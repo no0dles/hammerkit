@@ -1,10 +1,7 @@
-import { join } from 'path'
-import { getTestArg } from './run-arg'
-import { parseBuildFile } from '../src/parse'
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 
 describe('env', () => {
-  const fileName = join(__dirname, '../examples/env/build.yaml')
-  const buildFile = parseBuildFile(fileName, null)
+  const buildFile = loadExampleBuildFile('env')
 
   it('should use env from build file', async () => {
     const exampleTask = buildFile.getTask('example')

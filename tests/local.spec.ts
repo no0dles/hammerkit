@@ -1,10 +1,7 @@
-import { join } from 'path'
-import { getTestArg } from './run-arg'
-import { parseBuildFile } from '../src/parse'
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 
 describe('local', () => {
-  const fileName = join(__dirname, '../examples/local/build.yaml')
-  const buildFile = parseBuildFile(fileName, null)
+  const buildFile = loadExampleBuildFile('local')
 
   it('should run local task', async () => {
     const exampleTask = buildFile.getTask('example')

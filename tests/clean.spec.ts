@@ -1,14 +1,12 @@
 import { join, dirname } from 'path'
-import { parseBuildFile } from '../src/parse'
-import { getTestArg } from './run-arg'
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { existsSync } from 'fs'
 import { remove } from '../src/remove'
 
 describe('clean', () => {
   it('should clean created outputs', async () => {
-    const fileName = join(__dirname, '../examples/clean/build.yaml')
-    const buildFile = parseBuildFile(fileName, null)
-    const outputPath = join(dirname(fileName), 'node_modules')
+    const buildFile = loadExampleBuildFile('clean')
+    const outputPath = join(dirname(buildFile.fileName), 'node_modules')
     const [arg] = getTestArg()
 
     await remove(outputPath)

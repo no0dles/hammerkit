@@ -1,10 +1,7 @@
-import { join } from 'path'
-import { parseBuildFile } from '../src/parse'
-import { getTestArg } from './run-arg'
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 
 describe('validate', () => {
-  const fileName = join(__dirname, '../examples/validate/build.yaml')
-  const buildFile = parseBuildFile(fileName, null)
+  const buildFile = loadExampleBuildFile('validate')
 
   function validateTask(name: string, expectedErrors: string[]) {
     const task = buildFile.getTask(name)

@@ -1,10 +1,7 @@
-import { join } from 'path'
-import { getTestArg } from './run-arg'
-import { parseBuildFile } from '../src/parse'
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 
 describe('docker', () => {
-  const fileName = join(__dirname, '../examples/docker/build.yaml')
-  const buildFile = parseBuildFile(fileName, null)
+  const buildFile = loadExampleBuildFile('docker')
 
   it('should pull docker image', async () => {
     const exampleTask = buildFile.getTask('example')

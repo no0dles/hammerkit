@@ -1,14 +1,12 @@
 import { join, dirname } from 'path'
-import { getTestArg } from './run-arg'
-import { parseBuildFile } from '../src/parse'
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { appendFileSync, existsSync } from 'fs'
 import { remove } from '../src/remove'
 
 describe('cache', () => {
-  const fileName = join(__dirname, '../examples/cache/build.yaml')
-  const buildFile = parseBuildFile(fileName, null)
-  const cachePath = join(dirname(fileName), '.hammerkit')
-  const sourceFile = join(dirname(fileName), 'package.json')
+  const buildFile = loadExampleBuildFile('cache')
+  const cachePath = join(dirname(buildFile.fileName), '.hammerkit')
+  const sourceFile = join(dirname(buildFile.fileName), 'package.json')
 
   beforeEach(async () => {
     if (existsSync(cachePath)) {

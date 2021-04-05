@@ -1,14 +1,12 @@
 import { join, dirname } from 'path'
-import { parseBuildFile } from '../src/parse'
-import { getTestArg } from './run-arg'
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { remove } from '../src/remove'
 
 describe('store/restore', () => {
-  const fileName = join(__dirname, '../examples/store-restore/build.yaml')
-  const buildFile = parseBuildFile(fileName, null)
-  const outputPath = join(dirname(fileName), 'node_modules')
+  const buildFile = loadExampleBuildFile('store-restore')
+  const outputPath = join(dirname(buildFile.fileName), 'node_modules')
   const storePath = join(tmpdir(), 'storetest')
 
   beforeEach(async () => {
