@@ -4,5 +4,6 @@ tasks:
     image: alpine
     src:
       - "**/*.md"
+      - "**/*.md2"
     cmds:
       - echo test.md

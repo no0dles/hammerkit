@@ -9,6 +9,8 @@ import { getLogs } from './log'
 import { Container, ExecInspectInfo } from 'dockerode'
 import { splitBy } from './string'
 
+interface Volume { localPath: string; containerPath: string }
+
 export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   constructor(buildFile: ParsedBuildFile, name: string, private dockerTask: DockerBuildFileTask) {
     super(buildFile, name, dockerTask)
@@ -32,11 +34,17 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     const workingDirectory = this.getWorkingDirectory()
     const imageName = envs.escape(this.dockerTask.image)
     const containerWorkingDirectory = '/build/'
-    const volumes: { localPath: string; containerPath: string }[] = []
+    const volumes: Volume[] = []
+
+    const addVolume = (volume: Volume) => {
+      if(!volumes.some(v => v.containerPath === volume.containerPath)) {
+        volumes.push(volume)
+      }
+    }
 
     for (const source of this.getSources()) {
       if (existsSync(source.absolutePath)) {
-        volumes.push({
+        addVolume({
           localPath: source.absolutePath,
           containerPath: join(containerWorkingDirectory, source.relativePath),
         })
@@ -49,10 +57,10 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     for (const volume of taskVolumes) {
       if (volume.indexOf(':') >= 0) {
         const [localPath, containerPath] = splitBy(volume, ':')
-        volumes.push({ localPath: join(workingDirectory, localPath), containerPath })
+        addVolume({ localPath: join(workingDirectory, localPath), containerPath })
       } else {
         const filePath = join(workingDirectory, volume)
-        volumes.push({ localPath: filePath, containerPath: join(containerWorkingDirectory, volume) })
+        addVolume({ localPath: filePath, containerPath: join(containerWorkingDirectory, volume) })
       }
     }
 
