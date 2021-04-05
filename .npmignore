@@ -1,0 +1,14 @@
+.hammerkit
+.idea
+.gitignore
+src
+tests
+examples
+coverage
+build.yaml
+jest.config.ts
+tsconfig.json
+tsconfig.test.json
+tsconfig.build.json
+
+*.tgz

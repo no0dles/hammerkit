@@ -1,0 +1,9 @@
+tasks:
+  example:
+    description: example with dep
+    deps: [foo:bar]
+    cmds:
+      - echo hammertime
+
+references:
+  foo: ./foo/build.yaml

@@ -1,0 +1,5 @@
+tasks:
+  bar:
+    description: example task
+    cmds:
+      - cat foobar.txt

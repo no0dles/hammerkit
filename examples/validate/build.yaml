@@ -1,0 +1,55 @@
+tasks:
+  regular_task:
+    description: the perfect task
+    cmds:
+      - echo foo
+
+  missing_desc:
+    cmds:
+      - echo foo
+
+  missing_env:
+    description: should warn about missing env
+    envs:
+      TEST: $TEST
+    cmds:
+      - foo
+
+  empty:
+    description: should warn because there is no cmd/deps
+
+  only_deps:
+    description: should not warn for missing cmds
+    deps: [regular_task]
+
+  loop_with_cmd:
+    description: loop over a cmd
+    cmds:
+    - run: loop_with_cmd
+
+  loop_with_dep:
+    description: loop over dep
+    deps: [ loop_with_dep ]
+    cmds:
+      - echo "loop"
+
+  loop_with_refs:
+    description: loop over refs
+    deps: [ loop:loop_with_refs ]
+    cmds:
+      - echo "loop"
+
+  loop_with_multiple_tasks:
+    description: loop over multiple tasks
+    deps: [ loop_with_multiple_tasks_2 ]
+    cmds:
+      - echo "task 1"
+
+  loop_with_multiple_tasks_2:
+    description: loop over multiple tasks
+    deps: [ loop_with_multiple_tasks ]
+    cmds:
+      - echo "task 2"
+
+references:
+  loop: ./build-loop.yaml

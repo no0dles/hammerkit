@@ -1,0 +1,9 @@
+tasks:
+  bar:
+    description: ref task
+    cmds:
+      - cat foobar.txt
+
+references:
+  base: ../build.yaml
+  sub: ./build-sub.yaml

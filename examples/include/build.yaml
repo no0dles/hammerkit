@@ -1,0 +1,8 @@
+tasks:
+  example:
+    description: run ref task
+    cmds:
+      - run: foo:bar
+
+includes:
+  foo: ./foo/build.yaml

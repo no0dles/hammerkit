@@ -1,0 +1,5 @@
+tasks:
+  sub:
+    description: test sub sub reference
+    cmds:
+      - echo sub

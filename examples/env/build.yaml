@@ -1,0 +1,33 @@
+envs:
+  NODE_VERSION: 14.16.0
+
+tasks:
+  example:
+    description: echo build file env
+    cmds:
+      - echo $NODE_VERSION
+
+  example_docker:
+    description: env inside docker container
+    image: alpine
+    cmds:
+      - echo $NODE_VERSION
+
+  example_override:
+    description: echo task file env
+    envs:
+      NODE_VERSION: 15.0.0
+    cmds:
+      - echo $NODE_VERSION
+
+  example_with_dotenv:
+    description: read .env file
+    cmds:
+      - echo $TOKEN
+
+  example_with_shell_env:
+    description: get env from shell
+    envs:
+      VERSION: $VERSION
+    cmds:
+      - echo $VERSION

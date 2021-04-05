@@ -1,0 +1,8 @@
+tasks:
+  example:
+    description: store and restore example
+    image: node:14.16.0
+    generates:
+      - node_modules
+    cmds:
+      - npm install hammerkit

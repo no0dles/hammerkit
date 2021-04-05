@@ -1,0 +1,41 @@
+envs:
+  NODE_VERSION: 14.16.0
+
+tasks:
+  install:
+    description: install dependencies
+    image: node:$NODE_VERSION
+    cmds:
+      - npm install
+    mounts:
+      - node_modules
+    src:
+      - package.json
+      - package-lock.json
+
+  build:
+    description: build typescript
+    deps: [install]
+    image: node:$NODE_VERSION
+    src:
+      - src
+      - tsconfig.json
+    mounts:
+      - dist
+      - node_modules
+    cmds:
+      - node_modules/.bin/tsc
+
+  publish:minor:
+    description: publish npm package with minor version
+    deps: [build]
+    cmds:
+      - npm version minor
+      - npm publish
+
+  publish:patch:
+    description: publish npm package with patch version
+    deps: [build]
+    cmds:
+      - npm version patch
+      - npm publish

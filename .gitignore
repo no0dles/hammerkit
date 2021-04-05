@@ -1,0 +1,8 @@
+dist
+.idea
+dist
+coverage
+.hammerkit
+node_modules
+
+*.tgz

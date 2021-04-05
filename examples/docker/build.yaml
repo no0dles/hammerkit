@@ -1,0 +1,7 @@
+tasks:
+  example:
+    description: docker example
+    image: node:14.16.0
+    cmds:
+      - npm -v
+      - node -v
