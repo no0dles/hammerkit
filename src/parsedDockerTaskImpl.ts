@@ -1,68 +1,89 @@
-import {ParsedBuildFile} from './parsedBuildFile';
-import {DockerBuildFileTask} from './config';
-import {RunArg} from './run-arg';
-import {join} from 'path';
-import {existsSync} from 'fs';
-import {ParsedTaskImpl} from './parsedTaskImpl';
-import {Duplex, Writable} from 'stream';
-import {getLogs} from './log';
-import {chown} from './chown';
+import { ParsedBuildFile } from './parsedBuildFile'
+import { DockerBuildFileTask } from './config'
+import { RunArg } from './run-arg'
+import { join } from 'path'
+import { existsSync } from 'fs'
+import { ParsedTaskImpl } from './parsedTaskImpl'
+import { Duplex, Writable } from 'stream'
+import { getLogs } from './log'
 
 export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   constructor(buildFile: ParsedBuildFile, name: string, private dockerTask: DockerBuildFileTask) {
-    super(buildFile, name, dockerTask);
+    super(buildFile, name, dockerTask)
   }
 
   async pull(imageName: string, runArg: RunArg) {
-    const images = await runArg.docker.listImages({});
+    const images = await runArg.docker.listImages({})
     if (images.some((i) => i.RepoTags?.some((repoTag) => repoTag === imageName))) {
-      return;
+      return
     }
 
-    runArg.logger.withTag(this.getRelativeName()).debug(`pull ${imageName}`);
-    const image = await runArg.docker.pull(imageName);
+    runArg.logger.withTag(this.getRelativeName()).debug(`pull ${imageName}`)
+    const image = await runArg.docker.pull(imageName)
     await new Promise<void>((resolve, reject) => {
-      runArg.docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)));
-    });
+      runArg.docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)))
+    })
   }
 
   async executeTask(arg: RunArg): Promise<void> {
-    const envs = this.getEnvironmentVariables(arg);
-    const workingDirectory = this.getWorkingDirectory();
-    const imageName = envs.escape(this.dockerTask.image);
-    const workdir = '/build/';
-    const volumeMap: { [key: string]: string } = {};
+    const envs = this.getEnvironmentVariables(arg)
+    const workingDirectory = this.getWorkingDirectory()
+    const imageName = envs.escape(this.dockerTask.image)
+    const containerWorkingDirectory = '/build/'
+    const volumeMap: { [key: string]: string } = {}
 
     for (const source of this.getSources()) {
       if (existsSync(source.absolutePath)) {
-        volumeMap[source.relativePath] = `${source.absolutePath}:${join(workdir, source.relativePath)}`;
+        volumeMap[source.relativePath] = `${source.absolutePath}:${join(
+          containerWorkingDirectory,
+          source.relativePath
+        )}`
       } else {
-        arg.logger.withTag(this.getRelativeName()).warn(`source ${source.absolutePath} does not exists`);
+        arg.logger.withTag(this.getRelativeName()).warn(`source ${source.absolutePath} does not exists`)
       }
     }
 
-    const volumeList = [...this.dockerTask.mounts || [], ...this.dockerTask.generates || []];
+    const volumeList = [...(this.dockerTask.mounts || []), ...(this.dockerTask.generates || [])]
     for (const volume of volumeList) {
-      const filePath = join(workingDirectory, volume);
-      volumeMap[volume] = `${filePath}:${join(workdir, volume)}`;
+      const filePath = join(workingDirectory, volume)
+      volumeMap[volume] = `${filePath}:${join(containerWorkingDirectory, volume)}`
     }
 
-    await this.pull(imageName, arg);
+    await this.pull(imageName, arg)
 
     const container = await arg.docker.createContainer({
       Image: imageName,
       Tty: true,
-      Entrypoint: this.dockerTask.entrypoint || undefined,
+      Entrypoint: this.dockerTask.shell || 'sh',
       Env: envs.asArray(),
-      WorkingDir: workdir,
-      Labels: {'app': 'hammerkit'},
+      WorkingDir: containerWorkingDirectory,
+      Labels: { app: 'hammerkit' },
       HostConfig: {
-        Binds: Object.keys(volumeMap).map(k => volumeMap[k]),
+        Binds: Object.keys(volumeMap).map((k) => volumeMap[k]),
       },
-    });
+    })
+
+    const user = `${process.getuid()}:${process.getgid()}`
 
     try {
-      await container.start();
+      await container.start()
+
+      for (const volume of volumeList) {
+        const exec = await container.exec({
+          Cmd: ['chown', user, '-R', join(containerWorkingDirectory, volume)],
+          Tty: false,
+          AttachStdout: true,
+          AttachStderr: true,
+        })
+
+        const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
+        await awaitStream(stream, arg, this.getRelativeName(), imageName)
+        const result = await exec.inspect()
+        if (result.ExitCode !== 0) {
+          arg.logger.warn(`unable to set permissions for volume ${volume}`)
+        }
+      }
+
       for (const cmd of this.getCommands(arg)) {
         if (typeof cmd === 'string') {
           const exec = await container.exec({
@@ -70,76 +91,66 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
             Tty: false,
             AttachStdout: true,
             AttachStderr: true,
-          });
+            User: user,
+          })
 
-          const stream = await exec.start({stdin: true, Detach: false, Tty: false});
-          await awaitStream(stream, arg, this.getRelativeName(), imageName);
+          const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
+          await awaitStream(stream, arg, this.getRelativeName(), imageName)
 
-          const result = await exec.inspect();
+          const result = await exec.inspect()
           if (result.ExitCode !== 0) {
-            throw new Error(`command ${cmd} failed with ${result.ExitCode}`);
+            throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
           }
         } else {
-          await cmd.run.execute(arg);
+          await cmd.run.execute(arg)
         }
       }
     } finally {
-      await container.remove({force: true});
-
-      // ensure created files have the users ownership
-      if (process.platform !== 'win32' && process.platform !== 'darwin') {
-        for (const volume of volumeList) {
-          await chown(join(workingDirectory, volume));
-        }
-      }
+      await container.remove({ force: true })
     }
-
   }
 }
 
 function splitCommand(cmd: string): string[] {
-  const matches = cmd.match(/(?:[^\s"]+|"[^"]*")+/g);
+  const matches = cmd.match(/(?:[^\s"]+|"[^"]*")+/g)
   if (!matches) {
-    return [];
+    return []
   }
-  return matches;
+  return matches
 }
 
 class NoopStream extends Writable {
   constructor(private fn: (log: string) => void) {
-    super();
+    super()
   }
 
-  _write(chunk: any, encoding: BufferEncoding, callback: (error?: (Error | null)) => void) {
+  _write(chunk: any, encoding: BufferEncoding, callback: (error?: Error | null) => void) {
     for (const log of getLogs(chunk)) {
-      this.fn(log.endsWith('\n') ? log.substr(0, log.length - 1) : log);
+      this.fn(log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
     }
-    setImmediate(callback);
+    setImmediate(callback)
   }
 }
 
 async function awaitStream(stream: Duplex, runArg: RunArg, task: string, image: string) {
-  runArg.docker.modem.demuxStream(stream, new NoopStream(log => {
-    runArg.logger
-      .withTag(task)
-      .withTag(image)
-      .info(log);
-  }), new NoopStream(log => {
-    runArg.logger
-      .withTag(task)
-      .withTag(image)
-      .error(log);
-  }));
+  runArg.docker.modem.demuxStream(
+    stream,
+    new NoopStream((log) => {
+      runArg.logger.withTag(task).withTag(image).info(log)
+    }),
+    new NoopStream((log) => {
+      runArg.logger.withTag(task).withTag(image).error(log)
+    })
+  )
   await new Promise<void>((resolve, reject) => {
-    stream.on('error', err => {
-      reject(err);
-    });
+    stream.on('error', (err) => {
+      reject(err)
+    })
     stream.on('end', () => {
-      resolve();
-    });
+      resolve()
+    })
     stream.on('close', () => {
-      resolve();
-    });
-  });
+      resolve()
+    })
+  })
 }
-

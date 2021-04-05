@@ -26,6 +26,16 @@ tasks:
     cmds:
       - node_modules/.bin/tsc
 
+  prettier:
+    mounts:
+      - node_modules
+    src:
+      - src
+      - tests
+      - .prettierrc
+    cmds:
+      - node_modules/.bin/prettier -w src/** tests/**
+
   publish:minor:
     description: publish npm package with minor version
     deps: [build]

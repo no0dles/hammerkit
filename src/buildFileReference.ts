@@ -1,4 +1,4 @@
-import {ParsedBuildFile} from './parsedBuildFile';
+import { ParsedBuildFile } from './parsedBuildFile'
 
 export interface BuildFileReference {
   buildFile: ParsedBuildFile

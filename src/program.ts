@@ -1,106 +1,112 @@
-import {Command} from 'commander';
-import {existsSync, writeFileSync} from 'fs';
-import {parseBuildFile} from './parse';
-import consola, {LogLevel} from 'consola';
-import {RunArg} from './run-arg';
+import { Command } from 'commander'
+import { existsSync, writeFileSync } from 'fs'
+import { parseBuildFile } from './parse'
+import consola, { LogLevel } from 'consola'
+import { RunArg } from './run-arg'
 
 export function getProgram(fileName: string) {
-  const program = new Command();
+  const program = new Command()
 
   if (existsSync(fileName)) {
-    const buildFile = parseBuildFile(fileName, null);
-    const reservedCommands = ['clean', 'store', 'restore', 'validate'];
+    const buildFile = parseBuildFile(fileName, null)
+    const reservedCommands = ['clean', 'store', 'restore', 'validate']
 
-    program.command('clean')
+    program
+      .command('clean')
       .description('clear task cache')
       .action(async () => {
         try {
-          await buildFile.clean();
+          await buildFile.clean()
         } catch (e) {
-          consola.error(e);
-          process.exit(1);
+          consola.error(e)
+          process.exit(1)
         }
-      });
+      })
 
-    program.command('store <path>')
+    program
+      .command('store <path>')
       .description('save task outputs into <path>')
       .action(async (path) => {
         try {
-          await buildFile.restore(path);
+          await buildFile.restore(path)
         } catch (e) {
-          consola.error(e);
-          process.exit(1);
+          consola.error(e)
+          process.exit(1)
         }
-      });
+      })
 
-    program.command('restore <path>')
+    program
+      .command('restore <path>')
       .description('restore task outputs from <path>')
       .action(async (path) => {
         try {
-          await buildFile.restore(path);
+          await buildFile.restore(path)
         } catch (e) {
-          consola.error(e);
-          process.exit(1);
+          consola.error(e)
+          process.exit(1)
         }
-      });
+      })
 
-    program.command('validate')
+    program
+      .command('validate')
       .description('validate build.yaml')
       .action(async () => {
         try {
-          let count = 0;
-          const arg = new RunArg(false, 0);
+          let count = 0
+          const arg = new RunArg(false, 0)
           for (const validation of buildFile.validate(arg)) {
-            let logger = consola.withTag(validation.buildFile.fileName);
+            let logger = consola.withTag(validation.buildFile.fileName)
             if (validation.task) {
-              logger = logger.withTag(validation.task.getRelativeName());
+              logger = logger.withTag(validation.task.getRelativeName())
             }
             if (validation.type === 'error') {
-              logger.error(validation.message);
+              logger.error(validation.message)
             } else {
-              logger.warn(validation.message);
+              logger.warn(validation.message)
             }
 
-            count++;
+            count++
           }
 
           if (count === 0) {
-            consola.success(`${buildFile} is valid`);
+            consola.success(`${buildFile} is valid`)
           }
         } catch (e) {
-          process.exit(1);
+          process.exit(1)
         }
-      });
+      })
 
     for (const task of buildFile.getTasks()) {
-      const name = task.getAbsoluteName();
+      const name = task.getAbsoluteName()
       if (reservedCommands.indexOf(name) >= 0) {
-        consola.warn(`${name} is reserved, please use another name`);
-        continue;
+        consola.warn(`${name} is reserved, please use another name`)
+        continue
       }
 
-      program.command(name)
+      program
+        .command(name)
         .description(task.getDescription())
         .option('-v, --verbose', 'log debugging information', false)
         .option('-w, --worker <number>', 'parallel worker count', parseInt, 4)
         .option('--no-cache', 'ignore task cache', false)
         .action(async (options, command) => {
-          const runArg = new RunArg(!options.cache, options.workers);
+          const runArg = new RunArg(!options.cache, options.workers)
 
           if (options.verbose) {
-            runArg.logger.level = LogLevel.Debug;
+            runArg.logger.level = LogLevel.Debug
           }
 
           try {
-            await task.execute(runArg);
+            await task.execute(runArg)
           } catch (e) {
-            runArg.logger.error(e);
-            process.exit(1);
+            runArg.logger.error(e)
+            process.exit(1)
           }
-        });
+        })
     }
   } else {
-    program.command('init')
+    program
+      .command('init')
       .description('creates default build.yaml')
       .action(async () => {
         const content = `envs: {}
@@ -110,14 +116,14 @@ tasks:
     image: alpine
     cmds:
       echo "it's Hammer Time!"
-      `;
-        writeFileSync(fileName, content);
-        consola.success(`created ${fileName}`);
-      });
+      `
+        writeFileSync(fileName, content)
+        consola.success(`created ${fileName}`)
+      })
   }
 
-  program.version(require('../package.json').version);
-  program.name('hammerkit');
+  program.version(require('../package.json').version)
+  program.name('hammerkit')
 
-  return program;
+  return program
 }

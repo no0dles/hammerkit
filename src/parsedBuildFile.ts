@@ -1,29 +1,29 @@
-import {ParsedReference} from './parsedReference';
-import {ParsedTask} from './parse';
-import {EnvMap} from './env';
-import {RunArg} from './run-arg';
-import {BuildFileValidation} from './parsedBuildFileTask';
-import {BuildFileReference} from './buildFileReference';
+import { ParsedReference } from './parsedReference'
+import { ParsedTask } from './parse'
+import { EnvMap } from './env'
+import { RunArg } from './run-arg'
+import { BuildFileValidation } from './parsedBuildFileTask'
+import { BuildFileReference } from './buildFileReference'
 
 export interface ParsedBuildFile {
-  fileName: string;
+  fileName: string
 
   hasParent(buildFile: ParsedBuildFile): boolean
-  getPath(): string[];
+  getPath(): string[]
 
-  getTasks(): Generator<ParsedTask>;
+  getTasks(): Generator<ParsedTask>
 
-  getTask(name: string): ParsedTask;
+  getTask(name: string): ParsedTask
 
   getEnvironmentVariables(arg: RunArg): EnvMap
 
-  getReferences(): Generator<ParsedReference>;
+  getReferences(): Generator<ParsedReference>
 
-  getReference(name: string): ParsedReference | null;
+  getReference(name: string): ParsedReference | null
 
-  getIncludes(): Generator<ParsedReference>;
+  getIncludes(): Generator<ParsedReference>
 
-  getInclude(name: string): ParsedReference | null;
+  getInclude(name: string): ParsedReference | null
 
   validate(arg: RunArg): Generator<BuildFileValidation>
 
@@ -33,5 +33,5 @@ export interface ParsedBuildFile {
 
   restore(directory: string): Promise<void>
 
-  getWorkingDirectory(): string;
+  getWorkingDirectory(): string
 }

@@ -1,4 +1,4 @@
-import {ParsedBuildFileTask} from './parsedBuildFileTask';
+import { ParsedBuildFileTask } from './parsedBuildFileTask'
 
 export interface ParsedDockerBuildFileTask extends ParsedBuildFileTask {
   image: string

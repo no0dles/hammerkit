@@ -1,19 +1,19 @@
-import {copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync} from 'fs';
-import {join} from 'path';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync } from 'fs'
+import { join } from 'path'
 
 export function copy(src: string, dest: string) {
-  const exists = existsSync(src);
+  const exists = existsSync(src)
   if (!exists) {
-    return;
+    return
   }
 
-  const stats = lstatSync(src);
+  const stats = lstatSync(src)
   if (stats.isDirectory()) {
-    mkdirSync(dest, {recursive: true});
+    mkdirSync(dest, { recursive: true })
     for (const child of readdirSync(src)) {
-      copy(join(src, child), join(dest, child));
+      copy(join(src, child), join(dest, child))
     }
   } else {
-    copyFileSync(src, dest);
+    copyFileSync(src, dest)
   }
 }

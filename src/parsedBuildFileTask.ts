@@ -1,12 +1,14 @@
-import {RunArg} from './run-arg';
-import {ParsedTask} from './parse';
-import {EnvMap} from './env';
-import {ParsedBuildFile} from './parsedBuildFile';
+import { RunArg } from './run-arg'
+import { ParsedTask } from './parse'
+import { EnvMap } from './env'
+import { ParsedBuildFile } from './parsedBuildFile'
 
-export type ParsedBuildFileTaskCmd = string | {
-  run: ParsedTask
-  envs: EnvMap
-}
+export type ParsedBuildFileTaskCmd =
+  | string
+  | {
+      run: ParsedTask
+      envs: EnvMap
+    }
 
 export interface BuildFileValidation {
   buildFile: ParsedBuildFile
@@ -16,7 +18,7 @@ export interface BuildFileValidation {
 }
 
 export interface ParsedBuildFileTask {
-  getId(): string;
+  getId(): string
 
   getRelativeName(): string
 
@@ -24,29 +26,29 @@ export interface ParsedBuildFileTask {
 
   getDescription(): string
 
-  getCommands(arg: RunArg): Generator<ParsedBuildFileTaskCmd>;
+  getCommands(arg: RunArg): Generator<ParsedBuildFileTaskCmd>
 
-  getSources(): Generator<{ relativePath: string, absolutePath: string }>;
+  getSources(): Generator<{ relativePath: string; absolutePath: string }>
 
-  getGenerates(): Generator<{ relativePath: string, absolutePath: string }>;
+  getGenerates(): Generator<{ relativePath: string; absolutePath: string }>
 
   getEnvironmentVariables(arg: RunArg): EnvMap
 
   getWorkingDirectory(): string
 
-  updateCache(): Promise<void>;
+  updateCache(): Promise<void>
 
-  isCached(): Promise<boolean>;
+  isCached(): Promise<boolean>
 
   getDependencies(): Generator<ParsedTask>
 
   execute(arg: RunArg): Promise<void>
 
-  store(directory: string): Promise<void>;
+  store(directory: string): Promise<void>
 
-  restore(directory: string): Promise<void>;
+  restore(directory: string): Promise<void>
 
-  validate(arg: RunArg): Generator<BuildFileValidation>;
+  validate(arg: RunArg): Generator<BuildFileValidation>
 
-  clean(): Promise<void>;
+  clean(): Promise<void>
 }

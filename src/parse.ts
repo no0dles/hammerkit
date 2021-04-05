@@ -1,36 +1,36 @@
-import {parse} from 'yaml';
-import {existsSync, readFileSync} from 'fs';
-import {BuildFile} from './config';
-import {ParsedBuildFileTask} from './parsedBuildFileTask';
-import {ParsedDockerBuildFileTask} from './parsedDockerBuildFileTask';
-import {ParsedBuildFileImpl} from './parsedBuildFileImpl';
-import {BuildFileReference} from './buildFileReference';
+import { parse } from 'yaml'
+import { existsSync, readFileSync } from 'fs'
+import { BuildFile } from './config'
+import { ParsedBuildFileTask } from './parsedBuildFileTask'
+import { ParsedDockerBuildFileTask } from './parsedDockerBuildFileTask'
+import { ParsedBuildFileImpl } from './parsedBuildFileImpl'
+import { BuildFileReference } from './buildFileReference'
 
 export type ParsedTask = ParsedBuildFileTask | ParsedDockerBuildFileTask
 
 export function parseBuildFile(fileName: string, parentBuildFile: BuildFileReference | null) {
-  const buildFile = readBuildFile(fileName);
-  return new ParsedBuildFileImpl(fileName, buildFile, parentBuildFile);
+  const buildFile = readBuildFile(fileName)
+  return new ParsedBuildFileImpl(fileName, buildFile, parentBuildFile)
 }
 
 function readBuildFile(fileName: string): BuildFile {
   if (!existsSync(fileName)) {
-    throw new Error(`${fileName} not found`);
+    throw new Error(`${fileName} not found`)
   }
 
-  let content: string;
+  let content: string
   try {
-    content = readFileSync(fileName).toString();
+    content = readFileSync(fileName).toString()
   } catch (e) {
-    throw new Error(`unable to read ${fileName}`);
+    throw new Error(`unable to read ${fileName}`)
   }
 
-  let buildFile: BuildFile;
+  let buildFile: BuildFile
   try {
-    buildFile = parse(content);
+    buildFile = parse(content)
   } catch (e) {
-    throw new Error(`unable to parse yaml for ${fileName}`);
+    throw new Error(`unable to parse yaml for ${fileName}`)
   }
 
-  return buildFile;
+  return buildFile
 }

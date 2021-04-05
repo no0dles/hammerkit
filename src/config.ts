@@ -5,7 +5,7 @@ export interface BuildFile {
   references?: { [key: string]: string }
 }
 
-export type BuildFileTaskCmd = string | { run: string, envs?: { [key: string]: string } }
+export type BuildFileTaskCmd = string | { run: string; envs?: { [key: string]: string } }
 
 export interface BuildFileTask {
   description?: string
@@ -18,8 +18,8 @@ export interface BuildFileTask {
 
 export interface DockerBuildFileTask extends BuildFileTask {
   image: string
-  entrypoint?: string
+  shell?: string
   mounts?: string[]
 }
 
-export const isDockerBuildFileTask = (val: BuildFileTask): val is  DockerBuildFileTask => !!(<any>val).image;
+export const isDockerBuildFileTask = (val: BuildFileTask): val is DockerBuildFileTask => !!(<any>val).image
