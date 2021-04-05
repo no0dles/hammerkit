@@ -1,0 +1,11 @@
+tasks:
+  example:
+    description: install npm packages
+    image: node:14.16.0
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    cmds:
+      - npm ci
