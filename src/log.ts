@@ -1,4 +1,4 @@
-export function getLogs(chunk: Buffer | string) {
+export function getLogs(chunk: Buffer | string): string[] {
   return chunk
     .toString()
     .split(/\r?\n/)

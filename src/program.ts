@@ -1,10 +1,11 @@
-import { Command } from 'commander'
+import commaner, { Command } from 'commander'
 import { existsSync, writeFileSync } from 'fs'
 import { parseBuildFile } from './parse'
 import consola, { LogLevel } from 'consola'
 import { RunArg } from './run-arg'
+import packageJson from '../package.json'
 
-export function getProgram(fileName: string) {
+export function getProgram(fileName: string): commaner.Command {
   const program = new Command()
 
   if (existsSync(fileName)) {
@@ -89,7 +90,7 @@ export function getProgram(fileName: string) {
         .option('-v, --verbose', 'log debugging information', false)
         .option('-w, --worker <number>', 'parallel worker count', parseInt, 4)
         .option('--no-cache', 'ignore task cache', false)
-        .action(async (options, command) => {
+        .action(async (options) => {
           const runArg = new RunArg(!options.cache, options.workers)
 
           if (options.verbose) {
@@ -122,7 +123,7 @@ tasks:
       })
   }
 
-  program.version(require('../package.json').version)
+  program.version(packageJson.version)
   program.name('hammerkit')
 
   return program

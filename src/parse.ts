@@ -5,10 +5,11 @@ import { ParsedBuildFileTask } from './parsedBuildFileTask'
 import { ParsedDockerBuildFileTask } from './parsedDockerBuildFileTask'
 import { ParsedBuildFileImpl } from './parsedBuildFileImpl'
 import { BuildFileReference } from './buildFileReference'
+import { ParsedBuildFile } from './parsedBuildFile'
 
 export type ParsedTask = ParsedBuildFileTask | ParsedDockerBuildFileTask
 
-export function parseBuildFile(fileName: string, parentBuildFile: BuildFileReference | null) {
+export function parseBuildFile(fileName: string, parentBuildFile: BuildFileReference | null): ParsedBuildFile {
   const buildFile = readBuildFile(fileName)
   return new ParsedBuildFileImpl(fileName, buildFile, parentBuildFile)
 }

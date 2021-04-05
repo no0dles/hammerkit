@@ -3,7 +3,6 @@ import { ParsedTask } from './parse'
 import { EnvMap } from './env'
 import { RunArg } from './run-arg'
 import { BuildFileValidation } from './parsedBuildFileTask'
-import { BuildFileReference } from './buildFileReference'
 
 export interface ParsedBuildFile {
   fileName: string

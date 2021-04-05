@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync } from 'fs'
 import { join } from 'path'
 
-export function copy(src: string, dest: string) {
+export function copy(src: string, dest: string): void {
   const exists = existsSync(src)
   if (!exists) {
     return

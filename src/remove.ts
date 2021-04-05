@@ -1,8 +1,8 @@
-import rimraf from 'rimraf'
+import { rmdir } from 'fs'
 
-export async function remove(directory: string) {
+export async function remove(directory: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    rimraf(directory, (err) => {
+    rmdir(directory, { recursive: true }, (err) => {
       if (err) {
         reject(err)
       } else {

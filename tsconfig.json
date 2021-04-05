@@ -9,6 +9,7 @@
     "noImplicitReturns": true,
     "noImplicitThis": true,
     "downlevelIteration": true,
+    "resolveJsonModule": true,
     "sourceMap": true
   },
   "exclude": [

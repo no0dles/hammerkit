@@ -42,7 +42,7 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     await this.cleanCache()
   }
 
-  async cleanCache() {
+  async cleanCache(): Promise<void> {
     const cacheDir = join(dirname(this.fileName), '.hammerkit')
     await remove(cacheDir)
   }
@@ -80,7 +80,7 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
   }
 
   getEnvironmentVariables(arg: RunArg): EnvMap {
-    let envs = this.parentBuildFile ? this.parentBuildFile.buildFile.getEnvironmentVariables(arg) : arg.envs
+    const envs = this.parentBuildFile ? this.parentBuildFile.buildFile.getEnvironmentVariables(arg) : arg.envs
     return overrideEnv(loadEnvFile(envs, dirname(this.fileName)), this.buildFile.envs)
   }
 

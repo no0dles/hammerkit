@@ -2,16 +2,7 @@ import { ParsedBuildFile } from './parsedBuildFile'
 import { RunArg } from './run-arg'
 import { BuildFileTask } from './config'
 import { dirname, join, relative, resolve } from 'path'
-import {
-  createWriteStream,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-} from 'fs'
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs'
 import { ParsedTask } from './parse'
 import { copy } from './copy'
 import { BuildFileValidation, ParsedBuildFileTask, ParsedBuildFileTaskCmd } from './parsedBuildFileTask'

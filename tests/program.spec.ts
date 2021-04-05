@@ -2,20 +2,17 @@ import { getProgram } from '../src/program'
 import { join } from 'path'
 
 describe('program', () => {
-  async function testCommand(args: string[]) {
+  function testCommand(args: string[]): Promise<void> {
     const fileName = join(__dirname, '../examples/program/build.yaml')
     const program = getProgram(fileName)
-    await new Promise<void>(async (resolve, reject) => {
-      try {
-        await program
-          .exitOverride((err) => {
-            reject(err)
-          })
-          .parseAsync([process.argv[0], fileName, ...args])
-        resolve()
-      } catch (e) {
-        reject(e)
-      }
+    return new Promise<void>((resolve, reject) => {
+      program
+        .exitOverride((err) => {
+          reject(err)
+        })
+        .parseAsync([process.argv[0], fileName, ...args])
+        .catch(reject)
+        .then(() => resolve())
     })
   }
 

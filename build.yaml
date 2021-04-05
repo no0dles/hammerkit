@@ -26,7 +26,36 @@ tasks:
     cmds:
       - node_modules/.bin/tsc
 
+  format:
+    description: lint fix and prettier
+    image: node:$NODE_VERSION
+    mounts:
+      - node_modules
+    cmds:
+      - node_modules/.bin/prettier -w src/** tests/**
+      - node_modules/.bin/eslint . --ext .ts --fix
+    src:
+      - src
+      - tests
+      - .eslintignore
+      - .eslintrc
+      - .prettierrc
+
+  lint:
+    description: lint source code
+    image: node:$NODE_VERSION
+    src:
+      - src
+      - tests
+      - .eslintignore
+      - .eslintrc
+    mounts:
+      - node_modules
+    cmds:
+      - node_modules/.bin/eslint . --ext .ts
+
   prettier:
+    image: node:$NODE_VERSION
     mounts:
       - node_modules
     src:

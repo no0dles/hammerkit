@@ -6,7 +6,7 @@ import { existsSync } from 'fs'
 import { ParsedTaskImpl } from './parsedTaskImpl'
 import { Duplex, Writable } from 'stream'
 import { getLogs } from './log'
-import { Container } from 'dockerode'
+import { Container, ExecInspectInfo } from 'dockerode'
 import { splitBy } from './string'
 
 export class ParsedDockerTaskImpl extends ParsedTaskImpl {
@@ -14,7 +14,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     super(buildFile, name, dockerTask)
   }
 
-  async pull(imageName: string, runArg: RunArg) {
+  async pull(imageName: string, runArg: RunArg): Promise<void> {
     const images = await runArg.docker.listImages({})
     if (images.some((i) => i.RepoTags?.some((repoTag) => repoTag === imageName))) {
       return
@@ -102,7 +102,13 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     }
   }
 
-  async execCommand(container: Container, imageName: string, arg: RunArg, cmd: string[], user: string | undefined) {
+  async execCommand(
+    container: Container,
+    imageName: string,
+    arg: RunArg,
+    cmd: string[],
+    user: string | undefined
+  ): Promise<ExecInspectInfo> {
     const exec = await container.exec({
       Cmd: cmd,
       Tty: false,
