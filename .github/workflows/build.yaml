@@ -11,7 +11,7 @@ jobs:
           node-version: '14'
       - run: npm ci
       - run: npm run build
-      - run: npx jest --coverage
+      - run: npx jest --coverage --verbose
       - name: upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
         with:
