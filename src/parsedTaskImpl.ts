@@ -23,7 +23,7 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
   abstract executeTask(arg: RunArg): Promise<void>
 
   async execute(arg: RunArg): Promise<void> {
-    const name = this.getRelativeName()
+    const name = this.getAbsoluteName()
     let errors = 0
 
     for (const validate of this.validate(arg)) {

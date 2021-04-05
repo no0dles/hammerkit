@@ -13,7 +13,7 @@ export class ParsedLocalTaskImpl extends ParsedTaskImpl {
   async executeTask(arg: RunArg): Promise<void> {
     const taskEnv = this.getEnvironmentVariables(arg)
     const workingDir = this.getWorkingDirectory()
-    const name = this.getRelativeName()
+    const name = this.getAbsoluteName()
 
     for (const cmd of this.getCommands(arg)) {
       if (typeof cmd === 'string') {

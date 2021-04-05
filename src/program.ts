@@ -57,7 +57,7 @@ export function getProgram(fileName: string): commaner.Command {
           for (const validation of buildFile.validate(arg)) {
             let logger = consola.withTag(validation.buildFile.fileName)
             if (validation.task) {
-              logger = logger.withTag(validation.task.getRelativeName())
+              logger = logger.withTag(validation.task.getAbsoluteName())
             }
             if (validation.type === 'error') {
               logger.error(validation.message)

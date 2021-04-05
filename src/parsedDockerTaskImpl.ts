@@ -22,7 +22,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
       return
     }
 
-    runArg.logger.withTag(this.getRelativeName()).debug(`pull ${imageName}`)
+    runArg.logger.withTag(this.getAbsoluteName()).debug(`pull ${imageName}`)
     const image = await runArg.docker.pull(imageName)
     await new Promise<void>((resolve, reject) => {
       runArg.docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)))
@@ -49,7 +49,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
           containerPath: join(containerWorkingDirectory, source.relativePath),
         })
       } else {
-        arg.logger.withTag(this.getRelativeName()).warn(`source ${source.absolutePath} does not exists`)
+        arg.logger.withTag(this.getAbsoluteName()).warn(`source ${source.absolutePath} does not exists`)
       }
     }
 
@@ -97,7 +97,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
 
       for (const cmd of this.getCommands(arg)) {
         if (typeof cmd === 'string') {
-          arg.logger.withTag(this.getRelativeName()).info(cmd)
+          arg.logger.withTag(this.getAbsoluteName()).info(cmd)
           const result = await this.execCommand(container, imageName, arg, splitCommand(cmd), user)
           if (result.ExitCode !== 0) {
             throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
@@ -127,7 +127,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     })
 
     const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
-    await awaitStream(stream, arg, this.getRelativeName(), imageName)
+    await awaitStream(stream, arg, this.getAbsoluteName(), imageName)
     return await exec.inspect()
   }
 }
