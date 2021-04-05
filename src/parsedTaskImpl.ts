@@ -9,7 +9,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  rmdirSync,
   statSync,
   unlinkSync,
 } from 'fs';
@@ -17,6 +16,7 @@ import {ParsedTask} from './parse';
 import {copy} from './copy';
 import {BuildFileValidation, ParsedBuildFileTask, ParsedBuildFileTaskCmd} from './parsedBuildFileTask';
 import {EnvMap, overrideEnv} from './env';
+import {remove} from './remove';
 
 export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
   constructor(private buildFile: ParsedBuildFile, private name: string, private task: BuildFileTask) {
@@ -222,15 +222,7 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
 
   async clean(): Promise<void> {
     for (const generate of this.getGenerates()) {
-      if (!existsSync(generate.absolutePath)) {
-        continue;
-      }
-      const stats = lstatSync(generate.absolutePath);
-      if (stats.isDirectory()) {
-        rmdirSync(generate.absolutePath, {recursive: true});
-      } else if (stats.isFile()) {
-        unlinkSync(generate.absolutePath);
-      }
+      await remove(generate.absolutePath)
     }
   }
 

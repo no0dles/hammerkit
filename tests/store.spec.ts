@@ -1,8 +1,9 @@
 import {join, dirname} from 'path';
 import {parseBuildFile} from '../src/parse';
 import {getTestArg} from './run-arg';
-import {existsSync, rmdirSync} from 'fs';
+import {existsSync} from 'fs';
 import {tmpdir} from 'os';
+import {remove} from '../src/remove';
 
 describe('store/restore', () => {
   const fileName = join(__dirname, '../examples/store-restore/build.yaml');
@@ -10,13 +11,9 @@ describe('store/restore', () => {
   const outputPath = join(dirname(fileName), 'node_modules');
   const storePath = join(tmpdir(), 'storetest');
 
-  beforeEach(() => {
-    if (existsSync(outputPath)) {
-      rmdirSync(outputPath, {recursive: true});
-    }
-    if (existsSync(storePath)) {
-      rmdirSync(storePath, {recursive: true});
-    }
+  beforeEach(async () => {
+    await remove(outputPath)
+    await remove(storePath)
   });
 
   it('should clean created outputs', async () => {

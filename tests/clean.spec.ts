@@ -1,7 +1,8 @@
 import {join, dirname} from 'path';
 import {parseBuildFile} from '../src/parse';
 import {getTestArg} from './run-arg';
-import {existsSync, rmdirSync} from 'fs';
+import {existsSync} from 'fs';
+import {remove} from '../src/remove';
 
 describe('clean', () => {
   it('should clean created outputs', async () => {
@@ -10,9 +11,7 @@ describe('clean', () => {
     const outputPath = join(dirname(fileName), 'node_modules');
     const [arg] = getTestArg();
 
-    if (existsSync(outputPath)) {
-      rmdirSync(outputPath, {recursive: true});
-    }
+    await remove(outputPath)
 
     await buildFile.getTask('example').execute(arg);
     expect(existsSync(outputPath)).toBeTruthy();

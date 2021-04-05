@@ -1,7 +1,8 @@
 import {join, dirname} from 'path';
 import {getTestArg} from './run-arg';
 import {parseBuildFile} from '../src/parse';
-import {appendFileSync, existsSync, rmdirSync} from 'fs';
+import {appendFileSync, existsSync} from 'fs';
+import {remove} from '../src/remove';
 
 describe('cache', () => {
   const fileName = join(__dirname, '../examples/cache/build.yaml');
@@ -9,9 +10,9 @@ describe('cache', () => {
   const cachePath = join(dirname(fileName), '.hammerkit')
   const sourceFile = join(dirname(fileName), 'package.json')
 
-  beforeEach(() => {
+  beforeEach(async () => {
     if (existsSync(cachePath)) {
-      rmdirSync(cachePath, {recursive: true});
+      await remove(cachePath)
     }
   });
 
