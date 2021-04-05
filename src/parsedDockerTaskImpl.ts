@@ -49,7 +49,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     for (const volume of taskVolumes) {
       if (volume.indexOf(':') >= 0) {
         const [localPath, containerPath] = splitBy(volume, ':')
-        volumes.push({ localPath, containerPath })
+        volumes.push({ localPath: join(workingDirectory, localPath), containerPath })
       } else {
         const filePath = join(workingDirectory, volume)
         volumes.push({ localPath: filePath, containerPath: join(containerWorkingDirectory, volume) })
@@ -84,7 +84,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
 
       await setUserPermission(containerWorkingDirectory)
       for (const volume of volumes) {
-        await setUserPermission(join(containerWorkingDirectory, volume.containerPath))
+        await setUserPermission(volume.containerPath)
       }
 
       for (const cmd of this.getCommands(arg)) {
