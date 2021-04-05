@@ -17,6 +17,14 @@ export interface BuildFileValidation {
   type: 'error' | 'warn'
 }
 
+export interface SourceEntry {
+  relativePath: string
+  absolutePath: string
+  ignore: SourceEntryFilterFn
+}
+
+export type SourceEntryFilterFn = (fileName: string) => boolean
+
 export interface ParsedBuildFileTask {
   getId(): string
 
@@ -28,7 +36,7 @@ export interface ParsedBuildFileTask {
 
   getCommands(arg: RunArg): Generator<ParsedBuildFileTaskCmd>
 
-  getSources(): Generator<{ relativePath: string; absolutePath: string }>
+  getSources(): Generator<SourceEntry>
 
   getGenerates(): Generator<{ relativePath: string; absolutePath: string }>
 

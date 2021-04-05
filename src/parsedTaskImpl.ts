@@ -5,9 +5,17 @@ import { dirname, join, relative, resolve } from 'path'
 import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs'
 import { ParsedTask } from './parse'
 import { copy } from './copy'
-import { BuildFileValidation, ParsedBuildFileTask, ParsedBuildFileTaskCmd } from './parsedBuildFileTask'
+import {
+  BuildFileValidation,
+  ParsedBuildFileTask,
+  ParsedBuildFileTaskCmd,
+  SourceEntry,
+  SourceEntryFilterFn,
+} from './parsedBuildFileTask'
 import { EnvMap, overrideEnv } from './env'
 import { remove } from './remove'
+import { splitBy } from './string'
+import { Minimatch } from 'minimatch'
 
 export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
   constructor(private buildFile: ParsedBuildFile, private name: string, private task: BuildFileTask) {}
@@ -95,12 +103,35 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     return [...this.buildFile.getPath(), this.name].join(':')
   }
 
-  *getSources(): Generator<{ relativePath: string; absolutePath: string }> {
+  *getSources(): Generator<SourceEntry> {
     const workDirectory = this.getWorkingDirectory()
     for (const source of this.task.src || []) {
-      yield {
-        relativePath: source,
-        absolutePath: join(workDirectory, source),
+      const wildcardIndex = source.indexOf('*')
+      if (wildcardIndex >= 0) {
+        const matcher = new Minimatch(source, { dot: true })
+        const ignore: SourceEntryFilterFn = (fileName) => {
+          return !matcher.match(fileName)
+        }
+        const [prefix] = splitBy(source, '*')
+        if (prefix.length === 0) {
+          yield {
+            relativePath: '.',
+            absolutePath: workDirectory,
+            ignore,
+          }
+        } else {
+          yield {
+            relativePath: prefix.replace(/\/$/, ''),
+            absolutePath: join(workDirectory, prefix),
+            ignore,
+          }
+        }
+      } else {
+        yield {
+          relativePath: source,
+          absolutePath: join(workDirectory, source),
+          ignore: () => false,
+        }
       }
     }
   }
@@ -274,26 +305,39 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
   *getSourceSummary(): Generator<CacheEntry> {
     for (const src of this.getSources()) {
       const stats = statSync(src.absolutePath)
-      yield { fileName: src.absolutePath, lastModified: stats.mtimeMs }
 
       if (stats.isDirectory()) {
-        for (const subFile of this.extendSourceSummary(src.absolutePath)) {
+        for (const subFile of this.extendSourceSummary(src.absolutePath, src)) {
           yield subFile
+        }
+      } else {
+        if (!src.ignore(src.relativePath)) {
+          yield { fileName: src.absolutePath, lastModified: stats.mtimeMs }
         }
       }
     }
   }
 
-  *extendSourceSummary(directory: string): Generator<CacheEntry> {
+  *extendSourceSummary(directory: string, src: SourceEntry): Generator<CacheEntry> {
     const files = readdirSync(directory)
     for (const file of files) {
+      if (file === '.hammerkit') {
+        continue
+      }
+
       const fileName = join(directory, file)
       const stats = statSync(fileName)
-      yield { fileName, lastModified: stats.mtimeMs }
+      const relativeFileName = relative(src.absolutePath, fileName)
+      if (src.ignore(relativeFileName)) {
+        continue
+      }
+
       if (stats.isDirectory()) {
-        for (const subDir of this.extendSourceSummary(fileName)) {
+        for (const subDir of this.extendSourceSummary(fileName, src)) {
           yield subDir
         }
+      } else if (stats.isFile()) {
+        yield { fileName, lastModified: stats.mtimeMs }
       }
     }
   }

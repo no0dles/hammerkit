@@ -89,6 +89,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
 
       for (const cmd of this.getCommands(arg)) {
         if (typeof cmd === 'string') {
+          arg.logger.withTag(this.getRelativeName()).info(cmd)
           const result = await this.execCommand(container, imageName, arg, splitCommand(cmd), user)
           if (result.ExitCode !== 0) {
             throw new Error(`command ${cmd} failed with ${result.ExitCode}`)

@@ -1,0 +1,8 @@
+tasks:
+  example:
+    description: glob example
+    image: alpine
+    src:
+      - "**/*.md"
+    cmds:
+      - echo test.md
