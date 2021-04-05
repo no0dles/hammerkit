@@ -7,6 +7,7 @@ import { ParsedTaskImpl } from './parsedTaskImpl'
 import { Duplex, Writable } from 'stream'
 import { getLogs } from './log'
 import { Container } from 'dockerode'
+import { splitBy } from './string'
 
 export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   constructor(buildFile: ParsedBuildFile, name: string, private dockerTask: DockerBuildFileTask) {
@@ -31,23 +32,28 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     const workingDirectory = this.getWorkingDirectory()
     const imageName = envs.escape(this.dockerTask.image)
     const containerWorkingDirectory = '/build/'
-    const volumeMap: { [key: string]: string } = {}
+    const volumes: { localPath: string; containerPath: string }[] = []
 
     for (const source of this.getSources()) {
       if (existsSync(source.absolutePath)) {
-        volumeMap[source.relativePath] = `${source.absolutePath}:${join(
-          containerWorkingDirectory,
-          source.relativePath
-        )}`
+        volumes.push({
+          localPath: source.absolutePath,
+          containerPath: join(containerWorkingDirectory, source.relativePath),
+        })
       } else {
         arg.logger.withTag(this.getRelativeName()).warn(`source ${source.absolutePath} does not exists`)
       }
     }
 
-    const volumeList = [...(this.dockerTask.mounts || []), ...(this.dockerTask.generates || [])]
-    for (const volume of volumeList) {
-      const filePath = join(workingDirectory, volume)
-      volumeMap[volume] = `${filePath}:${join(containerWorkingDirectory, volume)}`
+    const taskVolumes = [...(this.dockerTask.mounts || []), ...(this.dockerTask.generates || [])]
+    for (const volume of taskVolumes) {
+      if (volume.indexOf(':') >= 0) {
+        const [localPath, containerPath] = splitBy(volume, ':')
+        volumes.push({ localPath, containerPath })
+      } else {
+        const filePath = join(workingDirectory, volume)
+        volumes.push({ localPath: filePath, containerPath: join(containerWorkingDirectory, volume) })
+      }
     }
 
     await this.pull(imageName, arg)
@@ -60,7 +66,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
       WorkingDir: containerWorkingDirectory,
       Labels: { app: 'hammerkit' },
       HostConfig: {
-        Binds: Object.keys(volumeMap).map((k) => volumeMap[k]),
+        Binds: volumes.map((v) => `${v.localPath}:${v.containerPath}`),
       },
     })
 
@@ -69,22 +75,16 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     try {
       await container.start()
 
-      const setUserPermission = async(directory: string) => {
-        const result = await this.execCommand(
-            container,
-            imageName,
-            arg,
-            ['chown', user, '-R', directory],
-            undefined
-        )
+      const setUserPermission = async (directory: string) => {
+        const result = await this.execCommand(container, imageName, arg, ['chown', user, '-R', directory], undefined)
         if (result.ExitCode !== 0) {
           arg.logger.warn(`unable to set permissions for ${directory}`)
         }
       }
 
       await setUserPermission(containerWorkingDirectory)
-      for (const volume of volumeList) {
-        await setUserPermission(join(containerWorkingDirectory, volume))
+      for (const volume of volumes) {
+        await setUserPermission(join(containerWorkingDirectory, volume.containerPath))
       }
 
       for (const cmd of this.getCommands(arg)) {

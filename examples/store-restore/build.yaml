@@ -2,6 +2,8 @@ tasks:
   example:
     description: store and restore example
     image: node:14.16.0
+    mounts:
+      - npm:/.npm
     generates:
       - node_modules
     cmds:

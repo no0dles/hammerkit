@@ -1,5 +1,6 @@
 import { join } from 'path'
 import { existsSync, readFileSync } from 'fs'
+import { splitBy } from './string'
 
 export function parseEnvs(): EnvMap {
   return new EnvMap({}, { ...process.env })
@@ -32,7 +33,8 @@ export function loadEnvFile(env: EnvMap, path: string): EnvMap {
     for (const envVar of envFile) {
       const equalIndex = envVar.indexOf('=')
       if (equalIndex > 0) {
-        envs[envVar.substr(0, equalIndex)] = envVar.substr(equalIndex + 1)
+        const [prefix, suffix] = splitBy(envVar, '=')
+        envs[prefix] = suffix
       }
     }
   }

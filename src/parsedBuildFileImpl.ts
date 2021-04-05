@@ -10,6 +10,7 @@ import { ParsedDockerTaskImpl } from './parsedDockerTaskImpl'
 import { RunArg } from './run-arg'
 import { BuildFileValidation } from './parsedBuildFileTask'
 import { remove } from './remove'
+import { splitBy } from './string'
 
 export class ParsedBuildFileImpl implements ParsedBuildFile {
   constructor(
@@ -153,8 +154,7 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
   getTask(name: string): ParsedTask {
     const splitIndex = name.indexOf(':')
     if (splitIndex >= 0) {
-      const prefix = name.substr(0, splitIndex)
-      const taskName = name.substr(splitIndex + 1)
+      const [prefix, taskName] = splitBy(name, ':')
       const include = this.getInclude(prefix)
       if (include) {
         return include.buildFile.getTask(taskName)
