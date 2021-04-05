@@ -6,6 +6,7 @@ import {existsSync} from 'fs';
 import {ParsedTaskImpl} from './parsedTaskImpl';
 import {Duplex, Writable} from 'stream';
 import {getLogs} from './log';
+import {chown} from './chown';
 
 export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   constructor(buildFile: ParsedBuildFile, name: string, private dockerTask: DockerBuildFileTask) {
@@ -30,22 +31,20 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     const workingDirectory = this.getWorkingDirectory();
     const imageName = envs.escape(this.dockerTask.image);
     const workdir = '/build/';
-    const volumes: { [key: string]: string } = {};
+    const volumeMap: { [key: string]: string } = {};
 
     for (const source of this.getSources()) {
       if (existsSync(source.absolutePath)) {
-        volumes[source.relativePath] = `${source.absolutePath}:${join(workdir, source.relativePath)}`;
+        volumeMap[source.relativePath] = `${source.absolutePath}:${join(workdir, source.relativePath)}`;
       } else {
         arg.logger.withTag(this.getRelativeName()).warn(`source ${source.absolutePath} does not exists`);
       }
     }
-    for (const volume of this.dockerTask.mounts || []) {
+
+    const volumeList = [...this.dockerTask.mounts || [], ...this.dockerTask.generates || []];
+    for (const volume of volumeList) {
       const filePath = join(workingDirectory, volume);
-      volumes[volume] = `${filePath}:${join(workdir, volume)}`;
-    }
-    for (const volume of this.dockerTask.generates || []) {
-      const filePath = join(workingDirectory, volume);
-      volumes[volume] = `${filePath}:${join(workdir, volume)}`;
+      volumeMap[volume] = `${filePath}:${join(workdir, volume)}`;
     }
 
     await this.pull(imageName, arg);
@@ -58,7 +57,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
       WorkingDir: workdir,
       Labels: {'app': 'hammerkit'},
       HostConfig: {
-        Binds: Object.keys(volumes).map(k => volumes[k]),
+        Binds: Object.keys(volumeMap).map(k => volumeMap[k]),
       },
     });
 
@@ -86,7 +85,15 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
       }
     } finally {
       await container.remove({force: true});
+
+      // ensure created files have the users ownership
+      if (process.platform !== 'win32' && process.platform !== 'darwin') {
+        for (const volume of volumeList) {
+          await chown(join(workingDirectory, volume));
+        }
+      }
     }
+
   }
 }
 
