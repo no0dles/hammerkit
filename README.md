@@ -1,7 +1,8 @@
 # Hammerkit
 
 ![License](https://img.shields.io/npm/l/hammerkit)
-![GitHub branch checks state](https://img.shields.io/github/checks-status/no0dles/hammerkit/master)
+![GitHub Workflow Status](https://img.shields.io/github/workflow/status/no0dles/hammerkit/master)
+![npm](https://img.shields.io/npm/v/hammerkit)
 
 ## Installation
 
