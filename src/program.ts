@@ -3,7 +3,6 @@ import { existsSync, writeFileSync } from 'fs'
 import { parseBuildFile } from './parse'
 import consola, { LogLevel } from 'consola'
 import { RunArg } from './run-arg'
-import packageJson from '../package.json'
 
 export function getProgram(fileName: string): commaner.Command {
   const program = new Command()
@@ -123,7 +122,8 @@ tasks:
       })
   }
 
-  program.version(packageJson.version)
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  program.version(require('../package.json').version)
   program.name('hammerkit')
 
   return program

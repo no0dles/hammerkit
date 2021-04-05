@@ -1,7 +1,7 @@
 name: master
 on: [push]
 jobs:
-  build_and_test:
+  build:
     runs-on: ubuntu-16.04
     steps:
       - name: Checkout
@@ -11,6 +11,16 @@ jobs:
           node-version: '14'
       - run: npm ci
       - run: npm run build
+      - run: npx eslint . --ext .ts
+  test:
+    runs-on: ubuntu-16.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+      - run: npm ci
       - run: npx jest --coverage --verbose
       - name: upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
