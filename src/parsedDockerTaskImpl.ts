@@ -6,6 +6,7 @@ import { existsSync } from 'fs'
 import { ParsedTaskImpl } from './parsedTaskImpl'
 import { Duplex, Writable } from 'stream'
 import { getLogs } from './log'
+import { Container } from 'dockerode'
 
 export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   constructor(buildFile: ParsedBuildFile, name: string, private dockerTask: DockerBuildFileTask) {
@@ -68,36 +69,27 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     try {
       await container.start()
 
-      for (const volume of volumeList) {
-        const exec = await container.exec({
-          Cmd: ['chown', user, '-R', join(containerWorkingDirectory, volume)],
-          Tty: false,
-          AttachStdout: true,
-          AttachStderr: true,
-        })
-
-        const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
-        await awaitStream(stream, arg, this.getRelativeName(), imageName)
-        const result = await exec.inspect()
+      const setUserPermission = async(directory: string) => {
+        const result = await this.execCommand(
+            container,
+            imageName,
+            arg,
+            ['chown', user, '-R', directory],
+            undefined
+        )
         if (result.ExitCode !== 0) {
-          arg.logger.warn(`unable to set permissions for volume ${volume}`)
+          arg.logger.warn(`unable to set permissions for ${directory}`)
         }
+      }
+
+      await setUserPermission(containerWorkingDirectory)
+      for (const volume of volumeList) {
+        await setUserPermission(join(containerWorkingDirectory, volume))
       }
 
       for (const cmd of this.getCommands(arg)) {
         if (typeof cmd === 'string') {
-          const exec = await container.exec({
-            Cmd: splitCommand(cmd),
-            Tty: false,
-            AttachStdout: true,
-            AttachStderr: true,
-            User: user,
-          })
-
-          const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
-          await awaitStream(stream, arg, this.getRelativeName(), imageName)
-
-          const result = await exec.inspect()
+          const result = await this.execCommand(container, imageName, arg, splitCommand(cmd), user)
           if (result.ExitCode !== 0) {
             throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
           }
@@ -108,6 +100,20 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     } finally {
       await container.remove({ force: true })
     }
+  }
+
+  async execCommand(container: Container, imageName: string, arg: RunArg, cmd: string[], user: string | undefined) {
+    const exec = await container.exec({
+      Cmd: cmd,
+      Tty: false,
+      AttachStdout: true,
+      AttachStderr: true,
+      User: user,
+    })
+
+    const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
+    await awaitStream(stream, arg, this.getRelativeName(), imageName)
+    return await exec.inspect()
   }
 }
 

@@ -7,12 +7,14 @@ describe('program', () => {
     const program = getProgram(fileName)
     await new Promise<void>(async (resolve, reject) => {
       try {
-        await program.exitOverride((err) => {
-          reject(err)
-        }).parseAsync([process.argv[0], fileName, ...args])
+        await program
+          .exitOverride((err) => {
+            reject(err)
+          })
+          .parseAsync([process.argv[0], fileName, ...args])
         resolve()
       } catch (e) {
-        reject(e);
+        reject(e)
       }
     })
   }
