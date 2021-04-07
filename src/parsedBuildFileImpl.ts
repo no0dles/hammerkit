@@ -1,102 +1,101 @@
-import {ParsedBuildFile} from './parsedBuildFile';
-import {BuildFile, isDockerBuildFileTask} from './config';
-import {BuildFileReference} from './buildFileReference';
-import {ParsedReference} from './parsedReference';
-import {parseBuildFile, ParsedTask} from './parse';
-import {join, dirname} from 'path';
-import {EnvMap, loadEnvFile, overrideEnv} from './env';
-import {ParsedLocalTaskImpl} from './parsedLocalTaskImpl';
-import {ParsedDockerTaskImpl} from './parsedDockerTaskImpl';
-import {RunArg} from './run-arg';
-import {BuildFileValidation} from './parsedBuildFileTask';
-import {remove} from './remove';
-import {splitBy} from './string';
+import { ParsedBuildFile } from './parsedBuildFile'
+import { BuildFile, isDockerBuildFileTask } from './config'
+import { BuildFileReference } from './buildFileReference'
+import { ParsedReference } from './parsedReference'
+import { parseBuildFile, ParsedTask } from './parse'
+import { join, dirname } from 'path'
+import { EnvMap, loadEnvFile, overrideEnv } from './env'
+import { ParsedLocalTaskImpl } from './parsedLocalTaskImpl'
+import { ParsedDockerTaskImpl } from './parsedDockerTaskImpl'
+import { RunArg } from './run-arg'
+import { BuildFileValidation } from './parsedBuildFileTask'
+import { remove } from './remove'
+import { splitBy } from './string'
 
 export class ParsedBuildFileImpl implements ParsedBuildFile {
   constructor(
     public fileName: string,
     private buildFile: BuildFile,
-    private parentBuildFile: BuildFileReference | null,
-  ) {
-  }
+    private parentBuildFile: BuildFileReference | null
+  ) {}
 
   hasParent(buildFile: ParsedBuildFile): boolean {
     return (
       !!this.parentBuildFile &&
       (this.parentBuildFile.buildFile.fileName === buildFile.fileName ||
         this.parentBuildFile.buildFile.hasParent(buildFile))
-    );
+    )
   }
 
   getPath(): string[] {
     if (this.parentBuildFile) {
-      return [...this.parentBuildFile.buildFile.getPath(), this.parentBuildFile.name];
+      return [...this.parentBuildFile.buildFile.getPath(), this.parentBuildFile.name]
     } else {
-      return [];
+      return []
     }
   }
 
   async clean(): Promise<void> {
     for (const task of this.getTasks()) {
-      await task.clean();
+      await task.clean()
     }
-    await this.cleanCache();
+    await this.cleanCache()
   }
 
   async cleanCache(): Promise<void> {
-    const cacheDir = join(dirname(this.fileName), '.hammerkit');
-    await remove(cacheDir);
+    const cacheDir = join(dirname(this.fileName), '.hammerkit')
+    await remove(cacheDir)
   }
 
   async restore(directory: string): Promise<void> {
     for (const task of this.getTasks()) {
-      await task.restore(directory);
+      await task.restore(directory)
     }
   }
 
   async store(directory: string): Promise<void> {
     for (const task of this.getTasks()) {
-      await task.store(directory);
+      await task.store(directory)
     }
   }
 
-  * validate(arg: RunArg): Generator<BuildFileValidation> {
+  *validate(arg: RunArg): Generator<BuildFileValidation> {
     for (const task of this.getTasks()) {
       for (const res of task.validate(arg)) {
-        yield res;
+        yield res
       }
     }
     for (const ref of this.getReferences()) {
       for (const res of ref.buildFile.validate(arg)) {
         // TODO child?
-        yield res;
+        yield res
       }
     }
     for (const include of this.getIncludes()) {
       // TODO child?
       for (const res of include.buildFile.validate(arg)) {
-        yield res;
+        yield res
       }
     }
   }
 
   getEnvironmentVariables(arg: RunArg): EnvMap {
-    const envs = this.parentBuildFile ? this.parentBuildFile.buildFile.getEnvironmentVariables(arg) : arg.envs;
-    return overrideEnv(loadEnvFile(envs, dirname(this.fileName)), this.buildFile.envs);
+    const envs = this.parentBuildFile ? this.parentBuildFile.buildFile.getEnvironmentVariables(arg) : arg.envs
+    return overrideEnv(loadEnvFile(envs, dirname(this.fileName)), this.buildFile.envs)
   }
 
   getWorkingDirectory(): string {
     if (!this.parentBuildFile || this.parentBuildFile.type === 'reference') {
-      return dirname(this.fileName);
+      return dirname(this.fileName)
     }
-    return this.parentBuildFile.buildFile.getWorkingDirectory();
+    return this.parentBuildFile.buildFile.getWorkingDirectory()
   }
 
   getInclude(name: string): ParsedReference | null {
-    const includes = this.buildFile.includes || {};
-    const include = includes[name];
+    const includes = this.buildFile.includes || {}
+    const include = includes[name]
     if (!include) {
-      return null;
+      return null
     }
     return {
       name,
@@ -105,11 +104,11 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
         type: 'include',
         name,
       }),
-    };
+    }
   }
 
-  * getIncludes(): Generator<ParsedReference> {
-    const includes = this.buildFile.includes || {};
+  *getIncludes(): Generator<ParsedReference> {
+    const includes = this.buildFile.includes || {}
     for (const name of Object.keys(includes)) {
       yield {
         name,
@@ -118,15 +117,15 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
           type: 'include',
           name,
         }),
-      };
+      }
     }
   }
 
   getReference(name: string): ParsedReference | null {
-    const references = this.buildFile.references || {};
-    const reference = references[name];
+    const references = this.buildFile.references || {}
+    const reference = references[name]
     if (!reference) {
-      return null;
+      return null
     }
     return {
       name,
@@ -135,11 +134,11 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
         type: 'reference',
         name,
       }),
-    };
+    }
   }
 
-  * getReferences(): Generator<ParsedReference> {
-    const references = this.buildFile.references || {};
+  *getReferences(): Generator<ParsedReference> {
+    const references = this.buildFile.references || {}
     for (const name of Object.keys(references)) {
       yield {
         name,
@@ -148,53 +147,53 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
           type: 'reference',
           name,
         }),
-      };
+      }
     }
   }
 
   getTask(name: string): ParsedTask {
-    const tasks = this.buildFile.tasks || {};
-    const task = tasks[name];
+    const tasks = this.buildFile.tasks || {}
+    const task = tasks[name]
     if (task) {
       if (isDockerBuildFileTask(task)) {
-        return new ParsedDockerTaskImpl(this, name, task);
+        return new ParsedDockerTaskImpl(this, name, task)
       }
-      return new ParsedLocalTaskImpl(this, name, task);
+      return new ParsedLocalTaskImpl(this, name, task)
     }
 
-    const [prefix, taskName] = splitBy(name, ':');
+    const [prefix, taskName] = splitBy(name, ':')
     if (prefix && taskName) {
-      const include = this.getInclude(prefix);
+      const include = this.getInclude(prefix)
       if (include) {
-        return include.buildFile.getTask(taskName);
+        return include.buildFile.getTask(taskName)
       }
 
-      const ref = this.getReference(prefix);
+      const ref = this.getReference(prefix)
       if (ref) {
-        return ref.buildFile.getTask(taskName);
+        return ref.buildFile.getTask(taskName)
       }
     }
 
-    throw new Error(`could not find task ${name}`);
+    throw new Error(`could not find task ${name}`)
   }
 
-  * getTasks(): Generator<ParsedTask> {
-    const tasks = this.buildFile.tasks || {};
+  *getTasks(): Generator<ParsedTask> {
+    const tasks = this.buildFile.tasks || {}
     for (const name of Object.keys(tasks)) {
-      const task = tasks[name];
+      const task = tasks[name]
 
       if (isDockerBuildFileTask(task)) {
-        yield new ParsedDockerTaskImpl(this, name, task);
+        yield new ParsedDockerTaskImpl(this, name, task)
       }
-      yield new ParsedLocalTaskImpl(this, name, task);
+      yield new ParsedLocalTaskImpl(this, name, task)
     }
 
     for (const ref of this.getReferences()) {
       if (ref.buildFile.hasParent(ref.buildFile)) {
-        continue;
+        continue
       }
       for (const task of ref.buildFile.getTasks()) {
-        yield task;
+        yield task
       }
     }
   }

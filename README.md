@@ -36,4 +36,5 @@
 - [ ] windows/osx test runs
 - [x] ignore .hammerkit folder in cache
 - [ ] support glob for sources
-- [ ] prevent duplicate execution on multiple deps
+- [x] prevent duplicate execution on multiple deps
+- [x] dependant cache and volumes

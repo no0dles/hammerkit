@@ -7,8 +7,11 @@ tasks:
     image: node:$NODE_VERSION
     cmds:
       - npm install
-    mounts:
+    generates:
       - node_modules
+    mounts:
+      - .npm/cache:/.npm
+      - .npm/config:/.config
     src:
       - package.json
       - package-lock.json
@@ -20,17 +23,15 @@ tasks:
     src:
       - src
       - tsconfig.json
-    mounts:
+    generates:
       - dist
-      - node_modules
     cmds:
       - node_modules/.bin/tsc
 
   format:
     description: lint fix and prettier
     image: node:$NODE_VERSION
-    mounts:
-      - node_modules
+    deps: [install]
     cmds:
       - node_modules/.bin/prettier -w src/** tests/**
       - node_modules/.bin/eslint . --ext .ts --fix
@@ -44,13 +45,12 @@ tasks:
   lint:
     description: lint source code
     image: node:$NODE_VERSION
+    deps: [install]
     src:
       - src
       - tests
       - .eslintignore
       - .eslintrc
-    mounts:
-      - node_modules
     cmds:
       - node_modules/.bin/eslint . --ext .ts
 

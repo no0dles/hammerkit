@@ -7,6 +7,8 @@ import { ParsedTask } from './parse'
 import { copy } from './copy'
 import {
   BuildFileValidation,
+  FileTaskExecution,
+  Generation,
   ParsedBuildFileTask,
   ParsedBuildFileTaskCmd,
   SourceEntry,
@@ -20,9 +22,26 @@ import { Minimatch } from 'minimatch'
 export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
   constructor(private buildFile: ParsedBuildFile, private name: string, private task: BuildFileTask) {}
 
-  abstract executeTask(arg: RunArg): Promise<void>
+  abstract executeTask(arg: RunArg, generations: Generation[]): Promise<void>
 
-  async execute(arg: RunArg): Promise<void> {
+  abstract get taskConfigKeys(): string[]
+
+  async execute(arg: RunArg): Promise<FileTaskExecution> {
+    const result: FileTaskExecution = {
+      cached: false,
+      generations: [],
+    }
+
+    const id = this.getId()
+    const prevResult = arg.hasCompleted(id)
+    if (prevResult) {
+      return prevResult
+    }
+
+    for (const generate of this.getGenerates()) {
+      result.generations.push(generate)
+    }
+
     const name = this.getAbsoluteName()
     let errors = 0
 
@@ -39,17 +58,35 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
       throw new Error(`${errors} validation errors`)
     }
 
+    let allDependenciesAreCached = true
     for (const dep of this.getDependencies()) {
-      await dep.execute(arg)
+      const depResult = await dep.execute(arg)
+      if (depResult.generations.length > 0) {
+        result.generations.push(...depResult.generations)
+      }
+      if (!depResult.cached && dep.canBeCached()) {
+        allDependenciesAreCached = false
+      }
     }
 
-    if (!arg.disableCache && (await this.isCached())) {
-      arg.logger.withTag(name).debug('skipped is cached')
-      return
+    if (allDependenciesAreCached) {
+      if (arg.disableCache) {
+        arg.logger.withTag(name).debug('caching disabled')
+      } else if (await this.isCached(arg)) {
+        arg.logger.withTag(name).debug('cache up to date')
+        result.cached = true
+        return result
+      }
+    } else {
+      arg.logger.withTag(name).debug('dependency changed, cache may not apply')
     }
 
-    await this.executeTask(arg)
+    await this.executeTask(arg, result.generations)
     await this.updateCache()
+
+    arg.complete(this.getId(), result)
+
+    return result
   }
 
   getId(): string {
@@ -112,14 +149,14 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
         const ignore: SourceEntryFilterFn = (fileName) => {
           return !matcher.match(fileName)
         }
-        const [prefix] = splitBy(source, '*')
-        if (prefix.length === 0) {
+        if (wildcardIndex === 0) {
           yield {
             relativePath: '.',
             absolutePath: workDirectory,
             ignore,
           }
         } else {
+          const [prefix] = splitBy(source, '*')
           yield {
             relativePath: prefix.replace(/\/$/, ''),
             absolutePath: join(workDirectory, prefix),
@@ -144,6 +181,23 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     const description = this.getDescription()
     if (!description) {
       yield { type: 'warn', buildFile: this.buildFile, message: `missing description`, task: this }
+    }
+
+    const taskKeys = Object.keys(this.task)
+    for (const key of this.taskConfigKeys) {
+      const tk = taskKeys.find((tk) => tk === key)
+      if (tk) {
+        taskKeys.splice(taskKeys.indexOf(tk), 1)
+      }
+    }
+
+    for (const unknownKey of taskKeys) {
+      yield {
+        type: 'error',
+        buildFile: this.buildFile,
+        message: `${unknownKey} is an unknown configuration`,
+        task: this,
+      }
     }
 
     for (const src of this.getSources()) {
@@ -278,16 +332,22 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     }
   }
 
-  async isCached(): Promise<boolean> {
+  canBeCached(): boolean {
+    return !!this.task.src && this.task.src.length > 0
+  }
+
+  async isCached(arg: RunArg): Promise<boolean> {
     // TODO when mounts change, isuptodate=false
     // TODO when task content changes
 
-    if (!this.task.src || this.task.src.length === 0) {
+    if (!this.canBeCached()) {
+      arg.logger.withTag(this.getAbsoluteName()).debug('cant be cached, missing src')
       return false
     }
 
     const cacheSummary = this.getCacheSummary()
     if (!cacheSummary) {
+      arg.logger.withTag(this.getAbsoluteName()).debug('no cache found')
       return false
     }
 
@@ -295,6 +355,7 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     for (const entry of sourceSummary) {
       const cacheEntry = cacheSummary[entry.fileName]
       if (cacheEntry !== entry.lastModified) {
+        arg.logger.withTag(this.getAbsoluteName()).debug(`cache src ${entry.fileName} changed`)
         return false
       }
     }

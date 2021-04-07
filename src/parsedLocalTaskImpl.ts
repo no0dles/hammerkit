@@ -10,6 +10,10 @@ export class ParsedLocalTaskImpl extends ParsedTaskImpl {
     super(buildFile, name, task)
   }
 
+  get taskConfigKeys(): string[] {
+    return ['description', 'cmds', 'deps', 'src', 'generates', 'envs']
+  }
+
   async executeTask(arg: RunArg): Promise<void> {
     const taskEnv = this.getEnvironmentVariables(arg)
     const workingDir = this.getWorkingDirectory()
@@ -17,6 +21,8 @@ export class ParsedLocalTaskImpl extends ParsedTaskImpl {
 
     for (const cmd of this.getCommands(arg)) {
       if (typeof cmd === 'string') {
+        arg.logger.withTag(name).info(cmd)
+
         await new Promise<void>((resolve, reject) => {
           const ps = exec(cmd, {
             env: taskEnv.processEnv(),

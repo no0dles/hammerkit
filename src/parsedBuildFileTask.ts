@@ -25,6 +25,16 @@ export interface SourceEntry {
 
 export type SourceEntryFilterFn = (fileName: string) => boolean
 
+export interface FileTaskExecution {
+  cached: boolean
+  generations: Generation[]
+}
+
+export interface Generation {
+  relativePath: string
+  absolutePath: string
+}
+
 export interface ParsedBuildFileTask {
   getId(): string
 
@@ -38,19 +48,20 @@ export interface ParsedBuildFileTask {
 
   getSources(): Generator<SourceEntry>
 
-  getGenerates(): Generator<{ relativePath: string; absolutePath: string }>
+  getGenerates(): Generator<Generation>
 
   getEnvironmentVariables(arg: RunArg): EnvMap
 
   getWorkingDirectory(): string
 
   updateCache(): Promise<void>
+  canBeCached(): boolean
 
-  isCached(): Promise<boolean>
+  isCached(arg: RunArg): Promise<boolean>
 
   getDependencies(): Generator<ParsedTask>
 
-  execute(arg: RunArg): Promise<void>
+  execute(arg: RunArg): Promise<FileTaskExecution>
 
   store(directory: string): Promise<void>
 

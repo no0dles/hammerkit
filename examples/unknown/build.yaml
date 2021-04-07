@@ -1,0 +1,9 @@
+tasks:
+  example:
+    cmd:
+      - test
+
+  docker:example:
+    image: foo
+    mount:
+      - foo
