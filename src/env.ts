@@ -31,9 +31,8 @@ export function loadEnvFile(env: EnvMap, path: string): EnvMap {
   if (existsSync(directory)) {
     const envFile = readFileSync(directory).toString().split(/\r?\n/)
     for (const envVar of envFile) {
-      const equalIndex = envVar.indexOf('=')
-      if (equalIndex > 0) {
-        const [prefix, suffix] = splitBy(envVar, '=')
+      const [prefix, suffix] = splitBy(envVar, '=')
+      if (prefix && suffix) {
         envs[prefix] = suffix
       }
     }

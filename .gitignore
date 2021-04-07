@@ -4,5 +4,5 @@ dist
 coverage
 .hammerkit
 node_modules
-
+examples/cache/npm
 *.tgz

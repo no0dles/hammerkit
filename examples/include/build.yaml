@@ -4,5 +4,10 @@ tasks:
     cmds:
       - run: foo:bar
 
+  name:example:
+    description: name example
+    cmds:
+      - echo name example
+
 includes:
   foo: ./foo/build.yaml
