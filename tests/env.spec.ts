@@ -1,4 +1,4 @@
-import { getTestArg, loadExampleBuildFile } from './run-arg'
+import {expectLog, getTestArg, loadExampleBuildFile} from './run-arg';
 
 describe('env', () => {
   const buildFile = loadExampleBuildFile('env')
@@ -7,36 +7,31 @@ describe('env', () => {
     const exampleTask = buildFile.getTask('example')
     const [arg, mock] = getTestArg()
     await exampleTask.execute(arg)
-    expect(mock.mock.calls.length).toBe(2)
-    expect(mock.mock.calls[0][0]).toEqual('14.16.0')
-    expect(mock.mock.calls[1][0]).toEqual('echo 14.16.0')
+    expectLog(mock, '14.16.0')
+    expectLog(mock, 'echo 14.16.0')
   })
 
   it('should pass env to docker', async () => {
     const exampleTask = buildFile.getTask('example_docker')
     const [arg, mock] = getTestArg()
     await exampleTask.execute(arg)
-    expect(mock.mock.calls.length).toBe(2)
-    expect(mock.mock.calls[mock.mock.calls.length - 2][0]).toEqual('pull alpine')
-    expect(mock.mock.calls[mock.mock.calls.length - 1][0]).toEqual('14.16.0')
+    expectLog(mock, '14.16.0')
   })
 
   it('should use env from task', async () => {
     const exampleTask = buildFile.getTask('example_override')
     const [arg, mock] = getTestArg()
     await exampleTask.execute(arg)
-    expect(mock.mock.calls.length).toBe(2)
-    expect(mock.mock.calls[0][0]).toEqual('15.0.0')
-    expect(mock.mock.calls[1][0]).toEqual('echo 15.0.0')
+    expectLog(mock, '15.0.0')
+    expectLog(mock, 'echo 15.0.0')
   })
 
   it('should use env from .env', async () => {
     const exampleTask = buildFile.getTask('example_with_dotenv')
     const [arg, mock] = getTestArg()
     await exampleTask.execute(arg)
-    expect(mock.mock.calls.length).toBe(2)
-    expect(mock.mock.calls[0][0]).toEqual('123456')
-    expect(mock.mock.calls[1][0]).toEqual('echo 123456')
+    expectLog(mock, '123456')
+    expectLog(mock, 'echo 123456')
   })
 
   it('should use process env', async () => {
@@ -44,8 +39,8 @@ describe('env', () => {
     const [arg, mock] = getTestArg()
     arg.envs.processEnvs['VERSION'] = '1.0.0'
     await exampleTask.execute(arg)
-    expect(mock.mock.calls[0][0]).toEqual('1.0.0')
-    expect(mock.mock.calls[1][0]).toEqual('echo 1.0.0')
+    expectLog(mock, '1.0.0')
+    expectLog(mock, 'echo 1.0.0')
   })
 
   it('should throw if process env is missing', async () => {

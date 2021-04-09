@@ -25,3 +25,7 @@ export function loadExampleBuildFile(dir: string): ParsedBuildFile {
   const fileName = join(__dirname, '../examples/', dir, 'build.yaml')
   return parseBuildFile(fileName, null)
 }
+
+export function expectLog(mock: jest.Mock, log: string) {
+  expect(mock.mock.calls.some(c => c[0] === log)).toBeTruthy()
+}

@@ -1,4 +1,4 @@
-import { getTestArg, loadExampleBuildFile } from './run-arg'
+import {expectLog, getTestArg, loadExampleBuildFile} from './run-arg';
 
 describe('reference', () => {
   const buildFile = loadExampleBuildFile('reference')
@@ -7,11 +7,10 @@ describe('reference', () => {
     const exampleTask = buildFile.getTask('example')
     const [arg, mock] = getTestArg()
     await exampleTask.execute(arg)
-    expect(mock.mock.calls.length).toBe(4)
-    expect(mock.mock.calls[0][0]).toEqual('foobar')
-    expect(mock.mock.calls[1][0]).toEqual('cat foobar.txt')
-    expect(mock.mock.calls[2][0]).toEqual('hammertime')
-    expect(mock.mock.calls[3][0]).toEqual('echo hammertime')
+    expectLog(mock, 'foobar')
+    expectLog(mock, 'cat foobar.txt')
+    expectLog(mock, 'hammertime')
+    expectLog(mock, 'echo hammertime')
   })
 
   it('should list task with references tasks nested', async () => {

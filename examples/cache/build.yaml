@@ -13,7 +13,7 @@ tasks:
       - npm ci
 
   dependant:
-    example: check node_modules path
+    description: check node_modules path
     image: node:14.16.0
     deps: [example]
     cmds:

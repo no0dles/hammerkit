@@ -55,15 +55,30 @@ tasks:
       - node_modules/.bin/eslint . --ext .ts
 
   prettier:
+
     image: node:$NODE_VERSION
-    mounts:
-      - node_modules
+    deps: [install]
     src:
       - src
       - tests
       - .prettierrc
     cmds:
       - node_modules/.bin/prettier -w src/** tests/**
+
+  test:
+    description: test code
+    deps: [install]
+    src:
+      - src
+      - tests
+      - jest.config.ts
+      - tsconfig.test.json
+      - tsconfig.json
+      - examples
+    generates:
+      - coverage
+    cmds:
+      - node_modules/.bin/jest --coverage
 
   publish:minor:
     description: publish npm package with minor version

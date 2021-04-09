@@ -21,8 +21,12 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   }
 
   async pull(imageName: string, runArg: RunArg): Promise<void> {
+    let searchImageName = imageName;
+    if (imageName.indexOf(':') === -1) {
+      searchImageName += ':latest'
+    }
     const images = await runArg.docker.listImages({})
-    if (images.some((i) => i.RepoTags?.some((repoTag) => repoTag === imageName))) {
+    if (images.some((i) => i.RepoTags?.some((repoTag) => repoTag === searchImageName))) {
       return
     }
 
@@ -61,7 +65,11 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     for (const volume of taskVolumes) {
       const [localPath, containerPath] = splitBy(volume, ':')
       if (localPath && containerPath) {
-        addVolume({ localPath: join(workingDirectory, localPath), containerPath })
+        if (localPath.startsWith('/')) {
+          addVolume({ localPath, containerPath })
+        } else {
+          addVolume({ localPath: join(workingDirectory, localPath), containerPath })
+        }
       } else {
         const filePath = join(workingDirectory, volume)
         addVolume({ localPath: filePath, containerPath: join(containerWorkingDirectory, volume) })

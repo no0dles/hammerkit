@@ -1,5 +1,5 @@
 import { join, dirname } from 'path'
-import { getTestArg, loadExampleBuildFile } from './run-arg'
+import {expectLog, getTestArg, loadExampleBuildFile} from './run-arg';
 import { appendFileSync, existsSync } from 'fs'
 import { remove } from '../src/remove'
 
@@ -30,8 +30,7 @@ describe('cache', () => {
     const [arg, mock] = getTestArg()
     await exampleTask.execute(arg)
 
-    const lsResult = mock.mock.calls.find((c) => c[0] === 'ls')
-    const resultIndex = mock.mock.calls.indexOf(lsResult) + 1
-    expect(mock.mock.calls[resultIndex][0]).toEqual('node_modules')
+    expectLog(mock, 'ls')
+    expectLog(mock, 'node_modules')
   })
 })

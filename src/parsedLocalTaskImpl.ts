@@ -30,12 +30,12 @@ export class ParsedLocalTaskImpl extends ParsedTaskImpl {
           })
           ps.stdout?.on('data', (data) => {
             for (const log of getLogs(data)) {
-              arg.logger.withTag(name).withTag(cmd).debug(log)
+              arg.logger.withTag(name).withTag(cmd).info(log)
             }
           })
           ps.stderr?.on('data', (data) => {
             for (const log of getLogs(data)) {
-              arg.logger.withTag(name).withTag(cmd).error(log)
+              arg.logger.withTag(name).withTag(cmd).info(log)
             }
           })
           ps.on('error', (err) => {

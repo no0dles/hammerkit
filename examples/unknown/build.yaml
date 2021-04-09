@@ -1,9 +1,26 @@
 tasks:
+  correct:
+    description: correct demo task
+    cmds:
+      - echo hey
+
   example:
+    description: test if wrong cmd gets validated
+    deps: [correct]
     cmd:
       - test
 
+  invalid:local:example:
+    description: test if docker key gets validated on local task
+    cmds:
+      - run: correct
+    mounts:
+      - foo
+
   docker:example:
+    description: test if wrong mount gets validated
     image: foo
+    cmds:
+      - run: correct
     mount:
       - foo
