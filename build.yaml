@@ -66,5 +66,19 @@ tasks:
     cmds:
       - node_modules/.bin/jest --coverage
 
+  publish:minor:
+    description: publish npm package with minor version
+    deps: [build]
+    cmds:
+      - npm version minor
+      - npm publish
+
+  publish:patch:
+    description: publish npm package with patch version
+    deps: [build]
+    cmds:
+      - npm version patch
+      - npm publish
+
 includes:
   npm: ./build.npm.yaml

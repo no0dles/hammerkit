@@ -23,7 +23,7 @@ describe('store/restore', () => {
     await buildFile.store(storePath)
     await buildFile.clean(cleanArg)
     expect(existsSync(outputPath)).toBeFalsy()
-    
+
     await buildFile.restore(storePath)
     expect(existsSync(outputPath)).toBeTruthy()
   })
