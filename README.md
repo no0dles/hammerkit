@@ -39,3 +39,4 @@
 - [x] prevent duplicate execution on multiple deps
 - [x] dependant cache and volumes
 - [x] rerun task when content changes, even when its cached
+- [x] add $PWD mounts

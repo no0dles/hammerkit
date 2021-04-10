@@ -10,8 +10,8 @@ tasks:
     generates:
       - node_modules
     mounts:
-      - .npm/cache:/.npm
-      - .npm/config:/.config
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
     src:
       - package.json
       - package-lock.json

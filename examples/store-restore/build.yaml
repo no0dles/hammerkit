@@ -3,7 +3,8 @@ tasks:
     description: store and restore example
     image: node:14.16.0
     mounts:
-      - npm:/.npm
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
     generates:
       - node_modules
     cmds:

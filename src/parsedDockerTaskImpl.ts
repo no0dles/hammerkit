@@ -1,6 +1,7 @@
 import { ParsedBuildFile } from './parsedBuildFile'
 import { DockerBuildFileTask } from './config'
 import { RunArg } from './run-arg'
+import { homedir } from 'os'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { ParsedTaskImpl } from './parsedTaskImpl'
@@ -67,6 +68,8 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
       if (localPath && containerPath) {
         if (localPath.startsWith('/')) {
           addVolume({ localPath, containerPath })
+        } else if (localPath.startsWith('$PWD')) {
+          addVolume({ localPath: join(homedir(), localPath.substr('$PWD'.length)), containerPath })
         } else {
           addVolume({ localPath: join(workingDirectory, localPath), containerPath })
         }
