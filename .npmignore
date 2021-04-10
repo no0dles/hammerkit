@@ -12,7 +12,9 @@ tsconfig.test.json
 tsconfig.build.json
 .npm
 .github
-.eslitrc
+.eslintrc
+.codacy.yaml
 .eslintignore
 .prettierrc
+dist/**/*.js.map
 *.tgz
