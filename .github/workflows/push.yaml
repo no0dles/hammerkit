@@ -12,6 +12,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx eslint . --ext .ts
+      - run: npx prettier --check src/** tests/**
   test:
     runs-on: ubuntu-16.04
     steps:

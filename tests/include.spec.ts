@@ -1,4 +1,4 @@
-import {expectLog, getTestArg, loadExampleBuildFile} from './run-arg';
+import { expectLog, getTestArg, loadExampleBuildFile } from './run-arg'
 import { join } from 'path'
 
 describe('include', () => {

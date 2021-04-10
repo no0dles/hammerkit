@@ -21,7 +21,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   }
 
   async pull(imageName: string, runArg: RunArg): Promise<void> {
-    let searchImageName = imageName;
+    let searchImageName = imageName
     if (imageName.indexOf(':') === -1) {
       searchImageName += ':latest'
     }
@@ -105,7 +105,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
 
       const setUserPermission = async (directory: string) => {
         arg.logger.withTag(name).debug('set permission on ', directory)
-        const result = await this.execCommand(container, imageName, arg, ['chown', user, directory], undefined)
+        const result = await this.execCommand(container, arg, ['chown', user, directory], undefined)
         if (result.ExitCode !== 0) {
           arg.logger.warn(`unable to set permissions for ${directory}`)
         }
@@ -119,7 +119,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
       for (const cmd of this.getCommands(arg)) {
         if (typeof cmd === 'string') {
           arg.logger.withTag(name).info(cmd)
-          const result = await this.execCommand(container, imageName, arg, splitCommand(cmd), user)
+          const result = await this.execCommand(container, arg, splitCommand(cmd), user)
           if (result.ExitCode !== 0) {
             throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
           }
@@ -134,7 +134,6 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
 
   async execCommand(
     container: Container,
-    imageName: string,
     arg: RunArg,
     cmd: string[],
     user: string | undefined
@@ -148,7 +147,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     })
 
     const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
-    await awaitStream(stream, arg, this.getAbsoluteName(), imageName)
+    await awaitStream(stream, arg, this.getAbsoluteName())
     return await exec.inspect()
   }
 
@@ -178,7 +177,7 @@ class NoopStream extends Writable {
   }
 }
 
-async function awaitStream(stream: Duplex, runArg: RunArg, task: string, image: string) {
+async function awaitStream(stream: Duplex, runArg: RunArg, task: string) {
   runArg.docker.modem.demuxStream(
     stream,
     new NoopStream((log) => {

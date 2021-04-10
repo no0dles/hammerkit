@@ -3,6 +3,7 @@ import consola, { LogLevel } from 'consola'
 import { join } from 'path'
 import { parseBuildFile } from '../src/parse'
 import { ParsedBuildFile } from '../src/parsedBuildFile'
+import { readFileSync } from 'fs'
 
 export function getTestArg(): [RunArg, jest.Mock] {
   const mock = jest.fn()
@@ -22,10 +23,19 @@ export function getTestArg(): [RunArg, jest.Mock] {
 }
 
 export function loadExampleBuildFile(dir: string): ParsedBuildFile {
-  const fileName = join(__dirname, '../examples/', dir, 'build.yaml')
+  const fileName = getBuildFilePath(dir)
   return parseBuildFile(fileName, null)
 }
 
-export function expectLog(mock: jest.Mock, log: string) {
-  expect(mock.mock.calls.some(c => c[0] === log)).toBeTruthy()
+export function getBuildFileContent(dir: string): Buffer {
+  const fileName = getBuildFilePath(dir)
+  return readFileSync(fileName)
+}
+
+export function getBuildFilePath(dir: string): string {
+  return join(__dirname, '../examples/', dir, 'build.yaml')
+}
+
+export function expectLog(mock: jest.Mock, log: string): void {
+  expect(mock.mock.calls.some((c) => c[0] === log)).toBeTruthy()
 }

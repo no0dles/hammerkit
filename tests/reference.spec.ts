@@ -1,4 +1,4 @@
-import {expectLog, getTestArg, loadExampleBuildFile} from './run-arg';
+import { expectLog, getTestArg, loadExampleBuildFile } from './run-arg'
 
 describe('reference', () => {
   const buildFile = loadExampleBuildFile('reference')

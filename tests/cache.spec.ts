@@ -1,17 +1,25 @@
 import { join, dirname } from 'path'
-import {expectLog, getTestArg, loadExampleBuildFile} from './run-arg';
-import { appendFileSync, existsSync } from 'fs'
+import { expectLog, getBuildFilePath, getTestArg, loadExampleBuildFile } from './run-arg'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs'
 import { remove } from '../src/remove'
 
 describe('cache', () => {
   const buildFile = loadExampleBuildFile('cache')
   const cachePath = join(dirname(buildFile.fileName), '.hammerkit')
   const sourceFile = join(dirname(buildFile.fileName), 'package.json')
+  const buildFilePath = getBuildFilePath('cache')
+  const sourceFileContent = readFileSync(sourceFile)
+  const buildFileContent = readFileSync(buildFilePath)
 
   beforeEach(async () => {
     if (existsSync(cachePath)) {
       await remove(cachePath)
     }
+  })
+
+  afterEach(() => {
+    writeFileSync(buildFilePath, buildFileContent)
+    writeFileSync(sourceFile, sourceFileContent)
   })
 
   it('should run task only if not cached', async () => {
