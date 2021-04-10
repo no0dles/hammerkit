@@ -10,5 +10,9 @@ jest.config.ts
 tsconfig.json
 tsconfig.test.json
 tsconfig.build.json
-
+.npm
+.github
+.eslitrc
+.eslintignore
+.prettierrc
 *.tgz
