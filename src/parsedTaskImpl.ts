@@ -20,11 +20,13 @@ import { splitBy } from './string'
 import { Minimatch } from 'minimatch'
 
 export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
-  constructor(private buildFile: ParsedBuildFile, private name: string, private task: BuildFileTask) {}
+  constructor(private buildFile: ParsedBuildFile, private name: string, protected task: BuildFileTask) {}
 
   abstract executeTask(arg: RunArg, generations: Generation[]): Promise<void>
 
   abstract get taskConfigKeys(): string[]
+
+  abstract get taskCacheValues(): any[]
 
   async execute(arg: RunArg): Promise<FileTaskExecution> {
     const result: FileTaskExecution = {
@@ -304,6 +306,10 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     return join(this.getWorkingDirectory(), '.hammerkit', this.name)
   }
 
+  private getTaskCacheFile() {
+    return join(this.getWorkingDirectory(), '.hammerkit', this.name + '.task')
+  }
+
   async updateCache(): Promise<void> {
     const cacheFile = this.getCacheFile()
     const cacheDir = dirname(cacheFile)
@@ -311,6 +317,17 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     if (!existsSync(cacheDir)) {
       mkdirSync(cacheDir, { recursive: true })
     }
+
+    const taskCacheFile = this.getTaskCacheFile()
+    const taskCacheStream = createWriteStream(taskCacheFile)
+    for (const cache of this.getCacheTaskSummary()) {
+      taskCacheStream.write(`${cache}\n`)
+    }
+    await new Promise<void>((resolve, reject) => {
+      taskCacheStream.on('error', reject)
+      taskCacheStream.on('finish', resolve)
+      taskCacheStream.end()
+    })
 
     const sourceSummary = this.getSourceSummary()
     const fileStream = createWriteStream(cacheFile)
@@ -337,11 +354,13 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
   }
 
   async isCached(arg: RunArg): Promise<boolean> {
-    // TODO when mounts change, isuptodate=false
-    // TODO when task content changes
-
     if (!this.canBeCached()) {
       arg.logger.withTag(this.getAbsoluteName()).debug('cant be cached, missing src')
+      return false
+    }
+
+    if (this.hasTaskChanged()) {
+      arg.logger.withTag(this.getAbsoluteName()).debug('cache outdated, task definition changed')
       return false
     }
 
@@ -400,6 +419,30 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
       } else if (stats.isFile()) {
         yield { fileName, lastModified: stats.mtimeMs }
       }
+    }
+  }
+
+  hasTaskChanged(): boolean {
+    const cacheFile = this.getTaskCacheFile()
+    if (!existsSync(cacheFile)) {
+      return false
+    }
+    const content = readFileSync(cacheFile).toString()
+    const lines = content.split(/\r?\n/)
+    let i = 0
+    for (const current of this.getCacheTaskSummary()) {
+      if (current !== lines[i] && !(current === undefined && lines[i] === 'undefined')) {
+        return true
+      }
+      i++
+    }
+
+    return false
+  }
+
+  *getCacheTaskSummary(): Generator<string> {
+    for (const value of this.taskCacheValues) {
+      yield JSON.stringify(value)
     }
   }
 

@@ -154,6 +154,19 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   get taskConfigKeys(): string[] {
     return ['description', 'cmds', 'deps', 'src', 'generates', 'envs', 'image', 'shell', 'mounts']
   }
+
+  get taskCacheValues(): any[] {
+    return [
+      this.dockerTask.image,
+      this.dockerTask.cmds,
+      this.dockerTask.deps,
+      this.dockerTask.src,
+      this.dockerTask.generates,
+      this.dockerTask.envs,
+      this.dockerTask.shell,
+      this.dockerTask.mounts,
+    ]
+  }
 }
 
 function splitCommand(cmd: string): string[] {

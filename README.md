@@ -35,6 +35,7 @@
 - [ ] dynamic deep of container work dir
 - [ ] windows/osx test runs
 - [x] ignore .hammerkit folder in cache
-- [ ] support glob for sources
+- [x] support glob for sources
 - [x] prevent duplicate execution on multiple deps
 - [x] dependant cache and volumes
+- [x] rerun task when content changes, even when its cached

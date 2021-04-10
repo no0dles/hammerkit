@@ -14,6 +14,10 @@ export class ParsedLocalTaskImpl extends ParsedTaskImpl {
     return ['description', 'cmds', 'deps', 'src', 'generates', 'envs']
   }
 
+  get taskCacheValues(): any[] {
+    return [this.task.cmds, this.task.envs]
+  }
+
   async executeTask(arg: RunArg): Promise<void> {
     const taskEnv = this.getEnvironmentVariables(arg)
     const workingDir = this.getWorkingDirectory()
