@@ -13,7 +13,7 @@ tasks:
   invalid:local:example:
     description: test if docker key gets validated on local task
     cmds:
-      - run: correct
+      - task: correct
     mounts:
       - foo
 
@@ -21,6 +21,6 @@ tasks:
     description: test if wrong mount gets validated
     image: foo
     cmds:
-      - run: correct
+      - task: correct
     mount:
       - foo

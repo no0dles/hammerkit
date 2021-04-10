@@ -2,7 +2,7 @@ tasks:
   loop_with_refs:
     description: "ref loop"
     cmds:
-      - run: loop:loop_with_refs
+      - task: loop:loop_with_refs
       - echo "loop"
 
 

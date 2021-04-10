@@ -1,25 +1,25 @@
-import { ParsedBuildFile } from './parsedBuildFile'
-import { BuildFile, isDockerBuildFileTask } from './config'
-import { BuildFileReference } from './buildFileReference'
-import { ParsedReference } from './parsedReference'
-import { parseBuildFile, ParsedTask } from './parse'
 import { join, dirname } from 'path'
 import { EnvMap, loadEnvFile, overrideEnv } from './env'
-import { ParsedLocalTaskImpl } from './parsedLocalTaskImpl'
-import { ParsedDockerTaskImpl } from './parsedDockerTaskImpl'
 import { RunArg } from './run-arg'
-import { BuildFileValidation } from './parsedBuildFileTask'
-import { remove } from './remove'
 import { splitBy } from './string'
+import { BuildFileConfig } from './config/build-file-config'
+import { isDockerFileTaskConfig } from './config/docker-file-task-config'
+import { remove } from './file/remove'
+import { DockerTask } from './docker-task'
+import { BuildFileReference } from './build-file-reference'
+import { LocalTask } from './local-task'
+import { parseBuildFile } from './file/parse'
+import { Task } from './task'
+import { BuildFileValidation } from './build-file-validation'
 
-export class ParsedBuildFileImpl implements ParsedBuildFile {
+export class BuildFile {
   constructor(
     public fileName: string,
-    private buildFile: BuildFile,
+    private buildFile: BuildFileConfig,
     private parentBuildFile: BuildFileReference | null
   ) {}
 
-  hasParent(buildFile: ParsedBuildFile): boolean {
+  hasParent(buildFile: BuildFile): boolean {
     return (
       !!this.parentBuildFile &&
       (this.parentBuildFile.buildFile.fileName === buildFile.fileName ||
@@ -35,9 +35,9 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     }
   }
 
-  async clean(): Promise<void> {
+  async clean(arg: RunArg): Promise<void> {
     for (const task of this.getTasks()) {
-      await task.clean()
+      await task.clean(arg)
     }
     await this.cleanCache()
   }
@@ -91,7 +91,7 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     return this.parentBuildFile.buildFile.getWorkingDirectory()
   }
 
-  getInclude(name: string): ParsedReference | null {
+  getInclude(name: string): BuildFileReference | null {
     const includes = this.buildFile.includes || {}
     const include = includes[name]
     if (!include) {
@@ -99,6 +99,7 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     }
     return {
       name,
+      type: 'include',
       buildFile: parseBuildFile(join(dirname(this.fileName), include), {
         buildFile: this,
         type: 'include',
@@ -107,11 +108,12 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     }
   }
 
-  *getIncludes(): Generator<ParsedReference> {
+  *getIncludes(): Generator<BuildFileReference> {
     const includes = this.buildFile.includes || {}
     for (const name of Object.keys(includes)) {
       yield {
         name,
+        type: 'include',
         buildFile: parseBuildFile(join(dirname(this.fileName), includes[name]), {
           buildFile: this,
           type: 'include',
@@ -121,7 +123,7 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     }
   }
 
-  getReference(name: string): ParsedReference | null {
+  getReference(name: string): BuildFileReference | null {
     const references = this.buildFile.references || {}
     const reference = references[name]
     if (!reference) {
@@ -129,6 +131,7 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     }
     return {
       name,
+      type: 'reference',
       buildFile: parseBuildFile(join(dirname(this.fileName), reference), {
         buildFile: this,
         type: 'reference',
@@ -137,11 +140,12 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     }
   }
 
-  *getReferences(): Generator<ParsedReference> {
+  *getReferences(): Generator<BuildFileReference> {
     const references = this.buildFile.references || {}
     for (const name of Object.keys(references)) {
       yield {
         name,
+        type: 'reference',
         buildFile: parseBuildFile(join(dirname(this.fileName), references[name]), {
           buildFile: this,
           type: 'reference',
@@ -151,14 +155,14 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     }
   }
 
-  getTask(name: string): ParsedTask {
+  getTask(name: string): Task {
     const tasks = this.buildFile.tasks || {}
     const task = tasks[name]
     if (task) {
-      if (isDockerBuildFileTask(task)) {
-        return new ParsedDockerTaskImpl(this, name, task)
+      if (isDockerFileTaskConfig(task)) {
+        return new DockerTask(this, name, task)
       }
-      return new ParsedLocalTaskImpl(this, name, task)
+      return new LocalTask(this, name, task)
     }
 
     const [prefix, taskName] = splitBy(name, ':')
@@ -177,15 +181,15 @@ export class ParsedBuildFileImpl implements ParsedBuildFile {
     throw new Error(`could not find task ${name}`)
   }
 
-  *getTasks(): Generator<ParsedTask> {
+  *getTasks(): Generator<Task> {
     const tasks = this.buildFile.tasks || {}
     for (const name of Object.keys(tasks)) {
       const task = tasks[name]
 
-      if (isDockerBuildFileTask(task)) {
-        yield new ParsedDockerTaskImpl(this, name, task)
+      if (isDockerFileTaskConfig(task)) {
+        yield new DockerTask(this, name, task)
       }
-      yield new ParsedLocalTaskImpl(this, name, task)
+      yield new LocalTask(this, name, task)
     }
 
     for (const ref of this.getReferences()) {

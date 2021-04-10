@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { parseBuildFile } from '../src/parse'
+import { parseBuildFile } from '../src/file/parse'
 
 describe('invalid', () => {
   it('should throw on invalid yaml', () => {

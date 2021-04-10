@@ -1,8 +1,7 @@
 import { join, dirname } from 'path'
 import { expectLog, getBuildFilePath, getTestArg, loadExampleBuildFile } from './run-arg'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs'
-import { remove } from '../src/remove'
-import { ParsedBuildFileTask } from '../src/parsedBuildFileTask'
+import { remove } from '../src/file/remove'
 
 describe('cache', () => {
   const buildFile = loadExampleBuildFile('cache')
@@ -45,13 +44,12 @@ describe('cache', () => {
 
   it('should rerun after task changes even when its cached', async () => {
     const exampleTask = buildFile.getTask('example')
-    const dockerTask = exampleTask as ParsedBuildFileTask
 
     const [arg] = getTestArg()
     expect(await exampleTask.isCached(arg)).toBeFalsy()
     await exampleTask.execute(arg)
     expect(await exampleTask.isCached(arg)).toBeTruthy()
-    ;(<any>dockerTask).dockerTask.image = '15.0.0'
+    ;(<any>exampleTask).dockerTask.image = '15.0.0'
     expect(await exampleTask.isCached(arg)).toBeFalsy()
   })
 })

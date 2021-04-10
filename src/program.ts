@@ -1,8 +1,8 @@
 import commaner, { Command } from 'commander'
 import { existsSync, writeFileSync } from 'fs'
-import { parseBuildFile } from './parse'
 import consola, { LogLevel } from 'consola'
 import { RunArg } from './run-arg'
+import { parseBuildFile } from './file/parse'
 
 export function getProgram(fileName: string): commaner.Command {
   const program = new Command()
@@ -16,7 +16,8 @@ export function getProgram(fileName: string): commaner.Command {
       .description('clear task cache')
       .action(async () => {
         try {
-          await buildFile.clean()
+          const runArg = new RunArg(false, 0)
+          await buildFile.clean(runArg)
         } catch (e) {
           consola.error(e)
           process.exit(1)

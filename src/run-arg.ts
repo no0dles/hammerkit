@@ -1,7 +1,7 @@
 import dockerode from 'dockerode'
 import consola from 'consola'
 import { parseEnvs } from './env'
-import { FileTaskExecution } from './parsedBuildFileTask'
+import { TaskResult } from './cache/task-result'
 
 export class RunArg {
   constructor(
@@ -11,14 +11,14 @@ export class RunArg {
     public logger = consola,
     public envs = parseEnvs(),
     private paths: { id: string; name: string }[] = [],
-    private completions: { [key: string]: FileTaskExecution } = {}
+    private completions: { [key: string]: TaskResult } = {}
   ) {}
 
-  hasCompleted(id: string): FileTaskExecution | null {
+  hasCompleted(id: string): TaskResult | null {
     return this.completions[id] || null
   }
 
-  complete(id: string, result: FileTaskExecution): void {
+  complete(id: string, result: TaskResult): void {
     this.completions[id] = result
   }
 

@@ -1,11 +1,11 @@
-import { ParsedLocalTaskImpl } from '../src/parsedLocalTaskImpl'
-import { ParsedBuildFileImpl } from '../src/parsedBuildFileImpl'
+import { BuildFile } from '../src/build-file'
+import { LocalTask } from '../src/local-task'
 
 describe('parsed-task-impl', () => {
   describe('getSources', () => {
     function testGlob(glob: string, expectedSource: string) {
-      const build = new ParsedBuildFileImpl('test.yaml', {}, null)
-      const task = new ParsedLocalTaskImpl(build, 'test', {
+      const build = new BuildFile('test.yaml', {}, null)
+      const task = new LocalTask(build, 'test', {
         cmds: [],
         src: [glob],
         envs: {},

@@ -1,0 +1,5 @@
+tasks:
+  example:
+    cmds:
+      - path: sub
+        cmd: pwd

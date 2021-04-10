@@ -1,23 +1,23 @@
-import { ParsedBuildFile } from './parsedBuildFile'
-import { DockerBuildFileTask } from './config'
 import { RunArg } from './run-arg'
 import { homedir } from 'os'
 import { join } from 'path'
 import { existsSync } from 'fs'
-import { ParsedTaskImpl } from './parsedTaskImpl'
-import { Duplex, Writable } from 'stream'
-import { getLogs } from './log'
+import { Task } from './task'
 import { Container, ExecInspectInfo } from 'dockerode'
 import { splitBy } from './string'
-import { Generation } from './parsedBuildFileTask'
+import { DockerFileTaskConfig } from './config/docker-file-task-config'
+import { BuildFile } from './build-file'
+import { awaitStream } from './docker/stream'
+import { TaskGeneration } from './cache/task-generation'
+import { isTaskCommandConfigCmd } from './task-command'
 
 interface Volume {
   localPath: string
   containerPath: string
 }
 
-export class ParsedDockerTaskImpl extends ParsedTaskImpl {
-  constructor(buildFile: ParsedBuildFile, name: string, private dockerTask: DockerBuildFileTask) {
+export class DockerTask extends Task {
+  constructor(buildFile: BuildFile, name: string, private dockerTask: DockerFileTaskConfig) {
     super(buildFile, name, dockerTask)
   }
 
@@ -38,7 +38,7 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
     })
   }
 
-  async executeTask(arg: RunArg, generation: Generation[]): Promise<void> {
+  async executeTask(arg: RunArg, generation: TaskGeneration[]): Promise<void> {
     const envs = this.getEnvironmentVariables(arg)
     const workingDirectory = this.getWorkingDirectory()
     const imageName = envs.escape(this.dockerTask.image)
@@ -108,7 +108,13 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
 
       const setUserPermission = async (directory: string) => {
         arg.logger.withTag(name).debug('set permission on ', directory)
-        const result = await this.execCommand(container, arg, ['chown', user, directory], undefined)
+        const result = await this.execCommand(
+          container,
+          arg,
+          containerWorkingDirectory,
+          ['chown', user, directory],
+          undefined
+        )
         if (result.ExitCode !== 0) {
           arg.logger.warn(`unable to set permissions for ${directory}`)
         }
@@ -122,12 +128,24 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
       for (const cmd of this.getCommands(arg)) {
         if (typeof cmd === 'string') {
           arg.logger.withTag(name).info(cmd)
-          const result = await this.execCommand(container, arg, splitCommand(cmd), user)
+          const result = await this.execCommand(container, arg, containerWorkingDirectory, splitCommand(cmd), user)
+          if (result.ExitCode !== 0) {
+            throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
+          }
+        } else if (isTaskCommandConfigCmd(cmd)) {
+          arg.logger.withTag(name).info(cmd.cmd)
+          const result = await this.execCommand(
+            container,
+            arg,
+            join(containerWorkingDirectory, cmd.path ?? ''),
+            splitCommand(cmd.cmd),
+            user
+          )
           if (result.ExitCode !== 0) {
             throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
           }
         } else {
-          await cmd.run.execute(arg)
+          await cmd.task.execute(arg)
         }
       }
     } finally {
@@ -138,11 +156,13 @@ export class ParsedDockerTaskImpl extends ParsedTaskImpl {
   async execCommand(
     container: Container,
     arg: RunArg,
+    workingDir: string,
     cmd: string[],
     user: string | undefined
   ): Promise<ExecInspectInfo> {
     const exec = await container.exec({
       Cmd: cmd,
+      WorkingDir: workingDir,
       Tty: false,
       AttachStdout: true,
       AttachStderr: true,
@@ -178,40 +198,4 @@ function splitCommand(cmd: string): string[] {
     return []
   }
   return matches
-}
-
-class NoopStream extends Writable {
-  constructor(private fn: (log: string) => void) {
-    super()
-  }
-
-  _write(chunk: any, encoding: BufferEncoding, callback: (error?: Error | null) => void) {
-    for (const log of getLogs(chunk)) {
-      this.fn(log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
-    }
-    setImmediate(callback)
-  }
-}
-
-async function awaitStream(stream: Duplex, runArg: RunArg, task: string) {
-  runArg.docker.modem.demuxStream(
-    stream,
-    new NoopStream((log) => {
-      runArg.logger.withTag(task).info(log)
-    }),
-    new NoopStream((log) => {
-      runArg.logger.withTag(task).info(log)
-    })
-  )
-  await new Promise<void>((resolve, reject) => {
-    stream.on('error', (err) => {
-      reject(err)
-    })
-    stream.on('end', () => {
-      resolve()
-    })
-    stream.on('close', () => {
-      resolve()
-    })
-  })
 }

@@ -1,9 +1,9 @@
 import { RunArg } from '../src/run-arg'
 import consola, { LogLevel } from 'consola'
 import { join } from 'path'
-import { parseBuildFile } from '../src/parse'
-import { ParsedBuildFile } from '../src/parsedBuildFile'
 import { readFileSync } from 'fs'
+import { BuildFile } from '../src/build-file'
+import { parseBuildFile } from '../src/file/parse'
 
 export function getTestArg(): [RunArg, jest.Mock] {
   const mock = jest.fn()
@@ -22,7 +22,7 @@ export function getTestArg(): [RunArg, jest.Mock] {
   return [arg, mock]
 }
 
-export function loadExampleBuildFile(dir: string): ParsedBuildFile {
+export function loadExampleBuildFile(dir: string): BuildFile {
   const fileName = getBuildFilePath(dir)
   return parseBuildFile(fileName, null)
 }

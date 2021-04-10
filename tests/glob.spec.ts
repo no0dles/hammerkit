@@ -1,7 +1,7 @@
 import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { dirname, join } from 'path'
-import { remove } from '../src/remove'
 import { appendFileSync } from 'fs'
+import { remove } from '../src/file/remove'
 
 describe('glob', () => {
   const buildFile = loadExampleBuildFile('glob')

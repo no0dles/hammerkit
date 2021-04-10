@@ -25,7 +25,7 @@ tasks:
   loop_with_cmd:
     description: loop over a cmd
     cmds:
-    - run: loop_with_cmd
+    - task: loop_with_cmd
 
   loop_with_dep:
     description: loop over dep

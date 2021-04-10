@@ -2,7 +2,7 @@ import { join, dirname } from 'path'
 import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
-import { remove } from '../src/remove'
+import { remove } from '../src/file/remove'
 
 describe('store/restore', () => {
   const buildFile = loadExampleBuildFile('store-restore')
@@ -16,12 +16,14 @@ describe('store/restore', () => {
 
   it('should clean created outputs', async () => {
     const [arg] = getTestArg()
-
     await buildFile.getTask('example').execute(arg)
     expect(existsSync(outputPath)).toBeTruthy()
+
+    const [cleanArg] = getTestArg()
     await buildFile.store(storePath)
-    await buildFile.clean()
+    await buildFile.clean(cleanArg)
     expect(existsSync(outputPath)).toBeFalsy()
+    
     await buildFile.restore(storePath)
     expect(existsSync(outputPath)).toBeTruthy()
   })

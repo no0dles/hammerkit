@@ -1,35 +1,32 @@
-import { ParsedBuildFile } from './parsedBuildFile'
 import { RunArg } from './run-arg'
-import { BuildFileTask } from './config'
 import { dirname, join, relative, resolve } from 'path'
 import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs'
-import { ParsedTask } from './parse'
-import { copy } from './copy'
-import {
-  BuildFileValidation,
-  FileTaskExecution,
-  Generation,
-  ParsedBuildFileTask,
-  ParsedBuildFileTaskCmd,
-  SourceEntry,
-  SourceEntryFilterFn,
-} from './parsedBuildFileTask'
 import { EnvMap, overrideEnv } from './env'
-import { remove } from './remove'
 import { splitBy } from './string'
 import { Minimatch } from 'minimatch'
+import { TaskConfig } from './config/task-config'
+import { BuildFile } from './build-file'
+import { copy } from './file/copy'
+import { remove } from './file/remove'
+import { isTaskCommandConfigCmd } from './config/task-command-config'
+import { BuildFileValidation } from './build-file-validation'
+import { TaskGeneration } from './cache/task-generation'
+import { TaskResult } from './cache/task-result'
+import { SourceEntry, SourceEntryFilterFn } from './cache/source-entry'
+import { CacheEntry } from './cache/cache-entry'
+import { isTaskCommandConfigRef, TaskCommand } from './task-command'
 
-export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
-  constructor(private buildFile: ParsedBuildFile, private name: string, protected task: BuildFileTask) {}
+export abstract class Task {
+  constructor(private buildFile: BuildFile, private name: string, protected task: TaskConfig) {}
 
-  abstract executeTask(arg: RunArg, generations: Generation[]): Promise<void>
+  abstract executeTask(arg: RunArg, generations: TaskGeneration[]): Promise<void>
 
   abstract get taskConfigKeys(): string[]
 
   abstract get taskCacheValues(): any[]
 
-  async execute(arg: RunArg): Promise<FileTaskExecution> {
-    const result: FileTaskExecution = {
+  async execute(arg: RunArg): Promise<TaskResult> {
+    const result: TaskResult = {
       cached: false,
       generations: [],
     }
@@ -99,21 +96,25 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     return (this.task.description || '').trim()
   }
 
-  *getCommands(arg: RunArg): Generator<ParsedBuildFileTaskCmd> {
+  *getCommands(arg: RunArg): Generator<TaskCommand> {
     const envs = this.getEnvironmentVariables(arg)
     for (const cmd of this.task.cmds || []) {
       if (typeof cmd === 'string') {
         yield envs.escape(cmd).trim()
+      } else if (isTaskCommandConfigCmd(cmd)) {
+        yield {
+          cmd: envs.escape(cmd.cmd).trim(),
+          path: cmd.path,
+        }
       } else {
         yield {
-          run: this.buildFile.getTask(cmd.run),
-          envs: overrideEnv(envs, cmd.envs),
+          task: this.buildFile.getTask(cmd.task),
         }
       }
     }
   }
 
-  *getDependencies(): Generator<ParsedTask> {
+  *getDependencies(): Generator<Task> {
     const deps = this.task.deps || []
     for (const dep of deps) {
       yield this.buildFile.getTask(dep)
@@ -244,9 +245,9 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     let cmdCount = 0
     for (const cmd of this.getCommands(arg)) {
       cmdCount++
-      if (typeof cmd !== 'string') {
-        if (!arg.hasParent(cmd.run.getId())) {
-          for (const validate of cmd.run.validate(arg.child(this.getId(), this.getRelativeName()))) {
+      if (isTaskCommandConfigRef(cmd)) {
+        if (!arg.hasParent(cmd.task.getId())) {
+          for (const validate of cmd.task.validate(arg.child(this.getId(), this.getRelativeName()))) {
             yield validate
           }
         } else {
@@ -296,10 +297,19 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
     }
   }
 
-  async clean(): Promise<void> {
+  async clean(arg: RunArg): Promise<void> {
+    const id = this.getId()
+    if (arg.hasCompleted(id)) {
+      return
+    }
+
     for (const generate of this.getGenerates()) {
       await remove(generate.absolutePath)
     }
+    for (const dep of this.getDependencies()) {
+      await dep.clean(arg)
+    }
+    arg.complete(id, { generations: [], cached: false })
   }
 
   private getCacheFile() {
@@ -461,9 +471,4 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
       return map
     }, {})
   }
-}
-
-export interface CacheEntry {
-  fileName: string
-  lastModified: number
 }
