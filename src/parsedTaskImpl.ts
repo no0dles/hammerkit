@@ -96,14 +96,14 @@ export abstract class ParsedTaskImpl implements ParsedBuildFileTask {
   }
 
   getDescription(): string {
-    return this.task.description || ''
+    return (this.task.description || '').trim()
   }
 
   *getCommands(arg: RunArg): Generator<ParsedBuildFileTaskCmd> {
     const envs = this.getEnvironmentVariables(arg)
     for (const cmd of this.task.cmds || []) {
       if (typeof cmd === 'string') {
-        yield envs.escape(cmd)
+        yield envs.escape(cmd).trim()
       } else {
         yield {
           run: this.buildFile.getTask(cmd.run),

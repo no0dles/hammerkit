@@ -1,0 +1,11 @@
+tasks:
+  example:
+    description: >
+      Test multiline
+      description
+    cmds:
+      - some very long cmd
+        continues on line 2
+      - >
+        some other very long
+        cmd continues on line 2
