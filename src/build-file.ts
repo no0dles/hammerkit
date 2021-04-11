@@ -12,6 +12,7 @@ import { parseBuildFile } from './file/parse'
 import { Task } from './task'
 import { BuildFileValidation } from './build-file-validation'
 import { copy } from './file/copy'
+import consola from 'consola'
 
 export class BuildFile {
   constructor(
@@ -82,22 +83,32 @@ export class BuildFile {
   }
 
   *validate(arg: RunArg): Generator<BuildFileValidation> {
+    if (arg.hasCompleted(this.fileName)) {
+      return
+    }
+
+    let count = 0
     for (const task of this.getTasks()) {
       for (const res of task.validate(arg)) {
         yield res
+        count++
       }
     }
+
     for (const ref of this.getReferences()) {
       for (const res of ref.buildFile.validate(arg)) {
-        // TODO child?
         yield res
       }
     }
     for (const include of this.getIncludes()) {
-      // TODO child?
       for (const res of include.buildFile.validate(arg)) {
         yield res
       }
+    }
+
+    arg.complete(this.fileName, { generations: [], cached: false })
+    if (count === 0) {
+      consola.success(`${this.fileName} is valid`)
     }
   }
 

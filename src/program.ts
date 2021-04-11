@@ -56,7 +56,6 @@ export function getProgram(fileName: string): commaner.Command {
       .description('validate build.yaml')
       .action(async () => {
         try {
-          let count = 0
           const arg = new RunArg(false, 0)
           for (const validation of buildFile.validate(arg)) {
             let logger = consola.withTag(validation.buildFile.fileName)
@@ -68,12 +67,6 @@ export function getProgram(fileName: string): commaner.Command {
             } else {
               logger.warn(validation.message)
             }
-
-            count++
-          }
-
-          if (count === 0) {
-            consola.success(`${buildFile} is valid`)
           }
         } catch (e) {
           process.exit(1)
