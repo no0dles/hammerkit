@@ -69,6 +69,7 @@ export function getProgram(fileName: string): commaner.Command {
             }
           }
         } catch (e) {
+          consola.error(`validation failed ${e.message}`)
           process.exit(1)
         }
       })
