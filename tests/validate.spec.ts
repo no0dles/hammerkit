@@ -17,6 +17,10 @@ describe('validate', () => {
     validateTask('regular_task', [])
   })
 
+  it('should validate regular docker task', async () => {
+    validateTask('regular_docker_task', [])
+  })
+
   it('should validate task without description', async () => {
     validateTask('missing_desc', ['missing description'])
   })

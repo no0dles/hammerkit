@@ -4,6 +4,12 @@ tasks:
     cmds:
       - echo foo
 
+  regular_docker_task:
+    description: the perfect task
+    image: node:14.16.0
+    cmds:
+      - echo foo
+
   missing_desc:
     cmds:
       - echo foo
