@@ -195,6 +195,7 @@ export class BuildFile {
       if (isDockerFileTaskConfig(task)) {
         return new DockerTask(this, name, task)
       }
+
       return new LocalTask(this, name, task)
     }
 
@@ -221,8 +222,9 @@ export class BuildFile {
 
       if (isDockerFileTaskConfig(task)) {
         yield new DockerTask(this, name, task)
+      } else {
+        yield new LocalTask(this, name, task)
       }
-      yield new LocalTask(this, name, task)
     }
 
     for (const ref of this.getReferences()) {
