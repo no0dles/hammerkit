@@ -1,11 +1,11 @@
-import {getTestArg, loadExampleBuildFile} from './run-arg';
+import { getTestArg, loadExampleBuildFile } from './run-arg'
 
 describe('monorepo', () => {
-  const buildFile = loadExampleBuildFile('monorepo');
+  const buildFile = loadExampleBuildFile('monorepo')
 
   it('should build monorepo', async () => {
-    const [arg] = getTestArg();
-    const task = buildFile.getTask('build');
-    await task.execute(arg);
-  });
-});
+    const [arg] = getTestArg()
+    const task = buildFile.getTask('build')
+    await task.execute(arg)
+  })
+})

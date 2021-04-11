@@ -32,7 +32,6 @@ describe('store/restore', () => {
   })
 
   it('should not store anything if nothing got generated', async () => {
-
     expect(existsSync(outputPath)).toBeFalsy()
     expect(existsSync(storePath)).toBeFalsy()
     const [storeArg] = getTestArg()
