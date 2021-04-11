@@ -89,7 +89,7 @@ export abstract class Task {
   }
 
   getId(): string {
-    return `${this.buildFile.fileName};${this.getRelativeName()}`
+    return `${this.getWorkingDirectory()};${this.getRelativeName()}`
   }
 
   getDescription(): string {

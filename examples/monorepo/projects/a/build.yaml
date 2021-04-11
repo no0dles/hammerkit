@@ -1,0 +1,10 @@
+tasks:
+  build:
+    deps: [npm:install]
+    cmds:
+      - node_modules/.bin/tsc
+    generates:
+      - dist
+
+includes:
+  npm: ../../build.npm.yaml

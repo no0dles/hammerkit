@@ -19,20 +19,26 @@ describe('store/restore', () => {
     await buildFile.getTask('example').execute(arg)
     expect(existsSync(outputPath)).toBeTruthy()
 
+    const [storeArg] = getTestArg()
+    await buildFile.store(storeArg, dirname(buildFile.fileName), storePath)
+
     const [cleanArg] = getTestArg()
-    await buildFile.store(storePath)
     await buildFile.clean(cleanArg)
     expect(existsSync(outputPath)).toBeFalsy()
 
-    await buildFile.restore(storePath)
+    const [restoreArg] = getTestArg()
+    await buildFile.restore(restoreArg, dirname(buildFile.fileName), storePath)
     expect(existsSync(outputPath)).toBeTruthy()
   })
 
   it('should not store anything if nothing got generated', async () => {
+
     expect(existsSync(outputPath)).toBeFalsy()
     expect(existsSync(storePath)).toBeFalsy()
-    await buildFile.store(storePath)
-    await buildFile.restore(storePath)
+    const [storeArg] = getTestArg()
+    await buildFile.store(storeArg, dirname(buildFile.fileName), storePath)
+    const [restoreArg] = getTestArg()
+    await buildFile.restore(restoreArg, dirname(buildFile.fileName), storePath)
     expect(existsSync(outputPath)).toBeFalsy()
     expect(existsSync(storePath)).toBeFalsy()
   })
