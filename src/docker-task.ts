@@ -128,7 +128,7 @@ export class DockerTask extends Task {
       for (const cmd of this.getCommands(arg)) {
         if (typeof cmd === 'string') {
           arg.logger.withTag(name).info(cmd)
-          const result = await this.execCommand(container, arg, containerWorkingDirectory, splitCommand(cmd), user)
+          const result = await this.execCommand(container, arg, containerWorkingDirectory, this.splitCommand(cmd), user)
           if (result.ExitCode !== 0) {
             throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
           }
@@ -138,7 +138,7 @@ export class DockerTask extends Task {
             container,
             arg,
             join(containerWorkingDirectory, cmd.path ?? ''),
-            splitCommand(cmd.cmd),
+            this.splitCommand(cmd.cmd),
             user
           )
           if (result.ExitCode !== 0) {
@@ -190,12 +190,8 @@ export class DockerTask extends Task {
       this.dockerTask.mounts,
     ]
   }
-}
 
-function splitCommand(cmd: string): string[] {
-  const matches = cmd.match(/(?:[^\s"]+|"[^"]*")+/g)
-  if (!matches) {
-    return []
+  splitCommand(cmd: string): string[] {
+    return [this.dockerTask.shell || 'sh', '-c', cmd]
   }
-  return matches
 }

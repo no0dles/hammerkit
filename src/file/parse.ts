@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs'
 import { BuildFile } from '../build-file'
 import { BuildFileConfig } from '../config/build-file-config'
 import { BuildFileReference } from '../build-file-reference'
+import { YAMLSyntaxError } from 'yaml/util'
 
 export function parseBuildFile(fileName: string, parentBuildFile: BuildFileReference | null): BuildFile {
   const buildFile = readBuildFile(fileName)
@@ -25,7 +26,11 @@ function readBuildFile(fileName: string): BuildFileConfig {
   try {
     buildFile = parse(content)
   } catch (e) {
-    throw new Error(`unable to parse yaml for ${fileName}`)
+    if (e instanceof YAMLSyntaxError) {
+      throw new Error(`unable to parse yaml for ${fileName}, ${e.message}`) // TODO line nr
+    } else {
+      throw new Error(`unable to parse yaml for ${fileName}, ${e.message}`)
+    }
   }
 
   return buildFile

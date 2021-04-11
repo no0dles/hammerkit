@@ -1,5 +1,6 @@
 import commaner, { Command } from 'commander'
 import { existsSync, writeFileSync } from 'fs'
+import { dirname } from 'path'
 import consola, { LogLevel } from 'consola'
 import { RunArg } from './run-arg'
 import { parseBuildFile } from './file/parse'
@@ -29,7 +30,8 @@ export function getProgram(fileName: string): commaner.Command {
       .description('save task outputs into <path>')
       .action(async (path) => {
         try {
-          await buildFile.restore(path)
+          const runArg = new RunArg(false, 0)
+          await buildFile.store(runArg, dirname(buildFile.fileName), path)
         } catch (e) {
           consola.error(e)
           process.exit(1)
@@ -41,7 +43,8 @@ export function getProgram(fileName: string): commaner.Command {
       .description('restore task outputs from <path>')
       .action(async (path) => {
         try {
-          await buildFile.restore(path)
+          const runArg = new RunArg(false, 0)
+          await buildFile.restore(runArg, dirname(buildFile.fileName), path)
         } catch (e) {
           consola.error(e)
           process.exit(1)

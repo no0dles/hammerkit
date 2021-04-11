@@ -1,4 +1,4 @@
-import { join, dirname } from 'path'
+import { join, dirname, relative } from 'path'
 import { EnvMap, loadEnvFile, overrideEnv } from './env'
 import { RunArg } from './run-arg'
 import { splitBy } from './string'
@@ -11,6 +11,7 @@ import { LocalTask } from './local-task'
 import { parseBuildFile } from './file/parse'
 import { Task } from './task'
 import { BuildFileValidation } from './build-file-validation'
+import { copy } from './file/copy'
 
 export class BuildFile {
   constructor(
@@ -42,21 +43,42 @@ export class BuildFile {
     await this.cleanCache()
   }
 
+  private getCacheDirectoryPath() {
+    return join(dirname(this.fileName), '.hammerkit')
+  }
+
   async cleanCache(): Promise<void> {
-    const cacheDir = join(dirname(this.fileName), '.hammerkit')
-    await remove(cacheDir)
+    await remove(this.getCacheDirectoryPath())
   }
 
-  async restore(directory: string): Promise<void> {
+  async restore(arg: RunArg, relativeDirectory: string, targetDirectory: string): Promise<void> {
     for (const task of this.getTasks()) {
-      await task.restore(directory)
+      await task.restore(arg, relativeDirectory, targetDirectory)
     }
+
+    const sourceCacheDir = join(
+      process.cwd(),
+      targetDirectory,
+      relative(relativeDirectory, dirname(this.fileName)),
+      '.hammerkit'
+    )
+    const cacheDir = this.getCacheDirectoryPath()
+    copy(sourceCacheDir, cacheDir)
   }
 
-  async store(directory: string): Promise<void> {
+  async store(arg: RunArg, relativeDirectory: string, targetDirectory: string): Promise<void> {
     for (const task of this.getTasks()) {
-      await task.store(directory)
+      await task.store(arg, relativeDirectory, targetDirectory)
     }
+
+    const cacheDir = this.getCacheDirectoryPath()
+    const targetCacheDir = join(
+      process.cwd(),
+      targetDirectory,
+      relative(relativeDirectory, dirname(this.fileName)),
+      '.hammerkit'
+    )
+    copy(cacheDir, targetCacheDir)
   }
 
   *validate(arg: RunArg): Generator<BuildFileValidation> {

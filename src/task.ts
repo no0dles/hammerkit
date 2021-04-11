@@ -271,9 +271,14 @@ export abstract class Task {
     }
   }
 
-  async restore(directory: string): Promise<void> {
+  async restore(arg: RunArg, relativeDirectory: string, targetDirectory: string): Promise<void> {
+    const id = this.getId()
+    if (arg.hasCompleted(id)) {
+      return
+    }
+
     for (const generate of this.getGenerates()) {
-      const sourcePath = join(directory, this.getRelativeName(), generate.relativePath)
+      const sourcePath = join(targetDirectory, relative(relativeDirectory, generate.absolutePath))
       const targetPath = generate.absolutePath
 
       if (!existsSync(sourcePath)) {
@@ -282,12 +287,26 @@ export abstract class Task {
 
       copy(sourcePath, targetPath)
     }
+
+    for (const dep of this.getDependencies()) {
+      await dep.restore(arg, relativeDirectory, targetDirectory)
+    }
+
+    arg.complete(id, { generations: [], cached: false })
   }
 
-  async store(directory: string): Promise<void> {
+  async store(arg: RunArg, relativeDirectory: string, targetDirectory: string): Promise<void> {
+    const id = this.getId()
+    if (arg.hasCompleted(id)) {
+      return
+    }
+
     for (const generate of this.getGenerates()) {
       const sourcePath = generate.absolutePath
-      const targetPath = join(directory, this.getRelativeName(), generate.relativePath)
+      const relativePath = relative(relativeDirectory, generate.absolutePath)
+      const targetPath = join(targetDirectory, relativePath)
+
+      await remove(targetPath)
 
       if (!existsSync(sourcePath)) {
         continue
@@ -295,6 +314,12 @@ export abstract class Task {
 
       copy(sourcePath, targetPath)
     }
+
+    for (const dep of this.getDependencies()) {
+      await dep.store(arg, relativeDirectory, targetDirectory)
+    }
+
+    arg.complete(id, { generations: [], cached: false })
   }
 
   async clean(arg: RunArg): Promise<void> {
