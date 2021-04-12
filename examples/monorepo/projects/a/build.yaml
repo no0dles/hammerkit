@@ -1,6 +1,10 @@
 tasks:
   build:
+    image: node:14.16.0
     deps: [npm:install]
+    src:
+      - tsconfig.json
+      - src
     cmds:
       - node_modules/.bin/tsc
     generates:

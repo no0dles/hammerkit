@@ -1,6 +1,6 @@
 import { RunArg } from './run-arg'
 import { homedir } from 'os'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { existsSync } from 'fs'
 import { Task } from './task'
 import { Container, ExecInspectInfo } from 'dockerode'
@@ -82,7 +82,7 @@ export class DockerTask extends Task {
     for (const generate of generation) {
       addVolume({
         localPath: generate.absolutePath,
-        containerPath: join(containerWorkingDirectory, generate.relativePath),
+        containerPath: join(containerWorkingDirectory, relative(workingDirectory, generate.absolutePath)),
       })
     }
 

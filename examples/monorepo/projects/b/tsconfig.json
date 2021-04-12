@@ -3,11 +3,17 @@
     "module": "commonjs",
     "target": "es5",
     "sourceMap": true,
+    "composite": true,
     "rootDir": "src",
     "baseUrl": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
+  "references": [{
+    "path": "../a/tsconfig.json"
+  }],
   "exclude": [
+    "dist",
     "node_modules"
   ]
 }

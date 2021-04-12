@@ -37,6 +37,9 @@ export abstract class Task {
       return prevResult
     }
 
+    for (const src of this.getSources()) {
+      result.generations.push(src)
+    }
     for (const generate of this.getGenerates()) {
       result.generations.push(generate)
     }
