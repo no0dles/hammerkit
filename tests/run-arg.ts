@@ -12,7 +12,7 @@ export function getTestArg(): [RunArg, jest.Mock] {
       function (level, message) {
         if (level && message) {
           // eslint-disable-next-line no-console
-          console.log(LogLevel[level], message)
+          //console.log(LogLevel[level], message)
         }
         return mock(level, message)
       }
