@@ -95,7 +95,7 @@ export function getProgram(fileName: string): commaner.Command {
           }
 
           try {
-            await task.execute(runArg)
+            await task.execute(runArg, [])
           } catch (e) {
             runArg.logger.error(e)
             process.exit(1)

@@ -6,6 +6,7 @@ describe('monorepo', () => {
   it('should build monorepo', async () => {
     const [arg] = getTestArg()
     const task = buildFile.getTask('build')
-    await task.execute(arg)
+    arg.disableCache = true
+    await task.execute(arg, [])
   })
 })

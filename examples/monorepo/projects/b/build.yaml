@@ -1,14 +1,8 @@
 tasks:
   build:
-    image: node:14.16.0
-    deps: [npm:install, a:build]
-    src:
-      - tsconfig.json
-      - src
+    deps: [a:build]
     cmds:
-      - node_modules/.bin/tsc
-    generates:
-      - dist
+      - task: npm:build
 
 references:
   a: ../a/build.yaml

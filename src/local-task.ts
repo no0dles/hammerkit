@@ -7,6 +7,7 @@ import { BuildFile } from './build-file'
 import { EnvMap } from './env'
 import { join } from 'path'
 import { isTaskCommandConfigCmd } from './task-command'
+import { TaskGeneration } from './cache/task-generation'
 
 export class LocalTask extends Task {
   constructor(buildFile: BuildFile, name: string, task: TaskConfig) {
@@ -56,7 +57,7 @@ export class LocalTask extends Task {
     })
   }
 
-  async executeTask(arg: RunArg): Promise<void> {
+  async executeTask(arg: RunArg, generation: TaskGeneration[]): Promise<void> {
     const taskEnv = this.getEnvironmentVariables(arg)
     const workingDir = this.getWorkingDirectory()
 
@@ -66,7 +67,7 @@ export class LocalTask extends Task {
       } else if (isTaskCommandConfigCmd(cmd)) {
         await this.executeCommand(cmd.cmd, arg, join(workingDir, cmd.path || ''), taskEnv)
       } else {
-        await cmd.task.execute(arg)
+        await cmd.task.execute(arg, generation)
       }
     }
   }

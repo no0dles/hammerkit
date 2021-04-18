@@ -25,10 +25,10 @@ export abstract class Task {
 
   abstract get taskCacheValues(): any[]
 
-  async execute(arg: RunArg): Promise<TaskResult> {
+  async execute(arg: RunArg, generation: TaskGeneration[]): Promise<TaskResult> {
     const result: TaskResult = {
       cached: false,
-      generations: [],
+      generations: generation,
     }
 
     const id = this.getId()
@@ -62,7 +62,7 @@ export abstract class Task {
 
     let allDependenciesAreCached = true
     for (const dep of this.getDependencies()) {
-      const depResult = await dep.execute(arg)
+      const depResult = await dep.execute(arg, generation)
       if (depResult.generations.length > 0) {
         result.generations.push(...depResult.generations)
       }

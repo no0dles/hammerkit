@@ -151,7 +151,7 @@ export class DockerTask extends Task {
             throw new Error(`command ${cmd} failed with ${result.ExitCode}`)
           }
         } else {
-          await cmd.task.execute(arg)
+          await cmd.task.execute(arg, generation)
         }
       }
     } finally {

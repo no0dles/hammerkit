@@ -11,7 +11,7 @@ describe('clean', () => {
 
     await remove(outputPath)
 
-    await buildFile.getTask('example').execute(arg)
+    await buildFile.getTask('example').execute(arg, [])
     expect(existsSync(outputPath)).toBeTruthy()
 
     const [cleanArg] = getTestArg()

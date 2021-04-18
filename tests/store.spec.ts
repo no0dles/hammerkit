@@ -16,7 +16,7 @@ describe('store/restore', () => {
 
   it('should clean created outputs', async () => {
     const [arg] = getTestArg()
-    await buildFile.getTask('example').execute(arg)
+    await buildFile.getTask('example').execute(arg, [])
     expect(existsSync(outputPath)).toBeTruthy()
 
     const [storeArg] = getTestArg()

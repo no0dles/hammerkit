@@ -7,7 +7,7 @@ describe('include', () => {
   it('should run included task', async () => {
     const exampleTask = buildFile.getTask('example')
     const [arg, mock] = getTestArg()
-    await exampleTask.execute(arg)
+    await exampleTask.execute(arg, [])
     expectLog(mock, 'foobar')
     expectLog(mock, 'cat foobar.txt')
   })
