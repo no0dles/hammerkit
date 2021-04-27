@@ -26,9 +26,9 @@ describe('cache', () => {
     const exampleTask = buildFile.getTask('example')
     const [arg] = getTestArg()
     expect(await exampleTask.isCached(arg)).toBeFalsy()
-    await exampleTask.execute(arg, [])
+    await exampleTask.execute(arg)
     expect(await exampleTask.isCached(arg)).toBeTruthy()
-    await exampleTask.execute(arg, [])
+    await exampleTask.execute(arg)
     appendFileSync(sourceFile, '\n')
     expect(await exampleTask.isCached(arg)).toBeFalsy()
   })
@@ -36,7 +36,7 @@ describe('cache', () => {
   it('should mount generations of dependant tasks', async () => {
     const exampleTask = buildFile.getTask('dependant')
     const [arg, mock] = getTestArg()
-    await exampleTask.execute(arg, [])
+    await exampleTask.execute(arg)
 
     expectLog(mock, 'ls')
     expectLog(mock, 'node_modules')
@@ -47,7 +47,7 @@ describe('cache', () => {
 
     const [arg] = getTestArg()
     expect(await exampleTask.isCached(arg)).toBeFalsy()
-    await exampleTask.execute(arg, [])
+    await exampleTask.execute(arg)
     expect(await exampleTask.isCached(arg)).toBeTruthy()
     ;(<any>exampleTask).dockerTask.image = '15.0.0'
     expect(await exampleTask.isCached(arg)).toBeFalsy()

@@ -1,11 +1,11 @@
 tasks:
   build:
     deps: [a:build]
-    cmds:
-      - task: npm:build
+    extends: tsc:build
 
 references:
   a: ../a/build.yaml
 
 includes:
   npm: ../../build.npm.yaml
+  tsc: ../../build.tsc.yaml

@@ -6,6 +6,6 @@ describe('local', () => {
   it('should run local task', async () => {
     const exampleTask = buildFile.getTask('example')
     const [arg] = getTestArg()
-    await exampleTask.execute(arg, [])
+    await exampleTask.execute(arg)
   })
 })

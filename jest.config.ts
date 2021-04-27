@@ -1,7 +1,8 @@
-import type { Config } from '@jest/types'
+import type {Config} from '@jest/types';
 
 const config: Config.InitialOptions = {
   preset: 'ts-jest',
+  setupFilesAfterEnv: ['jest-extended'],
   moduleFileExtensions: ['ts', 'js'],
   transform: {
     '^.+\\.ts$': 'ts-jest',
@@ -13,7 +14,7 @@ const config: Config.InitialOptions = {
   },
   rootDir: '.',
   testTimeout: 45000,
-  testRegex: 'tests/.*\\.spec\\.ts$',
+  testRegex: ['tests/.*\\.spec\\.ts$', 'src/rewrite/.*\\.spec\\.ts$'],
   testEnvironment: 'node',
   collectCoverage: true,
   coverageDirectory: '<rootDir>/coverage',
@@ -21,6 +22,6 @@ const config: Config.InitialOptions = {
     '<rootDir>/src/**',
   ],
   coverageReporters: ['json', 'html', 'lcov'],
-}
+};
 
-export default config
+export default config;

@@ -1,6 +1,7 @@
 import { Duplex, Writable } from 'stream'
 import { getLogs } from '../log'
 import { RunArg } from '../run-arg'
+import Dockerode from 'dockerode';
 
 class NoopStream extends Writable {
   constructor(private fn: (log: string) => void) {
@@ -15,14 +16,14 @@ class NoopStream extends Writable {
   }
 }
 
-export async function awaitStream(stream: Duplex, runArg: RunArg, task: string): Promise<void> {
-  runArg.docker.modem.demuxStream(
+export async function awaitStream(docker: Dockerode, stream: Duplex, runArg: RunArg, cmdName: string): Promise<void> {
+  docker.modem.demuxStream(
     stream,
     new NoopStream((log) => {
-      runArg.logger.withTag(task).info(log)
+      runArg.logger.withTag(cmdName).info(log)
     }),
     new NoopStream((log) => {
-      runArg.logger.withTag(task).info(log)
+      runArg.logger.withTag(cmdName).info(log)
     })
   )
   await new Promise<void>((resolve, reject) => {

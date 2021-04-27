@@ -1,9 +1,7 @@
-import { BuildFile } from './build-file'
-import { Task } from './task'
+import {TaskNode} from './rewrite/1-plan';
 
 export interface BuildFileValidation {
-  buildFile: BuildFile
-  task?: Task
+  task: TaskNode
   message: string
   type: 'error' | 'warn'
 }

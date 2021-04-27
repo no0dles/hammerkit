@@ -1,6 +1,6 @@
 tasks:
   install:
-    description: clean example
+    description: npm module install
     image: node:14.16.0
     mounts:
       - $PWD/.npm:/.npm
@@ -12,13 +12,3 @@ tasks:
       - node_modules
     cmds:
       - npm install
-  build:
-    image: node:14.16.0
-    deps: [ install ]
-    src:
-      - tsconfig.json
-      - src
-    cmds:
-      - node_modules/.bin/tsc
-    generates:
-      - dist
