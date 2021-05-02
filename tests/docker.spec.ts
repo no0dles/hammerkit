@@ -2,7 +2,7 @@ import { expectLog, getTestArg, loadExampleBuildFile } from './run-arg'
 import {executeTask} from '../src/rewrite/4-execute';
 
 describe('docker', () => {
-  const buildFile = loadExampleBuildFile('docker', process.env)
+  const buildFile = loadExampleBuildFile('docker')
 
   it('should pull docker image', async () => {
     const [arg, mock] = getTestArg()

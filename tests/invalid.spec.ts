@@ -1,9 +1,7 @@
-import { join } from 'path'
-import { parseBuildFile } from '../src/file/parse'
+import {loadExampleBuildFile} from './run-arg';
 
 describe('invalid', () => {
   it('should throw on invalid yaml', () => {
-    const fileName = join(__dirname, '../examples/invalid/build.yaml')
-    expect(() => parseBuildFile(fileName, null)).toThrow(/unable to parse yaml.*/)
+    expect(() => loadExampleBuildFile('invalid')).toThrow(/unable to parse.*/)
   })
 })

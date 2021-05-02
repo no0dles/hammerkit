@@ -12,6 +12,7 @@ describe('restructure', () => {
     };
   };
   const npmBuild: ExecutionBuildFile = {
+    fileName: '/home/user/build.npm.yaml',
     path: '/home/user',
     tasks: {
       install: {
@@ -25,6 +26,7 @@ describe('restructure', () => {
         envs: {},
         image: 'node:14.16.0-alpine',
         deps: [],
+        unknownProps: {}
       },
     },
     envs: {},
@@ -32,6 +34,7 @@ describe('restructure', () => {
     references: {},
   };
   const tscBuild: ExecutionBuildFile = {
+    fileName: '/home/user/build.tsc.yaml',
     path: '/home/user',
     tasks: {
       build: {
@@ -45,6 +48,7 @@ describe('restructure', () => {
         envs: {},
         image: 'node:14.16.0-alpine',
         deps: ['npm:install'],
+        unknownProps: {}
       },
     },
     envs: {},
@@ -54,6 +58,7 @@ describe('restructure', () => {
     references: {},
   };
   const projectA: ExecutionBuildFile = {
+    fileName: '/home/user/pkg/a/build.yaml',
     path: '/home/user/pkg/a',
     tasks: {
       build: {
@@ -67,6 +72,7 @@ describe('restructure', () => {
         envs: {},
         mounts: [],
         generates: [],
+        unknownProps: {}
       },
     },
     envs: {},
@@ -76,6 +82,7 @@ describe('restructure', () => {
     references: {},
   };
   const projectB: ExecutionBuildFile = {
+    fileName: '/home/user/pkg/b/build.yaml',
     path: '/home/user/pkg/b',
     tasks: {
       build: {
@@ -89,6 +96,7 @@ describe('restructure', () => {
         envs: {},
         mounts: [],
         generates: [],
+        unknownProps: {}
       },
     },
     envs: {},
@@ -100,6 +108,7 @@ describe('restructure', () => {
     },
   };
   const projectC: ExecutionBuildFile = {
+    fileName: '/home/user/pkg/c/build.yaml',
     path: '/home/user/pkg/c',
     tasks: {
       build: {
@@ -113,6 +122,7 @@ describe('restructure', () => {
         envs: {},
         mounts: [],
         generates: [],
+        unknownProps: {}
       },
     },
     envs: {},

@@ -1,7 +1,7 @@
 import {TreeDependencies, TreeDependencyNode} from './2-restructure';
-import {join} from 'path';
-import {existsSync, readFileSync, statSync, writeFileSync} from 'fs';
-import {ContainerMount, TaskNodeCmd} from './1-plan';
+import {join, dirname} from 'path';
+import {existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync} from 'fs';
+import {ContainerMount, TaskNode, TaskNodeCmd} from './1-plan';
 
 export interface TreeNodeCache {
   src: string[]
@@ -25,7 +25,7 @@ export function optimize(tree: TreeDependencies) {
   for (const key of Object.keys(tree)) {
     const node = tree[key];
     if (node.task.src.length === 0) {
-      continue
+      continue;
     }
 
     const cache = readCache(node);
@@ -40,11 +40,17 @@ export function optimize(tree: TreeDependencies) {
 
     // TODO compare other attrs
 
-    const currentStats = getCacheStats(current);
+    const currentStats = getCacheStats(node.task);
+    let changed = false;
     for (const key of Object.keys(cache.stats)) {
       if (currentStats[key]?.lastModified !== cache.stats[key].lastModified) {
-        continue;
+        changed = true;
+        break
       }
+    }
+
+    if (changed) {
+      continue
     }
 
     removeTask(key, tree);
@@ -72,18 +78,31 @@ function getCache(node: TreeDependencyNode): TreeNodeCache {
   };
 }
 
-function getCacheStats(cache: TreeNodeCache): TreeNodeCacheStats {
+function getCacheStats(cache: TaskNode): TreeNodeCacheStats {
   const result: TreeNodeCacheStats = {};
-  const files = [
-    ...cache.src, // TODO
-    ...cache.generates,
-    ...cache.mounts.map(m => m.localPath),
-  ];
-  for (const file of files) {
-    const stats = statSync(file);
-    result[file] = {lastModified: stats.mtimeMs};
+
+  for (const src of cache.src) {
+    getStats(result, src.absolutePath, file => src.matcher(file, cache.path));
   }
+
   return result;
+}
+
+function getStats(result: TreeNodeCacheStats, path: string, matcher: (file: string) => boolean) {
+  const stats = statSync(path);
+  if (stats.isFile()) {
+    if (matcher(path)) {
+      result[path] = {lastModified: stats.mtimeMs};
+    }
+  } else if (stats.isDirectory()) {
+    const files = readdirSync(path);
+    for (const file of files) {
+      const subPath = join(path, file)
+      if (matcher(subPath)) {
+        getStats(result, join(path, file), matcher);
+      }
+    }
+  }
 }
 
 export function writeCache(node: TreeDependencyNode) {
@@ -91,8 +110,9 @@ export function writeCache(node: TreeDependencyNode) {
   const cache = getCache(node);
   const content: TreeNodeCacheFile = {
     task: cache,
-    stats: getCacheStats(cache),
+    stats: getCacheStats(node.task),
   };
+  mkdirSync(dirname(cacheFile), {recursive: true});
   writeFileSync(cacheFile, JSON.stringify(content, null, 2));
 }
 

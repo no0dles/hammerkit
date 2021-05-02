@@ -1,6 +1,5 @@
 import commaner, {Command} from 'commander';
 import {existsSync, writeFileSync} from 'fs';
-import {dirname} from 'path';
 import consola, {LogLevel} from 'consola';
 import {RunArg} from './run-arg';
 import {clean} from './rewrite/5-clean';
@@ -23,8 +22,7 @@ export function getProgram(fileName: string): commaner.Command {
       .description('clear task cache')
       .action(async () => {
         try {
-          const tree = nodes(buildFile);
-          await clean(tree);
+          await clean(buildFile);
         } catch (e) {
           consola.error(e);
           process.exit(1);
@@ -36,8 +34,7 @@ export function getProgram(fileName: string): commaner.Command {
       .description('save task outputs into <path>')
       .action(async (path) => {
         try {
-          const tree = nodes(buildFile);
-          await store(tree, dirname(fileName), path);
+          await store(buildFile, path);
         } catch (e) {
           consola.error(e);
           process.exit(1);
@@ -49,8 +46,7 @@ export function getProgram(fileName: string): commaner.Command {
       .description('restore task outputs from <path>')
       .action(async (path) => {
         try {
-          const tree = nodes(buildFile);
-          await restore(tree, dirname(fileName), path);
+          await restore(buildFile, path);
         } catch (e) {
           consola.error(e);
           process.exit(1);
@@ -61,10 +57,9 @@ export function getProgram(fileName: string): commaner.Command {
       .command('validate')
       .description('validate build.yaml')
       .action(async () => {
-        const tree = nodes(buildFile);
         let errors = 0;
 
-        for (const validation of validate(tree)) {
+        for (const validation of validate(buildFile)) {
           let logger = consola.withTag(validation.task.name);
           if (validation.type === 'error') {
             errors++;

@@ -4,6 +4,7 @@ import {dirname, join} from 'path';
 import {Minimatch} from 'minimatch';
 
 export interface ExecutionBuildFile {
+  fileName: string
   path: string
   envs: { [key: string]: string }
   tasks: { [key: string]: ExecutionBuildTask }
@@ -31,6 +32,7 @@ export interface ExecutionBuildTask {
   mounts: string[] | null
   cmds: ExecutionBuildTaskCmd[] | null;
   envs: { [key: string]: string } | null
+  unknownProps: { [key: string]: any }
 }
 
 export function read(fileName: string): any {
@@ -40,8 +42,11 @@ export function read(fileName: string): any {
   } catch (e) {
     throw new Error(`unable to read ${fileName}`);
   }
-
-  return yamlParse(content);
+  try {
+    return yamlParse(content);
+  } catch (e) {
+    throw new Error(`unable to parse ${fileName}: ${e.message}`);
+  }
 }
 
 export function parse(fileName: string): ExecutionBuildFile {
@@ -70,9 +75,17 @@ function loadEnvFile(path: string, baseEnv: { [key: string]: string }): { [key: 
   return envs;
 }
 
+const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds'];
+const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys];
+
 function readFile(fileName: string, files: { [key: string]: ExecutionBuildFile }): ExecutionBuildFile {
+  if (files[fileName]) {
+    return files[fileName];
+  }
+
   const input = read(fileName);
   const result: ExecutionBuildFile = {
+    fileName,
     includes: {},
     tasks: {},
     path: dirname(fileName),
@@ -92,17 +105,22 @@ function readFile(fileName: string, files: { [key: string]: ExecutionBuildFile }
 
   for (const key of Object.keys(input.tasks || {})) {
     const value = input.tasks[key];
+    const validKeys = value.image ? validDockerTaskKeys : validTaskKeys;
     result.tasks[key] = {
       envs: parseEnvs(fileName, value.envs || {}),
       mounts: parseStringArray(fileName, key, 'mounts', value.mounts),
       src: parseSources(fileName, key, value),
       deps: parseStringArray(fileName, key, 'deps', value.deps),
       generates: parseStringArray(fileName, key, 'generates', value.generates),
-      description: value.description || null,
+      description: value.description ? value.description.trim() : null,
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,
       cmds: parseCommands(fileName, key, value.cmds),
+      unknownProps: Object.keys(value).filter(k => validKeys.indexOf(k) === -1).reduce<{ [key: string]: any }>((map, k) => {
+        map[k] = value[k];
+        return map;
+      }, {}),
     };
   }
 
@@ -120,19 +138,21 @@ function parseSources(fileName: string, key: string, value: any): ExecutionBuild
   for (const source of sources) {
     const wildcardIndex = source.indexOf('*');
     if (wildcardIndex >= 0) {
-      const matcher = new Minimatch(source, {dot: true});
-      const matcherFn = (fileName: string) => {
-        return matcher.match(fileName);
-      };
       if (wildcardIndex === 0) {
         result.push({
-          matcher: matcherFn,
+          matcher: (file, cwd) => {
+            const matcher = new Minimatch(join(cwd, source), {dot: true});
+            return matcher.match(file);
+          },
           relativePath: '.',
         });
       } else {
         const prefixSource = source.substr(0, wildcardIndex);
         result.push({
-          matcher: matcherFn,
+          matcher: (file, cwd) => {
+            const matcher = new Minimatch(join(cwd, source), {dot: true});
+            return matcher.match(file);
+          },
           relativePath: prefixSource,
         });
       }
@@ -158,7 +178,7 @@ function parseCommands(fileName: string, taskName: string, value: any): Executio
 
   return value.map<ExecutionBuildTaskCmd>(cmd => {
     if (typeof cmd === 'string') {
-      return cmd;
+      return cmd.trim();
     } else if (typeof cmd === 'object' && !!cmd.cmd) {
       if (!(typeof cmd.cmd === 'string')) {
         throw new Error(`${fileName} task ${taskName} cmd needs to be a string`);
@@ -168,9 +188,9 @@ function parseCommands(fileName: string, taskName: string, value: any): Executio
         if (!(typeof cmd.path === 'string')) {
           throw new Error(`${fileName} task ${taskName} cmd path needs to be a string`);
         }
-        return {cmd: cmd.cmd, path: cmd.path, type: 'cmd'};
+        return {cmd: cmd.cmd.trim(), path: cmd.path, type: 'cmd'};
       } else {
-        return {cmd: cmd.cmd, type: 'cmd'};
+        return {cmd: cmd.cmd.trim(), type: 'cmd'};
       }
     } else {
       throw new Error(`${fileName} task ${taskName} unknown cmd`);

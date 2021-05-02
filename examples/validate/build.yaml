@@ -28,11 +28,6 @@ tasks:
     description: should not warn for missing cmds
     deps: [regular_task]
 
-  loop_with_cmd:
-    description: loop over a cmd
-    cmds:
-    - task: loop_with_cmd
-
   loop_with_dep:
     description: loop over dep
     deps: [ loop_with_dep ]

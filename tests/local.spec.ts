@@ -1,11 +1,11 @@
 import { getTestArg, loadExampleBuildFile } from './run-arg'
+import {executeTask} from '../src/rewrite/4-execute';
 
 describe('local', () => {
   const buildFile = loadExampleBuildFile('local')
 
   it('should run local task', async () => {
-    const exampleTask = buildFile.getTask('example')
     const [arg] = getTestArg()
-    await exampleTask.execute(arg)
+    await executeTask(buildFile, 'example', true, arg)
   })
 })

@@ -3,7 +3,7 @@ tasks:
     description: glob example
     image: alpine
     src:
-      - "**/*.md"
+      - "*.md"
       - "**/*.md2"
     cmds:
       - echo test.md

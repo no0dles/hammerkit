@@ -24,6 +24,7 @@ export interface TaskNode {
   mounts: ContainerMount[]
   envs: { [key: string]: string }
   cmds: TaskNodeCmd[];
+  unknownProps: { [key: string]: any }
 }
 
 export interface TaskNodeSource {
@@ -44,15 +45,28 @@ export interface TaskNodeCmd {
 
 export function nodes(build: ExecutionBuildFile): TreeNodes {
   const nodes: TreeNodes = {};
-
-  // TODO
-  build.references;
+  addNodes(build, nodes, [], []);
   return nodes;
+}
+
+function addNodes(build: ExecutionBuildFile, nodes: TreeNodes, files: string[], namePrefix: string[]) {
+  if (files.indexOf(build.fileName) !== -1) {
+    return;
+  }
+
+  files.push(build.fileName);
+  for (const taskId of Object.keys(build.tasks)) {
+    addTask(build, taskId, nodes, {currentWorkdir: build.path, idPrefix: null, namePrefix: namePrefix});
+  }
+
+  for (const key of Object.keys(build.references)) {
+    addNodes(build.references[key], nodes, files, [...namePrefix, key]);
+  }
 }
 
 export function plan(build: ExecutionBuildFile, taskName: string): TaskTree {
   const nodes: TreeNodes = {};
-  const rootNode = addTask(build, taskName, nodes, {currentWorkdir: build.path, idPrefix: null});
+  const rootNode = addTask(build, taskName, nodes, {currentWorkdir: build.path, idPrefix: null, namePrefix: []});
   return {nodes, rootNode};
 }
 
@@ -68,12 +82,12 @@ function split(ref: string): { prefix?: string, taskName: string } {
 interface TaskContext {
   currentWorkdir: string
   idPrefix: string | null
+  namePrefix: string[]
 }
 
 function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, context: TaskContext): TaskNode {
   if (build.tasks[taskName]) {
-    const name = `${context.idPrefix ? context.idPrefix + ':' : ''}${taskName}`;
-    const id = `${context.currentWorkdir}:${name}`;
+    const id = `${context.currentWorkdir}:${context.idPrefix ? context.idPrefix + ':' : ''}${taskName}`;
     if (nodes[id]) {
       return nodes[id];
     }
@@ -84,7 +98,7 @@ function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, 
       envs: {...build.envs, ...(task.envs || {})},
       id,
       description: task.description,
-      name,
+      name: [...context.namePrefix, taskName].join(':'),
       shell: task.shell || null,
       image: task.image,
       mounts: (task.mounts || []).map(m => splitMount(context.currentWorkdir, m)),
@@ -92,6 +106,7 @@ function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, 
       deps: [],
       generates: getAbsolutePaths(task.generates, context.currentWorkdir),
       src: (task.src || []).map(src => mapSource(src, context.currentWorkdir)),
+      unknownProps: task.unknownProps,
     };
     nodes[id] = node;
 
@@ -137,11 +152,13 @@ function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, 
           ...context,
           currentWorkdir: build.references[ref.prefix].path,
           idPrefix: null,
+          namePrefix: [...context.namePrefix, ref.prefix],
         });
       } else if (build.includes[ref.prefix]) {
         return addTask(build.includes[ref.prefix], ref.taskName, nodes, {
           ...context,
           idPrefix: ref.prefix,
+          namePrefix: [...context.namePrefix, ref.prefix],
         });
       }
     }
@@ -210,22 +227,13 @@ function planCommand(cmds: ExecutionBuildTaskCmd[], workingDir: string, envs: { 
   const result: TaskNodeCmd[] = [];
   for (const cmd of cmds) {
     if (typeof cmd === 'string') {
-      result.push({cmd: escapeCommand(cmd, envs), path: workingDir});
+      result.push({cmd: cmd, path: workingDir});
     } else {
       result.push({
-        cmd: escapeCommand(cmd.cmd, envs),
+        cmd: cmd.cmd,
         path: join(workingDir, cmd.path || ''),
       });
     }
-  }
-  return result;
-}
-
-function escapeCommand(cmd: string, envs: { [key: string]: string }) {
-  let result = cmd;
-  for (const key of Object.keys(envs)) {
-    const envValue = envs[key];
-    result = result.replace(new RegExp(`\\$${key}`, 'gi'), envValue);
   }
   return result;
 }

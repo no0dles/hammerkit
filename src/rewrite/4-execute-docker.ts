@@ -37,15 +37,22 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg) 
     }
   };
 
-  for (const generate of task.generates) {
-    if (existsSync(generate)) {
+  for(const source of task.src) {
+    if(existsSync(source.absolutePath)) {
       addVolume({
-        localPath: generate,
-        containerPath: join(containerWorkingDirectory, relative(task.path, generate)),
+        localPath: source.absolutePath,
+        containerPath: join(containerWorkingDirectory, relative(task.path, source.absolutePath)),
       });
     } else {
-      arg.logger.warn(`${generate} does not exists`);
+      arg.logger.warn(`${source.absolutePath} does not exists`);
     }
+  }
+
+  for (const generate of task.generates) {
+    addVolume({
+      localPath: generate,
+      containerPath: join(containerWorkingDirectory, relative(task.path, generate)),
+    });
   }
 
   for (const volume of task.mounts) {
@@ -93,7 +100,7 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg) 
     }
 
     for (const cmd of task.cmds) {
-      const result = await execCommand(arg, docker, container, cmd.path, [task.shell || 'sh', '-c', cmd.cmd], cmd.cmd, user);
+      const result = await execCommand(arg, docker, container, join(containerWorkingDirectory, relative(task.path, cmd.path)), [task.shell || 'sh', '-c', cmd.cmd], cmd.cmd, user);
       if (result.ExitCode !== 0) {
         throw new Error(`command ${cmd.cmd} failed with ${result.ExitCode}`);
       }

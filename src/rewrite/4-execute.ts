@@ -71,15 +71,20 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
         }
       }
 
-      for (const pendingTask of pendingTasks) {
+      for (let i = 0; i < pendingTasks.length; i++) {
+        const pendingTask = pendingTasks[i]
         if (arg.workers !== 0 && runningTasks.length === arg.workers) {
           break;
         }
+
+        pendingTasks.splice(i, 1)
+        i--;
 
         const runningTask: TaskProcess = {
           task: pendingTask.task,
           promise: runTask(pendingTask.task, arg),
         };
+        runningTasks.push(runningTask);
         result.tasks[pendingTask.task.id].status = 'running';
         runningTask.promise.then(() => {
           result.tasks[pendingTask.task.id].status = 'completed';
@@ -93,12 +98,12 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
           runningTasks.splice(runningTasks.indexOf(runningTask), 1);
           moveRunningTasks();
         }).catch(err => {
+          result.success = false;
           result.tasks[pendingTask.task.id].status = 'failed';
           result.tasks[pendingTask.task.id].errorMessage = err.message;
           runningTasks.splice(runningTasks.indexOf(runningTask), 1);
           resolve(result);
         });
-        runningTasks.push(runningTask);
       }
 
       if (pendingTasks.length === 0 && runningTasks.length === 0 && Object.keys(tree).length === 0) {
@@ -108,8 +113,21 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
   });
 }
 
+function escapeCommand(cmd: string, envs: { [key: string]: string }) {
+  let result = cmd;
+  for (const key of Object.keys(envs)) {
+    const envValue = envs[key];
+    result = result.replace(new RegExp(`\\$${key}`, 'gi'), envValue);
+  }
+  return result;
+}
+
+
 async function runTask(task: TaskNode, arg: RunArg): Promise<void> {
   const envs = replaceEnvVariables(task.envs, arg.processEnvs);
+  for(const cmd of task.cmds) {
+    cmd.cmd = escapeCommand(cmd.cmd, envs)
+  }
   if (task.image) {
     await runTaskDocker(task.image, {
       ...task,

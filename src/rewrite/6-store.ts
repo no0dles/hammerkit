@@ -2,13 +2,15 @@ import {join, relative} from 'path';
 import {remove} from '../file/remove';
 import {existsSync} from 'fs';
 import {copy} from '../file/copy';
-import {TreeNodes} from './1-plan';
+import {nodes} from './1-plan';
+import {ExecutionBuildFile} from './0-parse';
 
-export async function store(tree: TreeNodes, cwd: string, targetDirectory: string) {
+export async function store(buildFile: ExecutionBuildFile, targetDirectory: string) {
+  const tree = nodes(buildFile);
   for(const key of Object.keys(tree)) {
     const node = tree[key]
     for(const sourcePath of node.generates) {
-      const relativePath = relative(cwd, sourcePath)
+      const relativePath = relative(buildFile.path, sourcePath)
       const targetPath = join(targetDirectory, relativePath)
 
       await remove(targetPath)

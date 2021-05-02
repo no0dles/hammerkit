@@ -1,8 +1,9 @@
 tasks:
   example:
     description: run ref task
+    deps: [foo:bar]
     cmds:
-      - task: foo:bar
+      - echo foo
 
   name:example:
     description: name example

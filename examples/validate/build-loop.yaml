@@ -1,8 +1,8 @@
 tasks:
   loop_with_refs:
     description: "ref loop"
+    deps: [loop:loop_with_refs]
     cmds:
-      - task: loop:loop_with_refs
       - echo "loop"
 
 

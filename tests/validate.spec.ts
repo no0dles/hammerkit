@@ -1,16 +1,12 @@
-import { getTestArg, loadExampleBuildFile } from './run-arg'
+import { loadExampleBuildFile } from './run-arg'
+import {validate} from '../src/rewrite/8-validate';
 
 describe('validate', () => {
   const buildFile = loadExampleBuildFile('validate')
 
   function validateTask(name: string, expectedErrors: string[]) {
-    const task = buildFile.getTask(name)
-    const [arg] = getTestArg()
-    const result = Array.from(task.validate(arg))
-    expect(result).toHaveLength(expectedErrors.length)
-    for (let i = 0; i < expectedErrors.length; i++) {
-      expect(result[i].message).toEqual(expectedErrors[i])
-    }
+    const result = Array.from(validate(buildFile, name))
+    expect(result.map(r => r.message)).toIncludeSameMembers(expectedErrors)
   }
 
   it('should validate regular task', async () => {
@@ -33,19 +29,15 @@ describe('validate', () => {
     validateTask('only_deps', [])
   })
 
-  it('should detect loop in cmd', async () => {
-    validateTask('loop_with_cmd', ['cycle detected loop_with_cmd -> loop_with_cmd'])
-  })
-
   it('should detect loop in dep', async () => {
-    validateTask('loop_with_dep', ['cycle detected loop_with_dep -> loop_with_dep'])
+    validateTask('loop_with_dep', ['task cycle detected loop_with_dep -> loop_with_dep'])
   })
 
   it('should detect loop in refs', async () => {
-    validateTask('loop_with_refs', ['cycle detected loop_with_refs -> loop_with_refs'])
+    validateTask('loop_with_refs', ['task cycle detected loop_with_refs -> loop_with_refs'])
   })
 
   it('should detect loop over multiple tasks', async () => {
-    validateTask('loop_with_multiple_tasks', ['cycle detected loop_with_multiple_tasks -> loop_with_multiple_tasks_2'])
+    validateTask('loop_with_multiple_tasks', ['task cycle detected loop_with_multiple_tasks -> loop_with_multiple_tasks_2 -> loop_with_multiple_tasks'])
   })
 })

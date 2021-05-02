@@ -1,12 +1,16 @@
-import { join, dirname } from 'path'
+import { join } from 'path'
 import { expectLog, getBuildFilePath, getTestArg, loadExampleBuildFile } from './run-arg'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs'
 import { remove } from '../src/file/remove'
+import {executeTask} from '../src/rewrite/4-execute';
+import {restructure, TreeDependencies} from '../src/rewrite/2-restructure';
+import {plan} from '../src/rewrite/1-plan';
+import {optimize, writeCache} from '../src/rewrite/3-optimize';
 
 describe('cache', () => {
   const buildFile = loadExampleBuildFile('cache')
-  const cachePath = join(dirname(buildFile.fileName), '.hammerkit')
-  const sourceFile = join(dirname(buildFile.fileName), 'package.json')
+  const cachePath = join(buildFile.path, '.hammerkit')
+  const sourceFile = join(buildFile.path, 'package.json')
   const buildFilePath = getBuildFilePath('cache')
   const sourceFileContent = readFileSync(sourceFile)
   const buildFileContent = readFileSync(buildFilePath)
@@ -22,34 +26,44 @@ describe('cache', () => {
     writeFileSync(sourceFile, sourceFileContent)
   })
 
-  it('should run task only if not cached', async () => {
-    const exampleTask = buildFile.getTask('example')
-    const [arg] = getTestArg()
-    expect(await exampleTask.isCached(arg)).toBeFalsy()
-    await exampleTask.execute(arg)
-    expect(await exampleTask.isCached(arg)).toBeTruthy()
-    await exampleTask.execute(arg)
-    appendFileSync(sourceFile, '\n')
-    expect(await exampleTask.isCached(arg)).toBeFalsy()
+  async function testCache(action: (depTree: TreeDependencies) => Promise<void>, expectInvalidate: boolean) {
+    const depTree = restructure(plan(buildFile, 'example'));
+    expect(depTree).toContainKey(`${buildFile.path}:example`)
+
+    optimize(depTree);
+    expect(depTree).toContainKey(`${buildFile.path}:example`)
+
+    writeCache(depTree[`${buildFile.path}:example`])
+    await action(depTree)
+
+    const afterCacheDepTree= {...depTree}
+    optimize(afterCacheDepTree);
+
+    if (expectInvalidate) {
+      expect(afterCacheDepTree).toContainKey(`${buildFile.path}:example`)
+    } else {
+      expect(afterCacheDepTree).not.toContainKey(`${buildFile.path}:example`)
+    }
+  }
+
+  it('should run invalid cache on src file change', async () => {
+    await testCache(async () => {
+      appendFileSync(sourceFile, '\n')
+    }, true)
   })
 
   it('should mount generations of dependant tasks', async () => {
-    const exampleTask = buildFile.getTask('dependant')
     const [arg, mock] = getTestArg()
-    await exampleTask.execute(arg)
+    const result = await executeTask( buildFile,'dependant', false, arg)
+    expect(result.success).toBeTruthy();
 
     expectLog(mock, 'ls')
     expectLog(mock, 'node_modules')
   })
 
-  it('should rerun after task changes even when its cached', async () => {
-    const exampleTask = buildFile.getTask('example')
-
-    const [arg] = getTestArg()
-    expect(await exampleTask.isCached(arg)).toBeFalsy()
-    await exampleTask.execute(arg)
-    expect(await exampleTask.isCached(arg)).toBeTruthy()
-    ;(<any>exampleTask).dockerTask.image = '15.0.0'
-    expect(await exampleTask.isCached(arg)).toBeFalsy()
+  it('should invalid cache on image change', async () => {
+    await testCache(async (depTree) => {
+      depTree[`${buildFile.path}:example`].task.image = '15.0.0'
+    }, true)
   })
 })

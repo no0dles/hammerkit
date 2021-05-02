@@ -1,12 +1,13 @@
 import { expectLog, getTestArg, loadExampleBuildFile } from './run-arg'
+import {executeTask} from '../src/rewrite/4-execute';
+import {nodes} from '../src/rewrite/1-plan';
 
 describe('reference', () => {
   const buildFile = loadExampleBuildFile('reference')
 
   it('should run included task', async () => {
-    const exampleTask = buildFile.getTask('example')
     const [arg, mock] = getTestArg()
-    await exampleTask.execute(arg)
+    await executeTask(buildFile, 'example', true, arg)
     expectLog(mock, 'foobar')
     expectLog(mock, 'cat foobar.txt')
     expectLog(mock, 'hammertime')
@@ -14,7 +15,7 @@ describe('reference', () => {
   })
 
   it('should list task with references tasks nested', async () => {
-    const tasks = Array.from(buildFile.getTasks())
-    expect(tasks.map((t) => t.getAbsoluteName())).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
+    const node = nodes(buildFile)
+    expect(Object.keys(node).map(t => node[t].name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
   })
 })
