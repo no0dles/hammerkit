@@ -1,6 +1,6 @@
 tasks:
   build:
-    extends: tsc:build
+    extend: tsc:build
 
 includes:
   tsc: ../../build.tsc.yaml

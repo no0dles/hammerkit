@@ -1,7 +1,7 @@
 tasks:
   build:
     deps: [a:build]
-    extends: tsc:build
+    extend: tsc:build
 
 references:
   a: ../a/build.yaml
