@@ -1,7 +1,7 @@
-import {TaskNode} from './1-plan';
-import {exec} from 'child_process';
-import {getLogs} from '../log';
-import {RunArg} from '../run-arg';
+import { TaskNode } from './1-plan'
+import { exec } from 'child_process'
+import { getLogs } from '../log'
+import { RunArg } from '../run-arg'
 
 function getProcessEnvs(task: TaskNode, arg: RunArg) {
   const envs = { ...task.envs }

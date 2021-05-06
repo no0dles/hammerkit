@@ -2,10 +2,10 @@ import { join } from 'path'
 import { expectLog, getBuildFilePath, getTestArg, loadExampleBuildFile } from './run-arg'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs'
 import { remove } from '../src/file/remove'
-import {executeTask} from '../src/rewrite/4-execute';
-import {restructure, TreeDependencies} from '../src/rewrite/2-restructure';
-import {plan} from '../src/rewrite/1-plan';
-import {optimize, writeCache} from '../src/rewrite/3-optimize';
+import { executeTask } from '../src/rewrite/4-execute'
+import { restructure, TreeDependencies } from '../src/rewrite/2-restructure'
+import { plan } from '../src/rewrite/1-plan'
+import { optimize, writeCache } from '../src/rewrite/3-optimize'
 
 describe('cache', () => {
   const buildFile = loadExampleBuildFile('cache')
@@ -27,17 +27,17 @@ describe('cache', () => {
   })
 
   async function testCache(action: (depTree: TreeDependencies) => Promise<void>, expectInvalidate: boolean) {
-    const depTree = restructure(plan(buildFile, 'example'));
+    const depTree = restructure(plan(buildFile, 'example'))
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    optimize(depTree);
+    optimize(depTree)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
     writeCache(depTree[`${buildFile.path}:example`])
     await action(depTree)
 
-    const afterCacheDepTree= {...depTree}
-    optimize(afterCacheDepTree);
+    const afterCacheDepTree = { ...depTree }
+    optimize(afterCacheDepTree)
 
     if (expectInvalidate) {
       expect(afterCacheDepTree).toContainKey(`${buildFile.path}:example`)
@@ -54,8 +54,8 @@ describe('cache', () => {
 
   it('should mount generations of dependant tasks', async () => {
     const [arg, mock] = getTestArg()
-    const result = await executeTask( buildFile,'dependant', false, arg)
-    expect(result.success).toBeTruthy();
+    const result = await executeTask(buildFile, 'dependant', false, arg)
+    expect(result.success).toBeTruthy()
 
     expectLog(mock, 'node_modules')
     expectLog(mock, 'package-lock.json')

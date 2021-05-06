@@ -1,12 +1,12 @@
 import { loadExampleBuildFile } from './run-arg'
-import {validate} from '../src/rewrite/8-validate';
+import { validate } from '../src/rewrite/8-validate'
 
 describe('unknown', () => {
   const buildFile = loadExampleBuildFile('unknown')
 
   function validateTask(name: string, expectedErrors: string[]) {
     const result = Array.from(validate(buildFile, name))
-    expect(result.map(r => r.message)).toIncludeSameMembers(expectedErrors)
+    expect(result.map((r) => r.message)).toIncludeSameMembers(expectedErrors)
   }
 
   it('should validate unknown props', async () => {

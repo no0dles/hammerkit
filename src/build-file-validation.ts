@@ -1,4 +1,4 @@
-import {TaskNode} from './rewrite/1-plan';
+import { TaskNode } from './rewrite/1-plan'
 
 export interface BuildFileValidation {
   task: TaskNode

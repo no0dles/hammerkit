@@ -1,4 +1,4 @@
-import {loadExampleBuildFile} from './run-arg';
+import { loadExampleBuildFile } from './run-arg'
 
 describe('invalid', () => {
   it('should throw on invalid yaml', () => {

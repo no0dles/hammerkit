@@ -1,5 +1,5 @@
 import { getTestArg, loadExampleBuildFile } from './run-arg'
-import {executeTask} from '../src/rewrite/4-execute';
+import { executeTask } from '../src/rewrite/4-execute'
 
 describe('monorepo', () => {
   const buildFile = loadExampleBuildFile('monorepo')

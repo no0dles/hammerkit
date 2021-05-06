@@ -3,10 +3,10 @@ import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { remove } from '../src/file/remove'
-import {executeTask} from '../src/rewrite/4-execute';
-import {store} from '../src/rewrite/6-store';
-import {clean} from '../src/rewrite/5-clean';
-import {restore} from '../src/rewrite/7-restore';
+import { executeTask } from '../src/rewrite/4-execute'
+import { store } from '../src/rewrite/6-store'
+import { clean } from '../src/rewrite/5-clean'
+import { restore } from '../src/rewrite/7-restore'
 
 describe('store/restore', () => {
   const buildFile = loadExampleBuildFile('store-restore')

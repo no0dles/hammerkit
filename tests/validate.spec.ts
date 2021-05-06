@@ -1,12 +1,12 @@
 import { loadExampleBuildFile } from './run-arg'
-import {validate} from '../src/rewrite/8-validate';
+import { validate } from '../src/rewrite/8-validate'
 
 describe('validate', () => {
   const buildFile = loadExampleBuildFile('validate')
 
   function validateTask(name: string, expectedErrors: string[]) {
     const result = Array.from(validate(buildFile, name))
-    expect(result.map(r => r.message)).toIncludeSameMembers(expectedErrors)
+    expect(result.map((r) => r.message)).toIncludeSameMembers(expectedErrors)
   }
 
   it('should validate regular task', async () => {
@@ -38,6 +38,8 @@ describe('validate', () => {
   })
 
   it('should detect loop over multiple tasks', async () => {
-    validateTask('loop_with_multiple_tasks', ['task cycle detected loop_with_multiple_tasks -> loop_with_multiple_tasks_2 -> loop_with_multiple_tasks'])
+    validateTask('loop_with_multiple_tasks', [
+      'task cycle detected loop_with_multiple_tasks -> loop_with_multiple_tasks_2 -> loop_with_multiple_tasks',
+    ])
   })
 })

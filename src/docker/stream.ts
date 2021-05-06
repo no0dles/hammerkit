@@ -1,7 +1,7 @@
 import { Duplex, Writable } from 'stream'
 import { getLogs } from '../log'
 import { RunArg } from '../run-arg'
-import Dockerode from 'dockerode';
+import Dockerode from 'dockerode'
 
 class NoopStream extends Writable {
   constructor(private fn: (log: string) => void) {
