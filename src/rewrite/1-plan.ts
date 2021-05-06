@@ -114,7 +114,7 @@ function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, 
       addDependency(build, node, taskName, dep, nodes, context);
     }
 
-    node.cmds = planCommand(task.cmds || [], context.currentWorkdir, node.envs);
+    node.cmds = planCommand(task.cmds || [], context.currentWorkdir);
 
     if (task.extend) {
       const extend = findTask(build, task.extend);
@@ -223,7 +223,7 @@ function getAbsolutePaths(dirs: string[] | null, workingDir: string): string[] {
   return dirs.map(dir => join(workingDir, dir));
 }
 
-function planCommand(cmds: ExecutionBuildTaskCmd[], workingDir: string, envs: { [key: string]: string }): TaskNodeCmd[] {
+function planCommand(cmds: ExecutionBuildTaskCmd[], workingDir: string): TaskNodeCmd[] {
   const result: TaskNodeCmd[] = [];
   for (const cmd of cmds) {
     if (typeof cmd === 'string') {

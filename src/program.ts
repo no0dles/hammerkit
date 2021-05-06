@@ -60,7 +60,7 @@ export function getProgram(fileName: string): commaner.Command {
         let errors = 0;
 
         for (const validation of validate(buildFile)) {
-          let logger = consola.withTag(validation.task.name);
+          const logger = consola.withTag(validation.task.name);
           if (validation.type === 'error') {
             errors++;
             logger.error(validation.message);

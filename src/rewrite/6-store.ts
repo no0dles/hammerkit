@@ -5,7 +5,7 @@ import {copy} from '../file/copy';
 import {nodes} from './1-plan';
 import {ExecutionBuildFile} from './0-parse';
 
-export async function store(buildFile: ExecutionBuildFile, targetDirectory: string) {
+export async function store(buildFile: ExecutionBuildFile, targetDirectory: string): Promise<void> {
   const tree = nodes(buildFile);
   for(const key of Object.keys(tree)) {
     const node = tree[key]

@@ -1,8 +1,8 @@
 import {remove} from '../file/remove';
-import {nodes, TreeNodes} from './1-plan';
+import {nodes} from './1-plan';
 import {ExecutionBuildFile} from './0-parse';
 
-export async function clean(buildFile: ExecutionBuildFile) {
+export async function clean(buildFile: ExecutionBuildFile): Promise<void> {
   const tree = nodes(buildFile);
   for(const key of Object.keys(tree)) {
     const node = tree[key]

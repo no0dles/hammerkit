@@ -14,7 +14,7 @@ function getProcessEnvs(task: TaskNode, arg: RunArg) {
   return envs
 }
 
-export async function runLocally(task: TaskNode, arg: RunArg) {
+export async function runLocally(task: TaskNode, arg: RunArg): Promise<void> {
   const envs = getProcessEnvs(task, arg)
   for (const cmd of task.cmds) {
     await new Promise<void>((resolve, reject) => {

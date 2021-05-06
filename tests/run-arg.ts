@@ -1,5 +1,5 @@
 import {RunArg} from '../src/run-arg';
-import consola, {LogLevel} from 'consola';
+import consola from 'consola';
 import {join} from 'path';
 import {ExecutionBuildFile, parse} from '../src/rewrite/0-parse';
 

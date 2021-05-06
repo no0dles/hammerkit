@@ -1,6 +1,6 @@
 import {TreeDependencies, TreeDependencyNode} from './2-restructure';
 import {join, dirname} from 'path';
-import {existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync} from 'fs';
+import {existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync} from 'fs';
 import {ContainerMount, TaskNode, TaskNodeCmd} from './1-plan';
 
 export interface TreeNodeCache {
@@ -21,7 +21,7 @@ export interface TreeNodeCacheStats {
   [key: string]: { lastModified: number }
 }
 
-export function optimize(tree: TreeDependencies) {
+export function optimize(tree: TreeDependencies): void {
   for (const key of Object.keys(tree)) {
     const node = tree[key];
     if (node.task.src.length === 0) {
@@ -105,7 +105,7 @@ function getStats(result: TreeNodeCacheStats, path: string, matcher: (file: stri
   }
 }
 
-export function writeCache(node: TreeDependencyNode) {
+export function writeCache(node: TreeDependencyNode): void {
   const cacheFile = join(node.task.path, '.hammerkit', node.task.name + '.json');
   const cache = getCache(node);
   const content: TreeNodeCacheFile = {

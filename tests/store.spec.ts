@@ -1,4 +1,4 @@
-import { join, dirname } from 'path'
+import { join } from 'path'
 import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'

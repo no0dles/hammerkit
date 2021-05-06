@@ -59,7 +59,7 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
     result.tasks[key] = {task: tree[key].task, duration: 0, status: 'pending'};
   }
 
-  return new Promise<ExecuteResult>((resolve, reject) => {
+  return new Promise<ExecuteResult>((resolve) => {
     moveRunningTasks();
 
     function moveRunningTasks() {

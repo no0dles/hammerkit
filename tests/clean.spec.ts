@@ -3,7 +3,6 @@ import {getTestArg, loadExampleBuildFile} from './run-arg';
 import {existsSync} from 'fs';
 import {remove} from '../src/file/remove';
 import {executeTask} from '../src/rewrite/4-execute';
-import {nodes} from '../src/rewrite/1-plan';
 import {clean} from '../src/rewrite/5-clean';
 
 describe('clean', () => {

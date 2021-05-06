@@ -22,7 +22,7 @@ async function pull(docker: Dockerode, imageName: string, runArg: RunArg): Promi
   });
 }
 
-export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg) {
+export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg): Promise<void> {
   const docker = new Dockerode();
   const containerWorkingDirectory = '/build/';
   const volumes: ContainerMount[] = [];
