@@ -12,6 +12,11 @@
 
 ```hammerkit init```
 
+## Release
+```
+npm version patch|minor|major
+```
+
 ## Usage
 ```hammerkit <taskName>```
 
