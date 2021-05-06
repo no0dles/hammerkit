@@ -145,11 +145,11 @@ describe('restructure', () => {
   });
 
   it('should resolve sources', () => {
-    expect(tree['/home/user/pkg/a:npm:install'].task.src).toIncludeAllMembers(['/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json']);
-    expect(tree['/home/user/pkg/b:npm:install'].task.src).toIncludeAllMembers(['/home/user/pkg/b/package.json', '/home/user/pkg/b/package-lock.json']);
-    expect(tree['/home/user/pkg/c:npm:install'].task.src).toIncludeAllMembers(['/home/user/pkg/c/package.json', '/home/user/pkg/c/package-lock.json']);
-    expect(tree['/home/user/pkg/a:build'].task.src).toIncludeAllMembers(['/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json', '/home/user/pkg/a/tsconfig.json']);
-    expect(tree['/home/user/pkg/b:build'].task.src).toIncludeAllMembers(['/home/user/pkg/b/package.json', '/home/user/pkg/b/package-lock.json', '/home/user/pkg/b/tsconfig.json', '/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json', '/home/user/pkg/a/tsconfig.json']);
-    expect(tree['/home/user/pkg/c:build'].task.src).toIncludeAllMembers(['/home/user/pkg/c/package.json', '/home/user/pkg/c/package-lock.json', '/home/user/pkg/c/tsconfig.json', '/home/user/pkg/b/package.json', '/home/user/pkg/b/package-lock.json', '/home/user/pkg/b/tsconfig.json', '/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json', '/home/user/pkg/a/tsconfig.json']);
+    expect(tree['/home/user/pkg/a:npm:install'].task.src.map(s => s.absolutePath)).toIncludeAllMembers(['/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json']);
+    expect(tree['/home/user/pkg/b:npm:install'].task.src.map(s => s.absolutePath)).toIncludeAllMembers(['/home/user/pkg/b/package.json', '/home/user/pkg/b/package-lock.json']);
+    expect(tree['/home/user/pkg/c:npm:install'].task.src.map(s => s.absolutePath)).toIncludeAllMembers(['/home/user/pkg/c/package.json', '/home/user/pkg/c/package-lock.json']);
+    expect(tree['/home/user/pkg/a:build'].task.src.map(s => s.absolutePath)).toIncludeAllMembers(['/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json', '/home/user/pkg/a/tsconfig.json']);
+    expect(tree['/home/user/pkg/b:build'].task.src.map(s => s.absolutePath)).toIncludeAllMembers(['/home/user/pkg/b/package.json', '/home/user/pkg/b/package-lock.json', '/home/user/pkg/b/tsconfig.json', '/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json', '/home/user/pkg/a/tsconfig.json']);
+    expect(tree['/home/user/pkg/c:build'].task.src.map(s => s.absolutePath)).toIncludeAllMembers(['/home/user/pkg/c/package.json', '/home/user/pkg/c/package-lock.json', '/home/user/pkg/c/tsconfig.json', '/home/user/pkg/b/package.json', '/home/user/pkg/b/package-lock.json', '/home/user/pkg/b/tsconfig.json', '/home/user/pkg/a/package.json', '/home/user/pkg/a/package-lock.json', '/home/user/pkg/a/tsconfig.json']);
   });
 });

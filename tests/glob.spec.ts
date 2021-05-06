@@ -49,6 +49,6 @@ describe('glob', () => {
     appendFileSync(join(buildFile.path, 'test.md'), '\n')
 
     optimize(depTree);
-    expect(depTree).not.toContainKey(`${buildFile.path}:example`)
+    expect(depTree).toContainKey(`${buildFile.path}:example`)
   })
 })

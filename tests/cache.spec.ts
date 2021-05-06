@@ -57,8 +57,9 @@ describe('cache', () => {
     const result = await executeTask( buildFile,'dependant', false, arg)
     expect(result.success).toBeTruthy();
 
-    expectLog(mock, 'ls')
     expectLog(mock, 'node_modules')
+    expectLog(mock, 'package-lock.json')
+    expectLog(mock, 'package.json')
   })
 
   it('should invalid cache on image change', async () => {
