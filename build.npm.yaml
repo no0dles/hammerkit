@@ -1,7 +1,7 @@
 tasks:
   install:
     description: install dependencies
-    image: node:$NODE_VERSION
+    image: node:14.16.0
     cmds:
       - npm install
     generates:

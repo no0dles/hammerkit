@@ -12,6 +12,11 @@ import { executeTask } from './rewrite/4-execute'
 
 export function getProgram(fileName: string): commaner.Command {
   const program = new Command()
+  const isVerbose = process.argv.some((a) => a === '--verbose')
+
+  if (isVerbose) {
+    consola.level = LogLevel.Debug
+  }
 
   if (existsSync(fileName)) {
     const buildFile = parse(fileName)
@@ -86,7 +91,6 @@ export function getProgram(fileName: string): commaner.Command {
       program
         .command(task.name)
         .description(task.description || '')
-        .option('-v, --verbose', 'log debugging information', false)
         .option('-w, --worker <number>', 'parallel worker count', parseInt, 4)
         .option('--no-cache', 'ignore task cache', false)
         .action(async (options) => {
@@ -102,10 +106,17 @@ export function getProgram(fileName: string): commaner.Command {
 
           try {
             const result = await executeTask(buildFile, task.name, options.cache, runArg)
+            for (const key of Object.keys(result.tasks)) {
+              const task = result.tasks[key]
+              runArg.logger.info(`[${task.status}] ${task.task.name}: ${task.duration}ms`)
+            }
+
             if (!result.success) {
               for (const key of Object.keys(result.tasks)) {
                 const task = result.tasks[key]
-                runArg.logger.withTag(task.status).info(`${task.task.name} ${task.errorMessage}`)
+                if (task.status === 'failed') {
+                  runArg.logger.info(`${task.task.name} ${task.errorMessage}`)
+                }
               }
             }
           } catch (e) {
@@ -134,6 +145,7 @@ tasks:
 
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   program.version(require('../package.json').version)
+  program.option('--verbose', 'log debugging information', false)
   program.name('hammerkit')
 
   return program

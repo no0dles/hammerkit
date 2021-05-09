@@ -2,6 +2,7 @@ import { TreeDependencies, TreeDependencyNode } from './2-restructure'
 import { join, dirname } from 'path'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { ContainerMount, TaskNode, TaskNodeCmd } from './1-plan'
+import consola from 'consola'
 
 export interface TreeNodeCache {
   src: string[]
@@ -30,11 +31,13 @@ export function optimize(tree: TreeDependencies): void {
 
     const cache = readCache(node)
     if (!cache) {
+      consola.debug(`${node.task.name} can't be skipped because there is no cache`)
       continue
     }
 
     const current = getCache(node)
     if (current.image !== cache.task.image) {
+      consola.debug(`${node.task.name} can't be skipped because task image has been modified`)
       continue
     }
 
@@ -44,6 +47,7 @@ export function optimize(tree: TreeDependencies): void {
     let changed = false
     for (const key of Object.keys(cache.stats)) {
       if (currentStats[key]?.lastModified !== cache.stats[key].lastModified) {
+        consola.debug(`${node.task.name} can't be skipped because ${key} has been modified`)
         changed = true
         break
       }
@@ -53,6 +57,7 @@ export function optimize(tree: TreeDependencies): void {
       continue
     }
 
+    consola.debug(`${node.task.name} is skipped because it's cache is up to date`)
     removeTask(key, tree)
   }
 }
@@ -106,6 +111,7 @@ function getStats(result: TreeNodeCacheStats, path: string, matcher: (file: stri
 }
 
 export function writeCache(node: TreeDependencyNode): void {
+  consola.debug(`write cache for ${node.task.name}`)
   const cacheFile = join(node.task.path, '.hammerkit', node.task.name + '.json')
   const cache = getCache(node)
   const content: TreeNodeCacheFile = {

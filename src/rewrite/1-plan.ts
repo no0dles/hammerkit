@@ -123,6 +123,9 @@ function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, 
       if (!task.image && extend.task.image) {
         node.image = extend.task.image
       }
+      if (extend.task.description && !node.description) {
+        node.description = extend.task.description
+      }
       if (extend.task.generates) {
         node.generates.push(...getAbsolutePaths(extend.task.generates, context.currentWorkdir))
       }

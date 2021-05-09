@@ -5,9 +5,11 @@ import { RunArg } from '../run-arg'
 import { runLocally } from './4-execute-local'
 import { runTaskDocker } from './4-execute-docker'
 import { ExecutionBuildFile } from './0-parse'
+import consola from 'consola'
 
 export interface TaskProcess {
   task: TaskNode
+  start: Date
   promise: Promise<void>
 }
 
@@ -33,6 +35,7 @@ function replaceEnvVariables(
     if (value.startsWith('$')) {
       const processEnvValue = processEnv[value.substr(1)]
       if (processEnvValue) {
+        consola.debug(`use process env ${value.substr(1)}`)
         result[key] = processEnvValue
       } else {
         throw new Error(`missing env ${value}`)
@@ -74,6 +77,7 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
       for (const key of Object.keys(tree)) {
         const node = tree[key]
         if (node.dependencies.length === 0) {
+          consola.debug(`${node.task.name} is pending for execution`)
           pendingTasks.push(node)
           delete tree[key]
         }
@@ -90,13 +94,17 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
 
         const runningTask: TaskProcess = {
           task: pendingTask.task,
+          start: new Date(),
           promise: runTask(pendingTask.task, arg),
         }
+        consola.debug(`${pendingTask.task.name} is running`)
         runningTasks.push(runningTask)
         result.tasks[pendingTask.task.id].status = 'running'
         runningTask.promise
           .then(() => {
             result.tasks[pendingTask.task.id].status = 'completed'
+            result.tasks[pendingTask.task.id].duration = new Date().getTime() - runningTask.start.getTime()
+            consola.debug(`${pendingTask.task.name} completed in ${result.tasks[pendingTask.task.id].duration}ms`)
             writeCache(pendingTask)
             for (const key of Object.keys(tree)) {
               const index = tree[key].dependencies.indexOf(pendingTask.task.id)
@@ -109,8 +117,14 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
           })
           .catch((err) => {
             result.success = false
+            result.tasks[pendingTask.task.id].duration = new Date().getTime() - runningTask.start.getTime()
             result.tasks[pendingTask.task.id].status = 'failed'
             result.tasks[pendingTask.task.id].errorMessage = err.message
+            consola.debug(
+              `${pendingTask.task.name} failed in ${result.tasks[pendingTask.task.id].duration}ms with error ${
+                err.message
+              }`
+            )
             runningTasks.splice(runningTasks.indexOf(runningTask), 1)
             resolve(result)
           })

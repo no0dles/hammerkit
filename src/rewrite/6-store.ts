@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { copy } from '../file/copy'
 import { nodes } from './1-plan'
 import { ExecutionBuildFile } from './0-parse'
+import consola from 'consola'
 
 export async function store(buildFile: ExecutionBuildFile, targetDirectory: string): Promise<void> {
   const tree = nodes(buildFile)
@@ -19,6 +20,7 @@ export async function store(buildFile: ExecutionBuildFile, targetDirectory: stri
         continue
       }
 
+      consola.debug(`copy ${sourcePath} to ${targetPath}`)
       copy(sourcePath, targetPath)
     }
   }

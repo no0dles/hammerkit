@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'fs'
 import { parse as yamlParse } from 'yaml'
 import { dirname, join } from 'path'
 import { Minimatch } from 'minimatch'
+import consola from 'consola'
 
 export interface ExecutionBuildFile {
   fileName: string
@@ -34,6 +35,7 @@ export interface ExecutionBuildTask {
 }
 
 export function read(fileName: string): any {
+  consola.debug(`read ${fileName} build file`)
   let content: string
   try {
     content = readFileSync(fileName).toString()
@@ -65,6 +67,7 @@ function loadEnvFile(path: string, baseEnv: { [key: string]: string }): { [key: 
       const key = envVar.substr(0, index)
       const value = envVar.substr(index + 1)
       if (!envs[key]) {
+        consola.debug(`load env variable ${key} from ${directory} file`)
         envs[key] = value
       }
     }
@@ -122,6 +125,9 @@ function readFile(fileName: string, files: { [key: string]: ExecutionBuildFile }
           return map
         }, {}),
     }
+    if (Object.keys(result.tasks[key].unknownProps).length > 0) {
+      consola.warn(`unknown props ${Object.keys(result.tasks[key].unknownProps)} for ${key} in ${fileName}`)
+    }
   }
 
   return result
@@ -142,7 +148,13 @@ function parseSources(fileName: string, key: string, value: any): ExecutionBuild
         result.push({
           matcher: (file, cwd) => {
             const matcher = new Minimatch(join(cwd, source), { dot: true })
-            return matcher.match(file)
+            const match = matcher.match(file)
+            if (match) {
+              consola.debug(`file ${file} matches source ${source}`)
+            } else {
+              consola.debug(`file ${file} does not matche source ${source}`)
+            }
+            return match
           },
           relativePath: '.',
         })
@@ -151,7 +163,13 @@ function parseSources(fileName: string, key: string, value: any): ExecutionBuild
         result.push({
           matcher: (file, cwd) => {
             const matcher = new Minimatch(join(cwd, source), { dot: true })
-            return matcher.match(file)
+            const match = matcher.match(file)
+            if (match) {
+              consola.debug(`file ${file} matches source ${source}`)
+            } else {
+              consola.debug(`file ${file} does not matche source ${source}`)
+            }
+            return match
           },
           relativePath: prefixSource,
         })

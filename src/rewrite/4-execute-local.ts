@@ -2,6 +2,7 @@ import { TaskNode } from './1-plan'
 import { exec } from 'child_process'
 import { getLogs } from '../log'
 import { RunArg } from '../run-arg'
+import consola from 'consola'
 
 function getProcessEnvs(task: TaskNode, arg: RunArg) {
   const envs = { ...task.envs }
@@ -15,9 +16,11 @@ function getProcessEnvs(task: TaskNode, arg: RunArg) {
 }
 
 export async function runLocally(task: TaskNode, arg: RunArg): Promise<void> {
+  consola.debug(`execute ${task.name} locally`)
   const envs = getProcessEnvs(task, arg)
   for (const cmd of task.cmds) {
     await new Promise<void>((resolve, reject) => {
+      consola.debug(`execute cmd ${cmd.cmd} locally`)
       const ps = exec(cmd.cmd, {
         env: envs,
         cwd: cmd.path,

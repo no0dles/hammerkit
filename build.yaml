@@ -1,11 +1,9 @@
-envs:
-  NODE_VERSION: 14.16.0
 
 tasks:
   rebuild:
     description: build typescript
     deps: [ npm:install ]
-    image: node:$NODE_VERSION
+    image: node:14.16.0
     src:
       - src
       - tsconfig.json
@@ -18,7 +16,7 @@ tasks:
   build:
     description: build typescript
     deps: [npm:install]
-    image: node:$NODE_VERSION
+    image: node:14.16.0
     src:
       - src
       - tsconfig.json
@@ -29,7 +27,7 @@ tasks:
 
   format:
     description: lint fix and prettier
-    image: node:$NODE_VERSION
+    image: node:14.16.0
     deps: [npm:install]
     cmds:
       - node_modules/.bin/prettier -w src/** tests/**
@@ -43,7 +41,7 @@ tasks:
 
   lint:
     description: lint source code
-    image: node:$NODE_VERSION
+    image: node:14.16.0
     deps: [npm:install]
     src:
       - src
@@ -55,7 +53,7 @@ tasks:
 
   prettier:
     description: format source code
-    image: node:$NODE_VERSION
+    image: node:14.16.0
     deps: [npm:install]
     src:
       - src

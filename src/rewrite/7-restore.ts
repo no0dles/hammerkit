@@ -4,6 +4,7 @@ import { copy } from '../file/copy'
 import { remove } from '../file/remove'
 import { nodes } from './1-plan'
 import { ExecutionBuildFile } from './0-parse'
+import consola from 'consola'
 
 export async function restore(buildFile: ExecutionBuildFile, targetDirectory: string): Promise<void> {
   const tree = nodes(buildFile)
@@ -20,6 +21,7 @@ export async function restore(buildFile: ExecutionBuildFile, targetDirectory: st
         await remove(targetPath)
       }
 
+      consola.debug(`copy ${sourcePath} to ${targetPath}`)
       copy(sourcePath, targetPath)
     }
   }

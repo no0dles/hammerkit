@@ -4,8 +4,9 @@ import { RunArg } from '../run-arg'
 import { awaitStream } from '../docker/stream'
 import { ContainerMount, TaskNode } from './1-plan'
 import Dockerode, { Container } from 'dockerode'
+import consola from 'consola'
 
-async function pull(docker: Dockerode, imageName: string, runArg: RunArg): Promise<void> {
+async function pull(docker: Dockerode, imageName: string): Promise<void> {
   let searchImageName = imageName
   if (imageName.indexOf(':') === -1) {
     searchImageName += ':latest'
@@ -15,7 +16,7 @@ async function pull(docker: Dockerode, imageName: string, runArg: RunArg): Promi
     return
   }
 
-  runArg.logger.debug(`pull ${imageName}`)
+  consola.debug(`pull image ${imageName}`)
   const image = await docker.pull(imageName)
   await new Promise<void>((resolve, reject) => {
     docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)))
@@ -23,6 +24,7 @@ async function pull(docker: Dockerode, imageName: string, runArg: RunArg): Promi
 }
 
 export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg): Promise<void> {
+  consola.debug(`execute ${task.name} as docker task`)
   const docker = new Dockerode()
   const containerWorkingDirectory = '/build/'
   const volumes: ContainerMount[] = []
@@ -35,16 +37,23 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
 
   for (const source of task.src) {
     if (existsSync(source.absolutePath)) {
+      consola.debug(
+        `mount source volume ${source.absolutePath}:${join(
+          containerWorkingDirectory,
+          relative(task.path, source.absolutePath)
+        )}`
+      )
       addVolume({
         localPath: source.absolutePath,
         containerPath: join(containerWorkingDirectory, relative(task.path, source.absolutePath)),
       })
     } else {
-      arg.logger.warn(`${source.absolutePath} does not exists`)
+      consola.warn(`${source.absolutePath} does not exists`)
     }
   }
 
   for (const generate of task.generates) {
+    consola.debug(`mount generate volume ${generate}:${join(containerWorkingDirectory, relative(task.path, generate))}`)
     addVolume({
       localPath: generate,
       containerPath: join(containerWorkingDirectory, relative(task.path, generate)),
@@ -52,11 +61,13 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
   }
 
   for (const volume of task.mounts) {
+    consola.debug(`mount volume ${volume.localPath}:${volume.containerPath}`)
     addVolume(volume)
   }
 
-  await pull(docker, image, arg)
+  await pull(docker, image)
 
+  consola.debug(`create container with image ${image} with ${task.shell || 'sh'}`)
   const container = await docker.createContainer({
     Image: image,
     Tty: true,
@@ -96,6 +107,7 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
     }
 
     for (const cmd of task.cmds) {
+      consola.debug(`execute ${cmd.cmd} in container`)
       const result = await execCommand(
         arg,
         docker,
@@ -110,6 +122,7 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
       }
     }
   } finally {
+    consola.debug(`remove container`)
     await container.remove({ force: true })
   }
 }
