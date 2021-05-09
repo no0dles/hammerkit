@@ -67,6 +67,7 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
     tasks: {},
   }
   for (const key of Object.keys(tree)) {
+    consola.debug(`${tree[key].task.name} is pending for execution`)
     result.tasks[key] = { task: tree[key].task, duration: 0, status: 'pending' }
   }
 
@@ -77,7 +78,7 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
       for (const key of Object.keys(tree)) {
         const node = tree[key]
         if (node.dependencies.length === 0) {
-          consola.debug(`${node.task.name} is pending for execution`)
+          consola.debug(`${node.task.name} is scheduled for execution`)
           pendingTasks.push(node)
           delete tree[key]
         }
@@ -131,6 +132,7 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
       }
 
       if (pendingTasks.length === 0 && runningTasks.length === 0 && Object.keys(tree).length === 0) {
+        consola.debug(`finished execution of tasks ${Object.keys(result.tasks).map((k) => result.tasks[k].task.name)}`)
         resolve(result)
       }
     }
