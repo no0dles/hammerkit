@@ -108,19 +108,19 @@ export function getProgram(fileName: string): commaner.Command {
             const result = await executeTask(buildFile, task.name, options.cache, runArg)
             for (const key of Object.keys(result.tasks)) {
               const task = result.tasks[key]
-              runArg.logger.info(`[${task.status}] ${task.task.name}: ${task.duration}ms`)
+              consola.info(`[${task.status}] ${task.task.name}: ${task.duration}ms`)
             }
 
             if (!result.success) {
               for (const key of Object.keys(result.tasks)) {
                 const task = result.tasks[key]
                 if (task.status === 'failed') {
-                  runArg.logger.info(`${task.task.name} ${task.errorMessage}`)
+                  consola.info(`${task.task.name} ${task.errorMessage}`)
                 }
               }
             }
           } catch (e) {
-            runArg.logger.error(e)
+            consola.error(e)
             process.exit(1)
           }
         })

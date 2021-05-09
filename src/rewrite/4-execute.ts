@@ -81,12 +81,15 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
           consola.debug(`${node.task.name} is scheduled for execution`)
           pendingTasks.push(node)
           delete tree[key]
+        } else {
+          consola.debug(`${node.task.name} requires ${node.dependencies.join(', ')} for execution`)
         }
       }
 
       for (let i = 0; i < pendingTasks.length; i++) {
         const pendingTask = pendingTasks[i]
         if (arg.workers !== 0 && runningTasks.length === arg.workers) {
+          consola.debug(`${pendingTask.task.name} is postponed until a worker is available`)
           break
         }
 

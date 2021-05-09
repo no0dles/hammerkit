@@ -18,7 +18,9 @@ export function restructure(tree: TaskTree): TreeDependencies {
 function addDependencies(node: TaskNode, tree: TreeNodes, treeDependencies: TreeDependencies, path: string[]) {
   const dependencies: string[] = []
   for (const dep of node.deps) {
-    dependencies.push(dep.id)
+    if (dependencies.indexOf(dep.id) === -1) {
+      dependencies.push(dep.id)
+    }
 
     if (path.indexOf(dep.id) >= 0) {
       throw new Error(`dependency cycle ${path.join(' -> ')} -> ${dep.id}`)
