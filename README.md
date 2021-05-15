@@ -38,7 +38,7 @@ npm publish
     - [x] warn about missing env variables
 - [ ] docs
 - [x] mounts outside of container work dir
-- [ ] dynamic deep of container work dir
+- [x] dynamic deep of container work dir
 - [ ] windows/osx test runs
 - [x] ignore .hammerkit folder in cache
 - [x] support glob for sources
