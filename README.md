@@ -17,7 +17,7 @@ tasks:
   install:
     description: install node modules
     cmds:
-	 - npm install
+    - npm install
 ```
 
 A task contains a list of commands which are executed in order.
@@ -26,8 +26,8 @@ A task contains a list of commands which are executed in order.
 tasks:
   install_and_install:
     cmds:
-	 - npm install
-	 - npx tsc
+    - npm install
+    - npx tsc
 ```
 
 Tasks can have dependencies to each other and those are enforce to run first.
@@ -36,12 +36,12 @@ Tasks can have dependencies to each other and those are enforce to run first.
 tasks:
   install:
     cmds:
-	 - npm install
-	
+    - npm install
+
   build:
     deps: [install]
     cmds:
-	 - npx tsc
+    - npx tsc
 ```
 
 To prevent duplicate work, a list of source and output files can be defined. These will be checked before each execution and if the source files did not change since last time, it will skip the task. Note: If a dependency task has changed or does not have defined source files, caching will not work and run the task every time.
@@ -53,17 +53,17 @@ tasks:
     - package.json
     - package-lock.json
     cmds:
-	 - npm install
+    - npm install
     generates:
-	 - node_modules
-	
+    - node_modules
+
   build:
     deps: [install]
     src:
     - src
     - tsconfig.json
     cmds:
-	 - npx tsc
+    - npx tsc
 ```
 
 The source list can be files or folders which will be checked recursively. It's also possible to use glob patterns (**)
@@ -75,7 +75,7 @@ tasks:
     - src/**/*.ts
     - tsconfig.json
     cmds:
-	 - npx tsc
+    - npx tsc
 ```
 
 Environment variables can also be defined in the buildfile or the task directly.
@@ -86,10 +86,10 @@ envs:
 
 tasks:
   version:
-  	 envs:
-  	   NODE_ENV: production
+    envs:
+      NODE_ENV: production
     cmds:
-	 - npm run build
+    - npm run build
 ```
 
 For the more sensitive environment variables .env files can be used or they can be passed in. If an environment variable is defined like the version number in following example, it's presence is checked before execution and if missing aborted.
@@ -104,7 +104,7 @@ tasks:
     envs:
       VERSION: $VERSION
     cmds:
-	 - npm publish
+    - npm publish
 ```
 
 A Task can also run inside a docker container. 
@@ -114,7 +114,7 @@ tasks:
   install:
     image: node:14.16.0
     cmds:
-	 - npm install
+    - npm install
 ```
 
 For docker tasks the source and output files are mounted into the container. If there are any additional files which are neither of them, they can be defined with mounts.
@@ -124,15 +124,15 @@ tasks:
   install:
     image: node:14.16.0
     generates:
-      - node_modules
+    - node_modules
     src:
-      - package.json
-      - package-lock.json
+    - package.json
+    - package-lock.json
     mounts:
-      - $PWD/.npm:/.npm
-      - $PWD/.config:/.config
+    - $PWD/.npm:/.npm
+    - $PWD/.config:/.config
     cmds:
-	 - npm install
+    - npm install
 ```
 
 Dependent tasks source and output files will also be mounted, as they could be depandant. 
@@ -142,15 +142,15 @@ tasks:
   install:
     image: node:14.16.0
     generates:
-      - node_modules
+    - node_modules
     src:
-      - package.json
-      - package-lock.json
+    - package.json
+    - package-lock.json
     mounts:
-      - $PWD/.npm:/.npm
-      - $PWD/.config:/.config
+    - $PWD/.npm:/.npm
+    - $PWD/.config:/.config
     cmds:
-	 - npm install
+    - npm install
 
   build:
     deps: [install]
@@ -158,7 +158,7 @@ tasks:
     generates: [dist]
     src: [src]
     cmds:
-      - node_modules/.bin/tsc
+    - node_modules/.bin/tsc
 ```
 
 Buildfiles can be referenced from other buildfiles. 
@@ -182,7 +182,7 @@ tasks:
     deps: [npm:install]
     cmds:
     - tsc
-    
+
 includes:
   npm: utils/build.npm.yaml
 ```
