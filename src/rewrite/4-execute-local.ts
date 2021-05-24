@@ -19,6 +19,10 @@ export async function runLocally(task: TaskNode, arg: RunArg): Promise<void> {
   consola.debug(`execute ${task.name} locally`)
   const envs = getProcessEnvs(task, arg)
   for (const cmd of task.cmds) {
+    if (arg.cancelPromise.isResolved) {
+      return
+    }
+
     await new Promise<void>((resolve, reject) => {
       consola.debug(`execute cmd ${cmd.cmd} locally`)
       const ps = exec(cmd.cmd, {
@@ -39,6 +43,11 @@ export async function runLocally(task: TaskNode, arg: RunArg): Promise<void> {
         arg.logger.withTag(cmd.cmd).error(err)
       })
       ps.on('close', (code) => {
+        if (arg.cancelPromise.isResolved) {
+          reject(new Error('canceled'))
+          return
+        }
+
         if (code !== 0) {
           const message = `failed with code ${code}`
           arg.logger.withTag(cmd.cmd).error(message)
@@ -47,6 +56,9 @@ export async function runLocally(task: TaskNode, arg: RunArg): Promise<void> {
           arg.logger.success(cmd.cmd)
           resolve()
         }
+      })
+      arg.cancelPromise.promise.then(() => {
+        ps.kill()
       })
     })
   }

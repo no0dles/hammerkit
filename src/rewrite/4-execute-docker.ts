@@ -121,6 +121,10 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
     },
   })
 
+  arg.cancelPromise.promise.then(() => {
+    container.remove({ force: true })
+  })
+
   const user = `${process.getuid()}:${process.getgid()}`
 
   try {
@@ -148,6 +152,10 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
     }
 
     for (const cmd of task.cmds) {
+      if (arg.cancelPromise.isResolved) {
+        return
+      }
+
       consola.debug(`execute ${cmd.cmd} in container`)
       const result = await execCommand(
         arg,

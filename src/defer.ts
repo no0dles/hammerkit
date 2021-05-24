@@ -15,11 +15,11 @@ export class Defer<T> {
     })
   }
 
-  get isResolved() {
+  get isResolved(): boolean {
     return this.promiseResolved
   }
 
-  get isRejected() {
+  get isRejected(): boolean {
     return this.promiseRejected
   }
 
@@ -31,7 +31,7 @@ export class Defer<T> {
     return this.promiseError
   }
 
-  resolve(value: T) {
+  resolve(value: T): void {
     if (this.promiseResolved) {
       throw new Error('defer already resolved')
     }
@@ -41,10 +41,12 @@ export class Defer<T> {
 
     this.promiseResolved = true
     this.promiseResult = value ?? null
-    this.resolveFn!(value)
+    if (this.resolveFn) {
+      this.resolveFn(value)
+    }
   }
 
-  reject(err?: any) {
+  reject(err?: Error): void {
     if (this.promiseResolved) {
       throw new Error('defer already resolved')
     }
@@ -54,6 +56,8 @@ export class Defer<T> {
 
     this.promiseRejected = true
     this.promiseError = err
-    this.rejectFn!(err)
+    if (this.rejectFn) {
+      this.rejectFn(err)
+    }
   }
 }

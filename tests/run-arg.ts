@@ -2,6 +2,7 @@ import { RunArg } from '../src/run-arg'
 import consola from 'consola'
 import { join } from 'path'
 import { ExecutionBuildFile, parse } from '../src/rewrite/0-parse'
+import { Defer } from '../src/defer'
 
 export function getTestArg(): [RunArg, jest.Mock] {
   const mock = jest.fn()
@@ -20,6 +21,7 @@ export function getTestArg(): [RunArg, jest.Mock] {
       workers: 0,
       processEnvs: { ...process.env },
       logger: consola,
+      cancelPromise: new Defer<void>(),
     },
     mock,
   ]

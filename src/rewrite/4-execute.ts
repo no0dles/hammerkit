@@ -20,7 +20,7 @@ export interface ExecuteResult {
 
 export interface ExecuteTaskResult {
   duration: number
-  status: 'completed' | 'pending' | 'running' | 'failed'
+  status: 'completed' | 'pending' | 'running' | 'failed' | 'canceled' | 'aborted'
   errorMessage?: string
   task: TaskNode
 }
@@ -75,7 +75,23 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
   return new Promise<ExecuteResult>((resolve) => {
     moveRunningTasks()
 
+    arg.cancelPromise.promise.then(() => {
+      result.success = false
+      for (const pendingTask of pendingTasks) {
+        result.tasks[pendingTask.task.id].status = 'canceled'
+      }
+      for (const runningTask of runningTasks) {
+        result.tasks[runningTask.task.id].status = 'aborted'
+        result.tasks[runningTask.task.id].duration = new Date().getTime() - runningTask.start.getTime()
+      }
+      resolve(result)
+    })
+
     function moveRunningTasks() {
+      if (arg.cancelPromise.isResolved) {
+        return
+      }
+
       for (const key of Object.keys(tree)) {
         const node = tree[key]
         if (node.dependencies.length === 0) {
