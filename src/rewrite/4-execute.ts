@@ -56,6 +56,7 @@ export function executeTask(
   if (useCache) {
     optimize(depTree)
   }
+
   return execute(depTree, runArg)
 }
 

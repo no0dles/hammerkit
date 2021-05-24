@@ -9,6 +9,7 @@ import { store } from './rewrite/6-store'
 import { restore } from './rewrite/7-restore'
 import { validate } from './rewrite/8-validate'
 import { executeTask } from './rewrite/4-execute'
+import { Defer } from './defer'
 
 export function getProgram(fileName: string): commaner.Command {
   const program = new Command()
@@ -98,7 +99,12 @@ export function getProgram(fileName: string): commaner.Command {
             logger: consola,
             workers: options.workers,
             processEnvs: process.env,
+            cancelPromise: new Defer<void>(),
           }
+
+          process.on('SIGINT', function () {
+            runArg.cancelPromise.resolve()
+          })
 
           if (options.verbose) {
             runArg.logger.level = LogLevel.Debug

@@ -33,7 +33,7 @@ export interface TaskNodeSource {
 }
 
 export interface ContainerMount {
-  localPath: string;
+  localPath: string
   containerPath: string
 }
 
@@ -186,9 +186,9 @@ function splitMount(cwd: string, dir: string): ContainerMount {
     }
   } else if (parts.length === 2) {
     if (parts[1].startsWith('/')) {
-      return {localPath: parseLocalMount(cwd, parts[0]), containerPath: parts[1]}
+      return { localPath: parseLocalMount(cwd, parts[0]), containerPath: parts[1] }
     } else {
-      return {localPath: parseLocalMount(cwd, parts[0]), containerPath: join(cwd, parts[1]) }
+      return { localPath: parseLocalMount(cwd, parts[0]), containerPath: join(cwd, parts[1]) }
     }
   } else {
     throw new Error(`invalid mount ${dir}`)

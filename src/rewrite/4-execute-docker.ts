@@ -1,26 +1,26 @@
-import {dirname, join, relative} from 'path';
-import {existsSync} from 'fs';
-import {RunArg} from '../run-arg';
-import {awaitStream} from '../docker/stream';
-import {ContainerMount, TaskNode, TaskNodeSource} from './1-plan';
-import Dockerode, {Container} from 'dockerode';
-import consola from 'consola';
+import { dirname, join, relative } from 'path'
+import { existsSync } from 'fs'
+import { RunArg } from '../run-arg'
+import { awaitStream } from '../docker/stream'
+import { ContainerMount, TaskNode, TaskNodeSource } from './1-plan'
+import Dockerode, { Container } from 'dockerode'
+import consola from 'consola'
 
 async function pull(docker: Dockerode, imageName: string): Promise<void> {
-  let searchImageName = imageName;
+  let searchImageName = imageName
   if (imageName.indexOf(':') === -1) {
-    searchImageName += ':latest';
+    searchImageName += ':latest'
   }
-  const images = await docker.listImages({});
+  const images = await docker.listImages({})
   if (images.some((i) => i.RepoTags?.some((repoTag) => repoTag === searchImageName))) {
-    return;
+    return
   }
 
-  consola.debug(`pull image ${imageName}`);
-  const image = await docker.pull(imageName);
+  consola.debug(`pull image ${imageName}`)
+  const image = await docker.pull(imageName)
   await new Promise<void>((resolve, reject) => {
-    docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)));
-  });
+    docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)))
+  })
 }
 
 export interface ContainerVolumeTask {
@@ -31,12 +31,12 @@ export interface ContainerVolumeTask {
 }
 
 export interface ContainerVolume {
-  localPath: string,
+  localPath: string
   containerPath: string
 }
 
 export interface ContainerVolumeResult {
-  volumes: ContainerVolume[],
+  volumes: ContainerVolume[]
   workingDirectory: string
 }
 
@@ -44,16 +44,16 @@ export function getContainerVolumes(task: ContainerVolumeTask, checkSources: boo
   const result: ContainerVolumeResult = {
     volumes: [],
     workingDirectory: '',
-  };
+  }
 
   for (const source of task.src) {
     if (!checkSources || existsSync(source.absolutePath)) {
       result.volumes.push({
         localPath: source.absolutePath,
         containerPath: source.absolutePath,
-      });
+      })
     } else {
-      consola.warn(`source ${source.absolutePath} does not exists`);
+      consola.warn(`source ${source.absolutePath} does not exists`)
     }
   }
 
@@ -61,76 +61,73 @@ export function getContainerVolumes(task: ContainerVolumeTask, checkSources: boo
     result.volumes.push({
       localPath: generate,
       containerPath: generate,
-    });
+    })
   }
 
   for (const volume of task.mounts) {
-    result.volumes.push(volume);
+    result.volumes.push(volume)
   }
 
   for (const volume of result.volumes) {
-    consola.debug(
-      `mount volume ${volume.localPath}:${volume.containerPath}`,
-    );
+    consola.debug(`mount volume ${volume.localPath}:${volume.containerPath}`)
   }
 
-  let currentPath = task.path;
+  let currentPath = task.path
 
   while (currentPath !== dirname(currentPath)) {
-    const parentPath = dirname(currentPath);
+    const parentPath = dirname(currentPath)
 
-    let matches = true;
+    let matches = true
     for (const volume of result.volumes) {
       if (!volume.localPath.startsWith(parentPath)) {
-        matches = false;
-        break;
+        matches = false
+        break
       }
     }
 
     if (matches) {
       const basePath = task.path.substr(parentPath.length)
-      result.workingDirectory = join('/hammerkit', basePath);
+      result.workingDirectory = join('/hammerkit', basePath)
       for (const volume of result.volumes) {
         if (volume.containerPath.startsWith(parentPath)) {
-          volume.containerPath = join('/hammerkit', relative(parentPath, volume.containerPath));
+          volume.containerPath = join('/hammerkit', relative(parentPath, volume.containerPath))
         }
       }
-      break;
+      break
     }
 
-    currentPath = parentPath;
+    currentPath = parentPath
   }
 
-
-  return result;
+  return result
 }
 
 export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg): Promise<void> {
-  consola.debug(`execute ${task.name} as docker task`);
-  const docker = new Dockerode();
-  const volumes = getContainerVolumes(task, true);
-  await pull(docker, image);
+  consola.debug(`execute ${task.name} as docker task`)
+  const docker = new Dockerode()
+  const volumes = getContainerVolumes(task, true)
+  await pull(docker, image)
 
-  consola.debug(`create container with image ${image} with ${task.shell || 'sh'}`);
+  consola.debug(`create container with image ${image} with ${task.shell || 'sh'}`)
   const container = await docker.createContainer({
     Image: image,
     Tty: true,
     Entrypoint: task.shell || 'sh',
     Env: Object.keys(task.envs).map((k) => `${k}=${task.envs[k]}`),
     WorkingDir: volumes.workingDirectory,
-    Labels: {app: 'hammerkit'},
+    Labels: { app: 'hammerkit' },
     HostConfig: {
       Binds: volumes.volumes.map((v) => `${v.localPath}:${v.containerPath}`),
     },
-  });
+  })
 
-  const user = `${process.getuid()}:${process.getgid()}`;
+  const user = `${process.getuid()}:${process.getgid()}`
 
   try {
-    await container.start();
+    await container.start()
 
     const setUserPermission = async (directory: string) => {
-      arg.logger.debug('set permission on ', directory);
+      arg.logger.debug('set permission on ', directory)
       const result = await execCommand(
         arg,
         docker,
@@ -138,20 +135,20 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
         volumes.workingDirectory,
         ['chown', user, directory],
         `chown ${user} ${directory}`,
-        undefined,
-      );
+        undefined
+      )
       if (result.ExitCode !== 0) {
-        arg.logger.warn(`unable to set permissions for ${directory}`);
+        arg.logger.warn(`unable to set permissions for ${directory}`)
       }
-    };
+    }
 
-    await setUserPermission(volumes.workingDirectory);
+    await setUserPermission(volumes.workingDirectory)
     for (const volume of volumes.volumes) {
-      await setUserPermission(volume.containerPath);
+      await setUserPermission(volume.containerPath)
     }
 
     for (const cmd of task.cmds) {
-      consola.debug(`execute ${cmd.cmd} in container`);
+      consola.debug(`execute ${cmd.cmd} in container`)
       const result = await execCommand(
         arg,
         docker,
@@ -159,15 +156,15 @@ export async function runTaskDocker(image: string, task: TaskNode, arg: RunArg):
         join(volumes.workingDirectory, relative(task.path, cmd.path)),
         [task.shell || 'sh', '-c', cmd.cmd],
         cmd.cmd,
-        user,
-      );
+        user
+      )
       if (result.ExitCode !== 0) {
-        throw new Error(`command ${cmd.cmd} failed with ${result.ExitCode}`);
+        throw new Error(`command ${cmd.cmd} failed with ${result.ExitCode}`)
       }
     }
   } finally {
-    consola.debug(`remove container`);
-    await container.remove({force: true});
+    consola.debug(`remove container`)
+    await container.remove({ force: true })
   }
 }
 
@@ -178,7 +175,7 @@ async function execCommand(
   cwd: string,
   cmd: string[],
   cmdName: string,
-  user: string | undefined,
+  user: string | undefined
 ) {
   const exec = await container.exec({
     Cmd: cmd,
@@ -187,9 +184,9 @@ async function execCommand(
     AttachStdout: true,
     AttachStderr: true,
     User: user,
-  });
+  })
 
-  const stream = await exec.start({stdin: true, Detach: false, Tty: false});
-  await awaitStream(docker, stream, arg, cmdName);
-  return exec.inspect();
+  const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
+  await awaitStream(docker, stream, arg, cmdName)
+  return exec.inspect()
 }
