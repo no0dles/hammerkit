@@ -8,7 +8,10 @@
 
 ```npm i -g hammerkit```
 
-## Getting started
+## Documentation
+Docs and getting started guide can be found [here](https://no0dles.gitbook.io/hammerkit/).
+
+## Introduction
 
 The buildfile is usually named `build.yaml` and defines a list of tasks either defined in the file itself or by referencing them from other build files.
 
@@ -230,7 +233,6 @@ tasks:
     - [x] warn about missing descriptions
     - [x] warn about missing src files
     - [x] warn about missing env variables
-
 - [x] mounts outside of container work dir
 - [x] dynamic deep of container work dir
 - [x] ignore .hammerkit folder in cache
@@ -239,6 +241,7 @@ tasks:
 - [x] dependant cache and volumes
 - [x] rerun task when content changes, even when its cached
 - [x] add $PWD mounts
+- [ ] add cancel support Ctrl-C 
 - [ ] continous/watch tasks
 - [ ] services
 - [ ] docs

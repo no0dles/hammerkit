@@ -136,7 +136,7 @@ tasks:
   example:
     image: alpine
     cmds:
-      echo "it's Hammer Time!"
+      - echo "it's Hammer Time!"
       `
         writeFileSync(fileName, content)
         consola.success(`created ${fileName}`)
