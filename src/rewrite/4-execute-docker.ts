@@ -1,9 +1,9 @@
-import {basename, dirname, join, relative, sep} from 'path';
+import {dirname, join, relative} from 'path';
 import {existsSync} from 'fs';
 import {RunArg} from '../run-arg';
 import {awaitStream} from '../docker/stream';
-import {ContainerMount, TaskNode, TaskNodeCmd, TaskNodeSource} from './1-plan';
-import Dockerode, {Container, Volume} from 'dockerode';
+import {ContainerMount, TaskNode, TaskNodeSource} from './1-plan';
+import Dockerode, {Container} from 'dockerode';
 import consola from 'consola';
 
 async function pull(docker: Dockerode, imageName: string): Promise<void> {
@@ -77,7 +77,7 @@ export function getContainerVolumes(task: ContainerVolumeTask, checkSources: boo
   let currentPath = task.path;
 
   while (currentPath !== dirname(currentPath)) {
-    let parentPath = dirname(currentPath);
+    const parentPath = dirname(currentPath);
 
     let matches = true;
     for (const volume of result.volumes) {
