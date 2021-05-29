@@ -9,7 +9,7 @@ jobs:
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.1
+      - uses: no0dles/hammerkit-github-action@v1.2
       - run: hammerkit lint
       - run: hammerkit prettier
   test:
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.1
+      - uses: no0dles/hammerkit-github-action@v1.2
       - run: hammerkit test
       - name: upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
