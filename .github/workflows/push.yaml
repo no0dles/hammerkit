@@ -12,6 +12,12 @@ jobs:
       - uses: no0dles/hammerkit-github-action@v1.3
       - run: hammerkit lint
       - run: hammerkit prettier
+      - run: hammerkit build
+      - run: hammerkit store ~/.cache
+      - uses: actions/cache@v2
+        with:
+          key: hammercache
+          path: ~/.cache
   test:
     runs-on: ubuntu-18.04
     steps:
