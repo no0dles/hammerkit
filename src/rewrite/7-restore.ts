@@ -10,6 +10,13 @@ export async function restore(buildFile: ExecutionBuildFile, targetDirectory: st
   const tree = nodes(buildFile)
   for (const key of Object.keys(tree)) {
     const node = tree[key]
+
+    const cacheDir = join(node.path, '.hammerkit')
+    const sourceCacheDir = join(targetDirectory, relative(buildFile.path, node.path), '.hammerkit');
+    if (existsSync(sourceCacheDir) && !existsSync(cacheDir)) {
+      copy(sourceCacheDir, cacheDir)
+    }
+
     for (const targetPath of node.generates) {
       const sourcePath = join(targetDirectory, relative(buildFile.path, targetPath))
 

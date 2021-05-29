@@ -10,6 +10,13 @@ export async function store(buildFile: ExecutionBuildFile, targetDirectory: stri
   const tree = nodes(buildFile)
   for (const key of Object.keys(tree)) {
     const node = tree[key]
+
+    const cacheDir = join(node.path, '.hammerkit')
+    const targetCacheDir = join(targetDirectory, relative(buildFile.path, node.path), '.hammerkit')
+    if (existsSync(cacheDir) && !existsSync(targetCacheDir)) {
+      copy(cacheDir, targetCacheDir)
+    }
+
     for (const sourcePath of node.generates) {
       const relativePath = relative(buildFile.path, sourcePath)
       const targetPath = join(targetDirectory, relativePath)
