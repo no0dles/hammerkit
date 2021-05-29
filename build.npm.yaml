@@ -3,7 +3,22 @@ tasks:
     description: install dependencies
     image: node:14.16.0
     cmds:
-      - npm install
+      - npm ci
+    generates:
+      - node_modules
+      - package-lock.json
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    src:
+      - package.json
+      - package-lock.json
+
+  ci:
+    description: install dependencies
+    image: node:14.16.0
+    cmds:
+      - npm ci
     generates:
       - node_modules
     mounts:
@@ -12,3 +27,17 @@ tasks:
     src:
       - package.json
       - package-lock.json
+
+  publish:minor:
+    description: publish npm package with minor version
+    image: node:14.16.0
+    cmds:
+      - npm version minor
+      - npm publish
+
+  publish:patch:
+    description: publish npm package with patch version
+    image: node:14.16.0
+    cmds:
+      - npm version patch
+      - npm publish

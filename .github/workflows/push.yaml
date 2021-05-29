@@ -2,27 +2,26 @@ name: master
 on: [push]
 jobs:
   build:
-    runs-on: ubuntu-16.04
+    runs-on: ubuntu-18.04
     steps:
       - name: Checkout
         uses: actions/checkout@v2
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - run: npm ci
-      - run: npm run build
-      - run: npx eslint . --ext .ts
-      - run: npx prettier --check src/** tests/**
+      - run: npm i -g hammerkit
+      - run: hammerkit lint
+      - run: hammerkit prettier
   test:
-    runs-on: ubuntu-16.04
+    runs-on: ubuntu-18.04
     steps:
       - name: Checkout
         uses: actions/checkout@v2
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - run: npm ci
-      - run: npx jest --coverage --verbose
+      - run: npm i -g hammerkit
+      - run: hammerkit test
       - name: upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
         with:
