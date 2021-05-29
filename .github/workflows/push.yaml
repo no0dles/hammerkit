@@ -11,7 +11,7 @@ jobs:
           key: ${{ github.ref }}-${{ github.sha	 }}
           path: ~/.cache
           restore-keys: |
-            - ${{ github.ref }}-
+            ${{ github.ref }}-
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
