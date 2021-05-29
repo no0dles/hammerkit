@@ -18,3 +18,5 @@ tsconfig.build.json
 .prettierrc
 dist/**/*.js.map
 *.tgz
+docs
+build.npm.yaml
