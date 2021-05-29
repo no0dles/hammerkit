@@ -6,18 +6,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
-        with:
-          node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit lint
-      - run: hammerkit prettier
-      - run: hammerkit build
-      - run: hammerkit store ~/.cache
       - uses: actions/cache@v2
         with:
           key: hammercache
           path: ~/.cache
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+      - uses: no0dles/hammerkit-github-action@v1.3
+      - run: hammerkit restore ~/.cache
+      - run: hammerkit lint
+      - run: hammerkit prettier
+      - run: hammerkit build
+      - run: hammerkit store ~/.cache
   test:
     runs-on: ubuntu-18.04
     steps:
