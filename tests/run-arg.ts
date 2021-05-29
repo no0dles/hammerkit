@@ -22,6 +22,7 @@ export function getTestArg(): [RunArg, jest.Mock] {
       processEnvs: { ...process.env },
       logger: consola,
       cancelPromise: new Defer<void>(),
+      noContainer: false,
     },
     mock,
   ]
