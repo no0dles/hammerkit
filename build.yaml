@@ -25,6 +25,19 @@ tasks:
     cmds:
       - node_modules/.bin/tsc
 
+  build:test:
+    description: build typescript
+    deps: [npm:install]
+    image: node:14.16.0
+    src:
+      - src
+      - tsconfig.json
+      - tsconfig.test.json
+    generates:
+      - dist
+    cmds:
+      - node_modules/.bin/tsc -p tsconfig.test.json
+
   format:
     description: lint fix and prettier
     image: node:14.16.0

@@ -27,7 +27,7 @@ describe('cache', () => {
   })
 
   async function testCache(action: (depTree: TreeDependencies) => Promise<void>, expectInvalidate: boolean) {
-    const depTree = restructure(plan(buildFile, 'example'))
+    const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
     optimize(depTree)

@@ -15,7 +15,7 @@ describe('glob', () => {
   })
 
   it('should remove task after written cache', async () => {
-    const depTree = restructure(plan(buildFile, 'example'))
+    const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
     optimize(depTree)
@@ -29,7 +29,7 @@ describe('glob', () => {
   })
 
   it('should keep being cached after ignored file changed', () => {
-    const depTree = restructure(plan(buildFile, 'example'))
+    const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
     writeCache(depTree[`${buildFile.path}:example`])
@@ -41,7 +41,7 @@ describe('glob', () => {
   })
 
   it('should invalid cache after file has changed', () => {
-    const depTree = restructure(plan(buildFile, 'example'))
+    const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
     writeCache(depTree[`${buildFile.path}:example`])
