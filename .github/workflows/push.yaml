@@ -8,10 +8,10 @@ jobs:
         uses: actions/checkout@v2
       - uses: actions/cache@v2
         with:
-          key: ${{ GITHUB_REF }}-${{ GITHUB_SHA }}
+          key: ${{ github.ref }}-${{ github.sha	 }}
           path: ~/.cache
           restore-keys: |
-            - ${{ GITHUB_REF }}-
+            - ${{ github.ref }}-
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
