@@ -16,7 +16,7 @@ jobs:
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
-      - run: ls -la ~/.cache
+      - run: ls -la ~/.cache || true
       - run: hammerkit restore ~/.cache
       - run: ls -la
       - run: hammerkit lint
