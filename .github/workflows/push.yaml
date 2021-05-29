@@ -16,14 +16,11 @@ jobs:
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
-      - run: ls -la ~/.cache || true
       - run: hammerkit restore ~/.cache --verbose
-      - run: ls -la
       - run: hammerkit lint --verbose
       - run: hammerkit prettier --verbose
       - run: hammerkit build --verbose
       - run: hammerkit store ~/.cache --verbose
-      - run: ls -la ~/.cache
   test:
     runs-on: ubuntu-18.04
     steps:
