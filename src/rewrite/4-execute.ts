@@ -55,7 +55,7 @@ export function executeTask(
   runArg: RunArg
 ): Promise<ExecuteResult> {
   const tree = plan(build, taskName)
-  const depTree = restructure(tree)
+  const depTree = restructure(tree, true)
   if (useCache) {
     optimize(depTree)
   }

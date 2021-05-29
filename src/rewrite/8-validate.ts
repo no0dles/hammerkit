@@ -8,20 +8,6 @@ export function* validate(buildFile: ExecutionBuildFile, name?: string): Generat
   const tree = name ? plan(buildFile, name).nodes : nodes(buildFile)
   const cycleNodes: TaskNode[] = []
 
-  const dependencyTree = restructure(tree)
-  for (const nodeId of Object.keys(dependencyTree)) {
-    const watchDependencies = dependencyTree[nodeId].dependencies
-      .filter((dp) => tree[dp].watch)
-      .map((dp) => tree[dp].name)
-    if (watchDependencies.length > 0) {
-      yield {
-        type: 'error',
-        message: `task can not depend on watched task(s) ${watchDependencies.join(', ')}`,
-        task: dependencyTree[nodeId].task,
-      }
-    }
-  }
-
   for (const key of Object.keys(tree)) {
     const node = tree[key]
     if (!node.description) {
@@ -55,6 +41,20 @@ export function* validate(buildFile: ExecutionBuildFile, name?: string): Generat
       if (cyclePath) {
         cycleNodes.push(...cyclePath)
         yield { type: 'error', message: `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`, task: node }
+      }
+    }
+  }
+
+  const dependencyTree = restructure(tree, false)
+  for (const nodeId of Object.keys(dependencyTree)) {
+    const watchDependencies = dependencyTree[nodeId].dependencies
+      .filter((dp) => tree[dp].watch)
+      .map((dp) => tree[dp].name)
+    if (watchDependencies.length > 0) {
+      yield {
+        type: 'error',
+        message: `task can not depend on watched task(s) ${watchDependencies.join(', ')}`,
+        task: dependencyTree[nodeId].task,
       }
     }
   }

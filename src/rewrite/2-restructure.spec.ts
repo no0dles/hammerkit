@@ -138,7 +138,7 @@ describe('restructure', () => {
       b: projectB,
     },
   }
-  const tree = restructure(plan(projectC, 'build'))
+  const tree = restructure(plan(projectC, 'build'), true)
 
   it('should resolve dependencies', () => {
     expect(tree['/home/user/pkg/a:npm:install'].dependencies).toIncludeAllMembers([])

@@ -101,7 +101,7 @@ export function getProgram(fileName: string): commaner.Command {
             logger: consola,
             workers: options.workers,
             processEnvs: process.env,
-            noContainer: options.noContainer,
+            noContainer: !options.container,
             cancelPromise: new Defer<void>(),
           }
 

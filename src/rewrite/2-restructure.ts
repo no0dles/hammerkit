@@ -9,21 +9,27 @@ export interface TreeDependencyNode {
   dependencies: string[]
 }
 
-export function restructure(tree: TaskTree | TreeNodes): TreeDependencies {
+export function restructure(tree: TaskTree | TreeNodes, throwOnError: boolean): TreeDependencies {
   const treeDependencies: TreeDependencies = {}
   if (isTaskTree(tree)) {
-    addDependencies(tree.rootNode, tree.nodes, treeDependencies, [tree.rootNode.id])
+    addDependencies(tree.rootNode, tree.nodes, treeDependencies, [tree.rootNode.id], throwOnError)
   } else {
     for (const nodeId of Object.keys(tree)) {
       if (!treeDependencies[nodeId]) {
-        addDependencies(tree[nodeId], tree, treeDependencies, [nodeId])
+        addDependencies(tree[nodeId], tree, treeDependencies, [nodeId], throwOnError)
       }
     }
   }
   return treeDependencies
 }
 
-function addDependencies(node: TaskNode, tree: TreeNodes, treeDependencies: TreeDependencies, path: string[]) {
+function addDependencies(
+  node: TaskNode,
+  tree: TreeNodes,
+  treeDependencies: TreeDependencies,
+  path: string[],
+  throwOnError: boolean
+) {
   const dependencies: string[] = []
   for (const dep of node.deps) {
     if (dependencies.indexOf(dep.id) === -1) {
@@ -31,11 +37,15 @@ function addDependencies(node: TaskNode, tree: TreeNodes, treeDependencies: Tree
     }
 
     if (path.indexOf(dep.id) >= 0) {
-      throw new Error(`dependency cycle ${path.join(' -> ')} -> ${dep.id}`)
+      if (throwOnError) {
+        throw new Error(`dependency cycle ${path.join(' -> ')} -> ${dep.id}`)
+      } else {
+        continue
+      }
     }
 
     if (!treeDependencies[dep.id]) {
-      addDependencies(dep, tree, treeDependencies, [...path, dep.id])
+      addDependencies(dep, tree, treeDependencies, [...path, dep.id], throwOnError)
     }
 
     for (const subDep of treeDependencies[dep.id].dependencies) {
