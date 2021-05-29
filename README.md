@@ -1,8 +1,13 @@
-# Hammerkit
+<h1 align="center">
+  <img src="docs/hammerkit.png" alt="hammerkit" width="250">
+</h1>
+<h2 align="center">Hammerkit</h2>
 
-![License](https://img.shields.io/npm/l/hammerkit)
-![GitHub Workflow Status](https://img.shields.io/github/workflow/status/no0dles/hammerkit/master)
-![npm](https://img.shields.io/npm/v/hammerkit)
+<p align='center'>
+  <img alt='build' src='https://img.shields.io/github/workflow/status/no0dles/hammerkit/master'>
+  <img alt='license' src='https://img.shields.io/npm/l/hammerkit'>
+  <img alt='npm' src='https://img.shields.io/npm/v/hammerkit'>
+</p>
 
 ## Installation
 
