@@ -23,6 +23,7 @@ export interface ExecutionBuildSource {
 export interface ExecutionBuildTask {
   deps: string[] | null
   src: ExecutionBuildSource[] | null
+  watch: boolean | null
   description: string | null
   shell: string | null
   generates: string[] | null
@@ -76,7 +77,7 @@ function loadEnvFile(path: string, baseEnv: { [key: string]: string }): { [key: 
   return envs
 }
 
-const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds']
+const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys]
 
 function readFile(fileName: string, files: { [key: string]: ExecutionBuildFile }): ExecutionBuildFile {
@@ -117,6 +118,7 @@ function readFile(fileName: string, files: { [key: string]: ExecutionBuildFile }
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,
+      watch: value.watch || null,
       cmds: parseCommands(fileName, key, value.cmds),
       unknownProps: Object.keys(value)
         .filter((k) => validKeys.indexOf(k) === -1)

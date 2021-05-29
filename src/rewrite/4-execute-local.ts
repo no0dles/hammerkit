@@ -48,7 +48,7 @@ export async function runLocally(task: TaskNode, arg: RunArg): Promise<void> {
           return
         }
 
-        if (code !== 0) {
+        if (code !== 0 && code !== null) {
           const message = `failed with code ${code}`
           arg.logger.withTag(cmd.cmd).error(message)
           reject(new Error(message))

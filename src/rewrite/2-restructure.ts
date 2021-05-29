@@ -1,4 +1,4 @@
-import { TaskNode, TaskTree, TreeNodes } from './1-plan'
+import { isTaskTree, TaskNode, TaskTree, TreeNodes } from './1-plan'
 
 export interface TreeDependencies {
   [key: string]: TreeDependencyNode
@@ -9,9 +9,17 @@ export interface TreeDependencyNode {
   dependencies: string[]
 }
 
-export function restructure(tree: TaskTree): TreeDependencies {
+export function restructure(tree: TaskTree | TreeNodes): TreeDependencies {
   const treeDependencies: TreeDependencies = {}
-  addDependencies(tree.rootNode, tree.nodes, treeDependencies, [tree.rootNode.id])
+  if (isTaskTree(tree)) {
+    addDependencies(tree.rootNode, tree.nodes, treeDependencies, [tree.rootNode.id])
+  } else {
+    for (const nodeId of Object.keys(tree)) {
+      if (!treeDependencies[nodeId]) {
+        addDependencies(tree[nodeId], tree, treeDependencies, [nodeId])
+      }
+    }
+  }
   return treeDependencies
 }
 

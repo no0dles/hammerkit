@@ -5,7 +5,10 @@ import { RunArg } from '../run-arg'
 import { runLocally } from './4-execute-local'
 import { runTaskDocker } from './4-execute-docker'
 import { ExecutionBuildFile } from './0-parse'
+import { watch } from 'fs'
+import { join } from 'path'
 import consola from 'consola'
+import { Defer } from '../defer'
 
 export interface TaskProcess {
   task: TaskNode
@@ -63,6 +66,8 @@ export function executeTask(
 export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteResult> {
   const runningTasks: TaskProcess[] = []
   const pendingTasks: TreeDependencyNode[] = []
+  const watchingTasks: TaskProcess[] = []
+
   const result: ExecuteResult = {
     success: true,
     tasks: {},
@@ -84,8 +89,65 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
         result.tasks[runningTask.task.id].status = 'aborted'
         result.tasks[runningTask.task.id].duration = new Date().getTime() - runningTask.start.getTime()
       }
+      for (const watchingTask of watchingTasks) {
+        result.tasks[watchingTask.task.id].status = 'aborted'
+        result.tasks[watchingTask.task.id].duration = new Date().getTime() - watchingTask.start.getTime()
+      }
       resolve(result)
     })
+
+    function startWatchingTask(node: TreeDependencyNode) {
+      let cancelPromise = new Defer<void>()
+
+      function watchPromise(promise: Promise<any>): Promise<any> {
+        return promise
+          .then(() => {
+            if (!cancelPromise.isResolved && !arg.cancelPromise.isResolved) {
+              consola.info(`watched task ${node.task.name} ended early`)
+            } else {
+              consola.info(`watched task ${node.task.name} ended after cancellation`)
+            }
+          })
+          .catch((err) => {
+            if (!cancelPromise.isResolved && !arg.cancelPromise.isResolved) {
+              consola.error(`watched task ${node.task.name} ended with error: ${err.message}`)
+            }
+          })
+          .finally(() => {
+            if (cancelPromise.isResolved) {
+              cancelPromise = new Defer<void>()
+              watchTask.promise = watchPromise(
+                runTask(node.task, {
+                  ...arg,
+                  cancelPromise,
+                })
+              )
+            }
+          })
+      }
+
+      const watchTask: TaskProcess = {
+        task: node.task,
+        start: new Date(),
+        promise: watchPromise(
+          runTask(node.task, {
+            ...arg,
+            cancelPromise,
+          })
+        ),
+      }
+
+      for (const src of node.task.src) {
+        consola.debug(`watch source ${src.absolutePath} for watched task ${node.task.name}`)
+        watch(src.absolutePath, { recursive: true, persistent: false }, (type, fileName) => {
+          const absoluteFileName = join(src.absolutePath, fileName)
+          if (src.matcher(absoluteFileName, node.task.path)) {
+            consola.debug(`source ${absoluteFileName} change for watched task ${node.task.name}`)
+            cancelPromise.resolve()
+          }
+        })
+      }
+    }
 
     function moveRunningTasks() {
       if (arg.cancelPromise.isResolved) {
@@ -105,6 +167,13 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
 
       for (let i = 0; i < pendingTasks.length; i++) {
         const pendingTask = pendingTasks[i]
+        if (pendingTask.task.watch) {
+          startWatchingTask(pendingTask)
+          pendingTasks.splice(i, 1)
+          i--
+          continue
+        }
+
         if (arg.workers !== 0 && runningTasks.length === arg.workers) {
           consola.debug(`${pendingTask.task.name} is postponed until a worker is available`)
           break
@@ -152,8 +221,14 @@ export function execute(tree: TreeDependencies, arg: RunArg): Promise<ExecuteRes
       }
 
       if (pendingTasks.length === 0 && runningTasks.length === 0 && Object.keys(tree).length === 0) {
-        consola.debug(`finished execution of tasks ${Object.keys(result.tasks).map((k) => result.tasks[k].task.name)}`)
-        resolve(result)
+        if (watchingTasks.length > 0) {
+          consola.info(`running watching tasks, press Ctrl-C to abort`)
+        } else {
+          consola.debug(
+            `finished execution of tasks ${Object.keys(result.tasks).map((k) => result.tasks[k].task.name)}`
+          )
+          resolve(result)
+        }
       }
     }
   })
@@ -173,7 +248,7 @@ async function runTask(task: TaskNode, arg: RunArg): Promise<void> {
   for (const cmd of task.cmds) {
     cmd.cmd = escapeCommand(cmd.cmd, envs)
   }
-  if (task.image) {
+  if (task.image && !arg.noContainer) {
     await runTaskDocker(
       task.image,
       {
@@ -183,6 +258,10 @@ async function runTask(task: TaskNode, arg: RunArg): Promise<void> {
       arg
     )
   } else {
+    if (task.image) {
+      consola.debug(`${task.name} is executed locally instead inside of a container`)
+    }
+
     await runLocally(
       {
         ...task,

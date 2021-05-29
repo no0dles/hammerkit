@@ -6,4 +6,5 @@ export interface RunArg {
   processEnvs: { [key: string]: string | undefined }
   logger: Consola
   cancelPromise: Defer<void>
+  noContainer: boolean
 }

@@ -2,10 +2,25 @@ import { nodes, plan, TaskNode } from './1-plan'
 import { BuildFileValidation } from '../build-file-validation'
 import { existsSync } from 'fs'
 import { ExecutionBuildFile } from './0-parse'
+import { restructure } from './2-restructure'
 
 export function* validate(buildFile: ExecutionBuildFile, name?: string): Generator<BuildFileValidation> {
   const tree = name ? plan(buildFile, name).nodes : nodes(buildFile)
   const cycleNodes: TaskNode[] = []
+
+  const dependencyTree = restructure(tree)
+  for (const nodeId of Object.keys(dependencyTree)) {
+    const watchDependencies = dependencyTree[nodeId].dependencies
+      .filter((dp) => tree[dp].watch)
+      .map((dp) => tree[dp].name)
+    if (watchDependencies.length > 0) {
+      yield {
+        type: 'error',
+        message: `task can not depend on watched task(s) ${watchDependencies.join(', ')}`,
+        task: dependencyTree[nodeId].task,
+      }
+    }
+  }
 
   for (const key of Object.keys(tree)) {
     const node = tree[key]

@@ -1,5 +1,6 @@
 import commaner, { Command } from 'commander'
-import { existsSync, writeFileSync } from 'fs'
+import { existsSync, writeFileSync, appendFileSync } from 'fs'
+import { join } from 'path'
 import consola, { LogLevel } from 'consola'
 import { RunArg } from './run-arg'
 import { clean } from './rewrite/5-clean'
@@ -94,11 +95,13 @@ export function getProgram(fileName: string): commaner.Command {
         .description(task.description || '')
         .option('-w, --worker <number>', 'parallel worker count', parseInt, 4)
         .option('--no-cache', 'ignore task cache', false)
+        .option('--no-container', 'run every task locally without containers', false)
         .action(async (options) => {
           const runArg: RunArg = {
             logger: consola,
             workers: options.workers,
             processEnvs: process.env,
+            noContainer: options.noContainer,
             cancelPromise: new Defer<void>(),
           }
 
@@ -146,6 +149,16 @@ tasks:
       `
         writeFileSync(fileName, content)
         consola.success(`created ${fileName}`)
+
+        const gitIgnoreFile = join(process.cwd(), '.gitignore')
+        const gitIgnoreContent = `.hammerkit\n`
+        if (existsSync(gitIgnoreFile)) {
+          appendFileSync(gitIgnoreFile, gitIgnoreContent)
+          consola.success(`extened ${gitIgnoreFile} with hammerkit cache directory`)
+        } else {
+          writeFileSync(gitIgnoreFile, gitIgnoreContent)
+          consola.success(`created ${gitIgnoreFile} with hammerkit cache directory`)
+        }
       })
   }
 

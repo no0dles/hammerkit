@@ -1,0 +1,7 @@
+tasks:
+  api:
+    watch: true
+    src:
+      - src
+    cmds:
+      - node -r ts-node/register src/index.ts

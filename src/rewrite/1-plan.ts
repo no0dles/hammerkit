@@ -7,6 +7,8 @@ export interface TaskTree {
   rootNode: TaskNode
 }
 
+export const isTaskTree = (val: TaskTree | TreeNodes): val is TaskTree => !!val.nodes && !!val.rootNode
+
 export interface TreeNodes {
   [key: string]: TaskNode
 }
@@ -15,6 +17,7 @@ export interface TaskNode {
   id: string
   name: string
   path: string
+  watch: boolean
   description: string | null
   deps: TaskNode[]
   src: TaskNodeSource[]
@@ -25,6 +28,8 @@ export interface TaskNode {
   envs: { [key: string]: string }
   cmds: TaskNodeCmd[]
   unknownProps: { [key: string]: any }
+  sourceBuildFile: ExecutionBuildFile
+  sourceTaskName: string
 }
 
 export interface TaskNodeSource {
@@ -96,6 +101,7 @@ function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, 
       path: context.currentWorkdir,
       envs: { ...build.envs, ...(task.envs || {}) },
       id,
+      watch: task.watch ?? false,
       description: task.description,
       name: [...context.namePrefix, taskName].join(':'),
       shell: task.shell || null,
@@ -106,6 +112,8 @@ function addTask(build: ExecutionBuildFile, taskName: string, nodes: TreeNodes, 
       generates: getAbsolutePaths(task.generates, context.currentWorkdir),
       src: (task.src || []).map((src) => mapSource(src, context.currentWorkdir)),
       unknownProps: task.unknownProps,
+      sourceBuildFile: build,
+      sourceTaskName: taskName,
     }
     nodes[id] = node
 

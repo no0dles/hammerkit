@@ -1,0 +1,6 @@
+tasks:
+  shell_example:
+    image: ubuntu
+    shell: bash
+    cmds:
+      - echo $RANDOM
