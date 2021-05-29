@@ -241,10 +241,10 @@ tasks:
 - [x] dependant cache and volumes
 - [x] rerun task when content changes, even when its cached
 - [x] add $PWD mounts
-- [ ] add cancel support Ctrl-C 
-- [ ] continous/watch tasks
+- [x] add cancel support Ctrl-C 
+- [x] continous/watch tasks
+- [x] docs
 - [ ] services
-- [ ] docs
 - [ ] windows/osx test runs
 
 ## Release
