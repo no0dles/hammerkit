@@ -18,37 +18,37 @@ describe('glob', () => {
     const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    optimize(depTree)
+    await optimize(depTree)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    writeCache(depTree[`${buildFile.path}:example`])
+    await writeCache(depTree[`${buildFile.path}:example`])
 
     const afterCacheDepTree = { ...depTree }
-    optimize(afterCacheDepTree)
+    await optimize(afterCacheDepTree)
     expect(afterCacheDepTree).not.toContainKey(`${buildFile.path}:example`)
   })
 
-  it('should keep being cached after ignored file changed', () => {
+  it('should keep being cached after ignored file changed', async () => {
     const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    writeCache(depTree[`${buildFile.path}:example`])
+    await writeCache(depTree[`${buildFile.path}:example`])
 
     appendFileSync(join(buildFile.path, 'test.txt'), '\n')
 
-    optimize(depTree)
+    await optimize(depTree)
     expect(depTree).not.toContainKey(`${buildFile.path}:example`)
   })
 
-  it('should invalid cache after file has changed', () => {
+  it('should invalid cache after file has changed', async () => {
     const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    writeCache(depTree[`${buildFile.path}:example`])
+    await writeCache(depTree[`${buildFile.path}:example`])
 
     appendFileSync(join(buildFile.path, 'test.md'), '\n')
 
-    optimize(depTree)
+    await optimize(depTree)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
   })
 })

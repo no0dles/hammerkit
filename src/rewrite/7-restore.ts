@@ -26,7 +26,7 @@ export async function restore(buildFile: ExecutionBuildFile, targetDirectory: st
   })
 }
 
-export async function moveFiles(folder: () => Generator<{ from: string; to: string }>) {
+export async function moveFiles(folder: () => Generator<{ from: string; to: string }>): Promise<void> {
   const foldersToCopy: { from: string; to: string }[] = []
 
   const addFolder = (from: string, to: string) => {

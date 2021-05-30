@@ -48,7 +48,7 @@ function replaceEnvVariables(
   return result
 }
 
-export function executeTask(
+export async function executeTask(
   build: ExecutionBuildFile,
   taskName: string,
   useCache: boolean,
@@ -57,7 +57,7 @@ export function executeTask(
   const tree = plan(build, taskName)
   const depTree = restructure(tree, true)
   if (useCache) {
-    optimize(depTree)
+    await optimize(depTree)
   }
 
   return execute(depTree, runArg)

@@ -30,14 +30,14 @@ describe('cache', () => {
     const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    optimize(depTree)
+    await optimize(depTree)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    writeCache(depTree[`${buildFile.path}:example`])
+    await writeCache(depTree[`${buildFile.path}:example`])
     await action(depTree)
 
     const afterCacheDepTree = { ...depTree }
-    optimize(afterCacheDepTree)
+    await optimize(afterCacheDepTree)
 
     if (expectInvalidate) {
       expect(afterCacheDepTree).toContainKey(`${buildFile.path}:example`)
