@@ -1,0 +1,26 @@
+tasks:
+  login:
+    description: login to docker hub
+    envs:
+      DOCKER_TOKEN: $DOCKER_TOKEN
+      DOCKER_USERNAME: $DOCKER_USERNAME
+    cmds:
+      - echo $DOCKER_TOKEN | docker login --username $DOCKER_USERNAME --password-stdin
+
+  build:
+    description: build docker image
+    envs:
+      IMAGE_TAG: $IMAGE_TAG
+      IMAGE: $IMAGE
+    cmds:
+      - docker buildx build . --platform linux/arm64,linux/amd64 -t $IMAGE -t $IMAGE:$IMAGE_TAG
+
+
+  publish:
+    description: publish docker image
+    deps: [ login ]
+    envs:
+      IMAGE_TAG: $IMAGE_TAG
+      IMAGE: $IMAGE
+    cmds:
+      - docker buildx build . --platform linux/arm64,linux/amd64 --push -t $IMAGE -t $IMAGE:$IMAGE_TAG

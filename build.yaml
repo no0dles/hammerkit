@@ -1,17 +1,4 @@
 tasks:
-  rebuild:
-    description: build typescript
-    deps: [ npm:ci ]
-    image: node:14.16.0
-    src:
-      - src
-      - tsconfig.json
-    generates:
-      - dist
-    cmds:
-      - rm -r dist || true
-      - node_modules/.bin/tsc
-
   build:
     description: build typescript
     deps: [ npm:ci ]
@@ -89,5 +76,23 @@ tasks:
     cmds:
       - node_modules/.bin/jest --coverage
 
+  build:docker:
+    extend: docker:build
+    envs:
+      IMAGE: no0dles/hammerkit
+      IMAGE_TAG: $IMAGE_TAG
+
+  publish:docker:
+    extend: docker:publish
+    envs:
+      DOCKER_USERNAME: no0dles
+      IMAGE: no0dles/hammerkit
+      IMAGE_TAG: $IMAGE_TAG
+
+  publish:
+    description: publish npm package and docker image
+    deps: [ publish:docker, npm:publish ]
+
 includes:
   npm: ./build.npm.yaml
+  docker: ./build.docker.yaml

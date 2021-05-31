@@ -8,21 +8,46 @@ jobs:
         uses: actions/checkout@v2
       - uses: actions/cache@v2
         with:
-          key: ${{ github.ref }}-${{ github.sha	 }}
+          key: build-${{ github.ref }}-${{ github.sha }}
           path: ~/.cache
           restore-keys: |
-            ${{ github.ref }}-
+            build-${{ github.ref }}-
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit restore ~/.cache --verbose
+      - run: hammerkit restore ~/.cache
       - run: hammerkit lint --verbose
       - run: hammerkit prettier --verbose
       - run: hammerkit build --verbose
-      - run: hammerkit store ~/.cache --verbose
+      - run: hammerkit store ~/.cache
   test:
     runs-on: ubuntu-18.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          key: test-${{ github.ref }}-${{ github.sha }}
+          path: ~/.cache
+          restore-keys: |
+            test-${{ github.ref }}-
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+      - uses: no0dles/hammerkit-github-action@v1.3
+      - run: hammerkit restore ~/.cache
+      - run: hammerkit test
+      - run: hammerkit store ~/.cache
+      - name: upload coverage
+        uses: codacy/codacy-coverage-reporter-action@master
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: coverage/lcov.info
+  publish-npm:
+    runs-on: ubuntu-18.04
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -30,9 +55,12 @@ jobs:
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit test
-      - name: upload coverage
-        uses: codacy/codacy-coverage-reporter-action@master
-        with:
-          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage/lcov.info
+      - name: Version
+        id: version
+        run: |
+          echo ::set-output name=VERSION::${GITHUB_REF:11}
+      - run: hammerkit publish --verbose
+        env:
+          IMAGE_TAG: ${{ steps.version.outputs.VERSION }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
