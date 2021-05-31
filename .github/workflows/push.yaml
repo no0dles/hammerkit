@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
-      - run: docker buildx create --use
+      - run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes; docker buildx create --use
       - run: hammerkit build:docker
         env:
           IMAGE_TAG: latest
