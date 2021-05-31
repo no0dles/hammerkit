@@ -78,6 +78,7 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.version.outputs.VERSION }}
           DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          DOCKER_USERNAME: no0dles
 
   publish-npm:
     runs-on: ubuntu-18.04
@@ -90,6 +91,6 @@ jobs:
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit publish:npm --verbose
+      - run: hammerkit npm:publish --verbose
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
