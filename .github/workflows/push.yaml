@@ -30,6 +30,7 @@ jobs:
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
+      - run: docker buildx create --use
       - run: hammerkit build:docker
         env:
           IMAGE_TAG: latest
@@ -56,9 +57,10 @@ jobs:
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/lcov.info
-  publish-npm:
+
+  publish-docker:
     runs-on: ubuntu-18.04
-    needs: [test, build]
+    needs: [test, docker]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
@@ -71,8 +73,22 @@ jobs:
         id: version
         run: |
           echo ::set-output name=VERSION::${GITHUB_REF:11}
-      - run: hammerkit publish --verbose
+      - run: hammerkit publish:docker --verbose
         env:
           IMAGE_TAG: ${{ steps.version.outputs.VERSION }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+
+  publish-npm:
+    runs-on: ubuntu-18.04
+    needs: [test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+      - uses: no0dles/hammerkit-github-action@v1.3
+      - run: hammerkit publish:npm --verbose
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

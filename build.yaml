@@ -89,10 +89,6 @@ tasks:
       IMAGE: no0dles/hammerkit
       IMAGE_TAG: $IMAGE_TAG
 
-  publish:
-    description: publish npm package and docker image
-    deps: [ publish:docker, npm:publish ]
-
 includes:
   npm: ./build.npm.yaml
   docker: ./build.docker.yaml
