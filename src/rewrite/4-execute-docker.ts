@@ -69,6 +69,23 @@ export function getContainerVolumes(task: ContainerVolumeTask, checkSources: boo
   }
 
   for (const volume of result.volumes) {
+    const otherVolumes = result.volumes.filter(
+      (v) => v.containerPath === volume.containerPath && v.localPath !== volume.localPath
+    )
+    if (otherVolumes.length > 0) {
+      throw new Error(
+        `duplicate container mount with different sources ${[
+          volume.localPath,
+          ...otherVolumes.map((ov) => ov.localPath),
+        ].join(', ')}`
+      )
+    }
+  }
+  result.volumes = result.volumes.filter(
+    (v, i) => result.volumes.findIndex((iv) => iv.containerPath == v.containerPath) === i
+  )
+
+  for (const volume of result.volumes) {
     consola.debug(`mount volume ${volume.localPath}:${volume.containerPath}`)
   }
 
