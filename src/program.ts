@@ -127,6 +127,7 @@ export function getProgram(fileName: string): commaner.Command {
                   consola.info(`${task.task.name} ${task.errorMessage}`)
                 }
               }
+              process.exit(1);
             }
           } catch (e) {
             consola.error(e)
