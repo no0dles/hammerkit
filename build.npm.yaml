@@ -35,6 +35,9 @@ tasks:
     src:
       - package.json
       - package-lock.json
+      - tsconfig.json
+      - tsconfig.build.json
+      - src
       - dist
     envs:
       NPM_TOKEN: $NPM_TOKEN
