@@ -39,6 +39,9 @@ tasks:
       - tsconfig.build.json
       - src
       - dist
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
     envs:
       NPM_TOKEN: $NPM_TOKEN
     cmds:
