@@ -89,6 +89,9 @@ tasks:
       IMAGE: no0dles/hammerkit
       IMAGE_TAG: $IMAGE_TAG
 
+  publish:npm:
+    extend: npm:publish
+
 includes:
   npm: ./build.npm.yaml
   docker: ./build.docker.yaml

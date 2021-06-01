@@ -91,6 +91,6 @@ jobs:
         with:
           node-version: '14'
       - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit npm:publish --verbose
+      - run: hammerkit publish:npm --verbose
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
