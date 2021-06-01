@@ -255,5 +255,5 @@ tasks:
 ## Release
 ```
 npm version patch|minor|major
-npm publish
+git push origin --tags
 ```
