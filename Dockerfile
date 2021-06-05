@@ -23,4 +23,4 @@ FROM docker:20.10.6-dind
 WORKDIR /app
 COPY --from=build /app/hammerkit /usr/local/bin/hammerkit
 
-CMD ["hammerkit"]
+ENTRYPOINT ["hammerkit"]
