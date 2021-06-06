@@ -25,12 +25,47 @@ Additionally hammerkit tries to reduce complexity of build caching in CI systems
 Hammerkit on the other hand knows the source and output files of each build step and can therefore compact the build results into a single directory. Making it easy to being cached. Once restored, hammerkit can detect what's changed since last time and only build the changes.
 
 
-## Installation
-
-```npm i -g hammerkit```
-
 ## Documentation
 Docs and getting started guide can be found [here](https://no0dles.gitbook.io/hammerkit/).
+
+## Installation
+
+### Yarn/npm
+```npm i -g hammerkit```
+
+### Homebrew
+```
+brew tap no0dles/hammerkit
+brew install hammerkit
+```
+
+### Gitlab CI
+```
+variables:
+  DOCKER_DRIVER: overlay2
+
+services:
+  - docker:19.03.0-dind
+
+build:
+  image: no0dles/hammerkit
+  script:
+    - hammerkit build
+```
+
+### Github Action
+```
+jobs:
+  build:
+    runs-on: ubuntu-18.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+      - uses: no0dles/hammerkit-github-action@v1.3
+```
 
 ## Introduction
 
