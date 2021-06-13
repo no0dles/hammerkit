@@ -12,7 +12,7 @@ describe('clean', () => {
     await remove(outputPath)
 
     const [arg] = getTestArg()
-    const result = await executeTask(buildFile, 'example', false, arg)
+    const result = await executeTask(buildFile, 'example', false, 'checksum', arg)
     expect(result.success).toBeTruthy()
     expect(existsSync(outputPath)).toBeTruthy()
 

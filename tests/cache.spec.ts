@@ -30,14 +30,14 @@ describe('cache', () => {
     const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    await optimize(depTree)
+    await optimize(depTree, 'checksum')
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
     await writeCache(depTree[`${buildFile.path}:example`])
     await action(depTree)
 
     const afterCacheDepTree = { ...depTree }
-    await optimize(afterCacheDepTree)
+    await optimize(afterCacheDepTree, 'checksum')
 
     if (expectInvalidate) {
       expect(afterCacheDepTree).toContainKey(`${buildFile.path}:example`)
@@ -54,7 +54,7 @@ describe('cache', () => {
 
   it('should mount generations of dependant tasks', async () => {
     const [arg, mock] = getTestArg()
-    const result = await executeTask(buildFile, 'dependant', false, arg)
+    const result = await executeTask(buildFile, 'dependant', false, 'checksum', arg)
     expect(result.success).toBeTruthy()
 
     expectLog(mock, 'node_modules')

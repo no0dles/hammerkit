@@ -4,6 +4,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, sta
 import { ContainerMount, TaskNode, TaskNodeCmd } from './1-plan'
 import consola from 'consola'
 import { createHash } from 'crypto'
+import { CacheMethod } from './4-execute'
 
 export interface TreeNodeCache {
   src: string[]
@@ -23,7 +24,7 @@ export interface TreeNodeCacheStats {
   [key: string]: { lastModified: number; checksum: string }
 }
 
-export async function optimize(tree: TreeDependencies): Promise<void> {
+export async function optimize(tree: TreeDependencies, cacheMethod: CacheMethod): Promise<void> {
   for (const key of Object.keys(tree)) {
     const node = tree[key]
     if (node.task.src.length === 0) {
@@ -47,7 +48,10 @@ export async function optimize(tree: TreeDependencies): Promise<void> {
     const currentStats = await getCacheStats(node.task)
     let changed = false
     for (const key of Object.keys(cache.stats)) {
-      if (currentStats[key]?.checksum !== cache.stats[key].checksum) {
+      if (
+        (cacheMethod === 'checksum' && currentStats[key]?.checksum !== cache.stats[key].checksum) ||
+        (cacheMethod === 'modify-date' && currentStats[key]?.lastModified !== cache.stats[key].lastModified)
+      ) {
         consola.debug(`${node.task.name} can't be skipped because ${key} has been modified`)
         changed = true
         break

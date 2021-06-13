@@ -6,7 +6,7 @@ describe('clean', () => {
 
   it('should run with path arg', async () => {
     const [arg, mock] = getTestArg()
-    await executeTask(buildFile, 'example', true, arg)
+    await executeTask(buildFile, 'example', true, 'checksum', arg)
     expect(mock.mock.calls.some((c) => c[0].endsWith('cmd/sub'))).toBeTruthy()
   })
 })

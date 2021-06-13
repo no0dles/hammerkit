@@ -18,13 +18,13 @@ describe('glob', () => {
     const depTree = restructure(plan(buildFile, 'example'), true)
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
-    await optimize(depTree)
+    await optimize(depTree, 'checksum')
     expect(depTree).toContainKey(`${buildFile.path}:example`)
 
     await writeCache(depTree[`${buildFile.path}:example`])
 
     const afterCacheDepTree = { ...depTree }
-    await optimize(afterCacheDepTree)
+    await optimize(afterCacheDepTree, 'checksum')
     expect(afterCacheDepTree).not.toContainKey(`${buildFile.path}:example`)
   })
 
@@ -36,7 +36,7 @@ describe('glob', () => {
 
     appendFileSync(join(buildFile.path, 'test.txt'), '\n')
 
-    await optimize(depTree)
+    await optimize(depTree, 'checksum')
     expect(depTree).not.toContainKey(`${buildFile.path}:example`)
   })
 
@@ -48,7 +48,7 @@ describe('glob', () => {
 
     appendFileSync(join(buildFile.path, 'test.md'), '\n')
 
-    await optimize(depTree)
+    await optimize(depTree, 'checksum')
     expect(depTree).toContainKey(`${buildFile.path}:example`)
   })
 })

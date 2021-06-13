@@ -7,7 +7,7 @@ describe('reference', () => {
 
   it('should run included task', async () => {
     const [arg, mock] = getTestArg()
-    await executeTask(buildFile, 'example', true, arg)
+    await executeTask(buildFile, 'example', true, 'checksum', arg)
     expectLog(mock, 'foobar')
     expectLog(mock, 'cat foobar.txt')
     expectLog(mock, 'hammertime')

@@ -7,14 +7,14 @@ describe('include', () => {
 
   it('should run included task', async () => {
     const [arg, mock] = getTestArg()
-    await executeTask(buildFile, 'example', true, arg)
+    await executeTask(buildFile, 'example', true, 'checksum', arg)
     expectLog(mock, 'foobar')
     expectLog(mock, 'cat foobar.txt')
   })
 
   it('should get name:example', async () => {
     const [arg] = getTestArg()
-    const result = await executeTask(buildFile, 'name:example', true, arg)
+    const result = await executeTask(buildFile, 'name:example', true, 'checksum', arg)
     expect(result.success).toBeTruthy()
   })
 

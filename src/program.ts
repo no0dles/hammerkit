@@ -11,6 +11,7 @@ import { restore } from './rewrite/7-restore'
 import { validate } from './rewrite/8-validate'
 import { executeTask } from './rewrite/4-execute'
 import { Defer } from './defer'
+import { isCI } from './ci'
 
 export function getProgram(fileName: string): commaner.Command {
   const program = new Command()
@@ -95,6 +96,12 @@ export function getProgram(fileName: string): commaner.Command {
         .description(task.description || '')
         .option('-w, --worker <number>', 'parallel worker count', parseInt, 4)
         .option('--no-cache', 'ignore task cache', false)
+        .option(
+          '-cm, --cache-method <method>',
+          'caching method to compare',
+          /^(checksum|modify-date)$/,
+          isCI ? 'checksum' : 'modify-date'
+        )
         .option('--no-container', 'run every task locally without containers', false)
         .action(async (options) => {
           const runArg: RunArg = {
@@ -114,7 +121,7 @@ export function getProgram(fileName: string): commaner.Command {
           }
 
           try {
-            const result = await executeTask(buildFile, task.name, options.cache, runArg)
+            const result = await executeTask(buildFile, task.name, options.cache, options.cacheMethod, runArg)
             for (const key of Object.keys(result.tasks)) {
               const task = result.tasks[key]
               consola.info(`[${task.status}] ${task.task.name}: ${task.duration}ms`)

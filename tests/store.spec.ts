@@ -22,7 +22,7 @@ describe('store/restore', () => {
 
   it('should clean created outputs', async () => {
     const [arg] = getTestArg()
-    await executeTask(buildFile, 'example', false, arg)
+    await executeTask(buildFile, 'example', false, 'checksum', arg)
     expect(existsSync(outputPath)).toBeTruthy()
     expect(existsSync(cacheDir)).toBeTruthy()
 

@@ -9,7 +9,7 @@ describe('monorepo', () => {
 
   it('should build monorepo', async () => {
     const [arg] = getTestArg()
-    await executeTask(buildFile, 'build', true, arg)
+    await executeTask(buildFile, 'build', true, 'checksum', arg)
   })
 
   it('should clean monorepo', async () => {
@@ -23,7 +23,7 @@ describe('monorepo', () => {
       join(buildFile.path, 'projects/b/dist'),
     ]
     const [arg] = getTestArg()
-    await executeTask(buildFile, 'build', false, arg)
+    await executeTask(buildFile, 'build', false, 'checksum', arg)
     for (const file of files) {
       expect(existsSync(file)).toBeTruthy()
     }

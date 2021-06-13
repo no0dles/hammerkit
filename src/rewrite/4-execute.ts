@@ -48,16 +48,19 @@ function replaceEnvVariables(
   return result
 }
 
+export type CacheMethod = 'checksum' | 'modify-date'
+
 export async function executeTask(
   build: ExecutionBuildFile,
   taskName: string,
   useCache: boolean,
+  cacheMethod: CacheMethod,
   runArg: RunArg
 ): Promise<ExecuteResult> {
   const tree = plan(build, taskName)
   const depTree = restructure(tree, true)
   if (useCache) {
-    await optimize(depTree)
+    await optimize(depTree, cacheMethod)
   }
 
   return execute(depTree, runArg)
