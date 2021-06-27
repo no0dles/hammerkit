@@ -3,26 +3,32 @@ import { existsSync, writeFileSync, appendFileSync } from 'fs'
 import { join } from 'path'
 import consola, { LogLevel } from 'consola'
 import { RunArg } from './run-arg'
-import { clean } from './rewrite/5-clean'
-import { nodes } from './rewrite/1-plan'
-import { parse } from './rewrite/0-parse'
-import { store } from './rewrite/6-store'
-import { restore } from './rewrite/7-restore'
-import { validate } from './rewrite/8-validate'
-import { executeTask } from './rewrite/4-execute'
 import { Defer } from './defer'
 import { isCI } from './ci'
+import { parseBuildFile } from './parser/parse-build-file'
+import { planWorkNodes } from './planner/utils/plan-work-nodes'
+import { execute } from './executer/execute'
+import { planWorkTree } from './planner/utils/plan-work-tree'
+import { restore } from './executer/restore'
+import { store } from './executer/store'
+import { clean } from './executer/clean'
+import { validate } from './planner/validate'
 
-export function getProgram(fileName: string): commaner.Command {
+export function getProgram(cwd: string): commaner.Command {
   const program = new Command()
   const isVerbose = process.argv.some((a) => a === '--verbose')
+  const fileIndex = process.argv.indexOf('--file')
+
+  const fileName = join(cwd, fileIndex >= 0 ? process.argv[fileIndex + 1] : 'build.yaml')
+
+  console.log(fileName)
 
   if (isVerbose) {
     consola.level = LogLevel.Debug
   }
 
   if (existsSync(fileName)) {
-    const buildFile = parse(fileName)
+    const buildFile = parseBuildFile(fileName)
     const reservedCommands = ['clean', 'store', 'restore', 'validate']
 
     program
@@ -68,7 +74,7 @@ export function getProgram(fileName: string): commaner.Command {
         let errors = 0
 
         for (const validation of validate(buildFile)) {
-          const logger = consola.withTag(validation.task.name)
+          const logger = consola.withTag(validation.node.name)
           if (validation.type === 'error') {
             errors++
             logger.error(validation.message)
@@ -83,7 +89,7 @@ export function getProgram(fileName: string): commaner.Command {
         }
       })
 
-    const tasks = nodes(buildFile)
+    const tasks = planWorkNodes(buildFile)
     for (const key of Object.keys(tasks)) {
       const task = tasks[key]
       if (reservedCommands.indexOf(task.name) >= 0) {
@@ -94,26 +100,30 @@ export function getProgram(fileName: string): commaner.Command {
       program
         .command(task.name)
         .description(task.description || '')
-        .option('-w, --worker <number>', 'parallel worker count', parseInt, 4)
-        .option('--no-cache', 'ignore task cache', false)
+        .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
+        .option('-w, --watch', 'watch tasks', false)
         .option(
-          '-cm, --cache-method <method>',
+          '--cache <method>',
           'caching method to compare',
-          /^(checksum|modify-date)$/,
+          /^(checksum|modify-date|none)$/,
           isCI ? 'checksum' : 'modify-date'
         )
         .option('--no-container', 'run every task locally without containers', false)
         .action(async (options) => {
           const runArg: RunArg = {
             logger: consola,
-            workers: options.workers,
+            workers: options.concurrency,
             processEnvs: process.env,
+            cacheMethod: options.cacheMethod,
             noContainer: !options.container,
             cancelPromise: new Defer<void>(),
+            watch: options.watch,
           }
 
           process.on('SIGINT', function () {
-            runArg.cancelPromise.resolve()
+            if (!runArg.cancelPromise.isResolved) {
+              runArg.cancelPromise.resolve()
+            }
           })
 
           if (options.verbose) {
@@ -121,19 +131,14 @@ export function getProgram(fileName: string): commaner.Command {
           }
 
           try {
-            const result = await executeTask(buildFile, task.name, options.cache, options.cacheMethod, runArg)
-            for (const key of Object.keys(result.tasks)) {
-              const task = result.tasks[key]
-              consola.info(`[${task.status}] ${task.task.name}: ${task.duration}ms`)
+            const workTree = planWorkTree(buildFile, task.name)
+            const result = await execute(workTree, runArg)
+            for (const key of Object.keys(result.nodes)) {
+              const task = result.nodes[key]
+              consola.info(`[${task.type}] ${workTree.nodes[key].name}`)
             }
 
             if (!result.success) {
-              for (const key of Object.keys(result.tasks)) {
-                const task = result.tasks[key]
-                if (task.status === 'failed') {
-                  consola.info(`${task.task.name} ${task.errorMessage}`)
-                }
-              }
               process.exit(1)
             }
           } catch (e) {
@@ -143,6 +148,10 @@ export function getProgram(fileName: string): commaner.Command {
         })
     }
   } else {
+    if (fileIndex >= 0) {
+      consola.warn(`unable to find build file ${fileName}`)
+    }
+
     program
       .command('init')
       .description('creates default build.yaml')
@@ -173,6 +182,7 @@ tasks:
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   program.version(require('../package.json').version)
   program.option('--verbose', 'log debugging information', false)
+  program.option('--file', 'set build file', 'build.yaml')
   program.name('hammerkit')
 
   return program

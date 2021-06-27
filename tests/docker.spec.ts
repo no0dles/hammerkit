@@ -1,12 +1,14 @@
 import { expectLog, getTestArg, loadExampleBuildFile } from './run-arg'
-import { executeTask } from '../src/rewrite/4-execute'
+import { execute } from '../src/executer/execute'
+import { planWorkTree } from '../src/planner/utils/plan-work-tree'
 
 describe('docker', () => {
   const buildFile = loadExampleBuildFile('docker')
 
   it('should pull docker image', async () => {
     const [arg, mock] = getTestArg()
-    const result = await executeTask(buildFile, 'example', true, 'checksum', arg)
+    const workTree = planWorkTree(buildFile, 'example')
+    const result = await execute(workTree, arg)
     expect(result.success).toBeTruthy()
     expectLog(mock, '6.14.11')
     expectLog(mock, 'v14.16.0')

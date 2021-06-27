@@ -1,0 +1,60 @@
+envs:
+  NODE_VERSION: 14.16.0
+
+tasks:
+  install:
+    description: install dependencies
+    image: node:$NODE_VERSION-alpine
+    cmds:
+      - npm install
+    generates:
+      - node_modules
+      - package-lock.json
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    src:
+      - package.json
+      - package-lock.json
+
+  install:prod:
+    extend: install
+    cmds:
+      - npm install --production
+
+  install:dev:
+    extend: install
+    cmds:
+      - npm install --development
+
+  ci:
+    description: install dependencies
+    image: node:$NODE_VERSION-alpine
+    cmds:
+      - npm ci
+    generates:
+      - node_modules
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    src:
+      - package.json
+      - package-lock.json
+
+  publish:
+    description: publish npm package
+    image: node:$NODE_VERSION-alpine
+    deps: [ci]
+    src:
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - src
+      - dist
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    envs:
+      NPM_TOKEN: $NPM_TOKEN
+    cmds:
+      - npm publish

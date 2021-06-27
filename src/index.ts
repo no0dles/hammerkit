@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { join } from 'path'
 import { getProgram } from './program'
 
-const program = getProgram(join(process.cwd(), 'build.yaml'))
+const program = getProgram(process.cwd())
 program.parse(process.argv)

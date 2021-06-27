@@ -3,10 +3,11 @@ import { getTestArg, loadExampleBuildFile } from './run-arg'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { remove } from '../src/file/remove'
-import { executeTask } from '../src/rewrite/4-execute'
-import { store } from '../src/rewrite/6-store'
-import { clean } from '../src/rewrite/5-clean'
-import { restore } from '../src/rewrite/7-restore'
+import { planWorkTree } from '../src/planner/utils/plan-work-tree'
+import { execute } from '../src/executer/execute'
+import { restore } from '../src/executer/restore'
+import { store } from '../src/executer/store'
+import { clean } from '../src/executer/clean'
 
 describe('store/restore', () => {
   const buildFile = loadExampleBuildFile('store-restore')
@@ -22,7 +23,9 @@ describe('store/restore', () => {
 
   it('should clean created outputs', async () => {
     const [arg] = getTestArg()
-    await executeTask(buildFile, 'example', false, 'checksum', arg)
+    const workTree = planWorkTree(buildFile, 'example')
+    const result = await execute(workTree, arg)
+    expect(result.success).toBeTruthy()
     expect(existsSync(outputPath)).toBeTruthy()
     expect(existsSync(cacheDir)).toBeTruthy()
 

@@ -1,8 +1,9 @@
 import { RunArg } from '../src/run-arg'
 import consola from 'consola'
 import { join } from 'path'
-import { ExecutionBuildFile, parse } from '../src/rewrite/0-parse'
 import { Defer } from '../src/defer'
+import { BuildFile } from '../src/parser/build-file'
+import { parseBuildFile } from '../src/parser/parse-build-file'
 
 export function getTestArg(): [RunArg, jest.Mock] {
   const mock = jest.fn()
@@ -23,14 +24,16 @@ export function getTestArg(): [RunArg, jest.Mock] {
       logger: consola,
       cancelPromise: new Defer<void>(),
       noContainer: false,
+      watch: false,
+      cacheMethod: 'checksum',
     },
     mock,
   ]
 }
 
-export function loadExampleBuildFile(dir: string): ExecutionBuildFile {
+export function loadExampleBuildFile(dir: string): BuildFile {
   const fileName = getBuildFilePath(dir)
-  return parse(fileName)
+  return parseBuildFile(fileName)
 }
 
 export function getBuildFilePath(dir: string): string {

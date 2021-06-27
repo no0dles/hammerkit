@@ -1,15 +1,18 @@
 import { getTestArg, loadExampleBuildFile } from './run-arg'
-import { executeTask } from '../src/rewrite/4-execute'
-import { clean } from '../src/rewrite/5-clean'
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { planWorkTree } from '../src/planner/utils/plan-work-tree'
+import { execute } from '../src/executer/execute'
+import { clean } from '../src/executer/clean'
 
 describe('monorepo', () => {
   const buildFile = loadExampleBuildFile('monorepo')
 
   it('should build monorepo', async () => {
     const [arg] = getTestArg()
-    await executeTask(buildFile, 'build', true, 'checksum', arg)
+    const workTree = planWorkTree(buildFile, 'build')
+    const result = await execute(workTree, arg)
+    expect(result.success).toBeTruthy()
   })
 
   it('should clean monorepo', async () => {
@@ -23,7 +26,9 @@ describe('monorepo', () => {
       join(buildFile.path, 'projects/b/dist'),
     ]
     const [arg] = getTestArg()
-    await executeTask(buildFile, 'build', false, 'checksum', arg)
+    const workTree = planWorkTree(buildFile, 'build')
+    const result = await execute(workTree, arg)
+    expect(result.success).toBeTruthy()
     for (const file of files) {
       expect(existsSync(file)).toBeTruthy()
     }

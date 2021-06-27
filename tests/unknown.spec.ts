@@ -1,5 +1,6 @@
+import 'jest-extended'
 import { loadExampleBuildFile } from './run-arg'
-import { validate } from '../src/rewrite/8-validate'
+import { validate } from '../src/planner/validate'
 
 describe('unknown', () => {
   const buildFile = loadExampleBuildFile('unknown')
