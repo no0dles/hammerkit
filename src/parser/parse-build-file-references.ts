@@ -1,14 +1,15 @@
 import { dirname, join } from 'path'
-import { existsSync } from 'fs'
 import { readBuildFile } from './read-build-file'
 import { BuildFile } from './build-file'
+import {Context} from '../run-arg';
 
-export function parseBuildFileReferences(
+export async function parseBuildFileReferences(
   type: string,
   fileName: string,
   files: { [key: string]: BuildFile },
-  refs: any
-): { [key: string]: BuildFile } {
+  refs: any,
+  context: Context
+): Promise<{ [key: string]: BuildFile }> {
   if (refs && typeof refs !== 'object') {
     throw new Error(`${fileName} references need to be an object`)
   }
@@ -17,10 +18,10 @@ export function parseBuildFileReferences(
   for (const key of Object.keys(refs)) {
     const value = refs[key]
     const referenceFileName = join(dirname(fileName), value)
-    if (!existsSync(referenceFileName)) {
+    if (!(await context.file.exists(referenceFileName))) {
       throw new Error(`${fileName} ${type} ${key} not found`)
     }
-    result[key] = readBuildFile(referenceFileName, files)
+    result[key] = await readBuildFile(referenceFileName, files, context)
   }
   return result
 }

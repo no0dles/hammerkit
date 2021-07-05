@@ -1,6 +1,6 @@
-import { WorkNodeState } from '../planner/work-node-status'
+import {WorkNodeStatus} from '../planner/work-node-status';
 
 export interface ExecuteResult {
   success: boolean
-  nodes: { [key: string]: WorkNodeState }
+  nodes: { [key: string]: WorkNodeStatus }
 }

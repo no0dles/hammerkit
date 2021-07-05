@@ -1,10 +1,10 @@
 import { Minimatch } from 'minimatch'
 import { join } from 'path'
-import consola from 'consola'
 import { parseStringArray } from './parse-string-array'
 import { BuildFileTaskSource } from './build-file-task-source'
+import {Context} from '../run-arg';
 
-export function parseBuildFileTaskSource(fileName: string, key: string, value: any): BuildFileTaskSource[] | null {
+export function parseBuildFileTaskSource(fileName: string, key: string, value: any, context: Context): BuildFileTaskSource[] | null {
   const sources = parseStringArray(fileName, key, 'src', value.src)
   if (!sources) {
     return null
@@ -21,9 +21,9 @@ export function parseBuildFileTaskSource(fileName: string, key: string, value: a
             const matcher = new Minimatch(join(cwd, source), { dot: true })
             const match = matcher.match(file)
             if (match) {
-              consola.debug(`file ${file} matches source ${source}`)
+              context.console.debug(`file ${file} matches source ${source}`)
             } else {
-              consola.debug(`file ${file} does not matche source ${source}`)
+              context.console.debug(`file ${file} does not matche source ${source}`)
             }
             return match
           },
@@ -36,9 +36,9 @@ export function parseBuildFileTaskSource(fileName: string, key: string, value: a
             const matcher = new Minimatch(join(cwd, source), { dot: true })
             const match = matcher.match(file)
             if (match) {
-              consola.debug(`file ${file} matches source ${source}`)
+              context.console.debug(`file ${file} matches source ${source}`)
             } else {
-              consola.debug(`file ${file} does not matche source ${source}`)
+              context.console.debug(`file ${file} does not matche source ${source}`)
             }
             return match
           },

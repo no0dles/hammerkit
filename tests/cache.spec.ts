@@ -1,43 +1,29 @@
 import 'jest-extended'
-import { join } from 'path'
-import { expectLog, getBuildFilePath, getTestArg, loadExampleBuildFile } from './run-arg'
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs'
-import { remove } from '../src/file/remove'
 import { optimize } from '../src/optimizer/optimize'
 import { writeWorkNodeCache } from '../src/optimizer/write-work-node-cache'
 import { planWorkTree } from '../src/planner/utils/plan-work-tree'
 import { execute } from '../src/executer/execute'
 import { WorkTree } from '../src/planner/work-tree'
 import { ContainerWorkNode } from '../src/planner/work-node'
+import {expectLog, expectSuccessfulResult, getTestSuite} from './run-arg';
+import {ExecutionContext} from '../src/run-arg';
+import {join} from 'path'
+import {BuildFile} from '../src/parser/build-file';
 
 describe('cache', () => {
-  const buildFile = loadExampleBuildFile('cache')
-  const cachePath = join(buildFile.path, '.hammerkit')
-  const sourceFile = join(buildFile.path, 'package.json')
-  const buildFilePath = getBuildFilePath('cache')
-  const sourceFileContent = readFileSync(sourceFile)
-  const buildFileContent = readFileSync(buildFilePath)
+  const suite = getTestSuite('cache', ['build.yaml', 'package.json', 'package-lock.json'])
 
-  beforeEach(async () => {
-    if (existsSync(cachePath)) {
-      await remove(cachePath)
-    }
-  })
+  afterAll(() => suite.close())
 
-  afterEach(() => {
-    writeFileSync(buildFilePath, buildFileContent)
-    writeFileSync(sourceFile, sourceFileContent)
-  })
-
-  async function testCache(action: (workTree: WorkTree) => Promise<void>, expectInvalidate: boolean) {
-    const [arg] = getTestArg()
+  async function testCache(action: (buildFile: BuildFile, workTree: WorkTree, context: ExecutionContext) => Promise<void>, expectInvalidate: boolean) {
+    const {buildFile, context, executionContext} = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
     expect(workTree.nodes).toContainKey(`${buildFile.path}:example`)
 
-    await writeWorkNodeCache(workTree.nodes[`${buildFile.path}:example`])
-    await action(workTree)
+    await writeWorkNodeCache(workTree.nodes[`${buildFile.path}:example`], context)
+    await action(buildFile, workTree, executionContext)
 
-    await optimize(workTree, arg)
+    await optimize(workTree, executionContext)
 
     if (expectInvalidate) {
       expect(workTree.nodes[`${buildFile.path}:example`].status.state.type).toEqual('pending')
@@ -47,25 +33,22 @@ describe('cache', () => {
   }
 
   it('should run invalid cache on src file change', async () => {
-    await testCache(async () => {
-      appendFileSync(sourceFile, '\n')
+    await testCache(async (buildFile, workTree, context) => {
+      await context.context.file.appendFile(join(context.context.cwd, 'package.json'), '\n')
     }, true)
   })
 
   it('should mount generations of dependant tasks', async () => {
-    const [arg, mock] = getTestArg()
+    const {buildFile, executionContext} = await suite.setup()
     const workTree = planWorkTree(buildFile, 'dependant')
-    const result = await execute(workTree, arg)
-    expect(result.success).toBeTruthy()
-
-    expectLog(mock, 'node_modules')
-    expectLog(mock, 'package-lock.json')
-    expectLog(mock, 'package.json')
+    const result = await execute(workTree, executionContext)
+    expectSuccessfulResult(result);
+    await expectLog(result, `${buildFile.path}:dependant`,'info: node_modules')
   })
 
   it('should invalid cache on image change', async () => {
-    await testCache(async (workTree) => {
+    await testCache(async (buildFile, workTree) => {
       (workTree.nodes[`${buildFile.path}:example`] as ContainerWorkNode).image = '15.0.0'
     }, true)
   })
-})
+});

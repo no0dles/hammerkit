@@ -1,45 +1,48 @@
 import { isContainerWorkNode, WorkNode } from '../planner/work-node'
-import { RunArg } from '../run-arg'
 import { executeDocker } from './execute-docker'
-import consola from 'consola'
 import { executeLocal } from './execute-local'
+import {Defer} from '../defer';
+import {writeLog} from '../log';
+import {ExecutionContext} from '../run-arg';
 
-export async function executeWorkNode(task: WorkNode, arg: RunArg): Promise<void> {
-  const envs = replaceEnvVariables(task.envs, arg.processEnvs)
-  if (isContainerWorkNode(task) && !arg.noContainer) {
+export async function executeWorkNode(node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
+  const envs = replaceEnvVariables(node, context.context.processEnvs)
+  if (isContainerWorkNode(node) && !context.noContainer) {
     await executeDocker(
       {
-        ...task,
+        ...node,
         envs,
       },
-      arg
+      context,
+      cancelDefer
     )
   } else {
-    if (isContainerWorkNode(task)) {
-      consola.debug(`${task.name} is executed locally instead inside of a container`)
+    if (isContainerWorkNode(node)) {
+      writeLog(node.status.stdout, 'debug',`${node.name} is executed locally instead inside of a container`)
     }
 
     await executeLocal(
       {
-        ...task,
+        ...node,
         envs,
       },
-      arg
+      context,
+      cancelDefer
     )
   }
 }
 
 function replaceEnvVariables(
-  baseEnv: { [key: string]: string },
+  node: WorkNode,
   processEnv: { [key: string]: string | undefined }
 ): { [key: string]: string } {
-  const result = { ...baseEnv }
+  const result = { ...node.envs }
   for (const key of Object.keys(result)) {
     const value = result[key]
     if (value.startsWith('$')) {
       const processEnvValue = processEnv[value.substr(1)]
       if (processEnvValue) {
-        consola.debug(`use process env ${value.substr(1)}`)
+        writeLog(node.status.stdout, 'debug',`use process env ${value.substr(1)}`)
         result[key] = processEnvValue
       } else {
         throw new Error(`missing env ${value}`)

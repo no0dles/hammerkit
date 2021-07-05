@@ -1,12 +1,12 @@
-import { RunArg } from '../run-arg'
+import {Context} from '../run-arg';
 
-export function getProcessEnvs(envs: { [key: string]: string }, arg: RunArg) {
-  const result = { ...envs }
-  for (const key of Object.keys(arg.processEnvs)) {
-    const value = arg.processEnvs[key]
+export function getProcessEnvs(envs: { [key: string]: string }, ctx: Context): { [key: string]: string } {
+  const result = {...envs};
+  for (const key of Object.keys(ctx.processEnvs)) {
+    const value = ctx.processEnvs[key];
     if (!result[key] && value) {
-      result[key] = value
+      result[key] = value;
     }
   }
-  return result
+  return result;
 }

@@ -1,5 +1,5 @@
 import { WorkNodeCommand } from '../planner/work-node-command'
-import { WorkNodeMount } from '../planner/work-node-mount'
+import { WorkNodePath } from '../planner/work-node-path'
 import { isContainerWorkNode, WorkNode } from '../planner/work-node'
 
 export interface WorkNodeDescription {
@@ -10,12 +10,12 @@ export interface WorkNodeDescription {
   envs: { [key: string]: string }
   cmds: WorkNodeCommand[]
   image: string | null
-  mounts: WorkNodeMount[]
+  mounts: WorkNodePath[]
 }
 
 export function getWorkDescription(node: WorkNode): WorkNodeDescription {
   return {
-    path: node.path,
+    path: node.cwd,
     deps: node.deps.map((d) => d.id),
     src: node.src.map((s) => s.absolutePath),
     generates: node.generates,

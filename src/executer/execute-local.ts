@@ -1,53 +1,52 @@
-import { RunArg } from '../run-arg'
-import consola from 'consola'
 import { getProcessEnvs } from '../envs/process-env'
 import { exec } from 'child_process'
-import { getLogs } from '../log'
+import {getLogs, writeLog} from '../log';
 import { WorkNode } from '../planner/work-node'
+import {Defer} from '../defer';
+import {ExecutionContext} from '../run-arg';
 
-export async function executeLocal(task: WorkNode, arg: RunArg): Promise<void> {
-  consola.info(`execute ${task.name} locally`)
-  const envs = getProcessEnvs(task.envs, arg)
-  for (const cmd of task.cmds) {
-    if (arg.cancelPromise.isResolved) {
+export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
+  writeLog(node.status.stdout, 'info', `execute ${node.name} locally`)
+  const envs = getProcessEnvs(node.envs, arg.context)
+  for (const cmd of node.cmds) {
+    if (cancelDefer.isResolved) {
       return
     }
 
     await new Promise<void>((resolve, reject) => {
-      consola.info(`execute cmd ${cmd.cmd} locally`)
+      writeLog(node.status.stdout, 'info', `execute cmd ${cmd.cmd} locally`)
       const ps = exec(cmd.cmd, {
         env: envs,
         cwd: cmd.path,
       })
       ps.stdout?.on('data', (data) => {
         for (const log of getLogs(data)) {
-          arg.logger.withTag(cmd.cmd).info(log)
+          writeLog(node.status.stdout, 'info', log)
         }
       })
       ps.stderr?.on('data', (data) => {
         for (const log of getLogs(data)) {
-          arg.logger.withTag(cmd.cmd).info(log)
+          writeLog(node.status.stdout, 'info', log)
         }
       })
       ps.on('error', (err) => {
-        arg.logger.withTag(cmd.cmd).error(err)
+        writeLog(node.status.stdout, 'error', err.message)
       })
       ps.on('close', (code) => {
-        if (arg.cancelPromise.isResolved) {
+        if (cancelDefer.isResolved) {
           reject(new Error('canceled'))
           return
         }
 
         if (code !== 0 && code !== null) {
           const message = `failed with code ${code}`
-          arg.logger.withTag(cmd.cmd).error(message)
+          writeLog(node.status.stdout, 'error', message)
           reject(new Error(message))
         } else {
-          arg.logger.success(cmd.cmd)
           resolve()
         }
       })
-      arg.cancelPromise.promise.then(() => {
+      cancelDefer.promise.then(() => {
         ps.kill()
       })
     })

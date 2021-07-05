@@ -1,13 +1,12 @@
-import { existsSync } from 'fs'
-import { remove } from './remove'
-import consola from 'consola'
-import { copy } from './copy'
+import {writeLog} from '../log';
+import {WorkNode} from '../planner/work-node';
+import {Context} from '../run-arg';
 
-export async function moveFiles(folder: () => Generator<{ from: string; to: string }>): Promise<void> {
+export async function moveFiles(node: WorkNode, context: Context, folder: () => Generator<{ from: string; to: string }>): Promise<void> {
   const foldersToCopy: { from: string; to: string }[] = []
 
-  const addFolder = (from: string, to: string) => {
-    if (!existsSync(from)) {
+  const addFolder = async (from: string, to: string) => {
+    if (!await context.file.exists(from)) {
       return
     }
 
@@ -19,15 +18,15 @@ export async function moveFiles(folder: () => Generator<{ from: string; to: stri
   }
 
   for (const { from, to } of folder()) {
-    addFolder(from, to)
+    await addFolder(from, to)
   }
 
   for (const folder of foldersToCopy) {
-    if (existsSync(folder.to)) {
-      await remove(folder.to)
+    if (await context.file.exists(folder.to)) {
+      await context.file.remove(folder.to)
     }
 
-    consola.debug(`copy ${folder.from} to ${folder.to}`)
-    copy(folder.from, folder.to)
+    writeLog(node.status.stdout, 'debug',`copy ${folder.from} to ${folder.to}`)
+    await context.file.copy(folder.from, folder.to)
   }
 }

@@ -1,27 +1,26 @@
 import { basename, join } from 'path'
-import { existsSync, readFileSync } from 'fs'
-import consola from 'consola'
+import {Context} from '../run-arg';
 
-export function readEnvFile(path: string, baseEnv: { [key: string]: string }): { [key: string]: string } {
+export async function readEnvFile(path: string, baseEnv: { [key: string]: string }, context: Context): Promise<{ [key: string]: string }> {
   const directory = join(path, '.env')
-  if (!existsSync(directory)) {
+  if (!(await context.file.exists(directory))) {
     return baseEnv
   }
 
   let envs: { [key: string]: string } = { ...baseEnv }
 
   if (basename(path) !== path) {
-    envs = { ...readEnvFile(basename(path), baseEnv) }
+    envs = { ...await readEnvFile(basename(path), baseEnv, context) }
   }
 
-  const envFile = readFileSync(directory).toString().split(/\r?\n/)
+  const envFile = (await context.file.read(directory)).split(/\r?\n/)
   for (const envVar of envFile) {
     const index = envVar.indexOf('=')
     if (index > 0) {
       const key = envVar.substr(0, index)
       const value = envVar.substr(index + 1)
       if (!envs[key]) {
-        consola.debug(`load env variable ${key} from ${directory} file`)
+        context.console.debug(`load env variable ${key} from ${directory} file`)
         envs[key] = value
       }
     }

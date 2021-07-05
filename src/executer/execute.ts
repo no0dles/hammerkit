@@ -1,138 +1,98 @@
-import { WorkTree } from '../planner/work-tree'
-import { ExecuteResult } from './execute-result'
-import { RunArg } from '../run-arg'
-import { optimize } from '../optimizer/optimize'
-import { getReadyWorkNodes } from './get-ready-work-nodes'
-import { WorkNode } from '../planner/work-node'
-import { executeWorkNode } from './execute-work-node'
-import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
-import { watch } from 'fs'
-import { join } from 'path'
-import consola from 'consola'
-import { isCompletedState, isRunningState, WorkNodeRunningState } from '../planner/work-node-status'
-import { Defer } from '../defer'
+import {WorkTree} from '../planner/work-tree';
+import {ExecuteResult} from './execute-result';
+import {optimize} from '../optimizer/optimize';
+import {getReadyWorkNodes} from './get-ready-work-nodes';
+import {WorkNode} from '../planner/work-node';
+import {executeWorkNode} from './execute-work-node';
+import {writeWorkNodeCache} from '../optimizer/write-work-node-cache';
+import {join} from 'path';
+import {Debouncer} from '../debouncer';
+import {writeLog} from '../log';
+import {iterateWorkNodes} from '../planner/utils/plan-work-nodes';
+import {ExecutionContext} from '../run-arg';
+import {cancelNodes, completeNode, failNode, resetNode, runNode} from './states';
 
-export async function execute(workTree: WorkTree, arg: RunArg): Promise<ExecuteResult> {
-  const runningNodes: WorkNode[] = []
+export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
+  context.context.cancelDefer.promise.then(() => {
+    cancelNodes(workTree, context);
+  })
 
-  await optimize(workTree, arg)
+  await optimize(workTree, context);
 
-  if (arg.watch) {
-    watchNodes(workTree, runningNodes, arg)
+  if (context.watch) {
+    watchNodes(workTree, context);
   }
-  runPendingNodes(workTree, runningNodes, arg)
 
-  await workTree.rootNode.status.defer.promise
+  runPendingNodes(workTree, context);
+
+  await workTree.rootNode.status.defer.promise;
 
   const result: ExecuteResult = {
     success: true,
     nodes: {},
-  }
+  };
 
-  for (const nodeId of Object.keys(workTree.nodes)) {
-    const node = workTree.nodes[nodeId]
-    result.nodes[nodeId] = node.status.state
-    if (node.status.state.type === 'failed') {
-      result.success = false
+  for (const node of iterateWorkNodes(workTree.nodes)) {
+    result.nodes[node.id] = node.status;
+    if (node.status.state.type === 'failed' || node.status.state.type === 'aborted') {
+      result.success = false;
     }
   }
 
-  return result
+  return result;
 }
 
-function watchNodes(workTree: WorkTree, runningNodes: WorkNode[], arg: RunArg) {
-  for (const nodeId of Object.keys(workTree.nodes)) {
-    const node = workTree.nodes[nodeId]
-
+function watchNodes(workTree: WorkTree, context: ExecutionContext) {
+  for (const node of iterateWorkNodes(workTree.nodes)) {
     if (node.src.length === 0) {
-      continue
+      continue;
     }
+
+    const debouncer = new Debouncer(() => {
+      resetNode(workTree, node.id, context)
+      runPendingNodes(workTree, context);
+    }, 100);
 
     for (const src of node.src) {
-      const watcher = watch(src.absolutePath, { recursive: true, persistent: false }, (type, fileName) => {
-        const absoluteFileName = join(src.absolutePath, fileName)
-        if (src.matcher(absoluteFileName, node.path)) {
-          consola.debug(`source ${absoluteFileName} change for watched task ${node.name}`)
-          if (isRunningState(node.status.state)) {
-            node.status.state.cancelDefer.resolve()
-          } else if (isCompletedState(node.status.state)) {
-            node.status.state = { type: 'pending' }
-            for (const depNodeId of Object.keys(workTree.nodes)) {
-              const depNode = workTree.nodes[depNodeId]
-              const completedDepNode = depNode.status.completedDependencies[nodeId]
-              if (completedDepNode) {
-                depNode.status.pendingDependencies[nodeId] = completedDepNode
-                delete depNode.status.completedDependencies[nodeId]
-              }
-            }
-          }
-          runPendingNodes(workTree, runningNodes, arg)
-        }
-      })
+      const watcher = context.context.file.watch(src.absolutePath, ( fileName) => {
+        const absoluteFileName = join(src.absolutePath, fileName);
 
-      arg.cancelPromise.promise.then(() => {
-        watcher.close()
-      })
+        if (src.matcher(absoluteFileName, node.cwd)) {
+          writeLog(node.status.stdout, 'debug',`source ${absoluteFileName} change for watched task ${node.name}`);
+          debouncer.bounce()
+        }
+      });
+
+      context.context.cancelDefer.promise.then(() => {
+        watcher.close();
+      });
     }
   }
 }
 
-function runPendingNodes(workTree: WorkTree, runningNodes: WorkNode[], arg: RunArg) {
-  const pendingNodes = getReadyWorkNodes(workTree)
+function runPendingNodes(workTree: WorkTree, arg: ExecutionContext) {
+  const pendingNodes = getReadyWorkNodes(workTree);
   for (const pendingNode of pendingNodes) {
-    if (arg.workers !== 0 && runningNodes.length === arg.workers) {
+    if (arg.workers !== 0 && Object.keys(arg.runningNodes).length === arg.workers) {
+      continue;
+    }
+
+    if (arg.runningNodes[pendingNode.id]) {
       continue
     }
 
-    runningNodes.push(pendingNode)
-
-    continueExecution(workTree, runningNodes, pendingNode, arg)
+    continueExecution(workTree, pendingNode, arg);
   }
 }
 
-function getDuration(state: WorkNodeRunningState): number {
-  return new Date().getTime() - state.started.getTime()
-}
-
-async function continueExecution(workTree: WorkTree, runningNodes: WorkNode[], node: WorkNode, arg: RunArg) {
-  const runningState: WorkNodeRunningState = { type: 'running', started: new Date(), cancelDefer: new Defer<void>() }
+async function continueExecution(workTree: WorkTree, node: WorkNode, context: ExecutionContext) {
+  const cancelDefer = runNode(workTree, node.id, context)
   try {
-    node.status.state = runningState
-    await executeWorkNode(node, arg)
-    node.status.state = { type: 'completed', ended: new Date(), duration: getDuration(runningState) }
-    runningNodes.splice(runningNodes.indexOf(node), 1)
-
-    for (const nodeId of Object.keys(workTree.nodes)) {
-      const otherNode = workTree.nodes[nodeId]
-      const dependency = otherNode.status.pendingDependencies[node.id]
-      if (dependency) {
-        delete otherNode.status.pendingDependencies[node.id]
-        otherNode.status.completedDependencies[node.id] = dependency
-      }
-    }
-
-    const cacheWrite = writeWorkNodeCache(node)
-
-    if (!arg.watch) {
-      cacheWrite.finally(() => {
-        node.status.defer.resolve()
-      })
-    }
-
-    runPendingNodes(workTree, runningNodes, arg)
+    await executeWorkNode(node, context, cancelDefer);
+    await writeWorkNodeCache(node, context.context);
+    completeNode(workTree, node.id, context)
   } catch (e) {
-    node.status.state = { type: 'failed', ended: new Date(), duration: getDuration(runningState), error: e }
-    node.status.defer.resolve()
-    for (const nodeId of Object.keys(workTree.nodes)) {
-      const otherNode = workTree.nodes[nodeId]
-      if (otherNode.status.state.type === 'pending') {
-        otherNode.status.state = { type: 'aborted' }
-        otherNode.status.defer.resolve()
-      } else if (otherNode.status.state.type === 'running') {
-        otherNode.status.state.cancelDefer.resolve()
-        otherNode.status.state = { type: 'aborted' }
-        otherNode.status.defer.resolve()
-      }
-    }
+    failNode(workTree, node.id, context, e)
   }
+  runPendingNodes(workTree, context);
 }

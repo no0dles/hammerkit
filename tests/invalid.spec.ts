@@ -1,7 +1,16 @@
-import { loadExampleBuildFile } from './run-arg'
+import {getTestSuite} from './run-arg';
 
 describe('invalid', () => {
-  it('should throw on invalid yaml', () => {
-    expect(() => loadExampleBuildFile('invalid')).toThrow(/unable to parse.*/)
+  const suite = getTestSuite('invalid', ['build.yaml'])
+
+  afterAll(() => suite.close())
+
+  it('should throw on invalid yaml', async () => {
+    try {
+      await suite.setup()
+      expect.fail('should not be called')
+    } catch (e) {
+      expect(e.message).toStartWith('unable to parse')
+    }
   })
 })

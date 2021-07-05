@@ -1,12 +1,13 @@
 import { WorkTree } from '../planner/work-tree'
-import consola from 'consola'
 import { readCache } from './read-work-node-cache'
 import { getWorkDescription } from './work-node-description'
 import { getWorkNodeCacheStats } from './get-work-node-cache-stats'
-import { RunArg } from '../run-arg'
+import {writeLog} from '../log';
+import {ExecutionContext} from '../run-arg';
+import {completeNode} from '../executer/states';
 
-export async function optimize(workTree: WorkTree, arg: RunArg): Promise<WorkTree> {
-  if (arg.cacheMethod === 'none') {
+export async function optimize(workTree: WorkTree, context: ExecutionContext): Promise<WorkTree> {
+  if (context.cacheMethod === 'none') {
     return workTree
   }
 
@@ -16,26 +17,26 @@ export async function optimize(workTree: WorkTree, arg: RunArg): Promise<WorkTre
       continue
     }
 
-    const cache = readCache(node)
+    const cache = await readCache(node, context.context)
     if (!cache) {
-      consola.debug(`${node.name} can't be skipped because there is no cache`)
+      writeLog(node.status.stdout, 'debug', `${node.name} can't be skipped because there is no cache`)
       continue
     }
 
     const current = getWorkDescription(node)
     if (current.image !== cache.task.image) {
-      consola.debug(`${node.name} can't be skipped because task image has been modified`)
+      writeLog(node.status.stdout, 'debug',`${node.name} can't be skipped because task image has been modified`)
       continue
     }
 
-    const currentStats = await getWorkNodeCacheStats(node)
+    const currentStats = await getWorkNodeCacheStats(node, context.context)
     let changed = false
     for (const key of Object.keys(cache.stats)) {
       if (
-        (arg.cacheMethod === 'checksum' && currentStats[key]?.checksum !== cache.stats[key].checksum) ||
-        (arg.cacheMethod === 'modify-date' && currentStats[key]?.lastModified !== cache.stats[key].lastModified)
+        (context.cacheMethod === 'checksum' && currentStats[key]?.checksum !== cache.stats[key].checksum) ||
+        (context.cacheMethod === 'modify-date' && currentStats[key]?.lastModified !== cache.stats[key].lastModified)
       ) {
-        consola.debug(`${node.name} can't be skipped because ${key} has been modified`)
+        writeLog(node.status.stdout, 'debug',`${node.name} can't be skipped because ${key} has been modified`)
         changed = true
         break
       }
@@ -45,19 +46,8 @@ export async function optimize(workTree: WorkTree, arg: RunArg): Promise<WorkTre
       continue
     }
 
-    consola.debug(`${node.name} is skipped because it's cache is up to date`)
-    node.status.state = { type: 'completed', ended: new Date(), duration: 0 }
-    if (!arg.watch) {
-      node.status.defer.resolve()
-    }
-    for (const otherKey of Object.keys(workTree.nodes)) {
-      const otherNode = workTree.nodes[otherKey]
-      const depNode = otherNode.status.pendingDependencies[node.id]
-      if (depNode) {
-        delete otherNode.status.pendingDependencies[node.id]
-        otherNode.status.completedDependencies[node.id] = depNode
-      }
-    }
+    writeLog(node.status.stdout, 'debug',`${node.name} is skipped because it's cache is up to date`)
+    completeNode(workTree, key, context)
   }
 
   return workTree

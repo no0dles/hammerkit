@@ -1,24 +1,21 @@
-import { remove } from '../file/remove'
 import { join } from 'path'
-import { existsSync } from 'fs'
-import consola from 'consola'
-import { BuildFile } from '../parser/build-file'
-import { planWorkNodes } from '../planner/utils/plan-work-nodes'
+import {writeLog} from '../log';
+import {WorkNodes} from '../planner/work-nodes';
+import {iterateWorkNodes} from '../planner/utils/plan-work-nodes';
+import {Context} from '../run-arg';
 
-export async function clean(buildFile: BuildFile): Promise<void> {
-  const tree = planWorkNodes(buildFile)
-  for (const key of Object.keys(tree)) {
-    const node = tree[key]
+export async function clean(workNodes: WorkNodes, context: Context): Promise<void> {
+  for (const node of iterateWorkNodes(workNodes)) {
     for (const generate of node.generates) {
-      if (existsSync(generate)) {
-        consola.info(`remove generate ${generate}`)
-        await remove(generate)
+      if (await context.file.exists(generate)) {
+        writeLog(node.status.stdout, 'info', `remove generate ${generate}`)
+        await context.file.remove(generate)
       }
     }
-    const cachePath = join(node.path, '.hammerkit')
-    if (existsSync(cachePath)) {
-      consola.info(`remove cache ${cachePath}`)
-      await remove(cachePath)
+    const cachePath = join(node.cwd, '.hammerkit')
+    if (await context.file.exists(cachePath)) {
+      writeLog(node.status.stdout, 'info', `remove cache ${cachePath}`)
+      await context.file.remove(cachePath)
     }
   }
 }

@@ -1,7 +1,17 @@
 tasks:
+  install:
+    cmds:
+      - npm install
+    generates:
+      - node_modules
+    src:
+      - package.json
+      - package-lock.json
+
   api:
-    watch: true
+    deps: [install]
     src:
       - src
+      - tsconfig.json
     cmds:
       - node -r ts-node/register src/index.ts

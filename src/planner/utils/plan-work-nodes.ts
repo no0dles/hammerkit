@@ -1,11 +1,19 @@
 import { BuildFile } from '../../parser/build-file'
 import { WorkNodes } from '../work-nodes'
 import { planWorkNode } from './plan-work-node'
+import {WorkNode} from '../work-node';
 
 export function planWorkNodes(build: BuildFile): WorkNodes {
   const nodes: WorkNodes = {}
   addWorkNodes(build, nodes, [], [])
   return nodes
+}
+
+export function * iterateWorkNodes(nodes: WorkNodes): Generator<WorkNode> {
+  for(const nodeId of Object.keys(nodes)) {
+    const node = nodes[nodeId]
+    yield node;
+  }
 }
 
 function addWorkNodes(build: BuildFile, nodes: WorkNodes, files: string[], namePrefix: string[]) {

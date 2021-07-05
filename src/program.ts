@@ -1,34 +1,27 @@
 import commaner, { Command } from 'commander'
-import { existsSync, writeFileSync, appendFileSync } from 'fs'
 import { join } from 'path'
-import consola, { LogLevel } from 'consola'
-import { RunArg } from './run-arg'
-import { Defer } from './defer'
 import { isCI } from './ci'
 import { parseBuildFile } from './parser/parse-build-file'
-import { planWorkNodes } from './planner/utils/plan-work-nodes'
+import {iterateWorkNodes, planWorkNodes} from './planner/utils/plan-work-nodes';
 import { execute } from './executer/execute'
 import { planWorkTree } from './planner/utils/plan-work-tree'
 import { restore } from './executer/restore'
 import { store } from './executer/store'
 import { clean } from './executer/clean'
 import { validate } from './planner/validate'
+import {hideCursor, showCursor, startWorkTreeLogger} from './log';
+import {Context, ExecutionContext} from './run-arg';
+import {emitter} from './emit';
 
-export function getProgram(cwd: string): commaner.Command {
+export async function getProgram(context: Context): Promise<commaner.Command> {
   const program = new Command()
-  const isVerbose = process.argv.some((a) => a === '--verbose')
   const fileIndex = process.argv.indexOf('--file')
 
-  const fileName = join(cwd, fileIndex >= 0 ? process.argv[fileIndex + 1] : 'build.yaml')
+  const fileName = join(context.cwd, fileIndex >= 0 ? process.argv[fileIndex + 1] : 'build.yaml')
 
-  console.log(fileName)
-
-  if (isVerbose) {
-    consola.level = LogLevel.Debug
-  }
-
-  if (existsSync(fileName)) {
-    const buildFile = parseBuildFile(fileName)
+  if (await context.file.exists(fileName)) {
+    const buildFile = await parseBuildFile(fileName, context)
+    const workNodes = planWorkNodes(buildFile)
     const reservedCommands = ['clean', 'store', 'restore', 'validate']
 
     program
@@ -36,9 +29,9 @@ export function getProgram(cwd: string): commaner.Command {
       .description('clear task cache')
       .action(async () => {
         try {
-          await clean(buildFile)
+          await clean(workNodes, context)
         } catch (e) {
-          consola.error(e)
+          context.console.error(e)
           process.exit(1)
         }
       })
@@ -48,9 +41,9 @@ export function getProgram(cwd: string): commaner.Command {
       .description('save task outputs into <path>')
       .action(async (path) => {
         try {
-          await store(buildFile, path)
+          await store(workNodes, path, context)
         } catch (e) {
-          consola.error(e)
+          context.console.error(e)
           process.exit(1)
         }
       })
@@ -60,9 +53,9 @@ export function getProgram(cwd: string): commaner.Command {
       .description('restore task outputs from <path>')
       .action(async (path) => {
         try {
-          await restore(buildFile, path)
+          await restore(workNodes, path, context)
         } catch (e) {
-          consola.error(e)
+          context.console.error(e)
           process.exit(1)
         }
       })
@@ -73,13 +66,12 @@ export function getProgram(cwd: string): commaner.Command {
       .action(async () => {
         let errors = 0
 
-        for (const validation of validate(buildFile)) {
-          const logger = consola.withTag(validation.node.name)
+        for await (const validation of validate(buildFile, context)) {
           if (validation.type === 'error') {
             errors++
-            logger.error(validation.message)
+            context.console.error(validation.message)
           } else {
-            logger.warn(validation.message)
+            context.console.warn(validation.message)
           }
         }
         if (errors === 0) {
@@ -89,17 +81,15 @@ export function getProgram(cwd: string): commaner.Command {
         }
       })
 
-    const tasks = planWorkNodes(buildFile)
-    for (const key of Object.keys(tasks)) {
-      const task = tasks[key]
-      if (reservedCommands.indexOf(task.name) >= 0) {
-        consola.warn(`${task.name} is reserved, please use another name`)
+    for (const node of iterateWorkNodes(workNodes)) {
+      if (reservedCommands.indexOf(node.name) >= 0) {
+        context.console.warn(`${node.name} is reserved, please use another name`)
         continue
       }
 
       program
-        .command(task.name)
-        .description(task.description || '')
+        .command(node.name)
+        .description(node.description || '')
         .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
         .option('-w, --watch', 'watch tasks', false)
         .option(
@@ -110,46 +100,39 @@ export function getProgram(cwd: string): commaner.Command {
         )
         .option('--no-container', 'run every task locally without containers', false)
         .action(async (options) => {
-          const runArg: RunArg = {
-            logger: consola,
-            workers: options.concurrency,
-            processEnvs: process.env,
+          const executionContext: ExecutionContext = {
+            workers: options.concurrency, // TODO rename
             cacheMethod: options.cacheMethod,
             noContainer: !options.container,
-            cancelPromise: new Defer<void>(),
             watch: options.watch,
-          }
-
-          process.on('SIGINT', function () {
-            if (!runArg.cancelPromise.isResolved) {
-              runArg.cancelPromise.resolve()
-            }
-          })
-
-          if (options.verbose) {
-            runArg.logger.level = LogLevel.Debug
+            events: emitter(),
+            context,
+            runningNodes: {},
           }
 
           try {
-            const workTree = planWorkTree(buildFile, task.name)
-            const result = await execute(workTree, runArg)
-            for (const key of Object.keys(result.nodes)) {
-              const task = result.nodes[key]
-              consola.info(`[${task.type}] ${workTree.nodes[key].name}`)
-            }
+            hideCursor();
+
+            const workTree = planWorkTree(buildFile, node.name)
+
+            const logger = startWorkTreeLogger(workTree)
+            const result = await execute(workTree, executionContext)
+            await logger.close()
 
             if (!result.success) {
               process.exit(1)
             }
           } catch (e) {
-            consola.error(e)
+            context.console.error(e)
             process.exit(1)
+          } finally {
+            showCursor()
           }
         })
     }
   } else {
     if (fileIndex >= 0) {
-      consola.warn(`unable to find build file ${fileName}`)
+      context.console.warn(`unable to find build file ${fileName}`)
     }
 
     program
@@ -164,17 +147,17 @@ tasks:
     cmds:
       - echo "it's Hammer Time!"
       `
-        writeFileSync(fileName, content)
-        consola.success(`created ${fileName}`)
+        await context.file.writeFile(fileName, content)
+        context.console.info(`created ${fileName}`)
 
         const gitIgnoreFile = join(process.cwd(), '.gitignore')
         const gitIgnoreContent = `.hammerkit\n`
-        if (existsSync(gitIgnoreFile)) {
-          appendFileSync(gitIgnoreFile, gitIgnoreContent)
-          consola.success(`extened ${gitIgnoreFile} with hammerkit cache directory`)
+        if (await context.file.exists(gitIgnoreFile)) {
+          await context.file.appendFile(gitIgnoreFile, gitIgnoreContent)
+          context.console.info(`extened ${gitIgnoreFile} with hammerkit cache directory`)
         } else {
-          writeFileSync(gitIgnoreFile, gitIgnoreContent)
-          consola.success(`created ${gitIgnoreFile} with hammerkit cache directory`)
+          await context.file.writeFile(gitIgnoreFile, gitIgnoreContent)
+          context.console.info(`created ${gitIgnoreFile} with hammerkit cache directory`)
         }
       })
   }

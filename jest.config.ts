@@ -14,7 +14,7 @@ const config: Config.InitialOptions = {
   },
   rootDir: '.',
   testTimeout: 45000,
-  testRegex: ['tests/.*\\.spec\\.ts$', 'src/rewrite/.*\\.spec\\.ts$'],
+  testRegex: ['tests/.*\\.spec\\.ts$', 'src/.*\\.spec\\.ts$'],
   testEnvironment: 'node',
   collectCoverage: true,
   coverageDirectory: '<rootDir>/coverage',

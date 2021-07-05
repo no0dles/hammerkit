@@ -1,45 +1,49 @@
 import 'jest-extended'
-import { loadExampleBuildFile } from './run-arg'
 import { validate } from '../src/planner/validate'
+import { getTestSuite} from './run-arg';
 
 describe('validate', () => {
-  const buildFile = loadExampleBuildFile('validate')
+  const suite = getTestSuite('validate', ['build.yaml', 'build-loop.yaml'])
+  async function validateTask(name: string, expectedErrors: string[]) {
+    const {buildFile, context} = await suite.setup()
 
-  function validateTask(name: string, expectedErrors: string[]) {
-    const result = Array.from(validate(buildFile, name))
-    expect(result.map((r) => r.message)).toIncludeSameMembers(expectedErrors)
+    let i = 0;
+    for await (const message of validate(buildFile, context, name)) {
+      expect(expectedErrors[i++]).toEqual(message.message)
+    }
+    expect(i).toEqual(expectedErrors.length)
   }
 
   it('should validate regular task', async () => {
-    validateTask('regular_task', [])
+    await validateTask('regular_task', [])
   })
 
   it('should validate regular docker task', async () => {
-    validateTask('regular_docker_task', [])
+    await validateTask('regular_docker_task', [])
   })
 
   it('should validate task without description', async () => {
-    validateTask('missing_desc', ['missing description'])
+    await validateTask('missing_desc', ['missing description'])
   })
 
   it('should detect empty tasks', async () => {
-    validateTask('empty', ['task is empty'])
+    await validateTask('empty', ['task is empty'])
   })
 
   it('should allow only deps', async () => {
-    validateTask('only_deps', [])
+    await validateTask('only_deps', [])
   })
 
   it('should detect loop in dep', async () => {
-    validateTask('loop_with_dep', ['task cycle detected loop_with_dep -> loop_with_dep'])
+    await validateTask('loop_with_dep', ['task cycle detected loop_with_dep -> loop_with_dep'])
   })
 
   it('should detect loop in refs', async () => {
-    validateTask('loop_with_refs', ['task cycle detected loop_with_refs -> loop_with_refs'])
+    await validateTask('loop_with_refs', ['task cycle detected loop_with_refs -> loop_with_refs'])
   })
 
   it('should detect loop over multiple tasks', async () => {
-    validateTask('loop_with_multiple_tasks', [
+    await validateTask('loop_with_multiple_tasks', [
       'task cycle detected loop_with_multiple_tasks -> loop_with_multiple_tasks_2 -> loop_with_multiple_tasks',
     ])
   })
