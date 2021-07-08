@@ -5,18 +5,21 @@ import { planWorkTree } from '../src/planner/utils/plan-work-tree'
 import { execute } from '../src/executer/execute'
 import { WorkTree } from '../src/planner/work-tree'
 import { ContainerWorkNode } from '../src/planner/work-node'
-import {expectLog, expectSuccessfulResult, getTestSuite} from './run-arg';
-import {ExecutionContext} from '../src/run-arg';
-import {join} from 'path'
-import {BuildFile} from '../src/parser/build-file';
+import { expectLog, expectSuccessfulResult, getTestSuite } from './run-arg'
+import { ExecutionContext } from '../src/run-arg'
+import { join } from 'path'
+import { BuildFile } from '../src/parser/build-file'
 
 describe('cache', () => {
   const suite = getTestSuite('cache', ['build.yaml', 'package.json', 'package-lock.json'])
 
   afterAll(() => suite.close())
 
-  async function testCache(action: (buildFile: BuildFile, workTree: WorkTree, context: ExecutionContext) => Promise<void>, expectInvalidate: boolean) {
-    const {buildFile, context, executionContext} = await suite.setup()
+  async function testCache(
+    action: (buildFile: BuildFile, workTree: WorkTree, context: ExecutionContext) => Promise<void>,
+    expectInvalidate: boolean
+  ) {
+    const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
     expect(workTree.nodes).toContainKey(`${buildFile.path}:example`)
 
@@ -39,11 +42,11 @@ describe('cache', () => {
   })
 
   it('should mount generations of dependant tasks', async () => {
-    const {buildFile, executionContext} = await suite.setup()
+    const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'dependant')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result);
-    await expectLog(result, `${buildFile.path}:dependant`,'info: node_modules')
+    expectSuccessfulResult(result)
+    await expectLog(result, `${buildFile.path}:dependant`, 'info: node_modules')
   })
 
   it('should invalid cache on image change', async () => {
@@ -51,4 +54,4 @@ describe('cache', () => {
       (workTree.nodes[`${buildFile.path}:example`] as ContainerWorkNode).image = '15.0.0'
     }, true)
   })
-});
+})

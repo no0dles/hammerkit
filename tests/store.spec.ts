@@ -5,8 +5,8 @@ import { execute } from '../src/executer/execute'
 import { restore } from '../src/executer/restore'
 import { store } from '../src/executer/store'
 import { clean } from '../src/executer/clean'
-import {expectSuccessfulResult, getTestSuite} from './run-arg';
-import {planWorkNodes} from '../src/planner/utils/plan-work-nodes';
+import { expectSuccessfulResult, getTestSuite } from './run-arg'
+import { planWorkNodes } from '../src/planner/utils/plan-work-nodes'
 
 describe('store/restore', () => {
   const suite = getTestSuite('store-restore', ['build.yaml'])
@@ -14,7 +14,7 @@ describe('store/restore', () => {
   afterAll(() => suite.close())
 
   it('should clean created outputs', async () => {
-    const {buildFile, context, executionContext} = await suite.setup()
+    const { buildFile, context, executionContext } = await suite.setup()
 
     const outputPath = join(buildFile.path, 'test-output')
     const generatedPath = join(buildFile.path, 'node_modules')
@@ -38,7 +38,7 @@ describe('store/restore', () => {
   })
 
   it('should not store anything if nothing got generated', async () => {
-    const {buildFile, context} = await suite.setup()
+    const { buildFile, context } = await suite.setup()
     const workNodes = planWorkNodes(buildFile)
     const outputPath = join(buildFile.path, 'test-output')
     const generatedPath = join(buildFile.path, 'node_modules')

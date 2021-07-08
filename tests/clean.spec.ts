@@ -1,5 +1,5 @@
 import { join } from 'path'
-import {expectSuccessfulResult, getTestSuite} from './run-arg';
+import { expectSuccessfulResult, getTestSuite } from './run-arg'
 import { existsSync } from 'fs'
 import { execute } from '../src/executer/execute'
 import { planWorkTree } from '../src/planner/utils/plan-work-tree'
@@ -11,13 +11,13 @@ describe('clean', () => {
   afterAll(() => suite.close())
 
   it('should clean generated outputs', async () => {
-    const {buildFile, context, executionContext} = await suite.setup()
+    const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
 
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result);
+    expectSuccessfulResult(result)
 
-    const outputPath = join(buildFile.path, 'node_modules');
+    const outputPath = join(buildFile.path, 'node_modules')
 
     expect(existsSync(outputPath)).toBeTruthy()
     await clean(workTree.nodes, context)

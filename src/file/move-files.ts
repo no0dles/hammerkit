@@ -1,12 +1,15 @@
-import {writeLog} from '../log';
-import {WorkNode} from '../planner/work-node';
-import {Context} from '../run-arg';
+import { WorkNode } from '../planner/work-node'
+import { Context } from '../run-arg'
 
-export async function moveFiles(node: WorkNode, context: Context, folder: () => Generator<{ from: string; to: string }>): Promise<void> {
+export async function moveFiles(
+  node: WorkNode,
+  context: Context,
+  folder: () => Generator<{ from: string; to: string }>
+): Promise<void> {
   const foldersToCopy: { from: string; to: string }[] = []
 
   const addFolder = async (from: string, to: string) => {
-    if (!await context.file.exists(from)) {
+    if (!(await context.file.exists(from))) {
       return
     }
 
@@ -26,7 +29,7 @@ export async function moveFiles(node: WorkNode, context: Context, folder: () => 
       await context.file.remove(folder.to)
     }
 
-    writeLog(node.status.stdout, 'debug',`copy ${folder.from} to ${folder.to}`)
+    node.status.console.write('internal', 'debug', `copy ${folder.from} to ${folder.to}`)
     await context.file.copy(folder.from, folder.to)
   }
 }

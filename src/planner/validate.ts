@@ -3,9 +3,13 @@ import { planWorkNodes } from '../planner/utils/plan-work-nodes'
 import { planWorkTree } from '../planner/utils/plan-work-tree'
 import { WorkNode } from '../planner/work-node'
 import { WorkNodeValidation } from './work-node-validation'
-import {Context} from '../run-arg';
+import { Context } from '../run-arg'
 
-export async function* validate(buildFile: BuildFile, context: Context, name?: string): AsyncGenerator<WorkNodeValidation> {
+export async function* validate(
+  buildFile: BuildFile,
+  context: Context,
+  name?: string
+): AsyncGenerator<WorkNodeValidation> {
   const tree = name ? planWorkTree(buildFile, name).nodes : planWorkNodes(buildFile)
   const cycleNodes: WorkNode[] = []
 
@@ -20,7 +24,7 @@ export async function* validate(buildFile: BuildFile, context: Context, name?: s
     }
 
     for (const src of node.src) {
-      if (!await context.file.exists(src.absolutePath)) {
+      if (!(await context.file.exists(src.absolutePath))) {
         yield {
           type: 'warn',
           message: `src ${src.absolutePath} does not exist`,

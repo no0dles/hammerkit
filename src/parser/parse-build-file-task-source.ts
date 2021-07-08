@@ -2,9 +2,14 @@ import { Minimatch } from 'minimatch'
 import { join } from 'path'
 import { parseStringArray } from './parse-string-array'
 import { BuildFileTaskSource } from './build-file-task-source'
-import {Context} from '../run-arg';
+import { Context } from '../run-arg'
 
-export function parseBuildFileTaskSource(fileName: string, key: string, value: any, context: Context): BuildFileTaskSource[] | null {
+export function parseBuildFileTaskSource(
+  fileName: string,
+  key: string,
+  value: any,
+  context: Context
+): BuildFileTaskSource[] | null {
   const sources = parseStringArray(fileName, key, 'src', value.src)
   if (!sources) {
     return null

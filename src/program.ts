@@ -2,16 +2,16 @@ import commaner, { Command } from 'commander'
 import { join } from 'path'
 import { isCI } from './ci'
 import { parseBuildFile } from './parser/parse-build-file'
-import {iterateWorkNodes, planWorkNodes} from './planner/utils/plan-work-nodes';
+import { iterateWorkNodes, planWorkNodes } from './planner/utils/plan-work-nodes'
 import { execute } from './executer/execute'
 import { planWorkTree } from './planner/utils/plan-work-tree'
 import { restore } from './executer/restore'
 import { store } from './executer/store'
 import { clean } from './executer/clean'
 import { validate } from './planner/validate'
-import {hideCursor, showCursor, startWorkTreeLogger} from './log';
-import {Context, ExecutionContext} from './run-arg';
-import {emitter} from './emit';
+import { hideCursor, printWorkTreeResult, showCursor, writeWorkTreeStatus } from './log'
+import { Context, ExecutionContext } from './run-arg'
+import { emitter } from './emit'
 
 export async function getProgram(context: Context): Promise<commaner.Command> {
   const program = new Command()
@@ -110,14 +110,30 @@ export async function getProgram(context: Context): Promise<commaner.Command> {
             runningNodes: {},
           }
 
+          let running = true
+          let count = 0
+
           try {
-            hideCursor();
+            hideCursor()
 
             const workTree = planWorkTree(buildFile, node.name)
+            writeWorkTreeStatus(workTree, count)
 
-            const logger = startWorkTreeLogger(workTree)
+            const tickerFn = () => {
+              count++
+              writeWorkTreeStatus(workTree, count)
+              if (running) {
+                setTimeout(tickerFn, 100)
+              }
+            }
+            tickerFn()
+
+            executionContext.events.on(({ workTree }) => {
+              writeWorkTreeStatus(workTree, count)
+            })
+
             const result = await execute(workTree, executionContext)
-            await logger.close()
+            await printWorkTreeResult(workTree, result)
 
             if (!result.success) {
               process.exit(1)
@@ -126,6 +142,7 @@ export async function getProgram(context: Context): Promise<commaner.Command> {
             context.console.error(e)
             process.exit(1)
           } finally {
+            running = false
             showCursor()
           }
         })
@@ -149,16 +166,6 @@ tasks:
       `
         await context.file.writeFile(fileName, content)
         context.console.info(`created ${fileName}`)
-
-        const gitIgnoreFile = join(process.cwd(), '.gitignore')
-        const gitIgnoreContent = `.hammerkit\n`
-        if (await context.file.exists(gitIgnoreFile)) {
-          await context.file.appendFile(gitIgnoreFile, gitIgnoreContent)
-          context.console.info(`extened ${gitIgnoreFile} with hammerkit cache directory`)
-        } else {
-          await context.file.writeFile(gitIgnoreFile, gitIgnoreContent)
-          context.console.info(`created ${gitIgnoreFile} with hammerkit cache directory`)
-        }
       })
   }
 

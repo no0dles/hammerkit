@@ -1,4 +1,4 @@
-import {getTestSuite} from './run-arg';
+import { getTestSuite } from './run-arg'
 
 describe('multi-line', () => {
   const suite = getTestSuite('multi-line', ['build.yaml'])
@@ -6,7 +6,7 @@ describe('multi-line', () => {
   afterAll(() => suite.close())
 
   it('should get multi lines', async () => {
-    const {buildFile} = await suite.setup()
+    const { buildFile } = await suite.setup()
     const task = buildFile.tasks['example']
     expect(task.cmds || []).toEqual([
       'some very long cmd continues on line 2',

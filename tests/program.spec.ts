@@ -1,6 +1,6 @@
 import { getProgram } from '../src/program'
 import { join } from 'path'
-import {getTestContext} from './run-arg';
+import { getTestContext } from './run-arg'
 
 describe('program', () => {
   async function testCommand(args: string[]): Promise<void> {

@@ -1,7 +1,7 @@
 import { Duplex, Writable } from 'stream'
-import {getLogs, writeLog} from '../log';
+import { getLogs } from '../log'
 import Dockerode from 'dockerode'
-import {ContainerWorkNode} from '../planner/work-node';
+import { ContainerWorkNode } from '../planner/work-node'
 
 class NoopStream extends Writable {
   constructor(private fn: (log: string) => void) {
@@ -19,8 +19,8 @@ class NoopStream extends Writable {
 export async function awaitStream(node: ContainerWorkNode, docker: Dockerode, stream: Duplex): Promise<void> {
   docker.modem.demuxStream(
     stream,
-    new NoopStream((log) => writeLog(node.status.stdout, 'info', log)),
-    new NoopStream((log) => writeLog(node.status.stdout, 'info', log))
+    new NoopStream((log) => node.status.console.write('process', 'info', log)),
+    new NoopStream((log) => node.status.console.write('process', 'info', log))
   )
 
   await new Promise<void>((resolve, reject) => {

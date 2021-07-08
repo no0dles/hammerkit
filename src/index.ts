@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { getProgram } from './program'
-import {Defer} from './defer';
-import {consoleContext, fileContext} from './run-arg';
+import { Defer } from './defer'
+import { fileContext } from './run-arg'
+import { consoleContext } from './log'
 
-const cancelDefer = new Defer<void>();
+const cancelDefer = new Defer<void>()
 
 process.on('SIGINT', function () {
   if (!cancelDefer.isResolved) {
@@ -18,7 +19,6 @@ getProgram({
   processEnvs: process.env,
   file: fileContext(),
   console: consoleContext(),
-}).then(program => {
+}).then((program) => {
   program.parse(process.argv)
 })
-

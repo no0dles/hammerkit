@@ -1,19 +1,52 @@
-import {WorkNode} from './work-node';
-import {Defer} from '../defer';
-import {Readable, Writable} from 'stream';
+import { WorkNode } from './work-node'
+import { Defer } from '../defer'
+import { isVerbose } from '../log'
+
+export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
+export type WorkNodeConsoleLogType = 'process' | 'internal'
+
+export interface WorkNodeConsoleLog {
+  level: WorkNodeConsoleLogLevel
+  type: WorkNodeConsoleLogType
+  message: string
+}
+
+export interface WorkNodeConsole {
+  current: WorkNodeConsoleLog | null
+
+  write(type: WorkNodeConsoleLogType, level: WorkNodeConsoleLogLevel, message: string): void
+
+  read(): Promise<WorkNodeConsoleLog[]>
+}
+
+export function nodeConsole(nodeId: string): WorkNodeConsole {
+  let current: WorkNodeConsoleLog | null = null
+  const logs: WorkNodeConsoleLog[] = []
+
+  return {
+    read(): Promise<WorkNodeConsoleLog[]> {
+      return Promise.resolve(logs)
+    },
+
+    write(type: WorkNodeConsoleLogType, level: WorkNodeConsoleLogLevel, message: string) {
+      const log: WorkNodeConsoleLog = { level, type, message }
+      if (isVerbose || level !== 'debug') {
+        current = log
+      }
+      logs.push(log)
+    },
+    get current() {
+      return current
+    },
+  }
+}
 
 export interface WorkNodeStatus {
   pendingDependencies: { [id: string]: WorkNode }
   completedDependencies: { [id: string]: WorkNode }
   state: WorkNodeState
   defer: Defer<void>
-  stderr: Writable
-
-  stderrRead(): Readable
-
-  stdout: Writable,
-
-  stdoutRead(): Readable
+  console: WorkNodeConsole
 }
 
 export type WorkNodeState =
@@ -42,15 +75,13 @@ export interface WorkNodeRunningState {
   cancelDefer: Defer<void>
 }
 
-export const isRunningState = (val: WorkNodeState): val is WorkNodeRunningState => val.type === 'running';
+export const isRunningState = (val: WorkNodeState): val is WorkNodeRunningState => val.type === 'running'
 
 export interface WorkNodeCompletedState {
   type: 'completed'
   duration: number
   ended: Date
 }
-
-export const isCompletedState = (val: WorkNodeState): val is WorkNodeCompletedState => val.type === 'completed';
 
 export interface WorkNodeFailedState {
   type: 'failed'

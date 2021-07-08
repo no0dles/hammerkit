@@ -1,6 +1,6 @@
 import { WorkTree } from '../planner/work-tree'
 import { WorkNode } from '../planner/work-node'
-import {iterateWorkNodes} from '../planner/utils/plan-work-nodes';
+import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 
 export function getReadyWorkNodes(workTree: WorkTree): WorkNode[] {
   const result: WorkNode[] = []

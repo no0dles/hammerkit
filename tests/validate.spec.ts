@@ -1,13 +1,13 @@
 import 'jest-extended'
 import { validate } from '../src/planner/validate'
-import { getTestSuite} from './run-arg';
+import { getTestSuite } from './run-arg'
 
 describe('validate', () => {
   const suite = getTestSuite('validate', ['build.yaml', 'build-loop.yaml'])
   async function validateTask(name: string, expectedErrors: string[]) {
-    const {buildFile, context} = await suite.setup()
+    const { buildFile, context } = await suite.setup()
 
-    let i = 0;
+    let i = 0
     for await (const message of validate(buildFile, context, name)) {
       expect(expectedErrors[i++]).toEqual(message.message)
     }

@@ -7,10 +7,10 @@ import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { parseStringArray } from './parse-string-array'
 import { BuildFile } from './build-file'
-import {Context} from '../run-arg';
+import { Context } from '../run-arg'
 
 export async function read(fileName: string, context: Context): Promise<any> {
-  context.console.debug(`read ${fileName} build file`)
+  // context.console.debug(`read ${fileName} build file`)
   let content: string
   try {
     content = await context.file.read(fileName)
@@ -27,7 +27,11 @@ export async function read(fileName: string, context: Context): Promise<any> {
 const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys]
 
-export async function readBuildFile(fileName: string, files: { [key: string]: BuildFile }, context: Context): Promise<BuildFile> {
+export async function readBuildFile(
+  fileName: string,
+  files: { [key: string]: BuildFile },
+  context: Context
+): Promise<BuildFile> {
   if (files[fileName]) {
     return files[fileName]
   }

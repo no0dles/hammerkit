@@ -2,9 +2,8 @@ import { WorkTree } from '../planner/work-tree'
 import { readCache } from './read-work-node-cache'
 import { getWorkDescription } from './work-node-description'
 import { getWorkNodeCacheStats } from './get-work-node-cache-stats'
-import {writeLog} from '../log';
-import {ExecutionContext} from '../run-arg';
-import {completeNode} from '../executer/states';
+import { ExecutionContext } from '../run-arg'
+import { completeNode } from '../executer/states'
 
 export async function optimize(workTree: WorkTree, context: ExecutionContext): Promise<WorkTree> {
   if (context.cacheMethod === 'none') {
@@ -19,13 +18,17 @@ export async function optimize(workTree: WorkTree, context: ExecutionContext): P
 
     const cache = await readCache(node, context.context)
     if (!cache) {
-      writeLog(node.status.stdout, 'debug', `${node.name} can't be skipped because there is no cache`)
+      node.status.console.write('internal', 'debug', `${node.name} can't be skipped because there is no cache`)
       continue
     }
 
     const current = getWorkDescription(node)
     if (current.image !== cache.task.image) {
-      writeLog(node.status.stdout, 'debug',`${node.name} can't be skipped because task image has been modified`)
+      node.status.console.write(
+        'internal',
+        'debug',
+        `${node.name} can't be skipped because task image has been modified`
+      )
       continue
     }
 
@@ -36,7 +39,7 @@ export async function optimize(workTree: WorkTree, context: ExecutionContext): P
         (context.cacheMethod === 'checksum' && currentStats[key]?.checksum !== cache.stats[key].checksum) ||
         (context.cacheMethod === 'modify-date' && currentStats[key]?.lastModified !== cache.stats[key].lastModified)
       ) {
-        writeLog(node.status.stdout, 'debug',`${node.name} can't be skipped because ${key} has been modified`)
+        node.status.console.write('internal', 'debug', `${node.name} can't be skipped because ${key} has been modified`)
         changed = true
         break
       }
@@ -46,7 +49,7 @@ export async function optimize(workTree: WorkTree, context: ExecutionContext): P
       continue
     }
 
-    writeLog(node.status.stdout, 'debug',`${node.name} is skipped because it's cache is up to date`)
+    node.status.console.write('internal', 'debug', `${node.name} is skipped because it's cache is up to date`)
     completeNode(workTree, key, context)
   }
 

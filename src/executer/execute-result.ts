@@ -1,4 +1,4 @@
-import {WorkNodeStatus} from '../planner/work-node-status';
+import { WorkNodeStatus } from '../planner/work-node-status'
 
 export interface ExecuteResult {
   success: boolean

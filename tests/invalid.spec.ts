@@ -1,4 +1,4 @@
-import {getTestSuite} from './run-arg';
+import { getTestSuite } from './run-arg'
 
 describe('invalid', () => {
   const suite = getTestSuite('invalid', ['build.yaml'])

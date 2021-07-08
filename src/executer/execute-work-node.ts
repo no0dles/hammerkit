@@ -1,11 +1,14 @@
 import { isContainerWorkNode, WorkNode } from '../planner/work-node'
 import { executeDocker } from './execute-docker'
 import { executeLocal } from './execute-local'
-import {Defer} from '../defer';
-import {writeLog} from '../log';
-import {ExecutionContext} from '../run-arg';
+import { Defer } from '../defer'
+import { ExecutionContext } from '../run-arg'
 
-export async function executeWorkNode(node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
+export async function executeWorkNode(
+  node: WorkNode,
+  context: ExecutionContext,
+  cancelDefer: Defer<void>
+): Promise<void> {
   const envs = replaceEnvVariables(node, context.context.processEnvs)
   if (isContainerWorkNode(node) && !context.noContainer) {
     await executeDocker(
@@ -18,7 +21,7 @@ export async function executeWorkNode(node: WorkNode, context: ExecutionContext,
     )
   } else {
     if (isContainerWorkNode(node)) {
-      writeLog(node.status.stdout, 'debug',`${node.name} is executed locally instead inside of a container`)
+      node.status.console.write('internal', 'debug', `${node.name} is executed locally instead inside of a container`)
     }
 
     await executeLocal(
@@ -42,7 +45,7 @@ function replaceEnvVariables(
     if (value.startsWith('$')) {
       const processEnvValue = processEnv[value.substr(1)]
       if (processEnvValue) {
-        writeLog(node.status.stdout, 'debug',`use process env ${value.substr(1)}`)
+        node.status.console.write('internal', 'debug', `use process env ${value.substr(1)}`)
         result[key] = processEnvValue
       } else {
         throw new Error(`missing env ${value}`)

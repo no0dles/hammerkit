@@ -1,4 +1,4 @@
-import {expectSuccessfulResult, getTestSuite} from './run-arg';
+import { expectSuccessfulResult, getTestSuite } from './run-arg'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { planWorkTree } from '../src/planner/utils/plan-work-tree'
@@ -11,14 +11,14 @@ describe('monorepo', () => {
   afterAll(() => suite.close())
 
   it('should build monorepo', async () => {
-    const {buildFile, executionContext} = await suite.setup()
+    const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'build')
     const result = await execute(workTree, executionContext)
     expectSuccessfulResult(result)
   })
 
   it('should clean monorepo', async () => {
-    const {buildFile, context, executionContext} = await suite.setup()
+    const { buildFile, context, executionContext } = await suite.setup()
     const files = [
       join(buildFile.path, '.hammerkit'),
       join(buildFile.path, 'projects/a/.hammerkit'),

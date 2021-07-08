@@ -1,6 +1,6 @@
 import { BuildFileTaskSource } from './build-file-task-source'
 import { BuildTaskCommand } from './build-file-task-command'
-import {BuildFileTaskPlatform} from './build-file-task-platform';
+import { BuildFileTaskPlatform } from './build-file-task-platform'
 
 export interface BuildFileTask {
   deps: string[] | null

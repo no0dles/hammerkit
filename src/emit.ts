@@ -7,32 +7,32 @@ export interface EmitHandle {
 }
 
 export interface Emitter<T> {
-  on(listener: EmitListener<T>): EmitHandle;
+  on(listener: EmitListener<T>): EmitHandle
 }
 
 export interface EmitterHandler<T> extends Emitter<T> {
-  emit(value: T): void;
+  emit(value: T): void
 }
 
 export function emitter<T>(): EmitterHandler<T> {
-  const listeners: EmitListener<T>[] = [];
+  const listeners: EmitListener<T>[] = []
 
   return {
     on(listener: EmitListener<T>): EmitHandle {
-      listeners.push(listener);
+      listeners.push(listener)
       return {
         close() {
-          const index = listeners.indexOf(listener);
+          const index = listeners.indexOf(listener)
           if (index >= 0) {
-            listeners.splice(index, 1);
+            listeners.splice(index, 1)
           }
         },
-      };
+      }
     },
     emit(value: T) {
       for (const listener of listeners) {
-        listener(value);
+        listener(value)
       }
     },
-  };
+  }
 }
