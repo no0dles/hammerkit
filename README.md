@@ -24,10 +24,11 @@ Additionally hammerkit tries to reduce complexity of build caching in CI systems
 
 Hammerkit on the other hand knows the source and output files of each build step and can therefore compact the build results into a single directory. Making it easy to being cached. Once restored, hammerkit can detect what's changed since last time and only build the changes.
 
-## Documentation
-<a href="https://no0dles.gitbook.io/hammerkit">
-    <img src="docs/read_the_docs.png" alt="docs">
-</a>
+<p align='center'>
+    <a href="https://no0dles.gitbook.io/hammerkit">
+        <img src="docs/read_the_docs.png" alt="docs">
+    </a>
+</p>
 
 ## Installation
 
