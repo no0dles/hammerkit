@@ -11,15 +11,15 @@ describe('include', () => {
     const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}:foo:bar`, 'info: foobar')
+    await expectSuccessfulResult(result)
+    await expectLog(result, `${buildFile.path}:foo:bar`, 'foobar')
   })
 
   it('should get name:example', async () => {
     const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'name:example')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
+    await expectSuccessfulResult(result)
   })
 
   it('should get included task', async () => {

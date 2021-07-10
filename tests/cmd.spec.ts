@@ -12,7 +12,7 @@ describe('cmd', () => {
 
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}:example`, 'info: .gitkeep')
+    await expectSuccessfulResult(result)
+    await expectLog(result, `${buildFile.path}:example`, '.gitkeep')
   })
 })

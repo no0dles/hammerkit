@@ -45,8 +45,8 @@ describe('cache', () => {
     const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'dependant')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}:dependant`, 'info: node_modules')
+    await expectSuccessfulResult(result)
+    await expectLog(result, `${buildFile.path}:dependant`, 'node_modules')
   })
 
   it('should invalid cache on image change', async () => {

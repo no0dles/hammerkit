@@ -66,7 +66,7 @@ export interface TestSuiteOptions {
   watch?: boolean
 }
 
-export function expectSuccessfulResult(result: ExecuteResult) {
+export async function expectSuccessfulResult(result: ExecuteResult) {
   if (!result.success) {
     for (const nodeId of Object.keys(result.nodes)) {
       const node = result.nodes[nodeId]
@@ -74,6 +74,7 @@ export function expectSuccessfulResult(result: ExecuteResult) {
         expect({
           nodeId,
           status: node.state.type,
+          logs: await node.console.read(),
         }).toEqual({
           nodeId,
           status: 'completed',
@@ -101,7 +102,7 @@ export function getTestContext(cwd: string): TestContext {
 
 export function getTestSuite(exampleName: string, files: string[]): TestSuite {
   const exampleDirectory = join(__dirname, '../examples/', exampleName)
-  const testDirectory = join(tmpdir(), exampleName)
+  const testDirectory = join(process.cwd(), 'disttmp', exampleName)
   const file = fileContext()
   const tests: Test[] = []
 

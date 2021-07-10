@@ -51,71 +51,153 @@ export async function getContainerVolumes(
   return result.filter((v, i) => result.findIndex((iv) => iv.containerPath == v.containerPath) === i)
 }
 
+class Lock {
+  private count = 0
+  private queue: Defer<LockLease>[] = []
+
+  constructor(private total: number) {}
+
+  private enqueueQueue() {
+    const item = this.queue.pop()
+    if (item) {
+      item.resolve(this.lease())
+    }
+  }
+
+  private lease(): LockLease {
+    return {
+      close: () => {
+        this.count--
+        this.enqueueQueue()
+      },
+    }
+  }
+
+  async acquire(): Promise<LockLease> {
+    if (this.count < this.total) {
+      this.count++
+      return this.lease()
+    } else {
+      const defer = new Defer<LockLease>()
+      this.queue.push(defer)
+      return defer.promise
+    }
+  }
+}
+
+interface LockLease {
+  close(): void
+}
+
+let dockerInstance: Dockerode | null = null
+const instanceLock = new Lock(2)
+
+function getDocker(): Dockerode {
+  if (!dockerInstance) {
+    dockerInstance = new Dockerode()
+  }
+  return dockerInstance
+}
+
+async function useDocker(fn: (docker: Dockerode) => Promise<void>): Promise<void> {
+  const lease = await instanceLock.acquire()
+  try {
+    const docker = getDocker()
+    await fn(docker)
+  } finally {
+    lease.close()
+  }
+}
+
+async function startContainer(container: Container): Promise<void> {
+  const defer = new Defer<void>()
+  setTimeout(() => {
+    // container.inspect().then(res => {
+    //   //console.log(res);
+    //   if (res.State?.Status === 'running') {
+    //     defer.resolve();
+    //   }
+    // });
+  }, 2000)
+  container.start().then(() => {
+    defer.resolve()
+  })
+  return defer.promise
+}
+
 export async function executeDocker(
   node: ContainerWorkNode,
   context: ExecutionContext,
   cancelDefer: Defer<void>
 ): Promise<void> {
   node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
-  const docker = new Dockerode()
-  const volumes = await getContainerVolumes(node, true, context.context)
-  await pull(node, docker, node.image)
+  await useDocker(async (docker) => {
+    const volumes = await getContainerVolumes(node, true, context.context)
+    await pull(node, docker, node.image)
 
-  node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
-  const container = await docker.createContainer({
-    Image: node.image,
-    Tty: true,
-    Entrypoint: node.shell,
-    Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
-    WorkingDir: node.cwd,
-    Labels: { app: 'hammerkit' },
-    HostConfig: {
-      Binds: volumes.map((v) => `${v.localPath}:${v.containerPath}`),
-    },
-  })
+    node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
+    const container = await docker.createContainer({
+      Image: node.image,
+      Tty: true,
+      Entrypoint: node.shell,
+      //Cmd: [node.shell],
+      Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
+      WorkingDir: node.cwd,
+      Labels: { app: 'hammerkit' },
+      // Volumes: volumes.reduce<{ [key: string]: {} }>((map, v) => {
+      //   map[`${v.localPath}:${v.containerPath}`] = {};
+      //   return map;
+      // }, {}),
+      HostConfig: {
+        Binds: volumes.map((v) => `${v.localPath}:${v.containerPath}`),
+      },
+    })
 
-  for (const volume of volumes) {
-    node.status.console.write('internal', 'debug', `mount volume ${volume.localPath}:${volume.containerPath}`)
-  }
-
-  cancelDefer.promise.then(() => {
-    container.remove({ force: true })
-  })
-
-  const user = `${process.getuid()}:${process.getgid()}`
-
-  try {
-    await container.start()
-
-    const setUserPermission = async (directory: string) => {
-      node.status.console.write('internal', 'debug', 'set permission on ' + directory)
-      const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
-      if (result.ExitCode !== 0) {
-        node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
-      }
-    }
-
-    await setUserPermission(node.cwd)
     for (const volume of volumes) {
-      await setUserPermission(volume.containerPath)
+      node.status.console.write('internal', 'debug', `mount volume ${volume.localPath}:${volume.containerPath}`)
     }
 
-    for (const cmd of node.cmds) {
-      if (cancelDefer.isResolved) {
-        return
+    cancelDefer.promise.then(() => {
+      container.remove({ force: true })
+    })
+
+    const user = `${process.getuid()}:${process.getgid()}`
+
+    try {
+      node.status.console.write('internal', 'info', `starting container with image ${node.image}`)
+
+      await startContainer(container)
+
+      const setUserPermission = async (directory: string) => {
+        node.status.console.write('internal', 'debug', 'set permission on ' + directory)
+        const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
+        if (result.ExitCode !== 0) {
+          node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
+        }
       }
 
-      node.status.console.write('internal', 'info', `execute ${cmd.cmd} in container`)
-      const result = await execCommand(node, docker, container, cmd.path, [node.shell || 'sh', '-c', cmd.cmd], user)
-      if (result.ExitCode !== 0) {
-        node.status.console.write('internal', 'error', `command ${cmd.cmd} failed with ${result.ExitCode}`)
-        throw new Error(`command ${cmd.cmd} failed with ${result.ExitCode}`)
+      await setUserPermission(node.cwd)
+      for (const volume of volumes) {
+        await setUserPermission(volume.containerPath)
       }
+
+      for (const cmd of node.cmds) {
+        if (cancelDefer.isResolved) {
+          return
+        }
+
+        node.status.console.write('internal', 'info', `execute ${cmd.cmd} in container`)
+        const result = await execCommand(node, docker, container, cmd.path, [node.shell || 'sh', '-c', cmd.cmd], user)
+        if (result.ExitCode !== 0) {
+          node.status.console.write('internal', 'error', `command ${cmd.cmd} failed with ${result.ExitCode}`)
+          throw new Error(`command ${cmd.cmd} failed with ${result.ExitCode}`)
+        }
+      }
+    } finally {
+      node.status.console.write('internal', 'debug', `remove container`)
+      await container.remove({ force: true })
     }
-  } finally {
-    node.status.console.write('internal', 'debug', `remove container`)
-    await container.remove({ force: true })
-  }
+  })
 }
 
 async function execCommand(

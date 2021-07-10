@@ -9,6 +9,7 @@ export interface WorkNodeConsoleLog {
   level: WorkNodeConsoleLogLevel
   type: WorkNodeConsoleLogType
   message: string
+  date: Date
 }
 
 export interface WorkNodeConsole {
@@ -29,7 +30,7 @@ export function nodeConsole(nodeId: string): WorkNodeConsole {
     },
 
     write(type: WorkNodeConsoleLogType, level: WorkNodeConsoleLogLevel, message: string) {
-      const log: WorkNodeConsoleLog = { level, type, message }
+      const log: WorkNodeConsoleLog = { level, type, message, date: new Date() }
       if (isVerbose || level !== 'debug') {
         current = log
       }

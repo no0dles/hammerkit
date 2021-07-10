@@ -14,8 +14,8 @@ describe('monorepo', () => {
     const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'build')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
-  })
+    await expectSuccessfulResult(result)
+  }, 120000)
 
   it('should clean monorepo', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
@@ -30,7 +30,7 @@ describe('monorepo', () => {
     ]
     const workTree = planWorkTree(buildFile, 'build')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
+    await expectSuccessfulResult(result)
     for (const file of files) {
       expect(existsSync(file)).toBeTruthy()
     }
@@ -38,5 +38,5 @@ describe('monorepo', () => {
     for (const file of files) {
       expect(existsSync(file)).toBeFalsy()
     }
-  })
+  }, 120000)
 })

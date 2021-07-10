@@ -75,6 +75,9 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
       : { type: 'failed', ended: new Date(), duration: getDuration(node.status.state), error }
     node.status.state = newState
     context.events.emit({ nodeId: node.id, workTree, newState, oldState: currentState })
+    if (!canceledExecution) {
+      cancelPendingNodes(workTree, nodeId, context)
+    }
   } else if (currentState.type === 'cancel') {
     const newState: WorkNodeState = canceledExecution ? { type: 'aborted' } : { type: 'pending' }
     node.status.state = newState
@@ -99,6 +102,25 @@ export function resetNode(workTree: WorkTree, nodeId: string, context: Execution
     const pendingState: WorkNodePendingState = { type: 'pending' }
     node.status.state = pendingState
     context.events.emit({ workTree, nodeId, oldState: currentState, newState: pendingState })
+  }
+}
+
+function cancelPendingNodes(workTree: WorkTree, nodeId: string, context: ExecutionContext) {
+  for (const node of iterateWorkNodes(workTree.nodes)) {
+    if (!node.status.pendingDependencies[nodeId]) {
+      continue
+    }
+
+    const currentState = node.status.state
+    if (currentState.type === 'pending') {
+      const cancelState: WorkNodeCancelState = { type: 'cancel' }
+      node.status.state = cancelState
+      context.events.emit({ workTree, nodeId, oldState: currentState, newState: cancelState })
+      if (!context.watch) {
+        node.status.defer.resolve()
+      }
+      cancelPendingNodes(workTree, node.id, context)
+    }
   }
 }
 

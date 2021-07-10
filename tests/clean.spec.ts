@@ -15,7 +15,7 @@ describe('clean', () => {
     const workTree = planWorkTree(buildFile, 'example')
 
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
+    await expectSuccessfulResult(result)
 
     const outputPath = join(buildFile.path, 'node_modules')
 

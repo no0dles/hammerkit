@@ -12,9 +12,9 @@ describe('reference', () => {
     const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}/foo:bar`, 'info: foobar')
-    await expectLog(result, `${buildFile.path}:example`, 'info: hammertime')
+    await expectSuccessfulResult(result)
+    await expectLog(result, `${buildFile.path}/foo:bar`, 'foobar')
+    await expectLog(result, `${buildFile.path}:example`, 'hammertime')
   })
 
   it('should list task with references tasks nested', async () => {

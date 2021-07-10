@@ -159,7 +159,7 @@ function parseWorkNode(baseWorkNode: BaseWorkNode, task: MergedBuildFileTask, co
       ...baseWorkNode,
       type: 'container',
       image: templateValue(task.image, task.envs),
-      shell: templateValue(task.shell, task.envs) || 'sh',
+      shell: templateValue(task.shell, task.envs) || '/bin/sh',
       mounts: parseContainerWorkNodeMount(task, context, task.envs),
     }
   } else {

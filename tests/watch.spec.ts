@@ -6,6 +6,8 @@ import { getTestSuite } from './run-arg'
 describe('watch', () => {
   const suite = getTestSuite('watch', ['build.yaml', 'src', 'package.json', 'package-lock.json', 'tsconfig.json'])
 
+  afterAll(() => suite.close())
+
   it('should run watch task and cancel', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
 

@@ -11,6 +11,6 @@ describe('local', () => {
     const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
+    await expectSuccessfulResult(result)
   })
 })

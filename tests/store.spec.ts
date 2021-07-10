@@ -21,10 +21,10 @@ describe('store/restore', () => {
 
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
-    expectSuccessfulResult(result)
+    await expectSuccessfulResult(result)
 
-    expect(existsSync(outputPath)).toBeTruthy()
     expect(existsSync(generatedPath)).toBeTruthy()
+    expect(existsSync(outputPath)).toBeFalsy()
 
     await store(workTree.nodes, outputPath, context)
     await clean(workTree.nodes, context)
