@@ -17,6 +17,7 @@ jobs:
 #            build-${{ github.ref }}-
       #- uses: no0dles/hammerkit-github-action@v1.3
       #- run: hammerkit restore ~/.cache
+      - run: npm ci
       - run: node_modules/.bin/prettier -w src/** tests/**
       - run: node_modules/.bin/eslint . --ext .ts
       - run: node_modules/.bin/tsc
@@ -54,7 +55,8 @@ jobs:
           node-version: '14'
       #- uses: no0dles/hammerkit-github-action@v1.3
       #- run: hammerkit restore ~/.cache
-      - run: hammerkit test
+      #- run: hammerkit test
+      - run: npm ci
       - run: node_modules/.bin/jest --runInBand
       #- run: hammerkit store ~/.cache
       - name: upload coverage
