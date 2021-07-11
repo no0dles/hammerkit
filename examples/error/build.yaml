@@ -1,0 +1,11 @@
+tasks:
+  local_error:
+    description: local error
+    cmds:
+      - exit 1
+
+  docker_error:
+    description: docker error
+    image: alpine:latest
+    cmds:
+      - exit 1

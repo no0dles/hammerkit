@@ -149,7 +149,7 @@ export async function executeDocker(
       //   return map;
       // }, {}),
       HostConfig: {
-        Binds: volumes.map((v) => `${v.localPath}:${v.containerPath}`),
+        Binds: volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${v.containerPath}`) : undefined,
       },
     })
 

@@ -15,7 +15,7 @@ COPY tsconfig.build.json .
 COPY src src
 RUN node_modules/.bin/tsc -b tsconfig.build.json
 RUN export ARCH=$(echo $TARGETPLATFORM | cut -c7-11)
-RUN node_modules/.bin/pkg . --targets node14-alpine-$ARCH --no-bytecode
+RUN node_modules/.bin/pkg . --targets "node14-alpine-$ARCH" --no-bytecode
 
 ######################################
 FROM docker:20.10.6-dind

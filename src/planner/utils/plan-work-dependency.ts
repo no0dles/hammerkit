@@ -11,7 +11,7 @@ export function planWorkDependency(
   dep: string,
   nodes: WorkNodes,
   context: WorkContext
-) {
+): void {
   const depNode = planWorkNode(build, dep, nodes, {
     ...context,
     idPrefix: null,

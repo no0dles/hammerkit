@@ -9,18 +9,18 @@ jobs:
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - uses: actions/cache@v2
-        with:
-          key: build-${{ github.ref }}-${{ github.sha }}
-          path: ~/.cache
-          restore-keys: |
-            build-${{ github.ref }}-
-      - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit restore ~/.cache
-      - run: hammerkit lint
-      - run: hammerkit prettier
-      - run: hammerkit build
-      - run: hammerkit store ~/.cache
+#      - uses: actions/cache@v2
+#        with:
+#          key: build-${{ github.ref }}-${{ github.sha }}
+#          path: ~/.cache
+#          restore-keys: |
+#            build-${{ github.ref }}-
+      #- uses: no0dles/hammerkit-github-action@v1.3
+      #- run: hammerkit restore ~/.cache
+      - run: node_modules/.bin/prettier -w src/** tests/**
+      - run: node_modules/.bin/eslint . --ext .ts
+      - run: node_modules/.bin/tsc
+      # - run: hammerkit store ~/.cache
   docker:
     runs-on: ubuntu-18.04
     steps:
@@ -43,19 +43,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - uses: actions/cache@v2
-        with:
-          key: test-${{ github.ref }}-${{ github.sha }}
-          path: ~/.cache
-          restore-keys: |
-            test-${{ github.ref }}-
+#      - uses: actions/cache@v2
+#        with:
+#          key: test-${{ github.ref }}-${{ github.sha }}
+#          path: ~/.cache
+#          restore-keys: |
+#            test-${{ github.ref }}-
       - uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit restore ~/.cache
+      #- uses: no0dles/hammerkit-github-action@v1.3
+      #- run: hammerkit restore ~/.cache
       - run: hammerkit test
-      - run: hammerkit store ~/.cache
+      - run: node_modules/.bin/jest --runInBand
+      #- run: hammerkit store ~/.cache
       - name: upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
         with:
@@ -102,7 +103,7 @@ jobs:
       - name: build
         run: hammerkit build
       - name: package
-        run: node_modules/.bin/pkg --no-bytecode -t node14-linux-x64,node14-linux-arm64,node14-macos-x64,node14-macos-arm64,node14-win-x64,node14-win-arm64 .
+        run: node_modules/.bin/pkg --no-bytecode -t "node14-linux-x64,node14-linux-arm64,node14-macos-x64,node14-macos-arm64,node14-win-x64,node14-win-arm64" .
       - name: release
         uses: actions/create-release@v1
         id: create_release

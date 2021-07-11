@@ -51,7 +51,7 @@ describe('cache', () => {
 
   it('should invalid cache on image change', async () => {
     await testCache(async (buildFile, workTree) => {
-      (workTree.nodes[`${buildFile.path}:example`] as ContainerWorkNode).image = '15.0.0'
+      ;(workTree.nodes[`${buildFile.path}:example`] as ContainerWorkNode).image = '15.0.0'
     }, true)
   })
 })

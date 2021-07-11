@@ -7,16 +7,19 @@ export async function parseBuildFileReferences(
   type: string,
   fileName: string,
   files: { [key: string]: BuildFile },
-  refs: any,
+  refs: unknown,
   context: Context
 ): Promise<{ [key: string]: BuildFile }> {
-  if (refs && typeof refs !== 'object') {
+  if (!refs) {
+    return {}
+  }
+
+  if (typeof refs !== 'object') {
     throw new Error(`${fileName} references need to be an object`)
   }
 
   const result: { [key: string]: BuildFile } = {}
-  for (const key of Object.keys(refs)) {
-    const value = refs[key]
+  for (const [key, value] of Object.entries(refs || {})) {
     const referenceFileName = join(dirname(fileName), value)
     if (!(await context.file.exists(referenceFileName))) {
       throw new Error(`${fileName} ${type} ${key} not found`)

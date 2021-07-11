@@ -62,7 +62,7 @@ export async function readBuildFile(
     result.tasks[key] = {
       envs: parseEnvs(fileName, value.envs || {}),
       mounts: parseStringArray(fileName, key, 'mounts', value.mounts),
-      src: parseBuildFileTaskSource(fileName, key, value, context),
+      src: parseBuildFileTaskSource(fileName, key, value.src, context),
       deps: parseStringArray(fileName, key, 'deps', value.deps),
       generates: parseStringArray(fileName, key, 'generates', value.generates),
       description: value.description ? value.description.trim() : null,

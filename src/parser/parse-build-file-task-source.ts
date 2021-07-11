@@ -6,11 +6,19 @@ import { Context } from '../run-arg'
 
 export function parseBuildFileTaskSource(
   fileName: string,
-  key: string,
-  value: any,
+  taskName: string,
+  value: unknown,
   context: Context
 ): BuildFileTaskSource[] | null {
-  const sources = parseStringArray(fileName, key, 'src', value.src)
+  if (!value) {
+    return null
+  }
+
+  if (typeof value !== 'string') {
+    throw new Error(`${fileName} task ${taskName} source needs to be of type string`)
+  }
+
+  const sources = parseStringArray(fileName, taskName, 'src', value)
   if (!sources) {
     return null
   }

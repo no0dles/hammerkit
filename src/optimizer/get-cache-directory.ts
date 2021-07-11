@@ -1,10 +1,10 @@
 import { join } from 'path'
 
-export function getCacheDirectory(nodeId: string) {
+export function getCacheDirectory(nodeId: string): string {
   return join(getHammerkitDirectory(), nodeId, 'cache')
 }
 
-export function getHammerkitDirectory() {
+export function getHammerkitDirectory(): string {
   if (process.platform === 'win32') {
     return join(process.env.APPDATA as string, 'hammerkit')
   } else if (process.platform === 'darwin') {

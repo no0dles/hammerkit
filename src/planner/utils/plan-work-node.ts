@@ -116,7 +116,7 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
           pendingDependencies: {},
           state: { type: 'pending' },
           defer: new Defer<void>(),
-          console: nodeConsole(id),
+          console: nodeConsole(),
         },
       },
       task,

@@ -20,7 +20,7 @@ export interface WorkNodeConsole {
   read(): Promise<WorkNodeConsoleLog[]>
 }
 
-export function nodeConsole(nodeId: string): WorkNodeConsole {
+export function nodeConsole(): WorkNodeConsole {
   let current: WorkNodeConsoleLog | null = null
   const logs: WorkNodeConsoleLog[] = []
 

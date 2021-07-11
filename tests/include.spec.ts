@@ -8,7 +8,7 @@ describe('include', () => {
   afterAll(() => suite.close())
 
   it('should run included task', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
+    const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)

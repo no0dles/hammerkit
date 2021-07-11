@@ -1,6 +1,6 @@
 import { BuildTaskCommand } from './build-file-task-command'
 
-export function parseBuildFileCommand(fileName: string, taskName: string, value: any): BuildTaskCommand[] | null {
+export function parseBuildFileCommand(fileName: string, taskName: string, value: unknown): BuildTaskCommand[] | null {
   if (!value) {
     return null
   }

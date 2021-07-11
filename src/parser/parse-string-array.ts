@@ -1,4 +1,9 @@
-export function parseStringArray(fileName: string, taskName: string, valueName: string, value: any): string[] | null {
+export function parseStringArray(
+  fileName: string,
+  taskName: string,
+  valueName: string,
+  value: unknown
+): string[] | null {
   if (!value) {
     return null
   }

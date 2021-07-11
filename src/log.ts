@@ -46,7 +46,7 @@ export function consoleContext(): ConsoleContext {
 
 export const isVerbose = process.argv.some((a) => a === '--verbose')
 
-export async function printWorkTreeResult(workTree: WorkTree, result: ExecuteResult) {
+export async function printWorkTreeResult(workTree: WorkTree, result: ExecuteResult): Promise<void> {
   clearScreenDown(process.stdout)
 
   const maxNodeNameLength = getNodeNameLength(workTree)
@@ -107,7 +107,7 @@ function getNodeName(node: WorkNode, maxNodeNameLength: number) {
   return colors.white(node.name) + ' '.repeat(maxNodeNameLength - node.name.length)
 }
 
-export function writeWorkTreeStatus(workTree: WorkTree, ticker: number) {
+export function writeWorkTreeStatus(workTree: WorkTree, ticker: number): void {
   clearScreenDown(process.stdout)
 
   const maxNodeNameLength = getNodeNameLength(workTree)
@@ -135,10 +135,10 @@ export function writeWorkTreeStatus(workTree: WorkTree, ticker: number) {
   moveCursor(process.stdout, 0, -1 * count)
 }
 
-export function hideCursor() {
+export function hideCursor(): void {
   process.stdout.write('\x1B[?25l')
 }
 
-export function showCursor() {
+export function showCursor(): void {
   process.stdout.write('\x1B[?25h')
 }

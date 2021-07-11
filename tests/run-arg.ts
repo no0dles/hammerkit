@@ -3,7 +3,6 @@ import { Defer } from '../src/defer'
 import { BuildFile } from '../src/parser/build-file'
 import { parseBuildFile } from '../src/parser/parse-build-file'
 import { ConsoleContext, ExecutionContext, fileContext, FileContext } from '../src/run-arg'
-import { tmpdir } from 'os'
 import { CacheMethod } from '../src/optimizer/cache-method'
 import { ExecuteResult } from '../src/executer/execute-result'
 import { emitter } from '../src/emit'
@@ -66,7 +65,7 @@ export interface TestSuiteOptions {
   watch?: boolean
 }
 
-export async function expectSuccessfulResult(result: ExecuteResult) {
+export async function expectSuccessfulResult(result: ExecuteResult): Promise<void> {
   if (!result.success) {
     for (const nodeId of Object.keys(result.nodes)) {
       const node = result.nodes[nodeId]
@@ -84,7 +83,7 @@ export async function expectSuccessfulResult(result: ExecuteResult) {
   }
 }
 
-export async function expectLog(result: ExecuteResult, nodeId: string, message: string) {
+export async function expectLog(result: ExecuteResult, nodeId: string, message: string): Promise<void> {
   const logs = await result.nodes[nodeId].console.read()
   expect(logs.map((l) => l.message)).toContain(message)
 }
