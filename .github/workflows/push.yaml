@@ -1,65 +1,82 @@
 name: master
-on: [push]
+on: [ push ]
 jobs:
   build:
     runs-on: ubuntu-18.04
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
         with:
           node-version: '14'
-#      - uses: actions/cache@v2
-#        with:
-#          key: build-${{ github.ref }}-${{ github.sha }}
-#          path: ~/.cache
-#          restore-keys: |
-#            build-${{ github.ref }}-
-      #- uses: no0dles/hammerkit-github-action@v1.3
-      #- run: hammerkit restore ~/.cache
-      - run: npm ci
-      - run: node_modules/.bin/prettier -w src/** tests/**
-      - run: node_modules/.bin/eslint . --ext .ts
-      - run: node_modules/.bin/tsc
-      # - run: hammerkit store ~/.cache
+      - name: Install npm packages
+        run: npm ci
+      - name: Check prettier
+        run: node_modules/.bin/prettier -w src/** tests/**
+      - name: Check eslint
+        run: node_modules/.bin/eslint . --ext .ts
+      - name: Build source code
+        run: node_modules/.bin/tsc
   docker:
     runs-on: ubuntu-18.04
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.3
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
       - name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@v1
-      - run: hammerkit build:docker
-        env:
-          IMAGE_TAG: latest
-  test:
-    runs-on: ubuntu-18.04
+      - name: Build image
+        run: docker buildx build . --platform linux/arm64,linux/amd64 -t no0dles/hammerkit
+
+  test-macos:
+    runs-on: macos-11
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-#      - uses: actions/cache@v2
-#        with:
-#          key: test-${{ github.ref }}-${{ github.sha }}
-#          path: ~/.cache
-#          restore-keys: |
-#            test-${{ github.ref }}-
-      - uses: actions/setup-node@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
         with:
           node-version: '14'
-      #- uses: no0dles/hammerkit-github-action@v1.3
-      #- run: hammerkit restore ~/.cache
-      #- run: hammerkit test
-      - run: npm ci
-      - run: node_modules/.bin/jest --runInBand
-      #- run: hammerkit store ~/.cache
-      - name: upload coverage
+      - name: Install npm packages
+        run: npm ci
+      - name: Run tests
+        run: node_modules/.bin/jest --runInBand
+
+  test-win:
+    runs-on: windows-2019
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+      - name: Install npm packages
+        run: npm ci
+      - name: Run tests
+        run: node_modules/.bin/jest --runInBand
+
+  test-linux:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+      - name: Install npm packages
+        run: npm ci
+      - name: Run tests
+        run: node_modules/.bin/jest --runInBand
+      - name: Upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
@@ -67,46 +84,42 @@ jobs:
 
   publish-docker:
     runs-on: ubuntu-18.04
-    needs: [test, docker]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
-        with:
-          node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.3
-      - name: Version
+      - name: Set Version
         id: version
         run: |
           echo ::set-output name=VERSION::${GITHUB_REF:11}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
       - name: Set up Docker Buildx
-        id: buildx
         uses: docker/setup-buildx-action@v1
-      - run: hammerkit publish:docker --verbose
+      - run: echo $DOCKER_TOKEN | docker login --username no0dles --password-stdin
+        env:
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+      - name: Build and push image
+        run: docker buildx build . --platform linux/arm64,linux/amd64 -t no0dles/hammerkit -t no0dles/hammerkit:$IMAGE_TAG --push
         env:
           IMAGE_TAG: ${{ steps.version.outputs.VERSION }}
-          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
-          DOCKER_USERNAME: no0dles
 
   publish-binaries:
     runs-on: ubuntu-18.04
-    needs: [ test, build ]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.3
-      - name: build
-        run: hammerkit build
-      - name: package
+      - name: Install npm packages
+        run: npm ci
+      - run: node_modules/.bin/tsc
+      - name: Build binaries
         run: node_modules/.bin/pkg --no-bytecode -t "node14-linux-x64,node14-linux-arm64,node14-macos-x64,node14-macos-arm64,node14-win-x64,node14-win-arm64" .
-      - name: release
+      - name: Create release
         uses: actions/create-release@v1
         id: create_release
         with:
@@ -173,15 +186,17 @@ jobs:
 
   publish-npm:
     runs-on: ubuntu-18.04
-    needs: [test, build]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
         with:
           node-version: '14'
-      - uses: no0dles/hammerkit-github-action@v1.3
-      - run: hammerkit publish:npm --verbose
+      - name: Install npm packages
+        run: npm ci
+      - name: Publish package
+        run: npm publish
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
