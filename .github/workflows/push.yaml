@@ -1,88 +1,7 @@
-name: master
+name: publish
 on: [ push ]
 jobs:
-  build:
-    runs-on: ubuntu-18.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup node
-        uses: actions/setup-node@v2
-        with:
-          node-version: '14'
-      - name: Install npm packages
-        run: npm ci
-      - name: Check prettier
-        run: node_modules/.bin/prettier -w src/** tests/**
-      - name: Check eslint
-        run: node_modules/.bin/eslint . --ext .ts
-      - name: Build source code
-        run: node_modules/.bin/tsc
   docker:
-    runs-on: ubuntu-18.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup node
-        uses: actions/setup-node@v2
-        with:
-          node-version: '14'
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v1
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v1
-      - name: Build image
-        run: docker buildx build . --platform linux/arm64,linux/amd64 -t no0dles/hammerkit
-
-  test-macos:
-    runs-on: macos-11
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup node
-        uses: actions/setup-node@v2
-        with:
-          node-version: '14'
-      - name: Install npm packages
-        run: npm ci
-      - name: Run tests
-        run: node_modules/.bin/jest --runInBand
-
-  test-win:
-    runs-on: windows-2019
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup node
-        uses: actions/setup-node@v2
-        with:
-          node-version: '14'
-      - name: Install npm packages
-        run: npm ci
-      - name: Run tests
-        run: node_modules/.bin/jest --runInBand
-
-  test-linux:
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup node
-        uses: actions/setup-node@v2
-        with:
-          node-version: '14'
-      - name: Install npm packages
-        run: npm ci
-      - name: Run tests
-        run: node_modules/.bin/jest --runInBand
-      - name: Upload coverage
-        uses: codacy/codacy-coverage-reporter-action@master
-        with:
-          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage/lcov.info
-
-  publish-docker:
     runs-on: ubuntu-18.04
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -104,7 +23,7 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.version.outputs.VERSION }}
 
-  publish-binaries:
+  binaries:
     runs-on: ubuntu-18.04
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -184,7 +103,7 @@ jobs:
           asset_name: hammerkit-win-x64.exe
           asset_content_type: application/octet-stream
 
-  publish-npm:
+  npm:
     runs-on: ubuntu-18.04
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
