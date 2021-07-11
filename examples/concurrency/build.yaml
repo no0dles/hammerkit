@@ -1,0 +1,17 @@
+tasks:
+  example:
+    deps: [work1, work2, work3]
+    cmds:
+      - echo test
+
+  work1:
+    cmds:
+      - sleep 2
+
+  work2:
+    cmds:
+      - sleep 2
+
+  work3:
+    cmds:
+      - sleep 2

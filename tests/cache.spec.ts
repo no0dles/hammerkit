@@ -5,7 +5,7 @@ import { planWorkTree } from '../src/planner/utils/plan-work-tree'
 import { execute } from '../src/executer/execute'
 import { WorkTree } from '../src/planner/work-tree'
 import { ContainerWorkNode } from '../src/planner/work-node'
-import { expectLog, expectSuccessfulResult, getTestSuite } from './run-arg'
+import { expectLog, expectSuccessfulResult, getNode, getTestSuite } from './run-arg'
 import { ExecutionContext } from '../src/run-arg'
 import { join } from 'path'
 import { BuildFile } from '../src/parser/build-file'
@@ -51,7 +51,8 @@ describe('cache', () => {
 
   it('should invalid cache on image change', async () => {
     await testCache(async (buildFile, workTree) => {
-      ;(workTree.nodes[`${buildFile.path}:example`] as ContainerWorkNode).image = '15.0.0'
+      const node = getNode(buildFile, workTree, 'example') as ContainerWorkNode
+      node.image = '15.0.0'
     }, true)
   })
 })

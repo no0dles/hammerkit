@@ -6,6 +6,8 @@ import { ConsoleContext, ExecutionContext, fileContext, FileContext } from '../s
 import { CacheMethod } from '../src/optimizer/cache-method'
 import { ExecuteResult } from '../src/executer/execute-result'
 import { emitter } from '../src/emit'
+import { WorkNode } from '../src/planner/work-node'
+import { WorkTree } from '../src/planner/work-tree'
 
 export interface TestContext {
   processEnvs: { [key: string]: string | undefined }
@@ -97,6 +99,10 @@ export function getTestContext(cwd: string): TestContext {
     console: testConsoleContext(),
   }
   return context
+}
+
+export function getNode(buildFile: BuildFile, workTree: WorkTree, taskName: string): WorkNode {
+  return workTree.nodes[`${buildFile.path}:${taskName}`]
 }
 
 export function getTestSuite(exampleName: string, files: string[]): TestSuite {

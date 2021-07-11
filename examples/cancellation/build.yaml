@@ -1,0 +1,20 @@
+tasks:
+  local_cancel:
+    deps: [long_running_local]
+    cmds:
+      - touch test
+
+  long_running_local:
+    cmds:
+      - sleep 40
+
+  long_running_docker:
+    image: alpine:latest
+    cmds:
+      - sleep 40
+
+  docker_cancel:
+    image: alpine:latest
+    deps: [long_running_docker]
+    cmds:
+      - touch test

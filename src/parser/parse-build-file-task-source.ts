@@ -14,10 +14,6 @@ export function parseBuildFileTaskSource(
     return null
   }
 
-  if (typeof value !== 'string') {
-    throw new Error(`${fileName} task ${taskName} source needs to be of type string`)
-  }
-
   const sources = parseStringArray(fileName, taskName, 'src', value)
   if (!sources) {
     return null

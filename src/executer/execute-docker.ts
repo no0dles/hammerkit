@@ -187,7 +187,7 @@ export async function executeDocker(
         }
 
         node.status.console.write('internal', 'info', `execute ${cmd.cmd} in container`)
-        const result = await execCommand(node, docker, container, cmd.path, [node.shell || 'sh', '-c', cmd.cmd], user)
+        const result = await execCommand(node, docker, container, cmd.path, [node.shell, '-c', cmd.cmd], user)
         if (result.ExitCode !== 0) {
           node.status.console.write('internal', 'error', `command ${cmd.cmd} failed with ${result.ExitCode}`)
           throw new Error(`command ${cmd.cmd} failed with ${result.ExitCode}`)
