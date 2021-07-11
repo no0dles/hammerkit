@@ -1,7 +1,8 @@
 import { Defer } from './defer'
 import { CacheMethod } from './optimizer/cache-method'
-import { stat, readdir, writeFile, readFile, rmdir, copyFile, mkdir, watch, appendFile } from 'fs'
+import { stat, readdir, writeFile, readFile, rmdir, copyFile, mkdir, appendFile } from 'fs'
 import { join, dirname } from 'path'
+import { watch } from 'chokidar'
 import { EmitterHandler } from './emit'
 import { WorkTree } from './planner/work-tree'
 import { WorkNode } from './planner/work-node'
@@ -151,7 +152,14 @@ export function fileContext(): FileContext {
       return defer.promise
     },
     watch(path: string, callback: (fileName: string) => void): { close(): void } {
-      const watcher = watch(path, { recursive: true, persistent: false }, (type, fileName) => {
+      const watcher = watch(path)
+      watcher.on('add', (fileName) => {
+        callback(fileName)
+      })
+      watcher.on('change', (fileName) => {
+        callback(fileName)
+      })
+      watcher.on('unlink', (fileName) => {
         callback(fileName)
       })
 
