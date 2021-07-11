@@ -1,11 +1,11 @@
 name: test
 on: [ push ]
 jobs:
-  test:
+  linux:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ macos-10.15, windows-2016, ubuntu-20.04 ]
+        os: [ ubuntu-20.04 ]
         node: [ 14 ]
     steps:
       - name: Checkout
@@ -14,6 +14,8 @@ jobs:
         uses: actions/setup-node@v2
         with:
           node-version: ${{ matrix.node }}
+      - name: Setup docker
+        run: brew install docker
       - name: Install npm packages
         run: npm ci
       - name: Run tests
@@ -24,3 +26,45 @@ jobs:
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/lcov.info
+
+  win:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ windows-2016 ]
+        node: [ 14 ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup node ${{ matrix.node }}
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Setup docker
+        run: brew install docker
+      - name: Install npm packages
+        run: npm ci
+      - name: Run tests
+        run: node_modules/.bin/jest --runInBand
+        timeout-minutes: 10
+        
+  macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ macos-10.15 ]
+        node: [ 14 ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup node ${{ matrix.node }}
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Setup docker
+        run: brew install docker
+      - name: Install npm packages
+        run: npm ci
+      - name: Run tests
+        run: node_modules/.bin/jest --runInBand
+        timeout-minutes: 10

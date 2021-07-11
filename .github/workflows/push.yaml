@@ -1,9 +1,11 @@
 name: publish
-on: [ push ]
+on:
+  push:
+    tags:
+      - v*
 jobs:
   docker:
     runs-on: ubuntu-18.04
-    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -25,7 +27,6 @@ jobs:
 
   binaries:
     runs-on: ubuntu-18.04
-    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -105,7 +106,6 @@ jobs:
 
   npm:
     runs-on: ubuntu-18.04
-    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@v2
