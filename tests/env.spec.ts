@@ -19,7 +19,7 @@ describe('env', () => {
     const { buildFile, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example_docker')
     const result = await execute(workTree, executionContext)
-    expect(result.success).toBeTruthy()
+    await expectSuccessfulResult(result)
     await expectLog(result, `${buildFile.path}:example_docker`, '14.16.0')
   })
 

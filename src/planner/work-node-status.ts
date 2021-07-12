@@ -1,6 +1,7 @@
 import { WorkNode } from './work-node'
 import { Defer } from '../defer'
 import { isVerbose } from '../log'
+import { EmitHandle, EmitListener, emitter, Emitter } from '../emit'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type WorkNodeConsoleLogType = 'process' | 'internal'
@@ -12,7 +13,7 @@ export interface WorkNodeConsoleLog {
   date: Date
 }
 
-export interface WorkNodeConsole {
+export interface WorkNodeConsole extends Emitter<WorkNodeConsoleLog> {
   current: WorkNodeConsoleLog | null
 
   write(type: WorkNodeConsoleLogType, level: WorkNodeConsoleLogLevel, message: string): void
@@ -24,9 +25,15 @@ export function nodeConsole(): WorkNodeConsole {
   let current: WorkNodeConsoleLog | null = null
   const logs: WorkNodeConsoleLog[] = []
 
+  const emit = emitter<WorkNodeConsoleLog>()
+
   return {
     read(): Promise<WorkNodeConsoleLog[]> {
       return Promise.resolve(logs)
+    },
+
+    on(listener: EmitListener<WorkNodeConsoleLog>): EmitHandle {
+      return emit.on(listener)
     },
 
     write(type: WorkNodeConsoleLogType, level: WorkNodeConsoleLogLevel, message: string) {
@@ -34,8 +41,10 @@ export function nodeConsole(): WorkNodeConsole {
       if (isVerbose || level !== 'debug') {
         current = log
       }
+      emit.emit(log)
       logs.push(log)
     },
+
     get current() {
       return current
     },
@@ -75,8 +84,6 @@ export interface WorkNodeRunningState {
   started: Date
   cancelDefer: Defer<void>
 }
-
-export const isRunningState = (val: WorkNodeState): val is WorkNodeRunningState => val.type === 'running'
 
 export interface WorkNodeCompletedState {
   type: 'completed'

@@ -13,12 +13,15 @@ process.on('SIGINT', function () {
   }
 })
 
-getProgram({
-  cwd: process.cwd(),
-  cancelDefer,
-  processEnvs: process.env,
-  file: fileContext(),
-  console: consoleContext(),
-}).then((program) => {
-  program.parse(process.argv)
+getProgram(
+  {
+    cwd: process.cwd(),
+    cancelDefer,
+    processEnvs: process.env,
+    file: fileContext(),
+    console: consoleContext(),
+  },
+  process.argv
+).then(({ program, args }) => {
+  program.parse(args)
 })

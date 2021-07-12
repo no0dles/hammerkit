@@ -1,4 +1,4 @@
-import commaner, { Command } from 'commander'
+import commaner, { Command, Option } from 'commander'
 import { join } from 'path'
 import { isCI } from './ci'
 import { parseBuildFile } from './parser/parse-build-file'
@@ -9,15 +9,22 @@ import { restore } from './executer/restore'
 import { store } from './executer/store'
 import { clean } from './executer/clean'
 import { validate } from './planner/validate'
-import { hideCursor, printWorkTreeResult, showCursor, writeWorkTreeStatus } from './log'
-import { Context, ExecutionContext } from './run-arg'
+import { Environment, ExecutionContext } from './run-arg'
 import { emitter } from './emit'
+import { getLogger } from './executer/log-mode'
 
-export async function getProgram(context: Context): Promise<commaner.Command> {
+export async function getProgram(
+  context: Environment,
+  argv: string[]
+): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
-  const fileIndex = process.argv.indexOf('--file')
 
-  const fileName = join(context.cwd, fileIndex >= 0 ? process.argv[fileIndex + 1] : 'build.yaml')
+  const args = [...argv]
+  const fileIndex = args.indexOf('--file')
+  const fileName = join(context.cwd, fileIndex >= 0 ? args[fileIndex + 1] : 'build.yaml')
+  if (fileIndex >= 0) {
+    args.splice(fileIndex, 2)
+  }
 
   if (await context.file.exists(fileName)) {
     const buildFile = await parseBuildFile(fileName, context)
@@ -91,18 +98,22 @@ export async function getProgram(context: Context): Promise<commaner.Command> {
         .command(node.name)
         .description(node.description || '')
         .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
-        .option('-w, --watch', 'watch tasks', false)
-        .option(
-          '--cache <method>',
-          'caching method to compare',
-          /^(checksum|modify-date|none)$/,
-          isCI ? 'checksum' : 'modify-date'
+        .addOption(new Option('-w, --watch', 'watch tasks').default(false))
+        .addOption(
+          new Option('-l, --log <mode>', 'log mode')
+            .default(isCI ? 'live' : 'interactive')
+            .choices(['interactive', 'live', 'grouped'])
         )
-        .option('--no-container', 'run every task locally without containers', false)
+        .addOption(
+          new Option('--cache <method>', 'caching method to compare')
+            .default(isCI ? 'checksum' : 'modify-date')
+            .choices(['checksum', 'modify-date', 'none'])
+        )
+        .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
         .action(async (options) => {
           const executionContext: ExecutionContext = {
             workers: options.concurrency, // TODO rename
-            cacheMethod: options.cacheMethod,
+            cacheMethod: options.cache,
             noContainer: !options.container,
             watch: options.watch,
             events: emitter(),
@@ -110,40 +121,20 @@ export async function getProgram(context: Context): Promise<commaner.Command> {
             runningNodes: {},
           }
 
-          let running = true
-          let count = 0
+          const logger = getLogger(options.log)
 
           try {
-            hideCursor()
-
             const workTree = planWorkTree(buildFile, node.name)
-            writeWorkTreeStatus(workTree, count)
-
-            const tickerFn = () => {
-              count++
-              writeWorkTreeStatus(workTree, count)
-              if (running) {
-                setTimeout(tickerFn, 100)
-              }
-            }
-            tickerFn()
-
-            executionContext.events.on(({ workTree }) => {
-              writeWorkTreeStatus(workTree, count)
-            })
-
+            logger.start(executionContext, workTree)
             const result = await execute(workTree, executionContext)
-            await printWorkTreeResult(workTree, result)
+            await logger.finish(workTree, result)
 
             if (!result.success) {
               process.exit(1)
             }
           } catch (e) {
-            context.console.error(e)
+            logger.abort(e)
             process.exit(1)
-          } finally {
-            running = false
-            showCursor()
           }
         })
     }
@@ -175,5 +166,5 @@ tasks:
   program.option('--file', 'set build file', 'build.yaml')
   program.name('hammerkit')
 
-  return program
+  return { program, args }
 }

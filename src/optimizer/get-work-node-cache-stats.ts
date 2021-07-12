@@ -2,13 +2,13 @@ import { calculateChecksum } from './calculate-checksum'
 import { join } from 'path'
 import { WorkNodeCacheFileStats } from './work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
 async function addWorkNodeCacheStats(
   result: WorkNodeCacheFileStats,
   path: string,
   matcher: (file: string) => boolean,
-  context: Context
+  context: Environment
 ) {
   const stats = await context.file.stats(path)
   if (stats.type === 'file') {
@@ -27,7 +27,7 @@ async function addWorkNodeCacheStats(
   }
 }
 
-export async function getWorkNodeCacheStats(cache: WorkNode, context: Context): Promise<WorkNodeCacheFileStats> {
+export async function getWorkNodeCacheStats(cache: WorkNode, context: Environment): Promise<WorkNodeCacheFileStats> {
   const result: WorkNodeCacheFileStats = {}
 
   for (const src of cache.src) {

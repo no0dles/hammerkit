@@ -14,7 +14,7 @@ export function getLogs(chunk: Buffer | string): string[] {
     .filter((s) => !!s)
 }
 
-function getLogLevel(level: WorkNodeConsoleLogLevel) {
+export function getLogLevel(level: WorkNodeConsoleLogLevel) {
   switch (level) {
     case 'debug':
       return colors.bgMagenta(level)
@@ -46,17 +46,26 @@ export function consoleContext(): ConsoleContext {
 
 export const isVerbose = process.argv.some((a) => a === '--verbose')
 
-export async function printWorkTreeResult(workTree: WorkTree, result: ExecuteResult): Promise<void> {
-  clearScreenDown(process.stdout)
-
+export async function printWorkTreeResult(
+  workTree: WorkTree,
+  result: ExecuteResult,
+  logConsoleOnFail: boolean
+): Promise<void> {
   const maxNodeNameLength = getNodeNameLength(workTree)
 
-  if (!result.success || isVerbose) {
+  if (logConsoleOnFail && (!result.success || isVerbose)) {
     for (const node of iterateWorkNodes(workTree.nodes)) {
       if (node.status.state.type === 'failed' || isVerbose) {
         const logs = await node.status.console.read()
         for (const log of logs) {
-          process.stdout.write(`${getNodeName(node, maxNodeNameLength)} ${getLogLevel(log.level)}: ${log.message}\n`)
+          if (log.level === 'debug' && !isVerbose) {
+            continue
+          }
+          process.stdout.write(
+            `${colors.grey('task:')} ${getNodeName(node, maxNodeNameLength)} ${getLogLevel(log.level)}: ${
+              log.message
+            }\n`
+          )
         }
         process.stdout.write('-----------------\n')
       }
@@ -93,7 +102,7 @@ function getStateText(state: WorkNodeState): string {
   }
 }
 
-function getNodeNameLength(workTree: WorkTree) {
+export function getNodeNameLength(workTree: WorkTree) {
   let maxNodeNameLength = 0
   for (const node of iterateWorkNodes(workTree.nodes)) {
     if (node.name.length > maxNodeNameLength) {
@@ -103,7 +112,7 @@ function getNodeNameLength(workTree: WorkTree) {
   return maxNodeNameLength
 }
 
-function getNodeName(node: WorkNode, maxNodeNameLength: number) {
+export function getNodeName(node: WorkNode, maxNodeNameLength: number) {
   return colors.white(node.name) + ' '.repeat(maxNodeNameLength - node.name.length)
 }
 

@@ -27,26 +27,28 @@ jobs:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/lcov.info
 
-#  win:
-#    runs-on: ${{ matrix.os }}
-#    strategy:
-#      matrix:
-#        os: [ windows-2016 ]
-#        node: [ 14 ]
-#    steps:
-#      - name: Checkout
-#        uses: actions/checkout@v2
-#      - name: Setup node ${{ matrix.node }}
-#        uses: actions/setup-node@v2
-#        with:
-#          node-version: ${{ matrix.node }}
-#      - name: Setup docker
-#        run: brew install docker
-#      - name: Install npm packages
-#        run: npm ci
-#      - name: Run tests
-#        run: node_modules/.bin/jest --runInBand
-#        timeout-minutes: 10
+  win:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ windows-2016 ]
+        node: [ 14 ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup node ${{ matrix.node }}
+        uses: actions/setup-node@v2
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Setup docker
+        run: brew install docker
+      - name: Install npm packages
+        run: npm ci
+      - name: Run tests
+        run: node_modules/.bin/jest --runInBand
+        env:
+          SKIP_DOCKER: true
+        timeout-minutes: 10
 
   macos:
     runs-on: ${{ matrix.os }}

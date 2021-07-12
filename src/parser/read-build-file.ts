@@ -7,9 +7,9 @@ import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { parseStringArray } from './parse-string-array'
 import { BuildFile } from './build-file'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
-export async function read(fileName: string, context: Context): Promise<any> {
+export async function read(fileName: string, context: Environment): Promise<any> {
   // context.console.debug(`read ${fileName} build file`)
   let content: string
   try {
@@ -30,7 +30,7 @@ const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys]
 export async function readBuildFile(
   fileName: string,
   files: { [key: string]: BuildFile },
-  context: Context
+  context: Environment
 ): Promise<BuildFile> {
   if (files[fileName]) {
     return files[fileName]
@@ -47,6 +47,10 @@ export async function readBuildFile(
   }
   files[fileName] = result
 
+  if (!input) {
+    return result
+  }
+
   result.includes = await parseBuildFileReferences('include', fileName, files, input.includes || {}, context)
   result.references = await parseBuildFileReferences('reference', fileName, files, input.references || {}, context)
   result.envs = parseEnvs(fileName, input.envs || {}) || {}
@@ -58,6 +62,10 @@ export async function readBuildFile(
 
   for (const key of Object.keys(input.tasks || {})) {
     const value = input.tasks[key]
+    if (typeof value !== 'object') {
+      throw new Error(`${fileName} task ${key} needs to be an object`)
+    }
+
     const validKeys = value.image ? validDockerTaskKeys : validTaskKeys
     result.tasks[key] = {
       envs: parseEnvs(fileName, value.envs || {}),

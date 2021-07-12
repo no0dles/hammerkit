@@ -143,7 +143,7 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
         watch: executionOptions?.watch ?? false,
         cacheMethod: executionOptions?.cacheMethod ?? 'checksum',
         workers: executionOptions?.workers ?? 0,
-        noContainer: executionOptions?.noContainer ?? false,
+        noContainer: process.env.SKIP_DOCKER === 'true' ? true : executionOptions?.noContainer ?? false,
         events: emitter(),
         runningNodes: {},
       }

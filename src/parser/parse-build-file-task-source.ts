@@ -2,13 +2,13 @@ import { Minimatch } from 'minimatch'
 import { join } from 'path'
 import { parseStringArray } from './parse-string-array'
 import { BuildFileTaskSource } from './build-file-task-source'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
 export function parseBuildFileTaskSource(
   fileName: string,
   taskName: string,
   value: unknown,
-  context: Context
+  environment: Environment
 ): BuildFileTaskSource[] | null {
   if (!value) {
     return null
@@ -30,9 +30,9 @@ export function parseBuildFileTaskSource(
             const matcher = new Minimatch(join(cwd, source), { dot: true })
             const match = matcher.match(file)
             if (match) {
-              context.console.debug(`file ${file} matches source ${source}`)
+              environment.console.debug(`file ${file} matches source ${source}`)
             } else {
-              context.console.debug(`file ${file} does not matche source ${source}`)
+              environment.console.debug(`file ${file} does not matche source ${source}`)
             }
             return match
           },
@@ -45,9 +45,9 @@ export function parseBuildFileTaskSource(
             const matcher = new Minimatch(join(cwd, source), { dot: true })
             const match = matcher.match(file)
             if (match) {
-              context.console.debug(`file ${file} matches source ${source}`)
+              environment.console.debug(`file ${file} matches source ${source}`)
             } else {
-              context.console.debug(`file ${file} does not matche source ${source}`)
+              environment.console.debug(`file ${file} does not matche source ${source}`)
             }
             return match
           },

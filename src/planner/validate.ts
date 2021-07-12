@@ -3,11 +3,11 @@ import { planWorkNodes } from '../planner/utils/plan-work-nodes'
 import { planWorkTree } from '../planner/utils/plan-work-tree'
 import { WorkNode } from '../planner/work-node'
 import { WorkNodeValidation } from './work-node-validation'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
 export async function* validate(
   buildFile: BuildFile,
-  context: Context,
+  context: Environment,
   name?: string
 ): AsyncGenerator<WorkNodeValidation> {
   const tree = name ? planWorkTree(buildFile, name).nodes : planWorkNodes(buildFile)

@@ -1,9 +1,9 @@
 import { join } from 'path'
 import { WorkNodes } from '../planner/work-nodes'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
-export async function clean(workNodes: WorkNodes, context: Context): Promise<void> {
+export async function clean(workNodes: WorkNodes, context: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workNodes)) {
     for (const generate of node.generates) {
       if (await context.file.exists(generate)) {

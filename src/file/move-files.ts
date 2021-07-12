@@ -1,9 +1,9 @@
 import { WorkNode } from '../planner/work-node'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
 export async function moveFiles(
   node: WorkNode,
-  context: Context,
+  context: Environment,
   folder: () => Generator<{ from: string; to: string }>
 ): Promise<void> {
   const foldersToCopy: { from: string; to: string }[] = []

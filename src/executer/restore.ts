@@ -2,9 +2,9 @@ import { join, relative } from 'path'
 import { moveFiles } from '../file/move-files'
 import { WorkNodes } from '../planner/work-nodes'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
-export async function restore(workNodes: WorkNodes, targetDirectory: string, context: Context): Promise<void> {
+export async function restore(workNodes: WorkNodes, targetDirectory: string, context: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workNodes)) {
     const cacheDir = join(node.cwd, '.hammerkit')
     const sourceCacheDir = join(targetDirectory, relative(node.buildFile.path, node.cwd), '.hammerkit')

@@ -1,9 +1,9 @@
 import { join } from 'path'
 import { WorkNode } from '../planner/work-node'
 import { WorkNodeCacheStats } from './work-node-cache-stats'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
-export async function readCache(node: WorkNode, context: Context): Promise<WorkNodeCacheStats | null> {
+export async function readCache(node: WorkNode, context: Environment): Promise<WorkNodeCacheStats | null> {
   const cacheFile = join(node.cwd, '.hammerkit', node.name + '.json')
   if (!(await context.file.exists(cacheFile))) {
     return null

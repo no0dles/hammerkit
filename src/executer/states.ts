@@ -75,16 +75,17 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
       : { type: 'failed', ended: new Date(), duration: getDuration(node.status.state), error }
     node.status.state = newState
     context.events.emit({ nodeId: node.id, workTree, newState, oldState: currentState })
-    if (!canceledExecution) {
-      cancelPendingNodes(workTree, nodeId, context)
-    }
   } else if (currentState.type === 'cancel') {
     const newState: WorkNodeState = canceledExecution ? { type: 'aborted' } : { type: 'pending' }
     node.status.state = newState
     context.events.emit({ nodeId: node.id, workTree, newState, oldState: currentState })
   }
 
-  if (canceledExecution || (!node.status.defer.isResolved && !context.watch)) {
+  if (!canceledExecution) {
+    cancelPendingNodes(workTree, nodeId, context)
+  }
+
+  if ((canceledExecution || !context.watch) && !node.status.defer.isResolved) {
     node.status.defer.resolve()
   }
 }

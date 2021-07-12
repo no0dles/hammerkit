@@ -1,10 +1,10 @@
 import { basename, join } from 'path'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
 export async function readEnvFile(
   path: string,
   baseEnv: { [key: string]: string },
-  context: Context
+  context: Environment
 ): Promise<{ [key: string]: string }> {
   const directory = join(path, '.env')
   if (!(await context.file.exists(directory))) {

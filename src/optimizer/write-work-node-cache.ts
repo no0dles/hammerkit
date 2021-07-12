@@ -3,9 +3,9 @@ import { getWorkNodeCacheStats } from './get-work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
 import { WorkNodeCacheStats } from './work-node-cache-stats'
 import { getWorkDescription } from './work-node-description'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
-export async function writeWorkNodeCache(node: WorkNode, context: Context): Promise<void> {
+export async function writeWorkNodeCache(node: WorkNode, context: Environment): Promise<void> {
   node.status.console.write('internal', 'debug', `write cache for ${node.name}`)
   const cacheFile = join(node.cwd, '.hammerkit', node.name + '.json')
   const cache = await getWorkNodeCacheStats(node, context)

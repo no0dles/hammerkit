@@ -3,12 +3,12 @@ envs:
 
 tasks:
   prettier:
-    description: build typescript
+    description: run prettier
     deps: [npm:ci]
     image: node:$NODE_VERSION-alpine
     src:
       - src
-      - tsconfig.json
+      - .prettierrc
     generates:
       - dist
     cmds:

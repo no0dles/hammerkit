@@ -1,7 +1,7 @@
 import { readBuildFile } from './read-build-file'
 import { BuildFile } from './build-file'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
-export function parseBuildFile(fileName: string, context: Context): Promise<BuildFile> {
+export function parseBuildFile(fileName: string, context: Environment): Promise<BuildFile> {
   return readBuildFile(fileName, {}, context)
 }

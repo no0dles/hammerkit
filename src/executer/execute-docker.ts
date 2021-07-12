@@ -3,13 +3,13 @@ import Dockerode, { Container } from 'dockerode'
 import { pull } from '../docker/pull'
 import { ContainerWorkNode } from '../planner/work-node'
 import { Defer } from '../defer'
-import { Context, ExecutionContext } from '../run-arg'
+import { Environment, ExecutionContext } from '../run-arg'
 import { WorkNodePath } from '../planner/work-node-path'
 
 export async function getContainerVolumes(
   node: ContainerWorkNode,
   checkSources: boolean,
-  context: Context
+  context: Environment
 ): Promise<WorkNodePath[]> {
   const result: WorkNodePath[] = []
 
@@ -111,14 +111,7 @@ async function useDocker(fn: (docker: Dockerode) => Promise<void>): Promise<void
 
 async function startContainer(container: Container): Promise<void> {
   const defer = new Defer<void>()
-  setTimeout(() => {
-    // container.inspect().then(res => {
-    //   //console.log(res);
-    //   if (res.State?.Status === 'running') {
-    //     defer.resolve();
-    //   }
-    // });
-  }, 2000)
+  // TODO watch if start takes too long to finish, report warning
   container.start().then(() => {
     defer.resolve()
   })
@@ -140,14 +133,9 @@ export async function executeDocker(
       Image: node.image,
       Tty: true,
       Entrypoint: node.shell,
-      //Cmd: [node.shell],
       Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
       WorkingDir: node.cwd,
       Labels: { app: 'hammerkit' },
-      // Volumes: volumes.reduce<{ [key: string]: {} }>((map, v) => {
-      //   map[`${v.localPath}:${v.containerPath}`] = {};
-      //   return map;
-      // }, {}),
       HostConfig: {
         Binds: volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${v.containerPath}`) : undefined,
       },
@@ -158,7 +146,7 @@ export async function executeDocker(
     }
 
     cancelDefer.promise.then(() => {
-      container.remove({ force: true })
+      container.remove({ force: true }).catch(() => {})
     })
 
     const user = `${process.getuid()}:${process.getgid()}`
@@ -195,7 +183,7 @@ export async function executeDocker(
       }
     } finally {
       node.status.console.write('internal', 'debug', `remove container`)
-      await container.remove({ force: true })
+      container.remove({ force: true }).catch(() => {})
     }
   })
 }

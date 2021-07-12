@@ -8,7 +8,7 @@ import { WorkTree } from './planner/work-tree'
 import { WorkNode } from './planner/work-node'
 import { WorkNodeState } from './planner/work-node-status'
 
-export interface ExecutionContext<TContext = Context> {
+export interface ExecutionContext<TContext = Environment> {
   workers: number
   noContainer: boolean
   cacheMethod: CacheMethod
@@ -19,7 +19,7 @@ export interface ExecutionContext<TContext = Context> {
   runningNodes: { [id: string]: WorkNode }
 }
 
-export interface Context {
+export interface Environment {
   processEnvs: { [key: string]: string | undefined }
   cancelDefer: Defer<void>
   cwd: string

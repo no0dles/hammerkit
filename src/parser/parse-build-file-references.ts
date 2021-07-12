@@ -1,14 +1,14 @@
 import { dirname, join } from 'path'
 import { readBuildFile } from './read-build-file'
 import { BuildFile } from './build-file'
-import { Context } from '../run-arg'
+import { Environment } from '../run-arg'
 
 export async function parseBuildFileReferences(
   type: string,
   fileName: string,
   files: { [key: string]: BuildFile },
   refs: unknown,
-  context: Context
+  context: Environment
 ): Promise<{ [key: string]: BuildFile }> {
   if (!refs) {
     return {}

@@ -25,7 +25,7 @@ export async function awaitStream(node: ContainerWorkNode, docker: Dockerode, st
 
   await new Promise<void>((resolve, reject) => {
     stream.on('error', (err) => {
-      reject(err)
+      resolve()
     })
     stream.on('end', () => {
       resolve()
