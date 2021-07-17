@@ -67,6 +67,8 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
   const node = workTree.nodes[nodeId]
   delete context.runningNodes[nodeId]
 
+  node.status.console.write('internal', 'error', error.message)
+
   const canceledExecution = context.context.cancelDefer.isResolved
   const currentState = node.status.state
   if (currentState.type === 'running') {

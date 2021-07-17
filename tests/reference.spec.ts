@@ -2,6 +2,7 @@ import { expectLog, expectSuccessfulResult, getTestSuite } from './run-arg'
 import { planWorkTree } from '../src/planner/utils/plan-work-tree'
 import { execute } from '../src/executer/execute'
 import { planWorkNodes } from '../src/planner/utils/plan-work-nodes'
+import { join } from 'path'
 
 describe('reference', () => {
   const suite = getTestSuite('reference', ['build.yaml', 'foo'])
@@ -13,7 +14,7 @@ describe('reference', () => {
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}/foo:bar`, 'foobar')
+    await expectLog(result, `${join(buildFile.path, 'foo')}:bar`, 'foobar')
     await expectLog(result, `${buildFile.path}:example`, 'hammertime')
   })
 
