@@ -12,7 +12,7 @@ import { templateValue } from '../planner/utils/template-value'
 export async function getContainerVolumes(
   node: ContainerWorkNode,
   checkSources: boolean,
-  context: Environment,
+  context: Environment
 ): Promise<WorkNodePath[]> {
   const result: WorkNodePath[] = []
 
@@ -40,14 +40,14 @@ export async function getContainerVolumes(
 
   for (const volume of result) {
     const otherVolumes = result.filter(
-      (v) => v.containerPath === volume.containerPath && v.localPath !== volume.localPath,
+      (v) => v.containerPath === volume.containerPath && v.localPath !== volume.localPath
     )
     if (otherVolumes.length > 0) {
       throw new Error(
         `duplicate container mount with different sources ${[
           volume.localPath,
           ...otherVolumes.map((ov) => ov.localPath),
-        ].join(', ')}`,
+        ].join(', ')}`
       )
     }
   }
@@ -58,8 +58,7 @@ class Lock {
   private count = 0
   private queue: Defer<LockLease>[] = []
 
-  constructor(private total: number) {
-  }
+  constructor(private total: number) {}
 
   private enqueueQueue() {
     const item = this.queue.pop()
@@ -124,7 +123,10 @@ async function startContainer(container: Container): Promise<void> {
 
 function convertToPosixPath(path: string) {
   if (platform() === 'win32') {
-    return path.split(sep).map((value, index) => index === 0 && value.endsWith(':') ? '/' + value.substr(0, value.length - 1) : value).join('/')
+    return path
+      .split(sep)
+      .map((value, index) => (index === 0 && value.endsWith(':') ? '/' + value.substr(0, value.length - 1) : value))
+      .join('/')
   }
   return path
 }
@@ -132,7 +134,7 @@ function convertToPosixPath(path: string) {
 export async function executeDocker(
   node: ContainerWorkNode,
   context: ExecutionContext,
-  cancelDefer: Defer<void>,
+  cancelDefer: Defer<void>
 ): Promise<void> {
   node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
   await useDocker(async (docker) => {
@@ -148,7 +150,8 @@ export async function executeDocker(
       WorkingDir: convertToPosixPath(node.cwd),
       Labels: { app: 'hammerkit' },
       HostConfig: {
-        Binds: volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`) : undefined,
+        Binds:
+          volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`) : undefined,
       },
     })
 
@@ -162,13 +165,15 @@ export async function executeDocker(
       })
     })
 
-    const user = platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos' ? `${process.getuid()}:${process.getgid()}` : undefined
+    const user =
+      platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
+        ? `${process.getuid()}:${process.getgid()}`
+        : undefined
 
     try {
       node.status.console.write('internal', 'info', `starting container with image ${node.image}`)
 
       await startContainer(container)
-
 
       if (user) {
         const setUserPermission = async (directory: string) => {
@@ -192,7 +197,14 @@ export async function executeDocker(
 
         const command = templateValue(cmd.cmd, node.envs)
         node.status.console.write('internal', 'info', `execute cmd ${command} in container`)
-        const result = await execCommand(node, docker, container, convertToPosixPath(cmd.path), [node.shell, '-c', command], user)
+        const result = await execCommand(
+          node,
+          docker,
+          container,
+          convertToPosixPath(cmd.path),
+          [node.shell, '-c', command],
+          user
+        )
         if (result.ExitCode !== 0) {
           node.status.console.write('internal', 'error', `command ${command} failed with ${result.ExitCode}`)
           throw new Error(`command ${command} failed with ${result.ExitCode}`)
@@ -213,7 +225,7 @@ async function execCommand(
   container: Container,
   cwd: string,
   cmd: string[],
-  user: string | undefined,
+  user: string | undefined
 ) {
   const exec = await container.exec({
     Cmd: cmd,
@@ -228,7 +240,9 @@ async function execCommand(
   const defer = new Defer<ExecInspectInfo>()
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
   awaitStream(node, docker, stream).then(async () => {
-    defer.resolve(await exec.inspect())
+    if (!defer.isResolved) {
+      defer.resolve(await exec.inspect())
+    }
   })
   pollStatus(exec, defer)
   return defer.promise
@@ -238,7 +252,7 @@ function pollStatus(exec: Exec, defer: Defer<ExecInspectInfo>): void {
   async function inspect() {
     const result = await exec.inspect()
     if (!result.Running && !defer.isResolved) {
-      defer.resolve(result);
+      defer.resolve(result)
     }
 
     if (!defer.isResolved) {
@@ -246,5 +260,5 @@ function pollStatus(exec: Exec, defer: Defer<ExecInspectInfo>): void {
     }
   }
 
-  inspect();
+  inspect()
 }
