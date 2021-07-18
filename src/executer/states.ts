@@ -83,7 +83,7 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
     context.events.emit({ nodeId: node.id, workTree, newState, oldState: currentState })
   }
 
-  if (!canceledExecution) {
+  if (!canceledExecution && !context.watch) {
     cancelPendingNodes(workTree, nodeId, context)
   }
 
@@ -140,6 +140,8 @@ export function cancelNodes(workTree: WorkTree, context: ExecutionContext): void
       node.status.state = cancelState
       currentState.cancelDefer.resolve()
       context.events.emit({ workTree, nodeId: node.id, oldState: currentState, newState: cancelState })
+    } else if ((currentState.type === 'completed' || currentState.type === 'failed') && !node.status.defer.isResolved) {
+      node.status.defer.resolve()
     }
   }
 }

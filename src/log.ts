@@ -14,7 +14,7 @@ export function getLogs(chunk: Buffer | string): string[] {
     .filter((s) => !!s)
 }
 
-export function getLogLevel(level: WorkNodeConsoleLogLevel) {
+export function getLogLevel(level: WorkNodeConsoleLogLevel): string {
   switch (level) {
     case 'debug':
       return colors.bgMagenta(level)
@@ -102,7 +102,7 @@ function getStateText(state: WorkNodeState): string {
   }
 }
 
-export function getNodeNameLength(workTree: WorkTree) {
+export function getNodeNameLength(workTree: WorkTree): number {
   let maxNodeNameLength = 0
   for (const node of iterateWorkNodes(workTree.nodes)) {
     if (node.name.length > maxNodeNameLength) {
@@ -112,7 +112,7 @@ export function getNodeNameLength(workTree: WorkTree) {
   return maxNodeNameLength
 }
 
-export function getNodeName(node: WorkNode, maxNodeNameLength: number) {
+export function getNodeName(node: WorkNode, maxNodeNameLength: number): string {
   return colors.white(node.name) + ' '.repeat(maxNodeNameLength - node.name.length)
 }
 

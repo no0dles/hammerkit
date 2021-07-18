@@ -75,7 +75,7 @@ export function groupedLogger(): LogStrategy {
       await printWorkTreeResult(workTree, result, false)
     },
     abort(e: Error) {
-      console.error(e)
+      process.stderr.write(`${e.message}\n`)
     },
   }
 }
@@ -97,7 +97,7 @@ export function liveLogger(): LogStrategy {
       await printWorkTreeResult(workTree, result, false)
     },
     abort(e: Error) {
-      console.error(e)
+      process.stderr.write(`${e.message}\n`)
     },
   }
 }
@@ -125,12 +125,13 @@ export function interactiveLogger(): LogStrategy {
       })
     },
     async finish(workTree: WorkTree, result: ExecuteResult) {
+      running = false
       clearScreenDown(process.stdout)
       await printWorkTreeResult(workTree, result, true)
       showCursor()
     },
     abort(e: Error) {
-      console.error(e)
+      process.stderr.write(`${e.message}\n`)
     },
   }
 }

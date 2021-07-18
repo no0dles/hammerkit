@@ -1,4 +1,4 @@
-import { dirname, join } from 'path'
+import { join } from 'path'
 import { getWorkNodeCacheStats } from './get-work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
 import { WorkNodeCacheStats } from './work-node-cache-stats'
