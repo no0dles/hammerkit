@@ -1,7 +1,7 @@
 import commaner, { Command, Option } from 'commander'
 import { join } from 'path'
 import { isCI } from './ci'
-import { parseBuildFile } from './parser/parse-build-file'
+import { getBuildFile } from './parser/get-build-file'
 import { iterateWorkNodes, planWorkNodes } from './planner/utils/plan-work-nodes'
 import { execute } from './executer/execute'
 import { planWorkTree } from './planner/utils/plan-work-tree'
@@ -27,7 +27,7 @@ export async function getProgram(
   }
 
   if (await context.file.exists(fileName)) {
-    const buildFile = await parseBuildFile(fileName, context)
+    const buildFile = await getBuildFile(fileName, context)
     const workNodes = planWorkNodes(buildFile)
     const reservedCommands = ['clean', 'store', 'restore', 'validate']
 

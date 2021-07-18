@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { Defer } from '../src/defer'
 import { BuildFile } from '../src/parser/build-file'
-import { parseBuildFile } from '../src/parser/parse-build-file'
+import { getBuildFile } from '../src/parser/parse-build-file'
 import { ConsoleContext, ExecutionContext, fileContext, FileContext } from '../src/run-arg'
 import { CacheMethod } from '../src/optimizer/cache-method'
 import { ExecuteResult } from '../src/executer/execute-result'
@@ -136,7 +136,7 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
       }
 
       const fileName = join(testDirectory, 'build.yaml')
-      const buildFile = await parseBuildFile(fileName, context)
+      const buildFile = await getBuildFile(fileName, context)
 
       const executionContext: ExecutionContext = {
         context,
