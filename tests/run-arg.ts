@@ -89,6 +89,10 @@ export async function expectLog(result: ExecuteResult, nodeId: string, message: 
   const logs = await result.nodes[nodeId].console.read()
   expect(logs.map((l) => l.message)).toContain(message)
 }
+export async function expectContainsLog(result: ExecuteResult, nodeId: string, message: string): Promise<void> {
+  const logs = await result.nodes[nodeId].console.read()
+  expect(logs.some((l) => l.message.indexOf(message))).toBeTrue()
+}
 
 export function getTestContext(cwd: string): TestContext {
   const context: TestContext = {

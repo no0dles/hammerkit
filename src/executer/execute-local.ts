@@ -4,6 +4,8 @@ import { getLogs } from '../log'
 import { WorkNode } from '../planner/work-node'
 import { Defer } from '../defer'
 import { ExecutionContext } from '../run-arg'
+import { templateValue } from '../planner/utils/template-value'
+import { platform } from 'os'
 
 export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
   node.status.console.write('internal', 'info', `execute ${node.name} locally`)
@@ -13,11 +15,13 @@ export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancel
       return
     }
 
+    const command = templateValue(cmd.cmd, envs)
     await new Promise<void>((resolve, reject) => {
-      node.status.console.write('internal', 'info', `execute cmd ${cmd.cmd} locally`)
-      const ps = exec(cmd.cmd, {
+      node.status.console.write('internal', 'info', `execute cmd ${command} locally`)
+      const ps = exec(command, {
         env: envs,
         cwd: cmd.path,
+        shell: platform() === 'win32' ? 'powershell.exe' : undefined,
       })
       ps.stdout?.on('data', (data) => {
         for (const log of getLogs(data)) {

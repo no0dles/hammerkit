@@ -1,9 +1,9 @@
 import { planWorkTree } from '../src/planner/utils/plan-work-tree'
 import { execute } from '../src/executer/execute'
-import { expectLog, expectSuccessfulResult, getTestSuite } from './run-arg'
+import { expectContainsLog, expectSuccessfulResult, getTestSuite } from './run-arg'
 
 describe('cmd', () => {
-  const suite = getTestSuite('cmd', ['build.yaml', 'sub/.gitkeep'])
+  const suite = getTestSuite('cmd', ['build.yaml', 'sub/README.md'])
 
   afterAll(() => suite.close())
 
@@ -13,6 +13,6 @@ describe('cmd', () => {
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}:example`, '.gitkeep')
+    await expectContainsLog(result, `${buildFile.path}:example`, 'README.md')
   })
 })

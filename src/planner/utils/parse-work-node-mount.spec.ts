@@ -1,26 +1,30 @@
 import { parseWorkNodeMount } from './parse-work-node-mount'
-import { join } from 'path'
+import { join, sep, posix } from 'path'
 import { homedir } from 'os'
+
+function normalizePath(val: string): string {
+  return val.split(posix.sep).join(sep)
+}
 
 describe('parse-work-node-mount', () => {
   it('should parse "subdir"', () => {
     expect(parseWorkNodeMount('/home/test', 'subdir')).toEqual({
-      localPath: '/home/test/subdir',
-      containerPath: '/home/test/subdir',
+      localPath: normalizePath('/home/test/subdir'),
+      containerPath: normalizePath('/home/test/subdir'),
     })
   })
 
   it('should parse "./subdir"', () => {
     expect(parseWorkNodeMount('/home/test', './subdir')).toEqual({
-      localPath: '/home/test/subdir',
-      containerPath: '/home/test/subdir',
+      localPath: normalizePath('/home/test/subdir'),
+      containerPath: normalizePath('/home/test/subdir'),
     })
   })
 
   it('should parse "./subdir:./otherdir"', () => {
     expect(parseWorkNodeMount('/home/test', './subdir:./otherdir')).toEqual({
-      localPath: '/home/test/subdir',
-      containerPath: '/home/test/otherdir',
+      localPath: normalizePath('/home/test/subdir'),
+      containerPath: normalizePath('/home/test/otherdir'),
     })
   })
 
@@ -34,7 +38,7 @@ describe('parse-work-node-mount', () => {
   it('should parse "$PWD/subdir:$PWD/subdir"', () => {
     expect(parseWorkNodeMount('/home/test', '$PWD/subdir:$PWD/subdir')).toEqual({
       localPath: join(homedir(), 'subdir'),
-      containerPath: '/home/test/subdir',
+      containerPath: normalizePath('/home/test/subdir'),
     })
   })
 
@@ -48,13 +52,13 @@ describe('parse-work-node-mount', () => {
   it('should parse "/subdir:otherdir"', () => {
     expect(parseWorkNodeMount('/home/test', '/subdir:otherdir')).toEqual({
       localPath: '/subdir',
-      containerPath: '/home/test/otherdir',
+      containerPath: normalizePath('/home/test/otherdir'),
     })
   })
 
   it('should parse "subdir:/otherdir"', () => {
     expect(parseWorkNodeMount('/home/test', 'subdir:/otherdir')).toEqual({
-      localPath: '/home/test/subdir',
+      localPath: normalizePath('/home/test/subdir'),
       containerPath: '/otherdir',
     })
   })

@@ -14,8 +14,8 @@ describe('watch', () => {
     const apiNodeId = `${buildFile.path}:api`
 
     executionContext.watch = true
-    executionContext.events.on(({ workTree }) => {
-      if (workTree.nodes[apiNodeId].status.state.type === 'running') {
+    executionContext.events.on(({ workTree, nodeId, oldState, newState }) => {
+      if (nodeId === apiNodeId && newState.type === 'running') {
         context.cancelDefer.resolve()
       }
     })

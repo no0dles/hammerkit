@@ -1,10 +1,13 @@
 import { awaitStream } from '../docker/stream'
-import Dockerode, { Container } from 'dockerode'
+import Dockerode, { Container, Exec, ExecInspectInfo } from 'dockerode'
 import { pull } from '../docker/pull'
+import { sep } from 'path'
 import { ContainerWorkNode } from '../planner/work-node'
 import { Defer } from '../defer'
 import { Environment, ExecutionContext } from '../run-arg'
 import { WorkNodePath } from '../planner/work-node-path'
+import { platform } from 'os'
+import { templateValue } from '../planner/utils/template-value'
 
 export async function getContainerVolumes(
   node: ContainerWorkNode,
@@ -118,6 +121,16 @@ async function startContainer(container: Container): Promise<void> {
   return defer.promise
 }
 
+function convertToPosixPath(path: string) {
+  if (platform() === 'win32') {
+    return path
+      .split(sep)
+      .map((value, index) => (index === 0 && value.endsWith(':') ? '/' + value.substr(0, value.length - 1) : value))
+      .join('/')
+  }
+  return path
+}
+
 export async function executeDocker(
   node: ContainerWorkNode,
   context: ExecutionContext,
@@ -134,10 +147,11 @@ export async function executeDocker(
       Tty: true,
       Entrypoint: node.shell,
       Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
-      WorkingDir: node.cwd,
+      WorkingDir: convertToPosixPath(node.cwd),
       Labels: { app: 'hammerkit' },
       HostConfig: {
-        Binds: volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${v.containerPath}`) : undefined,
+        Binds:
+          volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`) : undefined,
       },
     })
 
@@ -146,27 +160,34 @@ export async function executeDocker(
     }
 
     cancelDefer.promise.then(() => {
-      container.remove({ force: true }).catch(() => {})
+      container.remove({ force: true }).catch(() => {
+        node.status.console.write('internal', 'debug', `remove of container failed`)
+      })
     })
 
-    const user = `${process.getuid()}:${process.getgid()}`
+    const user =
+      platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
+        ? `${process.getuid()}:${process.getgid()}`
+        : undefined
 
     try {
       node.status.console.write('internal', 'info', `starting container with image ${node.image}`)
 
       await startContainer(container)
 
-      const setUserPermission = async (directory: string) => {
-        node.status.console.write('internal', 'debug', 'set permission on ' + directory)
-        const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
-        if (result.ExitCode !== 0) {
-          node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
+      if (user) {
+        const setUserPermission = async (directory: string) => {
+          node.status.console.write('internal', 'debug', 'set permission on ' + directory)
+          const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
+          if (result.ExitCode !== 0) {
+            node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
+          }
         }
-      }
 
-      await setUserPermission(node.cwd)
-      for (const volume of volumes) {
-        await setUserPermission(volume.containerPath)
+        await setUserPermission(node.cwd)
+        for (const volume of volumes) {
+          await setUserPermission(volume.containerPath)
+        }
       }
 
       for (const cmd of node.cmds) {
@@ -174,16 +195,26 @@ export async function executeDocker(
           return
         }
 
-        node.status.console.write('internal', 'info', `execute ${cmd.cmd} in container`)
-        const result = await execCommand(node, docker, container, cmd.path, [node.shell, '-c', cmd.cmd], user)
+        const command = templateValue(cmd.cmd, node.envs)
+        node.status.console.write('internal', 'info', `execute cmd ${command} in container`)
+        const result = await execCommand(
+          node,
+          docker,
+          container,
+          convertToPosixPath(cmd.path),
+          [node.shell, '-c', command],
+          user
+        )
         if (result.ExitCode !== 0) {
-          node.status.console.write('internal', 'error', `command ${cmd.cmd} failed with ${result.ExitCode}`)
-          throw new Error(`command ${cmd.cmd} failed with ${result.ExitCode}`)
+          node.status.console.write('internal', 'error', `command ${command} failed with ${result.ExitCode}`)
+          throw new Error(`command ${command} failed with ${result.ExitCode}`)
         }
       }
     } finally {
       node.status.console.write('internal', 'debug', `remove container`)
-      container.remove({ force: true }).catch(() => {})
+      await container.remove({ force: true }).catch(() => {
+        node.status.console.write('internal', 'debug', `remove of container failed`)
+      })
     }
   })
 }
@@ -201,11 +232,33 @@ async function execCommand(
     WorkingDir: cwd,
     Tty: false,
     AttachStdout: true,
+    AttachStdin: true,
     AttachStderr: true,
     User: user,
   })
 
-  const stream = await exec.start({ stdin: true, Detach: false, Tty: false })
-  await awaitStream(node, docker, stream)
-  return exec.inspect()
+  const defer = new Defer<ExecInspectInfo>()
+  const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
+  awaitStream(node, docker, stream).then(async () => {
+    if (!defer.isResolved) {
+      defer.resolve(await exec.inspect())
+    }
+  })
+  pollStatus(exec, defer)
+  return defer.promise
+}
+
+function pollStatus(exec: Exec, defer: Defer<ExecInspectInfo>): void {
+  async function inspect() {
+    const result = await exec.inspect()
+    if (!result.Running && !defer.isResolved) {
+      defer.resolve(result)
+    }
+
+    if (!defer.isResolved) {
+      setTimeout(() => inspect(), 50)
+    }
+  }
+
+  inspect()
 }

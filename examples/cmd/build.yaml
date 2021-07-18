@@ -2,4 +2,4 @@ tasks:
   example:
     cmds:
       - path: sub
-        cmd: ls -a
+        cmd: ls
