@@ -1,13 +1,13 @@
 import { join } from 'path'
 import { Defer } from '../src/defer'
 import { BuildFile } from '../src/parser/build-file'
-import { getBuildFile } from '../src/parser/parse-build-file'
 import { ConsoleContext, ExecutionContext, fileContext, FileContext } from '../src/run-arg'
 import { CacheMethod } from '../src/optimizer/cache-method'
 import { ExecuteResult } from '../src/executer/execute-result'
 import { emitter } from '../src/emit'
 import { WorkNode } from '../src/planner/work-node'
 import { WorkTree } from '../src/planner/work-tree'
+import { getBuildFile } from '../src/parser/get-build-file'
 
 export interface TestContext {
   processEnvs: { [key: string]: string | undefined }

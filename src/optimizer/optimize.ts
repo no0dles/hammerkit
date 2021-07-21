@@ -39,6 +39,13 @@ export async function optimize(workTree: WorkTree, context: ExecutionContext): P
         (context.cacheMethod === 'checksum' && currentStats[key]?.checksum !== cache.stats[key].checksum) ||
         (context.cacheMethod === 'modify-date' && currentStats[key]?.lastModified !== cache.stats[key].lastModified)
       ) {
+        node.status.console.write(
+          'internal',
+          'debug',
+          context.cacheMethod === 'checksum'
+            ? `${key} changed from checksum ${cache.stats[key].checksum} to ${currentStats[key]?.checksum}`
+            : `${key} changed from last modified ${cache.stats[key].lastModified} to ${currentStats[key]?.lastModified}`
+        )
         node.status.console.write('internal', 'debug', `${node.name} can't be skipped because ${key} has been modified`)
         changed = true
         break
