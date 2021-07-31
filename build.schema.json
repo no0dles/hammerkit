@@ -95,6 +95,13 @@
         "type": "string"
       }
     },
+    "taskPort": {
+      "type": "array",
+      "description": "A list of ports that get exposed on the host from the container",
+      "items": {
+        "type": "string"
+      }
+    },
     "localTask": {
       "type": "object",
       "description": "A task that gets executed in the local shell",
@@ -145,6 +152,9 @@
         "extend": {
           "type": "string",
           "description": "Name of task that gets used a template"
+        },
+        "ports": {
+          "$ref": "#/definitions/taskPort"
         },
         "envs": {
           "$ref": "#/definitions/envMap"

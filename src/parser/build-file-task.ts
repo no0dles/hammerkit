@@ -15,5 +15,6 @@ export interface BuildFileTask {
   mounts: string[] | null
   cmds: BuildTaskCommand[] | null
   envs: { [key: string]: string } | null
+  ports: string[] | null
   unknownProps: { [key: string]: any }
 }

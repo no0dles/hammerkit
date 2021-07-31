@@ -4,6 +4,7 @@ import { WorkNodeCommand } from './work-node-command'
 import { WorkNodePath } from './work-node-path'
 import { WorkNodeStatus } from './work-node-status'
 import { MergedBuildFileTask, MergedDependency } from './utils/plan-work-node'
+import { WorkNodePort } from './work-node-port'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -35,6 +36,7 @@ export interface ContainerWorkNode extends BaseWorkNode {
   image: string
   shell: string
   mounts: WorkNodePath[]
+  ports: WorkNodePort[]
 }
 
 export const isContainerWorkNode = (val: WorkNode): val is ContainerWorkNode => val.type === 'container'

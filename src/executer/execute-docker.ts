@@ -153,7 +153,15 @@ export async function executeDocker(
       HostConfig: {
         Binds:
           volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`) : undefined,
+        PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+          map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
+          return map
+        }, {}),
       },
+      ExposedPorts: node.ports.reduce<{ [key: string]: {} }>((map, port) => {
+        map[`${port.containerPort}/tcp`] = {}
+        return map
+      }, {}),
     })
 
     for (const volume of volumes) {

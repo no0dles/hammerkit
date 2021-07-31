@@ -61,6 +61,7 @@ export async function parseBuildFile(
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,
+      ports: parseStringArray(fileName, key, 'ports', value.ports),
       cmds: parseBuildFileCommand(fileName, key, value.cmds),
       unknownProps: Object.keys(value)
         .filter((k) => validKeys.indexOf(k) === -1)

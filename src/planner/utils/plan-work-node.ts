@@ -17,6 +17,9 @@ import { BuildTaskCommand } from '../../parser/build-file-task-command'
 import { nodeConsole } from '../work-node-status'
 import { Defer } from '../../utils/defer'
 import { getWorkNodeId } from '../work-node-id'
+import { WorkNodePort } from '../work-node-port'
+import { WorkNodePath } from '../work-node-path'
+import { parseWorkNodePort } from './parse-work-node-port'
 
 export interface MergedBuildFileTask {
   image: string | null
@@ -27,6 +30,7 @@ export interface MergedBuildFileTask {
   unknownProps: { [key: string]: any }
   src: BuildFileTaskSource[]
   mounts: string[]
+  ports: string[]
   generates: string[]
   continuous: boolean
 }
@@ -55,6 +59,7 @@ export function getMergedBuildTask(
       task: {
         image: task.image || extend.task.image,
         envs: extendEnvs,
+        ports: task.ports || extend.task.ports || [],
         cmds: task.cmds || extend.task.cmds || [],
         description: task.description || extend.task.description,
         shell: task.shell || extend.task.shell,
@@ -79,6 +84,7 @@ export function getMergedBuildTask(
         generates: task.generates || [],
         description: task.description,
         shell: task.shell,
+        ports: task.ports || [],
         unknownProps: task.unknownProps,
         mounts: task.mounts || [],
         envs,
@@ -164,6 +170,7 @@ function parseWorkNode(baseWorkNode: BaseWorkNode, task: MergedBuildFileTask, co
       image: templateValue(task.image, task.envs),
       shell: templateValue(task.shell, task.envs) || '/bin/sh',
       mounts: parseContainerWorkNodeMount(task, context, task.envs),
+      ports: parseContainerWorkNodePorts(task, context, task.envs),
     }
   } else {
     return {
@@ -173,11 +180,19 @@ function parseWorkNode(baseWorkNode: BaseWorkNode, task: MergedBuildFileTask, co
   }
 }
 
+function parseContainerWorkNodePorts(
+  task: MergedBuildFileTask,
+  context: WorkContext,
+  envs: { [key: string]: string } | null
+): WorkNodePort[] {
+  return task.ports.map((m) => templateValue(m, envs)).map((m) => parseWorkNodePort(m))
+}
+
 function parseContainerWorkNodeMount(
   task: MergedBuildFileTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
-) {
+): WorkNodePath[] {
   return task.mounts.map((m) => templateValue(m, envs)).map((m) => parseWorkNodeMount(context.currentWorkdir, m))
 }
 
@@ -185,7 +200,7 @@ function parseLocalWorkNodeGenerate(
   task: MergedBuildFileTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
-) {
+): string[] {
   return getAbsolutePaths(task.generates, context.currentWorkdir).map((g) => templateValue(g, envs))
 }
 
