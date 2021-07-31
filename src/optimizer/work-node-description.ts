@@ -1,27 +1,35 @@
 import { WorkNodeCommand } from '../planner/work-node-command'
-import { WorkNodePath } from '../planner/work-node-path'
-import { isContainerWorkNode, WorkNode } from '../planner/work-node'
+import { platform } from 'os'
+import { MergedBuildFileTask, MergedDependency } from '../planner/utils/plan-work-node'
 
 export interface WorkNodeDescription {
-  path: string
   deps: string[]
   src: string[]
   generates: string[]
   envs: { [key: string]: string }
   cmds: WorkNodeCommand[]
   image: string | null
-  mounts: WorkNodePath[]
+  mounts: string[]
+  shell: string | null
+  platform: string | null
 }
 
-export function getWorkDescription(node: WorkNode): WorkNodeDescription {
+export function getWorkDescription(task: MergedBuildFileTask, deps: MergedDependency[]): WorkNodeDescription {
   return {
-    path: node.cwd,
-    deps: node.deps.map((d) => d.id),
-    src: node.src.map((s) => s.absolutePath),
-    generates: node.generates,
-    cmds: node.cmds,
-    image: isContainerWorkNode(node) ? node.image : null,
-    mounts: isContainerWorkNode(node) ? node.mounts : [],
-    envs: node.envs,
+    shell: task.shell,
+    image: task.image,
+    platform: task.image ? null : platform(),
+    generates: (task.generates ?? []).sort(),
+    src: (task.src ? task.src.map((s) => s.relativePath) : []).sort(),
+    deps: (deps ?? []).map((d) => d.name).sort(),
+    envs: task.envs ?? {},
+    cmds: (task.cmds ?? []).map((c) => {
+      if (typeof c === 'string') {
+        return { cmd: c, path: '' }
+      } else {
+        return { cmd: c.cmd, path: c.path ?? '' }
+      }
+    }),
+    mounts: task.mounts.sort(),
   }
 }

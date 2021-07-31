@@ -1,32 +1,24 @@
 import { getWorkNodeId } from './work-node-id'
-import { parseBuildFile } from '../parser/parse-build-file'
-import { fileContext } from '../run-arg'
-import { consoleContext } from '../log'
-import { Defer } from '../defer'
-
-function createBuildFile(buildFile: any) {
-  return parseBuildFile('/home/user/build.yaml', {}, buildFile, {
-    cwd: process.cwd(),
-    cancelDefer: new Defer<void>(),
-    processEnvs: process.env,
-    file: fileContext(),
-    console: consoleContext(),
-  })
-}
+import { createBuildFile } from '../testing/create-build-file'
+import { getEnvironmentMock } from '../executer/get-environment-mock'
+import { getMergedBuildTask } from './utils/plan-work-node'
 
 async function compareTasks(firstTask: any, secondTask: any, expectEqual: boolean) {
-  const firstBuildFile = await createBuildFile({
+  const environmentMock = getEnvironmentMock()
+  const firstBuildFile = await createBuildFile(environmentMock, {
     tasks: {
       test: firstTask,
     },
   })
-  const secondBuildFile = await createBuildFile({
+  const secondBuildFile = await createBuildFile(environmentMock, {
     tasks: {
       test: secondTask,
     },
   })
-  const firstNodeId = getWorkNodeId(firstBuildFile.tasks['test'])
-  const secondNodeId = getWorkNodeId(secondBuildFile.tasks['test'])
+  const firstMerged = getMergedBuildTask(firstBuildFile, firstBuildFile.tasks['test'])
+  const secondMerged = getMergedBuildTask(secondBuildFile, secondBuildFile.tasks['test'])
+  const firstNodeId = getWorkNodeId(firstMerged.task, firstMerged.deps)
+  const secondNodeId = getWorkNodeId(secondMerged.task, secondMerged.deps)
   if (expectEqual) {
     expect(firstNodeId).toEqual(secondNodeId)
   } else {

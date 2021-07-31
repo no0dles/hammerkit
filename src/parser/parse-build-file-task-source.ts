@@ -2,7 +2,7 @@ import { Minimatch } from 'minimatch'
 import { join } from 'path'
 import { parseStringArray } from './parse-string-array'
 import { BuildFileTaskSource } from './build-file-task-source'
-import { Environment } from '../run-arg'
+import { Environment } from '../executer/environment'
 
 export function parseBuildFileTaskSource(
   fileName: string,

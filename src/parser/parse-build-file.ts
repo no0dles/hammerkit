@@ -1,5 +1,4 @@
 import { BuildFile } from './build-file'
-import { Environment } from '../run-arg'
 import { dirname } from 'path'
 import { parseBuildFileReferences } from './parse-build-file-references'
 import { parseEnvs } from './parse-envs'
@@ -7,6 +6,7 @@ import { readEnvFile } from './read-env-file'
 import { parseStringArray } from './parse-string-array'
 import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 import { parseBuildFileCommand } from './parse-build-file-task-command'
+import { Environment } from '../executer/environment'
 
 const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys]

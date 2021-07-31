@@ -1,5 +1,5 @@
 import { WorkNode } from '../planner/work-node'
-import { Environment } from '../run-arg'
+import { Environment } from '../executer/environment'
 
 export async function moveFiles(
   node: WorkNode,

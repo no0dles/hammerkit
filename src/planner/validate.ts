@@ -3,7 +3,7 @@ import { planWorkNodes } from '../planner/utils/plan-work-nodes'
 import { planWorkTree } from '../planner/utils/plan-work-tree'
 import { WorkNode } from '../planner/work-node'
 import { WorkNodeValidation } from './work-node-validation'
-import { Environment } from '../run-arg'
+import { Environment } from '../executer/environment'
 
 export async function* validate(
   buildFile: BuildFile,

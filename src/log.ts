@@ -5,7 +5,7 @@ import { WorkNodeConsoleLogLevel, WorkNodeState } from './planner/work-node-stat
 import colors from 'colors'
 import { WorkNode } from './planner/work-node'
 import { ExecuteResult } from './executer/execute-result'
-import { ConsoleContext } from './run-arg'
+import { ConsoleContext } from './console/console-context'
 
 export function getLogs(chunk: Buffer | string): string[] {
   return chunk

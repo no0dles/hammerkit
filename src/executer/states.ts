@@ -1,5 +1,4 @@
 import { WorkTree } from '../planner/work-tree'
-import { ExecutionContext } from '../run-arg'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 import {
   WorkNodeAbortedState,
@@ -9,7 +8,8 @@ import {
   WorkNodeRunningState,
   WorkNodeState,
 } from '../planner/work-node-status'
-import { Defer } from '../defer'
+import { ExecutionContext } from './execution-context'
+import { Defer } from '../utils/defer'
 
 function getDuration(state: WorkNodeState): number {
   if (state.type === 'running') {
@@ -20,7 +20,7 @@ function getDuration(state: WorkNodeState): number {
 
 export function runNode(workTree: WorkTree, nodeId: string, context: ExecutionContext): Defer<void> {
   const runningState: WorkNodeRunningState = { type: 'running', started: new Date(), cancelDefer: new Defer<void>() }
-  context.context.cancelDefer.promise.then(() => {
+  context.environment.cancelDefer.promise.then(() => {
     if (!runningState.cancelDefer.isResolved) {
       runningState.cancelDefer.resolve()
     }
@@ -33,7 +33,12 @@ export function runNode(workTree: WorkTree, nodeId: string, context: ExecutionCo
   return runningState.cancelDefer
 }
 
-export function completeNode(workTree: WorkTree, nodeId: string, context: ExecutionContext): void {
+export function completeNode(
+  workTree: WorkTree,
+  nodeId: string,
+  context: ExecutionContext,
+  resetCompletedNodes: boolean
+): void {
   const node = workTree.nodes[nodeId]
 
   const currentState = node.status.state
@@ -56,7 +61,7 @@ export function completeNode(workTree: WorkTree, nodeId: string, context: Execut
     }
 
     const completedDepNode = otherNode.status.completedDependencies[node.id]
-    if (completedDepNode) {
+    if (resetCompletedNodes && completedDepNode) {
       resetNode(workTree, otherNode.id, context)
     }
   }
@@ -69,7 +74,7 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
 
   node.status.console.write('internal', 'error', error.message)
 
-  const canceledExecution = context.context.cancelDefer.isResolved
+  const canceledExecution = context.environment.cancelDefer.isResolved
   const currentState = node.status.state
   if (currentState.type === 'running') {
     const newState: WorkNodeState = canceledExecution

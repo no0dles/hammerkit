@@ -1,8 +1,8 @@
 import { calculateChecksum } from './calculate-checksum'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { WorkNodeCacheFileStats } from './work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
-import { Environment } from '../run-arg'
+import { Environment } from '../executer/environment'
 
 async function addWorkNodeCacheStats(
   result: WorkNodeCacheFileStats,
@@ -14,7 +14,7 @@ async function addWorkNodeCacheStats(
   if (stats.type === 'file') {
     if (matcher(path)) {
       const checksum = await calculateChecksum(path)
-      result[path] = { lastModified: stats.lastModified, checksum }
+      result.files[relative(result.cwd, path)] = { lastModified: stats.lastModified, checksum }
     }
   } else if (stats.type === 'directory') {
     const files = await context.file.listFiles(path)
@@ -28,7 +28,10 @@ async function addWorkNodeCacheStats(
 }
 
 export async function getWorkNodeCacheStats(cache: WorkNode, context: Environment): Promise<WorkNodeCacheFileStats> {
-  const result: WorkNodeCacheFileStats = {}
+  const result: WorkNodeCacheFileStats = {
+    cwd: cache.cwd,
+    files: {},
+  }
 
   for (const src of cache.src) {
     await addWorkNodeCacheStats(result, src.absolutePath, (file) => src.matcher(file, cache.cwd), context)

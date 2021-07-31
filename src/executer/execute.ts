@@ -3,16 +3,15 @@ import { ExecuteResult } from './execute-result'
 import { optimize } from '../optimizer/optimize'
 import { getReadyWorkNodes } from './get-ready-work-nodes'
 import { WorkNode } from '../planner/work-node'
-import { executeWorkNode } from './execute-work-node'
 import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { join } from 'path'
-import { Debouncer } from '../debouncer'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
-import { ExecutionContext } from '../run-arg'
 import { cancelNodes, completeNode, failNode, resetNode, runNode } from './states'
+import { ExecutionContext } from './execution-context'
+import { Debouncer } from '../utils/debouncer'
 
 export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
-  context.context.cancelDefer.promise.then(() => {
+  context.environment.cancelDefer.promise.then(() => {
     cancelNodes(workTree, context)
   })
 
@@ -56,7 +55,7 @@ function watchNodes(workTree: WorkTree, context: ExecutionContext) {
     }, 100)
 
     for (const src of node.src) {
-      const watcher = context.context.file.watch(src.absolutePath, (fileName) => {
+      const watcher = context.environment.file.watch(src.absolutePath, (fileName) => {
         const absoluteFileName = join(src.absolutePath, fileName)
 
         if (src.matcher(absoluteFileName, node.cwd)) {
@@ -69,7 +68,7 @@ function watchNodes(workTree: WorkTree, context: ExecutionContext) {
         }
       })
 
-      context.context.cancelDefer.promise.then(() => {
+      context.environment.cancelDefer.promise.then(() => {
         watcher.close()
       })
     }
@@ -94,9 +93,9 @@ function runPendingNodes(workTree: WorkTree, arg: ExecutionContext) {
 async function continueExecution(workTree: WorkTree, node: WorkNode, context: ExecutionContext) {
   const cancelDefer = runNode(workTree, node.id, context)
   try {
-    await executeWorkNode(node, context, cancelDefer)
-    await writeWorkNodeCache(node, context.context)
-    completeNode(workTree, node.id, context)
+    await context.executor.exec(node, context, cancelDefer)
+    await writeWorkNodeCache(node, context.environment)
+    completeNode(workTree, node.id, context, true)
   } catch (e) {
     failNode(workTree, node.id, context, e)
   }

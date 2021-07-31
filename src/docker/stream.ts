@@ -2,8 +2,8 @@ import { Duplex } from 'stream'
 import { getLogs } from '../log'
 import Dockerode from 'dockerode'
 import { ContainerWorkNode } from '../planner/work-node'
-import { Defer } from '../defer'
 import { WorkNodeConsoleLogLevel } from '../planner/work-node-status'
+import { Defer } from '../utils/defer'
 
 export async function awaitStream(node: ContainerWorkNode, docker: Dockerode, stream: Duplex): Promise<void> {
   const defer = new Defer<void>()

@@ -3,11 +3,12 @@ import Dockerode, { Container, Exec, ExecInspectInfo } from 'dockerode'
 import { pull } from '../docker/pull'
 import { sep } from 'path'
 import { ContainerWorkNode } from '../planner/work-node'
-import { Defer } from '../defer'
-import { Environment, ExecutionContext } from '../run-arg'
 import { WorkNodePath } from '../planner/work-node-path'
 import { platform } from 'os'
 import { templateValue } from '../planner/utils/template-value'
+import { ExecutionContext } from './execution-context'
+import { Environment } from './environment'
+import { Defer } from '../utils/defer'
 
 export async function getContainerVolumes(
   node: ContainerWorkNode,
@@ -138,7 +139,7 @@ export async function executeDocker(
 ): Promise<void> {
   node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
   await useDocker(async (docker) => {
-    const volumes = await getContainerVolumes(node, true, context.context)
+    const volumes = await getContainerVolumes(node, true, context.environment)
     await pull(node, docker, node.image)
 
     node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)

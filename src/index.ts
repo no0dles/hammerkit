@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { getProgram } from './program'
-import { Defer } from './defer'
-import { fileContext } from './run-arg'
 import { consoleContext } from './log'
+import { getFileContext } from './file/get-file-context'
+import { Defer } from './utils/defer'
 
 const cancelDefer = new Defer<void>()
 
@@ -18,7 +18,7 @@ getProgram(
     cwd: process.cwd(),
     cancelDefer,
     processEnvs: process.env,
-    file: fileContext(),
+    file: getFileContext(),
     console: consoleContext(),
   },
   process.argv

@@ -1,5 +1,9 @@
 tasks:
   install:
+    #image: node:14.16.0-alpine
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
     cmds:
       - npm install
     generates:
@@ -8,10 +12,17 @@ tasks:
       - package.json
       - package-lock.json
 
+  work:
+    #image: node:14.16.0-alpine
+    deps: [install]
+    src:
+      - src/work.js
+    cmds:
+      - node src/work.js
   api:
+    #image: node:14.16.0-alpine
     deps: [install]
     src:
       - src
-      - tsconfig.json
     cmds:
-      - node -r ts-node/register src/index.ts
+      - node src/index.js

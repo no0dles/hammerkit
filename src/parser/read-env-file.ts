@@ -1,5 +1,5 @@
 import { basename, join } from 'path'
-import { Environment } from '../run-arg'
+import { Environment } from '../executer/environment'
 
 export async function readEnvFile(
   path: string,

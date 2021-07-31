@@ -1,19 +1,18 @@
-import { join } from 'path'
 import { getWorkNodeCacheStats } from './get-work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
-import { WorkNodeCacheStats } from './work-node-cache-stats'
 import { getWorkDescription } from './work-node-description'
-import { Environment } from '../run-arg'
+import { Environment } from '../executer/environment'
+import { getCacheDescriptionFile, getCacheStatsDirectory, getCacheStatsFile } from './get-cache-directory'
 
 export async function writeWorkNodeCache(node: WorkNode, context: Environment): Promise<void> {
-  node.status.console.write('internal', 'debug', `write cache for ${node.name}`)
-  const cacheFile = join(node.cwd, '.hammerkit', node.name.replace(new RegExp(`:`, 'gi'), '-') + '.json')
+  const cachePath = getCacheStatsDirectory(node.id, node.cwd)
+  const cacheFile = getCacheStatsFile(node.id, node.cwd)
+  const cacheDescriptionFile = getCacheDescriptionFile(node.id)
   const cache = await getWorkNodeCacheStats(node, context)
-  const content: WorkNodeCacheStats = {
-    task: getWorkDescription(node),
-    stats: cache,
-  }
-  const cacheDir = join(node.cwd, '.hammerkit')
-  await context.file.createDirectory(cacheDir)
-  await context.file.writeFile(cacheFile, JSON.stringify(content, null, 2))
+  const taskDescription = getWorkDescription(node.mergedTask, node.mergedDeps)
+  await context.file.createDirectory(cachePath)
+  node.status.console.write('internal', 'debug', `write cache description for ${node.name} to ${cacheDescriptionFile}`)
+  await context.file.writeFile(cacheDescriptionFile, JSON.stringify(taskDescription, null, 2))
+  node.status.console.write('internal', 'debug', `write file cache for ${node.name} to ${cacheFile}`)
+  await context.file.writeFile(cacheFile, JSON.stringify(cache, null, 2))
 }

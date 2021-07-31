@@ -16,8 +16,8 @@
     "type": "git"
   },
   "scripts": {
-    "prepack": "tsc -b tsconfig.build.json",
-    "build": "tsc -b tsconfig.build.json",
+    "prepack": "tsc -b tsconfig.json",
+    "build": "tsc -b tsconfig.json",
     "test": "jest"
   },
   "dependencies": {

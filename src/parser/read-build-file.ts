@@ -1,7 +1,7 @@
 import { parse as yamlParse } from 'yaml'
 import { BuildFile } from './build-file'
-import { Environment } from '../run-arg'
 import { parseBuildFile } from './parse-build-file'
+import { Environment } from '../executer/environment'
 
 export async function read(fileName: string, context: Environment): Promise<any> {
   // context.console.debug(`read ${fileName} build file`)

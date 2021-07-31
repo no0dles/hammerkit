@@ -1,7 +1,7 @@
 import { WorkNode } from './work-node'
-import { Defer } from '../defer'
 import { isVerbose } from '../log'
-import { EmitHandle, EmitListener, emitter, Emitter } from '../emit'
+import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
+import { Defer } from '../utils/defer'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type WorkNodeConsoleLogType = 'process' | 'internal'

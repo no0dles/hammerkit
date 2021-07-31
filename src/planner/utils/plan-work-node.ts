@@ -13,9 +13,10 @@ import { BuildFileTaskSource } from '../../parser/build-file-task-source'
 import { WorkNodeSource } from '../work-node-source'
 import { BuildFileTask } from '../../parser/build-file-task'
 import { WorkNodeCommand } from '../work-node-command'
-import { Defer } from '../../defer'
 import { BuildTaskCommand } from '../../parser/build-file-task-command'
 import { nodeConsole } from '../work-node-status'
+import { Defer } from '../../utils/defer'
+import { getWorkNodeId } from '../work-node-id'
 
 export interface MergedBuildFileTask {
   image: string | null
@@ -35,7 +36,7 @@ export interface MergedDependency {
   name: string
 }
 
-function getMergedBuildTask(
+export function getMergedBuildTask(
   build: BuildFile,
   task: BuildFileTask
 ): { task: MergedBuildFileTask; deps: MergedDependency[] } {
@@ -89,12 +90,12 @@ function getMergedBuildTask(
 
 export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNodes, context: WorkContext): WorkNode {
   if (build.tasks[taskName]) {
-    const id = `${context.currentWorkdir}:${context.idPrefix ? context.idPrefix + ':' : ''}${taskName}`
+    const { task, deps } = getMergedBuildTask(build, build.tasks[taskName])
+    const id = getWorkNodeId(task, deps)
     if (nodes[id]) {
       return nodes[id]
     }
 
-    const { task, deps } = getMergedBuildTask(build, build.tasks[taskName])
     const name = [...context.namePrefix, taskName].join(':')
     const node = parseWorkNode(
       {
@@ -111,6 +112,8 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
         taskName: taskName,
         src: parseLocalWorkNodeSource(task, context, task.envs),
         generates: parseLocalWorkNodeGenerate(task, context, task.envs),
+        mergedDeps: deps,
+        mergedTask: task,
         status: {
           completedDependencies: {},
           pendingDependencies: {},

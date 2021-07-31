@@ -1,7 +1,7 @@
 import { dirname, join } from 'path'
 import { readBuildFile } from './read-build-file'
 import { BuildFile } from './build-file'
-import { Environment } from '../run-arg'
+import { Environment } from '../executer/environment'
 
 export async function parseBuildFileReferences(
   type: string,

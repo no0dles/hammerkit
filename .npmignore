@@ -8,8 +8,6 @@ coverage
 build.yaml
 jest.config.ts
 tsconfig.json
-tsconfig.test.json
-tsconfig.build.json
 .npm
 .github
 .eslintrc
@@ -17,6 +15,8 @@ tsconfig.build.json
 .eslintignore
 .prettierrc
 dist/**/*.js.map
+temp
 *.tgz
 docs
 build.npm.yaml
+build.docker.yaml
