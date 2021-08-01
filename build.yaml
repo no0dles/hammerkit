@@ -29,7 +29,7 @@ tasks:
     image: node:14.16.0-alpine
     deps: [npm:ci]
     cmds:
-      - node_modules/.bin/prettier -w src/** tests/**
+      - node_modules/.bin/prettier -w src/**
       - node_modules/.bin/eslint . --ext .ts --fix
     src:
       - src
@@ -59,7 +59,7 @@ tasks:
       - tests
       - .prettierrc
     cmds:
-      - node_modules/.bin/prettier -w src/** tests/**
+      - node_modules/.bin/prettier -w src/**
 
   test:
     description: test code

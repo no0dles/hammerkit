@@ -13,7 +13,7 @@ jobs:
       - name: Install npm packages
         run: npm ci
       - name: Check prettier
-        run: node_modules/.bin/prettier -w src/** tests/**
+        run: node_modules/.bin/prettier -w src/**
       - name: Check eslint
         run: node_modules/.bin/eslint . --ext .ts
       - name: Build source code
