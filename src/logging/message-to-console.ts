@@ -3,7 +3,7 @@ import { WorkNodeConsoleLog } from '../planner/work-node-status'
 import { getLogLevel, getNodeName, isVerbose } from '../log'
 import colors from 'colors'
 
-export function logMessageToConsole(node: WorkNode, log: WorkNodeConsoleLog, maxNodeNameLength: number) {
+export function logMessageToConsole(node: WorkNode, log: WorkNodeConsoleLog, maxNodeNameLength: number): void {
   if (!isVerbose && log.level === 'debug') {
     return
   }

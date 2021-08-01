@@ -46,7 +46,7 @@ describe('file/get-file-context-mock', () => {
     const ctx = getFileContextMock()
     await ctx.createDirectory('/home/user/repo')
     const defer = new Defer<void>()
-    const watch = ctx.watch('/home/user', (fileName) => {
+    const watch = ctx.watch('/home/user', () => {
       defer.reject()
     })
     await ctx.createDirectory('/home/test')

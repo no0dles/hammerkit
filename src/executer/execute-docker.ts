@@ -173,7 +173,7 @@ export async function executeDocker(
           return map
         }, {}),
       },
-      ExposedPorts: node.ports.reduce<{ [key: string]: {} }>((map, port) => {
+      ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
         map[`${port.containerPort}/tcp`] = {}
         return map
       }, {}),

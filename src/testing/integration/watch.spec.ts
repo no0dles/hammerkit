@@ -13,7 +13,7 @@ describe('watch', () => {
     const workTree = planWorkTree(buildFile, 'api')
 
     executionContext.watch = true
-    executionContext.events.on(({ workTree, nodeId, oldState, newState }) => {
+    executionContext.events.on(({ workTree, nodeId, newState }) => {
       if (nodeId === workTree.rootNode.id && newState.type === 'running') {
         context.cancelDefer.resolve()
       }

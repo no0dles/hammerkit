@@ -14,7 +14,7 @@ const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys]
 export async function parseBuildFile(
   fileName: string,
   files: { [key: string]: BuildFile },
-  input: any,
+  input: unknown,
   context: Environment
 ): Promise<BuildFile> {
   const result: BuildFile = {
@@ -35,24 +35,32 @@ export async function parseBuildFile(
     return result
   }
 
-  result.includes = await parseBuildFileReferences('include', fileName, files, input.includes || {}, context)
-  result.references = await parseBuildFileReferences('reference', fileName, files, input.references || {}, context)
-  result.envs = parseEnvs(fileName, input.envs || {}) || {}
-  result.envs = await readEnvFile(dirname(fileName), result.envs, context)
+  await readEnvFile(dirname(fileName), result.envs, context)
 
-  if (input.tasks && typeof input.tasks !== 'object') {
+  for (const [key, value] of Object.entries(input)) {
+    if (key === 'includes') {
+      result.includes = await parseBuildFileReferences('include', fileName, files, value || {}, context)
+    } else if (key === 'references') {
+      result.references = await parseBuildFileReferences('reference', fileName, files, value || {}, context)
+    } else if (key === 'envs') {
+      result.envs = parseEnvs(fileName, value || {}, result.envs)
+    }
+  }
+
+  const tasks = 'tasks' in input ? (input as any)['tasks'] : null
+  if (tasks && typeof tasks !== 'object') {
     throw new Error(`${fileName} tasks need to be an object`)
   }
 
-  for (const key of Object.keys(input.tasks || {})) {
-    const value = input.tasks[key]
+  for (const key of Object.keys(tasks)) {
+    const value = tasks[key]
     if (typeof value !== 'object') {
       throw new Error(`${fileName} task ${key} needs to be an object`)
     }
 
     const validKeys = value.image ? validDockerTaskKeys : validTaskKeys
     result.tasks[key] = {
-      envs: parseEnvs(fileName, value.envs || {}),
+      envs: parseEnvs(fileName, value.envs || {}, {}),
       mounts: parseStringArray(fileName, key, 'mounts', value.mounts),
       src: parseBuildFileTaskSource(fileName, key, value.src, context),
       deps: parseStringArray(fileName, key, 'deps', value.deps),

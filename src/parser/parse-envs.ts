@@ -1,13 +1,19 @@
-export function parseEnvs(fileName: string, envs: unknown): { [key: string]: string } | null {
+export function parseEnvs(
+  fileName: string,
+  envs: unknown,
+  baseEnvs: { [key: string]: string }
+): { [key: string]: string } {
   if (!envs) {
-    return null
+    return baseEnvs
   }
 
   if (typeof envs !== 'object') {
     throw new Error(`${fileName} envs need to be an object`)
   }
 
-  const result: { [key: string]: string } = {}
+  const result: { [key: string]: string } = {
+    ...baseEnvs,
+  }
   for (const [key, value] of Object.entries(envs || {})) {
     if (typeof value === 'string') {
       result[key] = value
