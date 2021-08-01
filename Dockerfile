@@ -11,9 +11,8 @@ RUN npm ci
 
 # build source code
 COPY tsconfig.json .
-COPY tsconfig.build.json .
 COPY src src
-RUN node_modules/.bin/tsc -b tsconfig.build.json
+RUN node_modules/.bin/tsc -b
 RUN export ARCH=$(echo $TARGETPLATFORM | cut -c7-11)
 RUN node_modules/.bin/pkg . --targets "node14-alpine-$ARCH" --no-bytecode
 
