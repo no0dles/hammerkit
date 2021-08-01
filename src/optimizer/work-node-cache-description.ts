@@ -25,7 +25,12 @@ export function getWorkNodeCacheDescription(
     generates: (task.generates ?? []).sort(),
     src: (task.src ? task.src.map((s) => s.relativePath) : []).sort(),
     deps: (deps ?? []).map((d) => d.name).sort(),
-    envs: task.envs ?? {},
+    envs: Object.keys(task.envs ?? {})
+      .sort()
+      .reduce<{ [key: string]: string }>((map, key) => {
+        map[key] = task.envs[key]
+        return map
+      }, {}),
     cmds: (task.cmds ?? []).map((c) => {
       if (typeof c === 'string') {
         return { cmd: c, path: '' }

@@ -98,7 +98,7 @@ describe('work-node-id', () => {
     await compareTasks(
       {
         envs: {
-          NODE_VERSION: '14.16.0',
+          NODE_VERSION: '16.6.0',
           NPM_VERSION: '6.0.0',
         },
         cmds: ['npm ci', 'npm run build'],
@@ -106,7 +106,7 @@ describe('work-node-id', () => {
       {
         envs: {
           NPM_VERSION: '6.0.0',
-          NODE_VERSION: '14.16.0',
+          NODE_VERSION: '16.6.0',
         },
         cmds: ['npm ci', 'npm run build'],
       },

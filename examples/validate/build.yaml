@@ -6,7 +6,7 @@ tasks:
 
   regular_docker_task:
     description: the perfect task
-    image: node:14.16.0
+    image: node:16.6.0-alpine
     cmds:
       - echo foo
 

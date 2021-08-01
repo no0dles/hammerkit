@@ -1,6 +1,6 @@
 tasks:
   install:
-    image: node:14.16.0-alpine
+    image: node:16.6.0-alpine
     mounts:
       - $PWD/.npm:/.npm
       - $PWD/.config:/.config
@@ -13,7 +13,7 @@ tasks:
       - package-lock.json
 
   work:
-    image: node:14.16.0-alpine
+    image: node:16.6.0-alpine
     deps: [install]
     src:
       - src/work.js
@@ -21,7 +21,7 @@ tasks:
       - node src/work.js
 
   api:
-    image: node:14.16.0-alpine
+    image: node:16.6.0-alpine
     deps: [install]
     ports:
       - 8080:8080

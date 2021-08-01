@@ -35,7 +35,7 @@ export async function parseBuildFile(
     return result
   }
 
-  await readEnvFile(dirname(fileName), result.envs, context)
+  result.envs = await readEnvFile(dirname(fileName), result.envs, context)
 
   for (const [key, value] of Object.entries(input)) {
     if (key === 'includes') {

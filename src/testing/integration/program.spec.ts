@@ -28,5 +28,5 @@ describe('program', () => {
 
   it('should run when cache is up to date and --no-cache arg is passed', async () => {
     await testCommand(['example', '--cache', 'none'])
-  })
+  }, 120000)
 })

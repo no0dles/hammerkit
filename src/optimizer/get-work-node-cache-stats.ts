@@ -14,7 +14,7 @@ async function addWorkNodeCacheStats(
   const stats = await context.file.stats(path)
   if (stats.type === 'file') {
     if (matcher(path)) {
-      const checksum = await calculateChecksum(path)
+      const checksum = await calculateChecksum(context, path)
       result.files[relative(result.cwd, path)] = { lastModified: stats.lastModified, checksum }
     }
   } else if (stats.type === 'directory') {

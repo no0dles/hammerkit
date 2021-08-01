@@ -1,5 +1,4 @@
 import { join } from 'path'
-import { existsSync } from 'fs'
 import { expectSuccessfulResult } from '../expect'
 import { restore } from '../../executer/restore'
 import { planWorkTree } from '../../planner/utils/plan-work-tree'
@@ -8,6 +7,7 @@ import { clean } from '../../executer/clean'
 import { planWorkNodes } from '../../planner/utils/plan-work-nodes'
 import { getTestSuite } from '../get-test-suite'
 import { execute } from '../../executer/execute'
+import { existsSync } from 'fs'
 
 describe('store/restore', () => {
   const suite = getTestSuite('store-restore', ['build.yaml'])

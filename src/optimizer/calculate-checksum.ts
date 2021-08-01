@@ -1,19 +1,7 @@
 import { createHash } from 'crypto'
-import { createReadStream } from 'fs'
+import { Environment } from '../executer/environment'
 
-export function calculateChecksum(path: string): Promise<string> {
-  return new Promise(function (resolve, reject) {
-    const hash = createHash('sha1')
-    const input = createReadStream(path)
-
-    input.on('error', reject)
-
-    input.on('data', (chunk) => {
-      hash.update(chunk)
-    })
-
-    input.on('close', () => {
-      resolve(hash.digest('hex'))
-    })
-  })
+export async function calculateChecksum(environment: Environment, path: string): Promise<string> {
+  const input = await environment.file.read(path)
+  return createHash('sha1').update(input).digest('hex')
 }

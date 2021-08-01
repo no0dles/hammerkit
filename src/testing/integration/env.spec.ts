@@ -13,7 +13,7 @@ describe('env', () => {
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectLog(result, `example`, '14.16.0')
+    await expectLog(result, `example`, '16.6.0')
   })
 
   it('should pass env to docker', async () => {
@@ -21,7 +21,7 @@ describe('env', () => {
     const workTree = planWorkTree(buildFile, 'example_docker')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectLog(result, `example_docker`, '14.16.0')
+    await expectLog(result, `example_docker`, '16.6.0')
   })
 
   it('should use env from task', async () => {

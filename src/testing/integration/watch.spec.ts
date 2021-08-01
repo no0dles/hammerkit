@@ -22,7 +22,7 @@ describe('watch', () => {
 
     expect(result.success).toBeFalsy()
     expect(result.nodes[workTree.rootNode.id].state.type).toEqual('aborted')
-  })
+  }, 120000)
 
   it('should restart task if dependency updates', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
@@ -45,5 +45,5 @@ describe('watch', () => {
 
     expect(result.success).toBeFalsy()
     expect(result.nodes[workTree.rootNode.id].state.type).toEqual('aborted')
-  })
+  }, 120000)
 })

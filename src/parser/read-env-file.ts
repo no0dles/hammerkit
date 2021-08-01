@@ -7,14 +7,16 @@ export async function readEnvFile(
   context: Environment
 ): Promise<{ [key: string]: string }> {
   const directory = join(path, '.env')
-  if (!(await context.file.exists(directory))) {
-    return baseEnv
-  }
 
   let envs: { [key: string]: string } = { ...baseEnv }
 
   if (basename(path) !== path) {
-    envs = { ...(await readEnvFile(basename(path), baseEnv, context)) }
+    envs = { ...(await readEnvFile(basename(path), envs, context)) }
+  }
+
+  const exists = await context.file.exists(directory)
+  if (!exists) {
+    return envs
   }
 
   const envFile = (await context.file.read(directory)).split(/\r?\n/)
