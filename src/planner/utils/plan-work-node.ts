@@ -97,7 +97,7 @@ export function getMergedBuildTask(
 export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNodes, context: WorkContext): WorkNode {
   if (build.tasks[taskName]) {
     const { task, deps } = getMergedBuildTask(build, build.tasks[taskName])
-    const id = getWorkNodeId(task, deps)
+    const id = getWorkNodeId(context.currentWorkdir, task, deps)
     if (nodes[id]) {
       return nodes[id]
     }
@@ -121,6 +121,7 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
         mergedDeps: deps,
         mergedTask: task,
         status: {
+          name,
           completedDependencies: {},
           pendingDependencies: {},
           state: { type: 'pending' },

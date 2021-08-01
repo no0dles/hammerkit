@@ -52,6 +52,7 @@ export function nodeConsole(): WorkNodeConsole {
 }
 
 export interface WorkNodeStatus {
+  name: string
   pendingDependencies: { [id: string]: WorkNode }
   completedDependencies: { [id: string]: WorkNode }
   state: WorkNodeState

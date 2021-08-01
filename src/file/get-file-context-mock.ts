@@ -85,10 +85,8 @@ export function getFileContextMock(): FileContextMock {
   }
 
   function notifyChange(path: string[], fileName: string) {
-    const lastPart = path[path.length - 1]
-
     let currentNode: FilesystemDirectoryNode = rootNode
-    for (let i = 0; i < path.length - 1; i++) {
+    for (let i = 0; i < path.length; i++) {
       for (const listener of currentNode.listeners) {
         listener.callback(fileName)
       }
@@ -96,14 +94,9 @@ export function getFileContextMock(): FileContextMock {
       if (nextNode.type === 'directory') {
         currentNode = nextNode
       } else {
-        return
-      }
-    }
-
-    const lastNode = currentNode.nodes[lastPart]
-    if (lastNode) {
-      for (const listener of lastNode.listeners) {
-        listener.callback(fileName)
+        for (const listener of nextNode.listeners) {
+          listener.callback(fileName)
+        }
       }
     }
   }

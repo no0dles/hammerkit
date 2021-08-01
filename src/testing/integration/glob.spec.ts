@@ -13,45 +13,39 @@ describe('glob', () => {
   it('should remove task after written cache', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
-    const nodeId = `${buildFile.path}:example`
-    expect(workTree.nodes).toContainKey(nodeId)
-    expect(workTree.nodes[nodeId].status.state.type).toEqual('pending')
+    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
 
     await optimize(workTree, executionContext)
-    expect(workTree.nodes[nodeId].status.state.type).toEqual('pending')
+    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
 
-    await writeWorkNodeCache(workTree.nodes[`${buildFile.path}:example`], context)
+    await writeWorkNodeCache(workTree.rootNode, context)
     await optimize(workTree, executionContext)
-    expect(workTree.nodes[nodeId].status.state.type).toEqual('completed')
+    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('completed')
   })
 
   it('should keep being cached after ignored file changed', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
-    const nodeId = `${buildFile.path}:example`
-    expect(workTree.nodes).toContainKey(nodeId)
-    expect(workTree.nodes[nodeId].status.state.type).toEqual('pending')
+    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
 
-    await writeWorkNodeCache(workTree.nodes[`${buildFile.path}:example`], context)
+    await writeWorkNodeCache(workTree.rootNode, context)
 
     appendFileSync(join(buildFile.path, 'test.txt'), '\n')
 
     await optimize(workTree, executionContext)
-    expect(workTree.nodes[nodeId].status.state.type).toEqual('completed')
+    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('completed')
   })
 
   it('should invalid cache after file has changed', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
-    const nodeId = `${buildFile.path}:example`
-    expect(workTree.nodes).toContainKey(nodeId)
-    expect(workTree.nodes[nodeId].status.state.type).toEqual('pending')
+    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
 
-    await writeWorkNodeCache(workTree.nodes[`${buildFile.path}:example`], context)
+    await writeWorkNodeCache(workTree.rootNode, context)
 
     appendFileSync(join(buildFile.path, 'test.md'), '\n')
 
     await optimize(workTree, executionContext)
-    expect(workTree.nodes[nodeId].status.state.type).toEqual('pending')
+    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
   })
 })

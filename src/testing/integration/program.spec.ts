@@ -4,7 +4,7 @@ import { getProgram } from '../../program'
 
 describe('program', () => {
   async function testCommand(commandArgs: string[]): Promise<void> {
-    const fileName = join(__dirname, '../examples/program')
+    const fileName = join(__dirname, '../../../examples/program')
     const context = getTestContext(fileName)
     const { program, args } = await getProgram(context, [process.argv[0], fileName, ...commandArgs])
     return new Promise<void>((resolve, reject) => {
@@ -19,7 +19,7 @@ describe('program', () => {
   }
 
   it('should get help with description', async () => {
-    const fileName = join(__dirname, '../examples/program')
+    const fileName = join(__dirname, '../../../examples/program')
     const context = getTestContext(fileName)
     const { program } = await getProgram(context, process.argv)
     const help = program.exitOverride().helpInformation({ error: false })

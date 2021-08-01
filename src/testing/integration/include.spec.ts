@@ -13,7 +13,7 @@ describe('include', () => {
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}:foo:bar`, 'foobar')
+    await expectLog(result, `foo:bar`, 'foobar')
   })
 
   it('should get name:example', async () => {

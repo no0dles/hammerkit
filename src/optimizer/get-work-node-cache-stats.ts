@@ -3,6 +3,7 @@ import { join, relative } from 'path'
 import { WorkNodeCacheFileStats } from './work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
+import { CacheMethod } from './cache-method'
 
 async function addWorkNodeCacheStats(
   result: WorkNodeCacheFileStats,
@@ -27,15 +28,45 @@ async function addWorkNodeCacheStats(
   }
 }
 
-export async function getWorkNodeCacheStats(cache: WorkNode, context: Environment): Promise<WorkNodeCacheFileStats> {
+export async function getWorkNodeCacheStats(
+  cache: WorkNode,
+  environment: Environment
+): Promise<WorkNodeCacheFileStats> {
   const result: WorkNodeCacheFileStats = {
     cwd: cache.cwd,
     files: {},
   }
 
   for (const src of cache.src) {
-    await addWorkNodeCacheStats(result, src.absolutePath, (file) => src.matcher(file, cache.cwd), context)
+    await addWorkNodeCacheStats(result, src.absolutePath, (file) => src.matcher(file, cache.cwd), environment)
   }
 
   return result
+}
+
+export async function hasStatsChanged(
+  node: WorkNode,
+  cache: WorkNodeCacheFileStats,
+  current: WorkNodeCacheFileStats,
+  cacheMethod: CacheMethod
+): Promise<boolean> {
+  let changed = false
+  for (const key of Object.keys(cache.files)) {
+    if (
+      (cacheMethod === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
+      (cacheMethod === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
+    ) {
+      node.status.console.write(
+        'internal',
+        'debug',
+        cacheMethod === 'checksum'
+          ? `${key} changed from checksum ${cache.files[key].checksum} to ${current.files[key]?.checksum}`
+          : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
+      )
+      node.status.console.write('internal', 'debug', `${node.name} can't be skipped because ${key} has been modified`)
+      changed = true
+      break
+    }
+  }
+  return changed
 }

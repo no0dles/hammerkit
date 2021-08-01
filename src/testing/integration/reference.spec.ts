@@ -1,4 +1,3 @@
-import { join } from 'path'
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { planWorkNodes } from '../../planner/utils/plan-work-nodes'
@@ -15,13 +14,13 @@ describe('reference', () => {
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectLog(result, `${join(buildFile.path, 'foo')}:bar`, 'foobar')
-    await expectLog(result, `${buildFile.path}:example`, 'hammertime')
+    await expectLog(result, `foo:bar`, 'foobar')
+    await expectLog(result, `example`, 'hammertime')
   })
 
   it('should list task with references tasks nested', async () => {
     const { buildFile } = await suite.setup()
     const node = planWorkNodes(buildFile)
-    expect(Object.keys(node).map((t) => node[t].name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
+    expect(Object.values(node).map((t) => t.name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
   })
 })

@@ -17,8 +17,8 @@ async function compareTasks(firstTask: any, secondTask: any, expectEqual: boolea
   })
   const firstMerged = getMergedBuildTask(firstBuildFile, firstBuildFile.tasks['test'])
   const secondMerged = getMergedBuildTask(secondBuildFile, secondBuildFile.tasks['test'])
-  const firstNodeId = getWorkNodeId(firstMerged.task, firstMerged.deps)
-  const secondNodeId = getWorkNodeId(secondMerged.task, secondMerged.deps)
+  const firstNodeId = getWorkNodeId(firstBuildFile.path, firstMerged.task, firstMerged.deps)
+  const secondNodeId = getWorkNodeId(secondBuildFile.path, secondMerged.task, secondMerged.deps)
   if (expectEqual) {
     expect(firstNodeId).toEqual(secondNodeId)
   } else {

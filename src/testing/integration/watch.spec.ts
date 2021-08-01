@@ -10,31 +10,29 @@ describe('watch', () => {
 
   it('should run watch task and cancel', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
-
-    const apiNodeId = `${buildFile.path}:api`
+    const workTree = planWorkTree(buildFile, 'api')
 
     executionContext.watch = true
     executionContext.events.on(({ workTree, nodeId, oldState, newState }) => {
-      if (nodeId === apiNodeId && newState.type === 'running') {
+      if (nodeId === workTree.rootNode.id && newState.type === 'running') {
         context.cancelDefer.resolve()
       }
     })
-    const workTree = planWorkTree(buildFile, 'api')
     const result = await execute(workTree, executionContext)
 
     expect(result.success).toBeFalsy()
-    expect(result.nodes[apiNodeId].state.type).toEqual('aborted')
+    expect(result.nodes[workTree.rootNode.id].state.type).toEqual('aborted')
   })
 
   it('should restart task if dependency updates', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
+    const workTree = planWorkTree(buildFile, 'api')
 
-    const apiNodeId = `${buildFile.path}:api`
     let restarted = false
 
     executionContext.watch = true
     executionContext.events.on(({ nodeId, newState }) => {
-      if (nodeId === apiNodeId && newState.type === 'running') {
+      if (nodeId === workTree.rootNode.id && newState.type === 'running') {
         if (restarted) {
           context.cancelDefer.resolve()
         } else {
@@ -43,10 +41,9 @@ describe('watch', () => {
         }
       }
     })
-    const workTree = planWorkTree(buildFile, 'api')
     const result = await execute(workTree, executionContext)
 
     expect(result.success).toBeFalsy()
-    expect(result.nodes[apiNodeId].state.type).toEqual('aborted')
+    expect(result.nodes[workTree.rootNode.id].state.type).toEqual('aborted')
   })
 })

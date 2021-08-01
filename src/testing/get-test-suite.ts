@@ -10,13 +10,15 @@ import { getConsoleContextMock } from '../console/get-console-context-mock'
 import { getFileContext } from '../file/get-file-context'
 import { emitter } from '../utils/emitter'
 import { Defer } from '../utils/defer'
+import { clean } from '../executer/clean'
+import { planWorkNodes } from '../planner/utils/plan-work-nodes'
 
 interface Test {
   cwd: string
 }
 
 export function getTestSuite(exampleName: string, files: string[]): TestSuite {
-  const exampleDirectory = join(__dirname, '../examples/', exampleName)
+  const exampleDirectory = join(__dirname, '../../examples/', exampleName)
   const testDirectory = join(process.cwd(), 'temp', exampleName)
   const file = getFileContext()
   const tests: Test[] = []
@@ -47,6 +49,9 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
 
       const fileName = join(testDirectory, 'build.yaml')
       const buildFile = await getBuildFile(fileName, context)
+      const workNodes = planWorkNodes(buildFile)
+
+      await clean(workNodes, context)
 
       const executionContext: ExecutionContext = {
         environment: context,

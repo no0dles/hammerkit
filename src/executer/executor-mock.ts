@@ -15,6 +15,9 @@ export function getExecutorMock(): ExecutorMock {
     exec(node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
       const resultDefer = new Defer<void>()
       cancelDefer.promise.then(() => {
+        if (resultDefer.isResolved) {
+          return
+        }
         resultDefer.reject(new Error('canceled'))
       })
       if (waits[node.id]) {

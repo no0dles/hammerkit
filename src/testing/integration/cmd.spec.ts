@@ -14,6 +14,6 @@ describe('cmd', () => {
     const workTree = planWorkTree(buildFile, 'example')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectContainsLog(result, `${buildFile.path}:example`, 'README.md')
+    await expectContainsLog(result, `example`, 'README.md')
   })
 })

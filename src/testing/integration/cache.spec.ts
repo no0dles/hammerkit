@@ -11,6 +11,7 @@ import { ContainerWorkNode } from '../../planner/work-node'
 import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'
 import { getNode } from '../get-node'
+import { getWorkNodeId } from '../../planner/work-node-id'
 
 describe('cache', () => {
   const suite = getTestSuite('cache', ['build.yaml', 'package.json', 'package-lock.json'])
@@ -23,17 +24,17 @@ describe('cache', () => {
   ) {
     const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
-    expect(workTree.nodes).toContainKey(`${buildFile.path}:example`)
+    expect(workTree.nodes).toContainKey(workTree.rootNode.id)
 
-    await writeWorkNodeCache(workTree.nodes[`${buildFile.path}:example`], context)
+    await writeWorkNodeCache(workTree.nodes[workTree.rootNode.id], context)
     await action(buildFile, workTree, executionContext)
 
     await optimize(workTree, executionContext)
 
     if (expectInvalidate) {
-      expect(workTree.nodes[`${buildFile.path}:example`].status.state.type).toEqual('pending')
+      expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
     } else {
-      expect(workTree.nodes[`${buildFile.path}:example`].status.state.type).toEqual('completed')
+      expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('completed')
     }
   }
 
@@ -48,13 +49,17 @@ describe('cache', () => {
     const workTree = planWorkTree(buildFile, 'dependant')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await expectLog(result, `${buildFile.path}:dependant`, 'node_modules')
+    await expectLog(result, `dependant`, 'node_modules')
   })
 
   it('should invalid cache on image change', async () => {
     await testCache(async (buildFile, workTree) => {
       const node = getNode(buildFile, workTree, 'example') as ContainerWorkNode
       node.image = '15.0.0'
+      node.mergedTask.image = '15.0.0'
+      delete workTree.nodes[node.id]
+      node.id = getWorkNodeId(node.cwd, node.mergedTask, node.mergedDeps)
+      workTree.nodes[node.id] = node
     }, true)
   })
 })

@@ -9,6 +9,7 @@ import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 import { cancelNodes, completeNode, failNode, resetNode, runNode } from './states'
 import { ExecutionContext } from './execution-context'
 import { Debouncer } from '../utils/debouncer'
+import { hasStatsChanged, getWorkNodeCacheStats } from '../optimizer/get-work-node-cache-stats'
 
 export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
   context.environment.cancelDefer.promise.then(() => {
@@ -18,7 +19,7 @@ export async function execute(workTree: WorkTree, context: ExecutionContext): Pr
   await optimize(workTree, context)
 
   if (context.watch) {
-    watchNodes(workTree, context)
+    await watchNodes(workTree, context)
   }
 
   runPendingNodes(workTree, context)
@@ -43,19 +44,32 @@ export async function execute(workTree: WorkTree, context: ExecutionContext): Pr
   return result
 }
 
-function watchNodes(workTree: WorkTree, context: ExecutionContext) {
+async function watchNodes(workTree: WorkTree, context: ExecutionContext) {
   for (const node of iterateWorkNodes(workTree.nodes)) {
     if (node.src.length === 0) {
       continue
     }
 
-    const debouncer = new Debouncer(() => {
+    let currentState = await getWorkNodeCacheStats(node, context.environment)
+
+    const debouncer = new Debouncer(async () => {
+      if (context.environment.cancelDefer.isResolved) {
+        return
+      }
+
+      const newStats = await getWorkNodeCacheStats(node, context.environment)
+      const hasChanged = await hasStatsChanged(node, currentState, newStats, context.cacheMethod)
+      if (!hasChanged) {
+        return
+      }
+      currentState = newStats
+
       resetNode(workTree, node.id, context)
       runPendingNodes(workTree, context)
     }, 100)
 
     for (const src of node.src) {
-      const watcher = context.environment.file.watch(src.absolutePath, (fileName) => {
+      const watcher = context.environment.file.watch(src.absolutePath, async (fileName) => {
         const absoluteFileName = join(src.absolutePath, fileName)
 
         if (src.matcher(absoluteFileName, node.cwd)) {

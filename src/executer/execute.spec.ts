@@ -25,7 +25,7 @@ describe('execute', () => {
       },
       'api'
     )
-    nodeId = `${ctx.environment.cwd}:api`
+    nodeId = workTree.rootNode.id
 
     await ctx.environment.file.createDirectory(ctx.environment.cwd)
     await ctx.environment.file.writeFile(`${ctx.environment.cwd}/index.js`, "console.log('hello')")
@@ -41,8 +41,8 @@ describe('execute', () => {
     await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
 
     await ctx.executor.waitFor(nodeId)
-
     await ctx.environment.cancelDefer.resolve()
+
     const result = await resultPromise
     expect(result.success).toBeFalsy()
   })
@@ -56,8 +56,8 @@ describe('execute', () => {
     await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
 
     await ctx.executor.waitFor(nodeId)
-
     await ctx.environment.cancelDefer.resolve()
+
     const result = await resultPromise
     expect(result.success).toBeFalsy()
   })

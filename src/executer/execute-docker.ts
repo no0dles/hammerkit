@@ -1,7 +1,7 @@
 import { awaitStream } from '../docker/stream'
 import Dockerode, { Container, Exec, ExecInspectInfo } from 'dockerode'
 import { pull } from '../docker/pull'
-import { sep } from 'path'
+import { sep, extname } from 'path'
 import { ContainerWorkNode } from '../planner/work-node'
 import { WorkNodePath } from '../planner/work-node-path'
 import { platform } from 'os'
@@ -10,25 +10,40 @@ import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { Defer } from '../utils/defer'
 
-export async function getContainerVolumes(
-  node: ContainerWorkNode,
-  checkSources: boolean,
-  context: Environment
-): Promise<WorkNodePath[]> {
+export async function getContainerVolumes(node: ContainerWorkNode, context: Environment): Promise<WorkNodePath[]> {
   const result: WorkNodePath[] = []
 
   for (const source of node.src) {
-    if (!checkSources || (await context.file.exists(source.absolutePath))) {
+    const exists = await context.file.exists(source.absolutePath)
+
+    if (exists) {
       result.push({
         localPath: source.absolutePath,
         containerPath: source.absolutePath,
       })
     } else {
-      node.status.console.write('internal', 'warn', `source ${source.absolutePath} does not exists`)
+      if (extname(source.absolutePath)) {
+        await context.file.writeFile(source.absolutePath, '')
+      } else {
+        await context.file.createDirectory(source.absolutePath)
+        result.push({
+          localPath: source.absolutePath,
+          containerPath: source.absolutePath,
+        })
+      }
     }
   }
 
   for (const generate of node.generates) {
+    const exists = await context.file.exists(generate)
+    if (!exists) {
+      if (extname(generate)) {
+        await context.file.writeFile(generate, '')
+      } else {
+        await context.file.createDirectory(generate)
+      }
+    }
+
     result.push({
       localPath: generate,
       containerPath: generate,
@@ -139,7 +154,7 @@ export async function executeDocker(
 ): Promise<void> {
   node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
   await useDocker(async (docker) => {
-    const volumes = await getContainerVolumes(node, true, context.environment)
+    const volumes = await getContainerVolumes(node, context.environment)
     await pull(node, docker, node.image)
 
     node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
@@ -250,7 +265,10 @@ async function execCommand(
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
   awaitStream(node, docker, stream).then(async () => {
     if (!defer.isResolved) {
-      defer.resolve(await exec.inspect())
+      const result = await exec.inspect()
+      if (!defer.isResolved) {
+        defer.resolve(result)
+      }
     }
   })
   pollStatus(exec, defer)
