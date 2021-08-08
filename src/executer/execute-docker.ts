@@ -10,21 +10,28 @@ import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { Defer } from '../utils/defer'
 import { createHash } from 'crypto'
-import { execute } from './execute'
 
 interface WorkNodeVolume {
   name: string
   containerPath: string
 }
 
+export function generateId(generate: string) {
+  return createHash('sha1').update(generate).digest('hex')
+}
+
+export function getVolumeName(generate: string): string {
+  return `hammerkit-${generateId(generate)}`
+}
+
 export async function getContainerVolumes(node: ContainerWorkNode, context: Environment): Promise<WorkNodeVolume[]> {
   const volumes: WorkNodeVolume[] = []
 
   for (const generate of node.generates) {
-    const name = `hammerkit-${createHash('sha1').update(generate).digest('hex')}`
+    const name = getVolumeName(generate.path)
     volumes.push({
       name,
-      containerPath: generate,
+      containerPath: generate.path,
     })
   }
 
@@ -124,7 +131,7 @@ function getDocker(): Dockerode {
   return dockerInstance
 }
 
-async function useDocker(fn: (docker: Dockerode) => Promise<void>): Promise<void> {
+export async function useDocker(fn: (docker: Dockerode) => Promise<void>): Promise<void> {
   const lease = await instanceLock.acquire()
   try {
     const docker = getDocker()
@@ -134,7 +141,7 @@ async function useDocker(fn: (docker: Dockerode) => Promise<void>): Promise<void
   }
 }
 
-async function startContainer(container: Container): Promise<void> {
+export async function startContainer(container: Container): Promise<void> {
   const defer = new Defer<void>()
   // TODO watch if start takes too long to finish, report warning
   container.start().then(() => {
@@ -269,7 +276,7 @@ export async function executeDocker(
   })
 }
 
-async function execCommand(
+export async function execCommand(
   node: ContainerWorkNode,
   docker: Dockerode,
   container: Container,
@@ -302,7 +309,7 @@ async function execCommand(
   return defer.promise
 }
 
-function pollStatus(exec: Exec, defer: Defer<ExecInspectInfo>): void {
+export function pollStatus(exec: Exec, defer: Defer<ExecInspectInfo>): void {
   async function inspect() {
     const result = await exec.inspect()
     if (!result.Running && !defer.isResolved) {

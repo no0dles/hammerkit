@@ -27,19 +27,19 @@ describe('store/restore', () => {
     expect(existsSync(generatedPath)).toBeTruthy()
     expect(existsSync(outputPath)).toBeFalsy()
 
-    await store(workTree.nodes, outputPath, context)
-    await clean(workTree.nodes, context)
+    await store(workTree.nodes, outputPath, context, executionContext.executor)
+    await clean(workTree.nodes, context, executionContext.executor)
 
     expect(existsSync(outputPath)).toBeTruthy()
     expect(existsSync(generatedPath)).toBeFalsy()
 
-    await restore(workTree.nodes, outputPath, context)
+    await restore(workTree.nodes, outputPath, context, executionContext.executor)
     expect(existsSync(outputPath)).toBeTruthy()
     expect(existsSync(generatedPath)).toBeTruthy()
   })
 
   it('should not store anything if nothing got generated', async () => {
-    const { buildFile, context } = await suite.setup()
+    const { buildFile, context, executionContext } = await suite.setup()
     const workNodes = planWorkNodes(buildFile)
     const outputPath = join(buildFile.path, 'test-output')
     const generatedPath = join(buildFile.path, 'node_modules')
@@ -47,8 +47,8 @@ describe('store/restore', () => {
     expect(existsSync(generatedPath)).toBeFalsy()
     expect(existsSync(outputPath)).toBeFalsy()
 
-    await store(workNodes, outputPath, context)
-    await restore(workNodes, outputPath, context)
+    await store(workNodes, outputPath, context, executionContext.executor)
+    await restore(workNodes, outputPath, context, executionContext.executor)
 
     expect(existsSync(generatedPath)).toBeFalsy()
     expect(existsSync(outputPath)).toBeFalsy()

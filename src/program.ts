@@ -1,5 +1,5 @@
 import commaner, { Command, Option } from 'commander'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { getBuildFile } from './parser/get-build-file'
 import { iterateWorkNodes, planWorkNodes } from './planner/utils/plan-work-nodes'
 import { execute } from './executer/execute'
@@ -39,7 +39,7 @@ export async function getProgram(
       .description('clear task cache')
       .action(async () => {
         try {
-          await clean(workNodes, environment)
+          await clean(workNodes, environment, getDockerExecutor())
         } catch (e) {
           environment.console.error(e)
           process.exit(1)
@@ -51,7 +51,7 @@ export async function getProgram(
       .description('save task outputs into <path>')
       .action(async (path) => {
         try {
-          await store(workNodes, path, environment)
+          await store(workNodes, resolve(path), environment, getDockerExecutor())
         } catch (e) {
           environment.console.error(e)
           process.exit(1)
@@ -63,7 +63,7 @@ export async function getProgram(
       .description('restore task outputs from <path>')
       .action(async (path) => {
         try {
-          await restore(workNodes, path, environment)
+          await restore(workNodes, resolve(path), environment, getDockerExecutor())
         } catch (e) {
           environment.console.error(e)
           process.exit(1)

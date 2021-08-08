@@ -27,8 +27,8 @@ export function planWorkDependency(
     }
   }
   for (const generate of depNode.generates) {
-    if (node.generates.indexOf(generate) === -1) {
-      node.generates.push(generate)
+    if (!node.generates.some((g) => g.path === generate.path)) {
+      node.generates.push({ path: generate.path, inherited: true })
     }
   }
 

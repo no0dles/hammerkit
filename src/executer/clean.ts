@@ -2,20 +2,18 @@ import { WorkNodes } from '../planner/work-nodes'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 import { Environment } from './environment'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
+import { isContainerWorkNode } from '../planner/work-node'
+import { getVolumeName } from './execute-docker'
+import { Executor } from './executor'
 
-export async function clean(workNodes: WorkNodes, context: Environment): Promise<void> {
+export async function clean(workNodes: WorkNodes, environment: Environment, executor: Executor): Promise<void> {
   for (const node of iterateWorkNodes(workNodes)) {
-    for (const generate of node.generates) {
-      if (await context.file.exists(generate)) {
-        node.status.console.write('internal', 'info', `remove generate ${generate}`)
-        await context.file.remove(generate)
-      }
-    }
+    await executor.clean(node, environment)
 
     const cachePath = getCacheDirectory(node.id)
-    if (await context.file.exists(cachePath)) {
+    if (await environment.file.exists(cachePath)) {
       node.status.console.write('internal', 'info', `remove cache ${cachePath}`)
-      await context.file.remove(cachePath)
+      await environment.file.remove(cachePath)
     }
   }
 }

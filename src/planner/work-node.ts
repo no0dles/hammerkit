@@ -17,7 +17,7 @@ export interface BaseWorkNode {
   deps: WorkNode[]
   src: WorkNodeSource[]
   status: WorkNodeStatus
-  generates: string[]
+  generates: { path: string; inherited: boolean }[]
   envs: { [key: string]: string }
   cmds: WorkNodeCommand[]
   unknownProps: { [key: string]: any }

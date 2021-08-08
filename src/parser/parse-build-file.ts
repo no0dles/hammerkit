@@ -9,7 +9,7 @@ import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { Environment } from '../executer/environment'
 
 const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
-const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys]
+const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
 
 export async function parseBuildFile(
   fileName: string,

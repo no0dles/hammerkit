@@ -201,8 +201,10 @@ function parseLocalWorkNodeGenerate(
   task: MergedBuildFileTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
-): string[] {
-  return getAbsolutePaths(task.generates, context.currentWorkdir).map((g) => templateValue(g, envs))
+): { path: string; inherited: boolean }[] {
+  return getAbsolutePaths(task.generates, context.currentWorkdir)
+    .map((g) => templateValue(g, envs))
+    .map((path) => ({ path, inherited: false }))
 }
 
 function parseLocalWorkNodeSource(

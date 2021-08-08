@@ -51,7 +51,8 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
       const buildFile = await getBuildFile(fileName, context)
       const workNodes = planWorkNodes(buildFile)
 
-      await clean(workNodes, context)
+      const executor = getDockerExecutor()
+      await clean(workNodes, context, executor)
 
       const executionContext: ExecutionContext = {
         environment: context,
@@ -59,7 +60,7 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
         cacheMethod: executionOptions?.cacheMethod ?? 'checksum',
         workers: executionOptions?.workers ?? 0,
         events: emitter(),
-        executor: getDockerExecutor(),
+        executor,
         runningNodes: {},
       }
 

@@ -4,19 +4,27 @@ import { WorkNodes } from '../planner/work-nodes'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 import { Environment } from './environment'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
+import { Executor } from './executor'
 
-export async function restore(workNodes: WorkNodes, targetDirectory: string, context: Environment): Promise<void> {
+export async function restore(
+  workNodes: WorkNodes,
+  targetDirectory: string,
+  environment: Environment,
+  executor: Executor
+): Promise<void> {
   for (const node of iterateWorkNodes(workNodes)) {
     const cachePath = getCacheDirectory(node.id)
     const sourceCacheDir = join(targetDirectory, 'cache', node.id)
 
-    await moveFiles(node, context, function* () {
+    await moveFiles(node, environment, function* () {
       yield { from: sourceCacheDir, to: cachePath }
-
-      for (const targetPath of node.generates) {
-        const sourcePath = join(targetDirectory, relative(node.buildFile.path, targetPath))
-        yield { from: sourcePath, to: targetPath }
-      }
     })
+
+    try {
+      await executor.restore(node, environment, targetDirectory)
+    } catch (e) {
+      console.error(e)
+      throw e
+    }
   }
 }

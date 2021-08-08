@@ -21,7 +21,7 @@ describe('clean', () => {
     const outputPath = join(buildFile.path, 'node_modules')
 
     expect(existsSync(outputPath)).toBeTruthy()
-    await clean(workTree.nodes, context)
+    await clean(workTree.nodes, context, executionContext.executor)
     expect(existsSync(outputPath)).toBeFalsy()
   })
 })
