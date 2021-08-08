@@ -1,7 +1,7 @@
 {
   "name": "hammerkit",
   "description": "build stuff and things",
-  "version": "1.3.16",
+  "version": "1.4.0-beta.2",
   "bin": "dist/index.js",
   "bugs": {
     "url": "https://github.com/no0dles/hammerkit"
