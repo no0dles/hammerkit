@@ -10,14 +10,14 @@ import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { Defer } from '../utils/defer'
 import { createHash } from 'crypto'
-import { ensureVolumeExists, existsVolume } from './get-docker-executor'
+import { ensureVolumeExists } from './get-docker-executor'
 
 interface WorkNodeVolume {
   name: string
   containerPath: string
 }
 
-export function generateId(generate: string) {
+export function generateId(generate: string): string {
   return createHash('sha1').update(generate).digest('hex')
 }
 
@@ -25,7 +25,7 @@ export function getVolumeName(generate: string): string {
   return `hammerkit-${generateId(generate)}`
 }
 
-export async function getContainerVolumes(node: ContainerWorkNode, context: Environment): Promise<WorkNodeVolume[]> {
+export async function getContainerVolumes(node: ContainerWorkNode): Promise<WorkNodeVolume[]> {
   const volumes: WorkNodeVolume[] = []
 
   for (const generate of node.generates) {
@@ -84,70 +84,26 @@ export async function getContainerMounts(node: ContainerWorkNode, context: Envir
   return result.filter((v, i) => result.findIndex((iv) => iv.containerPath == v.containerPath) === i)
 }
 
-class Lock {
-  private count = 0
-  private queue: Defer<LockLease>[] = []
-
-  constructor(private total: number) {}
-
-  private enqueueQueue() {
-    const item = this.queue.pop()
-    if (item) {
-      item.resolve(this.lease())
-    }
-  }
-
-  private lease(): LockLease {
-    return {
-      close: () => {
-        this.count--
-        this.enqueueQueue()
-      },
-    }
-  }
-
-  async acquire(): Promise<LockLease> {
-    if (this.count < this.total) {
-      this.count++
-      return this.lease()
-    } else {
-      const defer = new Defer<LockLease>()
-      this.queue.push(defer)
-      return defer.promise
-    }
-  }
-}
-
-interface LockLease {
-  close(): void
-}
-
 let dockerInstance: Dockerode | null = null
-const instanceLock = new Lock(2)
 
-function getDocker(): Dockerode {
+export function getDocker(): Dockerode {
   if (!dockerInstance) {
     dockerInstance = new Dockerode()
   }
   return dockerInstance
 }
 
-export async function useDocker(fn: (docker: Dockerode) => Promise<void>): Promise<void> {
-  const lease = await instanceLock.acquire()
-  try {
-    const docker = getDocker()
-    await fn(docker)
-  } finally {
-    lease.close()
-  }
-}
-
 export async function startContainer(container: Container): Promise<void> {
   const defer = new Defer<void>()
   // TODO watch if start takes too long to finish, report warning
-  container.start().then(() => {
-    defer.resolve()
-  })
+  container
+    .start()
+    .then(() => {
+      defer.resolve()
+    })
+    .catch((e) => {
+      defer.reject(e)
+    })
   return defer.promise
 }
 
@@ -161,46 +117,63 @@ function convertToPosixPath(path: string) {
   return path
 }
 
+export function checkIfAbort(cancelDefer: Defer<void>): void {
+  if (cancelDefer.isResolved) {
+    throw new Error('canceled')
+  }
+}
+
 export async function executeDocker(
   node: ContainerWorkNode,
   context: ExecutionContext,
   cancelDefer: Defer<void>
 ): Promise<void> {
   node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
-  await useDocker(async (docker) => {
-    const volumes = await getContainerVolumes(node, context.environment)
-    const mounts = await getContainerMounts(node, context.environment)
+  const docker = getDocker()
 
-    await pull(node, docker, node.image)
+  const volumes = await getContainerVolumes(node)
+  const mounts = await getContainerMounts(node, context.environment)
 
-    for (const volume of volumes) {
-      await ensureVolumeExists(docker, volume.name)
-    }
+  checkIfAbort(cancelDefer)
+  await pull(node, docker, node.image)
 
-    node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
-    const container = await docker.createContainer({
-      Image: node.image,
-      Tty: true,
-      Entrypoint: node.shell,
-      Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
-      WorkingDir: convertToPosixPath(node.cwd),
-      Labels: { app: 'hammerkit' },
-      HostConfig: {
-        Binds: [
-          ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-          ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
-        ],
-        PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-          map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-          return map
-        }, {}),
-      },
-      ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
-        map[`${port.containerPort}/tcp`] = {}
+  checkIfAbort(cancelDefer)
+  for (const volume of volumes) {
+    await ensureVolumeExists(docker, volume.name)
+  }
+
+  checkIfAbort(cancelDefer)
+  node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
+  const container = await docker.createContainer({
+    Image: node.image,
+    Tty: true,
+    Entrypoint: node.shell,
+    Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
+    WorkingDir: convertToPosixPath(node.cwd),
+    Labels: { app: 'hammerkit' },
+    HostConfig: {
+      Binds: [
+        ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
+        ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+      ],
+      PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+        map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
         return map
       }, {}),
-    })
+      AutoRemove: true,
+    },
+    ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
+      map[`${port.containerPort}/tcp`] = {}
+      return map
+    }, {}),
+  })
 
+  const user =
+    platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
+      ? `${process.getuid()}:${process.getgid()}`
+      : undefined
+
+  try {
     for (const mount of mounts) {
       node.status.console.write('internal', 'debug', `bind mount ${mount.localPath}:${mount.containerPath}`)
     }
@@ -208,64 +181,56 @@ export async function executeDocker(
       node.status.console.write('internal', 'debug', `volume mount ${volume.name}:${volume.containerPath}`)
     }
 
-    cancelDefer.promise.then(() => {
-      container.remove({ force: true }).catch(() => {
-        node.status.console.write('internal', 'debug', `remove of container failed`)
-      })
-    })
+    node.status.console.write('internal', 'info', `starting container with image ${node.image}`)
+    await startContainer(container)
 
-    const user =
-      platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
-        ? `${process.getuid()}:${process.getgid()}`
-        : undefined
-
-    try {
-      node.status.console.write('internal', 'info', `starting container with image ${node.image}`)
-
-      await startContainer(container)
-
-      if (user) {
-        const setUserPermission = async (directory: string) => {
-          node.status.console.write('internal', 'debug', 'set permission on ' + directory)
-          const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
-          if (result.ExitCode !== 0) {
-            node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
-          }
-        }
-
-        await setUserPermission(node.cwd)
-        for (const mount of mounts) {
-          await setUserPermission(mount.containerPath)
+    if (user) {
+      const setUserPermission = async (directory: string) => {
+        node.status.console.write('internal', 'debug', 'set permission on ' + directory)
+        const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
+        if (!result || result.ExitCode !== 0) {
+          node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
         }
       }
 
-      for (const cmd of node.cmds) {
-        if (cancelDefer.isResolved) {
-          return
-        }
-
-        const command = templateValue(cmd.cmd, node.envs)
-        node.status.console.write('internal', 'info', `execute cmd ${command} in container`)
-        const result = await execCommand(
-          node,
-          docker,
-          container,
-          convertToPosixPath(cmd.path),
-          [node.shell, '-c', command],
-          user
-        )
-        if (result.ExitCode !== 0) {
-          node.status.console.write('internal', 'error', `command ${command} failed with ${result.ExitCode}`)
-          throw new Error(`command ${command} failed with ${result.ExitCode}`)
-        }
+      await setUserPermission(node.cwd)
+      for (const mount of mounts) {
+        await setUserPermission(mount.containerPath)
       }
-    } finally {
-      node.status.console.write('internal', 'debug', `remove container`)
-      await container.remove({ force: true }).catch(() => {
-        node.status.console.write('internal', 'debug', `remove of container failed`)
-      })
     }
-  })
+
+    for (const cmd of node.cmds) {
+      checkIfAbort(cancelDefer)
+
+      const command = templateValue(cmd.cmd, node.envs)
+      node.status.console.write('internal', 'info', `execute cmd ${command} in container`)
+      const result = await execCommand(
+        node,
+        docker,
+        container,
+        convertToPosixPath(cmd.path),
+        [node.shell, '-c', command],
+        user
+      )
+      if (!result) {
+        return
+      }
+
+      if (result.ExitCode !== 0) {
+        node.status.console.write('internal', 'error', `command ${command} failed with ${result.ExitCode}`)
+        throw new Error(`command ${command} failed with ${result.ExitCode}`)
+      }
+    }
+  } finally {
+    try {
+      node.status.console.write('internal', 'debug', `remove container`)
+      await container.remove({ force: true })
+    } catch (e) {
+      if (e.statusCode !== 404) {
+        node.status.console.write('internal', 'debug', `remove of container failed ${e.message}`)
+      }
+    }
+  }
 }
 
 export async function execCommand(
@@ -275,7 +240,9 @@ export async function execCommand(
   cwd: string,
   cmd: string[],
   user: string | undefined
-) {
+): Promise<ExecInspectInfo | null> {
+  const defer = new Defer<ExecInspectInfo>()
+
   const exec = await container.exec({
     Cmd: cmd,
     WorkingDir: cwd,
@@ -286,30 +253,44 @@ export async function execCommand(
     User: user,
   })
 
-  const defer = new Defer<ExecInspectInfo>()
   node.status.console.write('internal', 'debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
-  awaitStream(node, docker, stream).then(async () => {
-    if (!defer.isResolved) {
-      const result = await exec.inspect()
+
+  awaitStream(node, docker, stream)
+    .then(async () => {
       if (!defer.isResolved) {
-        defer.resolve(result)
+        const result = await exec.inspect()
+        if (!defer.isResolved) {
+          defer.resolve(result)
+        }
       }
-    }
-  })
+    })
+    .catch((e) => {
+      if (!defer.isResolved) {
+        defer.reject(e)
+      }
+    })
+
   pollStatus(exec, defer)
+
   return defer.promise
 }
 
 export function pollStatus(exec: Exec, defer: Defer<ExecInspectInfo>): void {
   async function inspect() {
-    const result = await exec.inspect()
-    if (!result.Running && !defer.isResolved) {
-      defer.resolve(result)
-    }
+    try {
+      const result = await exec.inspect()
+      if (!result.Running && !defer.isResolved) {
+        defer.resolve(result)
+      }
 
-    if (!defer.isResolved) {
-      setTimeout(() => inspect(), 50)
+      if (!defer.isResolved) {
+        setTimeout(() => inspect(), 50)
+      }
+    } catch (e) {
+      if (!defer.isResolved) {
+        defer.reject(e)
+      }
     }
   }
 

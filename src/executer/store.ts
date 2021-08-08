@@ -20,11 +20,6 @@ export async function store(
       yield { from: cachePath, to: sourceCacheDir }
     })
 
-    try {
-      await executor.store(node, environment, targetDirectory)
-    } catch (e) {
-      console.error(e)
-      throw e
-    }
+    await executor.store(node, environment, targetDirectory)
   }
 }

@@ -6,7 +6,7 @@ import { clean } from '../../executer/clean'
 import { getTestSuite } from '../get-test-suite'
 import { execute } from '../../executer/execute'
 import { getLocalExecutor } from '../../executer/get-local-executor'
-import { getVolumeName, useDocker } from '../../executer/execute-docker'
+import { getDocker, getVolumeName } from '../../executer/execute-docker'
 import { existsVolume, getDockerExecutor } from '../../executer/get-docker-executor'
 
 describe('clean', () => {
@@ -43,15 +43,10 @@ describe('clean', () => {
 
     const outputPath = join(buildFile.path, 'node_modules')
     const volumeName = getVolumeName(outputPath)
-    await useDocker(async (docker) => {
-      const exists = await existsVolume(docker, volumeName)
-      expect(exists).toBeTruthy()
-    })
+    const docker = getDocker()
+    expect(await existsVolume(docker, volumeName)).toBeTruthy()
 
     await clean(workTree.nodes, context, executionContext.executor)
-    await useDocker(async (docker) => {
-      const exists = await existsVolume(docker, volumeName)
-      expect(exists).toBeFalsy()
-    })
+    expect(await existsVolume(docker, volumeName)).toBeFalsy()
   })
 })

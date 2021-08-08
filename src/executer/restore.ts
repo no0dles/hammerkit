@@ -1,4 +1,4 @@
-import { join, relative } from 'path'
+import { join } from 'path'
 import { moveFiles } from '../file/move-files'
 import { WorkNodes } from '../planner/work-nodes'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
@@ -20,11 +20,6 @@ export async function restore(
       yield { from: sourceCacheDir, to: cachePath }
     })
 
-    try {
-      await executor.restore(node, environment, targetDirectory)
-    } catch (e) {
-      console.error(e)
-      throw e
-    }
+    await executor.restore(node, environment, targetDirectory)
   }
 }
