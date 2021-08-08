@@ -34,8 +34,14 @@ jobs:
         uses: actions/setup-node@v2
         with:
           node-version: '14'
+      - name: Set Version
+        id: version
+        run: |
+          echo ::set-output name=VERSION::${GITHUB_REF:11}
       - name: Install npm packages
         run: npm ci
+      - name: Set version
+        run: npm version ${{ steps.version.outputs.version }}
       - run: node_modules/.bin/tsc
       - name: Build binaries
         run: node_modules/.bin/pkg --no-bytecode -t "node14-linux-x64,node14-linux-arm64,node14-macos-x64,node14-macos-arm64,node14-win-x64,node14-win-arm64" .
@@ -113,9 +119,21 @@ jobs:
         uses: actions/setup-node@v2
         with:
           node-version: '14'
+      - name: Set Version
+        id: version
+        run: |
+          echo ::set-output name=VERSION::${GITHUB_REF:11}
       - name: Install npm packages
         run: npm ci
+      - name: Set version
+        run: npm version ${{ steps.version.outputs.version }}
+      - name: Publish package
+        run: npm publish --tag beta
+        if: contains(steps.version.outputs.version, 'beta')
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish package
         run: npm publish
+        if: !contains(steps.version.outputs.version, 'beta')
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
