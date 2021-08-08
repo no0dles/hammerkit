@@ -134,6 +134,6 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish package
         run: npm publish
-        if: !contains(steps.version.outputs.version, 'beta')
+        if: "!contains(steps.version.outputs.version, 'beta')"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
