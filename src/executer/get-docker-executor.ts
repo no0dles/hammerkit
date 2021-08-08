@@ -7,6 +7,28 @@ import { replaceEnvVariables } from '../environment/replace-env-variables'
 import { Defer } from '../utils/defer'
 import { join } from 'path'
 import { Environment } from './environment'
+import Dockerode from 'dockerode'
+
+export async function existsVolume(docker: Dockerode, volumeName: string): Promise<boolean> {
+  try {
+    const volume = await docker.getVolume(volumeName)
+    await volume.inspect()
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+export async function ensureVolumeExists(docker: Dockerode, volumeName: string): Promise<void> {
+  const volumeExists = await existsVolume(docker, volumeName)
+  if (!volumeExists) {
+    await docker.createVolume({
+      Name: volumeName,
+      Driver: 'local',
+      Labels: { app: 'hammerkit' },
+    })
+  }
+}
 
 export function getDockerExecutor(): Executor {
   const localExec = getLocalExecutor()
@@ -27,16 +49,7 @@ export function getDockerExecutor(): Executor {
             continue
           }
 
-          try {
-            const volume = await docker.getVolume(volumeName)
-            await volume.inspect()
-          } catch (e) {
-            await docker.createVolume({
-              Name: volumeName,
-              Driver: 'local',
-              Labels: { app: 'hammerkit' },
-            })
-          }
+          await ensureVolumeExists(docker, volumeName)
 
           node.status.console.write('internal', 'info', `import data into volume ${volumeName}`)
           const res = await docker.run(
@@ -66,10 +79,8 @@ export function getDockerExecutor(): Executor {
           const id = generateId(generate.path)
           const volumeName = getVolumeName(generate.path)
 
-          try {
-            const volume = await docker.getVolume(volumeName)
-            await volume.inspect()
-          } catch (e) {
+          const volumeExists = await existsVolume(docker, volumeName)
+          if (!volumeExists) {
             node.status.console.write('internal', 'info', `generate ${generate} has no volume ${volumeName}`)
             continue
           }
@@ -101,12 +112,12 @@ export function getDockerExecutor(): Executor {
           }
 
           const volumeName = getVolumeName(generate.path)
-          try {
-            const volume = await docker.getVolume(volumeName)
-            await volume.inspect()
+          const volumeExists = await existsVolume(docker, volumeName)
+          if (volumeExists) {
             node.status.console.write('internal', 'info', `remove volume ${volumeName}`)
+            const volume = await docker.getVolume(volumeName)
             await volume.remove()
-          } catch (e) {
+          } else {
             node.status.console.write('internal', 'info', `generate ${generate} has no volume ${volumeName}`)
           }
         }

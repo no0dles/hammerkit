@@ -8,14 +8,17 @@ import { planWorkNodes } from '../../planner/utils/plan-work-nodes'
 import { getTestSuite } from '../get-test-suite'
 import { execute } from '../../executer/execute'
 import { existsSync } from 'fs'
+import { getLocalExecutor } from '../../executer/get-local-executor'
 
 describe('store/restore', () => {
-  const suite = getTestSuite('store-restore', ['build.yaml'])
+  const suite = getTestSuite('store-restore', ['build.yaml', 'package.json'])
 
   afterAll(() => suite.close())
 
-  it('should clean created outputs', async () => {
+  it('should clean created outputs locally', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
+    executionContext.cacheMethod = 'none'
+    executionContext.executor = getLocalExecutor()
 
     const outputPath = join(buildFile.path, 'test-output')
     const generatedPath = join(buildFile.path, 'node_modules')

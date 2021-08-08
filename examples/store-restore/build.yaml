@@ -7,5 +7,7 @@ tasks:
       - $PWD/.config:/.config
     generates:
       - node_modules
+    src:
+      - package.json
     cmds:
       - npm install hammerkit

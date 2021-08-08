@@ -10,6 +10,7 @@ import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { Defer } from '../utils/defer'
 import { createHash } from 'crypto'
+import { ensureVolumeExists, existsVolume } from './get-docker-executor'
 
 interface WorkNodeVolume {
   name: string
@@ -173,16 +174,7 @@ export async function executeDocker(
     await pull(node, docker, node.image)
 
     for (const volume of volumes) {
-      try {
-        const existing = await docker.getVolume(volume.name)
-        await existing.inspect()
-      } catch (e) {
-        await docker.createVolume({
-          Name: volume.name,
-          Driver: 'local',
-          Labels: { app: 'hammerkit' },
-        })
-      }
+      await ensureVolumeExists(docker, volume.name)
     }
 
     node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)

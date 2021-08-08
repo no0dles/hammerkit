@@ -8,3 +8,4 @@ examples/*/npm
 *.tgz
 .npm
 temp
+.DS_Store
