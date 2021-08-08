@@ -92,6 +92,6 @@ The goal will be to either skip local tasks where platform requirements are not 
 
 ## Release
 ```
-npm version patch|minor|major
+npm version patch|minor|major|prerelease
 git push origin --tags
 ```

@@ -262,6 +262,7 @@ async function execCommand(
   })
 
   const defer = new Defer<ExecInspectInfo>()
+  node.status.console.write('internal', 'debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
   awaitStream(node, docker, stream).then(async () => {
     if (!defer.isResolved) {
