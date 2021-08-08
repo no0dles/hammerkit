@@ -15,6 +15,7 @@ import { getDockerExecutor } from './executer/get-docker-executor'
 import { getLogger } from './logging/get-logger'
 import { isCI } from './utils/ci'
 import { emitter } from './utils/emitter'
+import { getKubernetesExecutor } from './executer/execute-kubernetes'
 
 export async function getProgram(
   environment: Environment,
@@ -119,7 +120,11 @@ export async function getProgram(
             cacheMethod: options.cache,
             watch: options.watch,
             events: emitter(),
-            executor: options.container ? getDockerExecutor() : getLocalExecutor(),
+            executor: options.container
+              ? buildFile.containerRuntime.type === 'docker'
+                ? getDockerExecutor()
+                : getKubernetesExecutor()
+              : getLocalExecutor(),
             environment: environment,
             runningNodes: {},
           }

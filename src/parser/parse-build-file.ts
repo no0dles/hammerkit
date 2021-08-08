@@ -7,6 +7,7 @@ import { parseStringArray } from './parse-string-array'
 import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { Environment } from '../executer/environment'
+import { BuildFileContainerRuntime } from './build-file-container-runtime'
 
 const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'shell', ...validTaskKeys]
@@ -19,6 +20,9 @@ export async function parseBuildFile(
 ): Promise<BuildFile> {
   const result: BuildFile = {
     fileName,
+    containerRuntime: {
+      type: 'docker',
+    },
     includes: {},
     tasks: {},
     path: dirname(fileName),
@@ -44,6 +48,8 @@ export async function parseBuildFile(
       result.references = await parseBuildFileReferences('reference', fileName, files, value || {}, context)
     } else if (key === 'envs') {
       result.envs = parseEnvs(fileName, value || {}, result.envs)
+    } else if (key === 'containerRuntime') {
+      result.containerRuntime = parseContainerRuntime(value)
     }
   }
 
@@ -86,4 +92,18 @@ export async function parseBuildFile(
   }
 
   return result
+}
+
+function parseContainerRuntime(value: any): BuildFileContainerRuntime {
+  const runtime: BuildFileContainerRuntime = {
+    type: 'docker',
+  }
+
+  const supportedRuntimes = ['docker', 'kubernetes']
+  if (value.type && supportedRuntimes.indexOf(value.type) === -1) {
+    throw new Error(`unsupported container runtime of type ${value.type}`)
+  }
+  runtime.type = value.type
+
+  return runtime
 }

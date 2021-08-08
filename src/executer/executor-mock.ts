@@ -2,6 +2,7 @@ import { Executor } from './executor'
 import { WorkNode } from '../planner/work-node'
 import { ExecutionContext } from './execution-context'
 import { Defer } from '../utils/defer'
+import { WorkTree } from '../planner/work-tree'
 
 export interface ExecutorMock extends Executor {
   waitFor(nodeId: string): Promise<Defer<void>>
@@ -12,7 +13,7 @@ export function getExecutorMock(): ExecutorMock {
   const execs: { [key: string]: Defer<void> } = {}
 
   return {
-    exec(node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
+    exec(workTree: WorkTree, node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
       const resultDefer = new Defer<void>()
       cancelDefer.promise.then(() => {
         if (resultDefer.isResolved) {

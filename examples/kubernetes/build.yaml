@@ -1,0 +1,25 @@
+containerRuntime:
+  type: kubernetes
+
+tasks:
+  install:
+    image: node:16.6.0-alpine
+    cmds:
+      - npm install
+    src:
+      - package.json
+      - pacakge-lock.json
+    generates:
+      - node_modules
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+
+  api:
+    image: node:16.6.0-alpine
+    deps:
+      - install
+    cmds:
+      - node -r ts-node/register src/index.ts
+    src:
+      - src

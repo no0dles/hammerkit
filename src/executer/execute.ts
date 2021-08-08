@@ -107,7 +107,7 @@ function runPendingNodes(workTree: WorkTree, arg: ExecutionContext) {
 async function continueExecution(workTree: WorkTree, node: WorkNode, context: ExecutionContext) {
   const cancelDefer = runNode(workTree, node.id, context)
   try {
-    await context.executor.exec(node, context, cancelDefer)
+    await context.executor.exec(workTree, node, context, cancelDefer)
     await writeWorkNodeCache(node, context.environment)
     completeNode(workTree, node.id, context, true)
   } catch (e) {

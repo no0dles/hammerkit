@@ -1,0 +1,7 @@
+{
+  "name": "kubernetes",
+  "version": "1.0.0",
+  "devDependencies": {
+    "typescript": "^4.3.5"
+  }
+}

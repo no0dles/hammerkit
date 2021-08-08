@@ -5,14 +5,15 @@ import { executeDocker } from './execute-docker'
 import { getLocalExecutor } from './get-local-executor'
 import { replaceEnvVariables } from '../environment/replace-env-variables'
 import { Defer } from '../utils/defer'
+import { WorkTree } from '../planner/work-tree'
 
 export function getDockerExecutor(): Executor {
   const localExec = getLocalExecutor()
 
   return {
-    async exec(node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
+    async exec(workTree: WorkTree, node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
       if (!isContainerWorkNode(node)) {
-        return localExec.exec(node, context, cancelDefer)
+        return localExec.exec(workTree, node, context, cancelDefer)
       }
 
       const envs = replaceEnvVariables(node, context.environment.processEnvs)
