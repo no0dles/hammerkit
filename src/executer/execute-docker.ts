@@ -9,8 +9,29 @@ import { templateValue } from '../planner/utils/template-value'
 import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { Defer } from '../utils/defer'
+import { createHash } from 'crypto'
+import { execute } from './execute'
 
-export async function getContainerVolumes(node: ContainerWorkNode, context: Environment): Promise<WorkNodePath[]> {
+interface WorkNodeVolume {
+  name: string
+  containerPath: string
+}
+
+export async function getContainerVolumes(node: ContainerWorkNode, context: Environment): Promise<WorkNodeVolume[]> {
+  const volumes: WorkNodeVolume[] = []
+
+  for (const generate of node.generates) {
+    const name = `hammerkit-${createHash('sha1').update(generate).digest('hex')}`
+    volumes.push({
+      name,
+      containerPath: generate,
+    })
+  }
+
+  return volumes
+}
+
+export async function getContainerMounts(node: ContainerWorkNode, context: Environment): Promise<WorkNodePath[]> {
   const result: WorkNodePath[] = []
 
   for (const source of node.src) {
@@ -34,24 +55,8 @@ export async function getContainerVolumes(node: ContainerWorkNode, context: Envi
     }
   }
 
-  for (const generate of node.generates) {
-    const exists = await context.file.exists(generate)
-    if (!exists) {
-      if (extname(generate)) {
-        await context.file.writeFile(generate, '')
-      } else {
-        await context.file.createDirectory(generate)
-      }
-    }
-
-    result.push({
-      localPath: generate,
-      containerPath: generate,
-    })
-  }
-
-  for (const volume of node.mounts) {
-    result.push(volume)
+  for (const mount of node.mounts) {
+    result.push(mount)
   }
 
   for (const volume of result) {
@@ -67,6 +72,7 @@ export async function getContainerVolumes(node: ContainerWorkNode, context: Envi
       )
     }
   }
+
   return result.filter((v, i) => result.findIndex((iv) => iv.containerPath == v.containerPath) === i)
 }
 
@@ -155,7 +161,22 @@ export async function executeDocker(
   node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
   await useDocker(async (docker) => {
     const volumes = await getContainerVolumes(node, context.environment)
+    const mounts = await getContainerMounts(node, context.environment)
+
     await pull(node, docker, node.image)
+
+    for (const volume of volumes) {
+      try {
+        const existing = await docker.getVolume(volume.name)
+        await existing.inspect()
+      } catch (e) {
+        await docker.createVolume({
+          Name: volume.name,
+          Driver: 'local',
+          Labels: { app: 'hammerkit' },
+        })
+      }
+    }
 
     node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
     const container = await docker.createContainer({
@@ -166,8 +187,10 @@ export async function executeDocker(
       WorkingDir: convertToPosixPath(node.cwd),
       Labels: { app: 'hammerkit' },
       HostConfig: {
-        Binds:
-          volumes.length > 0 ? volumes.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`) : undefined,
+        Binds: [
+          ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
+          ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+        ],
         PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
           map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
           return map
@@ -179,8 +202,11 @@ export async function executeDocker(
       }, {}),
     })
 
+    for (const mount of mounts) {
+      node.status.console.write('internal', 'debug', `bind mount ${mount.localPath}:${mount.containerPath}`)
+    }
     for (const volume of volumes) {
-      node.status.console.write('internal', 'debug', `mount volume ${volume.localPath}:${volume.containerPath}`)
+      node.status.console.write('internal', 'debug', `volume mount ${volume.name}:${volume.containerPath}`)
     }
 
     cancelDefer.promise.then(() => {
@@ -209,8 +235,8 @@ export async function executeDocker(
         }
 
         await setUserPermission(node.cwd)
-        for (const volume of volumes) {
-          await setUserPermission(volume.containerPath)
+        for (const mount of mounts) {
+          await setUserPermission(mount.containerPath)
         }
       }
 
