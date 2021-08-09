@@ -1,7 +1,6 @@
 import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { getTestSuite } from '../get-test-suite'
 import { execute } from '../../executer/execute'
-import { join } from 'path'
 
 describe('watch', () => {
   const suite = getTestSuite('watch', ['build.yaml', 'src', 'package.json', 'package-lock.json', 'tsconfig.json'])
