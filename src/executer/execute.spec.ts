@@ -35,13 +35,13 @@ describe('execute', () => {
   it('should restart watching task if once completed', async () => {
     const resultPromise = execute(workTree, ctx)
 
-    const runningApi = await ctx.executor.waitFor(nodeId)
-    runningApi.resolve()
+    const runningApi = await ctx.executor.waitForNode(nodeId)
+    runningApi.end()
 
     await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
 
-    await ctx.executor.waitFor(nodeId)
-    await ctx.environment.cancelDefer.resolve()
+    await ctx.executor.waitForNode(nodeId)
+    await ctx.environment.cancelDefer.abort()
 
     const result = await resultPromise
     expect(result.success).toBeFalsy()
@@ -50,13 +50,13 @@ describe('execute', () => {
   it('should restart watching task if once failed', async () => {
     const resultPromise = execute(workTree, ctx)
 
-    const runningApi = await ctx.executor.waitFor(nodeId)
-    runningApi.reject(new Error('runtime error'))
+    const runningApi = await ctx.executor.waitForNode(nodeId)
+    runningApi.fail(new Error('runtime error'))
 
     await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
 
-    await ctx.executor.waitFor(nodeId)
-    await ctx.environment.cancelDefer.resolve()
+    await ctx.executor.waitForNode(nodeId)
+    await ctx.environment.cancelDefer.abort()
 
     const result = await resultPromise
     expect(result.success).toBeFalsy()

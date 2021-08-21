@@ -4,7 +4,6 @@ import { ExecutionContext } from './execution-context'
 import { executeDocker, generateId, getDocker, getVolumeName } from './execute-docker'
 import { getLocalExecutor } from './get-local-executor'
 import { replaceEnvVariables } from '../environment/replace-env-variables'
-import { Defer } from '../utils/defer'
 import { join } from 'path'
 import { Environment } from './environment'
 import Dockerode, { VolumeInspectInfo } from 'dockerode'
@@ -114,7 +113,7 @@ export function getDockerExecutor(): Executor {
         }
       }
     },
-    async exec(node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
+    async exec(node: WorkNode, context: ExecutionContext, cancelDefer: AbortController): Promise<void> {
       if (!isContainerWorkNode(node)) {
         return localExec.exec(node, context, cancelDefer)
       }

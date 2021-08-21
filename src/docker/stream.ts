@@ -3,32 +3,23 @@ import { getLogs } from '../log'
 import Dockerode from 'dockerode'
 import { ContainerWorkNode } from '../planner/work-node'
 import { WorkNodeConsoleLogLevel } from '../planner/work-node-status'
-import { Defer } from '../utils/defer'
 
 export async function awaitStream(node: ContainerWorkNode, docker: Dockerode, stream: Duplex): Promise<void> {
-  const defer = new Defer<void>()
-
-  function end() {
-    if (!defer.isResolved) {
-      defer.resolve()
-    }
-  }
-
-  function writeLog(leve: WorkNodeConsoleLogLevel) {
-    return (buffer: Buffer) => {
-      for (const log of getLogs(buffer)) {
-        node.status.console.write('process', leve, log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
+  return new Promise<void>((resolve, reject) => {
+    function writeLog(leve: WorkNodeConsoleLogLevel) {
+      return (buffer: Buffer) => {
+        for (const log of getLogs(buffer)) {
+          node.status.console.write('process', leve, log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
+        }
       }
     }
-  }
 
-  stream.on('error', end)
-  stream.on('end', end)
-  stream.on('close', end)
+    stream.on('error', reject)
+    stream.on('end', resolve)
+    stream.on('close', resolve)
 
-  demuxStream(stream, writeLog('info'), writeLog('error'))
-
-  await defer.promise
+    demuxStream(stream, writeLog('info'), writeLog('error'))
+  })
 }
 
 function demuxStream(stream: any, stdoutFn: (buffer: Buffer) => void, stderrFn: (buffer: Buffer) => void) {

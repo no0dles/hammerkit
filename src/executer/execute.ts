@@ -53,7 +53,7 @@ async function watchNodes(workTree: WorkTree, context: ExecutionContext) {
     let currentState = await getWorkNodeCacheStats(node, context.environment)
 
     const debouncer = new Debouncer(async () => {
-      if (context.environment.cancelDefer.isResolved) {
+      if (context.environment.cancelDefer.signal.aborted) {
         return
       }
 

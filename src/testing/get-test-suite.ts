@@ -9,7 +9,6 @@ import { getDockerExecutor } from '../executer/get-docker-executor'
 import { getConsoleContextMock } from '../console/get-console-context-mock'
 import { getFileContext } from '../file/get-file-context'
 import { emitter } from '../utils/emitter'
-import { Defer } from '../utils/defer'
 import { clean } from '../executer/clean'
 import { planWorkNodes } from '../planner/utils/plan-work-nodes'
 
@@ -34,7 +33,7 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
     ): Promise<{ context: TestContext; executionContext: ExecutionContext; buildFile: BuildFile }> {
       const context: TestContext = {
         processEnvs: { ...process.env },
-        cancelDefer: new Defer<void>(),
+        cancelDefer: new AbortController(),
         cwd: testDirectory,
         file,
         console: getConsoleContextMock(),

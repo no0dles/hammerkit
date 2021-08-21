@@ -15,7 +15,6 @@ import { BuildFileTask } from '../../parser/build-file-task'
 import { WorkNodeCommand } from '../work-node-command'
 import { BuildTaskCommand } from '../../parser/build-file-task-command'
 import { nodeConsole } from '../work-node-status'
-import { Defer } from '../../utils/defer'
 import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
 import { WorkNodePath } from '../work-node-path'
@@ -125,7 +124,7 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
           completedDependencies: {},
           pendingDependencies: {},
           state: { type: 'pending' },
-          defer: new Defer<void>(),
+          defer: new AbortController(),
           console: nodeConsole(),
         },
       },

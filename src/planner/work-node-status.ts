@@ -1,7 +1,6 @@
 import { WorkNode } from './work-node'
 import { isVerbose } from '../log'
 import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
-import { Defer } from '../utils/defer'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type WorkNodeConsoleLogType = 'process' | 'internal'
@@ -56,7 +55,7 @@ export interface WorkNodeStatus {
   pendingDependencies: { [id: string]: WorkNode }
   completedDependencies: { [id: string]: WorkNode }
   state: WorkNodeState
-  defer: Defer<void>
+  defer: AbortController
   console: WorkNodeConsole
 }
 
@@ -83,7 +82,7 @@ export interface WorkNodeAbortedState {
 export interface WorkNodeRunningState {
   type: 'running'
   started: Date
-  cancelDefer: Defer<void>
+  cancelDefer: AbortController
 }
 
 export interface WorkNodeCompletedState {

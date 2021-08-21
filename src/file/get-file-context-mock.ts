@@ -109,7 +109,7 @@ export function getFileContextMock(): FileContextMock {
       fileNode.lastAccess = new Date()
       notifyChange(parts, path)
     },
-    async createDirectory(path: string): Promise<void> {
+    async createDirectory(path: string): Promise<string> {
       const parts = path.split(sep)
       let currentNode = rootNode
       for (let i = 0; i < parts.length; i++) {
@@ -127,6 +127,7 @@ export function getFileContextMock(): FileContextMock {
         }
       }
       notifyChange(parts, path)
+      return path
     },
     async copy(source: string, destination: string): Promise<void> {
       const destinationPath = destination.split(sep)

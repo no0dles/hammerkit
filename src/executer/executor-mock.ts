@@ -1,15 +1,19 @@
 import { Executor } from './executor'
 import { WorkNode } from '../planner/work-node'
 import { ExecutionContext } from './execution-context'
-import { Defer } from '../utils/defer'
 
 export interface ExecutorMock extends Executor {
-  waitFor(nodeId: string): Promise<Defer<void>>
+  waitForNode(nodeId: string): Promise<NodeHandle>
+}
+
+export interface NodeHandle {
+  fail(err: Error): void;
+  end(): void;
 }
 
 export function getExecutorMock(): ExecutorMock {
-  const waits: { [key: string]: Defer<Defer<void>> } = {}
-  const execs: { [key: string]: Defer<void> } = {}
+  const waits: { [key: string]: NodeHandle } = {}
+  const execs: { [key: string]: NodeHandle } = {}
 
   return {
     restore(): Promise<void> {
@@ -21,33 +25,45 @@ export function getExecutorMock(): ExecutorMock {
     clean(): Promise<void> {
       return Promise.resolve()
     },
-    exec(node: WorkNode, context: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
-      const resultDefer = new Defer<void>()
-      cancelDefer.promise.then(() => {
-        if (resultDefer.isResolved) {
-          return
+    exec(node: WorkNode, context: ExecutionContext, cancelDefer: AbortController): Promise<void> {
+      return new Promise<void>((resolve, reject) => {
+        const resultDefer: NodeHandle = {
+          end() {
+            resolve()
+          },
+          fail(err: Error) {
+            reject(err)
+          }
         }
-        resultDefer.reject(new Error('canceled'))
+        cancelDefer.promise.then(() => {
+          if (resultDefer.isResolved) {
+            return
+          }
+          resultDefer.reject(new Error('canceled'))
+        })
+        if (waits[node.id]) {
+          waits[node.id].resolve(resultDefer)
+          delete waits[node.id]
+        } else {
+          execs[node.id] = resultDefer
+        }
       })
-      if (waits[node.id]) {
-        waits[node.id].resolve(resultDefer)
-        delete waits[node.id]
-      } else {
-        execs[node.id] = resultDefer
-      }
-
-      return resultDefer.promise
     },
-    async waitFor(nodeId: string): Promise<Defer<void>> {
+    async waitForNode(nodeId: string): Promise<NodeHandle> {
       const currentExecs = execs[nodeId]
       if (currentExecs) {
         delete execs[nodeId]
         return currentExecs
       }
 
-      const resultDefer = new Defer<Defer<void>>()
+      const resultDefer: NodeHandle = {
+        end() {
+        },
+        fail(err: Error) {
+        }
+      }
       waits[nodeId] = resultDefer
-      return resultDefer.promise
+      return resultDefer
     },
   }
 }

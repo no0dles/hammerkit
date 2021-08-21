@@ -1,5 +1,5 @@
 export interface FileContext {
-  createDirectory(path: string): Promise<void>
+  createDirectory(path: string): Promise<string>
 
   listFiles(path: string): Promise<string[]>
 

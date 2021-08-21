@@ -5,13 +5,12 @@ import { templateValue } from '../planner/utils/template-value'
 import { platform } from 'os'
 import { ExecutionContext } from './execution-context'
 import { getProcessEnvs } from '../environment/get-process-env'
-import { Defer } from '../utils/defer'
 
-export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancelDefer: Defer<void>): Promise<void> {
+export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancelDefer: AbortController): Promise<void> {
   node.status.console.write('internal', 'info', `execute ${node.name} locally`)
   const envs = getProcessEnvs(node.envs, arg.environment)
   for (const cmd of node.cmds) {
-    if (cancelDefer.isResolved) {
+    if (cancelDefer.signal.aborted) {
       return
     }
 
@@ -37,7 +36,7 @@ export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancel
         node.status.console.write('process', 'error', err.message)
       })
       ps.on('close', (code) => {
-        if (cancelDefer.isResolved) {
+        if (cancelDefer.signal.aborted) {
           reject(new Error('canceled'))
           return
         }

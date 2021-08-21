@@ -1,76 +1,69 @@
-import { appendFile, copyFile, mkdir, readdir, readFile, rmdir, stat, writeFile } from 'fs'
+import { appendFile, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs'
 import { dirname, join } from 'path'
 import { watch } from 'chokidar'
 import { FileContext, Stats } from './file-context'
-import { Defer } from '../utils/defer'
 
-function handleCallback<T>(defer: Defer<T>): (err: Error | null, value: T) => void
-function handleCallback(defer: Defer<void>): (err: Error | null) => void
-function handleCallback(defer: Defer<any>): (err: Error | null, value?: any) => void {
-  return (err: Error | null, value: any) => {
-    if (err) {
-      defer.reject(err)
-    } else {
-      defer.resolve(value)
-    }
-  }
+function handleCallback<T>(callback: (cb: ((err: Error | null, value: T | null | undefined) => void)) => void): Promise<T>
+function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
+function handleCallback(callback: (cb: (err: Error | null, value?: any) => void) => void): Promise<any> {
+  return new Promise<any>((resolve, reject) => {
+    callback((err: Error | null, value: any) => {
+      if (err) {
+        reject(err)
+      } else {
+        resolve(value)
+      }
+    })
+  })
 }
 
 export function getFileContext(): FileContext {
   return {
     stats(path: string): Promise<Stats> {
-      const defer = new Defer<{ type: 'file'; lastModified: number } | { type: 'directory' } | { type: 'other' }>()
-      stat(path, (err, stats) => {
-        if (err) {
-          defer.reject(err)
-        } else {
-          if (stats.isDirectory()) {
-            defer.resolve({ type: 'directory' })
-          } else if (stats.isFile()) {
-            defer.resolve({ type: 'file', lastModified: stats.mtimeMs })
+      return new Promise<Stats>((resolve, reject) => {
+        stat(path, (err, stats) => {
+          if (err) {
+            reject(err)
           } else {
-            defer.resolve({ type: 'other' })
+            if (stats.isDirectory()) {
+              resolve({ type: 'directory' })
+            } else if (stats.isFile()) {
+              resolve({ type: 'file', lastModified: stats.mtimeMs })
+            } else {
+              resolve({ type: 'other' })
+            }
           }
-        }
+        })
       })
-      return defer.promise
     },
     appendFile(path: string, content: string): Promise<void> {
-      const defer = new Defer<void>()
-      appendFile(path, content, handleCallback(defer))
-      return defer.promise
+      return handleCallback(cb => appendFile(path, content, cb))
     },
     writeFile(path: string, content: string): Promise<void> {
-      const defer = new Defer<void>()
-      writeFile(path, content, handleCallback(defer))
-      return defer.promise
+      return handleCallback(cb => writeFile(path, content, cb))
     },
     listFiles(path: string): Promise<string[]> {
-      const defer = new Defer<string[]>()
-      readdir(path, handleCallback(defer))
-      return defer.promise
+      return handleCallback(cb => readdir(path, cb))
     },
     exists(path: string): Promise<boolean> {
-      const defer = new Defer<boolean>()
+      return handleCallback(cb =>
       stat(path, (err) => {
         if (err) {
-          defer.resolve(false)
+          cb(null, false)
         } else {
-          defer.resolve(true)
+          cb(null, true)
         }
-      })
-      return defer.promise
+      }))
     },
     read(path: string): Promise<string> {
-      const defer = new Defer<string>()
-      readFile(path, (err, content) => {
+      return handleCallback(cb =>
+        readFile(path, (err, content) => {
         if (err) {
-          defer.reject(err)
+          cb(err, null)
         } else {
-          defer.resolve(content.toString())
+          cb(null, content.toString())
         }
-      })
-      return defer.promise
+      }))
     },
     async copy(source: string, destination: string): Promise<void> {
       const exists = await this.exists(source)
@@ -91,20 +84,17 @@ export function getFileContext(): FileContext {
           await this.createDirectory(destinationDirectory)
         }
 
-        const defer = new Defer<void>()
-        copyFile(source, destination, handleCallback(defer))
-        return defer.promise
+        return handleCallback(cb =>
+        copyFile(source, destination, cb));
       }
     },
-    createDirectory(path: string): Promise<void> {
-      const defer = new Defer<string | undefined>()
-      mkdir(path, { recursive: true }, handleCallback(defer))
-      return defer.promise.then()
+    createDirectory(path: string): Promise<string> {
+      return handleCallback(cb => mkdir(path, { recursive: true }, cb))
     },
-    remove(path: string): Promise<void> {
-      const defer = new Defer<void>()
-      rmdir(path, { recursive: true }, handleCallback(defer))
-      return defer.promise
+    async remove(path: string): Promise<void> {
+      if (await this.exists(path)) {
+        return handleCallback(cb => rm(path, { recursive: true }, cb))
+      }
     },
     watch(path: string, callback: (fileName: string) => void): { close(): void } {
       const watcher = watch(path)

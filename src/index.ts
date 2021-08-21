@@ -3,14 +3,11 @@
 import { getProgram } from './program'
 import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
-import { Defer } from './utils/defer'
 
-const cancelDefer = new Defer<void>()
+const cancelDefer = new AbortController()
 
 process.on('SIGINT', function () {
-  if (!cancelDefer.isResolved) {
-    cancelDefer.resolve()
-  }
+  cancelDefer.abort()
 })
 
 getProgram(

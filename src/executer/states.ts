@@ -9,7 +9,6 @@ import {
   WorkNodeState,
 } from '../planner/work-node-status'
 import { ExecutionContext } from './execution-context'
-import { Defer } from '../utils/defer'
 
 function getDuration(state: WorkNodeState): number {
   if (state.type === 'running') {
@@ -18,11 +17,11 @@ function getDuration(state: WorkNodeState): number {
   return 0
 }
 
-export function runNode(workTree: WorkTree, nodeId: string, context: ExecutionContext): Defer<void> {
-  const runningState: WorkNodeRunningState = { type: 'running', started: new Date(), cancelDefer: new Defer<void>() }
+export function runNode(workTree: WorkTree, nodeId: string, context: ExecutionContext): AbortController {
+  const runningState: WorkNodeRunningState = { type: 'running', started: new Date(), cancelDefer: new AbortController() }
   context.environment.cancelDefer.promise.then(() => {
-    if (!runningState.cancelDefer.isResolved) {
-      runningState.cancelDefer.resolve()
+    if (!runningState.cancelDefer.signal.aborted) {
+      runningState.cancelDefer.abort()
     }
   })
 
@@ -48,8 +47,8 @@ export function completeNode(
     duration: getDuration(currentState),
   }
   node.status.state = completedState
-  if (!context.watch && !node.status.defer.isResolved) {
-    node.status.defer.resolve()
+  if (!context.watch && !node.status.defer.signal.aborted) {
+    node.status.defer.abort()
   }
   delete context.runningNodes[node.id]
 
@@ -74,7 +73,7 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
 
   node.status.console.write('internal', 'error', error.message)
 
-  const canceledExecution = context.environment.cancelDefer.isResolved
+  const canceledExecution = context.environment.cancelDefer.signal.aborted
   const currentState = node.status.state
   if (currentState.type === 'running') {
     const newState: WorkNodeState = canceledExecution
@@ -92,8 +91,8 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
     cancelPendingNodes(workTree, nodeId, context)
   }
 
-  if ((canceledExecution || !context.watch) && !node.status.defer.isResolved) {
-    node.status.defer.resolve()
+  if ((canceledExecution || !context.watch) && !node.status.defer.signal.aborted) {
+    node.status.defer.abort()
   }
 }
 
@@ -104,7 +103,7 @@ export function resetNode(workTree: WorkTree, nodeId: string, context: Execution
   if (currentState.type === 'running') {
     const cancelState: WorkNodeCancelState = { type: 'cancel' }
     node.status.state = cancelState
-    currentState.cancelDefer.resolve()
+    currentState.cancelDefer.abort()
     context.events.emit({ workTree, nodeId, oldState: currentState, newState: cancelState })
   } else if (currentState.type === 'completed' || currentState.type === 'failed') {
     const pendingState: WorkNodePendingState = { type: 'pending' }
@@ -125,7 +124,7 @@ function cancelPendingNodes(workTree: WorkTree, nodeId: string, context: Executi
       node.status.state = cancelState
       context.events.emit({ workTree, nodeId, oldState: currentState, newState: cancelState })
       if (!context.watch) {
-        node.status.defer.resolve()
+        node.status.defer.abort()
       }
       cancelPendingNodes(workTree, node.id, context)
     }
@@ -138,15 +137,15 @@ export function cancelNodes(workTree: WorkTree, context: ExecutionContext): void
     if (currentState.type === 'pending') {
       const abortState: WorkNodeAbortedState = { type: 'aborted' }
       node.status.state = abortState
-      node.status.defer.resolve()
+      node.status.defer.abort()
       context.events.emit({ nodeId: node.id, workTree, newState: abortState, oldState: currentState })
     } else if (currentState.type === 'running') {
       const cancelState: WorkNodeCancelState = { type: 'cancel' }
       node.status.state = cancelState
-      currentState.cancelDefer.resolve()
+      currentState.cancelDefer.abort()
       context.events.emit({ workTree, nodeId: node.id, oldState: currentState, newState: cancelState })
-    } else if ((currentState.type === 'completed' || currentState.type === 'failed') && !node.status.defer.isResolved) {
-      node.status.defer.resolve()
+    } else if ((currentState.type === 'completed' || currentState.type === 'failed') && !node.status.defer.signal.aborted) {
+      node.status.defer.abort()
     }
   }
 }

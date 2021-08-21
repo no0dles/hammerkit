@@ -2,13 +2,12 @@ import { awaitStream } from '../docker/stream'
 import Dockerode, { Container, Exec, ExecInspectInfo } from 'dockerode'
 import { pull } from '../docker/pull'
 import { sep, extname } from 'path'
-import { ContainerWorkNode } from '../planner/work-node'
+import { ContainerWorkNode, WorkNode } from '../planner/work-node'
 import { WorkNodePath } from '../planner/work-node-path'
 import { platform } from 'os'
 import { templateValue } from '../planner/utils/template-value'
 import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
-import { Defer } from '../utils/defer'
 import { createHash } from 'crypto'
 import { ensureVolumeExists } from './get-docker-executor'
 
@@ -93,18 +92,22 @@ export function getDocker(): Dockerode {
   return dockerInstance
 }
 
-export async function startContainer(container: Container): Promise<void> {
-  const defer = new Defer<void>()
-  // TODO watch if start takes too long to finish, report warning
-  container
-    .start()
-    .then(() => {
-      defer.resolve()
-    })
-    .catch((e) => {
-      defer.reject(e)
-    })
-  return defer.promise
+export async function startContainer(node: WorkNode, container: Container): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const handle = setTimeout(() => {
+      node.status.console.write('internal', 'warn', 'start of container is potentially stuck on start')
+    }, 1000)
+    container
+      .start()
+      .then(() => {
+        clearTimeout(handle)
+        resolve()
+      })
+      .catch((e) => {
+        clearTimeout(handle)
+        reject(e)
+      })
+  })
 }
 
 function convertToPosixPath(path: string) {
@@ -117,8 +120,8 @@ function convertToPosixPath(path: string) {
   return path
 }
 
-export function checkIfAbort(cancelDefer: Defer<void>): void {
-  if (cancelDefer.isResolved) {
+export function checkIfAbort(cancelDefer: AbortController): void {
+  if (cancelDefer.signal.aborted) {
     throw new Error('canceled')
   }
 }
@@ -126,7 +129,7 @@ export function checkIfAbort(cancelDefer: Defer<void>): void {
 export async function executeDocker(
   node: ContainerWorkNode,
   context: ExecutionContext,
-  cancelDefer: Defer<void>
+  cancelDefer: AbortController
 ): Promise<void> {
   node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
   const docker = getDocker()
@@ -182,7 +185,7 @@ export async function executeDocker(
     }
 
     node.status.console.write('internal', 'info', `starting container with image ${node.image}`)
-    await startContainer(container)
+    await startContainer(node, container)
 
     if (user) {
       const setUserPermission = async (directory: string) => {
@@ -241,8 +244,6 @@ export async function execCommand(
   cmd: string[],
   user: string | undefined
 ): Promise<ExecInspectInfo | null> {
-  const defer = new Defer<ExecInspectInfo>()
-
   const exec = await container.exec({
     Cmd: cmd,
     WorkingDir: cwd,
@@ -256,43 +257,23 @@ export async function execCommand(
   node.status.console.write('internal', 'debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
 
-  awaitStream(node, docker, stream)
-    .then(async () => {
-      if (!defer.isResolved) {
-        const result = await exec.inspect()
-        if (!defer.isResolved) {
-          defer.resolve(result)
-        }
-      }
-    })
-    .catch((e) => {
-      if (!defer.isResolved) {
-        defer.reject(e)
-      }
-    })
 
-  pollStatus(exec, defer)
+  return new Promise<ExecInspectInfo | null>( (resolve, reject) => {
+    awaitStream(node, docker, stream)
+      .then(() => exec.inspect())
+      .then(resolve)
+      .catch(reject);
 
-  return defer.promise
+    pollStatus(exec, resolve, reject)
+  })
 }
 
-export function pollStatus(exec: Exec, defer: Defer<ExecInspectInfo>): void {
-  async function inspect() {
-    try {
-      const result = await exec.inspect()
-      if (!result.Running && !defer.isResolved) {
-        defer.resolve(result)
-      }
-
-      if (!defer.isResolved) {
-        setTimeout(() => inspect(), 50)
-      }
-    } catch (e) {
-      if (!defer.isResolved) {
-        defer.reject(e)
-      }
+export function pollStatus(exec: Exec, resolve: (result: ExecInspectInfo) => void, reject: (err: Error) => void): void {
+  exec.inspect().then(result => {
+    if (!result.Running) {
+      resolve(result)
+    } else {
+      setTimeout(() => pollStatus(exec, resolve, reject), 50)
     }
-  }
-
-  inspect()
+  }).catch(reject)
 }
