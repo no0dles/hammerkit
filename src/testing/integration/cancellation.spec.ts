@@ -12,11 +12,11 @@ describe('cancellation', () => {
     const { buildFile, context, executionContext } = await suite.setup()
     const workTree = planWorkTree(buildFile, taskName)
     executionContext.events.on((evt) => {
-      if (evt.newState.type === 'running' && !executionContext.environment.cancelDefer.signal.aborted) {
+      if (evt.newState.type === 'running' && !executionContext.environment.abortCtrl.signal.aborted) {
         evt.workTree.nodes[evt.nodeId].status.console.on((log) => {
           if (log.message.startsWith('execute cmd ')) {
             setTimeout(() => {
-              executionContext.environment.cancelDefer.abort()
+              executionContext.environment.abortCtrl.abort()
             }, 2000)
           }
         })

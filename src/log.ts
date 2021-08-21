@@ -62,9 +62,9 @@ export async function printWorkTreeResult(
             continue
           }
           process.stdout.write(
-            `${colors.grey('task:')} ${getNodeName(node, maxNodeNameLength)} ${getLogLevel(log.level)}: ${
-              log.message
-            }\n`
+            `${colors.grey('task:')} ${getNodeName(node, maxNodeNameLength)} ${formatDate(log.date)} ${getLogLevel(
+              log.level
+            )}: ${log.message}\n`
           )
         }
         process.stdout.write('-----------------\n')
@@ -116,6 +116,21 @@ export function getNodeName(node: WorkNode, maxNodeNameLength: number): string {
   return colors.white(node.name) + ' '.repeat(maxNodeNameLength - node.name.length)
 }
 
+export function formatDate(date: Date): string {
+  return colors.grey(
+    `[${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date
+      .getDay()
+      .toString()
+      .padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date
+      .getMinutes()
+      .toString()
+      .padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}.${date
+      .getMilliseconds()
+      .toString()
+      .padStart(3, '0')}]`
+  )
+}
+
 export function writeWorkTreeStatus(workTree: WorkTree, ticker: number): void {
   clearScreenDown(process.stdout)
 
@@ -123,11 +138,14 @@ export function writeWorkTreeStatus(workTree: WorkTree, ticker: number): void {
 
   let count = 0
   for (const node of iterateWorkNodes(workTree.nodes)) {
-    const completedDepCount = Object.keys(node.status.completedDependencies).length
-    const totalDepCount = completedDepCount + Object.keys(node.status.pendingDependencies).length
     let message = `${colors.grey('task:')} ${getNodeName(node, maxNodeNameLength)} - ${getStateText(node.status.state)}`
-    if (totalDepCount > 0 && completedDepCount !== totalDepCount) {
-      message += ` | ${colors.grey(` awaiting dependencies (${completedDepCount}/${totalDepCount})`)}`
+
+    if (node.status.state.type === 'pending') {
+      const totalDepCount = node.deps.length
+      const completedDepCount = totalDepCount - Object.keys(node.status.state.pendingDependencies).length
+      if (totalDepCount > 0 && completedDepCount !== totalDepCount) {
+        message += ` | ${colors.grey(` awaiting dependencies (${completedDepCount}/${totalDepCount})`)}`
+      }
     }
     if (node.status.state.type === 'running') {
       message += ` | ${spinner[ticker % spinner.length]}`

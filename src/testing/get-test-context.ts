@@ -5,7 +5,7 @@ import { getConsoleContextMock } from '../console/get-console-context-mock'
 export function getTestContext(cwd: string): TestContext {
   const context: TestContext = {
     processEnvs: { ...process.env },
-    cancelDefer: new AbortController(),
+    abortCtrl: new AbortController(),
     cwd,
     file: getFileContext(),
     console: getConsoleContextMock(),

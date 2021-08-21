@@ -5,6 +5,7 @@ import { templateValue } from '../planner/utils/template-value'
 import { platform } from 'os'
 import { ExecutionContext } from './execution-context'
 import { getProcessEnvs } from '../environment/get-process-env'
+import { listenOnAbort } from '../utils/abort-event'
 
 export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancelDefer: AbortController): Promise<void> {
   node.status.console.write('internal', 'info', `execute ${node.name} locally`)
@@ -49,7 +50,7 @@ export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancel
           resolve()
         }
       })
-      cancelDefer.promise.then(() => {
+      listenOnAbort(cancelDefer.signal, () => {
         ps.kill()
       })
     })

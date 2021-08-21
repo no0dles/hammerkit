@@ -1,5 +1,4 @@
 import { CacheMethod } from '../optimizer/cache-method'
-import { WorkNode } from '../planner/work-node'
 import { Executor } from './executor'
 import { ExecutionContextEvent } from './execution-context-event'
 import { Environment } from './environment'
@@ -13,5 +12,4 @@ export interface ExecutionContext {
   environment: Environment
   executor: Executor
   events: EmitterHandler<ExecutionContextEvent>
-  runningNodes: { [id: string]: WorkNode }
 }

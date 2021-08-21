@@ -121,9 +121,7 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
         mergedTask: task,
         status: {
           name,
-          completedDependencies: {},
-          pendingDependencies: {},
-          state: { type: 'pending' },
+          state: { type: 'pending', pendingDependencies: {} },
           defer: new AbortController(),
           console: nodeConsole(),
         },
@@ -134,9 +132,19 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
 
     nodes[id] = node
 
-    for (const dep of deps) {
-      planWorkDependency(dep.build, node, taskName, templateValue(dep.name, task.envs), nodes, context)
-    }
+    const depNodes = deps.map((dep) => {
+      const depName = templateValue(dep.name, dep.build.envs)
+      const depNode = planWorkNode(dep.build, depName, nodes, {
+        ...context,
+        idPrefix: null,
+      })
+      if (!depNode) {
+        throw new Error(`unable to find dependency ${dep} for task ${taskName} in ${dep.build.path}`)
+      }
+      return depNode
+    })
+
+    planWorkDependency(depNodes, node, taskName, nodes, context)
 
     return node
   } else {

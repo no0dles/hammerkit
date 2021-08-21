@@ -1,18 +1,24 @@
 import { Executor } from './executor'
 import { WorkNode } from '../planner/work-node'
 import { ExecutionContext } from './execution-context'
+import { listenOnAbort } from '../utils/abort-event'
 
 export interface ExecutorMock extends Executor {
-  waitForNode(nodeId: string): Promise<NodeHandle>
+  waitForExecution(nodeId: string): Promise<NodeHandle>
+
+  abort(nodeId: string, err: Error): void
+
+  end(nodeId: string): void
 }
 
 export interface NodeHandle {
-  fail(err: Error): void;
-  end(): void;
+  fail(err: Error): void
+
+  end(): void
 }
 
 export function getExecutorMock(): ExecutorMock {
-  const waits: { [key: string]: NodeHandle } = {}
+  const waits: { [key: string]: (handle: NodeHandle) => void } = {}
   const execs: { [key: string]: NodeHandle } = {}
 
   return {
@@ -29,41 +35,42 @@ export function getExecutorMock(): ExecutorMock {
       return new Promise<void>((resolve, reject) => {
         const resultDefer: NodeHandle = {
           end() {
+            delete execs[node.id]
             resolve()
           },
           fail(err: Error) {
+            delete execs[node.id]
             reject(err)
-          }
+          },
         }
-        cancelDefer.promise.then(() => {
-          if (resultDefer.isResolved) {
-            return
-          }
-          resultDefer.reject(new Error('canceled'))
+        listenOnAbort(cancelDefer.signal, () => {
+          reject(new Error('canceled'))
         })
         if (waits[node.id]) {
-          waits[node.id].resolve(resultDefer)
+          waits[node.id](resultDefer)
           delete waits[node.id]
         } else {
           execs[node.id] = resultDefer
         }
       })
     },
-    async waitForNode(nodeId: string): Promise<NodeHandle> {
+    abort(nodeId: string, err: Error): void {
+      execs[nodeId].fail(err)
+    },
+    end(nodeId: string): void {
+      execs[nodeId].end()
+    },
+    async waitForExecution(nodeId: string): Promise<NodeHandle> {
       const currentExecs = execs[nodeId]
       if (currentExecs) {
-        delete execs[nodeId]
         return currentExecs
       }
 
-      const resultDefer: NodeHandle = {
-        end() {
-        },
-        fail(err: Error) {
-        }
-      }
-      waits[nodeId] = resultDefer
-      return resultDefer
+      const promise = new Promise<NodeHandle>((resolve) => {
+        waits[nodeId] = resolve
+      })
+
+      return promise
     },
   }
 }

@@ -121,7 +121,6 @@ export async function getProgram(
             events: emitter(),
             executor: options.container ? getDockerExecutor() : getLocalExecutor(),
             environment: environment,
-            runningNodes: {},
           }
 
           const logger = getLogger(options.log)

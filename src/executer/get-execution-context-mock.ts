@@ -11,7 +11,6 @@ export function getExecutionContextMock(): ExecutionContextMock {
     executor: getExecutorMock(),
     cacheMethod: 'checksum',
     watch: false,
-    runningNodes: {},
     workers: 0,
   }
 }

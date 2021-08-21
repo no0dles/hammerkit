@@ -3,7 +3,7 @@ import { ConsoleContext } from '../console/console-context'
 
 export interface Environment {
   processEnvs: { [key: string]: string | undefined }
-  cancelDefer: AbortController
+  abortCtrl: AbortController
   cwd: string
   file: FileContext
   console: ConsoleContext

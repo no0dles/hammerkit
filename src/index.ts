@@ -4,16 +4,16 @@ import { getProgram } from './program'
 import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
 
-const cancelDefer = new AbortController()
+const abortCtrl = new AbortController()
 
 process.on('SIGINT', function () {
-  cancelDefer.abort()
+  abortCtrl.abort()
 })
 
 getProgram(
   {
     cwd: process.cwd(),
-    cancelDefer,
+    abortCtrl,
     processEnvs: process.env,
     file: getFileContext(),
     console: consoleContext(),

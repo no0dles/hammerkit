@@ -1,7 +1,6 @@
 import { WorkTree } from '../planner/work-tree'
 import { ExecuteResult } from './execute-result'
 import { optimize } from '../optimizer/optimize'
-import { getReadyWorkNodes } from './get-ready-work-nodes'
 import { WorkNode } from '../planner/work-node'
 import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { join } from 'path'
@@ -10,9 +9,10 @@ import { cancelNodes, completeNode, failNode, resetNode, runNode } from './state
 import { ExecutionContext } from './execution-context'
 import { Debouncer } from '../utils/debouncer'
 import { hasStatsChanged, getWorkNodeCacheStats } from '../optimizer/get-work-node-cache-stats'
+import { listenOnAbort } from '../utils/abort-event'
 
 export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
-  context.environment.cancelDefer.promise.then(() => {
+  listenOnAbort(context.environment.abortCtrl.signal, () => {
     cancelNodes(workTree, context)
   })
 
@@ -22,12 +22,7 @@ export async function execute(workTree: WorkTree, context: ExecutionContext): Pr
     await watchNodes(workTree, context)
   }
 
-  runPendingNodes(workTree, context)
-
-  await workTree.rootNode.status.defer.promise
-  for (const node of iterateWorkNodes(workTree.nodes)) {
-    await node.status.defer.promise
-  }
+  await run(workTree, context)
 
   const result: ExecuteResult = {
     success: true,
@@ -44,6 +39,87 @@ export async function execute(workTree: WorkTree, context: ExecutionContext): Pr
   return result
 }
 
+export function run(workTree: WorkTree, context: ExecutionContext): Promise<void> {
+  const runningNodes: { [id: string]: WorkNode } = {}
+  const pendingNodeIds: string[] = []
+
+  return new Promise<void>((resolve, reject) => {
+    listenOnAbort(context.environment.abortCtrl.signal, () => {
+      let hasRunningNode = false
+      for (const node of iterateWorkNodes(workTree.nodes)) {
+        if (
+          node.status.state.type === 'cancel' ||
+          node.status.state.type === 'pending' ||
+          node.status.state.type === 'running'
+        ) {
+          hasRunningNode = true
+          break
+        }
+      }
+      if (!hasRunningNode) {
+        resolve()
+      }
+    })
+
+    const runPending = async () => {
+      if (context.workers !== 0 && Object.keys(runningNodes).length >= context.workers) {
+        return
+      }
+
+      const nextNodeId = pendingNodeIds.splice(0, 1)[0]
+      if (!nextNodeId) {
+        return
+      }
+
+      const node = workTree.nodes[nextNodeId]
+      runningNodes[nextNodeId] = node
+
+      const abortCtrl = runNode(workTree, node.id, context)
+      try {
+        await context.executor.exec(node, context, abortCtrl)
+        await writeWorkNodeCache(node, context.environment)
+        delete runningNodes[nextNodeId]
+        completeNode(workTree, node.id, context)
+      } catch (e) {
+        delete runningNodes[nextNodeId]
+        failNode(workTree, node.id, context, e)
+      }
+    }
+
+    const enqueueNode = async (node: WorkNode) => {
+      try {
+        if (node.status.state.type === 'pending') {
+          if (Object.keys(node.status.state.pendingDependencies).length !== 0) {
+            return
+          }
+
+          pendingNodeIds.push(node.id)
+
+          await runPending()
+        } else if (
+          (!context.watch || context.environment.abortCtrl.signal.aborted) &&
+          (workTree.rootNode.status.state.type === 'completed' ||
+            workTree.rootNode.status.state.type === 'aborted' ||
+            workTree.rootNode.status.state.type === 'failed')
+        ) {
+          resolve()
+        }
+      } catch (e) {
+        reject(e)
+      }
+    }
+
+    context.events.on((evt) => {
+      const node = workTree.nodes[evt.nodeId]
+      enqueueNode(node)
+    })
+
+    for (const node of iterateWorkNodes(workTree.nodes)) {
+      enqueueNode(node)
+    }
+  })
+}
+
 async function watchNodes(workTree: WorkTree, context: ExecutionContext) {
   for (const node of iterateWorkNodes(workTree.nodes)) {
     if (node.src.length === 0) {
@@ -53,7 +129,7 @@ async function watchNodes(workTree: WorkTree, context: ExecutionContext) {
     let currentState = await getWorkNodeCacheStats(node, context.environment)
 
     const debouncer = new Debouncer(async () => {
-      if (context.environment.cancelDefer.signal.aborted) {
+      if (context.environment.abortCtrl.signal.aborted) {
         return
       }
 
@@ -64,11 +140,12 @@ async function watchNodes(workTree: WorkTree, context: ExecutionContext) {
       }
       currentState = newStats
 
+      node.status.console.write('internal', 'debug', `source changed, restart process`)
       resetNode(workTree, node.id, context)
-      runPendingNodes(workTree, context)
     }, 100)
 
     for (const src of node.src) {
+      node.status.console.write('internal', 'debug', `watch ${src.absolutePath} source`)
       const watcher = context.environment.file.watch(src.absolutePath, async (fileName) => {
         const absoluteFileName = join(src.absolutePath, fileName)
 
@@ -81,37 +158,10 @@ async function watchNodes(workTree: WorkTree, context: ExecutionContext) {
           debouncer.bounce()
         }
       })
-
-      context.environment.cancelDefer.promise.then(() => {
+      listenOnAbort(context.environment.abortCtrl.signal, () => {
         watcher.close()
+        debouncer.clear()
       })
     }
   }
-}
-
-function runPendingNodes(workTree: WorkTree, arg: ExecutionContext) {
-  const pendingNodes = getReadyWorkNodes(workTree)
-  for (const pendingNode of pendingNodes) {
-    if (arg.workers !== 0 && Object.keys(arg.runningNodes).length === arg.workers) {
-      continue
-    }
-
-    if (arg.runningNodes[pendingNode.id]) {
-      continue
-    }
-
-    continueExecution(workTree, pendingNode, arg)
-  }
-}
-
-async function continueExecution(workTree: WorkTree, node: WorkNode, context: ExecutionContext) {
-  const cancelDefer = runNode(workTree, node.id, context)
-  try {
-    await context.executor.exec(node, context, cancelDefer)
-    await writeWorkNodeCache(node, context.environment)
-    completeNode(workTree, node.id, context, true)
-  } catch (e) {
-    failNode(workTree, node.id, context, e)
-  }
-  runPendingNodes(workTree, context)
 }

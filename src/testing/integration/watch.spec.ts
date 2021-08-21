@@ -14,7 +14,7 @@ describe('watch', () => {
     executionContext.watch = true
     executionContext.events.on(({ workTree, nodeId, newState }) => {
       if (nodeId === workTree.rootNode.id && newState.type === 'running') {
-        context.cancelDefer.abort()
+        context.abortCtrl.abort()
       }
     })
     const result = await execute(workTree, executionContext)

@@ -3,7 +3,7 @@ import { ConsoleContextMock } from '../console/console-context-mock'
 
 export interface TestContext {
   processEnvs: { [key: string]: string | undefined }
-  cancelDefer: AbortController
+  abortCtrl: AbortController
   cwd: string
   file: FileContext
   console: ConsoleContextMock

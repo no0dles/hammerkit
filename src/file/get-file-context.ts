@@ -3,7 +3,7 @@ import { dirname, join } from 'path'
 import { watch } from 'chokidar'
 import { FileContext, Stats } from './file-context'
 
-function handleCallback<T>(callback: (cb: ((err: Error | null, value: T | null | undefined) => void)) => void): Promise<T>
+function handleCallback<T>(callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void): Promise<T>
 function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
 function handleCallback(callback: (cb: (err: Error | null, value?: any) => void) => void): Promise<any> {
   return new Promise<any>((resolve, reject) => {
@@ -37,33 +37,35 @@ export function getFileContext(): FileContext {
       })
     },
     appendFile(path: string, content: string): Promise<void> {
-      return handleCallback(cb => appendFile(path, content, cb))
+      return handleCallback((cb) => appendFile(path, content, cb))
     },
     writeFile(path: string, content: string): Promise<void> {
-      return handleCallback(cb => writeFile(path, content, cb))
+      return handleCallback((cb) => writeFile(path, content, cb))
     },
     listFiles(path: string): Promise<string[]> {
-      return handleCallback(cb => readdir(path, cb))
+      return handleCallback((cb) => readdir(path, cb))
     },
     exists(path: string): Promise<boolean> {
-      return handleCallback(cb =>
-      stat(path, (err) => {
-        if (err) {
-          cb(null, false)
-        } else {
-          cb(null, true)
-        }
-      }))
+      return handleCallback((cb) =>
+        stat(path, (err) => {
+          if (err) {
+            cb(null, false)
+          } else {
+            cb(null, true)
+          }
+        })
+      )
     },
     read(path: string): Promise<string> {
-      return handleCallback(cb =>
+      return handleCallback((cb) =>
         readFile(path, (err, content) => {
-        if (err) {
-          cb(err, null)
-        } else {
-          cb(null, content.toString())
-        }
-      }))
+          if (err) {
+            cb(err, null)
+          } else {
+            cb(null, content.toString())
+          }
+        })
+      )
     },
     async copy(source: string, destination: string): Promise<void> {
       const exists = await this.exists(source)
@@ -84,16 +86,15 @@ export function getFileContext(): FileContext {
           await this.createDirectory(destinationDirectory)
         }
 
-        return handleCallback(cb =>
-        copyFile(source, destination, cb));
+        return handleCallback((cb) => copyFile(source, destination, cb))
       }
     },
     createDirectory(path: string): Promise<string> {
-      return handleCallback(cb => mkdir(path, { recursive: true }, cb))
+      return handleCallback((cb) => mkdir(path, { recursive: true }, cb))
     },
     async remove(path: string): Promise<void> {
       if (await this.exists(path)) {
-        return handleCallback(cb => rm(path, { recursive: true }, cb))
+        return handleCallback((cb) => rm(path, { recursive: true }, cb))
       }
     },
     watch(path: string, callback: (fileName: string) => void): { close(): void } {

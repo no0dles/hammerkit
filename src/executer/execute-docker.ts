@@ -10,6 +10,7 @@ import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { createHash } from 'crypto'
 import { ensureVolumeExists } from './get-docker-executor'
+import { listenOnAbort } from '../utils/abort-event'
 
 interface WorkNodeVolume {
   name: string
@@ -171,6 +172,14 @@ export async function executeDocker(
     }, {}),
   })
 
+  listenOnAbort(cancelDefer.signal, () => {
+    container.remove({ force: true }).catch((e) => {
+      if (e.statusCode !== 404) {
+        node.status.console.write('internal', 'debug', `remove of container failed ${e.message}`)
+      }
+    })
+  })
+
   const user =
     platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
       ? `${process.getuid()}:${process.getgid()}`
@@ -257,23 +266,25 @@ export async function execCommand(
   node.status.console.write('internal', 'debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
 
-
-  return new Promise<ExecInspectInfo | null>( (resolve, reject) => {
+  return new Promise<ExecInspectInfo | null>((resolve, reject) => {
     awaitStream(node, docker, stream)
       .then(() => exec.inspect())
       .then(resolve)
-      .catch(reject);
+      .catch(reject)
 
     pollStatus(exec, resolve, reject)
   })
 }
 
 export function pollStatus(exec: Exec, resolve: (result: ExecInspectInfo) => void, reject: (err: Error) => void): void {
-  exec.inspect().then(result => {
-    if (!result.Running) {
-      resolve(result)
-    } else {
-      setTimeout(() => pollStatus(exec, resolve, reject), 50)
-    }
-  }).catch(reject)
+  exec
+    .inspect()
+    .then((result) => {
+      if (!result.Running) {
+        resolve(result)
+      } else {
+        setTimeout(() => pollStatus(exec, resolve, reject), 50)
+      }
+    })
+    .catch(reject)
 }

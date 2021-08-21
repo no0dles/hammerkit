@@ -52,8 +52,6 @@ export function nodeConsole(): WorkNodeConsole {
 
 export interface WorkNodeStatus {
   name: string
-  pendingDependencies: { [id: string]: WorkNode }
-  completedDependencies: { [id: string]: WorkNode }
   state: WorkNodeState
   defer: AbortController
   console: WorkNodeConsole
@@ -69,6 +67,7 @@ export type WorkNodeState =
 
 export interface WorkNodePendingState {
   type: 'pending'
+  pendingDependencies: { [key: string]: WorkNode }
 }
 
 export interface WorkNodeCancelState {
@@ -82,7 +81,7 @@ export interface WorkNodeAbortedState {
 export interface WorkNodeRunningState {
   type: 'running'
   started: Date
-  cancelDefer: AbortController
+  abortCtrl: AbortController
 }
 
 export interface WorkNodeCompletedState {

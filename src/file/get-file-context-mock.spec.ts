@@ -31,13 +31,13 @@ describe('file/get-file-context-mock', () => {
   it('should emit listener if directory below gets created', async () => {
     const ctx = getFileContextMock()
     await ctx.createDirectory('/home/user/repo')
-    await new Promise<void>( resolve => {
+    await new Promise<void>((resolve) => {
       const watch = ctx.watch('/home/user', (fileName) => {
         expect(fileName).toEqual('/home/user/repo/test')
         watch.close()
         resolve()
       })
-       ctx.createDirectory('/home/user/repo/test')
+      ctx.createDirectory('/home/user/repo/test')
     })
   })
 

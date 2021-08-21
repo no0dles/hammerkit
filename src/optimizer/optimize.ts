@@ -28,7 +28,7 @@ export async function optimize(workTree: WorkTree, context: ExecutionContext): P
     }
 
     node.status.console.write('internal', 'debug', `${node.name} is skipped because it's cache is up to date`)
-    completeNode(workTree, key, context, false)
+    completeNode(workTree, key, context)
   }
 
   return workTree

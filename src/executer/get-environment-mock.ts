@@ -7,7 +7,7 @@ export function getEnvironmentMock(): EnvironmentMock {
     cwd: '/home/user',
     file: getFileContextMock(),
     console: getConsoleContextMock(),
-    cancelDefer: new AbortController(),
+    abortCtrl: new AbortController(),
     processEnvs: {},
   }
 }

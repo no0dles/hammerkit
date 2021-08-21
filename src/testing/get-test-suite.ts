@@ -33,7 +33,7 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
     ): Promise<{ context: TestContext; executionContext: ExecutionContext; buildFile: BuildFile }> {
       const context: TestContext = {
         processEnvs: { ...process.env },
-        cancelDefer: new AbortController(),
+        abortCtrl: new AbortController(),
         cwd: testDirectory,
         file,
         console: getConsoleContextMock(),
@@ -60,7 +60,6 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
         workers: executionOptions?.workers ?? 0,
         events: emitter(),
         executor,
-        runningNodes: {},
       }
 
       tests.push({
