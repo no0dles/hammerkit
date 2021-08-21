@@ -1,5 +1,6 @@
 export function listenOnAbort(abort: AbortSignal, callback: () => void): void {
-  ;(abort as any).addEventListener(
+  const listener = abort as any
+  listener.addEventListener(
     'abort',
     () => {
       callback()
