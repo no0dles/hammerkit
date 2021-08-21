@@ -206,6 +206,9 @@ export async function executeDocker(
       }
 
       await setUserPermission(node.cwd)
+      for (const volume of volumes) {
+        await setUserPermission(volume.containerPath)
+      }
       for (const mount of mounts) {
         await setUserPermission(mount.containerPath)
       }
