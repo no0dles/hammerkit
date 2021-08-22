@@ -2,17 +2,19 @@ envs:
   NODE_VERSION: 16.6.0
 
 tasks:
-  build:
-    description: build typescript
-    deps: [npm:ci]
+  test:
+    description: test code
     image: node:$NODE_VERSION-alpine
+    deps: [npm:ci]
     src:
       - src
+      - jest.config.ts
       - tsconfig.json
+      - examples
     generates:
-      - dist
+      - coverage
     cmds:
-      - node_modules/.bin/tsc
+      - node_modules/.bin/jest --coverage
 
 includes:
   npm: build.npm.yaml

@@ -1,0 +1,19 @@
+envs:
+  KUBECTL_VERSION: latest
+
+tasks:
+  help:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:latest
+    mounts:
+      - $PWD/.kube/config:/.kube/config
+      - $PWD/.config/gcloud:/.config/gcloud
+    cmds:
+      - gcloud --help
+
+  auth:login:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:latest
+    mounts:
+      - $PWD/.kube/config:/.kube/config
+      - $PWD/.config/gcloud:/.config/gcloud
+    cmds:
+      - gcloud auth login

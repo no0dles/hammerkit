@@ -29,4 +29,8 @@ function addWorkNodes(build: BuildFile, nodes: WorkNodes, files: string[], nameP
   for (const key of Object.keys(build.references)) {
     addWorkNodes(build.references[key], nodes, files, [...namePrefix, key])
   }
+
+  for (const key of Object.keys(build.includes)) {
+    addWorkNodes(build.includes[key], nodes, files, [...namePrefix, key])
+  }
 }

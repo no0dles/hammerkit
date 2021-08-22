@@ -52,7 +52,7 @@ export async function parseBuildFile(
     throw new Error(`${fileName} tasks need to be an object`)
   }
 
-  for (const key of Object.keys(tasks)) {
+  for (const key of Object.keys(tasks || {})) {
     const value = tasks[key]
     if (typeof value !== 'object') {
       throw new Error(`${fileName} task ${key} needs to be an object`)

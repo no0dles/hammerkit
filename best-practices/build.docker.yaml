@@ -13,8 +13,7 @@ tasks:
       IMAGE_TAG: $IMAGE_TAG
       IMAGE: $IMAGE
     cmds:
-      - docker buildx build . --platform linux/arm64,linux/amd64 -t $IMAGE -t $IMAGE:$IMAGE_TAG
-
+      - docker buildx build . --platform linux/arm64,linux/amd64 -t $IMAGE:$IMAGE_TAG
 
   publish:
     description: publish docker image
@@ -23,4 +22,4 @@ tasks:
       IMAGE_TAG: $IMAGE_TAG
       IMAGE: $IMAGE
     cmds:
-      - docker buildx build . --platform linux/arm64,linux/amd64 --push -t $IMAGE -t $IMAGE:$IMAGE_TAG
+      - docker buildx build . --platform linux/arm64,linux/amd64 --push -t $IMAGE:$IMAGE_TAG

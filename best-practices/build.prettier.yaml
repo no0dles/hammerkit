@@ -2,17 +2,15 @@ envs:
   NODE_VERSION: 16.6.0
 
 tasks:
-  prettier:
-    description: run prettier
+  format:
+    description: format source code
     deps: [npm:ci]
     image: node:$NODE_VERSION-alpine
     src:
       - src
       - .prettierrc
-    generates:
-      - dist
     cmds:
-      - node_modules/.bin/tsc
+      - node_modules/.bin/prettier -w src/**
 
 includes:
   npm: build.npm.yaml

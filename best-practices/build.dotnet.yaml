@@ -1,0 +1,7 @@
+tasks:
+  db:update:
+    image: mcr.microsoft.com/dotnet/sdk:5.0
+    src:
+      - Migrations/*.cs
+    cmds:
+      - dotnet ef database update
