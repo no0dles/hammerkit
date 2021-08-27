@@ -1,0 +1,20 @@
+envs:
+  NODE_VERSION: 16.6.0
+
+tasks:
+  test:
+    description: test code
+    image: node:$NODE_VERSION-alpine
+    deps: [npm:ci]
+    src:
+      - src
+      - jest.config.ts
+      - tsconfig.json
+      - examples
+    generates:
+      - coverage
+    cmds:
+      - node_modules/.bin/jest --coverage
+
+includes:
+  npm: build.npm.yaml

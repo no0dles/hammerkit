@@ -1,9 +1,9 @@
 dist
 .idea
-dist
 coverage
-.hammerkit
 node_modules
 examples/*/npm
 *.tgz
 .npm
+temp
+.DS_Store

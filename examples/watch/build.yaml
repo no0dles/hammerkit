@@ -1,7 +1,31 @@
 tasks:
+  install:
+    image: node:16.6.0-alpine
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    cmds:
+      - npm install
+    generates:
+      - node_modules
+    src:
+      - package.json
+      - package-lock.json
+
+  work:
+    image: node:16.6.0-alpine
+    deps: [install]
+    src:
+      - src/work.js
+    cmds:
+      - node src/work.js
+
   api:
-    watch: true
+    image: node:16.6.0-alpine
+    deps: [install]
+    ports:
+      - 8080:8080
     src:
       - src
     cmds:
-      - node -r ts-node/register src/index.ts
+      - node src/index.js

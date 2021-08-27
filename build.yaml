@@ -1,97 +1,13 @@
-tasks:
-  build:
-    description: build typescript
-    deps: [ npm:ci ]
-    image: node:14.16.0-alpine
-    src:
-      - src
-      - tsconfig.json
-    generates:
-      - dist
-    cmds:
-      - node_modules/.bin/tsc
-
-  build:test:
-    description: build typescript
-    deps: [npm:ci]
-    image: node:14.16.0-alpine
-    src:
-      - src
-      - tsconfig.json
-      - tsconfig.test.json
-    generates:
-      - dist
-    cmds:
-      - node_modules/.bin/tsc -p tsconfig.test.json
-
-  format:
-    description: lint fix and prettier
-    image: node:14.16.0-alpine
-    deps: [npm:ci]
-    cmds:
-      - node_modules/.bin/prettier -w src/** tests/**
-      - node_modules/.bin/eslint . --ext .ts --fix
-    src:
-      - src
-      - tests
-      - .eslintignore
-      - .eslintrc
-      - .prettierrc
-
-  lint:
-    description: lint source code
-    image: node:14.16.0-alpine
-    deps: [npm:ci]
-    src:
-      - src
-      - tests
-      - .eslintignore
-      - .eslintrc
-    cmds:
-      - node_modules/.bin/eslint . --ext .ts
-
-  prettier:
-    description: format source code
-    image: node:14.16.0-alpine
-    deps: [npm:ci]
-    src:
-      - src
-      - tests
-      - .prettierrc
-    cmds:
-      - node_modules/.bin/prettier -w src/** tests/**
-
-  test:
-    description: test code
-    deps: [npm:ci]
-    src:
-      - src
-      - tests
-      - jest.config.ts
-      - tsconfig.test.json
-      - tsconfig.json
-      - examples
-    generates:
-      - coverage
-    cmds:
-      - node_modules/.bin/jest --coverage
-
-  build:docker:
-    extend: docker:build
-    envs:
-      IMAGE: no0dles/hammerkit
-      IMAGE_TAG: $IMAGE_TAG
-
-  publish:docker:
-    extend: docker:publish
-    envs:
-      DOCKER_USERNAME: no0dles
-      IMAGE: no0dles/hammerkit
-      IMAGE_TAG: $IMAGE_TAG
-
-  publish:npm:
-    extend: npm:publish
+envs:
+  DOCKER_USERNAME: no0dles
+  IMAGE: no0dles/hammerkit
 
 includes:
-  npm: ./build.npm.yaml
-  docker: ./build.docker.yaml
+  tsc: ./best-practices/build.tsc.yaml
+  npm: ./best-practices/build.npm.yaml
+  eslint: ./best-practices/build.eslint.yaml
+  prettier: ./best-practices/build.prettier.yaml
+  docker: ./best-practices/build.docker.yaml
+  jest: ./best-practices/build.jest.yaml
+  helm: ./best-practices/build.helm.yaml
+  gcloud: ./best-practices/build.gcloud.yaml

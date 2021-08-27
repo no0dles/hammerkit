@@ -1,28 +1,37 @@
-import commaner, { Command } from 'commander'
-import { existsSync, writeFileSync, appendFileSync } from 'fs'
-import { join } from 'path'
-import consola, { LogLevel } from 'consola'
-import { RunArg } from './run-arg'
-import { clean } from './rewrite/5-clean'
-import { nodes } from './rewrite/1-plan'
-import { parse } from './rewrite/0-parse'
-import { store } from './rewrite/6-store'
-import { restore } from './rewrite/7-restore'
-import { validate } from './rewrite/8-validate'
-import { executeTask } from './rewrite/4-execute'
-import { Defer } from './defer'
-import { isCI } from './ci'
+import commaner, { Command, Option } from 'commander'
+import { join, resolve } from 'path'
+import { getBuildFile } from './parser/get-build-file'
+import { iterateWorkNodes, planWorkNodes } from './planner/utils/plan-work-nodes'
+import { execute } from './executer/execute'
+import { planWorkTree } from './planner/utils/plan-work-tree'
+import { restore } from './executer/restore'
+import { store } from './executer/store'
+import { clean } from './executer/clean'
+import { validate } from './planner/validate'
+import { Environment } from './executer/environment'
+import { ExecutionContext } from './executer/execution-context'
+import { getLocalExecutor } from './executer/get-local-executor'
+import { getDockerExecutor } from './executer/get-docker-executor'
+import { getLogger } from './logging/get-logger'
+import { isCI } from './utils/ci'
+import { emitter } from './utils/emitter'
 
-export function getProgram(fileName: string): commaner.Command {
+export async function getProgram(
+  environment: Environment,
+  argv: string[]
+): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
-  const isVerbose = process.argv.some((a) => a === '--verbose')
 
-  if (isVerbose) {
-    consola.level = LogLevel.Debug
+  const args = [...argv]
+  const fileIndex = args.indexOf('--file')
+  const fileName = join(environment.cwd, fileIndex >= 0 ? args[fileIndex + 1] : 'build.yaml')
+  if (fileIndex >= 0) {
+    args.splice(fileIndex, 2)
   }
 
-  if (existsSync(fileName)) {
-    const buildFile = parse(fileName)
+  if (await environment.file.exists(fileName)) {
+    const buildFile = await getBuildFile(fileName, environment)
+    const workNodes = planWorkNodes(buildFile)
     const reservedCommands = ['clean', 'store', 'restore', 'validate']
 
     program
@@ -30,9 +39,9 @@ export function getProgram(fileName: string): commaner.Command {
       .description('clear task cache')
       .action(async () => {
         try {
-          await clean(buildFile)
+          await clean(workNodes, environment, getDockerExecutor())
         } catch (e) {
-          consola.error(e)
+          environment.console.error(e)
           process.exit(1)
         }
       })
@@ -42,9 +51,9 @@ export function getProgram(fileName: string): commaner.Command {
       .description('save task outputs into <path>')
       .action(async (path) => {
         try {
-          await store(buildFile, path)
+          await store(workNodes, resolve(path), environment, getDockerExecutor())
         } catch (e) {
-          consola.error(e)
+          environment.console.error(e)
           process.exit(1)
         }
       })
@@ -54,9 +63,9 @@ export function getProgram(fileName: string): commaner.Command {
       .description('restore task outputs from <path>')
       .action(async (path) => {
         try {
-          await restore(buildFile, path)
+          await restore(workNodes, resolve(path), environment, getDockerExecutor())
         } catch (e) {
-          consola.error(e)
+          environment.console.error(e)
           process.exit(1)
         }
       })
@@ -67,13 +76,12 @@ export function getProgram(fileName: string): commaner.Command {
       .action(async () => {
         let errors = 0
 
-        for (const validation of validate(buildFile)) {
-          const logger = consola.withTag(validation.task.name)
+        for await (const validation of validate(buildFile, environment)) {
           if (validation.type === 'error') {
             errors++
-            logger.error(validation.message)
+            environment.console.error(validation.message)
           } else {
-            logger.warn(validation.message)
+            environment.console.warn(validation.message)
           }
         }
         if (errors === 0) {
@@ -83,66 +91,60 @@ export function getProgram(fileName: string): commaner.Command {
         }
       })
 
-    const tasks = nodes(buildFile)
-    for (const key of Object.keys(tasks)) {
-      const task = tasks[key]
-      if (reservedCommands.indexOf(task.name) >= 0) {
-        consola.warn(`${task.name} is reserved, please use another name`)
+    for (const node of iterateWorkNodes(workNodes)) {
+      if (reservedCommands.indexOf(node.name) >= 0) {
+        environment.console.warn(`${node.name} is reserved, please use another name`)
         continue
       }
 
       program
-        .command(task.name)
-        .description(task.description || '')
-        .option('-w, --worker <number>', 'parallel worker count', parseInt, 4)
-        .option('--no-cache', 'ignore task cache', false)
-        .option(
-          '-cm, --cache-method <method>',
-          'caching method to compare',
-          /^(checksum|modify-date)$/,
-          isCI ? 'checksum' : 'modify-date'
+        .command(node.name)
+        .description(node.description || '')
+        .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
+        .addOption(new Option('-w, --watch', 'watch tasks').default(false))
+        .addOption(
+          new Option('-l, --log <mode>', 'log mode')
+            .default(isCI ? 'live' : 'interactive')
+            .choices(['interactive', 'live', 'grouped'])
         )
-        .option('--no-container', 'run every task locally without containers', false)
+        .addOption(
+          new Option('--cache <method>', 'caching method to compare')
+            .default(isCI ? 'checksum' : 'modify-date')
+            .choices(['checksum', 'modify-date', 'none'])
+        )
+        .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
         .action(async (options) => {
-          const runArg: RunArg = {
-            logger: consola,
-            workers: options.workers,
-            processEnvs: process.env,
-            noContainer: !options.container,
-            cancelPromise: new Defer<void>(),
+          const executionContext: ExecutionContext = {
+            workers: options.concurrency, // TODO rename
+            cacheMethod: options.cache,
+            watch: options.watch,
+            events: emitter(),
+            executor: options.container ? getDockerExecutor() : getLocalExecutor(),
+            environment: environment,
           }
 
-          process.on('SIGINT', function () {
-            runArg.cancelPromise.resolve()
-          })
-
-          if (options.verbose) {
-            runArg.logger.level = LogLevel.Debug
-          }
+          const logger = getLogger(options.log)
 
           try {
-            const result = await executeTask(buildFile, task.name, options.cache, options.cacheMethod, runArg)
-            for (const key of Object.keys(result.tasks)) {
-              const task = result.tasks[key]
-              consola.info(`[${task.status}] ${task.task.name}: ${task.duration}ms`)
-            }
+            const workTree = planWorkTree(buildFile, node.name)
+            logger.start(executionContext, workTree)
+            const result = await execute(workTree, executionContext)
+            await logger.finish(workTree, result)
 
             if (!result.success) {
-              for (const key of Object.keys(result.tasks)) {
-                const task = result.tasks[key]
-                if (task.status === 'failed') {
-                  consola.info(`${task.task.name} ${task.errorMessage}`)
-                }
-              }
               process.exit(1)
             }
           } catch (e) {
-            consola.error(e)
+            logger.abort(e)
             process.exit(1)
           }
         })
     }
   } else {
+    if (fileIndex >= 0) {
+      environment.console.warn(`unable to find build file ${fileName}`)
+    }
+
     program
       .command('init')
       .description('creates default build.yaml')
@@ -155,25 +157,16 @@ tasks:
     cmds:
       - echo "it's Hammer Time!"
       `
-        writeFileSync(fileName, content)
-        consola.success(`created ${fileName}`)
-
-        const gitIgnoreFile = join(process.cwd(), '.gitignore')
-        const gitIgnoreContent = `.hammerkit\n`
-        if (existsSync(gitIgnoreFile)) {
-          appendFileSync(gitIgnoreFile, gitIgnoreContent)
-          consola.success(`extened ${gitIgnoreFile} with hammerkit cache directory`)
-        } else {
-          writeFileSync(gitIgnoreFile, gitIgnoreContent)
-          consola.success(`created ${gitIgnoreFile} with hammerkit cache directory`)
-        }
+        await environment.file.writeFile(fileName, content)
+        environment.console.info(`created ${fileName}`)
       })
   }
 
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   program.version(require('../package.json').version)
   program.option('--verbose', 'log debugging information', false)
+  program.option('--file', 'set build file', 'build.yaml')
   program.name('hammerkit')
 
-  return program
+  return { program, args }
 }

@@ -1,0 +1,36 @@
+name: build
+on: [ push ]
+jobs:
+  npm-package:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+      - name: Install npm packages
+        run: npm ci
+      - name: Check prettier
+        run: node_modules/.bin/prettier -w src/**
+      - name: Check eslint
+        run: node_modules/.bin/eslint . --ext .ts
+      - name: Build source code
+        run: node_modules/.bin/tsc
+  docker:
+    runs-on: ubuntu-18.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup node
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Build image
+        run: docker buildx build . --platform linux/arm64,linux/amd64 -t no0dles/hammerkit

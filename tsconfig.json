@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "rootDir": "src",
     "lib": ["ES2020"],
     "module": "commonjs",
     "target": "ES2020",
@@ -15,6 +16,9 @@
   },
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    "temp",
+    "examples",
+    "jest.config.ts"
   ]
 }

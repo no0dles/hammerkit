@@ -1,0 +1,16 @@
+envs:
+  NODE_VERSION: 16.6.0
+
+tasks:
+  format:
+    description: format source code
+    deps: [npm:ci]
+    image: node:$NODE_VERSION-alpine
+    src:
+      - src
+      - .prettierrc
+    cmds:
+      - node_modules/.bin/prettier -w src/**
+
+includes:
+  npm: build.npm.yaml

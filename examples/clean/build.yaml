@@ -1,11 +1,13 @@
 tasks:
   example:
     description: clean example
-    image: node:14.16.0
+    image: node:16.6.0-alpine
     mounts:
       - $PWD/.npm:/.npm
       - $PWD/.config:/.config
     generates:
       - node_modules
+    src:
+      - package.json
     cmds:
-      - npm install hammerkit
+      - npm install

@@ -1,0 +1,10 @@
+tasks:
+  ls:
+    mounts:
+      - $PWD/.kube:/root/.kube
+      - $PWD/.helm:/root/.helm
+      - $PWD/.config/helm:/root/.config/helm
+      - $PWD/.cache/helm:/root/.cache/helm
+    image: alpine/helm:2.16.10
+    cmds:
+      - helm ls

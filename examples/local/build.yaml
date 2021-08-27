@@ -2,4 +2,4 @@ tasks:
   example:
     description: local shell example
     cmds:
-      - docker pull node:14.16.0
+      - ls

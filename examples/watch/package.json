@@ -1,0 +1,7 @@
+{
+  "name": "watch",
+  "version": "1.0.0",
+  "devDependencies": {
+    "typescript": "^4.3.4"
+  }
+}

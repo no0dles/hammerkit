@@ -1,0 +1,18 @@
+envs:
+  NODE_VERSION: 16.6.0
+
+tasks:
+  build:
+    description: build typescript
+    deps: [npm:ci]
+    image: node:$NODE_VERSION-alpine
+    src:
+      - src
+      - tsconfig.json
+    generates:
+      - dist
+    cmds:
+      - node_modules/.bin/tsc
+
+includes:
+  npm: build.npm.yaml
