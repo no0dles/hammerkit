@@ -1,8 +1,6 @@
-.hammerkit
 .idea
 .gitignore
 src
-tests
 examples
 coverage
 build.yaml
@@ -18,6 +16,4 @@ dist/**/*.js.map
 temp
 *.tgz
 docs
-build.npm.yaml
-build.docker.yaml
 best-practices

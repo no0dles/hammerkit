@@ -19,7 +19,6 @@
     "dist",
     "temp",
     "examples",
-    "tests",
     "jest.config.ts"
   ]
 }

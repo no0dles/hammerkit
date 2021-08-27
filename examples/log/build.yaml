@@ -1,0 +1,19 @@
+tasks:
+  a:
+    deps: [b, c]
+    cmds:
+      - echo "a start"
+      - sleep 3
+      - echo "a end"
+
+  b:
+    cmds:
+      - echo "b start"
+      - sleep 1
+      - echo "b end"
+
+  c:
+    cmds:
+      - echo "c start"
+      - sleep 2
+      - echo "c end"
