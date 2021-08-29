@@ -43,7 +43,7 @@ describe('store/restore', () => {
 
   it('should not store anything if nothing got generated', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
-    const workNodes = planWorkNodes(buildFile)
+    const [workNodes] = planWorkNodes(buildFile)
     const outputPath = join(buildFile.path, 'test-output')
     const generatedPath = join(buildFile.path, 'node_modules')
 

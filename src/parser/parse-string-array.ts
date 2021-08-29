@@ -8,10 +8,10 @@ export function parseStringArray(
     return null
   }
   if (value instanceof Array) {
-    if (!value.every((v) => typeof v === 'string')) {
+    if (!value.every((v) => typeof v === 'string' || typeof v === 'number')) {
       throw new Error(`${fileName} task ${taskName} ${valueName} needs to be a string array`)
     }
-    return value
+    return value.map((v) => `${v}`)
   } else {
     throw new Error(`${fileName} task ${taskName} ${valueName} needs to be a string array`)
   }

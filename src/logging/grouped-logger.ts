@@ -13,10 +13,13 @@ export function groupedLogger(): LogStrategy {
       maxNodeNameLength = getNodeNameLength(workTree)
 
       executionContext.events.on(async (evt) => {
-        if (evt.newState.type === 'completed' || evt.newState.type === 'failed' || evt.newState.type === 'aborted') {
+        if (
+          evt.type === 'node' &&
+          (evt.newState.type === 'completed' || evt.newState.type === 'failed' || evt.newState.type === 'aborted')
+        ) {
           const node = workTree.nodes[evt.nodeId]
           for (const log of await node.status.console.read()) {
-            logMessageToConsole(node, log, maxNodeNameLength)
+            logMessageToConsole('task', node, log, maxNodeNameLength)
           }
         }
       })

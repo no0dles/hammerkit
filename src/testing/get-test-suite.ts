@@ -48,7 +48,7 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
 
       const fileName = join(testDirectory, 'build.yaml')
       const buildFile = await getBuildFile(fileName, context)
-      const workNodes = planWorkNodes(buildFile)
+      const [workNodes] = planWorkNodes(buildFile)
 
       const executor = getDockerExecutor()
       await clean(workNodes, context, executor)

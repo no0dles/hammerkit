@@ -10,6 +10,7 @@ import { ExecutionContext } from './execution-context'
 import { Debouncer } from '../utils/debouncer'
 import { hasStatsChanged, getWorkNodeCacheStats } from '../optimizer/get-work-node-cache-stats'
 import { listenOnAbort } from '../utils/abort-event'
+import { ServiceProcess } from './executor'
 
 export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
   listenOnAbort(context.environment.abortCtrl.signal, () => {
@@ -41,6 +42,7 @@ export async function execute(workTree: WorkTree, context: ExecutionContext): Pr
 
 export function run(workTree: WorkTree, context: ExecutionContext): Promise<void> {
   const runningNodes: { [id: string]: WorkNode } = {}
+  const runningServices: { [id: string]: ServiceProcess } = {}
   const pendingNodeIds: string[] = []
 
   return new Promise<void>((resolve, reject) => {
@@ -57,9 +59,23 @@ export function run(workTree: WorkTree, context: ExecutionContext): Promise<void
         }
       }
       if (!hasRunningNode) {
-        resolve()
+        shutdown()
       }
     })
+
+    const shutdown = async (error?: Error) => {
+      for (const svc of Object.values(runningServices)) {
+        try {
+          await svc.stop()
+        } catch (e) {}
+      }
+
+      if (error) {
+        reject(error)
+      } else {
+        resolve()
+      }
+    }
 
     const runPending = async () => {
       if (context.workers !== 0 && Object.keys(runningNodes).length >= context.workers) {
@@ -93,6 +109,16 @@ export function run(workTree: WorkTree, context: ExecutionContext): Promise<void
             return
           }
 
+          if (Object.keys(node.status.state.pendingServices).length !== 0) {
+            for (const need of node.needs) {
+              if (runningServices[need.id]) {
+                continue
+              }
+              runningServices[need.id] = context.executor.start(workTree, need, context)
+            }
+            return
+          }
+
           pendingNodeIds.push(node.id)
 
           await runPending()
@@ -102,16 +128,20 @@ export function run(workTree: WorkTree, context: ExecutionContext): Promise<void
             workTree.rootNode.status.state.type === 'aborted' ||
             workTree.rootNode.status.state.type === 'failed')
         ) {
-          resolve()
+          shutdown()
         }
       } catch (e) {
-        reject(e)
+        shutdown(e)
       }
     }
 
     context.events.on((evt) => {
-      const node = workTree.nodes[evt.nodeId]
-      enqueueNode(node)
+      if (evt.type === 'node') {
+        const node = workTree.nodes[evt.nodeId]
+        enqueueNode(node)
+      } else {
+        //TODO remove service if not needed
+      }
     })
 
     for (const node of iterateWorkNodes(workTree.nodes)) {

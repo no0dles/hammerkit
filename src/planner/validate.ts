@@ -4,17 +4,29 @@ import { planWorkTree } from '../planner/utils/plan-work-tree'
 import { WorkNode } from '../planner/work-node'
 import { WorkNodeValidation } from './work-node-validation'
 import { Environment } from '../executer/environment'
+import { WorkNodes } from './work-nodes'
+import { WorkServices } from './work-services'
+
+function plan(buileFile: BuildFile, name?: string): [WorkNodes, WorkServices] {
+  if (name) {
+    const tree = planWorkTree(buileFile, name)
+    return [tree.nodes, tree.services]
+  } else {
+    const [nodes, services] = planWorkNodes(buileFile)
+    return [nodes, services]
+  }
+}
 
 export async function* validate(
   buildFile: BuildFile,
   context: Environment,
   name?: string
 ): AsyncGenerator<WorkNodeValidation> {
-  const tree = name ? planWorkTree(buildFile, name).nodes : planWorkNodes(buildFile)
+  const [nodes, services] = plan(buildFile, name) // TODO validate services
   const cycleNodes: WorkNode[] = []
 
-  for (const key of Object.keys(tree)) {
-    const node = tree[key]
+  for (const key of Object.keys(nodes)) {
+    const node = nodes[key]
     if (!node.description) {
       yield { type: 'warn', message: `missing description`, node: node }
     }

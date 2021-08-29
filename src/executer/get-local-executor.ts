@@ -1,4 +1,4 @@
-import { Executor } from './executor'
+import { Executor, ServiceProcess } from './executor'
 import { isContainerWorkNode, WorkNode } from '../planner/work-node'
 import { ExecutionContext } from './execution-context'
 import { executeLocal } from './execute-local'
@@ -6,9 +6,14 @@ import { replaceEnvVariables } from '../environment/replace-env-variables'
 import { Environment } from './environment'
 import { moveFiles } from '../file/move-files'
 import { join, relative } from 'path'
+import { WorkService } from '../planner/work-service'
+import { WorkTree } from '../planner/work-tree'
 
 export function getLocalExecutor(): Executor {
   return {
+    start(workTree: WorkTree, service: WorkService, context: ExecutionContext): ServiceProcess {
+      throw new Error('services are not yet supported without docker')
+    },
     async restore(node: WorkNode, environment: Environment, path: string): Promise<void> {
       await moveFiles(node, environment, function* () {
         for (const targetPath of node.generates) {

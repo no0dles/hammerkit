@@ -19,6 +19,9 @@ import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
 import { WorkNodePath } from '../work-node-path'
 import { parseWorkNodePort } from './parse-work-node-port'
+import { WorkServices } from '../work-services'
+import { WorkService } from '../work-service'
+import { getWorkServiceId } from '../work-service-id'
 
 export interface MergedBuildFileTask {
   image: string | null
@@ -39,10 +42,15 @@ export interface MergedDependency {
   name: string
 }
 
+export interface MergedNeed {
+  name: string
+  build: BuildFile
+}
+
 export function getMergedBuildTask(
   build: BuildFile,
   task: BuildFileTask
-): { task: MergedBuildFileTask; deps: MergedDependency[] } {
+): { task: MergedBuildFileTask; deps: MergedDependency[]; needs: MergedNeed[] } {
   const envs = {
     ...build.envs,
     ...(task.envs || {}),
@@ -72,6 +80,10 @@ export function getMergedBuildTask(
         ...(extend.task.deps || []).map((d) => ({ name: d, build: extend.build })),
         ...(task.deps || []).map((d) => ({ name: d, build: build })),
       ],
+      needs: [
+        ...(extend.task.needs || []).map((n) => ({ name: n, build: extend.build })),
+        ...(task.needs || []).map((n) => ({ name: n, build: build })),
+      ],
     }
   } else {
     return {
@@ -89,13 +101,20 @@ export function getMergedBuildTask(
         envs,
       },
       deps: [...(task.deps || []).map((d) => ({ name: d, build: build }))],
+      needs: [...(task.needs || []).map((n) => ({ name: n, build: build }))],
     }
   }
 }
 
-export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNodes, context: WorkContext): WorkNode {
+export function planWorkNode(
+  build: BuildFile,
+  taskName: string,
+  nodes: WorkNodes,
+  services: WorkServices,
+  context: WorkContext
+): WorkNode {
   if (build.tasks[taskName]) {
-    const { task, deps } = getMergedBuildTask(build, build.tasks[taskName])
+    const { task, deps, needs } = getMergedBuildTask(build, build.tasks[taskName])
     const id = getWorkNodeId(context.currentWorkdir, task, deps)
     if (nodes[id]) {
       return nodes[id]
@@ -119,9 +138,10 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
         generates: parseLocalWorkNodeGenerate(task, context, task.envs),
         mergedDeps: deps,
         mergedTask: task,
+        needs: parseWorkNodeNeeds(needs, services),
         status: {
           name,
-          state: { type: 'pending', pendingDependencies: {} },
+          state: { type: 'pending', pendingDependencies: {}, pendingServices: {} },
           defer: new AbortController(),
           console: nodeConsole(),
         },
@@ -130,11 +150,17 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
       context
     )
 
+    if (node.status.state.type === 'pending') {
+      for (const need of node.needs) {
+        node.status.state.pendingServices[need.id] = need
+      }
+    }
+
     nodes[id] = node
 
     const depNodes = deps.map((dep) => {
       const depName = templateValue(dep.name, dep.build.envs)
-      const depNode = planWorkNode(dep.build, depName, nodes, {
+      const depNode = planWorkNode(dep.build, depName, nodes, services, {
         ...context,
         idPrefix: null,
       })
@@ -151,14 +177,14 @@ export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNode
     const ref = splitName(taskName)
     if (ref.prefix) {
       if (build.references[ref.prefix]) {
-        return planWorkNode(build.references[ref.prefix], ref.taskName, nodes, {
+        return planWorkNode(build.references[ref.prefix], ref.taskName, nodes, services, {
           ...context,
           currentWorkdir: build.references[ref.prefix].path,
           idPrefix: null,
           namePrefix: [...context.namePrefix, ref.prefix],
         })
       } else if (build.includes[ref.prefix]) {
-        return planWorkNode(build.includes[ref.prefix], ref.taskName, nodes, {
+        return planWorkNode(build.includes[ref.prefix], ref.taskName, nodes, services, {
           ...context,
           idPrefix: ref.prefix,
           namePrefix: [...context.namePrefix, ref.prefix],
@@ -225,6 +251,39 @@ function parseLocalWorkNodeSource(
       matcher: src.matcher,
     }))
     .map((src) => mapSource(src, context.currentWorkdir))
+}
+
+function parseWorkNodeNeeds(needs: MergedNeed[], services: WorkServices): WorkService[] {
+  const result: WorkService[] = []
+
+  for (const need of needs) {
+    const service = need.build.services[need.name]
+    const id = getWorkServiceId(need.build, service)
+    if (!services[id]) {
+      services[id] = {
+        id,
+        name: need.name,
+        healthcheck: service.healthcheck,
+        envs: service.envs || {},
+        mounts: (service.mounts || [])
+          .map((m) => templateValue(m, service.envs))
+          .map((m) => parseWorkNodeMount(need.build.path, m)),
+        status: {
+          state: {
+            type: 'pending',
+          },
+          defer: new AbortController(),
+          console: nodeConsole(),
+        },
+        image: service.image,
+        volumes: service.volumes || {},
+        ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),
+      }
+    }
+    result.push(services[id])
+  }
+
+  return result
 }
 
 function parseWorkNodeCommand(

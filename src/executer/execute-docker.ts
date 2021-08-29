@@ -11,6 +11,7 @@ import { Environment } from './environment'
 import { createHash } from 'crypto'
 import { ensureVolumeExists } from './get-docker-executor'
 import { listenOnAbort } from '../utils/abort-event'
+import { WorkNodeConsole } from '../planner/work-node-status'
 
 interface WorkNodeVolume {
   name: string
@@ -139,11 +140,19 @@ export async function executeDocker(
   const mounts = await getContainerMounts(node, context.environment)
 
   checkIfAbort(cancelDefer)
-  await pull(node, docker, node.image)
+  await pull(node.status.console, docker, node.image)
 
   checkIfAbort(cancelDefer)
   for (const volume of volumes) {
     await ensureVolumeExists(docker, volume.name)
+  }
+
+  const links: string[] = []
+  for (const need of node.needs) {
+    if (need.status.state.type !== 'ready') {
+      throw new Error(`service ${need.name} is not running`)
+    }
+    links.push(`${need.status.state.containerName}:${need.name}`)
   }
 
   checkIfAbort(cancelDefer)
@@ -164,6 +173,7 @@ export async function executeDocker(
         map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
         return map
       }, {}),
+      Links: links,
       AutoRemove: true,
     },
     ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
@@ -199,7 +209,14 @@ export async function executeDocker(
     if (user) {
       const setUserPermission = async (directory: string) => {
         node.status.console.write('internal', 'debug', 'set permission on ' + directory)
-        const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
+        const result = await execCommand(
+          node.status.console,
+          docker,
+          container,
+          '/',
+          ['chown', user, directory],
+          undefined
+        )
         if (!result || result.ExitCode !== 0) {
           node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
         }
@@ -220,7 +237,7 @@ export async function executeDocker(
       const command = templateValue(cmd.cmd, node.envs)
       node.status.console.write('internal', 'info', `execute cmd ${command} in container`)
       const result = await execCommand(
-        node,
+        node.status.console,
         docker,
         container,
         convertToPosixPath(cmd.path),
@@ -249,10 +266,10 @@ export async function executeDocker(
 }
 
 export async function execCommand(
-  node: ContainerWorkNode,
+  console: WorkNodeConsole,
   docker: Dockerode,
   container: Container,
-  cwd: string,
+  cwd: string | undefined,
   cmd: string[],
   user: string | undefined
 ): Promise<ExecInspectInfo | null> {
@@ -266,11 +283,11 @@ export async function execCommand(
     User: user,
   })
 
-  node.status.console.write('internal', 'debug', `received exec id ${exec.id}`)
+  console.write('internal', 'debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
 
   return new Promise<ExecInspectInfo | null>((resolve, reject) => {
-    awaitStream(node, docker, stream)
+    awaitStream(console, docker, stream)
       .then(() => exec.inspect())
       .then(resolve)
       .catch(reject)

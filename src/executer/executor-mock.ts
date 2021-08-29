@@ -1,7 +1,10 @@
-import { Executor } from './executor'
+import { Executor, ServiceProcess } from './executor'
 import { WorkNode } from '../planner/work-node'
 import { ExecutionContext } from './execution-context'
 import { listenOnAbort } from '../utils/abort-event'
+import { WorkService } from '../planner/work-service'
+import { Environment } from './environment'
+import { WorkTree } from '../planner/work-tree'
 
 export interface ExecutorMock extends Executor {
   waitForExecution(nodeId: string): Promise<NodeHandle>
@@ -22,6 +25,11 @@ export function getExecutorMock(): ExecutorMock {
   const execs: { [key: string]: NodeHandle } = {}
 
   return {
+    start(workTree: WorkTree, service: WorkService, context: ExecutionContext): ServiceProcess {
+      return {
+        async stop(): Promise<void> {}, // TODO
+      }
+    },
     restore(): Promise<void> {
       return Promise.resolve()
     },

@@ -12,6 +12,8 @@ import { ExecutionContext } from './execution-context'
 import { listenOnAbort } from '../utils/abort-event'
 import { WorkNode } from '../planner/work-node'
 import { ExecutionContextEvent } from './execution-context-event'
+import { WorkService } from '../planner/work-service'
+import { WorkServiceReadyState, WorkServiceRunningState } from '../planner/work-service-state'
 
 function getDuration(state: WorkNodeState): number {
   if (state.type === 'running') {
@@ -33,7 +35,7 @@ export function runNode(workTree: WorkTree, nodeId: string, context: ExecutionCo
 
   const currentState = workTree.nodes[nodeId].status.state
   workTree.nodes[nodeId].status.state = runningState
-  context.events.emit({ oldState: currentState, newState: runningState, nodeId, workTree })
+  context.events.emit({ type: 'node', oldState: currentState, newState: runningState, nodeId, workTree })
   return runningState.abortCtrl
 }
 
@@ -51,7 +53,7 @@ export function completeNode(workTree: WorkTree, nodeId: string, context: Execut
     node.status.defer.abort()
   }
 
-  context.events.emit({ oldState: currentState, newState: completedState, nodeId, workTree })
+  context.events.emit({ type: 'node', oldState: currentState, newState: completedState, nodeId, workTree })
 
   for (const otherNode of iterateWorkNodes(workTree.nodes)) {
     if (otherNode.status.state.type !== 'pending') {
@@ -64,18 +66,9 @@ export function completeNode(workTree: WorkTree, nodeId: string, context: Execut
       continue
     }
 
-    const newState: WorkNodePendingState = {
-      type: 'pending',
-      pendingDependencies: Object.keys(pendingDependencies).reduce<{
-        [key: string]: WorkNode
-      }>((map, key) => {
-        if (pendingDependencies[key].status.state.type !== 'completed') {
-          map[key] = pendingDependencies[key]
-        }
-        return map
-      }, {}),
-    }
+    const newState = getPendingState(otherNode)
     const evt: ExecutionContextEvent = {
+      type: 'node',
       oldState: otherNode.status.state,
       nodeId: otherNode.id,
       workTree,
@@ -84,6 +77,56 @@ export function completeNode(workTree: WorkTree, nodeId: string, context: Execut
     otherNode.status.state = newState
     context.events.emit(evt)
   }
+}
+
+export function serviceReady(workTree: WorkTree, serviceId: string, context: ExecutionContext, containerName: string) {
+  const service = workTree.services[serviceId]
+  const oldState = service.status.state
+  const newState: WorkServiceReadyState = {
+    type: 'ready',
+    containerName,
+  }
+  service.status.state = newState
+  context.events.emit({ type: 'service', newState, oldState, workTree, serviceId })
+
+  for (const otherNode of iterateWorkNodes(workTree.nodes)) {
+    if (otherNode.status.state.type !== 'pending') {
+      continue
+    }
+
+    const pendingServices = otherNode.status.state.pendingServices
+    const dependency = pendingServices[serviceId]
+    if (!dependency) {
+      continue
+    }
+
+    const newState = getPendingState(otherNode)
+    const evt: ExecutionContextEvent = {
+      type: 'node',
+      oldState: otherNode.status.state,
+      nodeId: otherNode.id,
+      workTree,
+      newState,
+    }
+    otherNode.status.state = newState
+    context.events.emit(evt)
+  }
+}
+
+export function serviceRunning(
+  workTree: WorkTree,
+  serviceId: string,
+  context: ExecutionContext,
+  containerName: string
+) {
+  const service = workTree.services[serviceId]
+  const oldState = service.status.state
+  const newState: WorkServiceRunningState = {
+    type: 'running',
+    containerName,
+  }
+  service.status.state = newState
+  context.events.emit({ type: 'service', newState, oldState, workTree, serviceId })
 }
 
 export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionContext, error: Error): void {
@@ -98,11 +141,11 @@ export function failNode(workTree: WorkTree, nodeId: string, context: ExecutionC
       ? { type: 'aborted' }
       : { type: 'failed', ended: new Date(), duration: getDuration(node.status.state), error }
     node.status.state = newState
-    context.events.emit({ nodeId: node.id, workTree, newState, oldState: currentState })
+    context.events.emit({ type: 'node', nodeId: node.id, workTree, newState, oldState: currentState })
   } else if (currentState.type === 'cancel') {
     const newState: WorkNodeState = canceledExecution ? { type: 'aborted' } : getPendingState(node)
     node.status.state = newState
-    context.events.emit({ nodeId: node.id, workTree, newState, oldState: currentState })
+    context.events.emit({ type: 'node', nodeId: node.id, workTree, newState, oldState: currentState })
   }
 
   if (!canceledExecution && !context.watch) {
@@ -123,6 +166,12 @@ function getPendingState(node: WorkNode): WorkNodePendingState {
       }
       return map
     }, {}),
+    pendingServices: node.needs.reduce<{ [key: string]: WorkService }>((map, service) => {
+      if (service.status.state.type !== 'ready') {
+        map[service.id] = service
+      }
+      return map
+    }, {}),
   }
 }
 
@@ -134,11 +183,11 @@ export function resetNode(workTree: WorkTree, nodeId: string, context: Execution
     const cancelState: WorkNodeCancelState = { type: 'cancel' }
     node.status.state = cancelState
     currentState.abortCtrl.abort()
-    context.events.emit({ workTree, nodeId, oldState: currentState, newState: cancelState })
+    context.events.emit({ type: 'node', workTree, nodeId, oldState: currentState, newState: cancelState })
   } else if (currentState.type === 'completed' || currentState.type === 'failed') {
     const pendingState = getPendingState(node)
     node.status.state = pendingState
-    context.events.emit({ workTree, nodeId, oldState: currentState, newState: pendingState })
+    context.events.emit({ type: 'node', workTree, nodeId, oldState: currentState, newState: pendingState })
   }
 }
 
@@ -156,7 +205,7 @@ function cancelPendingNodes(workTree: WorkTree, nodeId: string, context: Executi
     if (currentState.type === 'pending') {
       const cancelState: WorkNodeCancelState = { type: 'cancel' }
       node.status.state = cancelState
-      context.events.emit({ workTree, nodeId, oldState: currentState, newState: cancelState })
+      context.events.emit({ type: 'node', workTree, nodeId, oldState: currentState, newState: cancelState })
       if (!context.watch) {
         node.status.defer.abort()
       }
@@ -172,12 +221,12 @@ export function cancelNodes(workTree: WorkTree, context: ExecutionContext): void
       const abortState: WorkNodeAbortedState = { type: 'aborted' }
       node.status.state = abortState
       node.status.defer.abort()
-      context.events.emit({ nodeId: node.id, workTree, newState: abortState, oldState: currentState })
+      context.events.emit({ type: 'node', nodeId: node.id, workTree, newState: abortState, oldState: currentState })
     } else if (currentState.type === 'running') {
       const cancelState: WorkNodeCancelState = { type: 'cancel' }
       node.status.state = cancelState
       currentState.abortCtrl.abort()
-      context.events.emit({ workTree, nodeId: node.id, oldState: currentState, newState: cancelState })
+      context.events.emit({ type: 'node', workTree, nodeId: node.id, oldState: currentState, newState: cancelState })
     } else if (
       (currentState.type === 'completed' || currentState.type === 'failed') &&
       !node.status.defer.signal.aborted

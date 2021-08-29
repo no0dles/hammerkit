@@ -12,9 +12,11 @@ describe('watch', () => {
     const workTree = planWorkTree(buildFile, 'api')
 
     executionContext.watch = true
-    executionContext.events.on(({ workTree, nodeId, newState }) => {
-      if (nodeId === workTree.rootNode.id && newState.type === 'running') {
-        context.abortCtrl.abort()
+    executionContext.events.on((evt) => {
+      if (evt.type === 'node') {
+        if (evt.nodeId === workTree.rootNode.id && evt.newState.type === 'running') {
+          context.abortCtrl.abort()
+        }
       }
     })
     const result = await execute(workTree, executionContext)

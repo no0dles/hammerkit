@@ -1,7 +1,9 @@
 import Dockerode from 'dockerode'
 import { ContainerWorkNode } from '../planner/work-node'
+import { ConsoleContext } from '../console/console-context'
+import { WorkNodeConsole } from '../planner/work-node-status'
 
-export async function pull(node: ContainerWorkNode, docker: Dockerode, imageName: string): Promise<void> {
+export async function pull(console: WorkNodeConsole, docker: Dockerode, imageName: string): Promise<void> {
   let searchImageName = imageName
   if (imageName.indexOf(':') === -1) {
     searchImageName += ':latest'
@@ -11,7 +13,7 @@ export async function pull(node: ContainerWorkNode, docker: Dockerode, imageName
     return
   }
 
-  node.status.console.write('internal', 'debug', `pull image ${imageName}`)
+  console.write('internal', 'debug', `pull image ${imageName}`)
   const image = await docker.pull(imageName)
   await new Promise<void>((resolve, reject) => {
     docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)))

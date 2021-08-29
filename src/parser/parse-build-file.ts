@@ -7,8 +7,9 @@ import { parseStringArray } from './parse-string-array'
 import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { Environment } from '../executer/environment'
+import { parseBuildFileServices } from './parse-build-file-services'
 
-const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
+const validTaskKeys = ['envs', 'src', 'needs', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
 
 export async function parseBuildFile(
@@ -24,6 +25,7 @@ export async function parseBuildFile(
     path: dirname(fileName),
     references: {},
     envs: {},
+    services: {},
   }
   files[fileName] = result
 
@@ -44,6 +46,8 @@ export async function parseBuildFile(
       result.references = await parseBuildFileReferences('reference', fileName, files, value || {}, context)
     } else if (key === 'envs') {
       result.envs = parseEnvs(fileName, value || {}, result.envs)
+    } else if (key === 'services') {
+      result.services = parseBuildFileServices(fileName, value || {}, result)
     }
   }
 
@@ -69,6 +73,7 @@ export async function parseBuildFile(
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,
+      needs: value.needs || null,
       ports: parseStringArray(fileName, key, 'ports', value.ports),
       cmds: parseBuildFileCommand(fileName, key, value.cmds),
       unknownProps: Object.keys(value)

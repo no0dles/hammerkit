@@ -31,7 +31,7 @@ export async function getProgram(
 
   if (await environment.file.exists(fileName)) {
     const buildFile = await getBuildFile(fileName, environment)
-    const workNodes = planWorkNodes(buildFile)
+    const [workNodes, workServices] = planWorkNodes(buildFile) // TODO make them accessable trough cli
     const reservedCommands = ['clean', 'store', 'restore', 'validate']
 
     program
