@@ -2,7 +2,6 @@ import { Executor, ServiceProcess } from './executor'
 import { WorkNode } from '../planner/work-node'
 import { ExecutionContext } from './execution-context'
 import { listenOnAbort } from '../utils/abort-event'
-import { WorkTree } from '../planner/work-tree'
 
 export interface ExecutorMock extends Executor {
   waitForExecution(nodeId: string): Promise<NodeHandle>
@@ -25,7 +24,10 @@ export function getExecutorMock(): ExecutorMock {
   return {
     start(): ServiceProcess {
       return {
-        async stop(): Promise<void> {}, // TODO
+        name: 'mock',
+        async stop(): Promise<void> {
+          return Promise.resolve()
+        }, // TODO
       }
     },
     restore(): Promise<void> {
@@ -37,7 +39,7 @@ export function getExecutorMock(): ExecutorMock {
     clean(): Promise<void> {
       return Promise.resolve()
     },
-    prepareRun(workTree: WorkTree): Promise<void> {
+    prepareRun(): Promise<void> {
       return Promise.resolve()
     },
     exec(node: WorkNode, context: ExecutionContext, abortCtrl: AbortController): Promise<void> {
@@ -75,11 +77,9 @@ export function getExecutorMock(): ExecutorMock {
         return currentExecs
       }
 
-      const promise = new Promise<NodeHandle>((resolve) => {
+      return new Promise<NodeHandle>((resolve) => {
         waits[nodeId] = resolve
       })
-
-      return promise
     },
   }
 }

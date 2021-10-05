@@ -12,6 +12,7 @@ import { hasStatsChanged, getWorkNodeCacheStats } from '../optimizer/get-work-no
 import { listenOnAbort } from '../utils/abort-event'
 import { ServiceProcess } from './executor'
 import { getErrorMessage } from '../log'
+import { logMessageToConsole } from '../logging/message-to-console'
 
 export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
   listenOnAbort(context.environment.abortCtrl.signal, () => {
@@ -69,7 +70,17 @@ export function run(workTree: WorkTree, context: ExecutionContext): Promise<void
       for (const svc of Object.values(runningServices)) {
         try {
           await svc.stop()
-        } catch (e) {}
+        } catch (e) {
+          logMessageToConsole(
+            {
+              type: 'internal',
+              message: `unable to stop service ${svc.name}`,
+              level: 'warn',
+              date: new Date(),
+            },
+            { type: 'general' }
+          )
+        }
       }
 
       if (error) {

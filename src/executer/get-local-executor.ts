@@ -6,7 +6,6 @@ import { replaceEnvVariables } from '../environment/replace-env-variables'
 import { Environment } from './environment'
 import { moveFiles } from '../file/move-files'
 import { join, relative } from 'path'
-import { WorkTree } from '../planner/work-tree'
 
 export function getLocalExecutor(): Executor {
   return {
@@ -46,7 +45,9 @@ export function getLocalExecutor(): Executor {
         await environment.file.remove(generate.path)
       }
     },
-    async prepareRun(workTree: WorkTree): Promise<void> {},
+    async prepareRun(): Promise<void> {
+      return Promise.resolve()
+    },
     async exec(node: WorkNode, context: ExecutionContext, abortCtrl: AbortController): Promise<void> {
       const envs = replaceEnvVariables(node, context.environment.processEnvs)
       if (isContainerWorkNode(node)) {

@@ -73,7 +73,7 @@ export async function getDockerExecutor(): Promise<Executor> {
           Image: service.image,
           Env: Object.keys(service.envs).map((k) => `${k}=${service.envs[k]}`),
           Labels: { app: 'hammerkit', 'hammerkit-id': service.id, 'hammerkit-type': 'service' },
-          ExposedPorts: service.ports.reduce<{ [key: string]: {} }>((map, port) => {
+          ExposedPorts: service.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
             map[`${port.containerPort}/tcp`] = {}
             return map
           }, {}),
@@ -146,6 +146,7 @@ export async function getDockerExecutor(): Promise<Executor> {
       })
 
       return {
+        name: service.name,
         async stop() {
           if (container) {
             try {

@@ -14,5 +14,6 @@ export interface Executor {
 }
 
 export interface ServiceProcess {
+  name: string
   stop(): Promise<void>
 }
