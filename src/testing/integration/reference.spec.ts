@@ -20,7 +20,7 @@ describe('reference', () => {
 
   it('should list task with references tasks nested', async () => {
     const { buildFile } = await suite.setup()
-    const node = planWorkNodes(buildFile)
-    expect(Object.values(node).map((t) => t.name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
+    const [nodes] = planWorkNodes(buildFile)
+    expect(Object.values(nodes).map((t) => t.name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
   })
 })

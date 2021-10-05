@@ -54,7 +54,7 @@ export function nodeConsole(): WorkNodeConsole {
 export interface WorkNodeStatus {
   name: string
   state: WorkNodeState
-  defer: AbortController
+  abortCtrl: AbortController
   console: WorkNodeConsole
 }
 
@@ -95,6 +95,6 @@ export interface WorkNodeCompletedState {
 export interface WorkNodeFailedState {
   type: 'failed'
   duration: number
-  error: Error
+  errorMessage: string
   ended: Date
 }

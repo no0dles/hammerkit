@@ -1,6 +1,4 @@
 import Dockerode from 'dockerode'
-import { ContainerWorkNode } from '../planner/work-node'
-import { ConsoleContext } from '../console/console-context'
 import { WorkNodeConsole } from '../planner/work-node-status'
 
 export async function pull(console: WorkNodeConsole, docker: Dockerode, imageName: string): Promise<void> {

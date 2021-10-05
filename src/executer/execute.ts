@@ -11,6 +11,7 @@ import { Debouncer } from '../utils/debouncer'
 import { hasStatsChanged, getWorkNodeCacheStats } from '../optimizer/get-work-node-cache-stats'
 import { listenOnAbort } from '../utils/abort-event'
 import { ServiceProcess } from './executor'
+import { getErrorMessage } from '../log'
 
 export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
   listenOnAbort(context.environment.abortCtrl.signal, () => {
@@ -23,6 +24,7 @@ export async function execute(workTree: WorkTree, context: ExecutionContext): Pr
     await watchNodes(workTree, context)
   }
 
+  await context.executor.prepareRun(workTree)
   await run(workTree, context)
 
   const result: ExecuteResult = {
@@ -63,7 +65,7 @@ export function run(workTree: WorkTree, context: ExecutionContext): Promise<void
       }
     })
 
-    const shutdown = async (error?: Error) => {
+    const shutdown = async (error?: unknown) => {
       for (const svc of Object.values(runningServices)) {
         try {
           await svc.stop()
@@ -98,7 +100,7 @@ export function run(workTree: WorkTree, context: ExecutionContext): Promise<void
         completeNode(workTree, node.id, context)
       } catch (e) {
         delete runningNodes[nextNodeId]
-        failNode(workTree, node.id, context, e)
+        failNode(workTree, node.id, context, getErrorMessage(e))
       }
     }
 

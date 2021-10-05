@@ -1,7 +1,6 @@
 import { Duplex } from 'stream'
 import { getLogs } from '../log'
 import Dockerode from 'dockerode'
-import { ContainerWorkNode } from '../planner/work-node'
 import { WorkNodeConsole, WorkNodeConsoleLogLevel } from '../planner/work-node-status'
 
 export async function awaitStream(console: WorkNodeConsole, docker: Dockerode, stream: Duplex): Promise<void> {

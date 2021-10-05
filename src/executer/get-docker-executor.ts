@@ -13,6 +13,8 @@ import { listenOnAbort } from '../utils/abort-event'
 import { WorkTree } from '../planner/work-tree'
 import { serviceReady, serviceRunning } from './states'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
+import { logMessageToConsole } from '../logging/message-to-console'
+import { getErrorMessage } from '../log'
 
 export async function existsVolume(docker: Dockerode, volumeName: string): Promise<VolumeInspectInfo | false> {
   try {
@@ -34,13 +36,31 @@ export async function ensureVolumeExists(docker: Dockerode, volumeName: string):
   }
 }
 
-export function getDockerExecutor(): Executor {
+export async function getDockerExecutor(): Promise<Executor> {
   const localExec = getLocalExecutor()
+  const docker = getDocker()
+
+  try {
+    await docker.version()
+  } catch (e) {
+    if (e instanceof Error && e.message.indexOf('ECONNREFUSED') >= 0) {
+      logMessageToConsole(
+        {
+          message: `docker is not running, try running in local shell or start`,
+          type: 'internal',
+          date: new Date(),
+          level: 'error',
+        },
+        { type: 'general' }
+      )
+    }
+
+    throw e
+  }
 
   return {
     start(workTree: WorkTree, service: WorkService, context: ExecutionContext): ServiceProcess {
       service.status.console.write('internal', 'debug', `execute ${service.name} as docker service`)
-      const docker = getDocker()
 
       let container: Container
 
@@ -52,7 +72,7 @@ export function getDockerExecutor(): Executor {
         container = await docker.createContainer({
           Image: service.image,
           Env: Object.keys(service.envs).map((k) => `${k}=${service.envs[k]}`),
-          Labels: { app: 'hammerkit' },
+          Labels: { app: 'hammerkit', 'hammerkit-id': service.id, 'hammerkit-type': 'service' },
           ExposedPorts: service.ports.reduce<{ [key: string]: {} }>((map, port) => {
             map[`${port.containerPort}/tcp`] = {}
             return map
@@ -71,7 +91,7 @@ export function getDockerExecutor(): Executor {
           try {
             await container.remove({ force: true })
           } catch (e) {
-            service.status.console.write('internal', 'debug', `failed to remove container: ${e.message}`)
+            service.status.console.write('internal', 'debug', `failed to remove container: ${getErrorMessage(e)}`)
           }
         })
 
@@ -95,31 +115,34 @@ export function getDockerExecutor(): Executor {
             container,
             undefined,
             healthCheck.cmd.split(' '),
-            undefined
+            undefined,
+            2000
           )
-          if (!result) {
-            return
-          }
 
-          if (result.ExitCode === 0) {
-            service.status.console.write('internal', 'debug', `healthcheck ${healthCheck.cmd} succeeded`)
-            serviceReady(workTree, service.id, context, containerName)
+          if (result.type === 'timeout') {
+            setTimeout(() => checkReadiness(containerName, healthCheck), 3000)
+            return
           } else {
-            service.status.console.write(
-              'internal',
-              'debug',
-              `healthcheck ${healthCheck.cmd} failed with ${result.ExitCode}`
-            )
-            setTimeout(() => checkReadiness(containerName, healthCheck), 5000)
+            if (result.result.ExitCode === 0) {
+              service.status.console.write('internal', 'debug', `healthcheck ${healthCheck.cmd} succeeded`)
+              serviceReady(workTree, service.id, context, containerName)
+            } else {
+              service.status.console.write(
+                'internal',
+                'debug',
+                `healthcheck ${healthCheck.cmd} failed with ${result.result.ExitCode}`
+              )
+              setTimeout(() => checkReadiness(containerName, healthCheck), 5000)
+            }
           }
         } catch (e) {
-          service.status.console.write('internal', 'debug', `checking readiness failed ${e.message}`)
+          service.status.console.write('internal', 'debug', `checking readiness failed ${getErrorMessage(e)}`)
           setTimeout(() => checkReadiness(containerName, healthCheck), 5000)
         }
       }
 
       run().catch((e) => {
-        service.status.console.write('internal', 'error', `service ${service.name} failed with ${e.message}`)
+        service.status.console.write('internal', 'error', `service ${service.name} failed with ${getErrorMessage(e)}`)
       })
 
       return {
@@ -128,7 +151,7 @@ export function getDockerExecutor(): Executor {
             try {
               await container.remove({ force: true })
             } catch (e) {
-              service.status.console.write('internal', 'debug', `failed to remove container: ${e.message}`)
+              service.status.console.write('internal', 'debug', `failed to remove container: ${getErrorMessage(e)}`)
             }
           }
         },
@@ -215,9 +238,25 @@ export function getDockerExecutor(): Executor {
         }
       }
     },
-    async exec(node: WorkNode, context: ExecutionContext, cancelDefer: AbortController): Promise<void> {
+    async prepareRun(workTree: WorkTree): Promise<void> {
+      const containers = await docker.listContainers({})
+      for (const container of containers) {
+        const containerId = container.Labels['hammerkit-id']
+        const containerType = container.Labels['hammerkit-type']
+        if (containerType === 'service') {
+          if (workTree.services[containerId]) {
+            await docker.getContainer(container.Id).remove({ force: true })
+          }
+        } else if (containerType === 'task') {
+          if (workTree.nodes[containerId]) {
+            await docker.getContainer(container.Id).remove({ force: true })
+          }
+        }
+      }
+    },
+    async exec(node: WorkNode, context: ExecutionContext, abortCtrl: AbortController): Promise<void> {
       if (!isContainerWorkNode(node)) {
-        return localExec.exec(node, context, cancelDefer)
+        return localExec.exec(node, context, abortCtrl)
       }
 
       const envs = replaceEnvVariables(node, context.environment.processEnvs)
@@ -227,7 +266,7 @@ export function getDockerExecutor(): Executor {
           envs,
         },
         context,
-        cancelDefer
+        abortCtrl
       )
     },
   }

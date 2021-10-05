@@ -39,7 +39,7 @@ export async function getProgram(
       .description('clear task cache')
       .action(async () => {
         try {
-          await clean(workNodes, environment, getDockerExecutor())
+          await clean(workNodes, environment, await getDockerExecutor())
         } catch (e) {
           environment.console.error(e)
           process.exit(1)
@@ -51,7 +51,7 @@ export async function getProgram(
       .description('save task outputs into <path>')
       .action(async (path) => {
         try {
-          await store(workNodes, resolve(path), environment, getDockerExecutor())
+          await store(workNodes, resolve(path), environment, await getDockerExecutor())
         } catch (e) {
           environment.console.error(e)
           process.exit(1)
@@ -63,7 +63,7 @@ export async function getProgram(
       .description('restore task outputs from <path>')
       .action(async (path) => {
         try {
-          await restore(workNodes, resolve(path), environment, getDockerExecutor())
+          await restore(workNodes, resolve(path), environment, await getDockerExecutor())
         } catch (e) {
           environment.console.error(e)
           process.exit(1)
@@ -114,18 +114,18 @@ export async function getProgram(
         )
         .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
         .action(async (options) => {
-          const executionContext: ExecutionContext = {
-            workers: options.concurrency, // TODO rename
-            cacheMethod: options.cache,
-            watch: options.watch,
-            events: emitter(),
-            executor: options.container ? getDockerExecutor() : getLocalExecutor(),
-            environment: environment,
-          }
-
           const logger = getLogger(options.log)
 
           try {
+            const executionContext: ExecutionContext = {
+              workers: options.concurrency, // TODO rename
+              cacheMethod: options.cache,
+              watch: options.watch,
+              events: emitter(),
+              executor: options.container ? await getDockerExecutor() : getLocalExecutor(),
+              environment: environment,
+            }
+
             const workTree = planWorkTree(buildFile, node.name)
             logger.start(executionContext, workTree)
             const result = await execute(workTree, executionContext)

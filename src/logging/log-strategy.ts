@@ -7,5 +7,5 @@ export interface LogStrategy {
 
   finish(workTree: WorkTree, result: ExecuteResult): Promise<void>
 
-  abort(e: Error): void
+  abort(e: unknown): void
 }

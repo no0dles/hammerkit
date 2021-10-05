@@ -50,7 +50,7 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
       const buildFile = await getBuildFile(fileName, context)
       const [workNodes] = planWorkNodes(buildFile)
 
-      const executor = getDockerExecutor()
+      const executor = await getDockerExecutor()
       await clean(workNodes, context, executor)
 
       const executionContext: ExecutionContext = {

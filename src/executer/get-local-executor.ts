@@ -6,12 +6,11 @@ import { replaceEnvVariables } from '../environment/replace-env-variables'
 import { Environment } from './environment'
 import { moveFiles } from '../file/move-files'
 import { join, relative } from 'path'
-import { WorkService } from '../planner/work-service'
 import { WorkTree } from '../planner/work-tree'
 
 export function getLocalExecutor(): Executor {
   return {
-    start(workTree: WorkTree, service: WorkService, context: ExecutionContext): ServiceProcess {
+    start(): ServiceProcess {
       throw new Error('services are not yet supported without docker')
     },
     async restore(node: WorkNode, environment: Environment, path: string): Promise<void> {
@@ -47,7 +46,8 @@ export function getLocalExecutor(): Executor {
         await environment.file.remove(generate.path)
       }
     },
-    async exec(node: WorkNode, context: ExecutionContext, cancelDefer: AbortController): Promise<void> {
+    async prepareRun(workTree: WorkTree): Promise<void> {},
+    async exec(node: WorkNode, context: ExecutionContext, abortCtrl: AbortController): Promise<void> {
       const envs = replaceEnvVariables(node, context.environment.processEnvs)
       if (isContainerWorkNode(node)) {
         node.status.console.write('internal', 'debug', `${node.name} is executed locally instead inside of a container`)
@@ -59,7 +59,7 @@ export function getLocalExecutor(): Executor {
           envs,
         },
         context,
-        cancelDefer
+        abortCtrl
       )
     },
   }

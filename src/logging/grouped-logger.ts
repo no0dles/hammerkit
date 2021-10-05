@@ -19,7 +19,7 @@ export function groupedLogger(): LogStrategy {
         ) {
           const node = workTree.nodes[evt.nodeId]
           for (const log of await node.status.console.read()) {
-            logMessageToConsole('task', node, log, maxNodeNameLength)
+            logMessageToConsole(log, { type: 'task', node, maxNodeNameLength })
           }
         }
       })

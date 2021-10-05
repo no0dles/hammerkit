@@ -33,7 +33,7 @@ describe('clean', () => {
 
   it('should clean generated outputs in containers', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
-    executionContext.executor = getDockerExecutor()
+    executionContext.executor = await getDockerExecutor()
     executionContext.cacheMethod = 'none'
 
     const workTree = planWorkTree(buildFile, 'example')

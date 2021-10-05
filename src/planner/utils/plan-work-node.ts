@@ -142,7 +142,7 @@ export function planWorkNode(
         status: {
           name,
           state: { type: 'pending', pendingDependencies: {}, pendingServices: {} },
-          defer: new AbortController(),
+          abortCtrl: new AbortController(),
           console: nodeConsole(),
         },
       },
@@ -272,7 +272,7 @@ function parseWorkNodeNeeds(needs: MergedNeed[], services: WorkServices): WorkSe
           state: {
             type: 'pending',
           },
-          defer: new AbortController(),
+          abortCtrl: new AbortController(),
           console: nodeConsole(),
         },
         image: service.image,

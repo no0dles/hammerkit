@@ -2,7 +2,7 @@ import { WorkNodeConsole } from './work-node-status'
 
 export interface WorkServiceStatus {
   state: WorkServiceState
-  defer: AbortController
+  abortCtrl: AbortController
   console: WorkNodeConsole
 }
 

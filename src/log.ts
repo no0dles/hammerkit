@@ -3,7 +3,6 @@ import { clearScreenDown, moveCursor } from 'readline'
 import { iterateWorkNodes } from './planner/utils/plan-work-nodes'
 import { WorkNodeConsoleLogLevel, WorkNodeState } from './planner/work-node-status'
 import colors from 'colors'
-import { WorkNode } from './planner/work-node'
 import { ExecuteResult } from './executer/execute-result'
 import { ConsoleContext } from './console/console-context'
 import { WorkServiceState } from './planner/work-service-state'
@@ -25,6 +24,16 @@ export function getLogLevel(level: WorkNodeConsoleLogLevel): string {
       return ` ` + colors.yellow(level)
     case 'error':
       return colors.red(level)
+  }
+}
+
+export function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) {
+    return e.message
+  } else if (typeof e === 'string') {
+    return e
+  } else {
+    return `unknown error ${e}`
   }
 }
 
