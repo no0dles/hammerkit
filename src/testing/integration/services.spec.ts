@@ -9,13 +9,6 @@ describe('services', () => {
 
   it('should run service', async () => {
     const { buildFile, executionContext, context } = await suite.setup()
-    executionContext.events.on((evt) => {
-      console.log(evt.type, evt.oldState, evt.newState)
-    })
-    context.console.on((type, message) => {
-      console.log(type, message)
-    })
-
     const workTree = planWorkTree(buildFile, 'api')
     const result = await execute(workTree, executionContext)
     expect(result.success).toBeTruthy()
