@@ -15,6 +15,8 @@ import { serviceReady, serviceRunning } from './states'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import { logMessageToConsole } from '../logging/message-to-console'
 import { getErrorMessage } from '../log'
+import { WorkNodes } from '../planner/work-nodes'
+import { WorkServices } from '../planner/work-services'
 
 export async function existsVolume(docker: Dockerode, volumeName: string): Promise<VolumeInspectInfo | false> {
   try {
@@ -239,17 +241,17 @@ export async function getDockerExecutor(): Promise<Executor> {
         }
       }
     },
-    async prepareRun(workTree: WorkTree): Promise<void> {
+    async prepareRun(workNodes: WorkNodes, workServices: WorkServices): Promise<void> {
       const containers = await docker.listContainers({})
       for (const container of containers) {
         const containerId = container.Labels['hammerkit-id']
         const containerType = container.Labels['hammerkit-type']
         if (containerType === 'service') {
-          if (workTree.services[containerId]) {
+          if (workServices[containerId]) {
             await docker.getContainer(container.Id).remove({ force: true })
           }
         } else if (containerType === 'task') {
-          if (workTree.nodes[containerId]) {
+          if (workNodes[containerId]) {
             await docker.getContainer(container.Id).remove({ force: true })
           }
         }

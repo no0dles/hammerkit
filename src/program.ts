@@ -39,7 +39,7 @@ export async function getProgram(
       .description('clear task cache')
       .action(async () => {
         try {
-          await clean(workNodes, environment, await getDockerExecutor())
+          await clean(workNodes, workServices, environment, await getDockerExecutor())
         } catch (e) {
           environment.console.error(e)
           process.exit(1)

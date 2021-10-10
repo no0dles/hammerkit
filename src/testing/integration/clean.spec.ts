@@ -27,7 +27,7 @@ describe('clean', () => {
     const outputPath = join(buildFile.path, 'node_modules')
 
     expect(existsSync(outputPath)).toBeTruthy()
-    await clean(workTree.nodes, context, executionContext.executor)
+    await clean(workTree.nodes, workTree.services, context, executionContext.executor)
     expect(existsSync(outputPath)).toBeFalsy()
   })
 
@@ -46,7 +46,7 @@ describe('clean', () => {
     const docker = getDocker()
     expect(await existsVolume(docker, volumeName)).toBeTruthy()
 
-    await clean(workTree.nodes, context, executionContext.executor)
+    await clean(workTree.nodes, workTree.services, context, executionContext.executor)
     expect(await existsVolume(docker, volumeName)).toBeFalsy()
   })
 })

@@ -1,9 +1,13 @@
-import { ConsoleContextMock } from './console-context-mock'
+import { ConsoleContextMock, ConsoleContextMockListener } from './console-context-mock'
 
 export function getConsoleContextMock(): ConsoleContextMock {
   const expectedLogs: { [key: string]: { fulfilled: boolean } } = {}
+  const listeners: ConsoleContextMockListener[] = []
 
-  function complete(message: string) {
+  function complete(type: string, message: string) {
+    for (const listener of listeners) {
+      listener(type, message)
+    }
     const obj = expectedLogs[message]
     if (obj) {
       obj.fulfilled = true
@@ -13,16 +17,19 @@ export function getConsoleContextMock(): ConsoleContextMock {
 
   return {
     warn(message: string) {
-      complete(message)
+      complete('warn', message)
     },
     info(message: string) {
-      complete(message)
+      complete('info', message)
     },
     error(message: string) {
-      complete(message)
+      complete('error', message)
     },
     debug(message: string) {
-      complete(message)
+      complete('debug', message)
+    },
+    on(listener: ConsoleContextMockListener) {
+      listeners.push(listener)
     },
     expectLog(message: string): { fulfilled: boolean } {
       expectedLogs[message] = { fulfilled: false }

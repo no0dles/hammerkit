@@ -31,7 +31,7 @@ describe('store/restore', () => {
     expect(existsSync(outputPath)).toBeFalsy()
 
     await store(workTree.nodes, outputPath, context, executionContext.executor)
-    await clean(workTree.nodes, context, executionContext.executor)
+    await clean(workTree.nodes, workTree.services, context, executionContext.executor)
 
     expect(existsSync(outputPath)).toBeTruthy()
     expect(existsSync(generatedPath)).toBeFalsy()

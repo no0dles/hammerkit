@@ -48,10 +48,11 @@ export function getTestSuite(exampleName: string, files: string[]): TestSuite {
 
       const fileName = join(testDirectory, 'build.yaml')
       const buildFile = await getBuildFile(fileName, context)
-      const [workNodes] = planWorkNodes(buildFile)
+      const [workNodes, workServices] = planWorkNodes(buildFile)
 
       const executor = await getDockerExecutor()
-      await clean(workNodes, context, executor)
+
+      await clean(workNodes, workServices, context, executor)
 
       const executionContext: ExecutionContext = {
         environment: context,

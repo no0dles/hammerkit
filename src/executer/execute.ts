@@ -21,11 +21,12 @@ export async function execute(workTree: WorkTree, context: ExecutionContext): Pr
 
   await optimize(workTree, context)
 
+  await context.executor.prepareRun(workTree.nodes, workTree.services)
+
   if (context.watch) {
     await watchNodes(workTree, context)
   }
 
-  await context.executor.prepareRun(workTree)
   await run(workTree, context)
 
   const result: ExecuteResult = {
