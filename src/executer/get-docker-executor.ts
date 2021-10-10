@@ -17,6 +17,7 @@ import { logMessageToConsole } from '../logging/message-to-console'
 import { getErrorMessage } from '../log'
 import { WorkNodes } from '../planner/work-nodes'
 import { WorkServices } from '../planner/work-services'
+import { removeContainer } from '../docker/remove-container'
 
 export async function existsVolume(docker: Dockerode, volumeName: string): Promise<VolumeInspectInfo | false> {
   try {
@@ -91,7 +92,7 @@ export async function getDockerExecutor(): Promise<Executor> {
 
         listenOnAbort(context.environment.abortCtrl.signal, async () => {
           try {
-            await container.remove({ force: true })
+            await removeContainer(container)
           } catch (e) {
             service.status.console.write('internal', 'debug', `failed to remove container: ${getErrorMessage(e)}`)
           }
@@ -152,7 +153,7 @@ export async function getDockerExecutor(): Promise<Executor> {
         async stop() {
           if (container) {
             try {
-              await container.remove({ force: true })
+              await removeContainer(container)
             } catch (e) {
               service.status.console.write('internal', 'debug', `failed to remove container: ${getErrorMessage(e)}`)
             }

@@ -12,6 +12,7 @@ import { createHash } from 'crypto'
 import { ensureVolumeExists } from './get-docker-executor'
 import { listenOnAbort } from '../utils/abort-event'
 import { WorkNodeConsole } from '../planner/work-node-status'
+import { removeContainer } from '../docker/remove-container'
 
 interface WorkNodeVolume {
   name: string
@@ -183,7 +184,7 @@ export async function executeDocker(
   })
 
   listenOnAbort(abortCtrl.signal, () => {
-    container.remove({ force: true }).catch((e) => {
+    removeContainer(container).catch((e) => {
       if (e.statusCode !== 404) {
         node.status.console.write('internal', 'debug', `remove of container failed ${e.message}`)
       }
@@ -262,7 +263,7 @@ export async function executeDocker(
   } finally {
     try {
       node.status.console.write('internal', 'debug', `remove container`)
-      await container.remove({ force: true })
+      await removeContainer(container)
     } catch (e: any) {
       if (e.statusCode !== 404) {
         node.status.console.write('internal', 'debug', `remove of container failed ${e.message}`)
