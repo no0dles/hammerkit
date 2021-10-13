@@ -22,11 +22,18 @@ function getDuration(state: WorkNodeState): number {
   return 0
 }
 
-export function runNode(workTree: WorkTree, nodeId: string, context: ExecutionContext): AbortController {
+export function runNode(
+  workTree: WorkTree,
+  nodeId: string,
+  context: ExecutionContext,
+  exec: (abortCtrl: AbortController) => Promise<void>
+): void {
+  const abortCtrl = new AbortController()
   const runningState: WorkNodeRunningState = {
     type: 'running',
     started: new Date(),
-    abortCtrl: new AbortController(),
+    abortCtrl,
+    promise: exec(abortCtrl),
   }
 
   listenOnAbort(context.environment.abortCtrl.signal, () => {
@@ -35,8 +42,13 @@ export function runNode(workTree: WorkTree, nodeId: string, context: ExecutionCo
 
   const currentState = workTree.nodes[nodeId].status.state
   workTree.nodes[nodeId].status.state = runningState
-  context.events.emit({ type: 'node', oldState: currentState, newState: runningState, nodeId, workTree })
-  return runningState.abortCtrl
+  context.events.emit({
+    type: 'node',
+    oldState: currentState,
+    newState: runningState,
+    nodeId,
+    workTree,
+  })
 }
 
 export function completeNode(workTree: WorkTree, nodeId: string, context: ExecutionContext): void {
@@ -185,7 +197,7 @@ export function resetNode(workTree: WorkTree, nodeId: string, context: Execution
 
   const currentState = node.status.state
   if (currentState.type === 'running') {
-    const cancelState: WorkNodeCancelState = { type: 'cancel' }
+    const cancelState: WorkNodeCancelState = { type: 'cancel', promise: currentState.promise }
     node.status.state = cancelState
     currentState.abortCtrl.abort()
     context.events.emit({ type: 'node', workTree, nodeId, oldState: currentState, newState: cancelState })
@@ -208,7 +220,7 @@ function cancelPendingNodes(workTree: WorkTree, nodeId: string, context: Executi
 
     const currentState = node.status.state
     if (currentState.type === 'pending') {
-      const cancelState: WorkNodeCancelState = { type: 'cancel' }
+      const cancelState: WorkNodeCancelState = { type: 'cancel', promise: Promise.resolve() }
       node.status.state = cancelState
       context.events.emit({ type: 'node', workTree, nodeId, oldState: currentState, newState: cancelState })
       if (!context.watch) {
@@ -228,7 +240,7 @@ export function cancelNodes(workTree: WorkTree, context: ExecutionContext): void
       node.status.abortCtrl.abort()
       context.events.emit({ type: 'node', nodeId: node.id, workTree, newState: abortState, oldState: currentState })
     } else if (currentState.type === 'running') {
-      const cancelState: WorkNodeCancelState = { type: 'cancel' }
+      const cancelState: WorkNodeCancelState = { type: 'cancel', promise: currentState.promise }
       node.status.state = cancelState
       currentState.abortCtrl.abort()
       context.events.emit({ type: 'node', workTree, nodeId: node.id, oldState: currentState, newState: cancelState })

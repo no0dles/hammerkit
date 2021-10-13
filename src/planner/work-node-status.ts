@@ -74,6 +74,7 @@ export interface WorkNodePendingState {
 
 export interface WorkNodeCancelState {
   type: 'cancel'
+  promise: Promise<void>
 }
 
 export interface WorkNodeAbortedState {
@@ -84,6 +85,7 @@ export interface WorkNodeRunningState {
   type: 'running'
   started: Date
   abortCtrl: AbortController
+  promise: Promise<void>
 }
 
 export interface WorkNodeCompletedState {

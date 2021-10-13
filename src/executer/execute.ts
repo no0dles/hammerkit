@@ -57,11 +57,15 @@ export function run(
   const runningNodes: { [id: string]: WorkNode } = {}
   const runningServices: { [id: string]: ServiceProcess } = {}
   const pendingNodeIds: string[] = []
-  const runningNodePromises: Promise<void>[] = []
 
   return new Promise<void>((resolve, reject) => {
     abortContext.addAbortFunction(async () => {
-      await Promise.allSettled(runningNodePromises)
+      for (const node of iterateWorkNodes(workTree.nodes)) {
+        if (node.status.state.type === 'running' || node.status.state.type === 'cancel') {
+          await node.status.state.promise
+        }
+      }
+
       await shutdown()
     })
 
@@ -89,7 +93,7 @@ export function run(
       }
     }
 
-    const runPending = async () => {
+    const runPending = () => {
       if (context.workers !== 0 && Object.keys(runningNodes).length >= context.workers) {
         return
       }
@@ -102,52 +106,46 @@ export function run(
       const node = workTree.nodes[nextNodeId]
       runningNodes[nextNodeId] = node
 
-      const abortCtrl = runNode(workTree, node.id, context)
-      try {
-        await context.executor.exec(node, context, abortCtrl)
-        await writeWorkNodeCache(node, context.environment)
-        delete runningNodes[nextNodeId]
-        completeNode(workTree, node.id, context)
-      } catch (e) {
-        delete runningNodes[nextNodeId]
-        failNode(workTree, node.id, context, getErrorMessage(e))
-      }
+      runNode(workTree, node.id, context, async (abortCtrl) => {
+        try {
+          await context.executor.exec(node, context, abortCtrl)
+          await writeWorkNodeCache(node, context.environment)
+          delete runningNodes[nextNodeId]
+          completeNode(workTree, node.id, context)
+        } catch (e) {
+          delete runningNodes[nextNodeId]
+          failNode(workTree, node.id, context, getErrorMessage(e))
+        }
+      })
     }
 
     const enqueueNode = (node: WorkNode) => {
-      try {
-        if (node.status.state.type === 'pending') {
-          if (Object.keys(node.status.state.pendingDependencies).length !== 0) {
-            return
-          }
-
-          if (Object.keys(node.status.state.pendingServices).length !== 0) {
-            for (const need of node.needs) {
-              if (runningServices[need.id]) {
-                continue
-              }
-              runningServices[need.id] = context.executor.start(workTree, need, context)
-            }
-            return
-          }
-
-          pendingNodeIds.push(node.id)
-
-          runningNodePromises.push(runPending())
-        } else if (
-          (!context.watch || context.environment.abortCtrl.signal.aborted) &&
-          (workTree.rootNode.status.state.type === 'completed' ||
-            workTree.rootNode.status.state.type === 'aborted' ||
-            workTree.rootNode.status.state.type === 'failed')
-        ) {
-          shutdown()
+      if (node.status.state.type === 'pending') {
+        if (Object.keys(node.status.state.pendingDependencies).length !== 0) {
+          return
         }
-      } catch (e) {
-        shutdown(e)
+
+        if (Object.keys(node.status.state.pendingServices).length !== 0) {
+          for (const need of node.needs) {
+            if (runningServices[need.id]) {
+              continue
+            }
+            runningServices[need.id] = context.executor.start(workTree, need, context)
+          }
+          return
+        }
+
+        pendingNodeIds.push(node.id)
       }
+
+      runPending()
     }
 
     context.events.on((evt) => {
+      if (context.environment.abortCtrl.signal.aborted) {
+        return
+      }
+
       if (evt.type === 'node') {
         const node = workTree.nodes[evt.nodeId]
         enqueueNode(node)
