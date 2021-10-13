@@ -17,13 +17,9 @@ describe('cancellation', () => {
         evt.newState.type === 'running' &&
         !executionContext.environment.abortCtrl.signal.aborted
       ) {
-        evt.workTree.nodes[evt.nodeId].status.console.on((log) => {
-          if (log.message.startsWith('execute cmd ')) {
-            setTimeout(() => {
-              executionContext.environment.abortCtrl.abort()
-            }, 2000)
-          }
-        })
+        setTimeout(() => {
+          executionContext.environment.abortCtrl.abort()
+        }, 2000)
       }
     })
     const result = await execute(workTree, executionContext)

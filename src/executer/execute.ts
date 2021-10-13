@@ -95,12 +95,12 @@ export function run(
 
     const runPending = () => {
       if (context.workers !== 0 && Object.keys(runningNodes).length >= context.workers) {
-        return
+        return false
       }
 
       const nextNodeId = pendingNodeIds.splice(0, 1)[0]
       if (!nextNodeId) {
-        return
+        return false
       }
 
       const node = workTree.nodes[nextNodeId]
@@ -117,6 +117,7 @@ export function run(
           failNode(workTree, node.id, context, getErrorMessage(e))
         }
       })
+      return true
     }
 
     const enqueueNode = (node: WorkNode) => {
@@ -138,7 +139,32 @@ export function run(
         pendingNodeIds.push(node.id)
       }
 
-      runPending()
+      return runPending()
+    }
+
+    const checkForEnd = () => {
+      if (context.watch) {
+        return
+      }
+
+      let completed = true
+      for (const node of iterateWorkNodes(workTree.nodes)) {
+        if (
+          node.status.state.type === 'cancel' ||
+          node.status.state.type === 'running' ||
+          node.status.state.type === 'pending'
+        ) {
+          completed = false
+          break
+        }
+      }
+
+      if (completed) {
+        shutdown()
+      } else if (Object.keys(runningNodes).length === 0) {
+        context.environment.console.warn(`could not schedule next task, unclear how to progress`)
+        shutdown(new Error('failed to progress'))
+      }
     }
 
     context.events.on((evt) => {
@@ -148,7 +174,11 @@ export function run(
 
       if (evt.type === 'node') {
         const node = workTree.nodes[evt.nodeId]
-        enqueueNode(node)
+        const hasEnqueued = enqueueNode(node)
+
+        if (!hasEnqueued) {
+          checkForEnd()
+        }
       } else {
         //TODO remove service if not needed
       }
