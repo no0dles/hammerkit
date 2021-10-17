@@ -2,12 +2,6 @@
   "name": "example-with-service",
   "version": "1.0.0",
   "dependencies": {
-    "@daita/relational": "^0.3.0-alpha.47",
-    "@daita/pg-adapter": "^0.3.0-alpha.47"
-  },
-  "devDependencies": {
-    "typescript": "^4.3.2",
-    "ts-node": "^10.0.0",
-    "@types/node": "^15.12.2"
+    "pg": "^8.7.1"
   }
 }
