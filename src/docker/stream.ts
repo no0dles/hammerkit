@@ -5,20 +5,28 @@ import { WorkNodeConsole, WorkNodeConsoleLogLevel } from '../planner/work-node-s
 
 export async function awaitStream(console: WorkNodeConsole, docker: Dockerode, stream: Duplex): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    function writeLog(leve: WorkNodeConsoleLogLevel) {
-      return (buffer: Buffer) => {
-        for (const log of getLogs(buffer)) {
-          console.write('process', leve, log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
-        }
-      }
-    }
-
-    demuxStream(stream, writeLog('info'), writeLog('error'))
+    logStream(console, docker, stream)
 
     stream.on('error', reject)
     stream.on('end', resolve)
     stream.on('close', resolve)
   })
+}
+
+export function logStream(
+  console: WorkNodeConsole,
+  docker: Dockerode,
+  stream: Duplex | NodeJS.ReadStream | NodeJS.ReadWriteStream
+): void {
+  demuxStream(stream, writeLog(console, 'info'), writeLog(console, 'error'))
+}
+
+function writeLog(console: WorkNodeConsole, level: WorkNodeConsoleLogLevel) {
+  return (buffer: Buffer) => {
+    for (const log of getLogs(buffer)) {
+      console.write('process', level, log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
+    }
+  }
 }
 
 function demuxStream(stream: any, stdoutFn: (buffer: Buffer) => void, stderrFn: (buffer: Buffer) => void) {

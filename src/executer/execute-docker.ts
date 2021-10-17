@@ -317,7 +317,7 @@ export async function execCommand(
         resolved = true
       }, timeout)
     } else {
-      pollStatus(abortContext, exec, resolve, reject)
+      //pollStatus(abortContext, exec, resolve, reject)
     }
   })
 }

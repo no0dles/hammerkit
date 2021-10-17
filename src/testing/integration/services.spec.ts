@@ -1,6 +1,7 @@
 import { getTestSuite } from '../get-test-suite'
 import { execute } from '../../executer/execute'
 import { planWorkTree } from '../../planner/utils/plan-work-tree'
+import { expectSuccessfulResult } from '../expect'
 
 describe('services', () => {
   const suite = getTestSuite('services', ['src/index.ts', 'package.json', 'tsconfig.json', 'build.yaml'])
@@ -11,6 +12,6 @@ describe('services', () => {
     const { buildFile, executionContext, context } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'api')
     const result = await execute(workTree, executionContext)
-    expect(result.success).toBeTruthy()
-  }, 120000)
+    await expectSuccessfulResult(result)
+  })
 })

@@ -13,11 +13,38 @@ import { ServiceProcess } from './executor'
 import { getErrorMessage } from '../log'
 import { logMessageToConsole } from '../logging/message-to-console'
 import { abortableFunction, AbortableFunctionContext } from '../utils/abortable-function'
+import { hasCycle } from '../planner/validate'
+import { WorkNodeState } from '../planner/work-node-status'
 
 export async function execute(workTree: WorkTree, context: ExecutionContext): Promise<ExecuteResult> {
   const result: ExecuteResult = {
     success: true,
     nodes: {},
+  }
+
+  for (const node of iterateWorkNodes(workTree.nodes)) {
+    const cyclePath = hasCycle(node, [])
+    if (cyclePath && cyclePath.length > 0) {
+      const errorMessage = `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`
+      const state: WorkNodeState = {
+        type: 'failed',
+        duration: 0,
+        ended: new Date(),
+        errorMessage,
+      }
+      result.nodes[node.id] = {
+        state,
+        name: node.status.name,
+        console: node.status.console,
+        abortCtrl: node.status.abortCtrl,
+      }
+      node.status.state = state
+      result.success = false
+    }
+  }
+
+  if (!result.success) {
+    return result
   }
 
   try {

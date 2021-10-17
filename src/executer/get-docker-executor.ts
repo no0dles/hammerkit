@@ -18,6 +18,7 @@ import { WorkNodes } from '../planner/work-nodes'
 import { WorkServices } from '../planner/work-services'
 import { removeContainer } from '../docker/remove-container'
 import { abortableFunction } from '../utils/abortable-function'
+import { logStream } from '../docker/stream'
 
 export async function existsVolume(docker: Dockerode, volumeName: string): Promise<VolumeInspectInfo | false> {
   try {
@@ -103,6 +104,9 @@ export async function getDockerExecutor(): Promise<Executor> {
                 service.status.console.write('internal', 'debug', `failed to remove container: ${getErrorMessage(e)}`)
               }
             })
+
+            const stream = await container.attach({ stream: true, stdout: true, stderr: true })
+            logStream(service.status.console, docker, stream)
 
             await container.start()
 

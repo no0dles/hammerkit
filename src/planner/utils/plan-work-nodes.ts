@@ -3,12 +3,20 @@ import { WorkNodes } from '../work-nodes'
 import { planWorkNode } from './plan-work-node'
 import { WorkNode } from '../work-node'
 import { WorkServices } from '../work-services'
+import { WorkService } from '../work-service'
 
 export function planWorkNodes(build: BuildFile): [WorkNodes, WorkServices] {
   const nodes: WorkNodes = {}
   const services: WorkServices = {}
   addWorkNodes(build, nodes, services, [], [])
   return [nodes, services]
+}
+
+export function* iterateWorkServices(services: WorkServices): Generator<WorkService> {
+  for (const serviceId of Object.keys(services)) {
+    const service = services[serviceId]
+    yield service
+  }
 }
 
 export function* iterateWorkNodes(nodes: WorkNodes): Generator<WorkNode> {

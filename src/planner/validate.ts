@@ -63,7 +63,7 @@ export async function* validate(
   }
 }
 
-function hasCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
+export function hasCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
   if (currentPath.indexOf(node) >= 0) {
     return [...currentPath, node]
   }

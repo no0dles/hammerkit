@@ -1,0 +1,10 @@
+tasks:
+  bar:
+    deps: [foo]
+    cmds:
+      - echo bar
+
+  foo:
+    deps: [bar]
+    cmds:
+      - echo foo

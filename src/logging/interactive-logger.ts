@@ -15,6 +15,10 @@ export function interactiveLogger(): LogStrategy {
       writeWorkTreeStatus(workTree, count)
 
       const tickerFn = () => {
+        if (!running) {
+          return
+        }
+
         count++
         writeWorkTreeStatus(workTree, count)
         if (running) {
@@ -24,6 +28,10 @@ export function interactiveLogger(): LogStrategy {
       tickerFn()
 
       executionContext.events.on(({ workTree }) => {
+        if (!running) {
+          return
+        }
+
         writeWorkTreeStatus(workTree, count)
       })
     },

@@ -1,6 +1,6 @@
 import { WorkTree } from './planner/work-tree'
 import { clearScreenDown, moveCursor } from 'readline'
-import { iterateWorkNodes } from './planner/utils/plan-work-nodes'
+import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
 import { WorkNodeConsoleLogLevel, WorkNodeState } from './planner/work-node-status'
 import colors from 'colors'
 import { ExecuteResult } from './executer/execute-result'
@@ -64,6 +64,25 @@ export async function printWorkTreeResult(
   const maxNodeNameLength = getNodeNameLength(workTree)
 
   if (logConsoleOnFail && (!result.success || isVerbose)) {
+    for (const service of iterateWorkServices(workTree.services)) {
+      if (isVerbose) {
+        const logs = await service.status.console.read()
+        for (const log of logs) {
+          if (log.level === 'debug' && !isVerbose) {
+            continue
+          }
+          process.stdout.write(
+            `${colors.grey('service:')} ${getNodeName(service.name, maxNodeNameLength)} ${formatDate(
+              log.date
+            )} ${getLogLevel(log.level)}: ${log.message}\n`
+          )
+        }
+        if (logs.length > 0) {
+          process.stdout.write('-----------------\n')
+        }
+      }
+    }
+
     for (const node of iterateWorkNodes(workTree.nodes)) {
       if (node.status.state.type === 'failed' || isVerbose) {
         const logs = await node.status.console.read()
@@ -77,7 +96,9 @@ export async function printWorkTreeResult(
             )}: ${log.message}\n`
           )
         }
-        process.stdout.write('-----------------\n')
+        if (logs.length > 0) {
+          process.stdout.write('-----------------\n')
+        }
       }
     }
   }
@@ -88,6 +109,9 @@ export async function printWorkTreeResult(
     )}`
     if (node.status.state.type === 'completed') {
       message += ` in ${node.status.state.duration}ms`
+    }
+    if (node.status.state.type === 'failed') {
+      message += ` ${node.status.state.errorMessage}`
     }
     process.stdout.write(`${message}\n`)
   }
