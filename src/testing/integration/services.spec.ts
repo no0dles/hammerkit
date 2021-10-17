@@ -4,7 +4,7 @@ import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { expectSuccessfulResult } from '../expect'
 
 describe('services', () => {
-  const suite = getTestSuite('services', ['src/index.ts', 'package.json', 'tsconfig.json', 'build.yaml'])
+  const suite = getTestSuite('services', ['index.js', 'package.json', 'package-lock.json', 'build.yaml'])
 
   afterAll(() => suite.close())
 
