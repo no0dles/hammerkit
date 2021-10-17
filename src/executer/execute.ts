@@ -60,16 +60,16 @@ export function run(
 
   return new Promise<void>((resolve, reject) => {
     abortContext.addAbortFunction(async () => {
+      await shutdown()
+    })
+
+    const shutdown = async (error?: unknown) => {
       for (const node of iterateWorkNodes(workTree.nodes)) {
         if (node.status.state.type === 'running' || node.status.state.type === 'cancel') {
           await node.status.state.promise
         }
       }
 
-      await shutdown()
-    })
-
-    const shutdown = async (error?: unknown) => {
       for (const svc of Object.values(runningServices)) {
         try {
           await svc.stop()
@@ -144,7 +144,7 @@ export function run(
 
     const checkForEnd = () => {
       if (context.watch) {
-        return
+        return false
       }
 
       let completed = true
@@ -161,10 +161,10 @@ export function run(
 
       if (completed) {
         shutdown()
-      } else if (Object.keys(runningNodes).length === 0) {
-        context.environment.console.warn(`could not schedule next task, unclear how to progress`)
-        shutdown(new Error('failed to progress'))
+        return true
       }
+
+      return false
     }
 
     context.events.on((evt) => {
@@ -172,6 +172,7 @@ export function run(
         return
       }
 
+      //let hasEnded = false
       if (evt.type === 'node') {
         const node = workTree.nodes[evt.nodeId]
         const hasEnqueued = enqueueNode(node)
@@ -179,6 +180,11 @@ export function run(
         if (!hasEnqueued) {
           checkForEnd()
         }
+
+        // if (hasEnded && Object.keys(runningNodes).length === 0) {
+        //   context.environment.console.warn(`could not schedule next task, unclear how to progress`)
+        //   shutdown(new Error('failed to progress'))
+        // }
       } else {
         //TODO remove service if not needed
       }

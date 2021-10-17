@@ -13,11 +13,11 @@ export async function awaitStream(console: WorkNodeConsole, docker: Dockerode, s
       }
     }
 
+    demuxStream(stream, writeLog('info'), writeLog('error'))
+
     stream.on('error', reject)
     stream.on('end', resolve)
     stream.on('close', resolve)
-
-    demuxStream(stream, writeLog('info'), writeLog('error'))
   })
 }
 
