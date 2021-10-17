@@ -13,5 +13,5 @@ describe('services', () => {
     const workTree = planWorkTree(buildFile, 'api')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-  })
+  }, 120000)
 })
