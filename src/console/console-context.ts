@@ -3,7 +3,7 @@ export interface ConsoleContext {
 
   info(message: string): void
 
-  error(message: string): void
+  error(message: string | unknown): void
 
   warn(message: string): void
 }

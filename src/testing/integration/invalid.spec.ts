@@ -9,7 +9,7 @@ describe('invalid', () => {
     try {
       await suite.setup()
       expect.fail('should not be called')
-    } catch (e) {
+    } catch (e: any) {
       expect(e.message).toStartWith('unable to parse')
     }
   })

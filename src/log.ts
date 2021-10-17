@@ -1,11 +1,11 @@
 import { WorkTree } from './planner/work-tree'
 import { clearScreenDown, moveCursor } from 'readline'
-import { iterateWorkNodes } from './planner/utils/plan-work-nodes'
+import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
 import { WorkNodeConsoleLogLevel, WorkNodeState } from './planner/work-node-status'
 import colors from 'colors'
-import { WorkNode } from './planner/work-node'
 import { ExecuteResult } from './executer/execute-result'
 import { ConsoleContext } from './console/console-context'
+import { WorkServiceState } from './planner/work-service-state'
 
 export function getLogs(chunk: Buffer | string): string[] {
   return chunk
@@ -24,6 +24,16 @@ export function getLogLevel(level: WorkNodeConsoleLogLevel): string {
       return ` ` + colors.yellow(level)
     case 'error':
       return colors.red(level)
+  }
+}
+
+export function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) {
+    return e.message
+  } else if (typeof e === 'string') {
+    return e
+  } else {
+    return `unknown error ${e}`
   }
 }
 
@@ -54,6 +64,25 @@ export async function printWorkTreeResult(
   const maxNodeNameLength = getNodeNameLength(workTree)
 
   if (logConsoleOnFail && (!result.success || isVerbose)) {
+    for (const service of iterateWorkServices(workTree.services)) {
+      if (isVerbose) {
+        const logs = await service.status.console.read()
+        for (const log of logs) {
+          if (log.level === 'debug' && !isVerbose) {
+            continue
+          }
+          process.stdout.write(
+            `${colors.grey('service:')} ${getNodeName(service.name, maxNodeNameLength)} ${formatDate(
+              log.date
+            )} ${getLogLevel(log.level)}: ${log.message}\n`
+          )
+        }
+        if (logs.length > 0) {
+          process.stdout.write('-----------------\n')
+        }
+      }
+    }
+
     for (const node of iterateWorkNodes(workTree.nodes)) {
       if (node.status.state.type === 'failed' || isVerbose) {
         const logs = await node.status.console.read()
@@ -62,20 +91,27 @@ export async function printWorkTreeResult(
             continue
           }
           process.stdout.write(
-            `${colors.grey('task:')} ${getNodeName(node, maxNodeNameLength)} ${formatDate(log.date)} ${getLogLevel(
+            `${colors.grey('task:')} ${getNodeName(node.name, maxNodeNameLength)} ${formatDate(log.date)} ${getLogLevel(
               log.level
             )}: ${log.message}\n`
           )
         }
-        process.stdout.write('-----------------\n')
+        if (logs.length > 0) {
+          process.stdout.write('-----------------\n')
+        }
       }
     }
   }
 
   for (const node of iterateWorkNodes(workTree.nodes)) {
-    let message = `${colors.grey('task:')} ${getNodeName(node, maxNodeNameLength)} - ${getStateText(node.status.state)}`
+    let message = `${colors.grey('task:')} ${getNodeName(node.name, maxNodeNameLength)} - ${getStateText(
+      node.status.state
+    )}`
     if (node.status.state.type === 'completed') {
       message += ` in ${node.status.state.duration}ms`
+    }
+    if (node.status.state.type === 'failed') {
+      message += ` ${node.status.state.errorMessage}`
     }
     process.stdout.write(`${message}\n`)
   }
@@ -83,7 +119,7 @@ export async function printWorkTreeResult(
 
 const spinner = '⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈'
 
-function getStateText(state: WorkNodeState): string {
+function getStateText(state: WorkNodeState | WorkServiceState): string {
   if (state.type === 'running') {
     return colors.blue(state.type)
   } else if (state.type === 'pending') {
@@ -96,6 +132,8 @@ function getStateText(state: WorkNodeState): string {
     return colors.red(state.type)
   } else if (state.type === 'cancel') {
     return colors.bgRed(state.type)
+  } else if (state.type === 'ready') {
+    return colors.blue(state.type)
   } else {
     //TODO fail never
     return ''
@@ -109,11 +147,16 @@ export function getNodeNameLength(workTree: WorkTree): number {
       maxNodeNameLength = node.name.length
     }
   }
+  for (const service of Object.values(workTree.services)) {
+    if (service.name.length > maxNodeNameLength) {
+      maxNodeNameLength = service.name.length
+    }
+  }
   return maxNodeNameLength
 }
 
-export function getNodeName(node: WorkNode, maxNodeNameLength: number): string {
-  return colors.white(node.name) + ' '.repeat(maxNodeNameLength - node.name.length)
+export function getNodeName(name: string, maxNodeNameLength: number): string {
+  return colors.white(name) + ' '.repeat(maxNodeNameLength - name.length)
 }
 
 export function formatDate(date: Date): string {
@@ -138,13 +181,20 @@ export function writeWorkTreeStatus(workTree: WorkTree, ticker: number): void {
 
   let count = 0
   for (const node of iterateWorkNodes(workTree.nodes)) {
-    let message = `${colors.grey('task:')} ${getNodeName(node, maxNodeNameLength)} - ${getStateText(node.status.state)}`
+    let message = `${colors.grey('task:')} ${getNodeName(node.name, maxNodeNameLength)} - ${getStateText(
+      node.status.state
+    )}`
 
     if (node.status.state.type === 'pending') {
       const totalDepCount = node.deps.length
+      const totalServiceCount = node.needs.length
       const completedDepCount = totalDepCount - Object.keys(node.status.state.pendingDependencies).length
+      const runningServiceCount = totalServiceCount - Object.keys(node.status.state.pendingServices).length
       if (totalDepCount > 0 && completedDepCount !== totalDepCount) {
         message += ` | ${colors.grey(` awaiting dependencies (${completedDepCount}/${totalDepCount})`)}`
+      }
+      if (totalServiceCount > 0 && runningServiceCount !== totalServiceCount) {
+        message += ` | ${colors.grey(` awaiting service (${runningServiceCount}/${totalServiceCount})`)}`
       }
     }
     if (node.status.state.type === 'running') {
@@ -155,6 +205,19 @@ export function writeWorkTreeStatus(workTree: WorkTree, ticker: number): void {
     } else if (node.status.state.type === 'completed') {
       message += ` in ${node.status.state.duration}ms`
     }
+    process.stdout.write(`${message}\n`)
+    count++
+  }
+
+  for (const service of Object.values(workTree.services)) {
+    let message = `${colors.grey('service:')} ${getNodeName(service.name, maxNodeNameLength)} - ${getStateText(
+      service.status.state
+    )}`
+
+    if (service.status.console.current) {
+      message += ` ${service.status.console.current.message}`
+    }
+
     process.stdout.write(`${message}\n`)
     count++
   }

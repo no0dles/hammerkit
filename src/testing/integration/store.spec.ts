@@ -31,7 +31,7 @@ describe('store/restore', () => {
     expect(existsSync(outputPath)).toBeFalsy()
 
     await store(workTree.nodes, outputPath, context, executionContext.executor)
-    await clean(workTree.nodes, context, executionContext.executor)
+    await clean(workTree.nodes, workTree.services, context, executionContext.executor)
 
     expect(existsSync(outputPath)).toBeTruthy()
     expect(existsSync(generatedPath)).toBeFalsy()
@@ -43,7 +43,7 @@ describe('store/restore', () => {
 
   it('should not store anything if nothing got generated', async () => {
     const { buildFile, context, executionContext } = await suite.setup()
-    const workNodes = planWorkNodes(buildFile)
+    const [workNodes] = planWorkNodes(buildFile)
     const outputPath = join(buildFile.path, 'test-output')
     const generatedPath = join(buildFile.path, 'node_modules')
 

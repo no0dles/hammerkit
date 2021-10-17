@@ -1,6 +1,7 @@
 import { WorkNode } from './work-node'
 import { isVerbose } from '../log'
 import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
+import { WorkService } from './work-service'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type WorkNodeConsoleLogType = 'process' | 'internal'
@@ -53,7 +54,7 @@ export function nodeConsole(): WorkNodeConsole {
 export interface WorkNodeStatus {
   name: string
   state: WorkNodeState
-  defer: AbortController
+  abortCtrl: AbortController
   console: WorkNodeConsole
 }
 
@@ -68,10 +69,12 @@ export type WorkNodeState =
 export interface WorkNodePendingState {
   type: 'pending'
   pendingDependencies: { [key: string]: WorkNode }
+  pendingServices: { [key: string]: WorkService }
 }
 
 export interface WorkNodeCancelState {
   type: 'cancel'
+  promise: Promise<void>
 }
 
 export interface WorkNodeAbortedState {
@@ -82,6 +85,7 @@ export interface WorkNodeRunningState {
   type: 'running'
   started: Date
   abortCtrl: AbortController
+  promise: Promise<void>
 }
 
 export interface WorkNodeCompletedState {
@@ -93,6 +97,6 @@ export interface WorkNodeCompletedState {
 export interface WorkNodeFailedState {
   type: 'failed'
   duration: number
-  error: Error
+  errorMessage: string
   ended: Date
 }

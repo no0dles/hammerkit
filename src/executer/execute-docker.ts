@@ -10,7 +10,10 @@ import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { createHash } from 'crypto'
 import { ensureVolumeExists } from './get-docker-executor'
-import { listenOnAbort } from '../utils/abort-event'
+import { WorkNodeConsole } from '../planner/work-node-status'
+import { removeContainer } from '../docker/remove-container'
+import { abortableFunction, AbortableFunctionContext } from '../utils/abortable-function'
+import { getErrorMessage } from '../log'
 
 interface WorkNodeVolume {
   name: string
@@ -121,71 +124,74 @@ function convertToPosixPath(path: string) {
   return path
 }
 
-export function checkIfAbort(cancelDefer: AbortController): void {
-  if (cancelDefer.signal.aborted) {
-    throw new Error('canceled')
-  }
-}
-
-export async function executeDocker(
+export function executeDocker(
   node: ContainerWorkNode,
   context: ExecutionContext,
-  cancelDefer: AbortController
+  abortCtrl: AbortController
 ): Promise<void> {
-  node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
-  const docker = getDocker()
+  return abortableFunction<void>(context.environment.console, abortCtrl.signal, async (ctx) => {
+    node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
+    const docker = getDocker()
 
-  const volumes = await getContainerVolumes(node)
-  const mounts = await getContainerMounts(node, context.environment)
+    const volumes = await getContainerVolumes(node)
+    const mounts = await getContainerMounts(node, context.environment)
 
-  checkIfAbort(cancelDefer)
-  await pull(node, docker, node.image)
+    ctx.checkForAbort()
+    await pull(node.status.console, docker, node.image)
 
-  checkIfAbort(cancelDefer)
-  for (const volume of volumes) {
-    await ensureVolumeExists(docker, volume.name)
-  }
+    ctx.checkForAbort()
+    for (const volume of volumes) {
+      await ensureVolumeExists(docker, volume.name)
+    }
 
-  checkIfAbort(cancelDefer)
-  node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
-  const container = await docker.createContainer({
-    Image: node.image,
-    Tty: true,
-    Entrypoint: node.shell,
-    Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
-    WorkingDir: convertToPosixPath(node.cwd),
-    Labels: { app: 'hammerkit' },
-    HostConfig: {
-      Binds: [
-        ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-        ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
-      ],
-      PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-        map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
+    const links: string[] = []
+    for (const need of node.needs) {
+      if (need.status.state.type !== 'ready') {
+        throw new Error(`service ${need.name} is not running`)
+      }
+      links.push(`${need.status.state.containerName}:${need.name}`)
+    }
+
+    ctx.checkForAbort()
+    node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
+    const container = await docker.createContainer({
+      Image: node.image,
+      Tty: true,
+      Entrypoint: node.shell,
+      Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
+      WorkingDir: convertToPosixPath(node.cwd),
+      Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
+      HostConfig: {
+        Binds: [
+          ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
+          ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+        ],
+        PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+          map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
+          return map
+        }, {}),
+        Links: links,
+        AutoRemove: true,
+      },
+      ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
+        map[`${port.containerPort}/tcp`] = {}
         return map
       }, {}),
-      AutoRemove: true,
-    },
-    ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
-      map[`${port.containerPort}/tcp`] = {}
-      return map
-    }, {}),
-  })
+    })
 
-  listenOnAbort(cancelDefer.signal, () => {
-    container.remove({ force: true }).catch((e) => {
-      if (e.statusCode !== 404) {
-        node.status.console.write('internal', 'debug', `remove of container failed ${e.message}`)
+    ctx.addAbortFunction(async () => {
+      try {
+        await removeContainer(container)
+      } catch (e) {
+        node.status.console.write('internal', 'debug', `remove of container failed ${getErrorMessage(e)}`)
       }
     })
-  })
 
-  const user =
-    platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
-      ? `${process.getuid()}:${process.getgid()}`
-      : undefined
+    const user =
+      platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
+        ? `${process.getuid()}:${process.getgid()}`
+        : undefined
 
-  try {
     for (const mount of mounts) {
       node.status.console.write('internal', 'debug', `bind mount ${mount.localPath}:${mount.containerPath}`)
     }
@@ -199,8 +205,17 @@ export async function executeDocker(
     if (user) {
       const setUserPermission = async (directory: string) => {
         node.status.console.write('internal', 'debug', 'set permission on ' + directory)
-        const result = await execCommand(node, docker, container, '/', ['chown', user, directory], undefined)
-        if (!result || result.ExitCode !== 0) {
+        const result = await execCommand(
+          ctx,
+          node.status.console,
+          docker,
+          container,
+          '/',
+          ['chown', user, directory],
+          undefined,
+          undefined
+        )
+        if (result.type === 'timeout' || result.result.ExitCode !== 0) {
           node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
         }
       }
@@ -215,47 +230,48 @@ export async function executeDocker(
     }
 
     for (const cmd of node.cmds) {
-      checkIfAbort(cancelDefer)
+      ctx.checkForAbort()
 
       const command = templateValue(cmd.cmd, node.envs)
       node.status.console.write('internal', 'info', `execute cmd ${command} in container`)
       const result = await execCommand(
-        node,
+        ctx,
+        node.status.console,
         docker,
         container,
         convertToPosixPath(cmd.path),
         [node.shell, '-c', command],
-        user
+        user,
+        undefined
       )
       if (!result) {
         return
       }
 
-      if (result.ExitCode !== 0) {
-        node.status.console.write('internal', 'error', `command ${command} failed with ${result.ExitCode}`)
-        throw new Error(`command ${command} failed with ${result.ExitCode}`)
+      if (result.type === 'timeout') {
+        throw new Error(`command ${command} timed out`)
+      }
+
+      if (result.result.ExitCode !== 0) {
+        node.status.console.write('internal', 'error', `command ${command} failed with ${result.result.ExitCode}`)
+        throw new Error(`command ${command} failed with ${result.result.ExitCode}`)
       }
     }
-  } finally {
-    try {
-      node.status.console.write('internal', 'debug', `remove container`)
-      await container.remove({ force: true })
-    } catch (e) {
-      if (e.statusCode !== 404) {
-        node.status.console.write('internal', 'debug', `remove of container failed ${e.message}`)
-      }
-    }
-  }
+  })
 }
 
+export type ExecResult = { type: 'result'; result: ExecInspectInfo } | { type: 'timeout' }
+
 export async function execCommand(
-  node: ContainerWorkNode,
+  abortContext: AbortableFunctionContext,
+  console: WorkNodeConsole,
   docker: Dockerode,
   container: Container,
-  cwd: string,
+  cwd: string | undefined,
   cmd: string[],
-  user: string | undefined
-): Promise<ExecInspectInfo | null> {
+  user: string | undefined,
+  timeout: number | undefined
+): Promise<ExecResult> {
   const exec = await container.exec({
     Cmd: cmd,
     WorkingDir: cwd,
@@ -266,27 +282,63 @@ export async function execCommand(
     User: user,
   })
 
-  node.status.console.write('internal', 'debug', `received exec id ${exec.id}`)
+  console.write('internal', 'debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
 
-  return new Promise<ExecInspectInfo | null>((resolve, reject) => {
-    awaitStream(node, docker, stream)
-      .then(() => exec.inspect())
-      .then(resolve)
+  return new Promise<ExecResult>((resolve, reject) => {
+    let resolved = false
+
+    awaitStream(console, docker, stream)
+      .then(() => {
+        if (resolved) {
+          return
+        }
+
+        abortContext.checkForAbort()
+
+        return exec.inspect().then((result) => {
+          if (resolved) {
+            return
+          }
+
+          resolve({ type: 'result', result })
+          resolved = true
+        })
+      })
       .catch(reject)
 
-    pollStatus(exec, resolve, reject)
+    if (timeout) {
+      setTimeout(() => {
+        if (resolved) {
+          return
+        }
+
+        resolve({ type: 'timeout' })
+        resolved = true
+      }, timeout)
+    } else {
+      //pollStatus(abortContext, exec, resolve, reject)
+    }
   })
 }
 
-export function pollStatus(exec: Exec, resolve: (result: ExecInspectInfo) => void, reject: (err: Error) => void): void {
+export function pollStatus(
+  abortContext: AbortableFunctionContext,
+  exec: Exec,
+  resolve: (result: ExecResult) => void,
+  reject: (err: Error) => void
+): void {
+  if (abortContext.isAborted()) {
+    return
+  }
+
   exec
     .inspect()
     .then((result) => {
       if (!result.Running) {
-        resolve(result)
+        resolve({ type: 'result', result })
       } else {
-        setTimeout(() => pollStatus(exec, resolve, reject), 50)
+        setTimeout(() => pollStatus(abortContext, exec, resolve, reject), 50)
       }
     })
     .catch(reject)

@@ -1,4 +1,4 @@
-import { Executor } from './executor'
+import { Executor, ServiceProcess } from './executor'
 import { isContainerWorkNode, WorkNode } from '../planner/work-node'
 import { ExecutionContext } from './execution-context'
 import { executeLocal } from './execute-local'
@@ -9,6 +9,9 @@ import { join, relative } from 'path'
 
 export function getLocalExecutor(): Executor {
   return {
+    start(): ServiceProcess {
+      throw new Error('services are not yet supported without docker')
+    },
     async restore(node: WorkNode, environment: Environment, path: string): Promise<void> {
       await moveFiles(node, environment, function* () {
         for (const targetPath of node.generates) {
@@ -42,7 +45,10 @@ export function getLocalExecutor(): Executor {
         await environment.file.remove(generate.path)
       }
     },
-    async exec(node: WorkNode, context: ExecutionContext, cancelDefer: AbortController): Promise<void> {
+    async prepareRun(): Promise<void> {
+      return Promise.resolve()
+    },
+    async exec(node: WorkNode, context: ExecutionContext, abortCtrl: AbortController): Promise<void> {
       const envs = replaceEnvVariables(node, context.environment.processEnvs)
       if (isContainerWorkNode(node)) {
         node.status.console.write('internal', 'debug', `${node.name} is executed locally instead inside of a container`)
@@ -54,7 +60,7 @@ export function getLocalExecutor(): Executor {
           envs,
         },
         context,
-        cancelDefer
+        abortCtrl
       )
     },
   }

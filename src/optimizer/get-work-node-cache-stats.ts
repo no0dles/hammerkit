@@ -11,6 +11,11 @@ async function addWorkNodeCacheStats(
   matcher: (file: string) => boolean,
   context: Environment
 ) {
+  const exists = await context.file.exists(path)
+  if (!exists) {
+    return
+  }
+
   const stats = await context.file.stats(path)
   if (stats.type === 'file') {
     if (matcher(path)) {

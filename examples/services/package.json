@@ -1,0 +1,7 @@
+{
+  "name": "example-with-service",
+  "version": "1.0.0",
+  "dependencies": {
+    "pg": "^8.7.1"
+  }
+}

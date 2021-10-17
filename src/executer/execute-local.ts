@@ -7,11 +7,11 @@ import { ExecutionContext } from './execution-context'
 import { getProcessEnvs } from '../environment/get-process-env'
 import { listenOnAbort } from '../utils/abort-event'
 
-export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancelDefer: AbortController): Promise<void> {
+export async function executeLocal(node: WorkNode, arg: ExecutionContext, abortCtrl: AbortController): Promise<void> {
   node.status.console.write('internal', 'info', `execute ${node.name} locally`)
   const envs = getProcessEnvs(node.envs, arg.environment)
   for (const cmd of node.cmds) {
-    if (cancelDefer.signal.aborted) {
+    if (abortCtrl.signal.aborted) {
       return
     }
 
@@ -37,7 +37,7 @@ export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancel
         node.status.console.write('process', 'error', err.message)
       })
       ps.on('close', (code) => {
-        if (cancelDefer.signal.aborted) {
+        if (abortCtrl.signal.aborted) {
           reject(new Error('canceled'))
           return
         }
@@ -50,7 +50,7 @@ export async function executeLocal(node: WorkNode, arg: ExecutionContext, cancel
           resolve()
         }
       })
-      listenOnAbort(cancelDefer.signal, () => {
+      listenOnAbort(abortCtrl.signal, () => {
         ps.kill()
       })
     })

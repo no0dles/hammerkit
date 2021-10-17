@@ -15,7 +15,13 @@ export function liveLogger(): LogStrategy {
 
       for (const node of iterateWorkNodes(workTree.nodes)) {
         node.status.console.on((log) => {
-          logMessageToConsole(node, log, maxNodeNameLength)
+          logMessageToConsole(log, { type: 'task', node, maxNodeNameLength })
+        })
+      }
+
+      for (const service of Object.values(workTree.services)) {
+        service.status.console.on((log) => {
+          logMessageToConsole(log, { type: 'service', service, maxNodeNameLength })
         })
       }
     },

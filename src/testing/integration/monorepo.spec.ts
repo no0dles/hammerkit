@@ -14,6 +14,6 @@ describe('monorepo', () => {
     const workTree = planWorkTree(buildFile, 'build')
     const result = await execute(workTree, executionContext)
     await expectSuccessfulResult(result)
-    await clean(workTree.nodes, executionContext.environment, executionContext.executor)
+    await clean(workTree.nodes, workTree.services, executionContext.environment, executionContext.executor)
   }, 120000)
 })

@@ -14,7 +14,11 @@ export async function read(fileName: string, context: Environment): Promise<any>
   try {
     return yamlParse(content)
   } catch (e) {
-    throw new Error(`unable to parse ${fileName}: ${e.message}`)
+    if (e instanceof Error) {
+      throw new Error(`unable to parse ${fileName}: ${e.message}`)
+    } else {
+      throw e
+    }
   }
 }
 

@@ -5,6 +5,7 @@ import { WorkNodePath } from './work-node-path'
 import { WorkNodeStatus } from './work-node-status'
 import { MergedBuildFileTask, MergedDependency } from './utils/plan-work-node'
 import { WorkNodePort } from './work-node-port'
+import { WorkService } from './work-service'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -23,6 +24,7 @@ export interface BaseWorkNode {
   unknownProps: { [key: string]: any }
   buildFile: BuildFile
   taskName: string
+  needs: WorkService[]
   mergedTask: MergedBuildFileTask
   mergedDeps: MergedDependency[]
 }
