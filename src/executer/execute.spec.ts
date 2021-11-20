@@ -1,62 +1,58 @@
-import { createWorkTree } from '../testing/create-work-tree'
-import { execute } from './execute'
-import { getExecutionContextMock } from './get-execution-context-mock'
-import { ExecutionContextMock } from './execution-context-mock'
-import { WorkTree } from '../planner/work-tree'
+import { getVirtualTestSuite } from '../testing/get-test-suite'
 
 describe('execute', () => {
-  let ctx: ExecutionContextMock
-  let workTree: WorkTree
-  let nodeId: string
-
-  beforeEach(async () => {
-    ctx = getExecutionContextMock()
-    ctx.watch = true
-
-    workTree = await createWorkTree(
-      ctx.environment,
-      {
-        tasks: {
-          api: {
-            cmds: ['node index.js'],
-            src: ['index.js', 'package.json'],
-          },
+  const suite = getVirtualTestSuite({
+    files: {
+      'index.js': "console.log('hello')",
+      'package.json': '{}',
+    },
+    buildFile: {
+      tasks: {
+        api: {
+          cmds: ['node index.js'],
+          src: ['index.js', 'package.json'],
         },
       },
-      'api'
-    )
-    nodeId = workTree.rootNode.id
-
-    await ctx.environment.file.createDirectory(ctx.environment.cwd)
-    await ctx.environment.file.writeFile(`${ctx.environment.cwd}/index.js`, "console.log('hello')")
-    await ctx.environment.file.writeFile(`${ctx.environment.cwd}/package.json`, '{}')
+    },
   })
 
+  afterAll(() => suite.close())
+
   it('should restart watching task if once completed', async () => {
-    const resultPromise = execute(workTree, ctx)
+    const testCase = await suite.setup({ mockExecution: true })
+    const apiMock = testCase.executionMock.getNode('api')
 
-    const runningApi = await ctx.executor.waitForExecution(nodeId)
-    runningApi.end()
+    const resultPromise = testCase.exec('api', {
+      watch: true,
+    })
 
-    await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
+    await apiMock.waitFor('running')
+    await apiMock.end(0)
 
-    await ctx.executor.waitForExecution(nodeId)
-    await ctx.environment.abortCtrl.abort()
+    await testCase.environment.file.appendFile(`${testCase.environment.cwd}/index.js`, '\n')
+
+    await apiMock.waitFor('running')
+    await testCase.environment.abortCtrl.abort()
 
     const result = await resultPromise
     expect(result.success).toBeFalsy()
   })
 
   it('should restart watching task if once failed', async () => {
-    const resultPromise = execute(workTree, ctx)
+    const testCase = await suite.setup({ mockExecution: true })
+    const apiMock = testCase.executionMock.getNode('api')
 
-    const runningApi = await ctx.executor.waitForExecution(nodeId)
-    runningApi.fail(new Error('runtime error'))
+    const resultPromise = testCase.exec('api', {
+      watch: true,
+    })
 
-    await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
+    await apiMock.waitFor('running')
+    await apiMock.end(1)
 
-    await ctx.executor.waitForExecution(nodeId)
-    await ctx.environment.abortCtrl.abort()
+    await testCase.environment.file.appendFile(`${testCase.environment.cwd}/index.js`, '\n')
+
+    await apiMock.waitFor('running')
+    await testCase.environment.abortCtrl.abort()
 
     const result = await resultPromise
     expect(result.success).toBeFalsy()

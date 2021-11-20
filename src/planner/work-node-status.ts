@@ -1,102 +1,93 @@
-import { WorkNode } from './work-node'
-import { isVerbose } from '../log'
 import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
-import { WorkService } from './work-service'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
-export type WorkNodeConsoleLogType = 'process' | 'internal'
+export type ConsoleType = 'stdout' | 'stderr'
+const ConsoleBufferMax = 100
+const StatusBufferMax = 200
 
-export interface WorkNodeConsoleLog {
-  level: WorkNodeConsoleLogLevel
-  type: WorkNodeConsoleLogType
+export interface ConsoleMessage {
+  type: ConsoleType
   message: string
   date: Date
 }
 
-export interface WorkNodeConsole extends Emitter<WorkNodeConsoleLog> {
-  current: WorkNodeConsoleLog | null
-
-  write(type: WorkNodeConsoleLogType, level: WorkNodeConsoleLogLevel, message: string): void
-
-  read(): Promise<WorkNodeConsoleLog[]>
+export interface StatusMessage {
+  level: WorkNodeConsoleLogLevel
+  message: string
+  date: Date
 }
 
-export function nodeConsole(): WorkNodeConsole {
-  let current: WorkNodeConsoleLog | null = null
-  const logs: WorkNodeConsoleLog[] = []
+export interface StatusConsole extends Emitter<StatusMessage> {
+  write(level: WorkNodeConsoleLogLevel, message: string): void
 
-  const emit = emitter<WorkNodeConsoleLog>()
+  read(): Promise<StatusMessage[]>
+}
+
+export interface LogConsole extends Emitter<ConsoleMessage> {
+  current: ConsoleMessage | null
+  recent: ConsoleMessage[]
+
+  write(type: ConsoleType, message: string): void
+
+  read(): Promise<ConsoleMessage[]>
+}
+
+export function statusConsole(): StatusConsole {
+  let current: StatusMessage | null = null
+  const recent: StatusMessage[] = []
+
+  const emit = emitter<StatusMessage>()
 
   return {
-    read(): Promise<WorkNodeConsoleLog[]> {
-      return Promise.resolve(logs)
+    write(level: WorkNodeConsoleLogLevel, message: string) {
+      const log: StatusMessage = { message, level, date: new Date() }
+      current = log
+      emit.emit(log)
+      recent.push(log)
+      if (recent.length > StatusBufferMax) {
+        recent.splice(0, 1)
+      }
+    },
+    on(listener: EmitListener<StatusMessage>): EmitHandle {
+      return emit.on(listener)
+    },
+    read(): Promise<StatusMessage[]> {
+      return Promise.resolve(recent)
+    },
+  }
+}
+
+export function nodeConsole(): LogConsole {
+  let current: ConsoleMessage | null = null
+  const recent: ConsoleMessage[] = []
+
+  const emit = emitter<ConsoleMessage>()
+
+  return {
+    read(): Promise<ConsoleMessage[]> {
+      return Promise.resolve(recent)
     },
 
-    on(listener: EmitListener<WorkNodeConsoleLog>): EmitHandle {
+    on(listener: EmitListener<ConsoleMessage>): EmitHandle {
       return emit.on(listener)
     },
 
-    write(type: WorkNodeConsoleLogType, level: WorkNodeConsoleLogLevel, message: string) {
-      const log: WorkNodeConsoleLog = { level, type, message, date: new Date() }
-      if (isVerbose || level !== 'debug') {
-        current = log
-      }
+    write(type: ConsoleType, message: string) {
+      const log: ConsoleMessage = { type, message, date: new Date() }
+      current = log
       emit.emit(log)
-      logs.push(log)
+      recent.push(log)
+      if (recent.length > ConsoleBufferMax) {
+        recent.splice(0, 1)
+      }
+    },
+
+    get recent() {
+      return recent
     },
 
     get current() {
       return current
     },
   }
-}
-
-export interface WorkNodeStatus {
-  name: string
-  state: WorkNodeState
-  abortCtrl: AbortController
-  console: WorkNodeConsole
-}
-
-export type WorkNodeState =
-  | WorkNodePendingState
-  | WorkNodeRunningState
-  | WorkNodeCompletedState
-  | WorkNodeFailedState
-  | WorkNodeAbortedState
-  | WorkNodeCancelState
-
-export interface WorkNodePendingState {
-  type: 'pending'
-  pendingDependencies: { [key: string]: WorkNode }
-  pendingServices: { [key: string]: WorkService }
-}
-
-export interface WorkNodeCancelState {
-  type: 'cancel'
-  promise: Promise<void>
-}
-
-export interface WorkNodeAbortedState {
-  type: 'aborted'
-}
-
-export interface WorkNodeRunningState {
-  type: 'running'
-  started: Date
-  abortCtrl: AbortController
-  promise: Promise<void>
-}
-
-export interface WorkNodeCompletedState {
-  type: 'completed'
-  duration: number
-  ended: Date
-}
-
-export interface WorkNodeFailedState {
-  type: 'failed'
-  duration: number
-  errorMessage: string
-  ended: Date
 }

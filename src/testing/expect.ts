@@ -1,17 +1,18 @@
-import { ExecuteResult } from '../executer/execute-result'
-import { WorkNodeStatus } from '../planner/work-node-status'
+import { SchedulerTerminationEvent } from '../executer/events'
+import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
+import { SchedulerState } from '../executer/scheduler/scheduler-state'
+import { NodeState } from '../executer/scheduler/node-state'
 
-export async function expectSuccessfulResult(result: ExecuteResult): Promise<void> {
+export async function expectSuccessfulResult(result: SchedulerTerminationEvent): Promise<void> {
   if (!result.success) {
-    for (const nodeId of Object.keys(result.nodes)) {
-      const node = result.nodes[nodeId]
-      if (node.state.type === 'failed') {
+    for (const state of iterateWorkNodes(result.state.node)) {
+      if (state.type === 'abort' || state.type === 'crash') {
         expect({
-          nodeId,
-          status: node.state.type,
-          logs: await node.console.read(),
+          nodeId: state.node.id,
+          status: state.type,
+          logs: await state.node.console.read(),
         }).toEqual({
-          nodeId,
+          nodeId: state.node.id,
           status: 'completed',
         })
       }
@@ -19,21 +20,25 @@ export async function expectSuccessfulResult(result: ExecuteResult): Promise<voi
   }
 }
 
-function getNode(result: ExecuteResult, name: string): WorkNodeStatus {
-  const node = Object.values(result.nodes).find((n) => n.name === name)
+function getNodeState(state: SchedulerState, name: string): NodeState {
+  const node = Object.values(state.node).find((n) => n.node.name === name)
   if (!node) {
     throw new Error(`could not find node ${name}`)
   }
   return node
 }
 
-export async function expectLog(result: ExecuteResult, name: string, message: string): Promise<void> {
-  const node = getNode(result, name)
-  const logs = await node.console.read()
+export async function expectLog(result: SchedulerTerminationEvent, name: string, message: string): Promise<void> {
+  const state = getNodeState(result.state, name)
+  const logs = await state.node.console.read()
   expect(logs.map((l) => l.message)).toContain(message)
 }
-export async function expectContainsLog(result: ExecuteResult, name: string, message: string): Promise<void> {
-  const node = getNode(result, name)
-  const logs = await node.console.read()
+export async function expectContainsLog(
+  result: SchedulerTerminationEvent,
+  name: string,
+  message: string
+): Promise<void> {
+  const state = getNodeState(result.state, name)
+  const logs = await state.node.console.read()
   expect(logs.some((l) => l.message.indexOf(message))).toBeTruthy()
 }

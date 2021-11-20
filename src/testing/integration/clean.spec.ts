@@ -1,13 +1,9 @@
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { expectSuccessfulResult } from '../expect'
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
-import { clean } from '../../executer/clean'
 import { getTestSuite } from '../get-test-suite'
-import { execute } from '../../executer/execute'
-import { getLocalExecutor } from '../../executer/get-local-executor'
 import { getDocker, getVolumeName } from '../../executer/execute-docker'
-import { existsVolume, getDockerExecutor } from '../../executer/get-docker-executor'
+import { existsVolume } from '../../executer/get-docker-executor'
 
 describe('clean', () => {
   const suite = getTestSuite('clean', ['build.yaml', 'package.json'])
@@ -15,38 +11,34 @@ describe('clean', () => {
   afterAll(() => suite.close())
 
   it('should clean generated outputs locally', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    executionContext.executor = getLocalExecutor()
-    executionContext.cacheMethod = 'none'
-
-    const workTree = planWorkTree(buildFile, 'example')
-
-    const result = await execute(workTree, executionContext)
+    const testCase = await suite.setup()
+    const result = await testCase.exec('example', {
+      cacheMethod: 'none',
+      noContainer: true,
+    })
     await expectSuccessfulResult(result)
 
-    const outputPath = join(buildFile.path, 'node_modules')
+    const outputPath = join(testCase.buildFile.path, 'node_modules')
 
     expect(existsSync(outputPath)).toBeTruthy()
-    await clean(workTree.nodes, workTree.services, context, executionContext.executor)
+    await testCase.clean()
     expect(existsSync(outputPath)).toBeFalsy()
   })
 
   it('should clean generated outputs in containers', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    executionContext.executor = await getDockerExecutor()
-    executionContext.cacheMethod = 'none'
-
-    const workTree = planWorkTree(buildFile, 'example')
-
-    const result = await execute(workTree, executionContext)
+    const testCase = await suite.setup()
+    const node = testCase.getNode('example')
+    const result = await testCase.exec('example', {
+      cacheMethod: 'none',
+    })
     await expectSuccessfulResult(result)
 
-    const outputPath = join(buildFile.path, 'node_modules')
+    const outputPath = join(testCase.buildFile.path, 'node_modules')
     const volumeName = getVolumeName(outputPath)
-    const docker = getDocker()
+    const docker = await getDocker(node)
     expect(await existsVolume(docker, volumeName)).toBeTruthy()
 
-    await clean(workTree.nodes, workTree.services, context, executionContext.executor)
+    await testCase.clean()
     expect(await existsVolume(docker, volumeName)).toBeFalsy()
   })
 })

@@ -5,10 +5,12 @@ import { validate } from '../../planner/validate'
 describe('unknown', () => {
   const suite = getTestSuite('unknown', ['build.yaml'])
 
+  afterAll(() => suite.close())
+
   async function validateTask(name: string, expectedErrors: string[]) {
-    const { buildFile, context } = await suite.setup()
+    const { buildFile, environment } = await suite.setup()
     let i = 0
-    for await (const message of validate(buildFile, context, name)) {
+    for await (const message of validate(buildFile, environment, name)) {
       expect(expectedErrors[i++]).toEqual(message.message)
     }
     expect(i).toEqual(expectedErrors.length)

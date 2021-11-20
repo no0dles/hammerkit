@@ -1,7 +1,6 @@
 import { join } from 'path'
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { getTestSuite } from '../get-test-suite'
-import { execute } from '../../executer/execute'
+import { NodeStartEvent } from '../../executer/events'
 
 describe('cancellation', () => {
   const suite = getTestSuite('cancellation', ['build.yaml'])
@@ -9,23 +8,20 @@ describe('cancellation', () => {
   afterAll(() => suite.close())
 
   async function testAbort(taskName: string, expectedState: string) {
-    const { buildFile, context, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, taskName)
-    executionContext.events.on((evt) => {
-      if (
-        evt.type === 'node' &&
-        evt.newState.type === 'running' &&
-        !executionContext.environment.abortCtrl.signal.aborted
-      ) {
+    const testCase = await suite.setup()
+    let nodeId: string
+    testCase.eventBus.on<NodeStartEvent>('node-start', (evt) => {
+      if (!testCase.environment.abortCtrl.signal.aborted && evt.node.name === taskName) {
+        nodeId = evt.node.id
         setTimeout(() => {
-          executionContext.environment.abortCtrl.abort()
+          testCase.environment.abortCtrl.abort()
         }, 2000)
       }
     })
-    const result = await execute(workTree, executionContext)
+    const result = await testCase.exec(taskName)
     expect(result.success).toBeFalsy()
-    expect(result.nodes[workTree.rootNode.id].state.type).toEqual(expectedState)
-    expect(await context.file.exists(join(buildFile.path, 'test'))).toBeFalsy()
+    expect(result.state.node[nodeId!].type).toEqual(expectedState)
+    expect(await testCase.environment.file.exists(join(testCase.buildFile.path, 'test'))).toBeFalsy()
   }
 
   it('should cancel local task with dependencies', async () => {

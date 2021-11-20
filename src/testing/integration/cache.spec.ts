@@ -4,14 +4,13 @@ import { writeWorkNodeCache } from '../../optimizer/write-work-node-cache'
 import { WorkTree } from '../../planner/work-tree'
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { planWorkTree } from '../../planner/utils/plan-work-tree'
-import { execute } from '../../executer/execute'
-import { ExecutionContext } from '../../executer/execution-context'
-import { optimize } from '../../optimizer/optimize'
 import { ContainerWorkNode } from '../../planner/work-node'
 import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'
 import { getNode } from '../get-node'
 import { getWorkNodeId } from '../../planner/work-node-id'
+import { Environment } from '../../executer/environment'
+import { checkIfUpToDate } from '../../executer/scheduler/enqueue-next'
 
 describe('cache', () => {
   const suite = getTestSuite('cache', ['build.yaml', 'package.json', 'package-lock.json'])
@@ -19,42 +18,45 @@ describe('cache', () => {
   afterAll(() => suite.close())
 
   async function testCache(
-    action: (buildFile: BuildFile, workTree: WorkTree, context: ExecutionContext) => Promise<void>,
+    action: (buildFile: BuildFile, workTree: WorkTree, environment: Environment) => Promise<void>,
     expectInvalidate: boolean
   ) {
-    const { buildFile, context, executionContext } = await suite.setup()
+    const { buildFile, environment } = await suite.setup()
     const workTree = planWorkTree(buildFile, 'example')
     expect(workTree.nodes).toContainKey(workTree.rootNode.id)
 
-    await writeWorkNodeCache(workTree.nodes[workTree.rootNode.id], context)
-    await action(buildFile, workTree, executionContext)
+    const node = workTree.nodes[workTree.rootNode.id]
+    await writeWorkNodeCache(node, environment)
+    await action(buildFile, workTree, environment)
 
-    await optimize(workTree, executionContext)
+    const checksumUpToDate = await checkIfUpToDate('checksum', node, environment)
+    const modifyDateUpToDate = await checkIfUpToDate('modify-date', node, environment)
 
     if (expectInvalidate) {
-      expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
+      expect(checksumUpToDate).toBeFalsy()
+      expect(modifyDateUpToDate).toBeFalsy()
     } else {
-      expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('completed')
+      expect(checksumUpToDate).toBeTruthy()
+      expect(modifyDateUpToDate).toBeTruthy()
     }
   }
 
   it('should run invalid cache on src file change', async () => {
-    await testCache(async (buildFile, workTree, context) => {
-      await context.environment.file.appendFile(join(context.environment.cwd, 'package.json'), '\n')
+    await testCache(async (buildFile, workTree, environment) => {
+      await environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
     }, true)
   })
 
   it('should mount generations of dependant tasks', async () => {
-    const { buildFile, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'dependant')
-    const result = await execute(workTree, executionContext)
+    const testCase = await suite.setup()
+    const result = await testCase.exec('dependant')
     await expectSuccessfulResult(result)
     await expectLog(result, `dependant`, 'node_modules')
   })
 
   it('should invalid cache on image change', async () => {
     await testCache(async (buildFile, workTree) => {
-      const node = getNode(buildFile, workTree, 'example') as ContainerWorkNode
+      const node = getNode(buildFile, workTree.nodes, 'example') as ContainerWorkNode
       node.image = '15.0.0'
       node.mergedTask.image = '15.0.0'
       delete workTree.nodes[node.id]

@@ -16,10 +16,6 @@ export function planWorkDependency(
 
     node.deps.push(depNode)
 
-    if (node.status.state.type === 'pending') {
-      node.status.state.pendingDependencies[depNode.id] = depNode
-    }
-
     for (const src of depNode.src) {
       if (node.src.indexOf(src) === -1) {
         node.src.push(src)

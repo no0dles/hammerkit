@@ -14,7 +14,7 @@ import { WorkNodeSource } from '../work-node-source'
 import { BuildFileTask } from '../../parser/build-file-task'
 import { WorkNodeCommand } from '../work-node-command'
 import { BuildTaskCommand } from '../../parser/build-file-task-command'
-import { nodeConsole } from '../work-node-status'
+import { nodeConsole, statusConsole } from '../work-node-status'
 import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
 import { WorkNodePath } from '../work-node-path'
@@ -139,22 +139,12 @@ export function planWorkNode(
         mergedDeps: deps,
         mergedTask: task,
         needs: parseWorkNodeNeeds(needs, services),
-        status: {
-          name,
-          state: { type: 'pending', pendingDependencies: {}, pendingServices: {} },
-          abortCtrl: new AbortController(),
-          console: nodeConsole(),
-        },
+        console: nodeConsole(),
+        status: statusConsole(),
       },
       task,
       context
     )
-
-    if (node.status.state.type === 'pending') {
-      for (const need of node.needs) {
-        node.status.state.pendingServices[need.id] = need
-      }
-    }
 
     nodes[id] = node
 
@@ -253,7 +243,7 @@ function parseLocalWorkNodeSource(
     .map((src) => mapSource(src, context.currentWorkdir))
 }
 
-function parseWorkNodeNeeds(needs: MergedNeed[], services: WorkServices): WorkService[] {
+export function parseWorkNodeNeeds(needs: MergedNeed[], services: WorkServices): WorkService[] {
   const result: WorkService[] = []
 
   for (const need of needs) {
@@ -268,13 +258,8 @@ function parseWorkNodeNeeds(needs: MergedNeed[], services: WorkServices): WorkSe
         mounts: (service.mounts || [])
           .map((m) => templateValue(m, service.envs))
           .map((m) => parseWorkNodeMount(need.build.path, m)),
-        status: {
-          state: {
-            type: 'pending',
-          },
-          abortCtrl: new AbortController(),
-          console: nodeConsole(),
-        },
+        console: nodeConsole(),
+        status: statusConsole(),
         image: service.image,
         volumes: service.volumes || {},
         ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),

@@ -1,0 +1,7 @@
+services:
+  prod_db:
+    context: kube-name
+    ports:
+      - 5432:5432
+    labels:
+      appname: postgres

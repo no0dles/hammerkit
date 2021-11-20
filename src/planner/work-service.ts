@@ -1,7 +1,7 @@
 import { WorkNodePort } from './work-node-port'
 import { WorkNodePath } from './work-node-path'
-import { WorkServiceStatus } from './work-service-state'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
+import { StatusConsole, LogConsole } from './work-node-status'
 
 export interface WorkService {
   id: string
@@ -11,6 +11,7 @@ export interface WorkService {
   mounts: WorkNodePath[]
   volumes: { [volumeName: string]: string }
   ports: WorkNodePort[]
-  status: WorkServiceStatus
+  console: LogConsole
   healthcheck: ExecutionBuildServiceHealthCheck | null
+  status: StatusConsole
 }

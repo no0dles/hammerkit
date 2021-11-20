@@ -12,7 +12,7 @@ export async function readCache(node: WorkNode, context: Environment): Promise<W
   try {
     return JSON.parse(await context.file.read(cacheFile))
   } catch (e) {
-    node.status.console.write('internal', 'error', `unable to read cache ${cacheFile}`)
+    node.status.write('error', `unable to read cache ${cacheFile}`)
   }
 
   return null

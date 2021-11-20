@@ -1,7 +1,6 @@
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { getTestSuite } from '../get-test-suite'
-import { execute } from '../../executer/execute'
 
 describe('include', () => {
   const suite = getTestSuite('include', ['build.yaml', 'foo', 'foobar.txt'])
@@ -9,17 +8,15 @@ describe('include', () => {
   afterAll(() => suite.close())
 
   it('should run included task', async () => {
-    const { buildFile, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'example')
-    const result = await execute(workTree, executionContext)
+    const testCase = await suite.setup()
+    const result = await testCase.exec('example')
     await expectSuccessfulResult(result)
     await expectLog(result, `foo:bar`, 'foobar')
   })
 
   it('should get name:example', async () => {
-    const { buildFile, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'name:example')
-    const result = await execute(workTree, executionContext)
+    const testCase = await suite.setup()
+    const result = await testCase.exec('name:example')
     await expectSuccessfulResult(result)
   })
 

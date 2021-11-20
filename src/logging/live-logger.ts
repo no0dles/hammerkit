@@ -1,35 +1,33 @@
-import { ExecutionContext } from '../executer/execution-context'
-import { WorkTree } from '../planner/work-tree'
-import { getNodeNameLength, printWorkTreeResult } from '../log'
+import {
+  getNodeNameLengthForWorkTree,
+  printWorkTreeResult,
+  writeNodeLogToConsole,
+  writeServiceLogToConsole,
+} from '../log'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
-import { ExecuteResult } from '../executer/execute-result'
-import { logMessageToConsole } from './message-to-console'
-import { LogStrategy } from './log-strategy'
+import { EventBus } from '../executer/event-bus'
+import { SchedulerInitializeEvent, SchedulerTerminationEvent } from '../executer/events'
 
-export function liveLogger(): LogStrategy {
+export function liveLogger(eventBus: EventBus) {
   let maxNodeNameLength = 0
 
-  return {
-    start(executionContext: ExecutionContext, workTree: WorkTree) {
-      maxNodeNameLength = getNodeNameLength(workTree)
+  eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', (evt) => {
+    maxNodeNameLength = getNodeNameLengthForWorkTree(evt.nodes, evt.services)
 
-      for (const node of iterateWorkNodes(workTree.nodes)) {
-        node.status.console.on((log) => {
-          logMessageToConsole(log, { type: 'task', node, maxNodeNameLength })
-        })
-      }
+    for (const node of iterateWorkNodes(evt.nodes)) {
+      node.console.on((log) => {
+        writeNodeLogToConsole(node, log, maxNodeNameLength)
+      })
+    }
 
-      for (const service of Object.values(workTree.services)) {
-        service.status.console.on((log) => {
-          logMessageToConsole(log, { type: 'service', service, maxNodeNameLength })
-        })
-      }
-    },
-    async finish(workTree: WorkTree, result: ExecuteResult): Promise<void> {
-      await printWorkTreeResult(workTree, result, false)
-    },
-    abort(e: Error) {
-      process.stderr.write(`${e.message}\n`)
-    },
-  }
+    for (const service of Object.values(evt.services)) {
+      service.console.on((log) => {
+        writeServiceLogToConsole(service, log, maxNodeNameLength)
+      })
+    }
+  })
+
+  eventBus.on<SchedulerTerminationEvent>('scheduler-termination', async (evt) => {
+    await printWorkTreeResult(evt.state, false)
+  })
 }

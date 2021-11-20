@@ -1,7 +1,7 @@
 import { FileContext } from '../file/file-context'
 import { ConsoleContextMock } from '../console/console-context-mock'
 
-export interface TestContext {
+export interface TestEnvironment {
   processEnvs: { [key: string]: string | undefined }
   abortCtrl: AbortController
   cwd: string

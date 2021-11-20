@@ -1,9 +1,9 @@
 import { BuildFile } from '../parser/build-file'
-import { WorkTree } from '../planner/work-tree'
 import { WorkNode } from '../planner/work-node'
+import { WorkNodes } from '../planner/work-nodes'
 
-export function getNode(buildFile: BuildFile, workTree: WorkTree, taskName: string): WorkNode {
-  const node = Object.values(workTree.nodes).find((n) => n.name === taskName)
+export function getNode(buildFile: BuildFile, nodes: WorkNodes, taskName: string): WorkNode {
+  const node = Object.values(nodes).find((n) => n.name === taskName)
   if (!node) {
     throw new Error(`could not find node ${taskName}`)
   }

@@ -1,6 +1,5 @@
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { getTestSuite } from '../get-test-suite'
-import { execute } from '../../executer/execute'
+import { NodeStartEvent } from '../../executer/events'
 
 describe('watch', () => {
   const suite = getTestSuite('watch', ['build.yaml', 'src', 'package.json', 'package-lock.json', 'tsconfig.json'])
@@ -8,21 +7,18 @@ describe('watch', () => {
   afterAll(() => suite.close())
 
   it('should run watch task and cancel', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'api')
-
-    executionContext.watch = true
-    executionContext.events.on((evt) => {
-      if (evt.type === 'node') {
-        if (evt.nodeId === workTree.rootNode.id && evt.newState.type === 'running') {
-          context.abortCtrl.abort()
-        }
+    const testCase = await suite.setup()
+    const apiNode = testCase.getNode('api')
+    testCase.eventBus.on<NodeStartEvent>('node-start', (evt) => {
+      if (evt.node.id === apiNode.id) {
+        testCase.environment.abortCtrl.abort()
       }
     })
-    const result = await execute(workTree, executionContext)
-
+    const result = await testCase.exec('api', {
+      watch: true,
+    })
     expect(result.success).toBeFalsy()
-    expect(result.nodes[workTree.rootNode.id].state.type).toEqual('aborted')
+    expect(result.state.node[apiNode.id].type).toEqual('abort')
   })
 
   // it('should restart task if dependency updates', async () => {

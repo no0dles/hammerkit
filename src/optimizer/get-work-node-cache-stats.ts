@@ -61,14 +61,13 @@ export async function hasStatsChanged(
       (cacheMethod === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
       (cacheMethod === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
     ) {
-      node.status.console.write(
-        'internal',
+      node.status.write(
         'debug',
         cacheMethod === 'checksum'
           ? `${key} changed from checksum ${cache.files[key].checksum} to ${current.files[key]?.checksum}`
           : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
       )
-      node.status.console.write('internal', 'debug', `${node.name} can't be skipped because ${key} has been modified`)
+      node.status.write('debug', `${node.name} can't be skipped because ${key} has been modified`)
       changed = true
       break
     }

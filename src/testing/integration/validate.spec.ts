@@ -5,14 +5,16 @@ import { validate } from '../../planner/validate'
 describe('validate', () => {
   const suite = getTestSuite('validate', ['build.yaml', 'build-loop.yaml'])
   async function validateTask(name: string, expectedErrors: string[]) {
-    const { buildFile, context } = await suite.setup()
+    const { buildFile, environment } = await suite.setup()
 
     let i = 0
-    for await (const message of validate(buildFile, context, name)) {
+    for await (const message of validate(buildFile, environment, name)) {
       expect(expectedErrors[i++]).toEqual(message.message)
     }
     expect(i).toEqual(expectedErrors.length)
   }
+
+  afterAll(() => suite.close())
 
   it('should validate regular task', async () => {
     await validateTask('regular_task', [])

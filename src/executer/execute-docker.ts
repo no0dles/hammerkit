@@ -1,19 +1,13 @@
 import { awaitStream } from '../docker/stream'
 import Dockerode, { Container, Exec, ExecInspectInfo } from 'dockerode'
-import { pull } from '../docker/pull'
 import { sep, extname } from 'path'
 import { ContainerWorkNode, WorkNode } from '../planner/work-node'
 import { WorkNodePath } from '../planner/work-node-path'
 import { platform } from 'os'
-import { templateValue } from '../planner/utils/template-value'
-import { ExecutionContext } from './execution-context'
 import { Environment } from './environment'
 import { createHash } from 'crypto'
-import { ensureVolumeExists } from './get-docker-executor'
-import { WorkNodeConsole } from '../planner/work-node-status'
-import { removeContainer } from '../docker/remove-container'
-import { abortableFunction, AbortableFunctionContext } from '../utils/abortable-function'
-import { getErrorMessage } from '../log'
+import { AbortableFunctionContext } from '../utils/abortable-function'
+import { WorkService } from '../planner/work-service'
 
 interface WorkNodeVolume {
   name: string
@@ -89,9 +83,19 @@ export async function getContainerMounts(node: ContainerWorkNode, context: Envir
 
 let dockerInstance: Dockerode | null = null
 
-export function getDocker(): Dockerode {
+export async function getDocker(nodeOrService: WorkNode | WorkService): Promise<Dockerode> {
   if (!dockerInstance) {
     dockerInstance = new Dockerode()
+
+    try {
+      await dockerInstance.version()
+    } catch (e) {
+      if (e instanceof Error && e.message.indexOf('ECONNREFUSED') >= 0) {
+        nodeOrService.status.write('error', `docker is not running, try running in local shell or start`)
+      }
+
+      throw e
+    }
   }
   return dockerInstance
 }
@@ -99,7 +103,7 @@ export function getDocker(): Dockerode {
 export async function startContainer(node: WorkNode, container: Container): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const handle = setTimeout(() => {
-      node.status.console.write('internal', 'warn', 'start of container is potentially stuck on start')
+      node.status.write('warn', 'start of container is potentially stuck on start')
     }, 1000)
     container
       .start()
@@ -114,7 +118,7 @@ export async function startContainer(node: WorkNode, container: Container): Prom
   })
 }
 
-function convertToPosixPath(path: string) {
+export function convertToPosixPath(path: string) {
   if (platform() === 'win32') {
     return path
       .split(sep)
@@ -124,147 +128,10 @@ function convertToPosixPath(path: string) {
   return path
 }
 
-export function executeDocker(
-  node: ContainerWorkNode,
-  context: ExecutionContext,
-  abortCtrl: AbortController
-): Promise<void> {
-  return abortableFunction<void>(context.environment.console, abortCtrl.signal, async (ctx) => {
-    node.status.console.write('internal', 'debug', `execute ${node.name} as docker task`)
-    const docker = getDocker()
-
-    const volumes = await getContainerVolumes(node)
-    const mounts = await getContainerMounts(node, context.environment)
-
-    ctx.checkForAbort()
-    await pull(node.status.console, docker, node.image)
-
-    ctx.checkForAbort()
-    for (const volume of volumes) {
-      await ensureVolumeExists(docker, volume.name)
-    }
-
-    const links: string[] = []
-    for (const need of node.needs) {
-      if (need.status.state.type !== 'ready') {
-        throw new Error(`service ${need.name} is not running`)
-      }
-      links.push(`${need.status.state.containerName}:${need.name}`)
-    }
-
-    ctx.checkForAbort()
-    node.status.console.write('internal', 'debug', `create container with image ${node.image} with ${node.shell}`)
-    const container = await docker.createContainer({
-      Image: node.image,
-      Tty: true,
-      Entrypoint: node.shell,
-      Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
-      WorkingDir: convertToPosixPath(node.cwd),
-      Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
-      HostConfig: {
-        Binds: [
-          ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-          ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
-        ],
-        PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-          map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-          return map
-        }, {}),
-        Links: links,
-        AutoRemove: true,
-      },
-      ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
-        map[`${port.containerPort}/tcp`] = {}
-        return map
-      }, {}),
-    })
-
-    ctx.addAbortFunction(async () => {
-      try {
-        await removeContainer(container)
-      } catch (e) {
-        node.status.console.write('internal', 'debug', `remove of container failed ${getErrorMessage(e)}`)
-      }
-    })
-
-    const user =
-      platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
-        ? `${process.getuid()}:${process.getgid()}`
-        : undefined
-
-    for (const mount of mounts) {
-      node.status.console.write('internal', 'debug', `bind mount ${mount.localPath}:${mount.containerPath}`)
-    }
-    for (const volume of volumes) {
-      node.status.console.write('internal', 'debug', `volume mount ${volume.name}:${volume.containerPath}`)
-    }
-
-    node.status.console.write('internal', 'info', `starting container with image ${node.image}`)
-    await startContainer(node, container)
-
-    if (user) {
-      const setUserPermission = async (directory: string) => {
-        node.status.console.write('internal', 'debug', 'set permission on ' + directory)
-        const result = await execCommand(
-          ctx,
-          node.status.console,
-          docker,
-          container,
-          '/',
-          ['chown', user, directory],
-          undefined,
-          undefined
-        )
-        if (result.type === 'timeout' || result.result.ExitCode !== 0) {
-          node.status.console.write('internal', 'warn', `unable to set permissions for ${directory}`)
-        }
-      }
-
-      await setUserPermission(node.cwd)
-      for (const volume of volumes) {
-        await setUserPermission(volume.containerPath)
-      }
-      for (const mount of mounts) {
-        await setUserPermission(mount.containerPath)
-      }
-    }
-
-    for (const cmd of node.cmds) {
-      ctx.checkForAbort()
-
-      const command = templateValue(cmd.cmd, node.envs)
-      node.status.console.write('internal', 'info', `execute cmd ${command} in container`)
-      const result = await execCommand(
-        ctx,
-        node.status.console,
-        docker,
-        container,
-        convertToPosixPath(cmd.path),
-        [node.shell, '-c', command],
-        user,
-        undefined
-      )
-      if (!result) {
-        return
-      }
-
-      if (result.type === 'timeout') {
-        throw new Error(`command ${command} timed out`)
-      }
-
-      if (result.result.ExitCode !== 0) {
-        node.status.console.write('internal', 'error', `command ${command} failed with ${result.result.ExitCode}`)
-        throw new Error(`command ${command} failed with ${result.result.ExitCode}`)
-      }
-    }
-  })
-}
-
 export type ExecResult = { type: 'result'; result: ExecInspectInfo } | { type: 'timeout' }
 
 export async function execCommand(
-  abortContext: AbortableFunctionContext,
-  console: WorkNodeConsole,
+  node: WorkNode | WorkService,
   docker: Dockerode,
   container: Container,
   cwd: string | undefined,
@@ -282,19 +149,17 @@ export async function execCommand(
     User: user,
   })
 
-  console.write('internal', 'debug', `received exec id ${exec.id}`)
+  node.status.write('debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
 
   return new Promise<ExecResult>((resolve, reject) => {
     let resolved = false
 
-    awaitStream(console, docker, stream)
+    awaitStream(node, docker, stream)
       .then(() => {
         if (resolved) {
           return
         }
-
-        abortContext.checkForAbort()
 
         return exec.inspect().then((result) => {
           if (resolved) {

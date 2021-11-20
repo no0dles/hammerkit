@@ -10,7 +10,7 @@ export function replaceEnvVariables(
     if (value.startsWith('$')) {
       const processEnvValue = processEnv[value.substr(1)]
       if (processEnvValue) {
-        node.status.console.write('internal', 'debug', `use process env ${value.substr(1)}`)
+        node.status.write('debug', `use process env ${value.substr(1)}`)
         result[key] = processEnvValue
       } else {
         throw new Error(`missing env ${value}`)

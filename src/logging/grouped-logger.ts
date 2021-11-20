@@ -1,34 +1,50 @@
-import { ExecutionContext } from '../executer/execution-context'
-import { WorkTree } from '../planner/work-tree'
-import { getNodeNameLength, printWorkTreeResult } from '../log'
-import { ExecuteResult } from '../executer/execute-result'
-import { LogStrategy } from './log-strategy'
-import { logMessageToConsole } from './message-to-console'
+import {
+  getNodeNameLengthForWorkTree,
+  printWorkTreeResult,
+  writeNodeLogToConsole,
+  writeServiceLogToConsole,
+} from '../log'
+import { EventBus } from '../executer/event-bus'
+import { SchedulerInitializeEvent, SchedulerTerminationEvent, SchedulerUpdateEvent } from '../executer/events'
+import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
 
-export function groupedLogger(): LogStrategy {
+export function groupedLogger(eventBus: EventBus): void {
   let maxNodeNameLength = 0
+  const completedNodes: string[] = []
+  const completedServices: string[] = []
 
-  return {
-    start(executionContext: ExecutionContext, workTree: WorkTree) {
-      maxNodeNameLength = getNodeNameLength(workTree)
+  eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', (evt) => {
+    maxNodeNameLength = getNodeNameLengthForWorkTree(evt.nodes, evt.services)
+  })
 
-      executionContext.events.on(async (evt) => {
-        if (
-          evt.type === 'node' &&
-          (evt.newState.type === 'completed' || evt.newState.type === 'failed' || evt.newState.type === 'aborted')
-        ) {
-          const node = workTree.nodes[evt.nodeId]
-          for (const log of await node.status.console.read()) {
-            logMessageToConsole(log, { type: 'task', node, maxNodeNameLength })
-          }
+  eventBus.on<SchedulerUpdateEvent>('scheduler-update', async (evt) => {
+    for (const node of iterateWorkNodes(evt.state.node)) {
+      if (completedNodes.indexOf(node.node.id) >= 0) {
+        continue
+      }
+
+      if (node.type === 'crash' || node.type === 'abort' || node.type === 'completed') {
+        completedNodes.push(node.node.id)
+        for (const log of await node.node.console.read()) {
+          writeNodeLogToConsole(node.node, log, maxNodeNameLength)
         }
-      })
-    },
-    async finish(workTree: WorkTree, result: ExecuteResult): Promise<void> {
-      await printWorkTreeResult(workTree, result, false)
-    },
-    abort(e: Error) {
-      process.stderr.write(`${e.message}\n`)
-    },
-  }
+      }
+    }
+
+    for (const service of iterateWorkServices(evt.state.service)) {
+      if (completedServices.indexOf(service.service.id) >= 0) {
+        continue
+      }
+
+      if (service.type === 'end') {
+        completedServices.push(service.service.id)
+        for (const log of await service.service.console.read()) {
+          writeServiceLogToConsole(service.service, log, maxNodeNameLength)
+        }
+      }
+    }
+  })
+  eventBus.on<SchedulerTerminationEvent>('scheduler-termination', async (evt) => {
+    await printWorkTreeResult(evt.state, false)
+  })
 }

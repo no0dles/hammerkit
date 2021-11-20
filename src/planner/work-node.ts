@@ -2,10 +2,10 @@ import { BuildFile } from '../parser/build-file'
 import { WorkNodeSource } from './work-node-source'
 import { WorkNodeCommand } from './work-node-command'
 import { WorkNodePath } from './work-node-path'
-import { WorkNodeStatus } from './work-node-status'
 import { MergedBuildFileTask, MergedDependency } from './utils/plan-work-node'
 import { WorkNodePort } from './work-node-port'
 import { WorkService } from './work-service'
+import { StatusConsole, LogConsole } from './work-node-status'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -17,7 +17,6 @@ export interface BaseWorkNode {
   continuous: boolean
   deps: WorkNode[]
   src: WorkNodeSource[]
-  status: WorkNodeStatus
   generates: { path: string; inherited: boolean }[]
   envs: { [key: string]: string }
   cmds: WorkNodeCommand[]
@@ -27,6 +26,8 @@ export interface BaseWorkNode {
   needs: WorkService[]
   mergedTask: MergedBuildFileTask
   mergedDeps: MergedDependency[]
+  console: LogConsole
+  status: StatusConsole
 }
 
 export interface LocalWorkNode extends BaseWorkNode {

@@ -4,6 +4,9 @@ import { planWorkNode } from './plan-work-node'
 import { WorkNode } from '../work-node'
 import { WorkServices } from '../work-services'
 import { WorkService } from '../work-service'
+import { NodeState } from '../../executer/scheduler/node-state'
+import { ServiceState } from '../../executer/scheduler/service-state'
+import { SchedulerNodeState, SchedulerServiceState } from '../../executer/scheduler/scheduler-state'
 
 export function planWorkNodes(build: BuildFile): [WorkNodes, WorkServices] {
   const nodes: WorkNodes = {}
@@ -12,14 +15,20 @@ export function planWorkNodes(build: BuildFile): [WorkNodes, WorkServices] {
   return [nodes, services]
 }
 
-export function* iterateWorkServices(services: WorkServices): Generator<WorkService> {
+export function iterateWorkServices(services: WorkServices): Generator<WorkService>
+export function iterateWorkServices(services: SchedulerServiceState): Generator<ServiceState>
+export function* iterateWorkServices(
+  services: WorkServices | SchedulerServiceState
+): Generator<WorkService | ServiceState> {
   for (const serviceId of Object.keys(services)) {
     const service = services[serviceId]
     yield service
   }
 }
 
-export function* iterateWorkNodes(nodes: WorkNodes): Generator<WorkNode> {
+export function iterateWorkNodes(nodes: WorkNodes): Generator<WorkNode>
+export function iterateWorkNodes(nodes: SchedulerNodeState): Generator<NodeState>
+export function* iterateWorkNodes(nodes: WorkNodes | SchedulerNodeState): Generator<WorkNode | NodeState> {
   for (const nodeId of Object.keys(nodes)) {
     const node = nodes[nodeId]
     yield node

@@ -11,8 +11,8 @@ export async function writeWorkNodeCache(node: WorkNode, context: Environment): 
   const cache = await getWorkNodeCacheStats(node, context)
   const taskDescription = getWorkDescription(node.cwd, node.mergedTask, node.mergedDeps)
   await context.file.createDirectory(cachePath)
-  node.status.console.write('internal', 'debug', `write cache description for ${node.name} to ${cacheDescriptionFile}`)
+  node.status.write('debug', `write cache description for ${node.name} to ${cacheDescriptionFile}`)
   await context.file.writeFile(cacheDescriptionFile, JSON.stringify(taskDescription, null, 2))
-  node.status.console.write('internal', 'debug', `write file cache for ${node.name} to ${cacheFile}`)
+  node.status.write('debug', `write file cache for ${node.name} to ${cacheFile}`)
   await context.file.writeFile(cacheFile, JSON.stringify(cache, null, 2))
 }
