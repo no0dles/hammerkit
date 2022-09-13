@@ -40,5 +40,5 @@ export async function expectContainsLog(
 ): Promise<void> {
   const state = getNodeState(result.state, name)
   const logs = await state.node.console.read()
-  expect(logs.some((l) => l.message.indexOf(message))).toBeTruthy()
+  expect(logs.some((l) => l.message.indexOf(message) >= 0)).toBeTruthy()
 }

@@ -31,6 +31,8 @@ import { logStream } from '../docker/stream'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import { join } from 'path'
 import { listenOnAbort } from '../utils/abort-event'
+import { replaceEnvVariables } from '../environment/replace-env-variables'
+import { getProcessEnvs } from '../environment/get-process-env'
 
 export function attachDockerExecutor(eventBus: EventBus, environment: Environment) {
   eventBus.on<NodeCleanupEvent>('node-cleanup', async (evt) => {
@@ -167,13 +169,15 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
         links.push(`${container}:${need.name}`)
       }
 
+      const envs = replaceEnvVariables(evt.node, environment.processEnvs)
+
       checkForAbort(evt.abortSignal)
       evt.node.status.write('debug', `create container with image ${evt.node.image} with ${evt.node.shell}`)
       container = await docker.createContainer({
         Image: evt.node.image,
         Tty: true,
         Entrypoint: evt.node.shell,
-        Env: Object.keys(evt.node.envs).map((k) => `${k}=${evt.node.envs[k]}`),
+        Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
         WorkingDir: convertToPosixPath(evt.node.cwd),
         Labels: { app: 'hammerkit', 'hammerkit-id': evt.node.id, 'hammerkit-type': 'task' },
         HostConfig: {
@@ -208,6 +212,21 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
 
       evt.node.status.write('debug', `starting container with image ${evt.node.image}`)
       await startContainer(evt.node, container)
+
+      listenOnAbort(evt.abortSignal, async () => {
+        if (container) {
+          try {
+            await removeContainer(container)
+          } catch (e) {
+            evt.node.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
+          }
+        }
+      })
+
+      await eventBus.emit({
+        type: 'node-start',
+        node: evt.node,
+      })
 
       if (user) {
         const setUserPermission = async (directory: string) => {
@@ -258,7 +277,7 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
           throw new Error(`command ${command} timed out`)
         }
 
-        if (result.result.ExitCode !== 0) {
+        if (result.result.ExitCode !== 0 && !evt.abortSignal.aborted) {
           await eventBus.emit({
             type: 'node-abort',
             node: evt.node,
@@ -268,10 +287,17 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
           return
         }
       }
-      await eventBus.emit({
-        type: 'node-completed',
-        node: evt.node,
-      })
+      if (!evt.abortSignal.aborted) {
+        await eventBus.emit({
+          type: 'node-completed',
+          node: evt.node,
+        })
+      } else {
+        await eventBus.emit({
+          type: 'node-canceled',
+          node: evt.node,
+        })
+      }
     } catch (e) {
       if (e instanceof AbortError) {
         await eventBus.emit({

@@ -113,24 +113,28 @@ export async function enqueueNext(state: SchedulerState, eventBus: EventBus, env
       }
 
       const abortController = new AbortController()
-      const result = isContainerWorkNode(nodeState.node)
-        ? eventBus.emit({
-            type: 'scheduler-start-container-node',
-            node: nodeState.node,
-            abortSignal: abortController.signal,
-            serviceContainers,
-          })
-        : eventBus.emit({
-            type: 'scheduler-start-local-node',
-            node: nodeState.node,
-            abortSignal: abortController.signal,
-          })
-      state.node[nodeId] = {
-        type: 'running',
-        abortController,
-        node: nodeState.node,
-        result,
-        started: new Date(),
+      const result =
+        isContainerWorkNode(nodeState.node) && !state.noContainer
+          ? eventBus.emit({
+              type: 'scheduler-start-container-node',
+              node: nodeState.node,
+              abortSignal: abortController.signal,
+              serviceContainers,
+            })
+          : eventBus.emit({
+              type: 'scheduler-start-local-node',
+              node: nodeState.node,
+              abortSignal: abortController.signal,
+            })
+
+      if (state.node[nodeId].type === 'pending') {
+        state.node[nodeId] = {
+          type: 'running',
+          abortController,
+          node: nodeState.node,
+          result,
+          started: new Date(),
+        }
       }
 
       await result

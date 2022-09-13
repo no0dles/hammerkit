@@ -91,7 +91,8 @@ class MockNode implements ExecutionMockNode {
 
   setDuration(durationInMs: number): void {
     this.durationInMs = durationInMs
-    if (this.state === 'running') {
+
+    const runTimer = () => {
       this.executionTimer = setTimeout(() => {
         if (this.resolveFn) {
           this.resolveFn({ exitCode: this.exitCode })
@@ -100,22 +101,33 @@ class MockNode implements ExecutionMockNode {
         this.runStateListeners()
       }, durationInMs)
     }
+    if (this.state === 'running') {
+      runTimer()
+    } else if (this.state === 'pending') {
+      this.onState('running', () => {
+        runTimer()
+      })
+    }
   }
 
-  waitFor(state: MockNodeState): Promise<void> {
+  onState(state: MockNodeState, callback: () => void) {
     if (!this.listeners[state]) {
       this.listeners[state] = []
     }
+    this.listeners[state].push(callback)
+  }
+
+  waitFor(state: MockNodeState): Promise<void> {
     return new Promise<void>((resolve) => {
-      this.listeners[state].push(resolve)
+      this.onState(state, resolve)
     })
   }
 
   run(): Promise<{ exitCode: number }> {
     this.state = 'running'
-    this.runStateListeners()
     return new Promise<{ exitCode: number }>((resolve) => {
       this.resolveFn = resolve
+      this.runStateListeners()
     })
   }
 

@@ -11,7 +11,7 @@ describe('cancellation', () => {
     const testCase = await suite.setup()
     let nodeId: string
     testCase.eventBus.on<NodeStartEvent>('node-start', (evt) => {
-      if (!testCase.environment.abortCtrl.signal.aborted && evt.node.name === taskName) {
+      if (!testCase.environment.abortCtrl.signal.aborted && evt.node.name.startsWith('long_')) {
         nodeId = evt.node.id
         setTimeout(() => {
           testCase.environment.abortCtrl.abort()
@@ -25,18 +25,18 @@ describe('cancellation', () => {
   }
 
   it('should cancel local task with dependencies', async () => {
-    await testAbort('local_cancel', 'aborted')
+    await testAbort('local_cancel', 'canceled')
   })
 
   it('should cancel local task', async () => {
-    await testAbort('long_running_local', 'aborted')
+    await testAbort('long_running_local', 'canceled')
   })
 
   it('should cancel docker task', async () => {
-    await testAbort('long_running_docker', 'aborted')
+    await testAbort('long_running_docker', 'canceled')
   })
 
   it('should cancel docker task with dependencies', async () => {
-    await testAbort('local_cancel', 'aborted')
+    await testAbort('docker_cancel', 'canceled')
   })
 })

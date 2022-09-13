@@ -14,4 +14,5 @@ export interface SchedulerState {
   node: SchedulerNodeState
   service: SchedulerServiceState
   cacheMethod: CacheMethod
+  noContainer: boolean
 }

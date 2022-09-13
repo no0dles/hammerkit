@@ -34,10 +34,12 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
     service: {},
     node: {},
     cacheMethod: 'none',
+    noContainer: false,
   }
 
   eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', async (evt) => {
     state.cacheMethod = evt.cacheMethod
+    state.noContainer = evt.noContainer
 
     checkForLoop(state)
     if (state.abort) {

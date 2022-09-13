@@ -11,6 +11,7 @@ import { Environment } from './environment'
 import { moveFiles } from '../file/move-files'
 import { join, relative } from 'path'
 import { WorkNode } from '../planner/work-node'
+import { replaceEnvVariables } from '../environment/replace-env-variables'
 
 export function attachLocalExecutor(eventBus: EventBus, environment: Environment) {
   eventBus.on<NodePruneStateEvent>('node-prune-state', async (evt) => {
@@ -50,7 +51,7 @@ export function attachLocalExecutor(eventBus: EventBus, environment: Environment
     evt.node.status.write('info', `execute ${evt.node.name} locally`)
 
     try {
-      const envs = getProcessEnvs(evt.node.envs, environment)
+      const envs = getProcessEnvs(replaceEnvVariables(evt.node, environment.processEnvs), environment)
       for (const cmd of evt.node.cmds) {
         checkForAbort(evt.abortSignal)
 
@@ -124,6 +125,13 @@ function executeCommand(
 
       resolve(code ?? 0)
     })
+
+    eventBus
+      .emit({
+        type: 'node-start',
+        node: node,
+      })
+      .catch((err) => reject(err))
 
     listenOnAbort(abortSignal, () => {
       ps.kill()

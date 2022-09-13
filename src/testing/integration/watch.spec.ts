@@ -18,7 +18,7 @@ describe('watch', () => {
       watch: true,
     })
     expect(result.success).toBeFalsy()
-    expect(result.state.node[apiNode.id].type).toEqual('abort')
+    expect(result.state.node[apiNode.id].type).toEqual('canceled')
   })
 
   // it('should restart task if dependency updates', async () => {

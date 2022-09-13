@@ -111,7 +111,7 @@ export interface SchedulerStartContainerNodeEvent {
 
 export interface SchedulerStartLocalNodeEvent {
   type: 'scheduler-start-local-node'
-  node: LocalWorkNode
+  node: LocalWorkNode | ContainerWorkNode
   abortSignal: AbortSignal
 }
 
