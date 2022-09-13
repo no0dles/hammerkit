@@ -31,6 +31,31 @@ export async function checkIfUpToDate(
   return true
 }
 
+export async function dequeueServices(state: SchedulerState, eventBus: EventBus, environment: Environment) {
+  if (state.abort) {
+    return
+  }
+
+  for (const [serviceId, serviceState] of Object.entries(state.service)) {
+    if (serviceState.type !== 'ready' && serviceState.type !== 'running') {
+      continue
+    }
+
+    let hasNeed = false
+    for (const nodeState of Object.values(state.node)) {
+      if (nodeState.type === 'running' || nodeState.type === 'pending') {
+        if (nodeState.node.needs.some((n) => n.id === serviceId)) {
+          hasNeed = true
+        }
+      }
+    }
+
+    if (!hasNeed) {
+      serviceState.abortController.abort()
+    }
+  }
+}
+
 export async function enqueueNext(state: SchedulerState, eventBus: EventBus, environment: Environment) {
   if (state.abort) {
     return

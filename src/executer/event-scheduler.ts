@@ -15,7 +15,7 @@ import { Environment } from './environment'
 import { getDuration } from './states'
 import { SchedulerState } from './scheduler/scheduler-state'
 import { watchNode } from './scheduler/watch-node'
-import { enqueueNext } from './scheduler/enqueue-next'
+import { dequeueServices, enqueueNext } from './scheduler/enqueue-next'
 import { abort } from './scheduler/abort-action'
 import { checkForLoop } from './scheduler/check-for-loop'
 import { finalize } from './scheduler/finalize-action'
@@ -110,6 +110,7 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
       node: evt.node,
       duration: getDuration(state.node[evt.node.id]),
     }
+    await dequeueServices(state, eventBus, environment)
     await enqueueNext(state, eventBus, environment)
     await finalize(state, eventBus)
   })

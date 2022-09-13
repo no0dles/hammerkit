@@ -30,6 +30,7 @@ import { Container } from 'dockerode'
 import { logStream } from '../docker/stream'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import { join } from 'path'
+import { listenOnAbort } from '../utils/abort-event'
 
 export function attachDockerExecutor(eventBus: EventBus, environment: Environment) {
   eventBus.on<NodeCleanupEvent>('node-cleanup', async (evt) => {
@@ -160,7 +161,7 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
       const links: string[] = []
       for (const need of evt.node.needs) {
         const container = evt.serviceContainers[need.id]
-        if (container) {
+        if (!container) {
           throw new Error(`service ${need.name} is not running`)
         }
         links.push(`${container}:${need.name}`)
@@ -322,6 +323,21 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
         },
       })
 
+      listenOnAbort(evt.abortSignal, async () => {
+        if (container) {
+          try {
+            await removeContainer(container)
+          } catch (e) {
+            evt.service.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
+          }
+        }
+
+        await eventBus.emit({
+          type: 'service-cancelled',
+          service: evt.service,
+        })
+      })
+
       const stream = await container.attach({ stream: true, stdout: true, stderr: true })
       logStream(evt.service, docker, stream)
 
@@ -337,11 +353,13 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
           containerId: container!.id,
         })
       } else {
-        checkReadiness(containerName, evt.service.healthcheck)
+        await checkReadiness(containerName, evt.service.healthcheck)
       }
 
       async function checkReadiness(containerName: string, healthCheck: ExecutionBuildServiceHealthCheck) {
         try {
+          checkForAbort(evt.abortSignal)
+
           const result = await execCommand(
             evt.service,
             docker,
@@ -369,8 +387,15 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
             }
           }
         } catch (e) {
-          evt.service.status.write('debug', `checking readiness failed ${getErrorMessage(e)}`)
-          setTimeout(() => checkReadiness(containerName, healthCheck), 5000)
+          if (e instanceof AbortError) {
+            await eventBus.emit({
+              type: 'service-cancelled',
+              service: evt.service,
+            })
+          } else {
+            evt.service.status.write('debug', `checking readiness failed ${getErrorMessage(e)}`)
+            setTimeout(() => checkReadiness(containerName, healthCheck), 5000)
+          }
         }
       }
     } catch (e) {
@@ -385,14 +410,6 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
           service: evt.service,
           errorMessage: getErrorMessage(e),
         })
-      }
-    } finally {
-      if (container) {
-        try {
-          await removeContainer(container)
-        } catch (e) {
-          evt.service.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
-        }
       }
     }
   })

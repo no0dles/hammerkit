@@ -1,5 +1,4 @@
 import Dockerode from 'dockerode'
-import { EventBus } from '../executer/event-bus'
 import { WorkNode } from '../planner/work-node'
 import { WorkService } from '../planner/work-service'
 
