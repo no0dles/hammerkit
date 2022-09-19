@@ -33,7 +33,6 @@ export interface LogConsole extends Emitter<ConsoleMessage> {
 }
 
 export function statusConsole(): StatusConsole {
-  let current: StatusMessage | null = null
   const recent: StatusMessage[] = []
 
   const emit = emitter<StatusMessage>()
@@ -41,7 +40,6 @@ export function statusConsole(): StatusConsole {
   return {
     write(level: WorkNodeConsoleLogLevel, message: string) {
       const log: StatusMessage = { message, level, date: new Date() }
-      current = log
       emit.emit(log)
       recent.push(log)
       if (recent.length > StatusBufferMax) {

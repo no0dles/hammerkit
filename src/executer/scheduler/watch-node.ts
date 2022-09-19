@@ -8,7 +8,12 @@ import { join } from 'path'
 import { listenOnAbort } from '../../utils/abort-event'
 import { resetNode } from './reset-node-action'
 
-export async function watchNode(state: SchedulerState, eventBus: EventBus, node: WorkNode, environment: Environment) {
+export async function watchNode(
+  state: SchedulerState,
+  eventBus: EventBus,
+  node: WorkNode,
+  environment: Environment
+): Promise<void> {
   if (node.src.length === 0) {
     return
   }

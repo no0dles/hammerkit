@@ -9,7 +9,7 @@ describe('cancellation', () => {
 
   async function testAbort(taskName: string, expectedState: string) {
     const testCase = await suite.setup()
-    let nodeId: string
+    let nodeId = ''
     testCase.eventBus.on<NodeStartEvent>('node-start', (evt) => {
       if (!testCase.environment.abortCtrl.signal.aborted && evt.node.name.startsWith('long_')) {
         nodeId = evt.node.id
@@ -20,7 +20,7 @@ describe('cancellation', () => {
     })
     const result = await testCase.exec(taskName)
     expect(result.success).toBeFalsy()
-    expect(result.state.node[nodeId!].type).toEqual(expectedState)
+    expect(result.state.node[nodeId].type).toEqual(expectedState)
     expect(await testCase.environment.file.exists(join(testCase.buildFile.path, 'test'))).toBeFalsy()
   }
 

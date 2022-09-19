@@ -7,7 +7,7 @@ import { moveFiles } from '../file/move-files'
 import { CacheCleanEvent, CacheRestoreEvent, CacheStoreEvent, NodeCompletedEvent } from './events'
 import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 
-export function attachCaching(eventBus: EventBus, environment: Environment) {
+export function attachCaching(eventBus: EventBus, environment: Environment): void {
   eventBus.on<NodeCompletedEvent>('node-completed', async (evt) => {
     await writeWorkNodeCache(evt.node, environment)
   })

@@ -4,9 +4,8 @@ import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
 import { BuildFile } from '../../parser/build-file'
 import { SchedulerTerminationEvent } from '../../executer/events'
-import { SchedulerNodeState } from '../../executer/scheduler/scheduler-state'
 import { NodeState } from '../../executer/scheduler/node-state'
-import { MockedTestCase, TestCase } from '../test-suite'
+import { MockedTestCase } from '../test-suite'
 
 describe('glob', () => {
   const suite = getTestSuite('glob', ['build.yaml', 'test.md', 'test.txt'])
@@ -25,7 +24,7 @@ describe('glob', () => {
     return state.state.node[node.id]
   }
 
-  async function testCache(action: (buildFile: BuildFile) => Promise<void>, expectInvalidate: boolean) {
+  async function testCache(expectInvalidate: boolean, action?: (buildFile: BuildFile) => Promise<void>) {
     const testCase = await suite.setup({ mockExecution: true })
     const result1 = await getTestRun(testCase)
     await expectSuccessfulResult(result1)
@@ -37,7 +36,9 @@ describe('glob', () => {
       expect(nodeState1.duration).toBeGreaterThanOrEqual(100)
     }
 
-    await action(testCase.buildFile)
+    if (action) {
+      await action(testCase.buildFile)
+    }
 
     const result2 = await getTestRun(testCase)
     await expectSuccessfulResult(result2)
@@ -55,18 +56,18 @@ describe('glob', () => {
   }
 
   it('should remove task after written cache', async () => {
-    await testCache(async () => {}, false)
+    await testCache(false)
   })
 
   it('should keep being cached after ignored file changed', async () => {
-    await testCache(async (buildFile) => {
+    await testCache(false, async (buildFile) => {
       appendFileSync(join(buildFile.path, 'test.txt'), '\n')
-    }, false)
+    })
   })
 
   it('should invalid cache after file has changed', async () => {
-    await testCache(async (buildFile) => {
+    await testCache(true, async (buildFile) => {
       appendFileSync(join(buildFile.path, 'test.md'), '\n')
-    }, true)
+    })
   })
 })

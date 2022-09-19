@@ -25,7 +25,7 @@ export function interactiveLogger(eventBus: EventBus): void {
     }
   }
 
-  eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', (evt) => {
+  eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', () => {
     hideCursor()
     tickerFn()
   })

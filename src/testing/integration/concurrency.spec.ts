@@ -11,13 +11,13 @@ describe('concurrency', () => {
     const testCase = await suite.setup()
 
     let concurrentRunners = 0
-    testCase.eventBus.on<NodeStartEvent>('node-start', (evt) => {
+    testCase.eventBus.on<NodeStartEvent>('node-start', () => {
       concurrentRunners++
       expect(concurrentRunners).toBeLessThanOrEqual(1)
     })
     testCase.eventBus.on<NodeCompletedEvent>(
       'node-completed',
-      (evt) => {
+      () => {
         concurrentRunners--
       },
       true

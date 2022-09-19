@@ -13,7 +13,7 @@ import { join, relative } from 'path'
 import { WorkNode } from '../planner/work-node'
 import { replaceEnvVariables } from '../environment/replace-env-variables'
 
-export function attachLocalExecutor(eventBus: EventBus, environment: Environment) {
+export function attachLocalExecutor(eventBus: EventBus, environment: Environment): void {
   eventBus.on<NodePruneStateEvent>('node-prune-state', async (evt) => {
     for (const generate of evt.node.generates) {
       if (generate.inherited) {

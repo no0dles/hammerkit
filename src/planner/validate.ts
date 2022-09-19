@@ -22,7 +22,7 @@ export async function* validate(
   context: Environment,
   name?: string
 ): AsyncGenerator<WorkNodeValidation> {
-  const [nodes, services] = plan(buildFile, name) // TODO validate services
+  const [nodes] = plan(buildFile, name) // TODO validate services
   const cycleNodes: WorkNode[] = []
 
   for (const key of Object.keys(nodes)) {

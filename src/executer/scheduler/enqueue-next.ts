@@ -32,7 +32,7 @@ export async function checkIfUpToDate(
   return true
 }
 
-export async function dequeueServices(state: SchedulerState, eventBus: EventBus, environment: Environment) {
+export async function dequeueServices(state: SchedulerState): Promise<void> {
   if (state.abort) {
     return
   }
@@ -57,7 +57,7 @@ export async function dequeueServices(state: SchedulerState, eventBus: EventBus,
   }
 }
 
-export async function enqueueNext(state: SchedulerState, eventBus: EventBus, environment: Environment) {
+export async function enqueueNext(state: SchedulerState, eventBus: EventBus, environment: Environment): Promise<void> {
   if (state.abort) {
     return
   }

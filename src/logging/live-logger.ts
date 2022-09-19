@@ -8,7 +8,7 @@ import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 import { EventBus } from '../executer/event-bus'
 import { SchedulerInitializeEvent, SchedulerTerminationEvent } from '../executer/events'
 
-export function liveLogger(eventBus: EventBus) {
+export function liveLogger(eventBus: EventBus): void {
   let maxNodeNameLength = 0
 
   eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', (evt) => {

@@ -26,15 +26,14 @@ import { removeContainer } from '../docker/remove-container'
 import { getErrorMessage } from '../log'
 import { platform } from 'os'
 import { templateValue } from '../planner/utils/template-value'
-import { Container } from 'dockerode'
+import Dockerode, { Container } from 'dockerode'
 import { logStream } from '../docker/stream'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import { join } from 'path'
 import { listenOnAbort } from '../utils/abort-event'
 import { replaceEnvVariables } from '../environment/replace-env-variables'
-import { getProcessEnvs } from '../environment/get-process-env'
 
-export function attachDockerExecutor(eventBus: EventBus, environment: Environment) {
+export function attachDockerExecutor(eventBus: EventBus, environment: Environment): void {
   eventBus.on<NodeCleanupEvent>('node-cleanup', async (evt) => {
     const docker = await getDocker(evt.node)
 
@@ -229,28 +228,12 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
       })
 
       if (user) {
-        const setUserPermission = async (directory: string) => {
-          evt.node.status.write('debug', `set permission on ${directory}`)
-          const result = await execCommand(
-            evt.node,
-            docker,
-            container!,
-            '/',
-            ['chown', user, directory],
-            undefined,
-            undefined
-          )
-          if (result.type === 'timeout' || result.result.ExitCode !== 0) {
-            evt.node.status.write('warn', `unable to set permissions for ${directory}`)
-          }
-        }
-
-        await setUserPermission(evt.node.cwd)
+        await setUserPermission(evt.node.cwd, evt, docker, container, user)
         for (const volume of volumes) {
-          await setUserPermission(volume.containerPath)
+          await setUserPermission(volume.containerPath, evt, evt, docker, container, user)
         }
         for (const mount of mounts) {
-          await setUserPermission(mount.containerPath)
+          await setUserPermission(mount.containerPath, evt, evt, docker, container, user)
         }
       }
 
@@ -376,53 +359,10 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
         await eventBus.emit({
           type: 'service-ready',
           service: evt.service,
-          containerId: container!.id,
+          containerId: container.id,
         })
       } else {
-        await checkReadiness(containerName, evt.service.healthcheck)
-      }
-
-      async function checkReadiness(containerName: string, healthCheck: ExecutionBuildServiceHealthCheck) {
-        try {
-          checkForAbort(evt.abortSignal)
-
-          const result = await execCommand(
-            evt.service,
-            docker,
-            container!,
-            undefined,
-            healthCheck.cmd.split(' '),
-            undefined,
-            2000
-          )
-
-          if (result.type === 'timeout') {
-            setTimeout(() => checkReadiness(containerName, healthCheck), 3000)
-            return
-          } else {
-            if (result.result.ExitCode === 0) {
-              evt.service.status.write('debug', `healthcheck ${healthCheck.cmd} succeeded`)
-              await eventBus.emit({
-                type: 'service-ready',
-                service: evt.service,
-                containerId: container!.id,
-              })
-            } else {
-              evt.service.status.write('debug', `healthcheck ${healthCheck.cmd} failed with ${result.result.ExitCode}`)
-              setTimeout(() => checkReadiness(containerName, healthCheck), 5000)
-            }
-          }
-        } catch (e) {
-          if (e instanceof AbortError) {
-            await eventBus.emit({
-              type: 'service-cancelled',
-              service: evt.service,
-            })
-          } else {
-            evt.service.status.write('debug', `checking readiness failed ${getErrorMessage(e)}`)
-            setTimeout(() => checkReadiness(containerName, healthCheck), 5000)
-          }
-        }
+        await checkReadiness(containerName, evt.service.healthcheck, evt, eventBus, docker, container)
       }
     } catch (e) {
       if (e instanceof AbortError) {
@@ -439,4 +379,67 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
       }
     }
   })
+}
+async function setUserPermission(
+  directory: string,
+  evt: SchedulerStartContainerNodeEvent,
+  docker: Dockerode,
+  container: Container,
+  user: string
+) {
+  evt.node.status.write('debug', `set permission on ${directory}`)
+  const result = await execCommand(evt.node, docker, container, '/', ['chown', user, directory], undefined, undefined)
+  if (result.type === 'timeout' || result.result.ExitCode !== 0) {
+    evt.node.status.write('warn', `unable to set permissions for ${directory}`)
+  }
+}
+
+async function checkReadiness(
+  containerName: string,
+  healthCheck: ExecutionBuildServiceHealthCheck,
+  evt: SchedulerStartServiceEvent,
+  eventBus: EventBus,
+  docker: Dockerode,
+  container: Container
+): Promise<void> {
+  try {
+    checkForAbort(evt.abortSignal)
+
+    const result = await execCommand(
+      evt.service,
+      docker,
+      container,
+      undefined,
+      healthCheck.cmd.split(' '),
+      undefined,
+      2000
+    )
+
+    if (result.type === 'timeout') {
+      setTimeout(() => checkReadiness(containerName, healthCheck, evt, eventBus, docker, container), 3000)
+      return
+    } else {
+      if (result.result.ExitCode === 0) {
+        evt.service.status.write('debug', `healthcheck ${healthCheck.cmd} succeeded`)
+        await eventBus.emit({
+          type: 'service-ready',
+          service: evt.service,
+          containerId: container.id,
+        })
+      } else {
+        evt.service.status.write('debug', `healthcheck ${healthCheck.cmd} failed with ${result.result.ExitCode}`)
+        setTimeout(() => checkReadiness(containerName, healthCheck, evt, eventBus, docker, container), 5000)
+      }
+    }
+  } catch (e) {
+    if (e instanceof AbortError) {
+      await eventBus.emit({
+        type: 'service-cancelled',
+        service: evt.service,
+      })
+    } else {
+      evt.service.status.write('debug', `checking readiness failed ${getErrorMessage(e)}`)
+      setTimeout(() => checkReadiness(containerName, healthCheck, evt, eventBus, docker, container), 5000)
+    }
+  }
 }

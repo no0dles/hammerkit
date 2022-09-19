@@ -28,7 +28,7 @@ async function updateState(eventBus: EventBus, state: SchedulerState, action: ()
   })
 }
 
-export function attachScheduler(eventBus: EventBus, environment: Environment) {
+export function attachScheduler(eventBus: EventBus, environment: Environment): void {
   const state: SchedulerState = {
     abort: false,
     service: {},
@@ -124,7 +124,7 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
       node: evt.node,
       duration: getDuration(state.node[evt.node.id]),
     }
-    await dequeueServices(state, eventBus, environment)
+    await dequeueServices(state)
     await enqueueNext(state, eventBus, environment)
   })
   eventBus.on<ServiceReadyEvent>('service-ready', async (evt) => {

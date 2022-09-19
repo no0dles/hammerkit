@@ -1,6 +1,5 @@
 import commaner, { Command, Option } from 'commander'
 import { join, resolve } from 'path'
-import { validate } from './planner/validate'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { getCli } from './testing/get-test-suite'

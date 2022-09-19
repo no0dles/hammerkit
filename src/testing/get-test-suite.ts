@@ -119,7 +119,9 @@ function getTestCase(
 class VirtualTestSuite implements TestSuite {
   constructor(private options: VirtualTestSuiteOptions) {}
 
-  async close(): Promise<void> {}
+  async close(): Promise<void> {
+    return Promise.resolve()
+  }
 
   setup(): Promise<TestCase>
   setup(options: Partial<TestSuiteSetupOptions>): Promise<MockedTestCase>

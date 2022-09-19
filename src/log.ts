@@ -141,7 +141,7 @@ export function getNodeNameLengthForSchedulerState(schedulerState: SchedulerStat
   return getNodeNameLength(Names)
 }
 
-export function getNodeNameLength(names: () => Generator<string>) {
+export function getNodeNameLength(names: () => Generator<string>): number {
   let maxNodeNameLength = 0
   for (const name of names()) {
     if (name.length > maxNodeNameLength) {
@@ -179,7 +179,7 @@ export function writeNodeLogToConsole(node: WorkNode, log: ConsoleMessage, maxNo
   )
 }
 
-export function writeServiceLogToConsole(service: WorkService, log: ConsoleMessage, maxNodeNameLength: number) {
+export function writeServiceLogToConsole(service: WorkService, log: ConsoleMessage, maxNodeNameLength: number): void {
   process.stdout.write(
     `${formatDate(log.date)} ${colors.grey('service:')} ${getNodeName(
       service.name,

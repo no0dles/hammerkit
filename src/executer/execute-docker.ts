@@ -118,7 +118,7 @@ export async function startContainer(node: WorkNode, container: Container): Prom
   })
 }
 
-export function convertToPosixPath(path: string) {
+export function convertToPosixPath(path: string): string {
   if (platform() === 'win32') {
     return path
       .split(sep)

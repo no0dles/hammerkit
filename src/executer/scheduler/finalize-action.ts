@@ -1,7 +1,7 @@
 import { SchedulerState } from './scheduler-state'
 import { EventBus } from '../event-bus'
 
-export async function finalize(state: SchedulerState, eventBus: EventBus) {
+export async function finalize(state: SchedulerState, eventBus: EventBus): Promise<void> {
   const hasPendingNodes = Object.values(state.node).some((n) => n.type === 'pending')
   if (!state.abort && hasPendingNodes) {
     return

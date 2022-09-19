@@ -1,4 +1,4 @@
-export function checkForAbort(abortSignal: AbortSignal) {
+export function checkForAbort(abortSignal: AbortSignal): void {
   if (abortSignal.aborted) {
     throw new AbortError()
   }
