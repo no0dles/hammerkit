@@ -15,4 +15,6 @@ export interface SchedulerState {
   service: SchedulerServiceState
   cacheMethod: CacheMethod
   noContainer: boolean
+  watch: boolean
+  workers: number
 }

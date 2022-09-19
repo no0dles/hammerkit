@@ -4,14 +4,19 @@ import { EventBusListener } from './event-bus-listener'
 export class EventBus {
   private listeners: { [key: string]: EventBusListener<any>[] } = {}
 
-  on<E extends HammerkitEvent>(type: E['type'], listener: EventBusListener<E>) {
+  on<E extends HammerkitEvent>(type: E['type'], listener: EventBusListener<E>, prio: boolean = false) {
     if (!this.listeners[type]) {
       this.listeners[type] = []
     }
-    this.listeners[type].push(listener)
+    if (prio) {
+      this.listeners[type].unshift(listener)
+    } else {
+      this.listeners[type].push(listener)
+    }
   }
 
   async emit(event: HammerkitEvent): Promise<void> {
+    console.info(event.type)
     const listeners = this.listeners[event.type] || []
     for (const listener of listeners) {
       await listener(event)

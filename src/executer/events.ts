@@ -32,8 +32,8 @@ export interface NodeStartEvent {
   node: WorkNode
 }
 
-export interface NodeAbortEvent {
-  type: 'node-abort'
+export interface NodeCrashEvent {
+  type: 'node-crash'
   node: WorkNode
   command: string
   exitCode: number
@@ -44,8 +44,8 @@ export interface NodeCanceledEvent {
   node: WorkNode
 }
 
-export interface NodeCrashEvent {
-  type: 'node-crash'
+export interface NodeErrorEvent {
+  type: 'node-error'
   node: WorkNode
   errorMessage: string
 }
@@ -183,12 +183,12 @@ export type ServiceEvent =
 export type NodeEvent =
   | NodeCleanupEvent
   | NodeStartEvent
-  | NodeAbortEvent
+  | NodeCrashEvent
   | NodeCanceledEvent
   | NodePruneStateEvent
   | NodeStoreStateEvent
   | NodeRestoreStateEvent
   | NodeCompletedEvent
-  | NodeCrashEvent
+  | NodeErrorEvent
 
 export type HammerkitEvent = CacheEvent | SchedulerEvent | ServiceEvent | NodeEvent

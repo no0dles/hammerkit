@@ -8,7 +8,7 @@ export function checkForLoop(state: SchedulerState): void {
     if (cyclePath && cyclePath.length > 0) {
       const errorMessage = `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`
       state.node[nodeState.node.id] = {
-        type: 'crash',
+        type: 'error',
         node: nodeState.node,
         errorMessage,
       }

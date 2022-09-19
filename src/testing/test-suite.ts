@@ -9,6 +9,7 @@ import { WorkNodeValidation } from '../planner/work-node-validation'
 
 export interface ExecutionMock {
   getNode(name: string): ExecutionMockNode
+  clearNode(name: string): void
 }
 
 export type MockNodeState = 'running' | 'pending' | 'ended'
@@ -18,6 +19,7 @@ export interface ExecutionMockNode {
   waitFor(state: MockNodeState): Promise<void>
   end(exitCode: number): void
   setDuration(durationInMs: number): void
+  executeCount: number
 }
 
 export interface MockedTestCase extends TestCase {

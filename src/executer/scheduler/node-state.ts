@@ -19,8 +19,8 @@ export interface NodeCompletedState {
   duration: number
 }
 
-export interface NodeCrashState {
-  type: 'crash'
+export interface NodeErrorState {
+  type: 'error'
   node: WorkNode
   errorMessage: string
 }
@@ -30,8 +30,8 @@ export interface NodeCanceledState {
   node: WorkNode
 }
 
-export interface NodeAbortState {
-  type: 'abort'
+export interface NodeCrashState {
+  type: 'crash'
   node: WorkNode
   exitCode: number
 }
@@ -40,6 +40,6 @@ export type NodeState =
   | NodePendingState
   | NodeRunningState
   | NodeCompletedState
+  | NodeErrorState
   | NodeCrashState
-  | NodeAbortState
   | NodeCanceledState

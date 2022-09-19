@@ -20,41 +20,64 @@ describe('execute', () => {
 
   it('should restart watching task if once completed', async () => {
     const testCase = await suite.setup({ mockExecution: true })
+
     const apiMock = testCase.executionMock.getNode('api')
+    apiMock.end(0)
+    apiMock.setDuration(10)
+
+    expect(apiMock.executeCount).toBe(0)
 
     const resultPromise = testCase.exec('api', {
       watch: true,
     })
 
-    await apiMock.waitFor('running')
-    await apiMock.end(0)
+    await wait(30)
+
+    expect(apiMock.executeCount).toBe(1)
 
     await testCase.environment.file.appendFile(`${testCase.environment.cwd}/index.js`, '\n')
 
-    await apiMock.waitFor('running')
+    await wait(130)
+
+    expect(apiMock.executeCount).toBe(2)
+
     await testCase.environment.abortCtrl.abort()
 
     const result = await resultPromise
-    expect(result.success).toBeFalsy()
+    expect(result.success).toBeTrue()
   })
 
   it('should restart watching task if once failed', async () => {
     const testCase = await suite.setup({ mockExecution: true })
+
     const apiMock = testCase.executionMock.getNode('api')
+    apiMock.end(1)
+    apiMock.setDuration(10)
+
+    expect(apiMock.executeCount).toBe(0)
 
     const resultPromise = testCase.exec('api', {
       watch: true,
     })
 
-    await apiMock.waitFor('running')
-    await apiMock.end(1)
+    await wait(30)
+    expect(apiMock.executeCount).toBe(1)
 
     await testCase.environment.file.appendFile(`${testCase.environment.cwd}/index.js`, '\n')
 
-    await apiMock.waitFor('running')
+    await wait(130)
+
+    expect(apiMock.executeCount).toBe(2)
+
     await testCase.environment.abortCtrl.abort()
 
     const result = await resultPromise
     expect(result.success).toBeFalsy()
   })
 })
+
+async function wait(ms: number) {
+  await new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), ms)
+  })
+}

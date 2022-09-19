@@ -23,7 +23,7 @@ export function groupedLogger(eventBus: EventBus): void {
         continue
       }
 
-      if (node.type === 'crash' || node.type === 'abort' || node.type === 'completed') {
+      if (node.type === 'crash' || node.type === 'error' || node.type === 'completed') {
         completedNodes.push(node.node.id)
         for (const log of await node.node.console.read()) {
           writeNodeLogToConsole(node.node, log, maxNodeNameLength)

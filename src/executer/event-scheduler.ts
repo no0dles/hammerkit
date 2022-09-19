@@ -1,9 +1,9 @@
 import { listenOnAbort } from '../utils/abort-event'
 import {
-  NodeAbortEvent,
+  NodeCrashEvent,
   NodeCanceledEvent,
   NodeCompletedEvent,
-  NodeCrashEvent,
+  NodeErrorEvent,
   SchedulerInitializeEvent,
   ServiceCancelledEvent,
   ServiceCrashEvent,
@@ -35,13 +35,16 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
     node: {},
     cacheMethod: 'none',
     noContainer: false,
+    watch: false,
+    workers: 0,
   }
 
   eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', async (evt) => {
     state.cacheMethod = evt.cacheMethod
     state.noContainer = evt.noContainer
+    state.watch = evt.watch
+    state.workers = evt.workers
 
-    checkForLoop(state)
     if (state.abort) {
       await eventBus.emit({
         type: 'scheduler-termination',
@@ -63,6 +66,13 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
         await watchNode(state, eventBus, node, environment)
       }
     }
+
+    checkForLoop(state)
+    if (state.abort) {
+      await finalize(state, eventBus)
+      return
+    }
+
     for (const service of iterateWorkServices(evt.services)) {
       await updateState(eventBus, state, () => {
         state.service[service.id] = {
@@ -84,10 +94,10 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
     })
     await finalize(state, eventBus)
   })
-  eventBus.on<NodeCrashEvent>('node-crash', async (evt) => {
+  eventBus.on<NodeErrorEvent>('node-error', async (evt) => {
     await updateState(eventBus, state, () => {
       state.node[evt.node.id] = {
-        type: 'crash',
+        type: 'error',
         node: evt.node,
         errorMessage: evt.errorMessage,
       }
@@ -95,15 +105,17 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
     abort(state)
     await finalize(state, eventBus)
   })
-  eventBus.on<NodeAbortEvent>('node-abort', async (evt) => {
+  eventBus.on<NodeCrashEvent>('node-crash', async (evt) => {
     await updateState(eventBus, state, () => {
       state.node[evt.node.id] = {
-        type: 'abort',
+        type: 'crash',
         node: evt.node,
         exitCode: evt.exitCode,
       }
     })
-    abort(state)
+    if (!state.watch) {
+      abort(state)
+    }
     await finalize(state, eventBus)
   })
   eventBus.on<NodeCompletedEvent>('node-completed', async (evt) => {
@@ -114,7 +126,6 @@ export function attachScheduler(eventBus: EventBus, environment: Environment) {
     }
     await dequeueServices(state, eventBus, environment)
     await enqueueNext(state, eventBus, environment)
-    await finalize(state, eventBus)
   })
   eventBus.on<ServiceReadyEvent>('service-ready', async (evt) => {
     const currentState = state.service[evt.service.id]

@@ -5,6 +5,7 @@ import { readCache } from '../../optimizer/read-work-node-cache'
 import { getWorkNodeCacheStats, hasStatsChanged } from '../../optimizer/get-work-node-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../optimizer/cache-method'
+import { finalize } from './finalize-action'
 
 export async function checkIfUpToDate(
   cacheMethod: CacheMethod,
@@ -63,6 +64,11 @@ export async function enqueueNext(state: SchedulerState, eventBus: EventBus, env
 
   for (const [nodeId, nodeState] of Object.entries(state.node)) {
     if (nodeState.type === 'pending') {
+      const runningNodeCount = Object.values(state.node).filter((n) => n.type === 'running').length
+      if (state.workers !== 0 && runningNodeCount >= state.workers) {
+        return
+      }
+
       const pendingNeeds = nodeState.node.needs.filter((need) => state.service[need.id].type === 'pending')
       const runningNeeds = nodeState.node.needs.filter((need) => state.service[need.id].type === 'running')
       const hasOpenDeps = nodeState.node.deps.some(
@@ -140,4 +146,6 @@ export async function enqueueNext(state: SchedulerState, eventBus: EventBus, env
       await result
     }
   }
+
+  await finalize(state, eventBus)
 }

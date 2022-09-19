@@ -61,7 +61,7 @@ export function attachLocalExecutor(eventBus: EventBus, environment: Environment
         const exitCode = await executeCommand(evt.node, eventBus, evt.abortSignal, cmd.path, command, envs)
         if (exitCode !== 0) {
           await eventBus.emit({
-            type: 'node-abort',
+            type: 'node-crash',
             node: evt.node,
             exitCode,
             command,
@@ -81,7 +81,7 @@ export function attachLocalExecutor(eventBus: EventBus, environment: Environment
         })
       } else {
         await eventBus.emit({
-          type: 'node-crash',
+          type: 'node-error',
           node: evt.node,
           errorMessage: getErrorMessage(e),
         })
@@ -90,7 +90,7 @@ export function attachLocalExecutor(eventBus: EventBus, environment: Environment
   })
 }
 
-function executeCommand(
+async function executeCommand(
   node: WorkNode,
   eventBus: EventBus,
   abortSignal: AbortSignal,
@@ -98,6 +98,11 @@ function executeCommand(
   command: string,
   envs: { [key: string]: string }
 ): Promise<number> {
+  await eventBus.emit({
+    type: 'node-start',
+    node: node,
+  })
+
   return new Promise<number>((resolve, reject) => {
     const ps = exec(command, {
       env: envs,
@@ -125,13 +130,6 @@ function executeCommand(
 
       resolve(code ?? 0)
     })
-
-    eventBus
-      .emit({
-        type: 'node-start',
-        node: node,
-      })
-      .catch((err) => reject(err))
 
     listenOnAbort(abortSignal, () => {
       ps.kill()

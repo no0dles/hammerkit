@@ -138,7 +138,7 @@ class VirtualTestSuite implements TestSuite {
       await file.createDirectory(dirname(join(cwd, filePath)))
       await file.writeFile(join(cwd, filePath), this.options.files[filePath])
     }
-    const buildFile = await createBuildFile(environment, this.options)
+    const buildFile = await createBuildFile(environment, this.options.buildFile)
     return getTestCase(buildFile, environment, options)
   }
 }

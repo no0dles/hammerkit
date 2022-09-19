@@ -13,6 +13,9 @@ export function attachExecutionMock(eventBus: EventBus, buildFile: BuildFile, no
       const node = getNode(buildFile, nodes, name)
       return getMockNode(node)
     },
+    clearNode(name: string): void {
+      delete mockNodes[name]
+    },
   }
 
   function getMockNode(node: WorkNode) {
@@ -28,7 +31,7 @@ export function attachExecutionMock(eventBus: EventBus, buildFile: BuildFile, no
 
     if (result.exitCode !== 0) {
       await eventBus.emit({
-        type: 'node-abort',
+        type: 'node-crash',
         node: evt.node,
         command: 'mock',
         exitCode: result.exitCode ?? 1,
@@ -55,7 +58,7 @@ export function attachExecutionMock(eventBus: EventBus, buildFile: BuildFile, no
 
     if (result.exitCode !== 0) {
       await eventBus.emit({
-        type: 'node-abort',
+        type: 'node-crash',
         node: evt.node,
         command: 'mock',
         exitCode: result.exitCode ?? 1,
@@ -75,11 +78,16 @@ class MockNode implements ExecutionMockNode {
   private durationInMs = 0
   private executionTimer: NodeJS.Timer | null = null
   private exitCode = 0
+  private executeCounter = 0
   private state: MockNodeState = 'pending'
   private resolveFn: ((result: { exitCode: number }) => void) | null = null
   private listeners: { [key: string]: (() => void)[] } = {}
 
   constructor(private node: WorkNode) {}
+
+  get executeCount() {
+    return this.executeCounter
+  }
 
   end(exitCode: number): void {
     this.exitCode = exitCode
@@ -125,6 +133,7 @@ class MockNode implements ExecutionMockNode {
 
   run(): Promise<{ exitCode: number }> {
     this.state = 'running'
+    this.executeCounter++
     return new Promise<{ exitCode: number }>((resolve) => {
       this.resolveFn = resolve
       this.runStateListeners()

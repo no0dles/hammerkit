@@ -3,22 +3,34 @@ import { appendFileSync } from 'fs'
 import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
 import { BuildFile } from '../../parser/build-file'
+import { SchedulerTerminationEvent } from '../../executer/events'
+import { SchedulerNodeState } from '../../executer/scheduler/scheduler-state'
+import { NodeState } from '../../executer/scheduler/node-state'
+import { MockedTestCase, TestCase } from '../test-suite'
 
 describe('glob', () => {
   const suite = getTestSuite('glob', ['build.yaml', 'test.md', 'test.txt'])
 
   afterAll(() => suite.close())
 
-  async function testCache(action: (buildFile: BuildFile) => Promise<void>, expectInvalidate: boolean) {
-    const testCase = await suite.setup({ mockExecution: true })
-    const node = testCase.getNode('example')
+  async function getTestRun(testCase: MockedTestCase) {
+    testCase.executionMock.clearNode('example')
     const taskMock = testCase.executionMock.getNode('example')
     taskMock.setDuration(100)
+    return await testCase.exec('example')
+  }
 
-    const result1 = await testCase.exec('example')
+  async function getTestNode(testCase: MockedTestCase, state: SchedulerTerminationEvent): Promise<NodeState> {
+    const node = testCase.getNode('example')
+    return state.state.node[node.id]
+  }
+
+  async function testCache(action: (buildFile: BuildFile) => Promise<void>, expectInvalidate: boolean) {
+    const testCase = await suite.setup({ mockExecution: true })
+    const result1 = await getTestRun(testCase)
     await expectSuccessfulResult(result1)
 
-    const nodeState1 = result1.state.node[node.id]
+    const nodeState1 = await getTestNode(testCase, result1)
 
     expect(nodeState1.type).toEqual('completed')
     if (nodeState1.type === 'completed') {
@@ -27,10 +39,10 @@ describe('glob', () => {
 
     await action(testCase.buildFile)
 
-    const result2 = await testCase.exec('example')
+    const result2 = await getTestRun(testCase)
     await expectSuccessfulResult(result2)
 
-    const nodeState2 = result1.state.node[node.id]
+    const nodeState2 = await getTestNode(testCase, result2)
 
     expect(nodeState2.type).toEqual('completed')
     if (nodeState2.type === 'completed') {

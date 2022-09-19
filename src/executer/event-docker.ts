@@ -210,6 +210,11 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
         evt.node.status.write('debug', `volume mount ${volume.name}:${volume.containerPath}`)
       }
 
+      await eventBus.emit({
+        type: 'node-start',
+        node: evt.node,
+      })
+
       evt.node.status.write('debug', `starting container with image ${evt.node.image}`)
       await startContainer(evt.node, container)
 
@@ -221,11 +226,6 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
             evt.node.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
           }
         }
-      })
-
-      await eventBus.emit({
-        type: 'node-start',
-        node: evt.node,
       })
 
       if (user) {
@@ -279,7 +279,7 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
 
         if (result.result.ExitCode !== 0 && !evt.abortSignal.aborted) {
           await eventBus.emit({
-            type: 'node-abort',
+            type: 'node-crash',
             node: evt.node,
             command,
             exitCode: result.result.ExitCode ?? 1,
@@ -306,7 +306,7 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
         })
       } else {
         await eventBus.emit({
-          type: 'node-crash',
+          type: 'node-error',
           node: evt.node,
           errorMessage: getErrorMessage(e),
         })

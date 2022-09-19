@@ -77,7 +77,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, logCon
     }
 
     for (const state of iterateWorkNodes(schedulerState.node)) {
-      if (state.type === 'crash' || state.type === 'abort' || isVerbose) {
+      if (state.type === 'crash' || state.type === 'error' || isVerbose) {
         const logs = await state.node.console.read()
         for (const log of logs) {
           writeNodeLogToConsole(state.node, log, maxNodeNameLength)
@@ -94,11 +94,11 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, logCon
     if (state.type === 'completed') {
       message += ` in ${state.duration}ms`
     }
-    if (state.type === 'abort') {
+    if (state.type === 'crash') {
       message += ` exited with ${state.exitCode}`
     }
-    if (state.type === 'crash') {
-      message += ` crashed with ${state.errorMessage}`
+    if (state.type === 'error') {
+      message += ` errored with ${state.errorMessage}`
     }
     process.stdout.write(`${message}\n`)
   }
@@ -115,7 +115,7 @@ function getStateText(state: NodeState | ServiceState): string {
     return colors.green(state.type)
   } else if (state.type === 'crash') {
     return colors.red(state.type)
-  } else if (state.type === 'abort') {
+  } else if (state.type === 'error') {
     return colors.red(state.type)
   } else if (state.type === 'end') {
     return colors.bgRed(state.type)

@@ -6,11 +6,12 @@ import { NodeState } from '../executer/scheduler/node-state'
 export async function expectSuccessfulResult(result: SchedulerTerminationEvent): Promise<void> {
   if (!result.success) {
     for (const state of iterateWorkNodes(result.state.node)) {
-      if (state.type === 'abort' || state.type === 'crash') {
+      if (state.type !== 'completed') {
         expect({
           nodeId: state.node.id,
           status: state.type,
           logs: await state.node.console.read(),
+          errorMessage: state.type === 'error' ? state.errorMessage : undefined,
         }).toEqual({
           nodeId: state.node.id,
           status: 'completed',
