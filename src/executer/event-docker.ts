@@ -230,10 +230,10 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
       if (user) {
         await setUserPermission(evt.node.cwd, evt, docker, container, user)
         for (const volume of volumes) {
-          await setUserPermission(volume.containerPath, evt, evt, docker, container, user)
+          await setUserPermission(volume.containerPath, evt, docker, container, user)
         }
         for (const mount of mounts) {
-          await setUserPermission(mount.containerPath, evt, evt, docker, container, user)
+          await setUserPermission(mount.containerPath, evt, docker, container, user)
         }
       }
 
