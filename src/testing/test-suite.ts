@@ -1,29 +1,26 @@
 import { BuildFile } from '../parser/build-file'
-import { EventBus } from '../executer/event-bus'
-import { SchedulerTerminationEvent } from '../executer/events'
+import { HammerkitEvent, SchedulerTerminationEvent } from '../executer/events'
 import { CacheMethod } from '../optimizer/cache-method'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { LogMode } from '../logging/log-mode'
 import { WorkNodeValidation } from '../planner/work-node-validation'
+import { Process, UpdateBus } from '../executer/emitter'
 
-export interface ExecutionMock {
-  getNode(name: string): ExecutionMockNode
-  clearNode(name: string): void
+export interface ExecutionMock<T> {
+  task(name: string): ExecutionMockNode
+  getProcess(key: string): Process<T, T> | null
 }
 
 export type MockNodeState = 'running' | 'pending' | 'ended'
 
 export interface ExecutionMockNode {
-  getState(): MockNodeState
-  waitFor(state: MockNodeState): Promise<void>
-  end(exitCode: number): void
-  setDuration(durationInMs: number): void
+  set(options: { duration?: number; exitCode: number }): this
   executeCount: number
 }
 
 export interface MockedTestCase extends TestCase {
-  executionMock: ExecutionMock
+  executionMock: ExecutionMock<HammerkitEvent>
 }
 
 export interface ExecOptions {
@@ -42,7 +39,7 @@ export interface UpOptions {
 export interface TestCase {
   environment: Environment
   buildFile: BuildFile
-  eventBus: EventBus
+  eventBus: UpdateBus<HammerkitEvent>
 
   exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerTerminationEvent>
 

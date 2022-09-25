@@ -1,74 +1,91 @@
-import { EventBus } from './event-bus'
 import { Environment } from './environment'
 import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 import { moveFiles } from '../file/move-files'
-import { CacheCleanEvent, CacheRestoreEvent, CacheStoreEvent, NodeCompletedEvent } from './events'
-import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
+import { getDocker, getVolumeName } from './execute-docker'
+import { removeContainer } from '../docker/remove-container'
+import { WorkNodes } from '../planner/work-nodes'
+import { WorkServices } from '../planner/work-services'
+import { existsVolume } from './get-docker-executor'
 
-export function attachCaching(eventBus: EventBus, environment: Environment): void {
-  eventBus.on<NodeCompletedEvent>('node-completed', async (evt) => {
-    await writeWorkNodeCache(evt.node, environment)
-  })
-  eventBus.on<CacheCleanEvent>('cache-clean', async (evt) => {
-    for (const node of iterateWorkNodes(evt.nodes)) {
-      await eventBus.emit({
-        type: 'node-cleanup',
-        node,
-      })
+export async function restoreCache(path: string, nodes: WorkNodes, services: WorkServices, environment: Environment) {
+  for (const node of iterateWorkNodes(nodes)) {
+    const cachePath = getCacheDirectory(node.id)
+    const sourceCacheDir = join(path, 'cache', node.id)
+
+    await moveFiles(node, environment, function* () {
+      yield { from: sourceCacheDir, to: cachePath }
+    })
+  }
+}
+
+export async function storeCache(path: string, nodes: WorkNodes, services: WorkServices, environment: Environment) {
+  for (const node of iterateWorkNodes(nodes)) {
+    const cachePath = getCacheDirectory(node.id)
+    const sourceCacheDir = join(path, 'cache', node.id)
+
+    await moveFiles(node, environment, function* () {
+      yield { from: cachePath, to: sourceCacheDir }
+    })
+  }
+}
+
+export async function cleanCache(nodes: WorkNodes, services: WorkServices, environment: Environment) {
+  for (const node of iterateWorkNodes(nodes)) {
+    const docker = await getDocker(node)
+
+    const containers = await docker.listContainers({
+      all: true,
+      filters: {
+        label: [`hammerkit-id=${node.id}`],
+      },
+    })
+    for (const container of containers) {
+      await removeContainer(docker.getContainer(container.Id))
     }
+  }
 
-    for (const service of iterateWorkServices(evt.services)) {
-      await eventBus.emit({
-        type: 'service-cleanup',
-        service,
-      })
+  for (const service of iterateWorkServices(services)) {
+    const docker = await getDocker(service)
+
+    const containers = await docker.listContainers({
+      all: true,
+      filters: {
+        label: [`hammerkit-id=${service.id}`],
+      },
+    })
+    for (const container of containers) {
+      await removeContainer(docker.getContainer(container.Id))
     }
+  }
 
-    for (const node of iterateWorkNodes(evt.nodes)) {
-      await eventBus.emit({
-        type: 'node-prune-state',
-        node,
-      })
+  for (const node of iterateWorkNodes(nodes)) {
+    const docker = await getDocker(node)
 
-      const cachePath = getCacheDirectory(node.id)
-      if (await environment.file.exists(cachePath)) {
-        node.status.write('info', `remove cache ${cachePath}`)
-        await environment.file.remove(cachePath)
+    for (const generate of node.generates) {
+      if (generate.inherited) {
+        continue
       }
+
+      const volumeName = getVolumeName(generate.path)
+      const volumeExists = await existsVolume(docker, volumeName)
+      if (volumeExists) {
+        node.status.write('info', `remove volume ${volumeName}`)
+        const volume = await docker.getVolume(volumeName)
+        await volume.remove()
+      } else {
+        node.status.write('info', `generate ${generate} has no volume ${volumeName}`)
+      }
+
+      node.status.write('info', `remove local directory ${generate.path}`)
+      await environment.file.remove(generate.path)
     }
-  })
-  eventBus.on<CacheStoreEvent>('cache-store', async (evt) => {
-    for (const node of iterateWorkNodes(evt.nodes)) {
-      const cachePath = getCacheDirectory(node.id)
-      const sourceCacheDir = join(evt.path, 'cache', node.id)
 
-      await moveFiles(node, environment, function* () {
-        yield { from: cachePath, to: sourceCacheDir }
-      })
-
-      await eventBus.emit({
-        type: 'node-store-state',
-        node,
-        path: evt.path,
-      })
+    const cachePath = getCacheDirectory(node.id)
+    if (await environment.file.exists(cachePath)) {
+      node.status.write('info', `remove cache ${cachePath}`)
+      await environment.file.remove(cachePath)
     }
-  })
-  eventBus.on<CacheRestoreEvent>('cache-restore', async (evt) => {
-    for (const node of iterateWorkNodes(evt.nodes)) {
-      const cachePath = getCacheDirectory(node.id)
-      const sourceCacheDir = join(evt.path, 'cache', node.id)
-
-      await moveFiles(node, environment, function* () {
-        yield { from: sourceCacheDir, to: cachePath }
-      })
-
-      await eventBus.emit({
-        type: 'node-restore-state',
-        node,
-        path: evt.path,
-      })
-    }
-  })
+  }
 }

@@ -5,15 +5,15 @@ import {
   writeServiceLogToConsole,
 } from '../log'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
-import { EventBus } from '../executer/event-bus'
-import { SchedulerInitializeEvent, SchedulerTerminationEvent } from '../executer/events'
+import { HammerkitEvent, SchedulerInitializeEvent, SchedulerTerminationEvent } from '../executer/events'
+import { UpdateBus } from '../executer/emitter'
+import { SchedulerState } from '../executer/scheduler/scheduler-state'
+import { Logger } from './log-mode'
 
-export function liveLogger(eventBus: EventBus): void {
-  let maxNodeNameLength = 0
+export function liveLogger(state: SchedulerState, eventBus: UpdateBus<HammerkitEvent>): Logger {
+  const maxNodeNameLength = getNodeNameLengthForWorkTree(state.node, state.service)
 
   eventBus.on<SchedulerInitializeEvent>('scheduler-initialize', (evt) => {
-    maxNodeNameLength = getNodeNameLengthForWorkTree(evt.nodes, evt.services)
-
     for (const node of iterateWorkNodes(evt.nodes)) {
       node.console.on((log) => {
         writeNodeLogToConsole(node, log, maxNodeNameLength)
@@ -27,7 +27,9 @@ export function liveLogger(eventBus: EventBus): void {
     }
   })
 
-  eventBus.on<SchedulerTerminationEvent>('scheduler-termination', async (evt) => {
-    await printWorkTreeResult(evt.state, false)
-  })
+  return {
+    async complete(evt: SchedulerTerminationEvent) {
+      await printWorkTreeResult(evt.state, false)
+    },
+  }
 }

@@ -21,7 +21,7 @@ export interface ServiceReadyState {
 export interface ServiceEndState {
   type: 'end'
   service: WorkService
-  reason: 'cancelled' | 'crash'
+  reason: 'canceled' | 'crash'
 }
 
 export type ServiceState = ServicePendingState | ServiceRunningState | ServiceReadyState | ServiceEndState

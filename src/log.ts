@@ -5,7 +5,7 @@ import colors from 'colors'
 import { ConsoleContext } from './console/console-context'
 import { WorkNodes } from './planner/work-nodes'
 import { WorkServices } from './planner/work-services'
-import { SchedulerState } from './executer/scheduler/scheduler-state'
+import { SchedulerNodeState, SchedulerServiceState, SchedulerState } from './executer/scheduler/scheduler-state'
 import { NodeState } from './executer/scheduler/node-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { WorkNode } from './planner/work-node'
@@ -151,13 +151,13 @@ export function getNodeNameLength(names: () => Generator<string>): number {
   return maxNodeNameLength
 }
 
-export function getNodeNameLengthForWorkTree(nodes: WorkNodes, services: WorkServices): number {
+export function getNodeNameLengthForWorkTree(nodes: SchedulerNodeState, services: SchedulerServiceState): number {
   function* Names(): Generator<string> {
     for (const node of iterateWorkNodes(nodes)) {
-      yield node.name
+      yield node.node.name
     }
     for (const service of iterateWorkServices(services)) {
-      yield service.name
+      yield service.service.name
     }
   }
 
@@ -230,8 +230,8 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, ticker: numb
     if (state.type === 'pending') {
       const totalDepCount = state.node.deps.length
       const totalServiceCount = state.node.needs.length
-      const completedDepCount = state.node.deps.filter((d) => schedulerState.node[d.id].type === 'completed').length
-      const runningServiceCount = state.node.needs.filter((n) => schedulerState.service[n.id].type === 'ready').length
+      const completedDepCount = state.node.deps.filter((d) => schedulerState.node[d.id]?.type === 'completed').length
+      const runningServiceCount = state.node.needs.filter((n) => schedulerState.service[n.id]?.type === 'ready').length
       if (totalDepCount > 0 && completedDepCount !== totalDepCount) {
         message += ` | ${colors.grey(` awaiting dependencies (${completedDepCount}/${totalDepCount})`)}`
       }

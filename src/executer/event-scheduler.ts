@@ -5,7 +5,7 @@ import {
   NodeCompletedEvent,
   NodeErrorEvent,
   SchedulerInitializeEvent,
-  ServiceCancelledEvent,
+  ServiceCanceledEvent,
   ServiceCrashEvent,
   ServiceReadyEvent,
 } from './events'
@@ -153,12 +153,12 @@ export function attachScheduler(eventBus: EventBus, environment: Environment): v
     abort(state)
     await finalize(state, eventBus)
   })
-  eventBus.on<ServiceCancelledEvent>('service-cancelled', async (evt) => {
+  eventBus.on<ServiceCanceledEvent>('service-canceled', async (evt) => {
     await updateState(eventBus, state, () => {
       state.service[evt.service.id] = {
         type: 'end',
         service: evt.service,
-        reason: 'cancelled',
+        reason: 'canceled',
       }
     })
     await finalize(state, eventBus)

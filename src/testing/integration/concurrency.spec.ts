@@ -15,13 +15,9 @@ describe('concurrency', () => {
       concurrentRunners++
       expect(concurrentRunners).toBeLessThanOrEqual(1)
     })
-    testCase.eventBus.on<NodeCompletedEvent>(
-      'node-completed',
-      () => {
-        concurrentRunners--
-      },
-      true
-    )
+    testCase.eventBus.on<NodeCompletedEvent>('node-completed', () => {
+      concurrentRunners--
+    })
 
     const result = await testCase.exec('example', {
       workers: 1,

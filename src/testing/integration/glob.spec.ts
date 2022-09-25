@@ -13,9 +13,7 @@ describe('glob', () => {
   afterAll(() => suite.close())
 
   async function getTestRun(testCase: MockedTestCase) {
-    testCase.executionMock.clearNode('example')
-    const taskMock = testCase.executionMock.getNode('example')
-    taskMock.setDuration(100)
+    testCase.executionMock.task('example').set({ duration: 100, exitCode: 0 })
     return await testCase.exec('example')
   }
 

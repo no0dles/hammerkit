@@ -1,148 +1,120 @@
-import { EventBus } from './event-bus'
-import { SchedulerStartContainerNodeEvent, SchedulerStartLocalNodeEvent, SchedulerStartServiceEvent } from './events'
-import { ExecutionMock, ExecutionMockNode, MockNodeState } from '../testing/test-suite'
-import { WorkNodes } from '../planner/work-nodes'
+import { HammerkitEvent } from './events'
+import { ExecutionMock, ExecutionMockNode } from '../testing/test-suite'
 import { getNode } from '../testing/get-node'
 import { BuildFile } from '../parser/build-file'
-import { WorkNode } from '../planner/work-node'
-
-export function attachExecutionMock(eventBus: EventBus, buildFile: BuildFile, nodes: WorkNodes): ExecutionMock {
-  const mockNodes: { [key: string]: MockNode } = {}
-  const mock: ExecutionMock = {
-    getNode(name: string): ExecutionMockNode {
-      const node = getNode(buildFile, nodes, name)
-      return getMockNode(node)
-    },
-    clearNode(name: string): void {
-      delete mockNodes[name]
-    },
-  }
-
-  function getMockNode(node: WorkNode) {
-    if (!mockNodes[node.id]) {
-      mockNodes[node.id] = new MockNode(node)
-    }
-    return mockNodes[node.id]
-  }
-
-  eventBus.on<SchedulerStartContainerNodeEvent>('scheduler-start-container-node', async (evt) => {
-    const node = getMockNode(evt.node)
-    const result = await node.run()
-
-    if (result.exitCode !== 0) {
-      await eventBus.emit({
-        type: 'node-crash',
-        node: evt.node,
-        command: 'mock',
-        exitCode: result.exitCode ?? 1,
-      })
-    } else {
-      await eventBus.emit({
-        type: 'node-completed',
-        node: evt.node,
-      })
-    }
-  })
-
-  eventBus.on<SchedulerStartServiceEvent>('scheduler-start-service', async (evt) => {
-    await eventBus.emit({
-      type: 'service-ready',
-      service: evt.service,
-      containerId: 'mock',
-    })
-  })
-
-  eventBus.on<SchedulerStartLocalNodeEvent>('scheduler-start-local-node', async (evt) => {
-    const node = getMockNode(evt.node)
-    const result = await node.run()
-
-    if (result.exitCode !== 0) {
-      await eventBus.emit({
-        type: 'node-crash',
-        node: evt.node,
-        command: 'mock',
-        exitCode: result.exitCode ?? 1,
-      })
-    } else {
-      await eventBus.emit({
-        type: 'node-completed',
-        node: evt.node,
-      })
-    }
-  })
-
-  return mock
-}
+import { Process } from './emitter'
+import { WorkNodes } from '../planner/work-nodes'
+import { WorkServices } from '../planner/work-services'
+import { sleep } from '../utils/sleep'
+import { waitOnAbort } from '../utils/abort-event'
+import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
+import { Environment } from './environment'
 
 class MockNode implements ExecutionMockNode {
-  private durationInMs = 0
-  private executionTimer: NodeJS.Timer | null = null
-  private exitCode = 0
-  private executeCounter = 0
-  private state: MockNodeState = 'pending'
-  private resolveFn: ((result: { exitCode: number }) => void) | null = null
-  private listeners: { [key: string]: (() => void)[] } = {}
+  executeCount: number = 0
+  exitCode: number = 0
+  duration: number = 0
 
-  constructor(private node: WorkNode) {}
-
-  get executeCount() {
-    return this.executeCounter
+  set(options: { duration?: number; exitCode: number }): this {
+    this.exitCode = options.exitCode
+    this.duration = options.duration ?? 0
+    return this
   }
+}
 
-  end(exitCode: number): void {
-    this.exitCode = exitCode
-  }
+export function getExecutionMock(
+  buildFile: BuildFile,
+  nodes: WorkNodes,
+  services: WorkServices,
+  environment: Environment
+): ExecutionMock<HammerkitEvent> {
+  const mockNodes: { [key: string]: MockNode } = {}
 
-  getState(): MockNodeState {
-    return this.state
-  }
+  const mock: ExecutionMock<HammerkitEvent> = {
+    task(name: string): ExecutionMockNode {
+      const node = getNode(buildFile, nodes, name)
+      const key = `node:${node.id}`
+      const mockNode = mockNodes[key] ?? new MockNode()
 
-  setDuration(durationInMs: number): void {
-    this.durationInMs = durationInMs
+      if (!mockNodes[key]) {
+        mockNodes[key] = mockNode
+      }
 
-    const runTimer = () => {
-      this.executionTimer = setTimeout(() => {
-        if (this.resolveFn) {
-          this.resolveFn({ exitCode: this.exitCode })
+      return mockNode
+    },
+    getProcess(key: string): Process<HammerkitEvent, HammerkitEvent> | null {
+      if (!mockNodes[key]) {
+        mockNodes[key] = new MockNode()
+      }
+
+      const mockNode = mockNodes[key]
+
+      if (key.startsWith('node') || key.startsWith('watch')) {
+        const nodeId = key.substring(key.indexOf(':') + 1)
+        const node = nodes[nodeId]
+
+        if (key.startsWith('watch')) {
+          return null
         }
-        this.state = 'ended'
-        this.runStateListeners()
-      }, durationInMs)
-    }
-    if (this.state === 'running') {
-      runTimer()
-    } else if (this.state === 'pending') {
-      this.onState('running', () => {
-        runTimer()
-      })
-    }
+
+        return async (abort, emitter) => {
+          mockNode.executeCount++
+
+          emitter.emit({
+            type: 'node-start',
+            node,
+          })
+
+          if (mockNode.duration > 0) {
+            await sleep(mockNode.duration)
+          }
+
+          await writeWorkNodeCache(node, environment)
+
+          if (mockNode.exitCode === 0) {
+            return {
+              type: 'node-completed',
+              node,
+            }
+          } else {
+            return {
+              type: 'node-crash',
+              node,
+              command: 'mock',
+              exitCode: mockNode.exitCode,
+            }
+          }
+        }
+      } else {
+        const serviceId = key.substring('service:'.length)
+        const service = services[serviceId]
+
+        return async (abort, emitter) => {
+          emitter.emit({
+            type: 'service-start',
+            service,
+          })
+
+          if (mockNode.duration > 0) {
+            await sleep(mockNode.duration)
+          }
+
+          emitter.emit({
+            type: 'service-ready',
+            service,
+            containerId: '',
+          })
+
+          await waitOnAbort(abort)
+
+          return {
+            type: 'service-canceled',
+            service,
+          }
+        }
+      }
+    },
   }
 
-  onState(state: MockNodeState, callback: () => void) {
-    if (!this.listeners[state]) {
-      this.listeners[state] = []
-    }
-    this.listeners[state].push(callback)
-  }
-
-  waitFor(state: MockNodeState): Promise<void> {
-    return new Promise<void>((resolve) => {
-      this.onState(state, resolve)
-    })
-  }
-
-  run(): Promise<{ exitCode: number }> {
-    this.state = 'running'
-    this.executeCounter++
-    return new Promise<{ exitCode: number }>((resolve) => {
-      this.resolveFn = resolve
-      this.runStateListeners()
-    })
-  }
-
-  private runStateListeners() {
-    for (const listener of this.listeners[this.state] || []) {
-      listener()
-    }
-  }
+  return mock
 }

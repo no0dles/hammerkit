@@ -21,9 +21,10 @@ describe('execute', () => {
   it('should restart watching task if once completed', async () => {
     const testCase = await suite.setup({ mockExecution: true })
 
-    const apiMock = testCase.executionMock.getNode('api')
-    apiMock.end(0)
-    apiMock.setDuration(10)
+    const apiMock = testCase.executionMock.task('api').set({
+      exitCode: 0,
+      duration: 10,
+    })
 
     expect(apiMock.executeCount).toBe(0)
 
@@ -50,9 +51,7 @@ describe('execute', () => {
   it('should restart watching task if once failed', async () => {
     const testCase = await suite.setup({ mockExecution: true })
 
-    const apiMock = testCase.executionMock.getNode('api')
-    apiMock.end(1)
-    apiMock.setDuration(10)
+    const apiMock = testCase.executionMock.task('api').set({ exitCode: 1, duration: 10 })
 
     expect(apiMock.executeCount).toBe(0)
 

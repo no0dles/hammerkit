@@ -32,6 +32,7 @@ import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import { join } from 'path'
 import { listenOnAbort } from '../utils/abort-event'
 import { replaceEnvVariables } from '../environment/replace-env-variables'
+import { ContainerWorkNode } from '../planner/work-node'
 
 export function attachDockerExecutor(eventBus: EventBus, environment: Environment): void {
   eventBus.on<NodeCleanupEvent>('node-cleanup', async (evt) => {
@@ -228,12 +229,12 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
       })
 
       if (user) {
-        await setUserPermission(evt.node.cwd, evt, docker, container, user)
+        await setUserPermission(evt.node.cwd, evt.node, docker, container, user, evt.abortSignal)
         for (const volume of volumes) {
-          await setUserPermission(volume.containerPath, evt, docker, container, user)
+          await setUserPermission(volume.containerPath, evt.node, docker, container, user, evt.abortSignal)
         }
         for (const mount of mounts) {
-          await setUserPermission(mount.containerPath, evt, docker, container, user)
+          await setUserPermission(mount.containerPath, evt.node, docker, container, user, evt.abortSignal)
         }
       }
 
@@ -250,7 +251,8 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
           convertToPosixPath(cmd.path),
           [evt.node.shell, '-c', command],
           user,
-          undefined
+          undefined,
+          evt.abortSignal
         )
         if (!result) {
           return
@@ -258,6 +260,14 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
 
         if (result.type === 'timeout') {
           throw new Error(`command ${command} timed out`)
+        }
+
+        if (result.type === 'canceled') {
+          await eventBus.emit({
+            type: 'node-canceled',
+            node: evt.node,
+          })
+          return
         }
 
         if (result.result.ExitCode !== 0 && !evt.abortSignal.aborted) {
@@ -342,7 +352,7 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
         }
 
         await eventBus.emit({
-          type: 'service-cancelled',
+          type: 'service-canceled',
           service: evt.service,
         })
       })
@@ -367,7 +377,7 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
     } catch (e) {
       if (e instanceof AbortError) {
         await eventBus.emit({
-          type: 'service-cancelled',
+          type: 'service-canceled',
           service: evt.service,
         })
       } else {
@@ -380,21 +390,34 @@ export function attachDockerExecutor(eventBus: EventBus, environment: Environmen
     }
   })
 }
-async function setUserPermission(
+export async function setUserPermission(
   directory: string,
-  evt: SchedulerStartContainerNodeEvent,
+  node: ContainerWorkNode,
   docker: Dockerode,
   container: Container,
-  user: string
+  user: string,
+  abort: AbortSignal
 ) {
-  evt.node.status.write('debug', `set permission on ${directory}`)
-  const result = await execCommand(evt.node, docker, container, '/', ['chown', user, directory], undefined, undefined)
+  node.status.write('debug', `set permission on ${directory}`)
+  const result = await execCommand(
+    node,
+    docker,
+    container,
+    '/',
+    ['chown', user, directory],
+    undefined,
+    undefined,
+    abort
+  )
+  if (result.type === 'canceled') {
+    return
+  }
   if (result.type === 'timeout' || result.result.ExitCode !== 0) {
-    evt.node.status.write('warn', `unable to set permissions for ${directory}`)
+    node.status.write('warn', `unable to set permissions for ${directory}`)
   }
 }
 
-async function checkReadiness(
+export async function checkReadiness(
   containerName: string,
   healthCheck: ExecutionBuildServiceHealthCheck,
   evt: SchedulerStartServiceEvent,
@@ -412,11 +435,14 @@ async function checkReadiness(
       undefined,
       healthCheck.cmd.split(' '),
       undefined,
-      2000
+      2000,
+      evt.abortSignal
     )
 
     if (result.type === 'timeout') {
       setTimeout(() => checkReadiness(containerName, healthCheck, evt, eventBus, docker, container), 3000)
+      return
+    } else if (result.type === 'canceled') {
       return
     } else {
       if (result.result.ExitCode === 0) {
@@ -434,7 +460,7 @@ async function checkReadiness(
   } catch (e) {
     if (e instanceof AbortError) {
       await eventBus.emit({
-        type: 'service-cancelled',
+        type: 'service-canceled',
         service: evt.service,
       })
     } else {

@@ -1,21 +1,13 @@
 import { dirname, join } from 'path'
 import { BuildFile } from '../parser/build-file'
 import { getBuildFile } from '../parser/get-build-file'
-import {
-  ExecOptions,
-  ExecutionMock,
-  MockedTestCase,
-  TestCase,
-  TestSuite,
-  TestSuiteSetupOptions,
-  UpOptions,
-} from './test-suite'
+import { ExecOptions, MockedTestCase, TestCase, TestSuite, TestSuiteSetupOptions, UpOptions } from './test-suite'
 import { TestEnvironment } from './test-environment'
 import { getConsoleContextMock } from '../console/get-console-context-mock'
 import { getFileContext } from '../file/get-file-context'
 import { iterateWorkNodes, planWorkNodes } from '../planner/utils/plan-work-nodes'
 import { WorkNode } from '../planner/work-node'
-import { SchedulerTerminationEvent, SchedulerUpResultEvent } from '../executer/events'
+import { HammerkitEvent, SchedulerTerminationEvent, SchedulerUpResultEvent } from '../executer/events'
 import { getNode } from './get-node'
 import { planWorkTree } from '../planner/utils/plan-work-tree'
 import { getFileContextMock } from '../file/get-file-context-mock'
@@ -24,15 +16,32 @@ import { FileContext } from '../file/file-context'
 import { Environment } from '../executer/environment'
 import { WorkNodeValidation } from '../planner/work-node-validation'
 import { validate } from '../planner/validate'
-import { attachScheduler } from '../executer/event-scheduler'
-import { attachDockerExecutor } from '../executer/event-docker'
-import { attachLocalExecutor } from '../executer/event-local'
-import { attachCaching } from '../executer/event-cache'
-import { EventBus } from '../executer/event-bus'
-import { attachExecutionMock } from '../executer/event-exec-mock'
+import { isCI } from '../utils/ci'
+import { groupedLogger } from '../logging/grouped-logger'
+import { liveLogger } from '../logging/live-logger'
+import { interactiveLogger } from '../logging/interactive-logger'
+import { getSchedulerState, schedule, watchNode } from '../executer/hierarchy-scheduler'
+import { UpdateBus, UpdateEmitter } from '../executer/emitter'
+import { Logger, LogMode } from '../logging/log-mode'
+import { failNever } from '../utils/fail-never'
+import { SchedulerState } from '../executer/scheduler/scheduler-state'
+import { getExecutionMock } from '../executer/event-exec-mock'
+import { cleanCache, restoreCache, storeCache } from '../executer/event-cache'
 
 interface Test {
   cwd: string
+}
+
+function getLogger(mode: LogMode, state: SchedulerState, bus: UpdateBus<HammerkitEvent>): Logger {
+  if (mode === 'grouped') {
+    return groupedLogger(state, bus)
+  } else if (mode === 'live') {
+    return liveLogger(state, bus)
+  } else if (mode === 'interactive') {
+    return interactiveLogger(state, bus)
+  } else {
+    failNever(mode, 'unknown log mode')
+  }
 }
 
 function getTestCase(
@@ -40,30 +49,30 @@ function getTestCase(
   environment: Environment,
   options?: Partial<TestSuiteSetupOptions>
 ): MockedTestCase | TestCase {
-  const eventBus = new EventBus()
-
   const [nodes, services] = planWorkNodes(buildFile)
 
-  attachCaching(eventBus, environment)
-  attachScheduler(eventBus, environment)
+  const executionMock = getExecutionMock(buildFile, nodes, services, environment)
+  const emitter = new UpdateEmitter<HammerkitEvent>(environment.abortCtrl.signal, (key, process) => {
+    if (options?.mockExecution) {
+      const mockedProcess = executionMock.getProcess(key)
+      if (mockedProcess) {
+        return mockedProcess
+      }
+    }
 
-  let executionMock: ExecutionMock | undefined = undefined
-
-  if (options?.mockExecution) {
-    executionMock = attachExecutionMock(eventBus, buildFile, nodes)
-  } else {
-    attachDockerExecutor(eventBus, environment)
-    attachLocalExecutor(eventBus, environment)
-  }
+    return process
+  })
 
   return {
     buildFile,
     environment,
-    eventBus,
+    eventBus: emitter,
     executionMock,
-    exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerTerminationEvent> {
+    async exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerTerminationEvent> {
       const workTree = planWorkTree(buildFile, taskName)
-      return eventBus.run<SchedulerTerminationEvent>('scheduler-termination', {
+
+      const cacheMethod = options?.cacheMethod ?? 'checksum'
+      const initialState = getSchedulerState({
         type: 'scheduler-initialize',
         services: workTree.services,
         nodes: workTree.nodes,
@@ -71,41 +80,44 @@ function getTestCase(
         cacheMethod: options?.cacheMethod ?? 'checksum',
         noContainer: options?.noContainer ?? false,
         workers: options?.workers ?? 0,
+        logMode: options?.logMode ?? isCI ? 'live' : 'interactive',
       })
+      const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
+      const logger = getLogger(logMode, initialState, emitter)
+
+      if (options?.watch) {
+        for (const node of iterateWorkNodes(workTree.nodes)) {
+          if (node.src.length > 0) {
+            emitter.task(`watch:${node.id}`, watchNode(node, environment, cacheMethod))
+          }
+        }
+      }
+
+      const result = await schedule(emitter, initialState, environment)
+
+      await logger.complete(result)
+
+      return result
     },
     async clean(): Promise<void> {
-      await eventBus.emit({
-        type: 'cache-clean',
-        nodes,
-        services,
-      })
+      await cleanCache(nodes, services, environment)
     },
     async restore(path: string): Promise<void> {
-      await eventBus.emit({
-        type: 'cache-restore',
-        nodes,
-        services,
-        path,
-      })
+      await restoreCache(path, nodes, services, environment)
     },
     async store(path: string): Promise<void> {
-      await eventBus.emit({
-        type: 'cache-store',
-        nodes,
-        services,
-        path,
-      })
+      await storeCache(path, nodes, services, environment)
     },
     getNode(name: string): WorkNode {
       const workTree = planWorkTree(buildFile, name)
       return getNode(buildFile, workTree.nodes, name)
     },
     async up(options?: Partial<UpOptions>): Promise<void> {
-      await eventBus.run<SchedulerUpResultEvent>('scheduler-up-result', {
-        type: 'scheduler-up',
-        services,
-        watch: options?.watch ?? false,
-      })
+      // await eventBus.run<SchedulerUpResultEvent>('scheduler-up-result', {
+      //   type: 'scheduler-up',
+      //   services,
+      //   watch: options?.watch ?? false,
+      // })
     },
     getNodes(): Generator<WorkNode> {
       return iterateWorkNodes(nodes)

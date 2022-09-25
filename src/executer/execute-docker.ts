@@ -8,6 +8,7 @@ import { Environment } from './environment'
 import { createHash } from 'crypto'
 import { AbortableFunctionContext } from '../utils/abortable-function'
 import { WorkService } from '../planner/work-service'
+import { listenOnAbort } from '../utils/abort-event'
 
 interface WorkNodeVolume {
   name: string
@@ -128,7 +129,7 @@ export function convertToPosixPath(path: string): string {
   return path
 }
 
-export type ExecResult = { type: 'result'; result: ExecInspectInfo } | { type: 'timeout' }
+export type ExecResult = { type: 'result'; result: ExecInspectInfo } | { type: 'timeout' } | { type: 'canceled' }
 
 export async function execCommand(
   node: WorkNode | WorkService,
@@ -137,7 +138,8 @@ export async function execCommand(
   cwd: string | undefined,
   cmd: string[],
   user: string | undefined,
-  timeout: number | undefined
+  timeout: number | undefined,
+  abort: AbortSignal
 ): Promise<ExecResult> {
   const exec = await container.exec({
     Cmd: cmd,
@@ -154,6 +156,15 @@ export async function execCommand(
 
   return new Promise<ExecResult>((resolve, reject) => {
     let resolved = false
+
+    listenOnAbort(abort, () => {
+      if (resolved) {
+        return
+      }
+
+      resolved = true
+      resolve({ type: 'canceled' })
+    })
 
     awaitStream(node, docker, stream)
       .then(() => {

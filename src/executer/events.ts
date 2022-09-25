@@ -4,6 +4,7 @@ import { WorkNodes } from '../planner/work-nodes'
 import { WorkServices } from '../planner/work-services'
 import { SchedulerState } from './scheduler/scheduler-state'
 import { CacheMethod } from '../optimizer/cache-method'
+import { LogMode } from '../logging/log-mode'
 
 export interface NodeCleanupEvent {
   type: 'node-cleanup'
@@ -37,6 +38,22 @@ export interface NodeCrashEvent {
   node: WorkNode
   command: string
   exitCode: number
+}
+
+export interface NodeWatchStartEvent {
+  type: 'node-watch-start'
+  node: WorkNode
+  sources: string[]
+}
+
+export interface NodeWatchCanceledEvent {
+  type: 'node-watch-canceled'
+  node: WorkNode
+}
+
+export interface NodeWatchResetEvent {
+  type: 'node-watch-reset'
+  node: WorkNode
 }
 
 export interface NodeCanceledEvent {
@@ -82,8 +99,8 @@ export interface ServiceCrashEvent {
   errorMessage: string
 }
 
-export interface ServiceCancelledEvent {
-  type: 'service-cancelled'
+export interface ServiceCanceledEvent {
+  type: 'service-canceled'
   service: WorkService
 }
 
@@ -95,6 +112,7 @@ export interface SchedulerInitializeEvent {
   workers: number
   noContainer: boolean
   cacheMethod: CacheMethod
+  logMode: LogMode
 }
 
 export interface SchedulerUpdateEvent {
@@ -177,7 +195,7 @@ export type ServiceEvent =
   | ServiceCleanupEvent
   | ServiceCrashEvent
   | ServiceStartEvent
-  | ServiceCancelledEvent
+  | ServiceCanceledEvent
   | ServicePruneEvent
   | ServiceReadyEvent
 export type NodeEvent =
@@ -190,5 +208,8 @@ export type NodeEvent =
   | NodeRestoreStateEvent
   | NodeCompletedEvent
   | NodeErrorEvent
+  | NodeWatchStartEvent
+  | NodeWatchResetEvent
+  | NodeWatchCanceledEvent
 
 export type HammerkitEvent = CacheEvent | SchedulerEvent | ServiceEvent | NodeEvent
