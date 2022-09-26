@@ -1,15 +1,10 @@
 import { hideCursor, printWorkTreeResult, showCursor, writeWorkTreeStatus } from '../log'
 import { clearScreenDown } from 'readline'
-import { EventBus } from '../executer/event-bus'
-import {
-  HammerkitEvent,
-  SchedulerInitializeEvent,
-  SchedulerTerminationEvent,
-  SchedulerUpdateEvent,
-} from '../executer/events'
+import { HammerkitEvent, SchedulerUpdateEvent } from '../executer/events'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { UpdateBus } from '../executer/emitter'
 import { Logger } from './log-mode'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 
 export function interactiveLogger(state: SchedulerState, eventBus: UpdateBus<HammerkitEvent>): Logger {
   let running = true
@@ -41,7 +36,7 @@ export function interactiveLogger(state: SchedulerState, eventBus: UpdateBus<Ham
   })
 
   return {
-    async complete(evt: SchedulerTerminationEvent): Promise<void> {
+    async complete(evt: SchedulerResult): Promise<void> {
       running = false
       clearScreenDown(process.stdout)
       await printWorkTreeResult(evt.state, true)

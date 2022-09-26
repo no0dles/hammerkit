@@ -9,7 +9,12 @@ import { WorkNodes } from '../planner/work-nodes'
 import { WorkServices } from '../planner/work-services'
 import { existsVolume } from './get-docker-executor'
 
-export async function restoreCache(path: string, nodes: WorkNodes, services: WorkServices, environment: Environment) {
+export async function restoreCache(
+  path: string,
+  nodes: WorkNodes,
+  services: WorkServices,
+  environment: Environment
+): Promise<void> {
   for (const node of iterateWorkNodes(nodes)) {
     const cachePath = getCacheDirectory(node.id)
     const sourceCacheDir = join(path, 'cache', node.id)
@@ -20,7 +25,12 @@ export async function restoreCache(path: string, nodes: WorkNodes, services: Wor
   }
 }
 
-export async function storeCache(path: string, nodes: WorkNodes, services: WorkServices, environment: Environment) {
+export async function storeCache(
+  path: string,
+  nodes: WorkNodes,
+  services: WorkServices,
+  environment: Environment
+): Promise<void> {
   for (const node of iterateWorkNodes(nodes)) {
     const cachePath = getCacheDirectory(node.id)
     const sourceCacheDir = join(path, 'cache', node.id)
@@ -31,7 +41,7 @@ export async function storeCache(path: string, nodes: WorkNodes, services: WorkS
   }
 }
 
-export async function cleanCache(nodes: WorkNodes, services: WorkServices, environment: Environment) {
+export async function cleanCache(nodes: WorkNodes, services: WorkServices, environment: Environment): Promise<void> {
   for (const node of iterateWorkNodes(nodes)) {
     const docker = await getDocker(node)
 

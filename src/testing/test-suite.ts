@@ -1,18 +1,17 @@
 import { BuildFile } from '../parser/build-file'
-import { HammerkitEvent, SchedulerTerminationEvent } from '../executer/events'
+import { HammerkitEvent } from '../executer/events'
 import { CacheMethod } from '../optimizer/cache-method'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { LogMode } from '../logging/log-mode'
 import { WorkNodeValidation } from '../planner/work-node-validation'
 import { Process, UpdateBus } from '../executer/emitter'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 
 export interface ExecutionMock<T> {
   task(name: string): ExecutionMockNode
   getProcess(key: string): Process<T, T> | null
 }
-
-export type MockNodeState = 'running' | 'pending' | 'ended'
 
 export interface ExecutionMockNode {
   set(options: { duration?: number; exitCode: number }): this
@@ -41,7 +40,7 @@ export interface TestCase {
   buildFile: BuildFile
   eventBus: UpdateBus<HammerkitEvent>
 
-  exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerTerminationEvent>
+  exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerResult>
 
   store(path: string): Promise<void>
   restore(path: string): Promise<void>

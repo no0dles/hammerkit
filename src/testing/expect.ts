@@ -1,9 +1,9 @@
-import { SchedulerTerminationEvent } from '../executer/events'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { NodeState } from '../executer/scheduler/node-state'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 
-export async function expectSuccessfulResult(result: SchedulerTerminationEvent): Promise<void> {
+export async function expectSuccessfulResult(result: SchedulerResult): Promise<void> {
   if (!result.success) {
     for (const state of iterateWorkNodes(result.state.node)) {
       if (state.type !== 'completed') {
@@ -29,16 +29,12 @@ function getNodeState(state: SchedulerState, name: string): NodeState {
   return node
 }
 
-export async function expectLog(result: SchedulerTerminationEvent, name: string, message: string): Promise<void> {
+export async function expectLog(result: SchedulerResult, name: string, message: string): Promise<void> {
   const state = getNodeState(result.state, name)
   const logs = await state.node.console.read()
   expect(logs.map((l) => l.message)).toContain(message)
 }
-export async function expectContainsLog(
-  result: SchedulerTerminationEvent,
-  name: string,
-  message: string
-): Promise<void> {
+export async function expectContainsLog(result: SchedulerResult, name: string, message: string): Promise<void> {
   const state = getNodeState(result.state, name)
   const logs = await state.node.console.read()
   expect(logs.some((l) => l.message.indexOf(message) >= 0)).toBeTruthy()

@@ -1,7 +1,7 @@
-import { SchedulerTerminationEvent } from '../executer/events'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 
 export type LogMode = 'live' | 'interactive' | 'grouped'
 
 export interface Logger {
-  complete(evt: SchedulerTerminationEvent): Promise<void>
+  complete(evt: SchedulerResult): Promise<void>
 }

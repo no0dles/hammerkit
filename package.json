@@ -18,7 +18,8 @@
   "scripts": {
     "prepack": "tsc -b tsconfig.json",
     "build": "tsc -b tsconfig.json",
-    "test": "jest"
+    "test": "jest",
+    "format": "prettier -w src/** && eslint . --fix --ext .ts"
   },
   "dependencies": {
     "chokidar": "^3.5.2",

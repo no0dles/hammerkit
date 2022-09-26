@@ -12,7 +12,6 @@ export function checkForLoop(state: SchedulerState): void {
         node: nodeState.node,
         errorMessage,
       }
-      state.abort = true
     }
   }
 }

@@ -20,17 +20,6 @@ export interface UpdateBus<T extends { type: string }> {
   on<E extends T>(type: T['type'], listener: (evt: E) => void): void
 }
 
-function combineAbort(first: AbortSignal, second: AbortSignal): AbortSignal {
-  const abortController = new AbortController()
-  listenOnAbort(first, () => {
-    abortController.abort()
-  })
-  listenOnAbort(second, () => {
-    abortController.abort()
-  })
-  return abortController.signal
-}
-
 export type ProcessMapper<R, T> = (key: string, process: Process<R, T>) => Process<R, T>
 
 export class UpdateEmitter<T extends { type: string }> implements ProgressHub<T>, UpdateBus<T> {
@@ -40,17 +29,25 @@ export class UpdateEmitter<T extends { type: string }> implements ProgressHub<T>
 
   constructor(private abort: AbortSignal, private taskMapper: ProcessMapper<any, T> = (key, process) => process) {}
 
-  task<R extends T>(key: string, process: Process<R, T>, taskAbort?: AbortSignal): void {
+  task<R extends T>(key: string, process: Process<R, T>): AbortController {
+    const abortController = new AbortController()
+    listenOnAbort(this.abort, () => {
+      abortController.abort()
+    })
+
     const item: ProcessItem<R> = {
       key,
-      promise: this.taskMapper(key, process)(taskAbort ? combineAbort(taskAbort, this.abort) : this.abort, this)
+      promise: this.taskMapper(key, process)(abortController.signal, this)
         .then<ProcessPromise<R>>((value) => ({ item, value, type: 'completed' }))
         .catch((error) => ({ item, error, type: 'error' })),
     }
+
     this.processes.push(item)
     if (this.interuptNext) {
       this.interuptNext({ type: 'interupt' })
     }
+
+    return abortController
   }
 
   async next(): Promise<T | null> {
@@ -88,7 +85,7 @@ export class UpdateEmitter<T extends { type: string }> implements ProgressHub<T>
     }
   }
 
-  emit(evt: T) {
+  emit(evt: T): void {
     const item: ProcessItem<T> = {
       key: evt.type,
       promise: Promise.resolve().then<ProcessPromise<T>>(() => ({ item, value: evt, type: 'completed' })),

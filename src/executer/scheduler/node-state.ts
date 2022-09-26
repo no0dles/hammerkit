@@ -9,7 +9,6 @@ export interface NodeRunningState {
   type: 'running'
   abortController: AbortController
   node: WorkNode
-  result: Promise<void>
   started: Date
 }
 

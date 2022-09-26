@@ -7,7 +7,7 @@ import { getConsoleContextMock } from '../console/get-console-context-mock'
 import { getFileContext } from '../file/get-file-context'
 import { iterateWorkNodes, planWorkNodes } from '../planner/utils/plan-work-nodes'
 import { WorkNode } from '../planner/work-node'
-import { HammerkitEvent, SchedulerTerminationEvent, SchedulerUpResultEvent } from '../executer/events'
+import { HammerkitEvent } from '../executer/events'
 import { getNode } from './get-node'
 import { planWorkTree } from '../planner/utils/plan-work-tree'
 import { getFileContextMock } from '../file/get-file-context-mock'
@@ -20,13 +20,16 @@ import { isCI } from '../utils/ci'
 import { groupedLogger } from '../logging/grouped-logger'
 import { liveLogger } from '../logging/live-logger'
 import { interactiveLogger } from '../logging/interactive-logger'
-import { getSchedulerState, schedule, watchNode } from '../executer/hierarchy-scheduler'
+import { schedule } from '../executer/hierarchy-scheduler'
 import { UpdateBus, UpdateEmitter } from '../executer/emitter'
 import { Logger, LogMode } from '../logging/log-mode'
 import { failNever } from '../utils/fail-never'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { getExecutionMock } from '../executer/event-exec-mock'
 import { cleanCache, restoreCache, storeCache } from '../executer/event-cache'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
+import { watchNode } from '../executer/watch-node'
+import { createSchedulerState } from '../executer/create-scheduler-state'
 
 interface Test {
   cwd: string
@@ -36,7 +39,7 @@ function getLogger(mode: LogMode, state: SchedulerState, bus: UpdateBus<Hammerki
   if (mode === 'grouped') {
     return groupedLogger(state, bus)
   } else if (mode === 'live') {
-    return liveLogger(state, bus)
+    return liveLogger(state)
   } else if (mode === 'interactive') {
     return interactiveLogger(state, bus)
   } else {
@@ -68,12 +71,11 @@ function getTestCase(
     environment,
     eventBus: emitter,
     executionMock,
-    async exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerTerminationEvent> {
+    async exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerResult> {
       const workTree = planWorkTree(buildFile, taskName)
 
       const cacheMethod = options?.cacheMethod ?? 'checksum'
-      const initialState = getSchedulerState({
-        type: 'scheduler-initialize',
+      const initialState = createSchedulerState({
         services: workTree.services,
         nodes: workTree.nodes,
         watch: options?.watch ?? false,
@@ -113,6 +115,15 @@ function getTestCase(
       return getNode(buildFile, workTree.nodes, name)
     },
     async up(options?: Partial<UpOptions>): Promise<void> {
+      const initialState = createSchedulerState({
+        services,
+        nodes: {},
+        watch: options?.watch ?? false,
+        cacheMethod: 'checksum',
+        noContainer: false,
+        workers: 0,
+        logMode: options?.logMode ?? isCI ? 'live' : 'interactive',
+      })
       // await eventBus.run<SchedulerUpResultEvent>('scheduler-up-result', {
       //   type: 'scheduler-up',
       //   services,

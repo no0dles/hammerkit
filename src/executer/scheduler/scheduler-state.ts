@@ -10,11 +10,11 @@ export interface SchedulerServiceState {
 }
 
 export interface SchedulerState {
-  abort: boolean
+  // abort: boolean
   node: SchedulerNodeState
   service: SchedulerServiceState
   cacheMethod: CacheMethod
   noContainer: boolean
-  watch: boolean
+  //watch: boolean
   workers: number
 }

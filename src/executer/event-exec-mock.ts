@@ -11,9 +11,9 @@ import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { Environment } from './environment'
 
 class MockNode implements ExecutionMockNode {
-  executeCount: number = 0
-  exitCode: number = 0
-  duration: number = 0
+  executeCount = 0
+  exitCode = 0
+  duration = 0
 
   set(options: { duration?: number; exitCode: number }): this {
     this.exitCode = options.exitCode
@@ -60,11 +60,6 @@ export function getExecutionMock(
         return async (abort, emitter) => {
           mockNode.executeCount++
 
-          emitter.emit({
-            type: 'node-start',
-            node,
-          })
-
           if (mockNode.duration > 0) {
             await sleep(mockNode.duration)
           }
@@ -90,11 +85,6 @@ export function getExecutionMock(
         const service = services[serviceId]
 
         return async (abort, emitter) => {
-          emitter.emit({
-            type: 'service-start',
-            service,
-          })
-
           if (mockNode.duration > 0) {
             await sleep(mockNode.duration)
           }

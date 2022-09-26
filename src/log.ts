@@ -3,8 +3,6 @@ import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work
 import { ConsoleMessage, WorkNodeConsoleLogLevel } from './planner/work-node-status'
 import colors from 'colors'
 import { ConsoleContext } from './console/console-context'
-import { WorkNodes } from './planner/work-nodes'
-import { WorkServices } from './planner/work-services'
 import { SchedulerNodeState, SchedulerServiceState, SchedulerState } from './executer/scheduler/scheduler-state'
 import { NodeState } from './executer/scheduler/node-state'
 import { ServiceState } from './executer/scheduler/service-state'
@@ -63,7 +61,7 @@ export const isVerbose = process.argv.some((a) => a === '--verbose')
 export async function printWorkTreeResult(schedulerState: SchedulerState, logConsoleOnFail: boolean): Promise<void> {
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
 
-  if (logConsoleOnFail && (schedulerState.abort || isVerbose)) {
+  if (logConsoleOnFail && isVerbose) {
     for (const serviceState of iterateWorkServices(schedulerState.service)) {
       if (isVerbose) {
         const logs = await serviceState.service.console.read()
@@ -98,7 +96,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, logCon
       message += ` exited with ${state.exitCode}`
     }
     if (state.type === 'error') {
-      message += ` errored with ${state.errorMessage}`
+      message += ` with message ${state.errorMessage}`
     }
     process.stdout.write(`${message}\n`)
   }

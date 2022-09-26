@@ -1,5 +1,4 @@
 import { join } from 'path'
-import { expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 import { existsSync } from 'fs'
 

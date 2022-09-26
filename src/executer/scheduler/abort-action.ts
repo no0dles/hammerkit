@@ -1,7 +1,6 @@
 import { SchedulerState } from './scheduler-state'
 
 export function abort(state: SchedulerState): void {
-  state.abort = true
   for (const node of Object.values(state.node)) {
     if (node.type === 'running') {
       node.abortController.abort()

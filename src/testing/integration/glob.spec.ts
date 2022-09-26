@@ -3,9 +3,9 @@ import { appendFileSync } from 'fs'
 import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
 import { BuildFile } from '../../parser/build-file'
-import { SchedulerTerminationEvent } from '../../executer/events'
 import { NodeState } from '../../executer/scheduler/node-state'
 import { MockedTestCase } from '../test-suite'
+import { SchedulerResult } from '../../executer/scheduler/scheduler-result'
 
 describe('glob', () => {
   const suite = getTestSuite('glob', ['build.yaml', 'test.md', 'test.txt'])
@@ -17,7 +17,7 @@ describe('glob', () => {
     return await testCase.exec('example')
   }
 
-  async function getTestNode(testCase: MockedTestCase, state: SchedulerTerminationEvent): Promise<NodeState> {
+  async function getTestNode(testCase: MockedTestCase, state: SchedulerResult): Promise<NodeState> {
     const node = testCase.getNode('example')
     return state.state.node[node.id]
   }

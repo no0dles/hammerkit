@@ -4,11 +4,12 @@ import {
   writeNodeLogToConsole,
   writeServiceLogToConsole,
 } from '../log'
-import { HammerkitEvent, SchedulerTerminationEvent, SchedulerUpdateEvent } from '../executer/events'
+import { HammerkitEvent, SchedulerUpdateEvent } from '../executer/events'
 import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
 import { UpdateBus } from '../executer/emitter'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { Logger } from './log-mode'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 
 export function groupedLogger(state: SchedulerState, eventBus: UpdateBus<HammerkitEvent>): Logger {
   const maxNodeNameLength = getNodeNameLengthForWorkTree(state.node, state.service)
@@ -45,7 +46,7 @@ export function groupedLogger(state: SchedulerState, eventBus: UpdateBus<Hammerk
   })
 
   return {
-    async complete(evt: SchedulerTerminationEvent): Promise<void> {
+    async complete(evt: SchedulerResult): Promise<void> {
       await printWorkTreeResult(evt.state, false)
     },
   }
