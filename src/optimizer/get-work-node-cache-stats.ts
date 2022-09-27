@@ -1,9 +1,11 @@
 import { calculateChecksum } from './calculate-checksum'
 import { join, relative } from 'path'
-import { WorkNodeCacheFileStats } from './work-node-cache-stats'
+import { WorkNodeCacheFileStats, WorkServiceCacheFileStats } from './work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { CacheMethod } from './cache-method'
+import { StatusConsole } from '../planner/work-node-status'
+import { WorkService } from '../planner/work-service'
 
 async function addWorkNodeCacheStats(
   result: WorkNodeCacheFileStats,
@@ -33,6 +35,40 @@ async function addWorkNodeCacheStats(
   }
 }
 
+async function addWorkServiceCacheStats(result: WorkServiceCacheFileStats, path: string, context: Environment) {
+  const exists = await context.file.exists(path)
+  if (!exists) {
+    return
+  }
+
+  const stats = await context.file.stats(path)
+  if (stats.type === 'file') {
+    const checksum = await calculateChecksum(context, path)
+    result.files[path] = { lastModified: stats.lastModified, checksum }
+  } else if (stats.type === 'directory') {
+    const files = await context.file.listFiles(path)
+    for (const file of files) {
+      const subPath = join(path, file)
+      await addWorkServiceCacheStats(result, join(path, file), context)
+    }
+  }
+}
+
+export async function getServiceNodeCacheStats(
+  cache: WorkService,
+  environment: Environment
+): Promise<WorkServiceCacheFileStats> {
+  const result: WorkServiceCacheFileStats = {
+    files: {},
+  }
+
+  for (const mount of cache.mounts) {
+    await addWorkServiceCacheStats(result, mount.localPath, environment)
+  }
+
+  return result
+}
+
 export async function getWorkNodeCacheStats(
   cache: WorkNode,
   environment: Environment
@@ -50,9 +86,9 @@ export async function getWorkNodeCacheStats(
 }
 
 export async function hasStatsChanged(
-  node: WorkNode,
-  cache: WorkNodeCacheFileStats,
-  current: WorkNodeCacheFileStats,
+  node: { name: string; status: StatusConsole },
+  cache: WorkNodeCacheFileStats | WorkServiceCacheFileStats,
+  current: WorkNodeCacheFileStats | WorkServiceCacheFileStats,
   cacheMethod: CacheMethod
 ): Promise<boolean> {
   let changed = false

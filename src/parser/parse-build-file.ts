@@ -8,6 +8,7 @@ import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { Environment } from '../executer/environment'
 import { parseBuildFileServices } from './parse-build-file-services'
+import { parseStringMap } from './parse-string-map'
 
 const validTaskKeys = ['envs', 'src', 'needs', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
@@ -70,6 +71,7 @@ export async function parseBuildFile(
       deps: parseStringArray(fileName, key, 'deps', value.deps),
       generates: parseStringArray(fileName, key, 'generates', value.generates),
       description: value.description ? value.description.trim() : null,
+      labels: parseStringMap(fileName, 'task', key, value.labels),
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,

@@ -1,4 +1,4 @@
-import { getVirtualTestSuite } from '../testing/get-test-suite'
+import { getVirtualTestSuite } from '../testing/virtual-test-suite'
 
 describe('execute', () => {
   const suite = getVirtualTestSuite({

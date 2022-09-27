@@ -21,9 +21,23 @@ export function updateState(current: SchedulerState, evt: HammerkitEvent): Sched
       node: evt.node,
     }
     return current
+  } else if (evt.type === 'service-watch-reset') {
+    const serviceState = current.service[evt.service.id]
+    if (serviceState.type === 'running') {
+      serviceState.abortController.abort() // TODO await stop
+    }
+    current.service[evt.service.id] = {
+      type: 'pending',
+      service: evt.service,
+    }
+    return current
   } else if (evt.type === 'node-watch-start') {
     return current
+  } else if (evt.type === 'service-watch-start') {
+    return current
   } else if (evt.type === 'node-watch-canceled') {
+    return current
+  } else if (evt.type === 'service-watch-canceled') {
     return current
   } else if (evt.type === 'scheduler-update') {
     return current

@@ -2,6 +2,7 @@ import { ExecutionBuildService } from './build-file-service'
 import { parseStringArray } from './parse-string-array'
 import { parseEnvs } from './parse-envs'
 import { BuildFile } from './build-file'
+import { parseStringMap } from './parse-string-map'
 
 const validKeys = ['image', 'ports', 'envs', 'mounts', 'volumes', 'healthcheck']
 
@@ -32,9 +33,9 @@ export function parseBuildFileServices(
       image: serviceValue.image,
       ports: parseStringArray(fileName, key, 'ports', serviceValue.ports),
       envs: parseEnvs(fileName, serviceValue.envs, buildFile.envs),
-      mounts: [], // TODO parse
-      volumes: {}, // TODO parse
+      mounts: parseStringArray(fileName, key, 'mounts', serviceValue.mounts),
       healthcheck: serviceValue.healthcheck, // TODO validate
+      labels: parseStringMap(fileName, 'service', key, serviceValue.labels),
       unknownProps: Object.keys(serviceValue)
         .filter((k) => validKeys.indexOf(k) === -1)
         .reduce<{ [key: string]: any }>((map, k) => {

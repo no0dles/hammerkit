@@ -9,7 +9,7 @@ export interface WorkService {
   envs: { [key: string]: string }
   image: string
   mounts: WorkNodePath[]
-  volumes: { [volumeName: string]: string }
+  // volumes: { [volumeName: string]: string } // TODO when cache/restore works with volumes
   ports: WorkNodePort[]
   console: LogConsole
   healthcheck: ExecutionBuildServiceHealthCheck | null

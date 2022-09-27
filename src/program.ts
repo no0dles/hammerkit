@@ -78,24 +78,6 @@ export async function getProgram(
         }
       })
 
-    program
-      .command('up')
-      .description('start services')
-      .addOption(new Option('-w, --watch', 'watch tasks').default(false))
-      .addOption(
-        new Option('-l, --log <mode>', 'log mode')
-          .default(isCI ? 'live' : 'interactive')
-          .choices(['interactive', 'live', 'grouped'])
-      )
-      .action(async (name, options) => {
-        try {
-          await cli.up({ watch: options.watch, logMode: options.log })
-          process.exit(0)
-        } catch (e) {
-          process.exit(1)
-        }
-      })
-
     for (const node of cli.getNodes()) {
       if (reservedCommands.indexOf(node.name) >= 0) {
         environment.console.warn(`${node.name} is reserved, please use another name`)

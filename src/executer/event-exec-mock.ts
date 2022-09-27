@@ -57,7 +57,7 @@ export function getExecutionMock(
           return null
         }
 
-        return async (abort, emitter) => {
+        return async () => {
           mockNode.executeCount++
 
           if (mockNode.duration > 0) {

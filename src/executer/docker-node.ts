@@ -27,7 +27,7 @@ export function dockerNode(
   serviceContainers: { [key: string]: string },
   environment: Environment
 ): Process<NodeCanceledEvent | NodeErrorEvent | NodeCrashEvent | NodeCompletedEvent, HammerkitEvent> {
-  return async (abort, emitter) => {
+  return async (abort) => {
     let container: Container | null = null
 
     try {

@@ -15,6 +15,13 @@
         "$ref": "#/definitions/task"
       }
     },
+    "services": {
+      "type": "object",
+      "description": "A map of services",
+      "additionalProperties": {
+        "$ref": "#/definitions/service"
+      }
+    },
     "includes": {
       "$ref": "#/definitions/include"
     },
@@ -23,6 +30,11 @@
     }
   },
   "definitions": {
+    "labels": {
+      "description": "A map of label values",
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
     "envMap": {
       "description": "A map of environment values",
       "type": "object",
@@ -88,7 +100,7 @@
         "type": "string"
       }
     },
-    "taskMount": {
+    "mount": {
       "type": "array",
       "description": "A list of file paths that get mounted into the container",
       "items": {
@@ -114,6 +126,9 @@
         "extend": {
           "type": "string",
           "description": "Name of task that gets used a template"
+        },
+        "labels": {
+          "$ref": "#/definitions/labels"
         },
         "envs": {
           "$ref": "#/definitions/envMap"
@@ -149,6 +164,9 @@
           "type": "string",
           "description": "A description of the task"
         },
+        "labels": {
+          "$ref": "#/definitions/labels"
+        },
         "extend": {
           "type": "string",
           "description": "Name of task that gets used a template"
@@ -175,7 +193,7 @@
           "description": "Define the container image the commands run in"
         },
         "mounts": {
-          "$ref": "#/definitions/taskMount"
+          "$ref": "#/definitions/mount"
         },
         "src": {
           "$ref": "#/definitions/taskSource"
@@ -198,6 +216,42 @@
       }, {
         "$ref": "#/definitions/localTask"
       }]
+    },
+    "service": {
+      "description": "A daemon in the background",
+      "required": ["image"],
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Define the container image the commands run in"
+        },
+        "labels": {
+          "$ref": "#/definitions/labels"
+        },
+        "envs": {
+          "$ref": "#/definitions/envMap"
+        },
+        "ports": {
+          "$ref": "#/definitions/taskPort"
+        },
+        "healthcheck": {
+          "$ref": "#/definitions/serviceHealthcheck"
+        },
+        "mounts": {
+          "$ref": "#/definitions/mount"
+        }
+      }
+    },
+    "serviceHealthcheck": {
+      "additionalItems": false,
+      "description": "A check to detect if the service is started and ready",
+      "properties": {
+        "cmd": {
+          "description": "task to check if the service is healthy",
+          "type": "string"
+        }
+      }
     }
   }
 }

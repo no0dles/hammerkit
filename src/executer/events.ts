@@ -26,6 +26,22 @@ export interface NodeWatchCanceledEvent {
   node: WorkNode
 }
 
+export interface ServiceWatchStartEvent {
+  type: 'service-watch-start'
+  service: WorkService
+  mounts: string[]
+}
+
+export interface ServiceWatchCanceledEvent {
+  type: 'service-watch-canceled'
+  service: WorkService
+}
+
+export interface ServiceWatchResetEvent {
+  type: 'service-watch-reset'
+  service: WorkService
+}
+
 export interface NodeWatchResetEvent {
   type: 'node-watch-reset'
   node: WorkNode
@@ -81,7 +97,14 @@ export interface SchedulerUpdateEvent {
 }
 
 export type SchedulerEvent = SchedulerUpdateEvent
-export type ServiceEvent = ServiceCrashEvent | ServiceStartEvent | ServiceCanceledEvent | ServiceReadyEvent
+export type ServiceEvent =
+  | ServiceWatchCanceledEvent
+  | ServiceWatchResetEvent
+  | ServiceWatchStartEvent
+  | ServiceCrashEvent
+  | ServiceStartEvent
+  | ServiceCanceledEvent
+  | ServiceReadyEvent
 export type NodeEvent =
   | NodeStartEvent
   | NodeCrashEvent

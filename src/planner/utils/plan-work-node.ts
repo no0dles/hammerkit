@@ -261,7 +261,7 @@ export function parseWorkNodeNeeds(needs: MergedNeed[], services: WorkServices):
         console: nodeConsole(),
         status: statusConsole(),
         image: service.image,
-        volumes: service.volumes || {},
+        //volumes: service.volumes || {},
         ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),
       }
     }

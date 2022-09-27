@@ -1,6 +1,8 @@
 services:
   postgres:
     image: postgres:12
+    labels:
+      app: example
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
@@ -28,6 +30,8 @@ tasks:
     image: node:16.6.0-alpine
     deps: [install]
     needs: [postgres]
+    labels:
+      app: example
     src:
       - index.js
     cmds:

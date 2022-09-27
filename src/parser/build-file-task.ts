@@ -18,4 +18,5 @@ export interface BuildFileTask {
   envs: { [key: string]: string } | null
   ports: string[] | null
   unknownProps: { [key: string]: any }
+  labels: { [key: string]: string }
 }

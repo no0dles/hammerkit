@@ -30,11 +30,6 @@ export interface ExecOptions {
   logMode: LogMode
 }
 
-export interface UpOptions {
-  watch: boolean
-  logMode: LogMode
-}
-
 export interface TestCase {
   environment: Environment
   buildFile: BuildFile
@@ -49,7 +44,6 @@ export interface TestCase {
 
   getNode(name: string): WorkNode
   getNodes(): Generator<WorkNode>
-  up(options?: Partial<UpOptions>): Promise<void>
 }
 
 export interface TestSuiteSetupOptions {
