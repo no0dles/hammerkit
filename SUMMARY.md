@@ -1,6 +1,6 @@
 # Table of contents
 
-* [About](docs/about.md)
+* [About](README.md)
 * [Installation](installation.md)
 * [Getting started](getting-started.md)
 * [Build file](build-file/README.md)
