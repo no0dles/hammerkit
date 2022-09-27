@@ -4,6 +4,10 @@ export function parseStringMap(
   name: string,
   value: unknown
 ): { [key: string]: string } {
+  if (value === null || value === undefined) {
+    return {}
+  }
+
   if (typeof value !== 'object') {
     throw new Error(`${fileName} ${type} ${name} labels needs to be a string map`)
   }
