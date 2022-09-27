@@ -26,4 +26,4 @@
 
 ## Release Blog
 
-* [Release 1.4.0](release-blog/release-1.4.0.md)
+* [Release 1.4.0](docs/release-blog/release-1.4.0.md)
