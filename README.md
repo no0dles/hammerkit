@@ -1,6 +1,6 @@
 # About
 
-<figure><img src="docs/hammerkit.png" alt=""><figcaption></figcaption></figure>
+<figure><img src="docs/hammerkit-small.png" width="144" alt=""><figcaption></figcaption></figure>
 
 ## What is hammerkit?
 
