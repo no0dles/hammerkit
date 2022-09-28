@@ -18,3 +18,7 @@ There are a lot of containerized CI systems that allow writing containerized bui
 Additionally hammerkit tries to reduce complexity of build caching in CI systems. Usually you define a directory that is being cached and restored before and after the CI build. That's totally fine for smaller project where there are not that many directories to cache. The bigger the project gets, the more effort it is, to keep all directories up to date.
 
 Hammerkit on the other hand knows the source and output files of each build step and can therefore compact the build results into a single directory. Making it easy to being cached. Once restored, hammerkit can detect what's changed since last time and only build the changes.
+
+## Where to go next?
+
+Check out the [docs](https://no0dles.gitbook.io/hammerkit/) for more info about how hammerkit can be used.
