@@ -3,6 +3,7 @@ import { join, resolve } from 'path'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { getCli } from './testing/get-test-suite'
+import { parseLabelArguments } from './parser/parse-label-arguments'
 
 export async function getProgram(
   environment: Environment,
@@ -102,13 +103,16 @@ export async function getProgram(
         .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
         .action(async (options) => {
           try {
-            const result = await cli.exec(node.name, {
-              cacheMethod: options.cache,
-              watch: options.watch,
-              workers: options.concurrency,
-              logMode: options.log,
-              noContainer: options.container,
-            })
+            const result = await cli.exec(
+              { taskName: node.name },
+              {
+                cacheMethod: options.cache,
+                watch: options.watch,
+                workers: options.concurrency,
+                logMode: options.log,
+                noContainer: options.container,
+              }
+            )
 
             if (!result.success) {
               process.exit(1)
@@ -118,6 +122,44 @@ export async function getProgram(
           }
         })
     }
+
+    program
+      .command('up', { isDefault: true })
+      .description('run all tasks / services')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
+      .addOption(new Option('-w, --watch', 'watch tasks').default(false))
+      .addOption(
+        new Option('-l, --log <mode>', 'log mode')
+          .default(isCI ? 'live' : 'interactive')
+          .choices(['interactive', 'live', 'grouped'])
+      )
+      .addOption(
+        new Option('--cache <method>', 'caching method to compare')
+          .default(isCI ? 'checksum' : 'modify-date')
+          .choices(['checksum', 'modify-date', 'none'])
+      )
+      .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
+      .action(async (options) => {
+        const result = await cli.exec(
+          {
+            excludeLabels: parseLabelArguments(options.exclude),
+            filterLabels: parseLabelArguments(options.filter),
+          },
+          {
+            cacheMethod: options.cache,
+            watch: options.watch,
+            workers: options.concurrency,
+            logMode: options.log,
+            noContainer: options.container,
+          }
+        )
+
+        if (!result.success) {
+          process.exit(1)
+        }
+      })
   } else {
     if (fileIndex >= 0) {
       environment.console.warn(`unable to find build file ${fileName}`)

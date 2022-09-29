@@ -7,13 +7,13 @@ describe('error', () => {
 
   it('should return error when local task failed', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('local_error')
+    const result = await testCase.exec({ taskName: 'local_error' })
     expect(result.success).toBeFalsy()
   })
 
   it('should return error when docker task failed', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('docker_error')
+    const result = await testCase.exec({ taskName: 'docker_error' })
     expect(result.success).toBeFalsy()
   })
 })

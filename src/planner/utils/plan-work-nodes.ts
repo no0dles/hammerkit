@@ -7,12 +7,95 @@ import { WorkService } from '../work-service'
 import { NodeState } from '../../executer/scheduler/node-state'
 import { ServiceState } from '../../executer/scheduler/service-state'
 import { SchedulerNodeState, SchedulerServiceState } from '../../executer/scheduler/scheduler-state'
+import { ExecTargetLabel, LabelValues } from '../../testing/test-suite'
 
-export function planWorkNodes(build: BuildFile): [WorkNodes, WorkServices] {
+function matchesAllLabels(filterLabels: LabelValues, node: WorkNode, nodes: WorkNodes): boolean {
+  for (const [labelKey, filterValues] of Object.entries(filterLabels)) {
+    const nodeValues = node.labels[labelKey]
+    if (nodeValues === null || nodeValues === undefined || nodeValues.length === 0) {
+      if (!hasNeedsWithMatch(node, nodes, (depNode) => matchesAllLabels(filterLabels, depNode, nodes))) {
+        return false
+      }
+    }
+
+    for (const nodeValue of nodeValues) {
+      if (filterValues.indexOf(nodeValue) === -1) {
+        if (!hasNeedsWithMatch(node, nodes, (depNode) => matchesAllLabels(filterLabels, depNode, nodes))) {
+          return false
+        }
+      }
+    }
+  }
+
+  return true
+}
+
+function hasNeedsWithMatch(root: WorkNode, nodes: WorkNodes, matcher: (node: WorkNode) => boolean): boolean {
+  for (const node of Object.values(nodes)) {
+    if (node.deps.some((d) => d.id === root.id)) {
+      if (matcher(node)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function hasDependencyWithMatch(root: WorkNode, matcher: (node: WorkNode) => boolean): boolean {
+  for (const dep of root.deps) {
+    if (matcher(dep)) {
+      return true
+    }
+  }
+  return false
+}
+
+function matchesAnyLabel(filterLabels: LabelValues, node: WorkNode): boolean {
+  for (const [labelKey, filterValues] of Object.entries(filterLabels)) {
+    const nodeValues = node.labels[labelKey]
+    if (nodeValues === null || nodeValues === undefined || nodeValues.length === 0) {
+      continue
+    }
+
+    for (const nodeValue of nodeValues) {
+      if (filterValues.indexOf(nodeValue) >= 0) {
+        return true
+      }
+    }
+  }
+
+  return hasDependencyWithMatch(node, (depNode) => matchesAnyLabel(filterLabels, depNode))
+}
+
+export function planWorkNodes(build: BuildFile, target: ExecTargetLabel): [WorkNodes, WorkServices] {
   const nodes: WorkNodes = {}
   const services: WorkServices = {}
   addWorkNodes(build, nodes, services, [], [])
+
+  const nodesIdsToRemove: string[] = []
+  for (const [nodeId, node] of Object.entries(nodes)) {
+    if (!matchesAllLabels(target.filterLabels, node, nodes) || matchesAnyLabel(target.excludeLabels, node)) {
+      nodesIdsToRemove.push(nodeId)
+    }
+  }
+
+  for (const nodeId of nodesIdsToRemove) {
+    removeNode(nodeId, nodes, services)
+  }
+
   return [nodes, services]
+}
+
+function removeNode(nodeId: string, nodes: WorkNodes, services: WorkServices) {
+  const node = nodes[nodeId]
+  if (node) {
+    delete nodes[nodeId]
+    for (const node of Object.values(nodes)) {
+      if (node.deps.some((d) => d.id === nodeId)) {
+        removeNode(node.id, nodes, services)
+      }
+    }
+  }
 }
 
 export function iterateWorkServices(services: WorkServices): Generator<WorkService>
@@ -48,7 +131,11 @@ function addWorkNodes(
 
   files.push(build.fileName)
   for (const taskId of Object.keys(build.tasks)) {
-    planWorkNode(build, taskId, nodes, services, { currentWorkdir: build.path, idPrefix: null, namePrefix: namePrefix })
+    planWorkNode(build, taskId, nodes, services, {
+      currentWorkdir: build.path,
+      idPrefix: null,
+      namePrefix: namePrefix,
+    })
   }
 
   for (const key of Object.keys(build.references)) {

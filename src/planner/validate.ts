@@ -9,10 +9,10 @@ import { WorkServices } from './work-services'
 
 function plan(buileFile: BuildFile, name?: string): [WorkNodes, WorkServices] {
   if (name) {
-    const tree = planWorkTree(buileFile, name)
+    const tree = planWorkTree(buileFile, { taskName: name })
     return [tree.nodes, tree.services]
   } else {
-    const [nodes, services] = planWorkNodes(buileFile)
+    const [nodes, services] = planWorkNodes(buileFile, { filterLabels: {}, excludeLabels: {} })
     return [nodes, services]
   }
 }

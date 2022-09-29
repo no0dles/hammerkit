@@ -22,6 +22,8 @@ import { parseWorkNodePort } from './parse-work-node-port'
 import { WorkServices } from '../work-services'
 import { WorkService } from '../work-service'
 import { getWorkServiceId } from '../work-service-id'
+import { ExecTarget, ExecTargetLabel, Labels, LabelValues } from '../../testing/test-suite'
+import { validate } from '../validate'
 
 export interface MergedBuildFileTask {
   image: string | null
@@ -35,6 +37,7 @@ export interface MergedBuildFileTask {
   ports: string[]
   generates: string[]
   continuous: boolean
+  labels: { [key: string]: string }
 }
 
 export interface MergedDependency {
@@ -75,6 +78,7 @@ export function getMergedBuildTask(
         src: [...(extend.task.src || []), ...(task.src || [])],
         mounts: [...(extend.task.mounts || []), ...(task.mounts || [])],
         generates: [...(extend.task.generates || []), ...(task.generates || [])],
+        labels: task.labels || extend.task.labels,
       },
       deps: [
         ...(extend.task.deps || []).map((d) => ({ name: d, build: extend.build })),
@@ -98,6 +102,7 @@ export function getMergedBuildTask(
         ports: task.ports || [],
         unknownProps: task.unknownProps,
         mounts: task.mounts || [],
+        labels: task.labels || {},
         envs,
       },
       deps: [...(task.deps || []).map((d) => ({ name: d, build: build }))],
@@ -112,7 +117,7 @@ export function planWorkNode(
   nodes: WorkNodes,
   services: WorkServices,
   context: WorkContext
-): WorkNode {
+): WorkNode | null {
   if (build.tasks[taskName]) {
     const { task, deps, needs } = getMergedBuildTask(build, build.tasks[taskName])
     const id = getWorkNodeId(context.currentWorkdir, task, deps)
@@ -141,6 +146,7 @@ export function planWorkNode(
         needs: parseWorkNodeNeeds(needs, services),
         console: nodeConsole(),
         status: statusConsole(),
+        labels: mapLabels(task.labels),
       },
       task,
       context
@@ -148,17 +154,22 @@ export function planWorkNode(
 
     nodes[id] = node
 
-    const depNodes = deps.map((dep) => {
+    const depNodes: WorkNode[] = []
+    for (const dep of deps) {
       const depName = templateValue(dep.name, dep.build.envs)
       const depNode = planWorkNode(dep.build, depName, nodes, services, {
         ...context,
         idPrefix: null,
       })
+
       if (!depNode) {
-        throw new Error(`unable to find dependency ${dep} for task ${taskName} in ${dep.build.path}`)
+        return null
       }
-      return depNode
-    })
+
+      // addDependencyLabel(node, depNode)
+
+      depNodes.push(depNode)
+    }
 
     planWorkDependency(depNodes, node, taskName, nodes, context)
 
@@ -183,6 +194,30 @@ export function planWorkNode(
     }
 
     throw new Error(`unable to find ${taskName} in ${build.path}`)
+  }
+}
+
+function mapLabels(labels: { [key: string]: string }): LabelValues {
+  const result: LabelValues = {}
+  for (const [key, value] of Object.entries(labels)) {
+    result[key] = [value]
+  }
+  return result
+}
+
+function addDependencyLabel(node: WorkNode, dep: WorkNode) {
+  for (const [labelKey, labelValue] of Object.entries(node.labels)) {
+    if (!dep.labels[labelKey]) {
+      dep.labels[labelKey] = []
+    }
+    if (!dep.labels[labelKey]) {
+      dep.labels[labelKey] = []
+    }
+    for (const value of labelValue) {
+      if (dep.labels[labelKey].indexOf(value) === -1) {
+        dep.labels[labelKey].push(value)
+      }
+    }
   }
 }
 

@@ -8,7 +8,7 @@ describe('services', () => {
 
   it('should run service', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('api')
+    const result = await testCase.exec({ taskName: 'api' })
     await expectSuccessfulResult(result)
   }, 120000)
 })

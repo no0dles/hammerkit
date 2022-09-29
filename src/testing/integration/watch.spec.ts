@@ -14,9 +14,7 @@ describe('watch', () => {
         testCase.environment.abortCtrl.abort()
       }
     })
-    const result = await testCase.exec('api', {
-      watch: true,
-    })
+    const result = await testCase.exec({ taskName: 'api' }, { watch: true })
     expect(result.success).toBeFalsy()
     expect(result.state.node[apiNode.id].type).toEqual('canceled')
   })

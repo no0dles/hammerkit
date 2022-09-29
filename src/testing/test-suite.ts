@@ -30,12 +30,31 @@ export interface ExecOptions {
   logMode: LogMode
 }
 
+export interface ExecTargetTask {
+  taskName: string
+}
+export interface ExecTargetLabel {
+  filterLabels: LabelValues
+  excludeLabels: LabelValues
+}
+export type ExecTarget = ExecTargetTask | ExecTargetLabel
+
+export const isExecTargetTask = (target: ExecTarget): target is ExecTargetTask => 'taskName' in target
+
+export interface LabelValues {
+  [key: string]: string[]
+}
+
+export interface Labels {
+  [key: string]: string
+}
+
 export interface TestCase {
   environment: Environment
   buildFile: BuildFile
   eventBus: UpdateBus<HammerkitEvent>
 
-  exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerResult>
+  exec(target: ExecTarget, options?: Partial<ExecOptions>): Promise<SchedulerResult>
 
   store(path: string): Promise<void>
   restore(path: string): Promise<void>

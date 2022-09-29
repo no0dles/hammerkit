@@ -18,7 +18,7 @@ describe('cancellation', () => {
         }, 2000)
       }
     })
-    const result = await testCase.exec(taskName)
+    const result = await testCase.exec({ taskName })
     expect(result.success).toBeFalsy()
     expect(result.state.node[nodeId].type).toEqual(expectedState)
     expect(await testCase.environment.file.exists(join(testCase.buildFile.path, 'test'))).toBeFalsy()

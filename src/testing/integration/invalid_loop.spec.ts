@@ -7,7 +7,7 @@ describe('invalid', () => {
 
   it('should detect loop in execution', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('foo')
+    const result = await testCase.exec({ taskName: 'foo' })
     expect(result.success).toBeFalsy()
   })
 })

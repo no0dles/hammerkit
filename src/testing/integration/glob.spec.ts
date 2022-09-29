@@ -14,7 +14,7 @@ describe('glob', () => {
 
   async function getTestRun(testCase: MockedTestCase) {
     testCase.executionMock.task('example').set({ duration: 100, exitCode: 0 })
-    return await testCase.exec('example')
+    return await testCase.exec({ taskName: 'example' })
   }
 
   async function getTestNode(testCase: MockedTestCase, state: SchedulerResult): Promise<NodeState> {

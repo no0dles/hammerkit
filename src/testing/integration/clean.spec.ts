@@ -12,10 +12,7 @@ describe('clean', () => {
 
   it('should clean generated outputs locally', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('example', {
-      cacheMethod: 'none',
-      noContainer: true,
-    })
+    const result = await testCase.exec({ taskName: 'example' }, { cacheMethod: 'none', noContainer: true })
     await expectSuccessfulResult(result)
 
     const outputPath = join(testCase.buildFile.path, 'node_modules')
@@ -28,9 +25,7 @@ describe('clean', () => {
   it('should clean generated outputs in containers', async () => {
     const testCase = await suite.setup()
     const node = testCase.getNode('example')
-    const result = await testCase.exec('example', {
-      cacheMethod: 'none',
-    })
+    const result = await testCase.exec({ taskName: 'example' }, { cacheMethod: 'none' })
     await expectSuccessfulResult(result)
 
     const outputPath = join(testCase.buildFile.path, 'node_modules')

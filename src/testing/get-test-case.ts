@@ -1,6 +1,6 @@
 import { BuildFile } from '../parser/build-file'
 import { Environment } from '../executer/environment'
-import { ExecOptions, MockedTestCase, TestCase, TestSuiteSetupOptions } from './test-suite'
+import { ExecOptions, ExecTarget, MockedTestCase, TestCase, TestSuiteSetupOptions } from './test-suite'
 import { iterateWorkNodes, iterateWorkServices, planWorkNodes } from '../planner/utils/plan-work-nodes'
 import { getExecutionMock } from '../executer/event-exec-mock'
 import { UpdateEmitter } from '../executer/emitter'
@@ -47,7 +47,7 @@ export function getTestCase(
   environment: Environment,
   options?: Partial<TestSuiteSetupOptions>
 ): MockedTestCase | TestCase {
-  const [nodes, services] = planWorkNodes(buildFile)
+  const [nodes, services] = planWorkNodes(buildFile, { excludeLabels: {}, filterLabels: {} })
 
   const executionMock = getExecutionMock(buildFile, nodes, services, environment)
   const emitter = new UpdateEmitter<HammerkitEvent>(environment.abortCtrl.signal, (key, process) => {
@@ -66,8 +66,8 @@ export function getTestCase(
     environment,
     eventBus: emitter,
     executionMock,
-    async exec(taskName: string, options?: Partial<ExecOptions>): Promise<SchedulerResult> {
-      const workTree = planWorkTree(buildFile, taskName)
+    async exec(target: ExecTarget, options?: Partial<ExecOptions>): Promise<SchedulerResult> {
+      const workTree = planWorkTree(buildFile, target)
 
       const cacheMethod = options?.cacheMethod ?? 'checksum'
       const initialState = createSchedulerState({
@@ -102,7 +102,7 @@ export function getTestCase(
       await storeCache(path, nodes, services, environment)
     },
     getNode(name: string): WorkNode {
-      const workTree = planWorkTree(buildFile, name)
+      const workTree = planWorkTree(buildFile, { taskName: name })
       return getNode(buildFile, workTree.nodes, name)
     },
     getNodes(): Generator<WorkNode> {

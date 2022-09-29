@@ -19,9 +19,7 @@ describe('concurrency', () => {
       concurrentRunners--
     })
 
-    const result = await testCase.exec('example', {
-      workers: 1,
-    })
+    const result = await testCase.exec({ taskName: 'example' }, { workers: 1 })
     await expectSuccessfulResult(result)
   })
 })

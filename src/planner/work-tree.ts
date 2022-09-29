@@ -4,6 +4,6 @@ import { WorkServices } from './work-services'
 
 export interface WorkTree {
   nodes: WorkNodes
-  rootNode: WorkNode
+  rootNode?: WorkNode
   services: WorkServices
 }

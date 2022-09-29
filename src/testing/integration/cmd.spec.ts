@@ -8,7 +8,7 @@ describe('cmd', () => {
 
   it('should run with path arg', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('example')
+    const result = await testCase.exec({ taskName: 'example' })
     await expectSuccessfulResult(result)
     await expectContainsLog(result, `example`, 'README.md')
   })

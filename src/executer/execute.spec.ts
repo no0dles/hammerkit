@@ -28,9 +28,7 @@ describe('execute', () => {
 
     expect(apiMock.executeCount).toBe(0)
 
-    const resultPromise = testCase.exec('api', {
-      watch: true,
-    })
+    const resultPromise = testCase.exec({ taskName: 'api' }, { watch: true })
 
     await wait(30)
 
@@ -55,9 +53,7 @@ describe('execute', () => {
 
     expect(apiMock.executeCount).toBe(0)
 
-    const resultPromise = testCase.exec('api', {
-      watch: true,
-    })
+    const resultPromise = testCase.exec({ taskName: 'api' }, { watch: true })
 
     await wait(30)
     expect(apiMock.executeCount).toBe(1)

@@ -6,6 +6,7 @@ import { MergedBuildFileTask, MergedDependency } from './utils/plan-work-node'
 import { WorkNodePort } from './work-node-port'
 import { WorkService } from './work-service'
 import { StatusConsole, LogConsole } from './work-node-status'
+import { LabelValues } from '../testing/test-suite'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -27,6 +28,7 @@ export interface BaseWorkNode {
   mergedTask: MergedBuildFileTask
   mergedDeps: MergedDependency[]
   console: LogConsole
+  labels: LabelValues
   status: StatusConsole
 }
 

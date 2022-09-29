@@ -9,7 +9,7 @@ describe('reference', () => {
 
   it('should run included task', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('example')
+    const result = await testCase.exec({ taskName: 'example' })
     await expectSuccessfulResult(result)
     await expectLog(result, `foo:bar`, 'foobar')
     await expectLog(result, `example`, 'hammertime')
@@ -17,7 +17,7 @@ describe('reference', () => {
 
   it('should list task with references tasks nested', async () => {
     const { buildFile } = await suite.setup()
-    const [nodes] = planWorkNodes(buildFile)
+    const [nodes] = planWorkNodes(buildFile, { filterLabels: {}, excludeLabels: {} })
     expect(Object.values(nodes).map((t) => t.name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
   })
 })

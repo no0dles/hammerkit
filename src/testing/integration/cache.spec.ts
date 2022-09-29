@@ -22,10 +22,11 @@ describe('cache', () => {
     expectInvalidate: boolean
   ) {
     const { buildFile, environment } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'example')
-    expect(workTree.nodes).toContainKey(workTree.rootNode.id)
+    const workTree = planWorkTree(buildFile, { taskName: 'example' })
 
-    const node = workTree.nodes[workTree.rootNode.id]
+    const node = Object.values(workTree.nodes).find((n) => n.name === 'example')!
+    expect(node).toBeDefined()
+
     await writeWorkNodeCache(node, environment)
     await action(buildFile, workTree, environment)
 
@@ -49,7 +50,7 @@ describe('cache', () => {
 
   it('should mount generations of dependant tasks', async () => {
     const testCase = await suite.setup()
-    const result = await testCase.exec('dependant')
+    const result = await testCase.exec({ taskName: 'dependant' })
     await expectSuccessfulResult(result)
     await expectLog(result, `dependant`, 'node_modules')
   })
