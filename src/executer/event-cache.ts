@@ -5,17 +5,11 @@ import { join } from 'path'
 import { moveFiles } from '../file/move-files'
 import { getDocker, getVolumeName } from './execute-docker'
 import { removeContainer } from '../docker/remove-container'
-import { WorkNodes } from '../planner/work-nodes'
-import { WorkServices } from '../planner/work-services'
 import { existsVolume } from './get-docker-executor'
+import { WorkTree } from '../planner/work-tree'
 
-export async function restoreCache(
-  path: string,
-  nodes: WorkNodes,
-  services: WorkServices,
-  environment: Environment
-): Promise<void> {
-  for (const node of iterateWorkNodes(nodes)) {
+export async function restoreCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
+  for (const node of iterateWorkNodes(workTree.nodes)) {
     const cachePath = getCacheDirectory(node.id)
     const sourceCacheDir = join(path, 'cache', node.id)
 
@@ -25,13 +19,8 @@ export async function restoreCache(
   }
 }
 
-export async function storeCache(
-  path: string,
-  nodes: WorkNodes,
-  services: WorkServices,
-  environment: Environment
-): Promise<void> {
-  for (const node of iterateWorkNodes(nodes)) {
+export async function storeCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
+  for (const node of iterateWorkNodes(workTree.nodes)) {
     const cachePath = getCacheDirectory(node.id)
     const sourceCacheDir = join(path, 'cache', node.id)
 
@@ -41,8 +30,8 @@ export async function storeCache(
   }
 }
 
-export async function cleanCache(nodes: WorkNodes, services: WorkServices, environment: Environment): Promise<void> {
-  for (const node of iterateWorkNodes(nodes)) {
+export async function cleanCache(workTree: WorkTree, environment: Environment): Promise<void> {
+  for (const node of iterateWorkNodes(workTree.nodes)) {
     const docker = await getDocker(node)
 
     const containers = await docker.listContainers({
@@ -56,7 +45,7 @@ export async function cleanCache(nodes: WorkNodes, services: WorkServices, envir
     }
   }
 
-  for (const service of iterateWorkServices(services)) {
+  for (const service of iterateWorkServices(workTree.services)) {
     const docker = await getDocker(service)
 
     const containers = await docker.listContainers({
@@ -70,7 +59,7 @@ export async function cleanCache(nodes: WorkNodes, services: WorkServices, envir
     }
   }
 
-  for (const node of iterateWorkNodes(nodes)) {
+  for (const node of iterateWorkNodes(workTree.nodes)) {
     const docker = await getDocker(node)
 
     for (const generate of node.generates) {

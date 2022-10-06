@@ -1,14 +1,6 @@
 import { WorkNode } from '../work-node'
-import { WorkNodes } from '../work-nodes'
-import { WorkContext } from '../work-context'
 
-export function planWorkDependency(
-  deps: WorkNode[],
-  node: WorkNode,
-  taskName: string,
-  nodes: WorkNodes,
-  context: WorkContext
-): void {
+export function planWorkDependency(deps: WorkNode[], node: WorkNode): void {
   for (const depNode of deps) {
     if (node.deps.some((d) => d.id === depNode.id)) {
       continue
@@ -28,6 +20,6 @@ export function planWorkDependency(
       }
     }
 
-    planWorkDependency(depNode.deps, node, taskName, nodes, context)
+    planWorkDependency(depNode.deps, node)
   }
 }

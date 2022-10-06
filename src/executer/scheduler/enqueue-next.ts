@@ -2,14 +2,9 @@ import { WorkNode } from '../../planner/work-node'
 import { readCache } from '../../optimizer/read-work-node-cache'
 import { getWorkNodeCacheStats, hasStatsChanged } from '../../optimizer/get-work-node-cache-stats'
 import { Environment } from '../environment'
-import { CacheMethod } from '../../optimizer/cache-method'
 
-export async function checkIfUpToDate(
-  cacheMethod: CacheMethod,
-  node: WorkNode,
-  environment: Environment
-): Promise<boolean> {
-  if (cacheMethod === 'none') {
+export async function checkIfUpToDate(node: WorkNode, environment: Environment): Promise<boolean> {
+  if (node.caching === 'none') {
     return false
   }
 
@@ -20,7 +15,7 @@ export async function checkIfUpToDate(
   }
 
   const currentStats = await getWorkNodeCacheStats(node, environment)
-  const changed = await hasStatsChanged(node, cache, currentStats, cacheMethod)
+  const changed = await hasStatsChanged(node, cache, currentStats)
   if (changed) {
     return false
   }

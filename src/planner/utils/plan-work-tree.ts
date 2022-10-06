@@ -1,23 +1,20 @@
 import { WorkTree } from '../work-tree'
 import { BuildFile } from '../../parser/build-file'
-import { WorkNodes } from '../work-nodes'
-import { planWorkNode } from './plan-work-node'
-import { WorkServices } from '../work-services'
-import { planWorkNodes } from './plan-work-nodes'
-import { ExecTarget, isExecTargetTask } from '../../testing/test-suite'
+import { getWorkNode } from './plan-work-node'
+import { createWorkContext } from '../work-context'
+import { WorkNode } from '../work-node'
+import { CacheMethod } from '../../parser/cache-method'
 
-export function planWorkTree(build: BuildFile, target: ExecTarget): WorkTree {
-  if (isExecTargetTask(target)) {
-    const nodes: WorkNodes = {}
-    const services: WorkServices = {}
-    const rootNode = planWorkNode(build, target.taskName, nodes, services, {
-      currentWorkdir: build.path,
-      idPrefix: null,
-      namePrefix: [],
-    })!
-    return { nodes, rootNode, services }
-  } else {
-    const [nodes, services] = planWorkNodes(build, target)
-    return { nodes, services }
+export interface PlanOptions {
+  taskName: string
+  cache?: CacheMethod
+}
+
+export function planWorkTree(build: BuildFile, options: PlanOptions): WorkTree & { rootNode: WorkNode } {
+  const context = createWorkContext(build, options.cache ?? null)
+  const result = getWorkNode(context, { taskName: options.taskName })
+  return {
+    ...context.workTree,
+    rootNode: result,
   }
 }

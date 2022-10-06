@@ -3,12 +3,12 @@ import { ExecutionMock, ExecutionMockNode } from '../testing/test-suite'
 import { getNode } from '../testing/get-node'
 import { BuildFile } from '../parser/build-file'
 import { Process } from './emitter'
-import { WorkNodes } from '../planner/work-nodes'
-import { WorkServices } from '../planner/work-services'
 import { sleep } from '../utils/sleep'
 import { waitOnAbort } from '../utils/abort-event'
 import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { Environment } from './environment'
+import { WorkTree } from '../planner/work-tree'
+import { Lazy } from '../testing/lazy'
 
 class MockNode implements ExecutionMockNode {
   executeCount = 0
@@ -24,15 +24,14 @@ class MockNode implements ExecutionMockNode {
 
 export function getExecutionMock(
   buildFile: BuildFile,
-  nodes: WorkNodes,
-  services: WorkServices,
+  lazyWorkTree: Lazy<WorkTree>,
   environment: Environment
 ): ExecutionMock<HammerkitEvent> {
   const mockNodes: { [key: string]: MockNode } = {}
 
   const mock: ExecutionMock<HammerkitEvent> = {
     task(name: string): ExecutionMockNode {
-      const node = getNode(buildFile, nodes, name)
+      const node = getNode(buildFile, lazyWorkTree.resolve().nodes, name)
       const key = `node:${node.id}`
       const mockNode = mockNodes[key] ?? new MockNode()
 
@@ -51,7 +50,7 @@ export function getExecutionMock(
 
       if (key.startsWith('node') || key.startsWith('watch')) {
         const nodeId = key.substring(key.indexOf(':') + 1)
-        const node = nodes[nodeId]
+        const node = lazyWorkTree.resolve().nodes[nodeId]
 
         if (key.startsWith('watch')) {
           return null
@@ -82,7 +81,7 @@ export function getExecutionMock(
         }
       } else {
         const serviceId = key.substring('service:'.length)
-        const service = services[serviceId]
+        const service = lazyWorkTree.resolve().services[serviceId]
 
         return async (abort, emitter) => {
           if (mockNode.duration > 0) {

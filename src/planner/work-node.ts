@@ -2,11 +2,12 @@ import { BuildFile } from '../parser/build-file'
 import { WorkNodeSource } from './work-node-source'
 import { WorkNodeCommand } from './work-node-command'
 import { WorkNodePath } from './work-node-path'
-import { MergedBuildFileTask, MergedDependency } from './utils/plan-work-node'
 import { WorkNodePort } from './work-node-port'
 import { WorkService } from './work-service'
 import { StatusConsole, LogConsole } from './work-node-status'
 import { LabelValues } from '../testing/test-suite'
+import { CacheMethod } from '../parser/cache-method'
+import { PlannedTask } from './utils/plan-work-node'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -21,15 +22,16 @@ export interface BaseWorkNode {
   generates: { path: string; inherited: boolean }[]
   envs: { [key: string]: string }
   cmds: WorkNodeCommand[]
-  unknownProps: { [key: string]: any }
+  plannedTask: PlannedTask
   buildFile: BuildFile
   taskName: string
   needs: WorkService[]
-  mergedTask: MergedBuildFileTask
-  mergedDeps: MergedDependency[]
+  //mergedTask: BuildFileReference
+  //mergedDeps: BuildFileReference[]
   console: LogConsole
   labels: LabelValues
   status: StatusConsole
+  caching: CacheMethod
 }
 
 export interface LocalWorkNode extends BaseWorkNode {

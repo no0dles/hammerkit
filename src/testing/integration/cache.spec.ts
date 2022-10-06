@@ -30,8 +30,8 @@ describe('cache', () => {
     await writeWorkNodeCache(node, environment)
     await action(buildFile, workTree, environment)
 
-    const checksumUpToDate = await checkIfUpToDate('checksum', node, environment)
-    const modifyDateUpToDate = await checkIfUpToDate('modify-date', node, environment)
+    const checksumUpToDate = await checkIfUpToDate({ ...node, caching: 'checksum' }, environment)
+    const modifyDateUpToDate = await checkIfUpToDate({ ...node, caching: 'modify-date' }, environment)
 
     if (expectInvalidate) {
       expect(checksumUpToDate).toBeFalsy()
@@ -58,10 +58,9 @@ describe('cache', () => {
   it('should invalid cache on image change', async () => {
     await testCache(async (buildFile, workTree) => {
       const node = getNode(buildFile, workTree.nodes, 'example') as ContainerWorkNode
-      node.image = '15.0.0'
-      node.mergedTask.image = '15.0.0'
+      node.plannedTask.image = '15.0.0'
       delete workTree.nodes[node.id]
-      node.id = getWorkNodeId(node.cwd, node.mergedTask, node.mergedDeps)
+      node.id = getWorkNodeId(node.plannedTask)
       workTree.nodes[node.id] = node
     }, true)
   })

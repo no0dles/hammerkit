@@ -106,7 +106,7 @@ export async function getProgram(
             const result = await cli.exec(
               { taskName: node.name },
               {
-                cacheMethod: options.cache,
+                cacheDefault: options.cache,
                 watch: options.watch,
                 workers: options.concurrency,
                 logMode: options.log,
@@ -148,7 +148,7 @@ export async function getProgram(
             filterLabels: parseLabelArguments(options.filter),
           },
           {
-            cacheMethod: options.cache,
+            cacheDefault: options.cache,
             watch: options.watch,
             workers: options.concurrency,
             logMode: options.log,

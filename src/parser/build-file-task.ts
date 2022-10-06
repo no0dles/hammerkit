@@ -1,6 +1,7 @@
 import { BuildFileTaskSource } from './build-file-task-source'
 import { BuildTaskCommand } from './build-file-task-command'
 import { BuildFileTaskPlatform } from './build-file-task-platform'
+import { CacheMethod } from './cache-method'
 
 export interface BuildFileTask {
   deps: string[] | null
@@ -19,4 +20,5 @@ export interface BuildFileTask {
   ports: string[] | null
   unknownProps: { [key: string]: any }
   labels: { [key: string]: string }
+  cache: CacheMethod | null
 }

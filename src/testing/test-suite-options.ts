@@ -1,4 +1,4 @@
-import { CacheMethod } from '../optimizer/cache-method'
+import { CacheMethod } from '../parser/cache-method'
 
 export interface TestSuiteOptions {
   workers?: number

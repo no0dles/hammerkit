@@ -1,19 +1,16 @@
 import { BuildFile } from '../parser/build-file'
-import { planWorkNodes } from '../planner/utils/plan-work-nodes'
-import { planWorkTree } from '../planner/utils/plan-work-tree'
-import { WorkNode } from '../planner/work-node'
+import { planWorkNodes } from './utils/plan-work-nodes'
+import { planWorkTree } from './utils/plan-work-tree'
+import { WorkNode } from './work-node'
 import { WorkNodeValidation } from './work-node-validation'
 import { Environment } from '../executer/environment'
-import { WorkNodes } from './work-nodes'
-import { WorkServices } from './work-services'
+import { WorkTree } from './work-tree'
 
-function plan(buileFile: BuildFile, name?: string): [WorkNodes, WorkServices] {
+function plan(buileFile: BuildFile, name?: string): WorkTree {
   if (name) {
-    const tree = planWorkTree(buileFile, { taskName: name })
-    return [tree.nodes, tree.services]
+    return planWorkTree(buileFile, { taskName: name })
   } else {
-    const [nodes, services] = planWorkNodes(buileFile, { filterLabels: {}, excludeLabels: {} })
-    return [nodes, services]
+    return planWorkNodes(buileFile, { filterLabels: {}, excludeLabels: {} })
   }
 }
 
@@ -22,11 +19,10 @@ export async function* validate(
   context: Environment,
   name?: string
 ): AsyncGenerator<WorkNodeValidation> {
-  const [nodes] = plan(buildFile, name) // TODO validate services
+  const workTree = plan(buildFile, name) // TODO validate services
   const cycleNodes: WorkNode[] = []
 
-  for (const key of Object.keys(nodes)) {
-    const node = nodes[key]
+  for (const [key, node] of Object.entries(workTree.nodes)) {
     if (!node.description) {
       yield { type: 'warn', message: `missing description`, node: node }
     }
@@ -45,7 +41,7 @@ export async function* validate(
       }
     }
 
-    for (const key of Object.keys(node.unknownProps)) {
+    for (const key of Object.keys(node.plannedTask.buildTask.unknownProps)) {
       yield {
         type: 'warn',
         message: `${key} is an unknown configuration`,

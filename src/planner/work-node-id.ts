@@ -1,9 +1,9 @@
 import { createHash } from 'crypto'
-import { getWorkDescription } from '../optimizer/work-node-description'
-import { MergedBuildFileTask, MergedDependency } from './utils/plan-work-node'
+import { PlannedTask } from './utils/plan-work-node'
+import { getWorkNodeCacheDescription } from '../optimizer/work-node-cache-description'
 
-export function getWorkNodeId(cwd: string, task: MergedBuildFileTask, deps: MergedDependency[]): string {
-  const description = getWorkDescription(cwd, task, deps)
+export function getWorkNodeId(task: PlannedTask): string {
+  const description = getWorkNodeCacheDescription(task)
   const jsonData = JSON.stringify(description)
   return createHash('sha1').update(jsonData).digest('hex')
 }

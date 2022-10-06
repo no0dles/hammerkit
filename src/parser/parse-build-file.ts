@@ -86,6 +86,7 @@ export async function parseBuildFile(
         }, {}),
       platform: null,
       continuous: null,
+      cache: value.caching || null,
     }
     if (Object.keys(result.tasks[key].unknownProps).length > 0) {
       context.console.warn(`unknown props ${Object.keys(result.tasks[key].unknownProps)} for ${key} in ${fileName}`)

@@ -1,6 +1,5 @@
 import { WorkNode } from '../planner/work-node'
 import { Environment } from './environment'
-import { CacheMethod } from '../optimizer/cache-method'
 import { Process } from './emitter'
 import { HammerkitEvent, NodeWatchCanceledEvent } from './events'
 import { getWorkNodeCacheStats, hasStatsChanged } from '../optimizer/get-work-node-cache-stats'
@@ -9,11 +8,7 @@ import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
 
-export function watchNode(
-  node: WorkNode,
-  environment: Environment,
-  cacheMethod: CacheMethod
-): Process<NodeWatchCanceledEvent, HammerkitEvent> {
+export function watchNode(node: WorkNode, environment: Environment): Process<NodeWatchCanceledEvent, HammerkitEvent> {
   return async (abort: AbortSignal, hub) => {
     let currentState = await getWorkNodeCacheStats(node, environment)
 
@@ -23,7 +18,7 @@ export function watchNode(
       }
 
       const newStats = await getWorkNodeCacheStats(node, environment)
-      const hasChanged = await hasStatsChanged(node, currentState, newStats, cacheMethod)
+      const hasChanged = await hasStatsChanged(node, currentState, newStats)
       if (!hasChanged) {
         return
       }

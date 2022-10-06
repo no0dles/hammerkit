@@ -1,13 +1,8 @@
 import { Environment } from './environment'
-import { CacheMethod } from '../optimizer/cache-method'
 import { Process } from './emitter'
 import { HammerkitEvent, ServiceWatchCanceledEvent } from './events'
 import { WorkService } from '../planner/work-service'
-import {
-  getServiceNodeCacheStats,
-  getWorkNodeCacheStats,
-  hasStatsChanged,
-} from '../optimizer/get-work-node-cache-stats'
+import { getServiceNodeCacheStats, hasStatsChanged } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
@@ -15,8 +10,7 @@ import { waitOnAbort } from '../utils/abort-event'
 
 export function watchService(
   service: WorkService,
-  environment: Environment,
-  cacheMethod: CacheMethod
+  environment: Environment
 ): Process<ServiceWatchCanceledEvent, HammerkitEvent> {
   return async (abort: AbortSignal, hub) => {
     let currentState = await getServiceNodeCacheStats(service, environment)
@@ -27,7 +21,7 @@ export function watchService(
       }
 
       const newStats = await getServiceNodeCacheStats(service, environment)
-      const hasChanged = await hasStatsChanged(service, currentState, newStats, cacheMethod)
+      const hasChanged = await hasStatsChanged(service, currentState, newStats)
       if (!hasChanged) {
         return
       }

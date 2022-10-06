@@ -1,6 +1,13 @@
 import { BuildFile } from '../parser/build-file'
 import { Environment } from '../executer/environment'
-import { ExecOptions, ExecTarget, MockedTestCase, TestCase, TestSuiteSetupOptions } from './test-suite'
+import {
+  ExecOptions,
+  ExecTarget,
+  isExecTargetTask,
+  MockedTestCase,
+  TestCase,
+  TestSuiteSetupOptions,
+} from './test-suite'
 import { iterateWorkNodes, iterateWorkServices, planWorkNodes } from '../planner/utils/plan-work-nodes'
 import { getExecutionMock } from '../executer/event-exec-mock'
 import { UpdateEmitter } from '../executer/emitter'
@@ -19,25 +26,24 @@ import { getNode } from './get-node'
 import { WorkNodeValidation } from '../planner/work-node-validation'
 import { validate } from '../planner/validate'
 import { watchService } from '../executer/watch-service'
-import { CacheMethod } from '../optimizer/cache-method'
 import { WorkServices } from '../planner/work-services'
 import { WorkNodes } from '../planner/work-nodes'
+import { Lazy } from './lazy'
 
 function startWatchProcesses(
   nodes: WorkNodes,
   services: WorkServices,
   emitter: UpdateEmitter<HammerkitEvent>,
-  environment: Environment,
-  cacheMethod: CacheMethod
+  environment: Environment
 ) {
   for (const node of iterateWorkNodes(nodes)) {
     if (node.src.length > 0) {
-      emitter.task(`watch:${node.id}`, watchNode(node, environment, cacheMethod))
+      emitter.task(`watch:${node.id}`, watchNode(node, environment))
     }
   }
   for (const service of iterateWorkServices(services)) {
     if (service.mounts.length > 0) {
-      emitter.task(`watch:${service.id}`, watchService(service, environment, cacheMethod))
+      emitter.task(`watch:${service.id}`, watchService(service, environment))
     }
   }
 }
@@ -47,9 +53,8 @@ export function getTestCase(
   environment: Environment,
   options?: Partial<TestSuiteSetupOptions>
 ): MockedTestCase | TestCase {
-  const [nodes, services] = planWorkNodes(buildFile, { excludeLabels: {}, filterLabels: {} })
-
-  const executionMock = getExecutionMock(buildFile, nodes, services, environment)
+  const lazyWorkTree = new Lazy(() => planWorkNodes(buildFile, { excludeLabels: {}, filterLabels: {} }))
+  const executionMock = getExecutionMock(buildFile, lazyWorkTree, environment)
   const emitter = new UpdateEmitter<HammerkitEvent>(environment.abortCtrl.signal, (key, process) => {
     if (options?.mockExecution) {
       const mockedProcess = executionMock.getProcess(key)
@@ -67,14 +72,18 @@ export function getTestCase(
     eventBus: emitter,
     executionMock,
     async exec(target: ExecTarget, options?: Partial<ExecOptions>): Promise<SchedulerResult> {
-      const workTree = planWorkTree(buildFile, target)
+      const workTree = isExecTargetTask(target)
+        ? planWorkTree(buildFile, { taskName: target.taskName, cache: options?.cacheDefault })
+        : planWorkNodes(buildFile, {
+            excludeLabels: target.excludeLabels,
+            filterLabels: target.filterLabels,
+            cache: options?.cacheDefault,
+          })
 
-      const cacheMethod = options?.cacheMethod ?? 'checksum'
       const initialState = createSchedulerState({
         services: workTree.services,
         nodes: workTree.nodes,
         watch: options?.watch ?? false,
-        cacheMethod: options?.cacheMethod ?? 'checksum',
         noContainer: options?.noContainer ?? false,
         workers: options?.workers ?? 0,
         logMode: options?.logMode ?? isCI ? 'live' : 'interactive',
@@ -83,7 +92,7 @@ export function getTestCase(
       const logger = getLogger(logMode, initialState, emitter)
 
       if (options?.watch) {
-        startWatchProcesses(workTree.nodes, workTree.services, emitter, environment, cacheMethod)
+        startWatchProcesses(workTree.nodes, workTree.services, emitter, environment)
       }
 
       const result = await schedule(emitter, initialState, environment)
@@ -93,20 +102,20 @@ export function getTestCase(
       return result
     },
     async clean(): Promise<void> {
-      await cleanCache(nodes, services, environment)
+      await cleanCache(lazyWorkTree.resolve(), environment)
     },
     async restore(path: string): Promise<void> {
-      await restoreCache(path, nodes, services, environment)
+      await restoreCache(path, lazyWorkTree.resolve(), environment)
     },
     async store(path: string): Promise<void> {
-      await storeCache(path, nodes, services, environment)
+      await storeCache(path, lazyWorkTree.resolve(), environment)
     },
     getNode(name: string): WorkNode {
       const workTree = planWorkTree(buildFile, { taskName: name })
       return getNode(buildFile, workTree.nodes, name)
     },
     getNodes(): Generator<WorkNode> {
-      return iterateWorkNodes(nodes)
+      return iterateWorkNodes(lazyWorkTree.resolve().nodes)
     },
     validate(): AsyncGenerator<WorkNodeValidation> {
       return validate(buildFile, environment)

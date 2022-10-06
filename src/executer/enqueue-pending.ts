@@ -34,7 +34,7 @@ export async function enqueuePending(
         continue
       }
 
-      const isUpToDate = await checkIfUpToDate(state.cacheMethod, nodeState.node, environment)
+      const isUpToDate = await checkIfUpToDate(nodeState.node, environment)
       if (isUpToDate) {
         emitter.emit({
           type: 'node-cached',

@@ -1,0 +1,21 @@
+tasks:
+  base_env:
+    envs:
+      NAME: base
+
+  base_container_task:
+    image: alpine
+    envs:
+      NAME: base
+    cmds:
+      - echo base
+
+  extend_container_task:
+    extend: base_container_task
+    envs:
+      NAME: override
+
+  extend_env:
+    extend: base_env
+    envs:
+      KEEP: value

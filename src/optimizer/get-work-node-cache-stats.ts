@@ -3,9 +3,9 @@ import { join, relative } from 'path'
 import { WorkNodeCacheFileStats, WorkServiceCacheFileStats } from './work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
-import { CacheMethod } from './cache-method'
 import { StatusConsole } from '../planner/work-node-status'
 import { WorkService } from '../planner/work-service'
+import { CacheMethod } from '../parser/cache-method'
 
 async function addWorkNodeCacheStats(
   result: WorkNodeCacheFileStats,
@@ -86,20 +86,19 @@ export async function getWorkNodeCacheStats(
 }
 
 export async function hasStatsChanged(
-  node: { name: string; status: StatusConsole },
+  node: { name: string; status: StatusConsole; caching: CacheMethod },
   cache: WorkNodeCacheFileStats | WorkServiceCacheFileStats,
-  current: WorkNodeCacheFileStats | WorkServiceCacheFileStats,
-  cacheMethod: CacheMethod
+  current: WorkNodeCacheFileStats | WorkServiceCacheFileStats
 ): Promise<boolean> {
   let changed = false
   for (const key of Object.keys(cache.files)) {
     if (
-      (cacheMethod === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
-      (cacheMethod === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
+      (node.caching === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
+      (node.caching === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
     ) {
       node.status.write(
         'debug',
-        cacheMethod === 'checksum'
+        node.caching === 'checksum'
           ? `${key} changed from checksum ${cache.files[key].checksum} to ${current.files[key]?.checksum}`
           : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
       )

@@ -1,8 +1,10 @@
 import { WorkNodeCommand } from '../planner/work-node-command'
-import { MergedBuildFileTask, MergedDependency } from '../planner/utils/plan-work-node'
 import { platform } from 'os'
+import { CacheMethod } from '../parser/cache-method'
+import { PlannedTask } from '../planner/utils/plan-work-node'
 
 export interface WorkNodeCacheDescription {
+  cwd: string
   deps: string[]
   src: string[]
   generates: string[]
@@ -11,27 +13,25 @@ export interface WorkNodeCacheDescription {
   image: string | null
   mounts: string[]
   shell: string | null
-  platform: string | null
+  platform: string
+  cache: CacheMethod
 }
 
-export function getWorkNodeCacheDescription(
-  task: MergedBuildFileTask,
-  deps: MergedDependency[]
-): WorkNodeCacheDescription {
+export function getWorkNodeCacheDescription(task: PlannedTask): WorkNodeCacheDescription {
   return {
     shell: task.shell,
     image: task.image,
-    platform: task.image ? null : platform(),
-    generates: (task.generates ?? []).sort(),
-    src: (task.src ? task.src.map((s) => s.relativePath) : []).sort(),
-    deps: (deps ?? []).map((d) => d.name).sort(),
-    envs: Object.keys(task.envs ?? {})
+    platform: task.image ? task.image : platform(),
+    generates: task.generates.sort(),
+    src: task.src.map((s) => s.relativePath).sort(),
+    deps: task.deps.map((d) => d.name).sort(),
+    envs: Object.keys(task.envs)
       .sort()
       .reduce<{ [key: string]: string }>((map, key) => {
         map[key] = task.envs[key]
         return map
       }, {}),
-    cmds: (task.cmds ?? []).map((c) => {
+    cmds: task.cmds.map((c) => {
       if (typeof c === 'string') {
         return { cmd: c, path: '' }
       } else {
@@ -39,5 +39,7 @@ export function getWorkNodeCacheDescription(
       }
     }),
     mounts: task.mounts.sort(),
+    cwd: task.cwd,
+    cache: task.cache,
   }
 }

@@ -1,6 +1,5 @@
 import { BuildFile } from '../../parser/build-file'
 import { WorkNodes } from '../work-nodes'
-import { planWorkNode } from './plan-work-node'
 import { WorkNode } from '../work-node'
 import { WorkServices } from '../work-services'
 import { WorkService } from '../work-service'
@@ -8,6 +7,10 @@ import { NodeState } from '../../executer/scheduler/node-state'
 import { ServiceState } from '../../executer/scheduler/service-state'
 import { SchedulerNodeState, SchedulerServiceState } from '../../executer/scheduler/scheduler-state'
 import { ExecTargetLabel, LabelValues } from '../../testing/test-suite'
+import { getWorkNode } from './plan-work-node'
+import { WorkTree } from '../work-tree'
+import { CacheMethod } from '../../parser/cache-method'
+import { createSubWorkContext, createWorkContext, WorkContext } from '../work-context'
 
 function matchesAllLabels(filterLabels: LabelValues, node: WorkNode, nodes: WorkNodes): boolean {
   for (const [labelKey, filterValues] of Object.entries(filterLabels)) {
@@ -51,6 +54,10 @@ function hasDependencyWithMatch(root: WorkNode, matcher: (node: WorkNode) => boo
 }
 
 function matchesAnyLabel(filterLabels: LabelValues, node: WorkNode): boolean {
+  if (Object.keys(filterLabels).length === 0) {
+    return false
+  }
+
   for (const [labelKey, filterValues] of Object.entries(filterLabels)) {
     const nodeValues = node.labels[labelKey]
     if (nodeValues === null || nodeValues === undefined || nodeValues.length === 0) {
@@ -67,32 +74,34 @@ function matchesAnyLabel(filterLabels: LabelValues, node: WorkNode): boolean {
   return hasDependencyWithMatch(node, (depNode) => matchesAnyLabel(filterLabels, depNode))
 }
 
-export function planWorkNodes(build: BuildFile, target: ExecTargetLabel): [WorkNodes, WorkServices] {
-  const nodes: WorkNodes = {}
-  const services: WorkServices = {}
-  addWorkNodes(build, nodes, services, [], [])
+export function planWorkNodes(build: BuildFile, options: ExecTargetLabel & { cache?: CacheMethod }): WorkTree {
+  const context = createWorkContext(build, options.cache ?? null)
+  addWorkNodes(context, [])
 
   const nodesIdsToRemove: string[] = []
-  for (const [nodeId, node] of Object.entries(nodes)) {
-    if (!matchesAllLabels(target.filterLabels, node, nodes) || matchesAnyLabel(target.excludeLabels, node)) {
+  for (const [nodeId, node] of Object.entries(context.workTree.nodes)) {
+    if (
+      !matchesAllLabels(options.filterLabels, node, context.workTree.nodes) ||
+      matchesAnyLabel(options.excludeLabels, node)
+    ) {
       nodesIdsToRemove.push(nodeId)
     }
   }
 
   for (const nodeId of nodesIdsToRemove) {
-    removeNode(nodeId, nodes, services)
+    removeNode(nodeId, context.workTree)
   }
 
-  return [nodes, services]
+  return context.workTree
 }
 
-function removeNode(nodeId: string, nodes: WorkNodes, services: WorkServices) {
-  const node = nodes[nodeId]
+function removeNode(nodeId: string, workTree: WorkTree) {
+  const node = workTree.nodes[nodeId]
   if (node) {
-    delete nodes[nodeId]
-    for (const node of Object.values(nodes)) {
+    delete workTree.nodes[nodeId]
+    for (const node of Object.values(workTree.nodes)) {
       if (node.deps.some((d) => d.id === nodeId)) {
-        removeNode(node.id, nodes, services)
+        removeNode(node.id, workTree)
       }
     }
   }
@@ -118,31 +127,21 @@ export function* iterateWorkNodes(nodes: WorkNodes | SchedulerNodeState): Genera
   }
 }
 
-function addWorkNodes(
-  build: BuildFile,
-  nodes: WorkNodes,
-  services: WorkServices,
-  files: string[],
-  namePrefix: string[]
-) {
-  if (files.indexOf(build.fileName) !== -1) {
+function addWorkNodes(context: WorkContext, files: string[]) {
+  if (files.indexOf(context.build.fileName) !== -1) {
     return
   }
 
-  files.push(build.fileName)
-  for (const taskId of Object.keys(build.tasks)) {
-    planWorkNode(build, taskId, nodes, services, {
-      currentWorkdir: build.path,
-      idPrefix: null,
-      namePrefix: namePrefix,
-    })
+  files.push(context.build.fileName)
+  for (const taskName of Object.keys(context.build.tasks)) {
+    getWorkNode(context, { taskName })
   }
 
-  for (const key of Object.keys(build.references)) {
-    addWorkNodes(build.references[key], nodes, services, files, [...namePrefix, key])
+  for (const name of Object.keys(context.build.references)) {
+    addWorkNodes(createSubWorkContext(context, { type: 'references', name }), files)
   }
 
-  for (const key of Object.keys(build.includes)) {
-    addWorkNodes(build.includes[key], nodes, services, files, [...namePrefix, key])
+  for (const name of Object.keys(context.build.includes)) {
+    addWorkNodes(createSubWorkContext(context, { type: 'includes', name }), files)
   }
 }

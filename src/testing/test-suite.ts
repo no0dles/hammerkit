@@ -1,12 +1,12 @@
 import { BuildFile } from '../parser/build-file'
 import { HammerkitEvent } from '../executer/events'
-import { CacheMethod } from '../optimizer/cache-method'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { LogMode } from '../logging/log-mode'
 import { WorkNodeValidation } from '../planner/work-node-validation'
 import { Process, UpdateBus } from '../executer/emitter'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
+import { CacheMethod } from '../parser/cache-method'
 
 export interface ExecutionMock<T> {
   task(name: string): ExecutionMockNode
@@ -23,11 +23,11 @@ export interface MockedTestCase extends TestCase {
 }
 
 export interface ExecOptions {
-  cacheMethod: CacheMethod
   workers: number
   watch: boolean
   noContainer: boolean
   logMode: LogMode
+  cacheDefault: CacheMethod
 }
 
 export interface ExecTargetTask {

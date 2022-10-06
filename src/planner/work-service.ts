@@ -2,6 +2,7 @@ import { WorkNodePort } from './work-node-port'
 import { WorkNodePath } from './work-node-path'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import { StatusConsole, LogConsole } from './work-node-status'
+import { CacheMethod } from '../parser/cache-method'
 
 export interface WorkService {
   id: string
@@ -14,4 +15,5 @@ export interface WorkService {
   console: LogConsole
   healthcheck: ExecutionBuildServiceHealthCheck | null
   status: StatusConsole
+  caching: CacheMethod
 }
