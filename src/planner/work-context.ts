@@ -4,7 +4,6 @@ import { CacheMethod } from '../parser/cache-method'
 
 export interface WorkContext {
   cwd: string
-  // idPrefix: string | null
   namePrefix: string[]
   build: BuildFile
   workTree: WorkTree
@@ -14,7 +13,6 @@ export interface WorkContext {
 export function createWorkContext(build: BuildFile, cacheDefault: CacheMethod | null): WorkContext {
   return {
     cwd: build.path,
-    // idPrefix: null,
     namePrefix: [],
     build,
     workTree: { nodes: {}, services: {} },
@@ -31,7 +29,6 @@ export function createSubWorkContext(
     build: subBuildFile,
     workTree: context.workTree,
     cwd: options.type === 'references' ? subBuildFile.path : context.cwd,
-    // idPrefix: null,
     namePrefix: [...context.namePrefix, options.name],
     cacheDefault: context.cacheDefault,
   }

@@ -51,12 +51,18 @@ export interface PlannedTask {
 }
 
 export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskResult): PlannedTask {
+  let extendedTask: BuildFileTask | null = null
+
   if (buildTaskResult.task.extend) {
     const extendedResult = findBuildTask(workContext, { taskName: buildTaskResult.task.extend })
-    // TODO
+    if (extendedResult.task.extend) {
+      throw new Error(`nested extend ${extendedResult.name} is not allowed for task ${buildTaskResult.name}`)
+    }
+    extendedTask = extendedResult.task
   }
 
   const envs = {
+    ...(extendedTask?.envs || {}),
     ...buildTaskResult.context.build.envs,
     ...(buildTaskResult.task.envs || {}),
   }
@@ -65,31 +71,32 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     buildTask: buildTaskResult.task,
     build: buildTaskResult.context.build,
     name: buildTaskResult.name,
-    cache: buildTaskResult.task.cache ?? workContext.cacheDefault,
-    description: buildTaskResult.task.description,
+    cache: buildTaskResult.task.cache ?? extendedTask?.cache ?? workContext.cacheDefault,
+    description: buildTaskResult.task.description ?? extendedTask?.description ?? null,
     continuous: buildTaskResult.task.continuous ?? false,
     cwd: workContext.cwd,
-    image: buildTaskResult.task.image,
-    platform: buildTaskResult.task.platform,
-    mounts: buildTaskResult.task.mounts || [],
-    generates: buildTaskResult.task.generates || [],
-    shell: buildTaskResult.task.shell,
-    ports: buildTaskResult.task.ports || [],
-    src: buildTaskResult.task.src || [],
-    cmds: buildTaskResult.task.cmds || [],
-    labels: buildTaskResult.task.labels || {},
+    image: buildTaskResult.task.image ?? extendedTask?.image ?? null,
+    platform: buildTaskResult.task.platform ?? extendedTask?.platform ?? null,
+    mounts: buildTaskResult.task.mounts || extendedTask?.mounts || [],
+    generates: buildTaskResult.task.generates || extendedTask?.generates || [],
+    shell: buildTaskResult.task.shell ?? extendedTask?.shell ?? null,
+    ports: buildTaskResult.task.ports || extendedTask?.ports || [],
+    src: buildTaskResult.task.src || extendedTask?.src || [],
+    cmds: buildTaskResult.task.cmds || extendedTask?.cmds || [],
+    labels: {
+      ...(extendedTask?.labels || {}),
+      ...(buildTaskResult.task.labels || {}),
+    },
     envs,
     deps: [
-      ...(buildTaskResult.task.deps || []).map((d) => ({
+      ...(buildTaskResult.task.deps || extendedTask?.deps || []).map((d) => ({
         name: d,
-        // build: buildTaskResult.build,
         build: buildTaskResult.context.build,
       })),
     ],
     needs: [
-      ...(buildTaskResult.task.needs || []).map((n) => ({
+      ...(buildTaskResult.task.needs || extendedTask?.needs || []).map((n) => ({
         name: n,
-        //build: buildTaskResult.build,
         build: workContext.build,
       })),
     ],
