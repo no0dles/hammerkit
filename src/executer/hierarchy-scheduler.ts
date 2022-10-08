@@ -13,24 +13,15 @@ export async function schedule(
 ): Promise<SchedulerResult> {
   let current: HammerkitEvent | null = null
   let state = initialState
-  let running = true
 
   do {
-    await enqueuePending(state, environment, emitter)
+    state = await enqueuePending(state, environment, emitter)
 
-    let hadUpdates = false
-    do {
-      current = await emitter.next()
-      if (current) {
-        state = updateState(state, current)
-        hadUpdates = true
-      }
-    } while (current)
-
-    if (!hadUpdates) {
-      running = false
+    current = await emitter.next()
+    if (current) {
+      state = updateState(state, current)
     }
-  } while (running)
+  } while (current)
 
   const success = !Object.values(state.node).some((n) => n.type !== 'completed')
 

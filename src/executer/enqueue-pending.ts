@@ -7,21 +7,24 @@ import { dockerService } from './docker-service'
 import { isContainerWorkNode } from '../planner/work-node'
 import { dockerNode } from './docker-node'
 import { localNode } from './local-node'
+import { updateState } from './update-state'
 
 export async function enqueuePending(
   state: SchedulerState,
   environment: Environment,
   emitter: UpdateEmitter<HammerkitEvent>
-): Promise<void> {
+): Promise<SchedulerState> {
   if (environment.abortCtrl.signal.aborted) {
-    return
+    return state
   }
+
+  let currentState = state
 
   for (const [, nodeState] of Object.entries(state.node)) {
     if (nodeState.type === 'pending') {
       const runningNodeCount = Object.values(state.node).filter((n) => n.type === 'running').length
       if (state.workers !== 0 && runningNodeCount >= state.workers) {
-        return
+        return currentState
       }
 
       const pendingNeeds = nodeState.node.needs.filter((need) => state.service[need.id].type === 'pending')
@@ -36,7 +39,7 @@ export async function enqueuePending(
 
       const isUpToDate = await checkIfUpToDate(nodeState.node, environment)
       if (isUpToDate) {
-        emitter.emit({
+        currentState = updateState(currentState, {
           type: 'node-cached',
           node: nodeState.node,
         })
@@ -45,7 +48,7 @@ export async function enqueuePending(
 
       if (pendingNeeds.length > 0) {
         for (const pendingNeed of pendingNeeds) {
-          emitter.emit({
+          currentState = updateState(currentState, {
             type: 'service-start',
             service: pendingNeed,
             abortController: emitter.task(`service:${pendingNeed.id}`, dockerService(pendingNeed)),
@@ -66,7 +69,7 @@ export async function enqueuePending(
         }
       }
 
-      emitter.emit({
+      currentState = updateState(currentState, {
         type: 'node-start',
         node: nodeState.node,
         abortController:
@@ -95,4 +98,6 @@ export async function enqueuePending(
       serviceState.abortController.abort()
     }
   }
+
+  return currentState
 }
