@@ -1,7 +1,7 @@
 import { SchedulerState } from './scheduler/scheduler-state'
 import { Environment } from './environment'
 import { UpdateEmitter } from './emitter'
-import { HammerkitEvent } from './events'
+import { HammerkitEvent, NodeStartEvent } from './events'
 import { checkIfUpToDate } from './scheduler/enqueue-next'
 import { dockerService } from './docker-service'
 import { isContainerWorkNode } from '../planner/work-node'
@@ -69,14 +69,16 @@ export async function enqueuePending(
         }
       }
 
-      currentState = updateState(currentState, {
+      const startEvent: NodeStartEvent = {
         type: 'node-start',
         node: nodeState.node,
         abortController:
           isContainerWorkNode(nodeState.node) && !state.noContainer
             ? emitter.task(`node:${nodeState.node.id}`, dockerNode(nodeState.node, serviceContainers, environment))
             : emitter.task(`node:${nodeState.node.id}`, localNode(nodeState.node, environment)),
-      })
+      }
+      currentState = updateState(currentState, startEvent)
+      emitter.emit(startEvent)
     }
   }
 

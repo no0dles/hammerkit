@@ -42,6 +42,9 @@ export function updateState(current: SchedulerState, evt: HammerkitEvent): Sched
   } else if (evt.type === 'scheduler-update') {
     return current
   } else if (evt.type === 'node-start') {
+    if (current.node[evt.node.id].type === 'running') {
+      return current
+    }
     current.node[evt.node.id] = {
       type: 'running',
       node: evt.node,
