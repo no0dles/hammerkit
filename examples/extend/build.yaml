@@ -3,6 +3,13 @@ tasks:
     envs:
       NAME: base
 
+  base_dep:
+    deps: [base_env]
+
+  extend_dep:
+    extend: base_dep
+    deps: [extend_env]
+
   base_container_task:
     image: alpine
     envs:

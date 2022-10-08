@@ -25,4 +25,10 @@ describe('extend', () => {
       expect(node.image).toBe('alpine')
     }
   })
+
+  it('should merge deps', async () => {
+    const testCase = await suite.setup()
+    const node = await testCase.getNode('extend_dep')
+    expect(node.deps.map((d) => d.name)).toIncludeSameMembers(['base_env', 'extend_env'])
+  })
 })

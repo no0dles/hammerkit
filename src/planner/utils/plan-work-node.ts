@@ -26,6 +26,7 @@ import { CacheMethod } from '../../parser/cache-method'
 export interface BuildFileReference {
   build: BuildFile
   name: string
+  context: WorkContext
 }
 
 export interface PlannedTask {
@@ -51,55 +52,65 @@ export interface PlannedTask {
 }
 
 export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskResult): PlannedTask {
-  let extendedTask: BuildFileTask | null = null
+  let extendedTask: BuildTaskResult | null = null
 
   if (buildTaskResult.task.extend) {
-    const extendedResult = findBuildTask(workContext, { taskName: buildTaskResult.task.extend })
-    if (extendedResult.task.extend) {
-      throw new Error(`nested extend ${extendedResult.name} is not allowed for task ${buildTaskResult.name}`)
+    extendedTask = findBuildTask(workContext, { taskName: buildTaskResult.task.extend })
+    if (extendedTask.task.extend) {
+      throw new Error(`nested extend ${extendedTask.name} is not allowed for task ${buildTaskResult.name}`)
     }
-    extendedTask = extendedResult.task
   }
 
   const envs = {
-    ...(extendedTask?.envs || {}),
+    ...(extendedTask?.task?.envs || {}),
     ...buildTaskResult.context.build.envs,
     ...(buildTaskResult.task.envs || {}),
+  }
+
+  const getReferences = (task: BuildTaskResult | null, prop: 'needs' | 'deps'): BuildFileReference[] => {
+    if (!task) {
+      return []
+    }
+
+    const value = task.task[prop]
+    if (!value) {
+      return []
+    }
+
+    return value.map((d) => ({
+      name: d,
+      build: buildTaskResult.context.build,
+      context: task.context,
+    }))
+  }
+
+  const mergeReferences = (first: BuildFileReference[], second: BuildFileReference[]): BuildFileReference[] => {
+    return [...first, ...second]
   }
 
   return {
     buildTask: buildTaskResult.task,
     build: buildTaskResult.context.build,
     name: buildTaskResult.name,
-    cache: buildTaskResult.task.cache ?? extendedTask?.cache ?? workContext.cacheDefault,
-    description: buildTaskResult.task.description ?? extendedTask?.description ?? null,
+    cache: buildTaskResult.task.cache ?? extendedTask?.task?.cache ?? workContext.cacheDefault,
+    description: buildTaskResult.task.description ?? extendedTask?.task?.description ?? null,
     continuous: buildTaskResult.task.continuous ?? false,
     cwd: workContext.cwd,
-    image: buildTaskResult.task.image ?? extendedTask?.image ?? null,
-    platform: buildTaskResult.task.platform ?? extendedTask?.platform ?? null,
-    mounts: buildTaskResult.task.mounts || extendedTask?.mounts || [],
-    generates: buildTaskResult.task.generates || extendedTask?.generates || [],
-    shell: buildTaskResult.task.shell ?? extendedTask?.shell ?? null,
-    ports: buildTaskResult.task.ports || extendedTask?.ports || [],
-    src: buildTaskResult.task.src || extendedTask?.src || [],
-    cmds: buildTaskResult.task.cmds || extendedTask?.cmds || [],
+    image: buildTaskResult.task.image ?? extendedTask?.task?.image ?? null,
+    platform: buildTaskResult.task.platform ?? extendedTask?.task?.platform ?? null,
+    mounts: buildTaskResult.task.mounts || extendedTask?.task?.mounts || [],
+    generates: buildTaskResult.task.generates || extendedTask?.task?.generates || [],
+    shell: buildTaskResult.task.shell ?? extendedTask?.task?.shell ?? null,
+    ports: buildTaskResult.task.ports || extendedTask?.task?.ports || [],
+    src: buildTaskResult.task.src || extendedTask?.task?.src || [],
+    cmds: buildTaskResult.task.cmds || extendedTask?.task?.cmds || [],
     labels: {
-      ...(extendedTask?.labels || {}),
+      ...(extendedTask?.task?.labels || {}),
       ...(buildTaskResult.task.labels || {}),
     },
     envs,
-    deps: [
-      ...(buildTaskResult.task.deps || extendedTask?.deps || []).map((d) => ({
-        name: d,
-        build: buildTaskResult.context.build,
-      })),
-    ],
-    needs: [
-      ...(buildTaskResult.task.needs || extendedTask?.needs || []).map((n) => ({
-        name: n,
-        build: workContext.build,
-      })),
-    ],
+    deps: mergeReferences(getReferences(extendedTask, 'deps'), getReferences(buildTaskResult, 'deps')),
+    needs: mergeReferences(getReferences(extendedTask, 'needs'), getReferences(buildTaskResult, 'needs')),
   }
 }
 
@@ -152,8 +163,10 @@ export function getWorkNode(context: WorkContext, selector: BuildTaskSelector): 
   const depNodes: WorkNode[] = []
   for (const plannedDep of plannedTask.deps) {
     const depName = templateValue(plannedDep.name, plannedDep.build.envs)
-    const depNode = getWorkNode(rootNode.context, { taskName: depName })
-    depNodes.push(depNode)
+    const depNode = getWorkNode(plannedDep.context, { taskName: depName })
+    if (!depNodes.some((d) => d.id === depNode.id)) {
+      depNodes.push(depNode)
+    }
   }
 
   planWorkDependency(depNodes, node)
@@ -273,7 +286,9 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
         ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),
       }
     }
-    result.push(context.workTree.services[id])
+    if (!result.some((s) => s.id === id)) {
+      result.push(context.workTree.services[id])
+    }
   }
 
   return result
