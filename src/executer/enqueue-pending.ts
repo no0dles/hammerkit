@@ -1,13 +1,15 @@
 import { SchedulerState } from './scheduler/scheduler-state'
 import { Environment } from './environment'
 import { UpdateEmitter } from './emitter'
-import { HammerkitEvent, NodeStartEvent } from './events'
+import { HammerkitEvent, NodeStartEvent, ServiceDns } from './events'
 import { checkIfUpToDate } from './scheduler/enqueue-next'
 import { dockerService } from './docker-service'
 import { isContainerWorkNode } from '../planner/work-node'
 import { dockerNode } from './docker-node'
 import { localNode } from './local-node'
-import { updateState } from './update-state'
+import { changeState } from './update-state'
+import { isContainerWorkService } from '../planner/work-service'
+import { kubernetesService } from './kubernetes-service'
 
 export async function enqueuePending(
   state: SchedulerState,
@@ -28,7 +30,6 @@ export async function enqueuePending(
       }
 
       const pendingNeeds = nodeState.node.needs.filter((need) => state.service[need.id].type === 'pending')
-      const runningNeeds = nodeState.node.needs.filter((need) => state.service[need.id].type === 'running')
       const hasOpenDeps = nodeState.node.deps.some(
         (dep) => state.node[dep.id].type === 'pending' || state.node[dep.id].type === 'running'
       )
@@ -39,7 +40,7 @@ export async function enqueuePending(
 
       const isUpToDate = await checkIfUpToDate(nodeState.node, environment)
       if (isUpToDate) {
-        currentState = updateState(currentState, {
+        currentState = changeState(currentState, emitter, {
           type: 'node-cached',
           node: nodeState.node,
         })
@@ -48,36 +49,39 @@ export async function enqueuePending(
 
       if (pendingNeeds.length > 0) {
         for (const pendingNeed of pendingNeeds) {
-          currentState = updateState(currentState, {
+          currentState = changeState(currentState, emitter, {
             type: 'service-start',
             service: pendingNeed,
-            abortController: emitter.task(`service:${pendingNeed.id}`, dockerService(pendingNeed)),
+            abortController: emitter.task(
+              `service:${pendingNeed.id}`,
+              isContainerWorkService(pendingNeed) ? dockerService(pendingNeed) : kubernetesService(pendingNeed)
+            ),
           })
         }
         continue
       }
 
-      if (runningNeeds.length > 0) {
+      const hasNotReadyNeeds = nodeState.node.needs.some((need) => state.service[need.id].type !== 'ready')
+      if (hasNotReadyNeeds) {
         continue
       }
 
-      const serviceContainers: { [key: string]: string } = {}
+      const serviceContainers: { [key: string]: ServiceDns } = {}
       for (const need of nodeState.node.needs) {
         const serviceState = state.service[need.id]
         if (serviceState.type === 'ready') {
-          serviceContainers[need.id] = serviceState.containerId
+          serviceContainers[need.id] = serviceState.dns
         }
       }
 
       const startEvent: NodeStartEvent = {
         type: 'node-start',
         node: nodeState.node,
-        abortController:
-          isContainerWorkNode(nodeState.node) && !state.noContainer
-            ? emitter.task(`node:${nodeState.node.id}`, dockerNode(nodeState.node, serviceContainers, environment))
-            : emitter.task(`node:${nodeState.node.id}`, localNode(nodeState.node, environment)),
+        abortController: isContainerWorkNode(nodeState.node)
+          ? emitter.task(`node:${nodeState.node.id}`, dockerNode(nodeState.node, serviceContainers, environment))
+          : emitter.task(`node:${nodeState.node.id}`, localNode(nodeState.node, environment)),
       }
-      currentState = updateState(currentState, startEvent)
+      currentState = changeState(currentState, emitter, startEvent)
       emitter.emit(startEvent)
     }
   }

@@ -74,9 +74,12 @@ function matchesAnyLabel(filterLabels: LabelValues, node: WorkNode): boolean {
   return hasDependencyWithMatch(node, (depNode) => matchesAnyLabel(filterLabels, depNode))
 }
 
-export function planWorkNodes(build: BuildFile, options: ExecTargetLabel & { cache?: CacheMethod }): WorkTree {
+export function planWorkNodes(
+  build: BuildFile,
+  options: ExecTargetLabel & { cache?: CacheMethod; noContainer: boolean }
+): WorkTree {
   const context = createWorkContext(build, options.cache ?? null)
-  addWorkNodes(context, [])
+  addWorkNodes(context, [], options.noContainer)
 
   const nodesIdsToRemove: string[] = []
   for (const [nodeId, node] of Object.entries(context.workTree.nodes)) {
@@ -127,21 +130,21 @@ export function* iterateWorkNodes(nodes: WorkNodes | SchedulerNodeState): Genera
   }
 }
 
-function addWorkNodes(context: WorkContext, files: string[]) {
+function addWorkNodes(context: WorkContext, files: string[], noContainer: boolean) {
   if (files.indexOf(context.build.fileName) !== -1) {
     return
   }
 
   files.push(context.build.fileName)
   for (const taskName of Object.keys(context.build.tasks)) {
-    getWorkNode(context, { taskName })
+    getWorkNode(context, { taskName }, noContainer)
   }
 
   for (const name of Object.keys(context.build.references)) {
-    addWorkNodes(createSubWorkContext(context, { type: 'references', name }), files)
+    addWorkNodes(createSubWorkContext(context, { type: 'references', name }), files, noContainer)
   }
 
   for (const name of Object.keys(context.build.includes)) {
-    addWorkNodes(createSubWorkContext(context, { type: 'includes', name }), files)
+    addWorkNodes(createSubWorkContext(context, { type: 'includes', name }), files, noContainer)
   }
 }

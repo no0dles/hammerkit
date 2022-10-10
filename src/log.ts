@@ -62,6 +62,37 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, logCon
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
 
   if (logConsoleOnFail && isVerbose) {
+    // TODO reduce repeating, sort status log by time order, remove it from node/service
+    for (const serviceState of iterateWorkServices(schedulerState.service)) {
+      const logs = await serviceState.service.status.read()
+      for (const log of logs) {
+        process.stdout.write(
+          `${formatDate(log.date)} ${colors.grey('service:')} ${getNodeName(
+            serviceState.service.name,
+            maxNodeNameLength
+          )} - ${log.date.toLocaleTimeString()} - ${colors.white(log.message)}\n`
+        )
+      }
+      if (logs.length > 0) {
+        process.stdout.write('-----------------\n')
+      }
+    }
+
+    for (const nodeState of iterateWorkNodes(schedulerState.node)) {
+      const logs = await nodeState.node.status.read()
+      for (const log of logs) {
+        process.stdout.write(
+          `${formatDate(log.date)} ${colors.grey('task:')} ${getNodeName(
+            nodeState.node.name,
+            maxNodeNameLength
+          )} - ${log.date.toLocaleTimeString()} - ${colors.white(log.message)}\n`
+        )
+      }
+      if (logs.length > 0) {
+        process.stdout.write('-----------------\n')
+      }
+    }
+
     for (const serviceState of iterateWorkServices(schedulerState.service)) {
       if (isVerbose) {
         const logs = await serviceState.service.console.read()

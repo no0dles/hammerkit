@@ -8,11 +8,12 @@ import { CacheMethod } from '../../parser/cache-method'
 export interface PlanOptions {
   taskName: string
   cache?: CacheMethod
+  noContainer: boolean
 }
 
 export function planWorkTree(build: BuildFile, options: PlanOptions): WorkTree & { rootNode: WorkNode } {
   const context = createWorkContext(build, options.cache ?? null)
-  const result = getWorkNode(context, { taskName: options.taskName })
+  const result = getWorkNode(context, { taskName: options.taskName }, options.noContainer)
   return {
     ...context.workTree,
     rootNode: result,

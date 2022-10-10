@@ -8,9 +8,9 @@ import { WorkTree } from './work-tree'
 
 function plan(buileFile: BuildFile, name?: string): WorkTree {
   if (name) {
-    return planWorkTree(buileFile, { taskName: name })
+    return planWorkTree(buileFile, { taskName: name, noContainer: false })
   } else {
-    return planWorkNodes(buileFile, { filterLabels: {}, excludeLabels: {} })
+    return planWorkNodes(buileFile, { filterLabels: {}, excludeLabels: {}, noContainer: false })
   }
 }
 

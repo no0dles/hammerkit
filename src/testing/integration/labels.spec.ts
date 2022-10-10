@@ -12,6 +12,7 @@ describe('local', () => {
     const plan = planWorkNodes(testCase.buildFile, {
       filterLabels: { app: ['bar'] },
       excludeLabels: {},
+      noContainer: false,
     })
     expectNodes(plan, ['bar', 'base'])
   })
@@ -21,6 +22,7 @@ describe('local', () => {
     const plan = planWorkNodes(testCase.buildFile, {
       filterLabels: { app: ['foo'] },
       excludeLabels: {},
+      noContainer: false,
     })
     expectNodes(plan, ['foo', 'base'])
   })
@@ -30,6 +32,7 @@ describe('local', () => {
     const plan = planWorkNodes(testCase.buildFile, {
       filterLabels: {},
       excludeLabels: { app: ['foo'] },
+      noContainer: false,
     })
     expectNodes(plan, ['bar', 'base'])
   })
@@ -39,6 +42,7 @@ describe('local', () => {
     const plan = planWorkNodes(testCase.buildFile, {
       filterLabels: {},
       excludeLabels: { app: ['base'] },
+      noContainer: false,
     })
     expectNodes(plan, [])
   })
@@ -48,6 +52,7 @@ describe('local', () => {
     const plan = planWorkNodes(testCase.buildFile, {
       filterLabels: { app: ['foo', 'bar'] },
       excludeLabels: {},
+      noContainer: false,
     })
     expectNodes(plan, ['foo', 'bar', 'base'])
   })

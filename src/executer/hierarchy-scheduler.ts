@@ -4,7 +4,7 @@ import { UpdateEmitter } from './emitter'
 import { Environment } from './environment'
 import { SchedulerResult } from './scheduler/scheduler-result'
 import { enqueuePending } from './enqueue-pending'
-import { updateState } from './update-state'
+import { changeState } from './update-state'
 
 export async function schedule(
   emitter: UpdateEmitter<HammerkitEvent>,
@@ -19,9 +19,9 @@ export async function schedule(
 
     current = await emitter.next()
     if (current) {
-      state = updateState(state, current)
+      state = changeState(state, emitter, current)
     }
-  } while (current)
+  } while (hasPending(state))
 
   const success = !Object.values(state.node).some((n) => n.type !== 'completed')
 
@@ -29,4 +29,8 @@ export async function schedule(
     state,
     success,
   }
+}
+
+function hasPending(state: SchedulerState) {
+  return Object.values(state.node).some((n) => n.type === 'running' || n.type === 'pending')
 }

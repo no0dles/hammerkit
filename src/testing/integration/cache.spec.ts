@@ -22,7 +22,7 @@ describe('cache', () => {
     expectInvalidate: boolean
   ) {
     const { buildFile, environment } = await suite.setup()
-    const workTree = planWorkTree(buildFile, { taskName: 'example' })
+    const workTree = planWorkTree(buildFile, { taskName: 'example', noContainer: false })
 
     const node = Object.values(workTree.nodes).find((n) => n.name === 'example')!
     expect(node).toBeDefined()

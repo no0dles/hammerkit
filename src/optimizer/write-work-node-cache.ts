@@ -6,7 +6,7 @@ import { getWorkNodeCacheDescription } from './work-node-cache-description'
 
 export async function writeWorkNodeCache(node: WorkNode, context: Environment): Promise<void> {
   const cachePath = getCacheStatsDirectory(node.id, node.cwd)
-  const cacheFile = getCacheStatsFile(node.id, node.cwd)
+  const cacheFile = getCacheStatsFile(node.type, node.id, node.cwd)
   const cacheDescriptionFile = getCacheDescriptionFile(node.id)
   const cache = await getWorkNodeCacheStats(node, context)
   const taskDescription = getWorkNodeCacheDescription(node.plannedTask)

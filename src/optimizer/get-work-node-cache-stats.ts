@@ -4,7 +4,7 @@ import { WorkNodeCacheFileStats, WorkServiceCacheFileStats } from './work-node-c
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { StatusConsole } from '../planner/work-node-status'
-import { WorkService } from '../planner/work-service'
+import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
 
 async function addWorkNodeCacheStats(
@@ -55,7 +55,7 @@ async function addWorkServiceCacheStats(result: WorkServiceCacheFileStats, path:
 }
 
 export async function getServiceNodeCacheStats(
-  cache: WorkService,
+  cache: ContainerWorkService,
   environment: Environment
 ): Promise<WorkServiceCacheFileStats> {
   const result: WorkServiceCacheFileStats = {

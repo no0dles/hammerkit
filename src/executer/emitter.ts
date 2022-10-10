@@ -27,11 +27,11 @@ export class UpdateEmitter<T extends { type: string }> implements ProgressHub<T>
   private interuptNext?: (val: { type: 'interupt' }) => void
   private listeners = new Map<string, ((evt: any) => void)[]>()
 
-  constructor(private abort: AbortSignal, private taskMapper: ProcessMapper<any, T> = (key, process) => process) {}
+  constructor(private abort: AbortController, private taskMapper: ProcessMapper<any, T> = (key, process) => process) {}
 
   task<R extends T>(key: string, process: Process<R, T>): AbortController {
     const abortController = new AbortController()
-    listenOnAbort(this.abort, () => {
+    listenOnAbort(this.abort.signal, () => {
       abortController.abort()
     })
 
@@ -103,5 +103,10 @@ export class UpdateEmitter<T extends { type: string }> implements ProgressHub<T>
     } else {
       listeners.push(listener)
     }
+  }
+
+  async close() {
+    this.abort.abort()
+    await Promise.allSettled(this.processes.map((p) => p.promise))
   }
 }

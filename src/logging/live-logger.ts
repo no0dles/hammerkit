@@ -26,7 +26,7 @@ export function liveLogger(state: SchedulerState): Logger {
 
   return {
     async complete(evt: SchedulerResult) {
-      await printWorkTreeResult(evt.state, false)
+      await printWorkTreeResult(evt.state, !evt.success)
     },
   }
 }

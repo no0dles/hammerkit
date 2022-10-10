@@ -1,4 +1,4 @@
-import { WorkService } from '../planner/work-service'
+import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { Process } from './emitter'
 import { HammerkitEvent, ServiceCanceledEvent, ServiceCrashEvent, ServiceReadyEvent } from './events'
 import { Container } from 'dockerode'
@@ -12,7 +12,7 @@ import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
 
 export function dockerService(
-  service: WorkService
+  service: ContainerWorkService
 ): Process<ServiceReadyEvent | ServiceCanceledEvent | ServiceCrashEvent, HammerkitEvent> {
   return async (abort, emitter) => {
     let container: Container | null = null
@@ -50,7 +50,7 @@ export function dockerService(
         emitter.emit({
           type: 'service-ready',
           service: service,
-          containerId: container.id,
+          dns: { containerId: container.id },
         })
       } else {
         let ready = false
@@ -64,7 +64,7 @@ export function dockerService(
         emitter.emit({
           type: 'service-ready',
           service,
-          containerId: container.id,
+          dns: { containerId: container.id },
         })
       }
 

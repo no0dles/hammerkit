@@ -1,7 +1,7 @@
 import { Environment } from './environment'
 import { Process } from './emitter'
 import { HammerkitEvent, ServiceWatchCanceledEvent } from './events'
-import { WorkService } from '../planner/work-service'
+import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { getServiceNodeCacheStats, hasStatsChanged } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
@@ -9,7 +9,7 @@ import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
 
 export function watchService(
-  service: WorkService,
+  service: ContainerWorkService,
   environment: Environment
 ): Process<ServiceWatchCanceledEvent, HammerkitEvent> {
   return async (abort: AbortSignal, hub) => {

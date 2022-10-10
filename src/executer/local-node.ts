@@ -23,7 +23,7 @@ export function localNode(
         checkForAbort(abort)
 
         const command = templateValue(cmd.cmd, envs)
-        node.status.write('info', `execute cmd ${command} locally`)
+        node.status.write('info', `execute cmd "${command}" locally`)
 
         const exitCode = await executeCommand(node, emitter, abort, cmd.path, command, envs)
         if (exitCode !== 0) {

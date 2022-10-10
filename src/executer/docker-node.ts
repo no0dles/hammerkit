@@ -1,7 +1,15 @@
 import { ContainerWorkNode } from '../planner/work-node'
 import { Environment } from './environment'
 import { Process } from './emitter'
-import { HammerkitEvent, NodeCanceledEvent, NodeCompletedEvent, NodeCrashEvent, NodeErrorEvent } from './events'
+import {
+  HammerkitEvent,
+  isHostServiceDns,
+  NodeCanceledEvent,
+  NodeCompletedEvent,
+  NodeCrashEvent,
+  NodeErrorEvent,
+  ServiceDns,
+} from './events'
 import { Container } from 'dockerode'
 import {
   convertToPosixPath,
@@ -24,7 +32,7 @@ import { removeContainer } from '../docker/remove-container'
 
 export function dockerNode(
   node: ContainerWorkNode,
-  serviceContainers: { [key: string]: string },
+  serviceContainers: { [key: string]: ServiceDns },
   environment: Environment
 ): Process<NodeCanceledEvent | NodeErrorEvent | NodeCrashEvent | NodeCompletedEvent, HammerkitEvent> {
   return async (abort) => {
@@ -45,12 +53,21 @@ export function dockerNode(
       }
 
       const links: string[] = []
+      const hosts: string[] = []
+
       for (const need of node.needs) {
-        const container = serviceContainers[need.id]
-        if (!container) {
-          throw new Error(`service ${need.name} is not running`)
+        const dns = serviceContainers[need.id]
+        if (isHostServiceDns(dns)) {
+          hosts.push(`${need.name}:${dns.host}`)
+          node.status.write('debug', `extra host ${need.name}:${dns.host}`)
+        } else {
+          if (!dns.containerId) {
+            throw new Error(`service ${need.name} is not running`)
+          }
+
+          links.push(`${dns.containerId}:${need.name}`)
+          node.status.write('debug', `link container ${dns.containerId}:${need.name}`)
         }
-        links.push(`${container}:${need.name}`)
       }
 
       const envs = replaceEnvVariables(node, environment.processEnvs)
@@ -74,6 +91,7 @@ export function dockerNode(
             map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
             return map
           }, {}),
+          ExtraHosts: hosts,
           Links: links,
           AutoRemove: true,
         },
@@ -112,7 +130,7 @@ export function dockerNode(
         checkForAbort(abort)
 
         const command = templateValue(cmd.cmd, node.envs)
-        node.status.write('info', `execute cmd ${command} in container`)
+        node.status.write('info', `execute cmd "${command}" in container`)
 
         const result = await execCommand(
           node,

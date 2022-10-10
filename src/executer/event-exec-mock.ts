@@ -91,7 +91,7 @@ export function getExecutionMock(
           emitter.emit({
             type: 'service-ready',
             service,
-            containerId: '',
+            dns: { containerId: '' },
           })
 
           await waitOnAbort(abort)

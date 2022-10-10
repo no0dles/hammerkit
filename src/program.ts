@@ -79,56 +79,10 @@ export async function getProgram(
         }
       })
 
-    for (const node of cli.getNodes()) {
-      if (reservedCommands.indexOf(node.name) >= 0) {
-        environment.console.warn(`${node.name} is reserved, please use another name`)
-        continue
-      }
-
-      program
-        .command(node.name)
-        .description(node.description || '')
-        .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
-        .addOption(new Option('-w, --watch', 'watch tasks').default(false))
-        .addOption(
-          new Option('-l, --log <mode>', 'log mode')
-            .default(isCI ? 'live' : 'interactive')
-            .choices(['interactive', 'live', 'grouped'])
-        )
-        .addOption(
-          new Option('--cache <method>', 'caching method to compare')
-            .default(isCI ? 'checksum' : 'modify-date')
-            .choices(['checksum', 'modify-date', 'none'])
-        )
-        .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
-        .action(async (options) => {
-          try {
-            const result = await cli.exec(
-              { taskName: node.name },
-              {
-                cacheDefault: options.cache,
-                watch: options.watch,
-                workers: options.concurrency,
-                logMode: options.log,
-                noContainer: options.container,
-              }
-            )
-
-            if (!result.success) {
-              process.exit(1)
-            }
-          } catch (e) {
-            process.exit(1)
-          }
-        })
-    }
-
     program
-      .command('up', { isDefault: true })
-      .description('run all tasks / services')
-      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
-      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
-      .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
+      .command('task', { isDefault: true })
+      .arguments('[task]')
+      .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
       .addOption(new Option('-w, --watch', 'watch tasks').default(false))
       .addOption(
         new Option('-l, --log <mode>', 'log mode')
@@ -141,25 +95,70 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
-      .action(async (options) => {
-        const result = await cli.exec(
-          {
-            excludeLabels: parseLabelArguments(options.exclude),
-            filterLabels: parseLabelArguments(options.filter),
-          },
-          {
-            cacheDefault: options.cache,
-            watch: options.watch,
-            workers: options.concurrency,
-            logMode: options.log,
-            noContainer: options.container,
-          }
-        )
+      .action(async (task, options) => {
+        try {
+          const result = await cli.exec(
+            task
+              ? { taskName: task }
+              : {
+                  excludeLabels: parseLabelArguments(options.exclude),
+                  filterLabels: parseLabelArguments(options.filter),
+                },
+            {
+              cacheDefault: options.cache,
+              watch: options.watch,
+              workers: options.concurrency,
+              logMode: options.log,
+              noContainer: !options.container,
+            }
+          )
 
-        if (!result.success) {
+          if (!result.success) {
+            process.exit(1)
+          }
+        } catch (e) {
           process.exit(1)
         }
       })
+
+    // program
+    //   .command('up', { isDefault: true })
+    //   .description('run all tasks / services')
+    //   .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+    //   .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+    //   .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
+    //   .addOption(new Option('-w, --watch', 'watch tasks').default(false))
+    //   .addOption(
+    //     new Option('-l, --log <mode>', 'log mode')
+    //       .default(isCI ? 'live' : 'interactive')
+    //       .choices(['interactive', 'live', 'grouped'])
+    //   )
+    //   .addOption(
+    //     new Option('--cache <method>', 'caching method to compare')
+    //       .default(isCI ? 'checksum' : 'modify-date')
+    //       .choices(['checksum', 'modify-date', 'none'])
+    //   )
+    //   .addOption(new Option('--no-container', 'run every task locally without containers'))
+    //   .action(async (options) => {
+    //     console.log(options)
+    //     const result = await cli.exec(
+    //       {
+    //         excludeLabels: parseLabelArguments(options.exclude),
+    //         filterLabels: parseLabelArguments(options.filter),
+    //       },
+    //       {
+    //         cacheDefault: options.cache,
+    //         watch: options.watch,
+    //         workers: options.concurrency,
+    //         logMode: options.log,
+    //         noContainer: options.container,
+    //       }
+    //     )
+    //
+    //     if (!result.success) {
+    //       process.exit(1)
+    //     }
+    //   })
   } else {
     if (fileIndex >= 0) {
       environment.console.warn(`unable to find build file ${fileName}`)

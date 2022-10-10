@@ -29,6 +29,7 @@ import { watchService } from '../executer/watch-service'
 import { WorkServices } from '../planner/work-services'
 import { WorkNodes } from '../planner/work-nodes'
 import { Lazy } from './lazy'
+import { isContainerWorkService } from '../planner/work-service'
 
 function startWatchProcesses(
   nodes: WorkNodes,
@@ -42,6 +43,9 @@ function startWatchProcesses(
     }
   }
   for (const service of iterateWorkServices(services)) {
+    if (!isContainerWorkService(service)) {
+      continue
+    }
     if (service.mounts.length > 0) {
       emitter.task(`watch:${service.id}`, watchService(service, environment))
     }
@@ -53,9 +57,11 @@ export function getTestCase(
   environment: Environment,
   options?: Partial<TestSuiteSetupOptions>
 ): MockedTestCase | TestCase {
-  const lazyWorkTree = new Lazy(() => planWorkNodes(buildFile, { excludeLabels: {}, filterLabels: {} }))
+  const lazyWorkTree = new Lazy(() =>
+    planWorkNodes(buildFile, { excludeLabels: {}, filterLabels: {}, noContainer: false })
+  )
   const executionMock = getExecutionMock(buildFile, lazyWorkTree, environment)
-  const emitter = new UpdateEmitter<HammerkitEvent>(environment.abortCtrl.signal, (key, process) => {
+  const emitter = new UpdateEmitter<HammerkitEvent>(environment.abortCtrl, (key, process) => {
     if (options?.mockExecution) {
       const mockedProcess = executionMock.getProcess(key)
       if (mockedProcess) {
@@ -72,19 +78,20 @@ export function getTestCase(
     eventBus: emitter,
     executionMock,
     async exec(target: ExecTarget, options?: Partial<ExecOptions>): Promise<SchedulerResult> {
+      const noContainer = options?.noContainer ?? false
       const workTree = isExecTargetTask(target)
-        ? planWorkTree(buildFile, { taskName: target.taskName, cache: options?.cacheDefault })
+        ? planWorkTree(buildFile, { taskName: target.taskName, cache: options?.cacheDefault, noContainer })
         : planWorkNodes(buildFile, {
             excludeLabels: target.excludeLabels,
             filterLabels: target.filterLabels,
             cache: options?.cacheDefault,
+            noContainer,
           })
 
       const initialState = createSchedulerState({
         services: workTree.services,
         nodes: workTree.nodes,
         watch: options?.watch ?? false,
-        noContainer: options?.noContainer ?? false,
         workers: options?.workers ?? 0,
         logMode: options?.logMode ?? isCI ? 'live' : 'interactive',
       })
@@ -97,6 +104,7 @@ export function getTestCase(
 
       const result = await schedule(emitter, initialState, environment)
 
+      await emitter.close()
       await logger.complete(result)
 
       return result
@@ -111,7 +119,7 @@ export function getTestCase(
       await storeCache(path, lazyWorkTree.resolve(), environment)
     },
     getNode(name: string): WorkNode {
-      const workTree = planWorkTree(buildFile, { taskName: name })
+      const workTree = planWorkTree(buildFile, { taskName: name, noContainer: false })
       return getNode(buildFile, workTree.nodes, name)
     },
     getNodes(): Generator<WorkNode> {

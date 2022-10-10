@@ -4,7 +4,7 @@ import { parseEnvs } from './parse-envs'
 import { BuildFile } from './build-file'
 import { parseStringMap } from './parse-string-map'
 
-const validKeys = ['image', 'ports', 'envs', 'mounts', 'volumes', 'healthcheck']
+const validKeys = ['image', 'ports', 'envs', 'mounts', 'volumes', 'healthcheck', 'context', 'selector']
 
 export function parseBuildFileServices(
   fileName: string,
@@ -22,11 +22,19 @@ export function parseBuildFileServices(
   }
 
   for (const [key, serviceValue] of Object.entries(value || {})) {
-    if (!serviceValue.image) {
-      throw new Error(`${fileName} service ${key} needs an image`)
+    const hasImage = !!serviceValue.image
+    const hasContextSelector = !!serviceValue.context && !!serviceValue.selector
+    if (!hasImage && !hasContextSelector) {
+      throw new Error(`${fileName} service ${key} needs an image or a context/selector`)
     }
-    if (typeof serviceValue.image !== 'string') {
+    if (hasImage && typeof serviceValue.image !== 'string') {
       throw new Error(`${fileName} service ${key} image is not valid`)
+    }
+    if (hasContextSelector && typeof serviceValue.context !== 'string') {
+      throw new Error(`${fileName} service ${key} context is not valid`)
+    }
+    if (hasImage && hasContextSelector) {
+      throw new Error(`${fileName} service ${key} can not have image and context/selector`)
     }
 
     services[key] = {
@@ -42,6 +50,8 @@ export function parseBuildFileServices(
           map[k] = serviceValue[k]
           return map
         }, {}),
+      selector: serviceValue.selector, // TODO validate
+      context: serviceValue.context,
     }
   }
 

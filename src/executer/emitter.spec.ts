@@ -2,7 +2,7 @@ import { UpdateEmitter } from './emitter'
 
 describe('emitter', () => {
   it('test error', async () => {
-    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController().signal)
+    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController())
     emitter.task(
       'test',
       () =>
@@ -43,7 +43,7 @@ describe('emitter', () => {
   })
 
   it('test tasks', async () => {
-    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController().signal)
+    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController())
     emitter.task(
       'test',
       () =>
@@ -76,7 +76,7 @@ describe('emitter', () => {
   })
 
   it('test interupt', async () => {
-    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController().signal)
+    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController())
     emitter.task(
       'test',
       () =>
@@ -99,7 +99,7 @@ describe('emitter', () => {
   })
 
   it('test emit interupt', async () => {
-    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController().signal)
+    const emitter = new UpdateEmitter<{ type: 'result'; value: number }>(new AbortController())
     emitter.task(
       'test',
       () =>

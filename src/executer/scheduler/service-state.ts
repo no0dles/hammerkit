@@ -1,4 +1,5 @@
 import { WorkService } from '../../planner/work-service'
+import { ServiceDns } from '../events'
 
 export interface ServicePendingState {
   type: 'pending'
@@ -15,7 +16,7 @@ export interface ServiceReadyState {
   type: 'ready'
   abortController: AbortController
   service: WorkService
-  containerId: string
+  dns: ServiceDns
 }
 
 export interface ServiceEndState {

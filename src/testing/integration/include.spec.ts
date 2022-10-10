@@ -22,7 +22,7 @@ describe('include', () => {
 
   it('should get included task', async () => {
     const { buildFile } = await suite.setup()
-    const tree = planWorkTree(buildFile, { taskName: 'foo:bar' })
+    const tree = planWorkTree(buildFile, { taskName: 'foo:bar', noContainer: false })
     expect(tree.rootNode?.name).toEqual('foo:bar')
     expect(tree.rootNode?.cwd).toEqual(buildFile.path)
   })

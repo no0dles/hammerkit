@@ -16,7 +16,7 @@ import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
 import { WorkNodePath } from '../work-node-path'
 import { parseWorkNodePort } from './parse-work-node-port'
-import { WorkService } from '../work-service'
+import { BaseWorkService, WorkService } from '../work-service'
 import { getWorkServiceId } from '../work-service-id'
 import { LabelValues } from '../../testing/test-suite'
 import { BuildFileTaskPlatform } from '../../parser/build-file-task-platform'
@@ -148,7 +148,7 @@ export function findBuildTask(context: WorkContext, selector: BuildTaskSelector)
   }
 }
 
-export function getWorkNode(context: WorkContext, selector: BuildTaskSelector): WorkNode {
+export function getWorkNode(context: WorkContext, selector: BuildTaskSelector, noContainer: boolean): WorkNode {
   const rootNode = findBuildTask(context, selector)
   const plannedTask = planTask(rootNode.context, rootNode)
 
@@ -157,13 +157,13 @@ export function getWorkNode(context: WorkContext, selector: BuildTaskSelector): 
     return context.workTree.nodes[id]
   }
 
-  const node = parseWorkNode(id, plannedTask, rootNode.context)
+  const node = parseWorkNode(id, plannedTask, rootNode.context, noContainer)
   context.workTree.nodes[id] = node
 
   const depNodes: WorkNode[] = []
   for (const plannedDep of plannedTask.deps) {
     const depName = templateValue(plannedDep.name, plannedDep.build.envs)
-    const depNode = getWorkNode(plannedDep.context, { taskName: depName })
+    const depNode = getWorkNode(plannedDep.context, { taskName: depName }, noContainer)
     if (!depNodes.some((d) => d.id === depNode.id)) {
       depNodes.push(depNode)
     }
@@ -182,7 +182,7 @@ export function mapLabels(labels: { [key: string]: string }): LabelValues {
   return result
 }
 
-function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): WorkNode {
+function parseWorkNode(id: string, task: PlannedTask, context: WorkContext, noContainer: boolean): WorkNode {
   const name = [...context.namePrefix, task.name].join(':')
 
   const baseWorkNode: BaseWorkNode = {
@@ -206,7 +206,8 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
     caching: task.cache,
   }
 
-  if (task.image) {
+  if (task.image && !noContainer) {
+    // TODO check if possible with needs if noContainer
     return {
       ...baseWorkNode,
       type: 'container',
@@ -269,21 +270,32 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
     const service = need.build.services[need.name]
     const id = getWorkServiceId(need.build, service)
     if (!context.workTree.services[id]) {
-      context.workTree.services[id] = {
+      const workService: BaseWorkService = {
         id,
         name: need.name,
-        healthcheck: service.healthcheck,
-        envs: service.envs || {},
-        mounts: (service.mounts || [])
-          .map((m) => templateValue(m, service.envs))
-          .map((m) => parseWorkNodeMount(need.build.path, m)),
         console: nodeConsole(),
         status: statusConsole(),
-        image: service.image,
-        //caching: service.cache ??,
-        //volumes: service.volumes || {},
         caching: context.cacheDefault,
         ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),
+      }
+      if (service.image) {
+        context.workTree.services[id] = {
+          ...workService,
+          envs: service.envs || {},
+          image: service.image,
+          healthcheck: service.healthcheck,
+          mounts: (service.mounts || [])
+            .map((m) => templateValue(m, service.envs))
+            .map((m) => parseWorkNodeMount(need.build.path, m)),
+          //caching: service.cache ??,
+          //volumes: service.volumes || {}, // TODO volume impl
+        }
+      } else if (!!service.context && !!service.selector) {
+        context.workTree.services[id] = {
+          ...workService,
+          context: service.context,
+          selector: service.selector,
+        }
       }
     }
     if (!result.some((s) => s.id === id)) {

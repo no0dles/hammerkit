@@ -2,8 +2,26 @@ import { SchedulerState } from './scheduler/scheduler-state'
 import { HammerkitEvent } from './events'
 import { getDuration } from './states'
 import { failNever } from '../utils/fail-never'
+import { UpdateEmitter } from './emitter'
 
-export function updateState(current: SchedulerState, evt: HammerkitEvent): SchedulerState {
+export function changeState(
+  current: SchedulerState,
+  emitter: UpdateEmitter<HammerkitEvent>,
+  evt: HammerkitEvent
+): SchedulerState {
+  const newState = updateState(current, evt)
+  if (evt.type !== 'scheduler-update') {
+    emitter.emit({
+      type: 'scheduler-update',
+      state: newState,
+    })
+  } else {
+    // emitter.emit(evt)
+  }
+  return newState
+}
+
+function updateState(current: SchedulerState, evt: HammerkitEvent): SchedulerState {
   if (evt.type === 'node-crash') {
     current.node[evt.node.id] = {
       type: 'crash',
@@ -107,11 +125,11 @@ export function updateState(current: SchedulerState, evt: HammerkitEvent): Sched
       current.service[evt.service.id] = {
         type: 'ready',
         service: evt.service,
-        containerId: evt.containerId,
+        dns: evt.dns,
         abortController: serviceState.abortController,
       }
     } else {
-      throw new Error('') // TODO
+      // throw new Error('') // TODO
     }
     return current
   } else {

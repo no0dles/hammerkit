@@ -13,6 +13,7 @@ export type WorkNode = LocalWorkNode | ContainerWorkNode
 
 export interface BaseWorkNode {
   id: string
+  taskName: string
   name: string
   cwd: string
   description: string | null
@@ -24,10 +25,7 @@ export interface BaseWorkNode {
   cmds: WorkNodeCommand[]
   plannedTask: PlannedTask
   buildFile: BuildFile
-  taskName: string
   needs: WorkService[]
-  //mergedTask: BuildFileReference
-  //mergedDeps: BuildFileReference[]
   console: LogConsole
   labels: LabelValues
   status: StatusConsole

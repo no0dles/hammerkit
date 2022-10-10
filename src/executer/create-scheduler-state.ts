@@ -11,7 +11,6 @@ export interface CreateSchedulerState {
   services: WorkServices
   watch: boolean
   workers: number
-  noContainer: boolean
   logMode: LogMode
 }
 
@@ -19,7 +18,6 @@ export function createSchedulerState(input: CreateSchedulerState): SchedulerStat
   const state: SchedulerState = {
     service: {},
     node: {},
-    noContainer: input.noContainer,
     workers: input.workers,
   }
 
