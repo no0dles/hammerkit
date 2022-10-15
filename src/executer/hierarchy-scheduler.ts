@@ -8,7 +8,7 @@ import { isContainerWorkNode } from '../planner/work-node'
 import { dockerNode } from './docker-node'
 import { localNode } from './local-node'
 import { State } from './state'
-import { ProcessManager } from './process-Manager'
+import { ProcessManager } from './process-manager'
 import { logContext } from '../planner/work-node-status'
 
 export async function schedule(

@@ -7,7 +7,7 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
   // TODO validate services
   const cycleNodes: WorkNode[] = []
 
-  for (const [key, node] of Object.entries(workTree.nodes)) {
+  for (const node of Object.values(workTree.nodes)) {
     if (!node.description) {
       yield { type: 'warn', message: `missing description`, node: node }
     }

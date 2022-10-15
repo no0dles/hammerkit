@@ -9,7 +9,7 @@ describe('cancellation', () => {
 
   async function testAbort(taskName: string, expectedState: string) {
     const { cli, environment } = await suite.setup({ taskName })
-    let nodeId: string = ''
+    let nodeId = ''
     const exec = await cli.execWatch({ logMode: 'live' })
     exec.state.on((state) => {
       for (const node of iterateWorkNodes(state.node)) {

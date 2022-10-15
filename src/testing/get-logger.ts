@@ -5,7 +5,6 @@ import { liveLogger } from '../logging/live-logger'
 import { interactiveLogger } from '../logging/interactive-logger'
 import { failNever } from '../utils/fail-never'
 import { Environment } from '../executer/environment'
-import { State } from '../executer/state'
 import { ReadonlyState } from '../executer/readonly-state'
 
 export function getLogger(mode: LogMode, state: ReadonlyState<SchedulerState>, env: Environment): Logger {

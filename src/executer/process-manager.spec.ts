@@ -7,8 +7,8 @@ describe('process-manager', () => {
     const manager = new ProcessManager(getEnvironmentMock())
 
     let currentIndex = 0
-    let expectedEvents: ProcessListenerEventType[] = ['started', 'ended']
-    manager.on((evt, processes) => {
+    const expectedEvents: ProcessListenerEventType[] = ['started', 'ended']
+    manager.on((evt) => {
       expect(evt.type).toBe(expectedEvents[currentIndex++])
     })
 

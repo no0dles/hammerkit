@@ -48,7 +48,6 @@ async function addWorkServiceCacheStats(result: WorkServiceCacheFileStats, path:
   } else if (stats.type === 'directory') {
     const files = await context.file.listFiles(path)
     for (const file of files) {
-      const subPath = join(path, file)
       await addWorkServiceCacheStats(result, join(path, file), context)
     }
   }

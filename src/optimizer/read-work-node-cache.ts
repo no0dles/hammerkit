@@ -2,7 +2,6 @@ import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { getCacheStatsFile } from './get-cache-directory'
 import { WorkNodeCacheFileStats } from './work-node-cache-stats'
-import { StatusScopedConsole } from '../planner/work-node-status'
 
 export async function readCache(node: WorkNode, context: Environment): Promise<WorkNodeCacheFileStats | null> {
   const cacheFile = getCacheStatsFile(node.type, node.id, node.cwd)

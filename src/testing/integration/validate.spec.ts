@@ -1,6 +1,5 @@
 import 'jest-extended'
 import { getTestSuite } from '../get-test-suite'
-import { validate } from '../../planner/validate'
 
 describe('validate', () => {
   const suite = getTestSuite('validate', ['build.yaml', 'build-loop.yaml'])

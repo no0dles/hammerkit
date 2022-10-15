@@ -43,7 +43,7 @@ describe('env', () => {
   })
 
   it('should throw if process env is missing', async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'example_with_shell_env' })
+    const { cli } = await suite.setup({ taskName: 'example_with_shell_env' })
     const result = await cli.exec()
     expect(result.success).toBeFalsy()
   })

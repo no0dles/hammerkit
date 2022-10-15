@@ -15,7 +15,7 @@ import { Environment } from '../executer/environment'
 import { startWatchProcesses } from './start-watch-processes'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { ReadonlyState } from '../executer/readonly-state'
-import { ProcessManager } from '../executer/process-Manager'
+import { ProcessManager } from '../executer/process-manager'
 
 export interface CliExecOptions {
   workers: number
