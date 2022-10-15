@@ -14,10 +14,13 @@ export interface WorkNodeCacheDescription {
   mounts: string[]
   shell: string | null
   platform: string
-  cache: CacheMethod
+  cache: CacheMethod | null
 }
 
-export function getWorkNodeCacheDescription(task: PlannedTask): WorkNodeCacheDescription {
+export function getWorkNodeCacheDescription(
+  task: PlannedTask,
+  defaultCache: CacheMethod | null
+): WorkNodeCacheDescription {
   return {
     shell: task.shell,
     image: task.image,
@@ -40,6 +43,6 @@ export function getWorkNodeCacheDescription(task: PlannedTask): WorkNodeCacheDes
     }),
     mounts: task.mounts.sort(),
     cwd: task.cwd,
-    cache: task.cache,
+    cache: task.cache ?? defaultCache,
   }
 }

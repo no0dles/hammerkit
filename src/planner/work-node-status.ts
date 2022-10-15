@@ -1,91 +1,130 @@
 import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
+import { WorkService } from './work-service'
+import { WorkNode } from './work-node'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
-const ConsoleBufferMax = 100
-const StatusBufferMax = 200
+
+const StatusBufferMax = 3000
 
 export interface ConsoleMessage {
-  type: ConsoleType
+  type: 'console'
+  console: ConsoleType
   message: string
   date: Date
+  context: LogContext
 }
 
 export interface StatusMessage {
+  type: 'status'
   level: WorkNodeConsoleLogLevel
   message: string
   date: Date
+  context: LogContext
 }
 
-export interface StatusConsole extends Emitter<StatusMessage> {
-  write(level: WorkNodeConsoleLogLevel, message: string): void
+export type Message = ConsoleMessage | StatusMessage
 
-  read(): Promise<StatusMessage[]>
+export interface LogContext {
+  type: 'task' | 'service'
+  name: string
+  id: string
 }
 
-export interface LogConsole extends Emitter<ConsoleMessage> {
-  current: ConsoleMessage | null
-  recent: ConsoleMessage[]
-
-  write(type: ConsoleType, message: string): void
-
-  read(): Promise<ConsoleMessage[]>
-}
-
-export function statusConsole(): StatusConsole {
-  const recent: StatusMessage[] = []
-
-  const emit = emitter<StatusMessage>()
-
+export function logContext(type: 'task' | 'service', node: WorkNode | WorkService): LogContext {
   return {
-    write(level: WorkNodeConsoleLogLevel, message: string) {
-      const log: StatusMessage = { message, level, date: new Date() }
-      emit.emit(log)
-      recent.push(log)
-      if (recent.length > StatusBufferMax) {
-        recent.splice(0, 1)
-      }
-    },
-    on(listener: EmitListener<StatusMessage>): EmitHandle {
-      return emit.on(listener)
-    },
-    read(): Promise<StatusMessage[]> {
-      return Promise.resolve(recent)
-    },
+    type,
+    name: node.name,
+    id: node.id,
   }
 }
 
-export function nodeConsole(): LogConsole {
-  let current: ConsoleMessage | null = null
-  const recent: ConsoleMessage[] = []
+export interface StatusConsole extends Emitter<Message> {
+  service(service: WorkService): StatusScopedConsole
 
-  const emit = emitter<ConsoleMessage>()
+  task(task: WorkNode): StatusScopedConsole
+  context(ctx: LogContext): StatusScopedConsole
+
+  read(): Generator<Message>
+}
+
+export interface StatusScopedConsole {
+  write(level: WorkNodeConsoleLogLevel, message: string): void
+
+  console(type: ConsoleType, message: string): void
+
+  read(): Generator<Message>
+
+  current(): Message | null
+}
+
+export function statusConsole(): StatusConsole {
+  const buffer: Message[] = []
+  const contextBuffer: { [key: string]: { buffer: Message[] } } = {}
+
+  const emit = emitter<Message>()
+
+  function addMessage(context: LogContext, message: Message) {
+    buffer.push(message)
+    emit.emit(message)
+    if (context.id in contextBuffer) {
+      contextBuffer[context.id].buffer.push(message)
+    } else {
+      contextBuffer[context.id] = { buffer: [message] }
+    }
+    if (buffer.length > StatusBufferMax) {
+      buffer.splice(0, 1) // TODO set limits for contextBuffer
+    }
+  }
 
   return {
-    read(): Promise<ConsoleMessage[]> {
-      return Promise.resolve(recent)
+    task(task: WorkNode): StatusScopedConsole {
+      return this.context(logContext('task', task))
     },
-
-    on(listener: EmitListener<ConsoleMessage>): EmitHandle {
-      return emit.on(listener)
+    service(service: WorkService): StatusScopedConsole {
+      return this.context(logContext('service', service))
     },
-
-    write(type: ConsoleType, message: string) {
-      const log: ConsoleMessage = { type, message, date: new Date() }
-      current = log
-      emit.emit(log)
-      recent.push(log)
-      if (recent.length > ConsoleBufferMax) {
-        recent.splice(0, 1)
+    context(context: LogContext): StatusScopedConsole {
+      return {
+        current() {
+          if (!(context.id in contextBuffer)) {
+            return null
+          }
+          const value = contextBuffer[context.id]
+          return value.buffer[value.buffer.length - 1]
+        },
+        *read(): Generator<Message> {
+          for (const log of contextBuffer[context.id]?.buffer || []) {
+            yield log
+          }
+        },
+        console(type: ConsoleType, message: string) {
+          addMessage(context, {
+            type: 'console',
+            console: type,
+            message,
+            date: new Date(),
+            context,
+          })
+        },
+        write(level: WorkNodeConsoleLogLevel, message: string) {
+          addMessage(context, {
+            type: 'status',
+            message,
+            context,
+            level,
+            date: new Date(),
+          })
+        },
       }
     },
-
-    get recent() {
-      return recent
+    on(listener: EmitListener<Message>): EmitHandle {
+      return emit.on(listener)
     },
-
-    get current() {
-      return current
+    *read(): Generator<Message> {
+      for (const message of buffer) {
+        yield message
+      }
     },
   }
 }

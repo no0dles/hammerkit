@@ -1,4 +1,4 @@
-import { LabelValues } from '../testing/test-suite'
+import { LabelValues } from '../executer/label-values'
 
 export function parseLabelArguments(args: string[]): LabelValues {
   const labels: LabelValues = {}

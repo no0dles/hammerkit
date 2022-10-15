@@ -3,6 +3,7 @@
 import { getProgram } from './program'
 import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
+import { statusConsole } from './planner/work-node-status'
 
 const abortCtrl = new AbortController()
 
@@ -15,8 +16,9 @@ getProgram(
     cwd: process.cwd(),
     abortCtrl,
     processEnvs: process.env,
-    file: getFileContext(),
+    file: getFileContext(process.cwd()),
     console: consoleContext(),
+    status: statusConsole(),
   },
   process.argv
 ).then(({ program, args }) => {

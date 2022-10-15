@@ -5,6 +5,7 @@ import { SchedulerState } from './scheduler/scheduler-state'
 import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
 import { checkForLoop } from './scheduler/check-for-loop'
 import { CacheMethod } from '../parser/cache-method'
+import { State } from './state'
 
 export interface CreateSchedulerState {
   nodes: WorkNodes
@@ -12,13 +13,17 @@ export interface CreateSchedulerState {
   watch: boolean
   workers: number
   logMode: LogMode
+  noContainer: boolean
+  cacheMethod: CacheMethod
 }
 
-export function createSchedulerState(input: CreateSchedulerState): SchedulerState {
+export function createSchedulerState(input: CreateSchedulerState): State {
   const state: SchedulerState = {
     service: {},
     node: {},
     workers: input.workers,
+    noContainer: input.noContainer,
+    cacheMethod: input.cacheMethod,
   }
 
   for (const node of iterateWorkNodes(input.nodes)) {
@@ -37,5 +42,5 @@ export function createSchedulerState(input: CreateSchedulerState): SchedulerStat
 
   checkForLoop(state)
 
-  return state
+  return new State(state)
 }

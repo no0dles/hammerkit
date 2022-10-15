@@ -7,9 +7,9 @@ describe('cmd', () => {
   afterAll(() => suite.close())
 
   it('should run with path arg', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'example' })
-    await expectSuccessfulResult(result)
-    await expectContainsLog(result, `example`, 'README.md')
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
+    await expectContainsLog(result, environment, `example`, 'README.md')
   })
 })

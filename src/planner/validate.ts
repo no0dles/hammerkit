@@ -1,25 +1,10 @@
-import { BuildFile } from '../parser/build-file'
-import { planWorkNodes } from './utils/plan-work-nodes'
-import { planWorkTree } from './utils/plan-work-tree'
 import { WorkNode } from './work-node'
 import { WorkNodeValidation } from './work-node-validation'
 import { Environment } from '../executer/environment'
 import { WorkTree } from './work-tree'
 
-function plan(buileFile: BuildFile, name?: string): WorkTree {
-  if (name) {
-    return planWorkTree(buileFile, { taskName: name, noContainer: false })
-  } else {
-    return planWorkNodes(buileFile, { filterLabels: {}, excludeLabels: {}, noContainer: false })
-  }
-}
-
-export async function* validate(
-  buildFile: BuildFile,
-  context: Environment,
-  name?: string
-): AsyncGenerator<WorkNodeValidation> {
-  const workTree = plan(buildFile, name) // TODO validate services
+export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkNodeValidation> {
+  // TODO validate services
   const cycleNodes: WorkNode[] = []
 
   for (const [key, node] of Object.entries(workTree.nodes)) {

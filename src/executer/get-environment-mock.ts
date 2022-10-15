@@ -1,6 +1,7 @@
 import { getFileContextMock } from '../file/get-file-context-mock'
 import { getConsoleContextMock } from '../console/get-console-context-mock'
 import { EnvironmentMock } from './environment-mock'
+import { statusConsole } from '../planner/work-node-status'
 
 export function getEnvironmentMock(): EnvironmentMock {
   return {
@@ -9,5 +10,6 @@ export function getEnvironmentMock(): EnvironmentMock {
     console: getConsoleContextMock(),
     abortCtrl: new AbortController(),
     processEnvs: {},
+    status: statusConsole(),
   }
 }

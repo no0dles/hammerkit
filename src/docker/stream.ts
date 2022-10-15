@@ -1,17 +1,11 @@
 import { Duplex } from 'stream'
 import { getLogs } from '../log'
 import Dockerode from 'dockerode'
-import { ConsoleType } from '../planner/work-node-status'
-import { WorkNode } from '../planner/work-node'
-import { WorkService } from '../planner/work-service'
+import { ConsoleType, StatusScopedConsole } from '../planner/work-node-status'
 
-export async function awaitStream(
-  nodeOrService: WorkNode | WorkService,
-  docker: Dockerode,
-  stream: Duplex
-): Promise<void> {
+export async function awaitStream(status: StatusScopedConsole, docker: Dockerode, stream: Duplex): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    logStream(nodeOrService, docker, stream)
+    logStream(status, docker, stream)
 
     stream.on('error', reject)
     stream.on('end', resolve)
@@ -20,17 +14,17 @@ export async function awaitStream(
 }
 
 export function logStream(
-  nodeOrService: WorkNode | WorkService,
+  status: StatusScopedConsole,
   docker: Dockerode,
   stream: Duplex | NodeJS.ReadStream | NodeJS.ReadWriteStream
 ): void {
-  demuxStream(stream, writeLog(nodeOrService, 'stdout'), writeLog(nodeOrService, 'stderr'))
+  demuxStream(stream, writeLog(status, 'stdout'), writeLog(status, 'stderr'))
 }
 
-function writeLog(nodeOrService: WorkNode | WorkService, level: ConsoleType) {
+function writeLog(status: StatusScopedConsole, level: ConsoleType) {
   return async (buffer: Buffer) => {
     for (const log of getLogs(buffer)) {
-      nodeOrService.console.write(level, log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
+      status.console(level, log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
     }
   }
 }

@@ -1,33 +1,20 @@
-import { join } from 'path'
-import { appendFileSync } from 'fs'
 import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
-import { BuildFile } from '../../parser/build-file'
-import { NodeState } from '../../executer/scheduler/node-state'
-import { MockedTestCase } from '../test-suite'
-import { SchedulerResult } from '../../executer/scheduler/scheduler-result'
+import { Environment } from '../../executer/environment'
 
 describe('glob', () => {
   const suite = getTestSuite('glob', ['build.yaml', 'test.md', 'test.txt'])
 
   afterAll(() => suite.close())
 
-  async function getTestRun(testCase: MockedTestCase) {
-    testCase.executionMock.task('example').set({ duration: 100, exitCode: 0 })
-    return await testCase.exec({ taskName: 'example' })
-  }
+  async function testCache(expectInvalidate: boolean, action?: (env: Environment) => Promise<void>) {
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
 
-  async function getTestNode(testCase: MockedTestCase, state: SchedulerResult): Promise<NodeState> {
-    const node = testCase.getNode('example')
-    return state.state.node[node.id]
-  }
+    const result1 = await cli.exec()
+    await expectSuccessfulResult(result1, environment)
 
-  async function testCache(expectInvalidate: boolean, action?: (buildFile: BuildFile) => Promise<void>) {
-    const testCase = await suite.setup({ mockExecution: true })
-    const result1 = await getTestRun(testCase)
-    await expectSuccessfulResult(result1)
-
-    const nodeState1 = await getTestNode(testCase, result1)
+    const node = cli.node('example')
+    const nodeState1 = result1.state.node[node.id]
 
     expect(nodeState1.type).toEqual('completed')
     if (nodeState1.type === 'completed') {
@@ -35,20 +22,20 @@ describe('glob', () => {
     }
 
     if (action) {
-      await action(testCase.buildFile)
+      await action(environment)
     }
 
-    const result2 = await getTestRun(testCase)
-    await expectSuccessfulResult(result2)
+    const result2 = await cli.exec()
+    await expectSuccessfulResult(result2, environment)
 
-    const nodeState2 = await getTestNode(testCase, result2)
+    const nodeState2 = result2.state.node[node.id]
 
     expect(nodeState2.type).toEqual('completed')
     if (nodeState2.type === 'completed') {
       if (expectInvalidate) {
-        expect(nodeState2.duration).toBeGreaterThanOrEqual(100)
+        expect(nodeState2.cached).toBeFalsy()
       } else {
-        expect(nodeState2.duration).toBe(0)
+        expect(nodeState2.cached).toBeTruthy()
       }
     }
   }
@@ -58,14 +45,14 @@ describe('glob', () => {
   })
 
   it('should keep being cached after ignored file changed', async () => {
-    await testCache(false, async (buildFile) => {
-      appendFileSync(join(buildFile.path, 'test.txt'), '\n')
+    await testCache(false, async (env) => {
+      await env.file.appendFile('test.txt', '\n')
     })
   })
 
   it('should invalid cache after file has changed', async () => {
-    await testCache(true, async (buildFile) => {
-      appendFileSync(join(buildFile.path, 'test.md'), '\n')
+    await testCache(true, async (env) => {
+      await env.file.appendFile('test.md', '\n')
     })
   })
 })

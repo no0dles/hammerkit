@@ -1,14 +1,14 @@
 import { awaitStream } from '../docker/stream'
 import Dockerode, { Container, Exec, ExecInspectInfo } from 'dockerode'
 import { sep, extname } from 'path'
-import { ContainerWorkNode, WorkNode } from '../planner/work-node'
+import { ContainerWorkNode } from '../planner/work-node'
 import { WorkNodePath } from '../planner/work-node-path'
 import { platform } from 'os'
 import { Environment } from './environment'
 import { createHash } from 'crypto'
 import { AbortableFunctionContext } from '../utils/abortable-function'
-import { WorkService } from '../planner/work-service'
 import { listenOnAbort } from '../utils/abort-event'
+import { StatusScopedConsole } from '../planner/work-node-status'
 
 interface WorkNodeVolume {
   name: string
@@ -84,7 +84,7 @@ export async function getContainerMounts(node: ContainerWorkNode, context: Envir
 
 let dockerInstance: Dockerode | null = null
 
-export async function getDocker(nodeOrService: WorkNode | WorkService): Promise<Dockerode> {
+export async function getDocker(status: StatusScopedConsole): Promise<Dockerode> {
   if (!dockerInstance) {
     dockerInstance = new Dockerode()
 
@@ -92,7 +92,7 @@ export async function getDocker(nodeOrService: WorkNode | WorkService): Promise<
       await dockerInstance.version()
     } catch (e) {
       if (e instanceof Error && e.message.indexOf('ECONNREFUSED') >= 0) {
-        nodeOrService.status.write('error', `docker is not running, try running in local shell or start`)
+        status.write('error', `docker is not running, try running in local shell or start`)
       }
 
       throw e
@@ -101,10 +101,10 @@ export async function getDocker(nodeOrService: WorkNode | WorkService): Promise<
   return dockerInstance
 }
 
-export async function startContainer(node: WorkNode, container: Container): Promise<void> {
+export async function startContainer(status: StatusScopedConsole, container: Container): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const handle = setTimeout(() => {
-      node.status.write('warn', 'start of container is potentially stuck on start')
+      status.write('warn', 'start of container is potentially stuck on start')
     }, 1000)
     container
       .start()
@@ -132,7 +132,7 @@ export function convertToPosixPath(path: string): string {
 export type ExecResult = { type: 'result'; result: ExecInspectInfo } | { type: 'timeout' } | { type: 'canceled' }
 
 export async function execCommand(
-  node: WorkNode | WorkService,
+  status: StatusScopedConsole,
   docker: Dockerode,
   container: Container,
   cwd: string | undefined,
@@ -151,7 +151,7 @@ export async function execCommand(
     User: user,
   })
 
-  node.status.write('debug', `received exec id ${exec.id}`)
+  status.write('debug', `received exec id ${exec.id}`)
   const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
 
   return new Promise<ExecResult>((resolve, reject) => {
@@ -166,7 +166,7 @@ export async function execCommand(
       resolve({ type: 'canceled' })
     })
 
-    awaitStream(node, docker, stream)
+    awaitStream(status, docker, stream)
       .then(() => {
         if (resolved) {
           return

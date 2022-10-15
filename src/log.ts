@@ -1,13 +1,12 @@
 import { clearScreenDown, moveCursor } from 'readline'
 import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
-import { ConsoleMessage, WorkNodeConsoleLogLevel } from './planner/work-node-status'
+import { Message, WorkNodeConsoleLogLevel } from './planner/work-node-status'
 import colors from 'colors'
 import { ConsoleContext } from './console/console-context'
 import { SchedulerNodeState, SchedulerServiceState, SchedulerState } from './executer/scheduler/scheduler-state'
 import { NodeState } from './executer/scheduler/node-state'
 import { ServiceState } from './executer/scheduler/service-state'
-import { WorkNode } from './planner/work-node'
-import { WorkService } from './planner/work-service'
+import { Environment } from './executer/environment'
 
 export function getLogs(chunk: Buffer | string): string[] {
   return chunk
@@ -58,63 +57,18 @@ export function consoleContext(): ConsoleContext {
 
 export const isVerbose = process.argv.some((a) => a === '--verbose')
 
-export async function printWorkTreeResult(schedulerState: SchedulerState, logConsoleOnFail: boolean): Promise<void> {
+export async function printWorkTreeResult(schedulerState: SchedulerState, env: Environment): Promise<void> {
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
 
-  if (logConsoleOnFail && isVerbose) {
-    // TODO reduce repeating, sort status log by time order, remove it from node/service
-    for (const serviceState of iterateWorkServices(schedulerState.service)) {
-      const logs = await serviceState.service.status.read()
-      for (const log of logs) {
-        process.stdout.write(
-          `${formatDate(log.date)} ${colors.grey('service:')} ${getNodeName(
-            serviceState.service.name,
-            maxNodeNameLength
-          )} - ${log.date.toLocaleTimeString()} - ${colors.white(log.message)}\n`
-        )
-      }
-      if (logs.length > 0) {
-        process.stdout.write('-----------------\n')
-      }
-    }
-
-    for (const nodeState of iterateWorkNodes(schedulerState.node)) {
-      const logs = await nodeState.node.status.read()
-      for (const log of logs) {
-        process.stdout.write(
-          `${formatDate(log.date)} ${colors.grey('task:')} ${getNodeName(
-            nodeState.node.name,
-            maxNodeNameLength
-          )} - ${log.date.toLocaleTimeString()} - ${colors.white(log.message)}\n`
-        )
-      }
-      if (logs.length > 0) {
-        process.stdout.write('-----------------\n')
-      }
-    }
-
-    for (const serviceState of iterateWorkServices(schedulerState.service)) {
-      if (isVerbose) {
-        const logs = await serviceState.service.console.read()
-        for (const log of logs) {
-          writeServiceLogToConsole(serviceState.service, log, maxNodeNameLength)
-        }
-        if (logs.length > 0) {
-          process.stdout.write('-----------------\n')
-        }
-      }
-    }
-
-    for (const state of iterateWorkNodes(schedulerState.node)) {
-      if (state.type === 'crash' || state.type === 'error' || isVerbose) {
-        const logs = await state.node.console.read()
-        for (const log of logs) {
-          writeNodeLogToConsole(state.node, log, maxNodeNameLength)
-        }
-        if (logs.length > 0) {
-          process.stdout.write('-----------------\n')
-        }
-      }
+  const logs = await env.status.read()
+  for (const log of logs) {
+    if (isVerbose || (log.type === 'console' && log.console === 'stderr')) {
+      process.stdout.write(
+        `${formatDate(log.date)} ${colors.grey(log.context.type + ':')} ${getNodeName(
+          log.context.name,
+          maxNodeNameLength
+        )} - ${log.date.toLocaleTimeString()} - ${colors.white(log.message)}\n`
+      )
     }
   }
 
@@ -157,6 +111,7 @@ function getStateText(state: NodeState | ServiceState): string {
     return ''
   }
 }
+
 export function getNodeNameLengthForSchedulerState(schedulerState: SchedulerState): number {
   function* Names(): Generator<string> {
     for (const node of iterateWorkNodes(schedulerState.node)) {
@@ -197,25 +152,18 @@ export function getNodeName(name: string, maxNodeNameLength: number): string {
   return colors.white(name) + ' '.repeat(maxNodeNameLength - name.length)
 }
 
-export function writeNodeLogToConsole(node: WorkNode, log: ConsoleMessage, maxNodeNameLength: number): void {
+export function writeNodeLogToConsole(log: Message, maxNodeNameLength: number): void {
+  const content =
+    log.type === 'console'
+      ? log.console === 'stdout'
+        ? colors.white(log.message)
+        : colors.red(log.message)
+      : `${getLogLevel(log.level)} - ${log.message}`
   process.stdout.write(
-    `${formatDate(log.date)} ${colors.grey('task:')} ${getNodeName(
-      node.name,
+    `${formatDate(log.date)} ${colors.grey(log.context.type + ':')} ${getNodeName(
+      log.context.name,
       maxNodeNameLength
-    )} - ${log.date.toLocaleTimeString()} - ${
-      log.type === 'stdout' ? colors.white(log.message) : colors.red(log.message)
-    }\n`
-  )
-}
-
-export function writeServiceLogToConsole(service: WorkService, log: ConsoleMessage, maxNodeNameLength: number): void {
-  process.stdout.write(
-    `${formatDate(log.date)} ${colors.grey('service:')} ${getNodeName(
-      service.name,
-      maxNodeNameLength
-    )} - ${log.date.toLocaleTimeString()} - ${
-      log.type === 'stdout' ? colors.white(log.message) : colors.red(log.message)
-    }\n`
+    )} - ${log.date.toLocaleTimeString()} - ${content}\n`
   )
 }
 
@@ -234,7 +182,7 @@ export function formatDate(date: Date): string {
   )
 }
 
-export function writeWorkTreeStatus(schedulerState: SchedulerState, ticker: number): void {
+export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environment, ticker: number): void {
   clearScreenDown(process.stdout)
 
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
@@ -246,8 +194,9 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, ticker: numb
       state
     )}`
 
-    if (state.service.console.current) {
-      message += ` ${state.service.console.current.message}`
+    const currentMessage = env.status.service(state.service).current()
+    if (currentMessage) {
+      message += ` ${currentMessage.message}`
     }
 
     count += printWithTruncate(message)
@@ -270,11 +219,15 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, ticker: numb
     }
     if (state.type === 'running') {
       message += ` | ${spinner[ticker % spinner.length]}`
-      if (state.node.console.current) {
-        message += ` ${state.node.console.current.message}`
+      const currentMessage = env.status.task(state.node).current()
+      if (currentMessage) {
+        message += ` ${currentMessage.message}`
       }
     } else if (state.type === 'completed') {
       message += ` in ${state.duration}ms`
+      if (state.cached) {
+        message += ' [CACHED]'
+      }
     }
 
     count += printWithTruncate(message)

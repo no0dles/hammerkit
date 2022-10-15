@@ -1,5 +1,4 @@
 import { getTestSuite } from '../get-test-suite'
-import { NodeStartEvent } from '../../executer/events'
 
 describe('watch', () => {
   const suite = getTestSuite('watch', ['build.yaml', 'src', 'package.json', 'package-lock.json', 'tsconfig.json'])
@@ -7,14 +6,15 @@ describe('watch', () => {
   afterAll(() => suite.close())
 
   it('should run watch task and cancel', async () => {
-    const testCase = await suite.setup()
-    const apiNode = testCase.getNode('api')
-    testCase.eventBus.on<NodeStartEvent>('node-start', (evt) => {
-      if (evt.node.id === apiNode.id) {
-        testCase.environment.abortCtrl.abort()
+    const { cli, environment } = await suite.setup({ taskName: 'api' })
+    const apiNode = cli.node('api')
+    const exec = cli.execWatch({ watch: true })
+    exec.state.on((state) => {
+      if (state.node[apiNode.id].type === 'running') {
+        environment.abortCtrl.abort()
       }
     })
-    const result = await testCase.exec({ taskName: 'api' }, { watch: true })
+    const result = await exec.start()
     expect(result.success).toBeFalsy()
     expect(result.state.node[apiNode.id].type).toEqual('canceled')
   })

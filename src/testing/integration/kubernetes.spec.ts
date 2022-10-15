@@ -7,8 +7,8 @@ describe('kubernetes', () => {
   afterAll(() => suite.close())
 
   it('should forward deployment', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'api' })
-    expectSuccessfulResult(result)
+    const { cli, environment } = await suite.setup({ taskName: 'api' })
+    const result = await cli.exec()
+    expectSuccessfulResult(result, environment)
   })
 })

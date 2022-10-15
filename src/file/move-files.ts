@@ -29,7 +29,7 @@ export async function moveFiles(
       await context.file.remove(folder.to)
     }
 
-    node.status.write('debug', `copy ${folder.from} to ${folder.to}`)
+    context.status.task(node).write('debug', `copy ${folder.from} to ${folder.to}`)
     await context.file.copy(folder.from, folder.to)
   }
 }

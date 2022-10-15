@@ -1,15 +1,12 @@
-import { WorkNode } from '../planner/work-node'
-import { ProgressHub } from './emitter'
-import { HammerkitEvent } from './events'
 import { exec } from 'child_process'
 import { platform } from 'os'
 import { getLogs } from '../log'
 import { AbortError } from './abort'
 import { listenOnAbort } from '../utils/abort-event'
+import { StatusScopedConsole } from '../planner/work-node-status'
 
 export async function executeCommand(
-  node: WorkNode,
-  eventBus: ProgressHub<HammerkitEvent>,
+  status: StatusScopedConsole,
   abortSignal: AbortSignal,
   cwd: string,
   command: string,
@@ -23,12 +20,12 @@ export async function executeCommand(
     })
     ps.stdout?.on('data', async (data) => {
       for (const log of getLogs(data)) {
-        node.console.write('stdout', log)
+        status.console('stdout', log)
       }
     })
     ps.stderr?.on('data', async (data) => {
       for (const log of getLogs(data)) {
-        node.console.write('stderr', log)
+        status.console('stderr', log)
       }
     })
     ps.on('error', (err) => {

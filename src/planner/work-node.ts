@@ -4,10 +4,9 @@ import { WorkNodeCommand } from './work-node-command'
 import { WorkNodePath } from './work-node-path'
 import { WorkNodePort } from './work-node-port'
 import { WorkService } from './work-service'
-import { StatusConsole, LogConsole } from './work-node-status'
-import { LabelValues } from '../testing/test-suite'
 import { CacheMethod } from '../parser/cache-method'
 import { PlannedTask } from './utils/plan-work-node'
+import { LabelValues } from '../executer/label-values'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -26,10 +25,8 @@ export interface BaseWorkNode {
   plannedTask: PlannedTask
   buildFile: BuildFile
   needs: WorkService[]
-  console: LogConsole
   labels: LabelValues
-  status: StatusConsole
-  caching: CacheMethod
+  caching: CacheMethod | null
 }
 
 export interface LocalWorkNode extends BaseWorkNode {
@@ -45,4 +42,3 @@ export interface ContainerWorkNode extends BaseWorkNode {
 }
 
 export const isContainerWorkNode = (val: WorkNode): val is ContainerWorkNode => val.type === 'container'
-export const isLocalWorkNode = (val: WorkNode): val is LocalWorkNode => val.type === 'local'

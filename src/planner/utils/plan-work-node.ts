@@ -11,17 +11,16 @@ import { BuildFileTaskSource } from '../../parser/build-file-task-source'
 import { WorkNodeSource } from '../work-node-source'
 import { BuildFileTask } from '../../parser/build-file-task'
 import { WorkNodeCommand } from '../work-node-command'
-import { nodeConsole, statusConsole } from '../work-node-status'
 import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
 import { WorkNodePath } from '../work-node-path'
 import { parseWorkNodePort } from './parse-work-node-port'
 import { BaseWorkService, WorkService } from '../work-service'
 import { getWorkServiceId } from '../work-service-id'
-import { LabelValues } from '../../testing/test-suite'
 import { BuildFileTaskPlatform } from '../../parser/build-file-task-platform'
 import { BuildTaskCommand } from '../../parser/build-file-task-command'
 import { CacheMethod } from '../../parser/cache-method'
+import { LabelValues } from '../../executer/label-values'
 
 export interface BuildFileReference {
   build: BuildFile
@@ -48,7 +47,7 @@ export interface PlannedTask {
   envs: { [key: string]: string }
   ports: string[]
   labels: { [key: string]: string }
-  cache: CacheMethod
+  cache: CacheMethod | null
 }
 
 export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskResult): PlannedTask {
@@ -92,7 +91,7 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     buildTask: buildTaskResult.task,
     build: buildTaskResult.context.build,
     name: buildTaskResult.name,
-    cache: buildTaskResult.task.cache ?? extendedTask?.task?.cache ?? workContext.cacheDefault,
+    cache: buildTaskResult.task.cache ?? extendedTask?.task?.cache ?? null,
     description: buildTaskResult.task.description ?? extendedTask?.task?.description ?? null,
     continuous: buildTaskResult.task.continuous ?? false,
     cwd: workContext.cwd,
@@ -148,7 +147,7 @@ export function findBuildTask(context: WorkContext, selector: BuildTaskSelector)
   }
 }
 
-export function getWorkNode(context: WorkContext, selector: BuildTaskSelector, noContainer: boolean): WorkNode {
+export function getWorkNode(context: WorkContext, selector: BuildTaskSelector): WorkNode {
   const rootNode = findBuildTask(context, selector)
   const plannedTask = planTask(rootNode.context, rootNode)
 
@@ -157,13 +156,13 @@ export function getWorkNode(context: WorkContext, selector: BuildTaskSelector, n
     return context.workTree.nodes[id]
   }
 
-  const node = parseWorkNode(id, plannedTask, rootNode.context, noContainer)
+  const node = parseWorkNode(id, plannedTask, rootNode.context)
   context.workTree.nodes[id] = node
 
   const depNodes: WorkNode[] = []
   for (const plannedDep of plannedTask.deps) {
     const depName = templateValue(plannedDep.name, plannedDep.build.envs)
-    const depNode = getWorkNode(plannedDep.context, { taskName: depName }, noContainer)
+    const depNode = getWorkNode(plannedDep.context, { taskName: depName })
     if (!depNodes.some((d) => d.id === depNode.id)) {
       depNodes.push(depNode)
     }
@@ -182,7 +181,7 @@ export function mapLabels(labels: { [key: string]: string }): LabelValues {
   return result
 }
 
-function parseWorkNode(id: string, task: PlannedTask, context: WorkContext, noContainer: boolean): WorkNode {
+function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): WorkNode {
   const name = [...context.namePrefix, task.name].join(':')
 
   const baseWorkNode: BaseWorkNode = {
@@ -200,14 +199,13 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext, noCo
     generates: parseLocalWorkNodeGenerate(task, context, task.envs),
     plannedTask: task,
     needs: parseWorkNodeNeeds(task.needs, context),
-    console: nodeConsole(),
-    status: statusConsole(),
+    // console: nodeConsole(),
+    // status: statusConsole(),
     labels: mapLabels(task.labels),
-    caching: task.cache,
+    caching: task.cache ?? null,
   }
 
-  if (task.image && !noContainer) {
-    // TODO check if possible with needs if noContainer
+  if (task.image) {
     return {
       ...baseWorkNode,
       type: 'container',
@@ -273,9 +271,7 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
       const workService: BaseWorkService = {
         id,
         name: need.name,
-        console: nodeConsole(),
-        status: statusConsole(),
-        caching: context.cacheDefault,
+        caching: null, // TODO
         ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),
       }
       if (service.image) {

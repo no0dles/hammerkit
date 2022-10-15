@@ -11,29 +11,29 @@ describe('clean', () => {
   afterAll(() => suite.close())
 
   it('should clean generated outputs locally', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'example' }, { cacheDefault: 'none', noContainer: true })
-    await expectSuccessfulResult(result)
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
+    const result = await cli.exec({ cacheDefault: 'none', noContainer: true })
+    await expectSuccessfulResult(result, environment)
 
-    const outputPath = join(testCase.buildFile.path, 'node_modules')
+    const outputPath = join(suite.path, 'node_modules')
 
     expect(existsSync(outputPath)).toBeTruthy()
-    await testCase.clean()
+    await cli.clean()
     expect(existsSync(outputPath)).toBeFalsy()
   })
 
   it('should clean generated outputs in containers', async () => {
-    const testCase = await suite.setup()
-    const node = testCase.getNode('example')
-    const result = await testCase.exec({ taskName: 'example' }, { cacheDefault: 'none' })
-    await expectSuccessfulResult(result)
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
+    const node = cli.node('example')
+    const result = await cli.exec({ cacheDefault: 'none' })
+    await expectSuccessfulResult(result, environment)
 
-    const outputPath = join(testCase.buildFile.path, 'node_modules')
+    const outputPath = join(suite.path, 'node_modules')
     const volumeName = getVolumeName(outputPath)
-    const docker = await getDocker(node)
+    const docker = await getDocker(environment.status.task(node))
     expect(await existsVolume(docker, volumeName)).toBeTruthy()
 
-    await testCase.clean()
+    await cli.clean()
     expect(await existsVolume(docker, volumeName)).toBeFalsy()
   })
 })

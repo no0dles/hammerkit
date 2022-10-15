@@ -1,77 +1,16 @@
-import { BuildFile } from '../parser/build-file'
-import { HammerkitEvent } from '../executer/events'
-import { WorkNode } from '../planner/work-node'
+import { Cli } from './cli'
 import { Environment } from '../executer/environment'
-import { LogMode } from '../logging/log-mode'
-import { WorkNodeValidation } from '../planner/work-node-validation'
-import { Process, UpdateBus } from '../executer/emitter'
-import { SchedulerResult } from '../executer/scheduler/scheduler-result'
-import { CacheMethod } from '../parser/cache-method'
-
-export interface ExecutionMock<T> {
-  task(name: string): ExecutionMockNode
-  getProcess(key: string): Process<T, T> | null
-}
-
-export interface ExecutionMockNode {
-  set(options: { duration?: number; exitCode: number }): this
-  executeCount: number
-}
-
-export interface MockedTestCase extends TestCase {
-  executionMock: ExecutionMock<HammerkitEvent>
-}
-
-export interface ExecOptions {
-  workers: number
-  watch: boolean
-  noContainer: boolean
-  logMode: LogMode
-  cacheDefault: CacheMethod
-}
-
-export interface ExecTargetTask {
-  taskName: string
-}
-export interface ExecTargetLabel {
-  filterLabels: LabelValues
-  excludeLabels: LabelValues
-}
-export type ExecTarget = ExecTargetTask | ExecTargetLabel
-
-export const isExecTargetTask = (target: ExecTarget): target is ExecTargetTask => 'taskName' in target
-
-export interface LabelValues {
-  [key: string]: string[]
-}
-
-export interface Labels {
-  [key: string]: string
-}
-
-export interface TestCase {
-  environment: Environment
-  buildFile: BuildFile
-  eventBus: UpdateBus<HammerkitEvent>
-
-  exec(target: ExecTarget, options?: Partial<ExecOptions>): Promise<SchedulerResult>
-
-  store(path: string): Promise<void>
-  restore(path: string): Promise<void>
-  clean(): Promise<void>
-  validate(): AsyncGenerator<WorkNodeValidation>
-
-  getNode(name: string): WorkNode
-  getNodes(): Generator<WorkNode>
-}
-
-export interface TestSuiteSetupOptions {
-  mockExecution: true
-}
+import { WorkScope } from '../executer/work-scope'
 
 export interface TestSuite {
-  setup(): Promise<TestCase>
-  setup(options: Partial<TestSuiteSetupOptions>): Promise<MockedTestCase>
+  path: string
+
+  setup(scope: WorkScope): Promise<TestSuiteSetup>
 
   close(): Promise<void>
+}
+
+export interface TestSuiteSetup {
+  cli: Cli
+  environment: Environment
 }

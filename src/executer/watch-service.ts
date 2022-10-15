@@ -1,36 +1,43 @@
 import { Environment } from './environment'
-import { Process } from './emitter'
-import { HammerkitEvent, ServiceWatchCanceledEvent } from './events'
-import { ContainerWorkService, WorkService } from '../planner/work-service'
+import { ContainerWorkService } from '../planner/work-service'
 import { getServiceNodeCacheStats, hasStatsChanged } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
+import { State } from './state'
+import { Process } from './process'
 
-export function watchService(
-  service: ContainerWorkService,
-  environment: Environment
-): Process<ServiceWatchCanceledEvent, HammerkitEvent> {
-  return async (abort: AbortSignal, hub) => {
+export function watchService(service: ContainerWorkService, state: State, environment: Environment): Process {
+  return async (abort: AbortSignal) => {
     let currentState = await getServiceNodeCacheStats(service, environment)
 
+    const status = environment.status.service(service)
     const debouncer = new Debouncer(async () => {
       if (environment.abortCtrl.signal.aborted) {
         return
       }
 
       const newStats = await getServiceNodeCacheStats(service, environment)
-      const hasChanged = await hasStatsChanged(service, currentState, newStats)
+      const hasChanged = await hasStatsChanged(
+        status,
+        { name: service.name, caching: service.caching ?? state.current.cacheMethod },
+        currentState,
+        newStats
+      )
       if (!hasChanged) {
         return
       }
       currentState = newStats
 
-      service.status.write('debug', `source changed for service ${service.name}, restart process`)
+      status.write('debug', `source changed for service ${service.name}, restart process`)
 
-      hub.emit({
-        type: 'service-watch-reset',
+      const serviceState = state.current.service[service.id]
+      if (serviceState.type === 'running') {
+        serviceState.abortController.abort() // TODO await stop
+      }
+      state.patchService({
+        type: 'pending',
         service,
       })
     }, 100)
@@ -39,23 +46,17 @@ export function watchService(
     const mounts: string[] = []
 
     for (const mount of service.mounts) {
-      service.status.write('debug', `watch ${mount.localPath} mount`)
+      status.write('debug', `watch ${mount.localPath} mount`)
 
       const watcher = environment.file.watch(mount.localPath, async (fileName) => {
         const absoluteFileName = join(mount.localPath, fileName)
-        service.status.write('debug', `source ${absoluteFileName} change for watched service ${service.name}`)
+        status.write('debug', `source ${absoluteFileName} change for watched service ${service.name}`)
         debouncer.bounce()
       })
 
       mounts.push(mount.localPath)
       fileWatchers.push(watcher)
     }
-
-    hub.emit({
-      type: 'service-watch-start',
-      service,
-      mounts,
-    })
 
     await waitOnAbort(abort)
 

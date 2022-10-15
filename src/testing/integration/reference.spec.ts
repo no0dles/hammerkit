@@ -1,6 +1,6 @@
 import { expectLog, expectSuccessfulResult } from '../expect'
-import { planWorkNodes } from '../../planner/utils/plan-work-nodes'
 import { getTestSuite } from '../get-test-suite'
+import { emptyWorkLabelScope } from '../../executer/work-scope'
 
 describe('reference', () => {
   const suite = getTestSuite('reference', ['build.yaml', 'foo'])
@@ -8,16 +8,16 @@ describe('reference', () => {
   afterAll(() => suite.close())
 
   it('should run included task', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'example' })
-    await expectSuccessfulResult(result)
-    await expectLog(result, `foo:bar`, 'foobar')
-    await expectLog(result, `example`, 'hammertime')
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
+    await expectLog(result, environment, `foo:bar`, 'foobar')
+    await expectLog(result, environment, `example`, 'hammertime')
   })
 
   it('should list task with references tasks nested', async () => {
-    const { buildFile } = await suite.setup()
-    const workTree = planWorkNodes(buildFile, { filterLabels: {}, excludeLabels: {}, noContainer: false })
-    expect(Object.values(workTree.nodes).map((t) => t.name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
+    const { cli } = await suite.setup(emptyWorkLabelScope())
+    const workNodes = cli.ls()
+    expect(workNodes.map((t) => t.name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
   })
 })

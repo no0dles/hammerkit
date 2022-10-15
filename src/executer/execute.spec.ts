@@ -1,78 +1,52 @@
-import { getVirtualTestSuite } from '../testing/virtual-test-suite'
+import { getTestSuite } from '../testing/get-test-suite'
 
 describe('execute', () => {
-  const suite = getVirtualTestSuite({
-    files: {
-      'index.js': "console.log('hello')",
-      'package.json': '{}',
-    },
-    buildFile: {
-      tasks: {
-        api: {
-          cmds: ['node index.js'],
-          src: ['index.js', 'package.json'],
-        },
-      },
-    },
-  })
+  const suite = getTestSuite('hello-world-node', ['build.yaml', 'package.json', 'index.js'])
 
   afterAll(() => suite.close())
 
   it('should restart watching task if once completed', async () => {
-    const testCase = await suite.setup({ mockExecution: true })
+    const { cli, environment } = await suite.setup({ taskName: 'api' })
 
-    const apiMock = testCase.executionMock.task('api').set({
-      exitCode: 0,
-      duration: 10,
+    const node = cli.node('api')
+    const exec = cli.execWatch({ watch: true })
+
+    let count = 0
+    exec.state.on((state) => {
+      if (state.node[node.id].type === 'completed') {
+        count++
+        if (count === 1) {
+          environment.file.appendFile(`${environment.cwd}/index.js`, '\n')
+        } else if (count === 2) {
+          environment.abortCtrl.abort()
+        }
+      }
     })
 
-    expect(apiMock.executeCount).toBe(0)
+    const result = await exec.start()
 
-    const resultPromise = testCase.exec({ taskName: 'api' }, { watch: true })
-
-    await wait(30)
-
-    expect(apiMock.executeCount).toBe(1)
-
-    await testCase.environment.file.appendFile(`${testCase.environment.cwd}/index.js`, '\n')
-
-    await wait(130)
-
-    expect(apiMock.executeCount).toBe(2)
-
-    await testCase.environment.abortCtrl.abort()
-
-    const result = await resultPromise
-    expect(result.success).toBeTrue()
+    expect(result.success).toBeTruthy()
   })
 
   it('should restart watching task if once failed', async () => {
-    const testCase = await suite.setup({ mockExecution: true })
+    const { cli, environment } = await suite.setup({ taskName: 'api_crashing' })
 
-    const apiMock = testCase.executionMock.task('api').set({ exitCode: 1, duration: 10 })
+    const node = cli.node('api_crashing')
+    const exec = cli.execWatch({ watch: true })
 
-    expect(apiMock.executeCount).toBe(0)
+    let count = 0
+    exec.state.on((state) => {
+      if (state.node[node.id].type === 'crash') {
+        count++
+        if (count === 1) {
+          environment.file.appendFile(`${environment.cwd}/index.js`, '\n')
+        } else if (count === 2) {
+          environment.abortCtrl.abort()
+        }
+      }
+    })
 
-    const resultPromise = testCase.exec({ taskName: 'api' }, { watch: true })
-
-    await wait(30)
-    expect(apiMock.executeCount).toBe(1)
-
-    await testCase.environment.file.appendFile(`${testCase.environment.cwd}/index.js`, '\n')
-
-    await wait(130)
-
-    expect(apiMock.executeCount).toBe(2)
-
-    await testCase.environment.abortCtrl.abort()
-
-    const result = await resultPromise
+    const result = await exec.start()
     expect(result.success).toBeFalsy()
   })
 })
-
-async function wait(ms: number) {
-  await new Promise<void>((resolve) => {
-    setTimeout(() => resolve(), ms)
-  })
-}

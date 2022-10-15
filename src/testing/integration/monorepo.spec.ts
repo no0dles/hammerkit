@@ -7,9 +7,9 @@ describe('monorepo', () => {
   afterAll(() => suite.close())
 
   it('should build and clean monorepo', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'build' })
-    await expectSuccessfulResult(result)
-    await testCase.clean()
+    const { cli, environment } = await suite.setup({ taskName: 'build' })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
+    await cli.clean()
   }, 120000)
 })

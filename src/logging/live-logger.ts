@@ -1,32 +1,20 @@
-import {
-  getNodeNameLengthForWorkTree,
-  printWorkTreeResult,
-  writeNodeLogToConsole,
-  writeServiceLogToConsole,
-} from '../log'
-import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
+import { getNodeNameLengthForWorkTree, printWorkTreeResult, writeNodeLogToConsole } from '../log'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { Logger } from './log-mode'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
+import { Environment } from '../executer/environment'
+import { ReadonlyState } from '../executer/readonly-state'
 
-export function liveLogger(state: SchedulerState): Logger {
-  const maxNodeNameLength = getNodeNameLengthForWorkTree(state.node, state.service)
+export function liveLogger(state: ReadonlyState<SchedulerState>, env: Environment): Logger {
+  const maxNodeNameLength = getNodeNameLengthForWorkTree(state.current.node, state.current.service)
 
-  for (const node of iterateWorkNodes(state.node)) {
-    node.node.console.on((log) => {
-      writeNodeLogToConsole(node.node, log, maxNodeNameLength)
-    })
-  }
-
-  for (const service of Object.values(state.service)) {
-    service.service.console.on((log) => {
-      writeServiceLogToConsole(service.service, log, maxNodeNameLength)
-    })
-  }
+  env.status.on((log) => {
+    writeNodeLogToConsole(log, maxNodeNameLength)
+  })
 
   return {
-    async complete(evt: SchedulerResult) {
-      await printWorkTreeResult(evt.state, !evt.success)
+    async complete(evt: SchedulerResult, env) {
+      await printWorkTreeResult(evt.state, env)
     },
   }
 }

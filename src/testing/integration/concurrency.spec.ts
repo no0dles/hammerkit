@@ -1,6 +1,5 @@
 import { expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
-import { NodeCompletedEvent, NodeStartEvent } from '../../executer/events'
 
 describe('concurrency', () => {
   const suite = getTestSuite('concurrency', ['build.yaml'])
@@ -8,18 +7,15 @@ describe('concurrency', () => {
   afterAll(() => suite.close())
 
   it('should run with concurrency lower than total tasks', async () => {
-    const testCase = await suite.setup()
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
 
-    let concurrentRunners = 0
-    testCase.eventBus.on<NodeStartEvent>('node-start', () => {
-      concurrentRunners++
-      expect(concurrentRunners).toBeLessThanOrEqual(1)
-    })
-    testCase.eventBus.on<NodeCompletedEvent>('node-completed', () => {
-      concurrentRunners--
+    const exec = cli.execWatch({ workers: 1 })
+    exec.state.on((state) => {
+      const runningNodes = Object.values(state.node).filter((n) => n.type === 'running')
+      expect(runningNodes.length).toBeLessThanOrEqual(1)
     })
 
-    const result = await testCase.exec({ taskName: 'example' }, { workers: 1 })
-    await expectSuccessfulResult(result)
+    const result = await exec.start()
+    await expectSuccessfulResult(result, environment)
   })
 })

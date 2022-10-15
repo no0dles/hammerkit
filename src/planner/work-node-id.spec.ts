@@ -16,9 +16,9 @@ async function compareTasks(firstTask: any, secondTask: any, expectEqual: boolea
       test: secondTask,
     },
   })
-  const firstContext = createWorkContext(firstBuildFile, null)
+  const firstContext = createWorkContext(firstBuildFile)
   const firstMerged = planTask(firstContext, findBuildTask(firstContext, { taskName: 'test' }))
-  const secondContext = createWorkContext(secondBuildFile, null)
+  const secondContext = createWorkContext(secondBuildFile)
   const secondMerged = planTask(secondContext, findBuildTask(secondContext, { taskName: 'test' }))
   const firstNodeId = getWorkNodeId(firstMerged)
   const secondNodeId = getWorkNodeId(secondMerged)

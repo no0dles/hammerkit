@@ -6,8 +6,8 @@ describe('invalid', () => {
   afterAll(() => suite.close())
 
   it('should detect loop in execution', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'foo' })
+    const { cli } = await suite.setup({ taskName: 'foo' })
+    const result = await cli.exec()
     expect(result.success).toBeFalsy()
   })
 })

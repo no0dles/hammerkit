@@ -1,18 +1,18 @@
-import { ContainerWorkNode } from '../planner/work-node'
 import Dockerode, { Container } from 'dockerode'
 import { execCommand } from './execute-docker'
+import { StatusScopedConsole } from '../planner/work-node-status'
 
 export async function setUserPermission(
   directory: string,
-  node: ContainerWorkNode,
+  status: StatusScopedConsole,
   docker: Dockerode,
   container: Container,
   user: string,
   abort: AbortSignal
 ): Promise<void> {
-  node.status.write('debug', `set permission on ${directory}`)
+  status.write('debug', `set permission on ${directory}`)
   const result = await execCommand(
-    node,
+    status,
     docker,
     container,
     '/',
@@ -25,6 +25,6 @@ export async function setUserPermission(
     return
   }
   if (result.type === 'timeout' || result.result.ExitCode !== 0) {
-    node.status.write('warn', `unable to set permissions for ${directory}`)
+    status.write('warn', `unable to set permissions for ${directory}`)
   }
 }

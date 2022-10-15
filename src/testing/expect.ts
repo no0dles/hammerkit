@@ -2,15 +2,16 @@ import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { NodeState } from '../executer/scheduler/node-state'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
+import { Environment } from '../executer/environment'
 
-export async function expectSuccessfulResult(result: SchedulerResult): Promise<void> {
+export async function expectSuccessfulResult(result: SchedulerResult, env: Environment): Promise<void> {
   if (!result.success) {
     for (const state of iterateWorkNodes(result.state.node)) {
       if (state.type !== 'completed') {
         expect({
           nodeId: state.node.id,
           status: state.type,
-          logs: await state.node.console.read(),
+          logs: env.status.task(state.node).read(),
           errorMessage: state.type === 'error' ? state.errorMessage : undefined,
         }).toEqual({
           nodeId: state.node.id,
@@ -29,13 +30,35 @@ function getNodeState(state: SchedulerState, name: string): NodeState {
   return node
 }
 
-export async function expectLog(result: SchedulerResult, name: string, message: string): Promise<void> {
+export async function expectLog(
+  result: SchedulerResult,
+  env: Environment,
+  name: string,
+  message: string
+): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = await state.node.console.read()
-  expect(logs.map((l) => l.message)).toContain(message)
+  const logs = env.status.task(state.node).read()
+  for (const log of logs) {
+    if (log.message === message) {
+      return
+    }
+  }
+
+  expect(logs).toContain(message)
 }
-export async function expectContainsLog(result: SchedulerResult, name: string, message: string): Promise<void> {
+export async function expectContainsLog(
+  result: SchedulerResult,
+  env: Environment,
+  name: string,
+  message: string
+): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = await state.node.console.read()
-  expect(logs.some((l) => l.message.indexOf(message) >= 0)).toBeTruthy()
+  const logs = env.status.task(state.node).read()
+  for (const log of logs) {
+    if (log.message.indexOf(message) >= 0) {
+      return
+    }
+  }
+
+  expect(Array.from(logs)).toContain(message)
 }

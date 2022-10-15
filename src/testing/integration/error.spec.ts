@@ -6,14 +6,14 @@ describe('error', () => {
   afterAll(() => suite.close())
 
   it('should return error when local task failed', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'local_error' })
+    const { cli } = await suite.setup({ taskName: 'local_error' })
+    const result = await cli.exec()
     expect(result.success).toBeFalsy()
   })
 
   it('should return error when docker task failed', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'docker_error' })
+    const { cli } = await suite.setup({ taskName: 'docker_error' })
+    const result = await cli.exec()
     expect(result.success).toBeFalsy()
   })
 })

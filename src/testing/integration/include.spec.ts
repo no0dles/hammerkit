@@ -1,5 +1,4 @@
 import { expectLog, expectSuccessfulResult } from '../expect'
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { getTestSuite } from '../get-test-suite'
 
 describe('include', () => {
@@ -8,22 +7,21 @@ describe('include', () => {
   afterAll(() => suite.close())
 
   it('should run included task', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'example' })
-    await expectSuccessfulResult(result)
-    await expectLog(result, `foo:bar`, 'foobar')
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
+    await expectLog(result, environment, `foo:bar`, 'foobar')
   })
 
   it('should get name:example', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'name:example' })
-    await expectSuccessfulResult(result)
+    const { cli, environment } = await suite.setup({ taskName: 'name:example' })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
   })
 
   it('should get included task', async () => {
-    const { buildFile } = await suite.setup()
-    const tree = planWorkTree(buildFile, { taskName: 'foo:bar', noContainer: false })
-    expect(tree.rootNode?.name).toEqual('foo:bar')
-    expect(tree.rootNode?.cwd).toEqual(buildFile.path)
+    const { cli } = await suite.setup({ taskName: 'foo:bar' })
+    expect(cli.ls().map((n) => n.name)).toEqual(['foo:bar'])
+    expect(cli.ls()[0].cwd).toEqual(suite.path)
   })
 })

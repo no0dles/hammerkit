@@ -7,10 +7,10 @@ describe('docker', () => {
   afterAll(() => suite.close())
 
   it('should pull docker image', async () => {
-    const testCase = await suite.setup()
-    const result = await testCase.exec({ taskName: 'example' })
-    await expectSuccessfulResult(result)
-    await expectLog(result, `example`, '7.19.1')
-    await expectLog(result, `example`, 'v16.6.0')
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
+    await expectLog(result, environment, `example`, '7.19.1')
+    await expectLog(result, environment, `example`, 'v16.6.0')
   })
 })

@@ -1,0 +1,8 @@
+tasks:
+  api:
+    cmds: [ 'node index.js' ]
+    src: [ 'index.js', 'package.json' ]
+
+  api_crashing:
+    cmds: [ 'node crash.js' ]
+    src: [ 'index.js', 'package.json' ]

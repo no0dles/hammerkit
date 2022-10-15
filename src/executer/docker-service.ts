@@ -1,6 +1,4 @@
-import { ContainerWorkService, WorkService } from '../planner/work-service'
-import { Process } from './emitter'
-import { HammerkitEvent, ServiceCanceledEvent, ServiceCrashEvent, ServiceReadyEvent } from './events'
+import { ContainerWorkService } from '../planner/work-service'
 import { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { getDocker } from './execute-docker'
@@ -10,21 +8,23 @@ import { waitOnAbort } from '../utils/abort-event'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
+import { Environment } from './environment'
+import { State } from './state'
+import { Process } from './process'
 
-export function dockerService(
-  service: ContainerWorkService
-): Process<ServiceReadyEvent | ServiceCanceledEvent | ServiceCrashEvent, HammerkitEvent> {
-  return async (abort, emitter) => {
+export function dockerService(service: ContainerWorkService, state: State, environment: Environment): Process {
+  return async (abort) => {
+    const status = environment.status.service(service)
     let container: Container | null = null
 
     try {
       checkForAbort(abort)
 
-      const docker = await getDocker(service)
-      await pull(service, docker, service.image)
+      const docker = await getDocker(status)
+      await pull(status, docker, service.image)
 
       checkForAbort(abort)
-      service.status.write('debug', `create container with image ${service.image}`)
+      status.write('debug', `create container with image ${service.image}`)
       container = await docker.createContainer({
         Image: service.image,
         Env: Object.keys(service.envs).map((k) => `${k}=${service.envs[k]}`),
@@ -42,30 +42,38 @@ export function dockerService(
       })
 
       const stream = await container.attach({ stream: true, stdout: true, stderr: true })
-      logStream(service, docker, stream)
+      logStream(status, docker, stream)
 
       await container.start()
 
       if (!service.healthcheck) {
-        emitter.emit({
-          type: 'service-ready',
-          service: service,
-          dns: { containerId: container.id },
-        })
+        const currentState = state.current.service[service.id]
+        if (currentState.type === 'running') {
+          state.patchService({
+            type: 'ready',
+            service,
+            dns: { containerId: container.id },
+            abortController: currentState.abortController,
+          })
+        }
       } else {
         let ready = false
         do {
-          ready = await checkReadiness(service, service.healthcheck, docker, container, abort)
+          ready = await checkReadiness(status, service.healthcheck, docker, container, abort)
           if (!ready) {
             await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
           }
         } while (!ready)
 
-        emitter.emit({
-          type: 'service-ready',
-          service,
-          dns: { containerId: container.id },
-        })
+        const currentState = state.current.service[service.id]
+        if (currentState.type === 'running') {
+          state.patchService({
+            type: 'ready',
+            service,
+            dns: { containerId: container.id },
+            abortController: currentState.abortController,
+          })
+        }
       }
 
       await waitOnAbort(abort)
@@ -92,7 +100,7 @@ export function dockerService(
         try {
           await removeContainer(container)
         } catch (e) {
-          service.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
+          status.write('error', `remove of container failed ${getErrorMessage(e)}`)
         }
       }
     }

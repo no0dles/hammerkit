@@ -3,8 +3,8 @@ import { join, relative } from 'path'
 import { WorkNodeCacheFileStats, WorkServiceCacheFileStats } from './work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
-import { StatusConsole } from '../planner/work-node-status'
-import { ContainerWorkService, WorkService } from '../planner/work-service'
+import { StatusScopedConsole } from '../planner/work-node-status'
+import { ContainerWorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
 
 async function addWorkNodeCacheStats(
@@ -86,7 +86,8 @@ export async function getWorkNodeCacheStats(
 }
 
 export async function hasStatsChanged(
-  node: { name: string; status: StatusConsole; caching: CacheMethod },
+  status: StatusScopedConsole,
+  node: { name: string; caching: CacheMethod },
   cache: WorkNodeCacheFileStats | WorkServiceCacheFileStats,
   current: WorkNodeCacheFileStats | WorkServiceCacheFileStats
 ): Promise<boolean> {
@@ -96,13 +97,13 @@ export async function hasStatsChanged(
       (node.caching === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
       (node.caching === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
     ) {
-      node.status.write(
+      status.write(
         'debug',
         node.caching === 'checksum'
           ? `${key} changed from checksum ${cache.files[key].checksum} to ${current.files[key]?.checksum}`
           : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
       )
-      node.status.write('debug', `${node.name} can't be skipped because ${key} has been modified`)
+      status.write('debug', `${node.name} can't be skipped because ${key} has been modified`)
       changed = true
       break
     }

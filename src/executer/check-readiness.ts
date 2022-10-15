@@ -1,17 +1,17 @@
-import { WorkService } from '../planner/work-service'
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import Dockerode, { Container } from 'dockerode'
 import { execCommand } from './execute-docker'
+import { StatusScopedConsole } from '../planner/work-node-status'
 
 export async function checkReadiness(
-  service: WorkService,
+  status: StatusScopedConsole,
   healthCheck: ExecutionBuildServiceHealthCheck,
   docker: Dockerode,
   container: Container,
   abort: AbortSignal
 ): Promise<boolean> {
   const result = await execCommand(
-    service,
+    status,
     docker,
     container,
     undefined,
@@ -27,10 +27,10 @@ export async function checkReadiness(
     return false
   } else {
     if (result.result.ExitCode === 0) {
-      service.status.write('debug', `healthcheck ${healthCheck.cmd} succeeded`)
+      status.write('debug', `healthcheck ${healthCheck.cmd} succeeded`)
       return true
     } else {
-      service.status.write('debug', `healthcheck ${healthCheck.cmd} failed with ${result.result.ExitCode}`)
+      status.write('debug', `healthcheck ${healthCheck.cmd} failed with ${result.result.ExitCode}`)
       return false
     }
   }

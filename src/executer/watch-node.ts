@@ -1,15 +1,16 @@
 import { WorkNode } from '../planner/work-node'
 import { Environment } from './environment'
-import { Process } from './emitter'
-import { HammerkitEvent, NodeWatchCanceledEvent } from './events'
 import { getWorkNodeCacheStats, hasStatsChanged } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
+import { State } from './state'
+import { Process } from './process'
 
-export function watchNode(node: WorkNode, environment: Environment): Process<NodeWatchCanceledEvent, HammerkitEvent> {
-  return async (abort: AbortSignal, hub) => {
+export function watchNode(node: WorkNode, state: State, environment: Environment): Process {
+  return async (abort: AbortSignal) => {
+    const status = environment.status.task(node)
     let currentState = await getWorkNodeCacheStats(node, environment)
 
     const debouncer = new Debouncer(async () => {
@@ -18,16 +19,25 @@ export function watchNode(node: WorkNode, environment: Environment): Process<Nod
       }
 
       const newStats = await getWorkNodeCacheStats(node, environment)
-      const hasChanged = await hasStatsChanged(node, currentState, newStats)
+      const hasChanged = await hasStatsChanged(
+        status,
+        { name: node.name, caching: node.caching ?? state.current.cacheMethod },
+        currentState,
+        newStats
+      )
       if (!hasChanged) {
         return
       }
       currentState = newStats
 
-      node.status.write('debug', `source changed for node ${node.name}, restart process`)
+      status.write('debug', `source changed for node ${node.name}, restart process`)
 
-      hub.emit({
-        type: 'node-watch-reset',
+      const currentNodeState = state.current.node[node.id]
+      if (currentNodeState.type === 'running') {
+        currentNodeState.abortController.abort() // TODO await stop
+      }
+      state.patchNode({
+        type: 'pending',
         node,
       })
     }, 100)
@@ -36,13 +46,13 @@ export function watchNode(node: WorkNode, environment: Environment): Process<Nod
     const sources: string[] = []
 
     for (const src of node.src) {
-      node.status.write('debug', `watch ${src.absolutePath} source`)
+      status.write('debug', `watch ${src.absolutePath} source`)
 
       const watcher = environment.file.watch(src.absolutePath, async (fileName) => {
         const absoluteFileName = join(src.absolutePath, fileName)
 
         if (src.matcher(absoluteFileName, node.cwd)) {
-          node.status.write('debug', `source ${absoluteFileName} change for watched task ${node.name}`)
+          status.write('debug', `source ${absoluteFileName} change for watched task ${node.name}`)
           debouncer.bounce()
         }
       })
@@ -50,12 +60,6 @@ export function watchNode(node: WorkNode, environment: Environment): Process<Nod
       sources.push(src.absolutePath)
       fileWatchers.push(watcher)
     }
-
-    hub.emit({
-      type: 'node-watch-start',
-      node,
-      sources,
-    })
 
     await waitOnAbort(abort)
 

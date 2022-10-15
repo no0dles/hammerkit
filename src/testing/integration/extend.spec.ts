@@ -6,8 +6,8 @@ describe('extend', () => {
   afterAll(() => suite.close())
 
   it('should merge env variables', async () => {
-    const testCase = await suite.setup()
-    const node = await testCase.getNode('extend_env')
+    const { cli } = await suite.setup({ taskName: 'extend_env' })
+    const node = await cli.node('extend_env')
     expect(node.envs).toEqual({
       NAME: 'base',
       KEEP: 'value',
@@ -15,8 +15,8 @@ describe('extend', () => {
   })
 
   it('should extend and override', async () => {
-    const testCase = await suite.setup()
-    const node = await testCase.getNode('extend_container_task')
+    const { cli } = await suite.setup({ taskName: 'extend_container_task' })
+    const node = await cli.node('extend_container_task')
     expect(node.envs).toEqual({
       NAME: 'override',
     })
@@ -27,8 +27,8 @@ describe('extend', () => {
   })
 
   it('should merge deps', async () => {
-    const testCase = await suite.setup()
-    const node = await testCase.getNode('extend_dep')
+    const { cli } = await suite.setup({ taskName: 'extend_dep' })
+    const node = await cli.node('extend_dep')
     expect(node.deps.map((d) => d.name)).toIncludeSameMembers(['base_env', 'extend_env'])
   })
 })

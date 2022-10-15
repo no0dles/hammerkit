@@ -1,8 +1,7 @@
 import Dockerode from 'dockerode'
-import { WorkNode } from '../planner/work-node'
-import { WorkService } from '../planner/work-service'
+import { StatusScopedConsole } from '../planner/work-node-status'
 
-export async function pull(nodeOrService: WorkNode | WorkService, docker: Dockerode, imageName: string): Promise<void> {
+export async function pull(status: StatusScopedConsole, docker: Dockerode, imageName: string): Promise<void> {
   let searchImageName = imageName
   if (imageName.indexOf(':') === -1) {
     searchImageName += ':latest'
@@ -12,7 +11,7 @@ export async function pull(nodeOrService: WorkNode | WorkService, docker: Docker
     return
   }
 
-  nodeOrService.status.write('debug', `pull image ${imageName}`)
+  status.write('debug', `pull image ${imageName}`)
   const image = await docker.pull(imageName)
   await new Promise<void>((resolve, reject) => {
     docker.modem.followProgress(image, (err: any, res: any) => (err ? reject(err) : resolve(res)))

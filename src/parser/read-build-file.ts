@@ -1,7 +1,11 @@
-import { parse as yamlParse } from 'yaml'
+import { parse as yamlParse, stringify as yamlSerialize } from 'yaml'
 import { BuildFile } from './build-file'
 import { parseBuildFile } from './parse-build-file'
 import { Environment } from '../executer/environment'
+
+export async function write(filename: string, content: any, context: Environment): Promise<void> {
+  await context.file.writeFile(filename, yamlSerialize(content))
+}
 
 export async function read(fileName: string, context: Environment): Promise<any> {
   // context.console.debug(`read ${fileName} build file`)

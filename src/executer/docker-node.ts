@@ -1,15 +1,6 @@
 import { ContainerWorkNode } from '../planner/work-node'
 import { Environment } from './environment'
-import { Process } from './emitter'
-import {
-  HammerkitEvent,
-  isHostServiceDns,
-  NodeCanceledEvent,
-  NodeCompletedEvent,
-  NodeCrashEvent,
-  NodeErrorEvent,
-  ServiceDns,
-} from './events'
+import { isHostServiceDns, ServiceDns } from './events'
 import { Container } from 'dockerode'
 import {
   convertToPosixPath,
@@ -29,23 +20,42 @@ import { templateValue } from '../planner/utils/template-value'
 import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
+import { getDuration } from './states'
+import { checkIfUpToDate } from './scheduler/enqueue-next'
+import { State } from './state'
+import { Process } from './process'
 
 export function dockerNode(
   node: ContainerWorkNode,
   serviceContainers: { [key: string]: ServiceDns },
+  state: State,
   environment: Environment
-): Process<NodeCanceledEvent | NodeErrorEvent | NodeCrashEvent | NodeCompletedEvent, HammerkitEvent> {
-  return async (abort) => {
+): Process {
+  return async (abort, started) => {
+    // TODO check how it behaves on noContainer override
+    const isUpToDate = await checkIfUpToDate(node, state.current.cacheMethod, environment)
+    if (isUpToDate) {
+      state.patchNode({
+        type: 'completed',
+        node: node,
+        cached: true,
+        duration: getDuration(started),
+      })
+      return
+    }
+
+    const status = environment.status.task(node)
+
     let container: Container | null = null
 
     try {
-      const docker = await getDocker(node)
+      const docker = await getDocker(status)
 
       const volumes = await getContainerVolumes(node)
       const mounts = await getContainerMounts(node, environment)
 
       checkForAbort(abort)
-      await pull(node, docker, node.image)
+      await pull(status, docker, node.image)
 
       checkForAbort(abort)
       for (const volume of volumes) {
@@ -59,21 +69,21 @@ export function dockerNode(
         const dns = serviceContainers[need.id]
         if (isHostServiceDns(dns)) {
           hosts.push(`${need.name}:${dns.host}`)
-          node.status.write('debug', `extra host ${need.name}:${dns.host}`)
+          status.write('debug', `extra host ${need.name}:${dns.host}`)
         } else {
           if (!dns.containerId) {
             throw new Error(`service ${need.name} is not running`)
           }
 
           links.push(`${dns.containerId}:${need.name}`)
-          node.status.write('debug', `link container ${dns.containerId}:${need.name}`)
+          status.write('debug', `link container ${dns.containerId}:${need.name}`)
         }
       }
 
-      const envs = replaceEnvVariables(node, environment.processEnvs)
+      const envs = replaceEnvVariables(node, status, environment.processEnvs)
 
       checkForAbort(abort)
-      node.status.write('debug', `create container with image ${node.image} with ${node.shell}`)
+      status.write('debug', `create container with image ${node.image} with ${node.shell}`)
       container = await docker.createContainer({
         Image: node.image,
         Tty: true,
@@ -107,22 +117,22 @@ export function dockerNode(
           : undefined
 
       for (const mount of mounts) {
-        node.status.write('debug', `bind mount ${mount.localPath}:${mount.containerPath}`)
+        status.write('debug', `bind mount ${mount.localPath}:${mount.containerPath}`)
       }
       for (const volume of volumes) {
-        node.status.write('debug', `volume mount ${volume.name}:${volume.containerPath}`)
+        status.write('debug', `volume mount ${volume.name}:${volume.containerPath}`)
       }
 
-      node.status.write('debug', `starting container with image ${node.image}`)
-      await startContainer(node, container)
+      status.write('debug', `starting container with image ${node.image}`)
+      await startContainer(status, container)
 
       if (user) {
-        await setUserPermission(node.cwd, node, docker, container, user, abort)
+        await setUserPermission(node.cwd, status, docker, container, user, abort)
         for (const volume of volumes) {
-          await setUserPermission(volume.containerPath, node, docker, container, user, abort)
+          await setUserPermission(volume.containerPath, status, docker, container, user, abort)
         }
         for (const mount of mounts) {
-          await setUserPermission(mount.containerPath, node, docker, container, user, abort)
+          await setUserPermission(mount.containerPath, status, docker, container, user, abort)
         }
       }
 
@@ -130,10 +140,10 @@ export function dockerNode(
         checkForAbort(abort)
 
         const command = templateValue(cmd.cmd, node.envs)
-        node.status.write('info', `execute cmd "${command}" in container`)
+        status.write('info', `execute cmd "${command}" in container`)
 
         const result = await execCommand(
-          node,
+          status,
           docker,
           container,
           convertToPosixPath(cmd.path),
@@ -148,47 +158,47 @@ export function dockerNode(
         }
 
         if (result.type === 'canceled') {
-          return {
-            type: 'node-canceled',
-            node,
-          }
+          throw new AbortError()
         }
 
         if (result.result.ExitCode !== 0) {
-          return {
-            type: 'node-crash',
-            node: node,
-            command,
+          state.patchNode({
+            node,
+            type: 'crash',
+            //command,
             exitCode: result.result.ExitCode ?? 1,
-          }
+          })
+          return
         }
       }
 
-      await writeWorkNodeCache(node, environment)
+      await writeWorkNodeCache(node, state.current.cacheMethod, environment)
 
-      return {
-        type: 'node-completed',
+      state.patchNode({
         node,
-      }
+        type: 'completed',
+        cached: false,
+        duration: getDuration(started),
+      })
     } catch (e) {
       if (e instanceof AbortError) {
-        return {
-          type: 'node-canceled',
+        state.patchNode({
           node,
-        }
+          type: 'canceled',
+        })
       } else {
-        return {
-          type: 'node-error',
+        state.patchNode({
           node,
+          type: 'error',
           errorMessage: getErrorMessage(e),
-        }
+        })
       }
     } finally {
       if (container) {
         try {
           await removeContainer(container)
         } catch (e) {
-          node.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
+          status.write('error', `remove of container failed ${getErrorMessage(e)}`)
         }
       }
     }

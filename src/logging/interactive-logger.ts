@@ -1,27 +1,22 @@
 import { hideCursor, printWorkTreeResult, showCursor, writeWorkTreeStatus } from '../log'
 import { clearScreenDown } from 'readline'
-import { HammerkitEvent, SchedulerUpdateEvent } from '../executer/events'
 import { SchedulerState } from '../executer/scheduler/scheduler-state'
-import { UpdateBus } from '../executer/emitter'
 import { Logger } from './log-mode'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
+import { Environment } from '../executer/environment'
+import { ReadonlyState } from '../executer/readonly-state'
 
-export function interactiveLogger(state: SchedulerState, eventBus: UpdateBus<HammerkitEvent>): Logger {
+export function interactiveLogger(state: ReadonlyState<SchedulerState>, env: Environment): Logger {
   let running = true
   let count = 0
-  let schedulerState: SchedulerState = state
 
   const tickerFn = () => {
     if (!running) {
       return
     }
 
-    if (!schedulerState) {
-      return
-    }
-
     count++
-    writeWorkTreeStatus(schedulerState, count)
+    writeWorkTreeStatus(state.current, env, count)
     if (running) {
       setTimeout(tickerFn, 100)
     }
@@ -30,16 +25,15 @@ export function interactiveLogger(state: SchedulerState, eventBus: UpdateBus<Ham
   hideCursor()
   tickerFn()
 
-  eventBus.on<SchedulerUpdateEvent>('scheduler-update', (evt) => {
-    schedulerState = evt.state
-    writeWorkTreeStatus(evt.state, count)
+  state.on((currentState) => {
+    writeWorkTreeStatus(currentState, env, count)
   })
 
   return {
-    async complete(evt: SchedulerResult): Promise<void> {
+    async complete(evt: SchedulerResult, env): Promise<void> {
       running = false
       clearScreenDown(process.stdout)
-      await printWorkTreeResult(evt.state, true)
+      await printWorkTreeResult(evt.state, env)
       showCursor()
     },
   }

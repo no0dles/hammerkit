@@ -16,6 +16,7 @@ export interface NodeCompletedState {
   type: 'completed'
   node: WorkNode
   duration: number
+  cached: boolean
 }
 
 export interface NodeErrorState {

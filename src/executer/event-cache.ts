@@ -32,7 +32,8 @@ export async function storeCache(path: string, workTree: WorkTree, environment: 
 
 export async function cleanCache(workTree: WorkTree, environment: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
-    const docker = await getDocker(node)
+    const status = environment.status.task(node)
+    const docker = await getDocker(status)
 
     const containers = await docker.listContainers({
       all: true,
@@ -46,7 +47,8 @@ export async function cleanCache(workTree: WorkTree, environment: Environment): 
   }
 
   for (const service of iterateWorkServices(workTree.services)) {
-    const docker = await getDocker(service)
+    const status = environment.status.service(service)
+    const docker = await getDocker(status)
 
     const containers = await docker.listContainers({
       all: true,
@@ -60,7 +62,8 @@ export async function cleanCache(workTree: WorkTree, environment: Environment): 
   }
 
   for (const node of iterateWorkNodes(workTree.nodes)) {
-    const docker = await getDocker(node)
+    const nodeStatus = environment.status.task(node)
+    const docker = await getDocker(nodeStatus)
 
     for (const generate of node.generates) {
       if (generate.inherited) {
@@ -70,20 +73,20 @@ export async function cleanCache(workTree: WorkTree, environment: Environment): 
       const volumeName = getVolumeName(generate.path)
       const volumeExists = await existsVolume(docker, volumeName)
       if (volumeExists) {
-        node.status.write('info', `remove volume ${volumeName}`)
+        nodeStatus.write('info', `remove volume ${volumeName}`)
         const volume = await docker.getVolume(volumeName)
         await volume.remove()
       } else {
-        node.status.write('info', `generate ${generate} has no volume ${volumeName}`)
+        nodeStatus.write('info', `generate ${generate} has no volume ${volumeName}`)
       }
 
-      node.status.write('info', `remove local directory ${generate.path}`)
+      nodeStatus.write('info', `remove local directory ${generate.path}`)
       await environment.file.remove(generate.path)
     }
 
     const cachePath = getCacheDirectory(node.id)
     if (await environment.file.exists(cachePath)) {
-      node.status.write('info', `remove cache ${cachePath}`)
+      nodeStatus.write('info', `remove cache ${cachePath}`)
       await environment.file.remove(cachePath)
     }
   }

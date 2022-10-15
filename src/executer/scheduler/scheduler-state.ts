@@ -1,5 +1,6 @@
 import { NodeState } from './node-state'
 import { ServiceState } from './service-state'
+import { CacheMethod } from '../../parser/cache-method'
 
 export interface SchedulerNodeState {
   [key: string]: NodeState
@@ -12,8 +13,8 @@ export interface SchedulerState {
   // abort: boolean
   node: SchedulerNodeState
   service: SchedulerServiceState
-  //cacheMethod: CacheMethod
-  //noContainer: boolean
+  cacheMethod: CacheMethod
+  noContainer: boolean
   //watch: boolean
   workers: number
 }

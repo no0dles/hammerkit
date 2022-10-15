@@ -1,11 +1,12 @@
-import { MockedTestCase, TestCase, TestSuite, TestSuiteSetupOptions } from './test-suite'
+import { TestSuite, TestSuiteSetup } from './test-suite'
 import { FileContext } from '../file/file-context'
 import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
-import { TestEnvironment } from './test-environment'
 import { getConsoleContextMock } from '../console/get-console-context-mock'
-import { getBuildFile } from '../parser/get-build-file'
-import { getTestCase } from './get-test-case'
+import { statusConsole } from '../planner/work-node-status'
+import { Environment } from '../executer/environment'
+import { WorkScope } from '../executer/work-scope'
+import { createCli } from '../program'
 
 interface Test {
   cwd: string
@@ -15,12 +16,13 @@ export class ExampleTestSuite implements TestSuite {
   private readonly file: FileContext
   private readonly tests: Test[] = []
   private readonly exampleDirectory: string
-  private readonly testDirectory: string
+
+  readonly path: string
 
   constructor(exampleName: string, private files: string[]) {
     this.exampleDirectory = join(__dirname, '../../examples/', exampleName)
-    this.testDirectory = join(process.cwd(), 'temp', exampleName)
-    this.file = getFileContext()
+    this.path = join(process.cwd(), 'temp', exampleName)
+    this.file = getFileContext(this.path)
   }
 
   async close(): Promise<void> {
@@ -29,34 +31,35 @@ export class ExampleTestSuite implements TestSuite {
     }
   }
 
-  setup(): Promise<TestCase>
-  setup(options: Partial<TestSuiteSetupOptions>): Promise<MockedTestCase>
-  async setup(options?: Partial<TestSuiteSetupOptions>): Promise<MockedTestCase | TestCase> {
-    const environment: TestEnvironment = {
+  async setup(scope: WorkScope): Promise<TestSuiteSetup> {
+    await this.file.remove(this.path)
+    await this.file.createDirectory(this.path)
+
+    const environment: Environment = {
       processEnvs: { ...process.env },
       abortCtrl: new AbortController(),
-      cwd: this.testDirectory,
+      cwd: this.path,
       file: this.file,
       console: getConsoleContextMock(),
+      status: statusConsole(),
     }
-
-    await this.file.remove(this.testDirectory)
-    await this.file.createDirectory(this.testDirectory)
 
     for (const file of this.files) {
-      await environment.file.copy(join(this.exampleDirectory, file), join(this.testDirectory, file))
+      await this.file.copy(join(this.exampleDirectory, file), join(this.path, file))
     }
 
-    const fileName = join(this.testDirectory, 'build.yaml')
-    const buildFile = await getBuildFile(fileName, environment)
+    const fileName = join(this.path, 'build.yaml')
 
     this.tests.push({
-      cwd: this.testDirectory,
+      cwd: this.path,
     })
 
-    const cli = getTestCase(buildFile, environment, options)
+    const cli = await createCli(fileName, environment, scope)
     await cli.clean()
 
-    return cli
+    return {
+      cli,
+      environment,
+    }
   }
 }
