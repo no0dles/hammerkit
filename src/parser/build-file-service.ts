@@ -4,6 +4,7 @@ export interface ExecutionBuildService {
   description: string | null
   ports: string[] | null
   mounts: string[] | null
+  cmd: string | null
   //volumes: { [key: string]: string } | null // TODO volume impl
   healthcheck: ExecutionBuildServiceHealthCheck | null
   unknownProps: { [key: string]: any }

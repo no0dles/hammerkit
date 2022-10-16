@@ -7,6 +7,7 @@ export interface BuildFileTask {
   deps: string[] | null
   src: BuildFileTaskSource[] | null
   platform: BuildFileTaskPlatform | null
+  continuous: boolean | null
   description: string | null
   shell: string | null
   generates: string[] | null

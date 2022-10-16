@@ -50,6 +50,7 @@ export function parseBuildFileServices(
       mounts: parseStringArray(ctx, 'mounts', serviceValue.mounts),
       healthcheck: parseHealthcheck(ctx, serviceValue.healthcheck),
       labels: parseStringMap(ctx, 'labels', serviceValue.labels),
+      cmd: parseString(ctx, 'cmd', serviceValue.cmd, true),
       unknownProps: Object.keys(serviceValue)
         .filter((k) => validKeys.indexOf(k) === -1)
         .reduce<{ [key: string]: any }>((map, k) => {

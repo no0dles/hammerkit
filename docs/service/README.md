@@ -17,7 +17,7 @@ Local tasks can also use needs, but hammerkit will not provide a dns resolution.
 Similar to [container tasks](../task/container.md) need container services an image to run.
 Tasks can declare the need for services and before the task gets executed, hammerkit will ensure the service is running.
 
-[Healthchecks](./healthcheck.md) can be used, to ensure that the service is running and ready to be used.
+[Healthchecks](./container.md#healthcheck) can be used, to ensure that the service is running and ready to be used.
 
 ```yaml
 services:

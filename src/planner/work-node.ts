@@ -15,6 +15,7 @@ export interface BaseWorkNode {
   taskName: string
   name: string
   cwd: string
+  continuous: boolean
   description: string | null
   deps: WorkNode[]
   src: WorkNodeSource[]

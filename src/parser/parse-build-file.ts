@@ -11,6 +11,7 @@ import { parseBuildFileServices } from './parse-build-file-services'
 import { parseStringMap } from './parse-string-map'
 import { ParseContext } from './parse-context'
 import { parseString } from './parse-string'
+import { parseBoolean } from './parse-boolean'
 
 const validTaskKeys = ['envs', 'src', 'needs', 'deps', 'generates', 'labels', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
@@ -79,6 +80,7 @@ export async function parseBuildFile(
       extend: value.extend || null,
       shell: value.shell || null,
       needs: value.needs || null,
+      continuous: parseBoolean(ctx, 'continuous', value.continuous, true),
       ports: parseStringArray(ctx, 'ports', value.ports),
       cmds: parseBuildFileCommand(ctx, value.cmds),
       unknownProps: Object.keys(value)

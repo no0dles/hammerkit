@@ -33,6 +33,7 @@ export function dockerService(service: ContainerWorkService, state: State, envir
           map[`${port.containerPort}/tcp`] = {}
           return map
         }, {}),
+        Cmd: service.cmd ? service.cmd.split(' ') : undefined,
         HostConfig: {
           PortBindings: service.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
             map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]

@@ -34,6 +34,7 @@ export interface PlannedTask {
   buildTask: BuildFileTask
   name: string
   cwd: string
+  continuous: boolean
   deps: BuildFileReference[]
   src: BuildFileTaskSource[]
   platform: BuildFileTaskPlatform | null
@@ -102,6 +103,7 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     ports: buildTaskResult.task.ports || extendedTask?.task?.ports || [],
     src: buildTaskResult.task.src || extendedTask?.task?.src || [],
     cmds: buildTaskResult.task.cmds || extendedTask?.task?.cmds || [],
+    continuous: buildTaskResult.task.continuous ?? extendedTask?.task?.continuous ?? false,
     labels: {
       ...(extendedTask?.task?.labels || {}),
       ...(buildTaskResult.task.labels || {}),
@@ -187,6 +189,7 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
     envs: task.envs,
     id,
     description: templateValue(task.description, task.envs),
+    continuous: task.continuous,
     name,
     cwd: task.cwd,
     cmds: parseWorkNodeCommand(task, context, task.envs),
@@ -277,6 +280,7 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
         context.workTree.services[id] = {
           ...workService,
           type: 'container',
+          cmd: service.cmd,
           envs: service.envs || {},
           image: service.image,
           healthcheck: service.healthcheck,

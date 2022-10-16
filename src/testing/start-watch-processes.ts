@@ -10,6 +10,10 @@ import { logContext } from '../planner/work-node-status'
 export function startWatchProcesses(state: State, processManager: ProcessManager, environment: Environment) {
   for (const node of iterateWorkNodes(state.current.node)) {
     if (node.node.src.length > 0) {
+      if (node.node.continuous) {
+        environment.status.task(node.node).write('debug', 'do not start files watches for continuous task')
+        continue
+      }
       processManager.background(logContext('task', node.node), watchNode(node.node, state, environment))
     }
   }
