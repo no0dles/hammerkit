@@ -4,7 +4,7 @@ import { AbortError, checkForAbort } from './abort'
 import { getDocker } from './execute-docker'
 import { pull } from '../docker/pull'
 import { logStream } from '../docker/stream'
-import { waitOnAbort } from '../utils/abort-event'
+import { listenOnAbort, waitOnAbort } from '../utils/abort-event'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
@@ -18,12 +18,12 @@ export function dockerService(service: ContainerWorkService, state: State, envir
     let container: Container | null = null
 
     try {
-      checkForAbort(abort)
+      checkForAbort(abort.signal)
 
       const docker = await getDocker(status)
       await pull(status, docker, service.image)
 
-      checkForAbort(abort)
+      checkForAbort(abort.signal)
       status.write('debug', `create container with image ${service.image}`)
       container = await docker.createContainer({
         Image: service.image,
@@ -59,41 +59,46 @@ export function dockerService(service: ContainerWorkService, state: State, envir
       } else {
         let ready = false
         do {
-          ready = await checkReadiness(status, service.healthcheck, docker, container, abort)
+          ready = await checkReadiness(status, service.healthcheck, docker, container, abort.signal)
           if (!ready) {
             await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
           }
-        } while (!ready)
+        } while (!ready && !abort.signal.aborted)
 
-        const currentState = state.current.service[service.id]
-        if (currentState.type === 'running') {
-          state.patchService({
-            type: 'ready',
-            service,
-            dns: { containerId: container.id },
-            abortController: currentState.abortController,
-          })
+        if (ready) {
+          const currentState = state.current.service[service.id]
+          if (currentState.type === 'running') {
+            state.patchService({
+              type: 'ready',
+              service,
+              dns: { containerId: container.id },
+              abortController: currentState.abortController,
+            })
+          }
         }
       }
 
-      await waitOnAbort(abort)
+      await waitOnAbort(abort.signal)
 
-      return {
-        type: 'service-canceled',
-        service: service,
-      }
+      state.patchService({
+        type: 'end',
+        service,
+        reason: 'canceled',
+      })
     } catch (e) {
       if (e instanceof AbortError) {
-        return {
-          type: 'service-canceled',
-          service: service,
-        }
-      } else {
-        return {
-          type: 'service-crash',
+        state.patchService({
+          type: 'end',
           service,
-          errorMessage: getErrorMessage(e),
-        }
+          reason: 'canceled',
+        })
+      } else {
+        status.write('error', getErrorMessage(e))
+        state.patchService({
+          type: 'end',
+          service,
+          reason: 'crash',
+        })
       }
     } finally {
       if (container) {

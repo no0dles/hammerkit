@@ -21,7 +21,7 @@ export async function schedule(
       if (nodeState.type === 'pending') {
         const pendingNeeds = nodeState.node.needs
           .map((need) => currentState.service[need.id])
-          .filter((service) => service.type === 'pending')
+          .filter((service) => service.type === 'pending' || service.type === 'end')
 
         const hasOpenDeps = nodeState.node.deps.some((dep) => currentState.node[dep.id].type !== 'completed')
 
@@ -30,12 +30,13 @@ export async function schedule(
         }
 
         if (pendingNeeds.length > 0) {
+          // TODO do not start, if needs are cached
           for (const pendingNeed of pendingNeeds) {
             const ctx = logContext('service', pendingNeed.service)
             state.patchService({
               type: 'running',
               service: pendingNeed.service,
-              abortController: processManager.task(
+              abortController: processManager.background(
                 ctx,
                 isContainerWorkService(pendingNeed.service)
                   ? dockerService(pendingNeed.service, state, environment)
@@ -60,8 +61,12 @@ export async function schedule(
         }
 
         const ctx = logContext('task', nodeState.node)
+        if (isContainerWorkNode(nodeState.node) && currentState.noContainer) {
+          environment.status.context(ctx).write('info', 'execute docker task locally because of the --no-container arg')
+        }
+
         state.patchNode({
-          type: 'running',
+          type: 'starting',
           node: nodeState.node,
           started: new Date(),
           abortController:
@@ -79,7 +84,7 @@ export async function schedule(
 
       let hasNeed = false
       for (const nodeState of Object.values(currentState.node)) {
-        if (nodeState.type === 'running' || nodeState.type === 'pending') {
+        if (nodeState.type === 'running' || nodeState.type === 'starting' || nodeState.type === 'pending') {
           if (nodeState.node.needs.some((n) => n.id === serviceId)) {
             hasNeed = true
           }
@@ -87,6 +92,7 @@ export async function schedule(
       }
 
       if (!hasNeed) {
+        environment.status.service(serviceState.service).write('info', 'stop unused service')
         serviceState.abortController.abort()
       }
     }

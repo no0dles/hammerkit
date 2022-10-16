@@ -5,9 +5,17 @@ export interface NodePendingState {
   node: WorkNode
 }
 
+export interface NodeStartingState {
+  type: 'starting'
+  abortController: AbortController
+  node: WorkNode
+  started: Date
+}
+
 export interface NodeRunningState {
   type: 'running'
   abortController: AbortController
+  stateKey: string
   node: WorkNode
   started: Date
 }
@@ -38,6 +46,7 @@ export interface NodeCrashState {
 
 export type NodeState =
   | NodePendingState
+  | NodeStartingState
   | NodeRunningState
   | NodeCompletedState
   | NodeErrorState

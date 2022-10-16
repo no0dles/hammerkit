@@ -1,6 +1,6 @@
 import { WorkNode } from '../planner/work-node'
 import { Environment } from './environment'
-import { getWorkNodeCacheStats, hasStatsChanged } from '../optimizer/get-work-node-cache-stats'
+import { getWorkNodeCacheStats, getCacheState } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
@@ -9,7 +9,7 @@ import { State } from './state'
 import { Process } from './process'
 
 export function watchNode(node: WorkNode, state: State, environment: Environment): Process {
-  return async (abort: AbortSignal) => {
+  return async (abort: AbortController) => {
     const status = environment.status.task(node)
     let currentState = await getWorkNodeCacheStats(node, environment)
 
@@ -19,7 +19,7 @@ export function watchNode(node: WorkNode, state: State, environment: Environment
       }
 
       const newStats = await getWorkNodeCacheStats(node, environment)
-      const hasChanged = await hasStatsChanged(
+      const hasChanged = await getCacheState(
         status,
         { name: node.name, caching: node.caching ?? state.current.cacheMethod },
         currentState,
@@ -61,7 +61,7 @@ export function watchNode(node: WorkNode, state: State, environment: Environment
       fileWatchers.push(watcher)
     }
 
-    await waitOnAbort(abort)
+    await waitOnAbort(abort.signal)
 
     debouncer.clear()
     for (const watcher of fileWatchers) {

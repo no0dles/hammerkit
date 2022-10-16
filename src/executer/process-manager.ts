@@ -68,7 +68,7 @@ export class ProcessManager {
       context: pendingProcess.context,
       started,
       promise: pendingProcess
-        .process(pendingProcess.abortController.signal, started)
+        .process(pendingProcess.abortController, started)
         .catch((err) => {
           this.env.status.context(pendingProcess.context).write('error', getErrorMessage(err))
         })

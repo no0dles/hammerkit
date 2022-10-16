@@ -37,5 +37,6 @@ tasks:
       app: example
     src:
       - index.js
+      - config.json
     cmds:
       - node index.js

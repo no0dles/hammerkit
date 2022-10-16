@@ -1,6 +1,6 @@
 import { clearScreenDown, moveCursor } from 'readline'
 import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
-import { Message, WorkNodeConsoleLogLevel } from './planner/work-node-status'
+import { LogContext, Message, WorkNodeConsoleLogLevel } from './planner/work-node-status'
 import colors from 'colors'
 import { ConsoleContext } from './console/console-context'
 import { SchedulerNodeState, SchedulerServiceState, SchedulerState } from './executer/scheduler/scheduler-state'
@@ -58,6 +58,11 @@ export function consoleContext(): ConsoleContext {
 
 export const isVerbose = process.argv.some((a) => a === '--verbose')
 
+const typeLength = ['service', 'task'].map((s) => s.length).reduce((max, current) => (max > current ? max : current), 0)
+export function getType(type: 'service' | 'task'): string {
+  return colors.grey(getNodeName(type, typeLength) + ':')
+}
+
 export async function printWorkTreeResult(schedulerState: SchedulerState, env: Environment): Promise<void> {
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
 
@@ -65,7 +70,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
   for (const log of logs) {
     if (isVerbose || (log.type === 'console' && log.console === 'stderr')) {
       process.stdout.write(
-        `${formatDate(log.date)} ${colors.grey(log.context.type + ':')} ${getNodeName(
+        `${formatDate(log.date)} ${getType(log.context.type)} ${getNodeName(
           log.context.name,
           maxNodeNameLength
         )} - ${log.date.toLocaleTimeString()} - ${colors.white(log.message)}\n`
@@ -73,8 +78,18 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     }
   }
 
+  for (const state of iterateWorkServices(schedulerState.service)) {
+    let message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)} - ${getStateText(state)}`
+    if (state.type === 'end') {
+      if (state.reason === 'crash') {
+        message += ` crashed`
+        process.stdout.write(`${message}\n`)
+      }
+    }
+  }
+
   for (const state of iterateWorkNodes(schedulerState.node)) {
-    let message = `${colors.grey('task:')} ${getNodeName(state.node.name, maxNodeNameLength)} - ${getStateText(state)}`
+    let message = `${getType('task')} ${getNodeName(state.node.name, maxNodeNameLength)} - ${getStateText(state)}`
     if (state.type === 'completed') {
       message += ` in ${state.duration}ms`
     }
@@ -93,7 +108,7 @@ const spinner = '⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒
 function getStateText(state: NodeState | ServiceState): string {
   if (state.type === 'running') {
     return colors.blue(state.type)
-  } else if (state.type === 'pending') {
+  } else if (state.type === 'pending' || state.type === 'starting') {
     return colors.yellow(state.type)
   } else if (state.type === 'completed') {
     return colors.green(state.type)
@@ -201,9 +216,7 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
   let count = 0
 
   for (const state of iterateWorkServices(schedulerState.service)) {
-    let message = `${colors.grey('service:')} ${getNodeName(state.service.name, maxNodeNameLength)} - ${getStateText(
-      state
-    )}`
+    let message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)} - ${getStateText(state)}`
 
     const currentMessage = env.status.service(state.service).current()
     if (currentMessage) {
@@ -214,7 +227,7 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
   }
 
   for (const state of iterateWorkNodes(schedulerState.node)) {
-    let message = `${colors.grey('task:')} ${getNodeName(state.node.name, maxNodeNameLength)} - ${getStateText(state)}`
+    let message = `${getType('task')} ${getNodeName(state.node.name, maxNodeNameLength)} - ${getStateText(state)}`
 
     if (state.type === 'pending') {
       const totalDepCount = state.node.deps.length
@@ -228,7 +241,7 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
         message += ` | ${colors.grey(` awaiting service (${runningServiceCount}/${totalServiceCount})`)}`
       }
     }
-    if (state.type === 'running') {
+    if (state.type === 'running' || state.type === 'starting') {
       message += ` | ${spinner[ticker % spinner.length]}`
       const currentMessage = env.status.task(state.node).current()
       if (currentMessage) {

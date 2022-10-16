@@ -7,10 +7,6 @@ export function parseServiceSelector(
   value: unknown,
   optional: boolean
 ): ExecutionBuildServiceSelector | null {
-  if (typeof value !== 'object') {
-    throw new Error(`${parseContextDescription(ctx)} invalid selector, expecting map`)
-  }
-
   if (value === null || value === undefined) {
     if (optional) {
       return null
@@ -19,15 +15,12 @@ export function parseServiceSelector(
     }
   }
 
-  if (!('type' in value)) {
-    throw new Error(`${parseContextDescription(ctx)} invalid selector, missing type property`)
-  }
-  if (!('name' in value)) {
-    throw new Error(`${parseContextDescription(ctx)} invalid selector, missing name property`)
+  if (typeof value !== 'object') {
+    throw new Error(`${parseContextDescription(ctx)} invalid selector, expecting map`)
   }
 
   const result: ExecutionBuildServiceSelector = { type: '', name: '' }
-  for (const [key, prop] of Object.entries(value)) {
+  for (const [key, prop] of Object.entries(value || {})) {
     if (key === 'type') {
       result.type = parseString(ctx, 'selector type', prop, false)
     } else if (key === 'name') {
@@ -35,6 +28,13 @@ export function parseServiceSelector(
     } else {
       throw new Error(`${parseContextDescription(ctx)} unknown property ${key} in healthcheck`)
     }
+  }
+
+  if (!result.type) {
+    throw new Error(`${parseContextDescription(ctx)} invalid selector, missing type property`)
+  }
+  if (!result.name) {
+    throw new Error(`${parseContextDescription(ctx)} invalid selector, missing name property`)
   }
 
   return result

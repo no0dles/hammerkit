@@ -50,7 +50,7 @@ export function kubernetesService(service: KubernetesWorkService, state: State, 
       })
     })
 
-    await waitOnAbort(abort)
+    await waitOnAbort(abort.signal)
 
     ps.kill()
   }

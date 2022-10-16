@@ -6,6 +6,8 @@ import { Environment } from '../executer/environment'
 import { StatusScopedConsole } from '../planner/work-node-status'
 import { ContainerWorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
+import { failNever } from '../utils/fail-never'
+import { createHash } from 'crypto'
 
 async function addWorkNodeCacheStats(
   result: WorkNodeCacheFileStats,
@@ -84,28 +86,59 @@ export async function getWorkNodeCacheStats(
   return result
 }
 
-export async function hasStatsChanged(
+export interface CacheState {
+  changed: boolean
+  stateKey: string
+}
+
+export async function getCacheState(
   status: StatusScopedConsole,
   node: { name: string; caching: CacheMethod },
-  cache: WorkNodeCacheFileStats | WorkServiceCacheFileStats,
+  cache: WorkNodeCacheFileStats | WorkServiceCacheFileStats | null,
   current: WorkNodeCacheFileStats | WorkServiceCacheFileStats
-): Promise<boolean> {
-  let changed = false
-  for (const key of Object.keys(cache.files)) {
-    if (
-      (node.caching === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
-      (node.caching === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
-    ) {
-      status.write(
-        'debug',
-        node.caching === 'checksum'
-          ? `${key} changed from checksum ${cache.files[key].checksum} to ${current.files[key]?.checksum}`
-          : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
-      )
-      status.write('debug', `${node.name} can't be skipped because ${key} has been modified`)
-      changed = true
-      break
+): Promise<CacheState> {
+  if (cache) {
+    let changed = false
+    for (const key of Object.keys(cache.files)) {
+      if (
+        (node.caching === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
+        (node.caching === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
+      ) {
+        status.write(
+          'debug',
+          node.caching === 'checksum'
+            ? `${key} changed from checksum ${cache.files[key].checksum} to ${current.files[key]?.checksum}`
+            : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
+        )
+        status.write('debug', `${node.name} can't be skipped because ${key} has been modified`)
+        changed = true
+        break
+      }
+    }
+
+    return {
+      changed,
+      stateKey: getStateKey(current, node.caching),
+    }
+  } else {
+    return {
+      changed: true,
+      stateKey: getStateKey(current, node.caching),
     }
   }
-  return changed
+}
+
+export function getStateKey(
+  stats: WorkNodeCacheFileStats | WorkServiceCacheFileStats,
+  cacheMethod: CacheMethod
+): string {
+  const contents = []
+  for (const key of Object.keys(stats.files)) {
+    if (cacheMethod === 'checksum') {
+      contents.push(`${key}:${stats.files[key].checksum}`)
+    } else if (cacheMethod === 'modify-date') {
+      contents.push(`${key}:${stats.files[key].lastModified}`)
+    }
+  }
+  return createHash('md5').update(contents.join(',')).digest('hex')
 }

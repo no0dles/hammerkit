@@ -2,7 +2,7 @@ import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
 
 describe('services', () => {
-  const suite = getTestSuite('services', ['index.js', 'package.json', 'package-lock.json', 'build.yaml'])
+  const suite = getTestSuite('services', ['index.js', 'config.json', 'package.json', 'package-lock.json', 'build.yaml'])
 
   afterAll(() => suite.close())
 

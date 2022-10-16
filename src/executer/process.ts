@@ -1,1 +1,1 @@
-export type Process = (abort: AbortSignal, started: Date) => Promise<any>
+export type Process = (abort: AbortController, started: Date) => Promise<any>

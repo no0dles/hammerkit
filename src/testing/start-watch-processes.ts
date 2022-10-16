@@ -10,7 +10,7 @@ import { logContext } from '../planner/work-node-status'
 export function startWatchProcesses(state: State, processManager: ProcessManager, environment: Environment) {
   for (const node of iterateWorkNodes(state.current.node)) {
     if (node.node.src.length > 0) {
-      processManager.task(logContext('task', node.node), watchNode(node.node, state, environment))
+      processManager.background(logContext('task', node.node), watchNode(node.node, state, environment))
     }
   }
   for (const service of iterateWorkServices(state.current.service)) {
@@ -18,7 +18,10 @@ export function startWatchProcesses(state: State, processManager: ProcessManager
       continue
     }
     if (service.service.mounts.length > 0) {
-      processManager.task(logContext('service', service.service), watchService(service.service, state, environment))
+      processManager.background(
+        logContext('service', service.service),
+        watchService(service.service, state, environment)
+      )
     }
   }
 }

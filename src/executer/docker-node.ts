@@ -21,9 +21,9 @@ import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
 import { getDuration } from './states'
-import { checkIfUpToDate } from './scheduler/enqueue-next'
 import { State } from './state'
 import { Process } from './process'
+import { startNode } from './start-node'
 
 export function dockerNode(
   node: ContainerWorkNode,
@@ -32,19 +32,12 @@ export function dockerNode(
   environment: Environment
 ): Process {
   return async (abort, started) => {
-    // TODO check how it behaves on noContainer override
-    const isUpToDate = await checkIfUpToDate(node, state.current.cacheMethod, environment)
-    if (isUpToDate) {
-      state.patchNode({
-        type: 'completed',
-        node: node,
-        cached: true,
-        duration: getDuration(started),
-      })
+    const status = environment.status.task(node)
+    status.write('info', `execute ${node.name} in container`)
+
+    if (await startNode(node, started, state, abort, environment)) {
       return
     }
-
-    const status = environment.status.task(node)
 
     let container: Container | null = null
 
@@ -54,10 +47,10 @@ export function dockerNode(
       const volumes = await getContainerVolumes(node)
       const mounts = await getContainerMounts(node, environment)
 
-      checkForAbort(abort)
+      checkForAbort(abort.signal)
       await pull(status, docker, node.image)
 
-      checkForAbort(abort)
+      checkForAbort(abort.signal)
       for (const volume of volumes) {
         await ensureVolumeExists(docker, volume.name)
       }
@@ -82,7 +75,7 @@ export function dockerNode(
 
       const envs = replaceEnvVariables(node, status, environment.processEnvs)
 
-      checkForAbort(abort)
+      checkForAbort(abort.signal)
       status.write('debug', `create container with image ${node.image} with ${node.shell}`)
       container = await docker.createContainer({
         Image: node.image,
@@ -127,17 +120,17 @@ export function dockerNode(
       await startContainer(status, container)
 
       if (user) {
-        await setUserPermission(node.cwd, status, docker, container, user, abort)
+        await setUserPermission(node.cwd, status, docker, container, user, abort.signal)
         for (const volume of volumes) {
-          await setUserPermission(volume.containerPath, status, docker, container, user, abort)
+          await setUserPermission(volume.containerPath, status, docker, container, user, abort.signal)
         }
         for (const mount of mounts) {
-          await setUserPermission(mount.containerPath, status, docker, container, user, abort)
+          await setUserPermission(mount.containerPath, status, docker, container, user, abort.signal)
         }
       }
 
       for (const cmd of node.cmds) {
-        checkForAbort(abort)
+        checkForAbort(abort.signal)
 
         const command = templateValue(cmd.cmd, node.envs)
         status.write('info', `execute cmd "${command}" in container`)
@@ -150,7 +143,7 @@ export function dockerNode(
           [node.shell, '-c', command],
           user,
           undefined,
-          abort
+          abort.signal
         )
 
         if (result.type === 'timeout') {

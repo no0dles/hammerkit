@@ -1,6 +1,6 @@
 import { Environment } from './environment'
 import { ContainerWorkService } from '../planner/work-service'
-import { getServiceNodeCacheStats, hasStatsChanged } from '../optimizer/get-work-node-cache-stats'
+import { getServiceNodeCacheStats, getCacheState } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
@@ -9,7 +9,7 @@ import { State } from './state'
 import { Process } from './process'
 
 export function watchService(service: ContainerWorkService, state: State, environment: Environment): Process {
-  return async (abort: AbortSignal) => {
+  return async (abort: AbortController) => {
     let currentState = await getServiceNodeCacheStats(service, environment)
 
     const status = environment.status.service(service)
@@ -19,16 +19,16 @@ export function watchService(service: ContainerWorkService, state: State, enviro
       }
 
       const newStats = await getServiceNodeCacheStats(service, environment)
-      const hasChanged = await hasStatsChanged(
+      const cacheState = await getCacheState(
         status,
         { name: service.name, caching: state.current.cacheMethod },
         currentState,
         newStats
       )
-      if (!hasChanged) {
+      if (!cacheState.changed) {
         return
       }
-      currentState = newStats
+      currentState = newStats // TODO revisit with stateKey
 
       status.write('debug', `source changed for service ${service.name}, restart process`)
 
@@ -58,7 +58,7 @@ export function watchService(service: ContainerWorkService, state: State, enviro
       fileWatchers.push(watcher)
     }
 
-    await waitOnAbort(abort)
+    await waitOnAbort(abort.signal)
 
     debouncer.clear()
     for (const watcher of fileWatchers) {

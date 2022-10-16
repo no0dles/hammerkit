@@ -187,44 +187,9 @@ export async function getProgram(
       })
 
     program
-      .command('exec')
-      .description('execute specific task')
-      .arguments('<task>')
-      .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
-      .addOption(new Option('-w, --watch', 'watch tasks').default(false))
-      .addOption(
-        new Option('-l, --log <mode>', 'log mode')
-          .default(isCI ? 'live' : 'interactive')
-          .choices(['interactive', 'live', 'grouped'])
-      )
-      .addOption(
-        new Option('--cache <method>', 'caching method to compare')
-          .default(isCI ? 'checksum' : 'modify-date')
-          .choices(['checksum', 'modify-date', 'none'])
-      )
-      .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
-      .action(async (task, options) => {
-        try {
-          const cli = await createCli(fileName, environment, { taskName: task })
-          const result = await cli.exec({
-            cacheDefault: options.cache,
-            watch: options.watch,
-            workers: options.concurrency,
-            logMode: options.log,
-            noContainer: !options.container,
-          })
-
-          if (!result.success) {
-            process.exit(1)
-          }
-        } catch (e) {
-          process.exit(1)
-        }
-      })
-
-    program
-      .command('up', { isDefault: true })
+      .command('exec', { isDefault: true })
       .description('execute all tasks')
+      .arguments('<task>')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
@@ -239,16 +204,16 @@ export async function getProgram(
           .default(isCI ? 'checksum' : 'modify-date')
           .choices(['checksum', 'modify-date', 'none'])
       )
-      .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
+      .addOption(new Option('--no-container', 'run every task locally without containers').default(true))
       .action(async (task, options) => {
         try {
-          const cli = await createCli(fileName, environment, parseWorkScope(options))
+          const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
           const result = await cli.exec({
             cacheDefault: options.cache,
             watch: options.watch,
             workers: options.concurrency,
             logMode: options.log,
-            noContainer: !options.container,
+            noContainer: !(options.container ?? true),
           })
 
           if (!result.success) {

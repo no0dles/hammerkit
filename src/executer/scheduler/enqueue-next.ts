@@ -1,37 +1,32 @@
 import { WorkNode } from '../../planner/work-node'
 import { readCache } from '../../optimizer/read-work-node-cache'
-import { getWorkNodeCacheStats, hasStatsChanged } from '../../optimizer/get-work-node-cache-stats'
+import { getWorkNodeCacheStats, getCacheState, CacheState } from '../../optimizer/get-work-node-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
 
-export async function checkIfUpToDate(
+export async function checkCacheState(
   node: WorkNode,
   defaultCacheMethod: CacheMethod,
   environment: Environment
-): Promise<boolean> {
+): Promise<CacheState> {
   const status = environment.status.task(node)
 
   if (node.caching === 'none') {
-    return false
+    return { changed: true, stateKey: '' }
   }
 
   const cache = await readCache(node, environment)
-  if (!cache) {
-    status.write('debug', `${node.name} can't be skipped because there is no cache`)
-    return false
-  }
-
   const currentStats = await getWorkNodeCacheStats(node, environment)
-  const changed = await hasStatsChanged(
+
+  const state = await getCacheState(
     status,
     { name: node.name, caching: node.caching ?? defaultCacheMethod },
     cache,
     currentStats
   )
-  if (changed) {
-    return false
+  if (!state.changed) {
+    status.write('debug', `${node.name} is skipped because it's cache is up to date`)
   }
 
-  status.write('debug', `${node.name} is skipped because it's cache is up to date`)
-  return true
+  return state
 }

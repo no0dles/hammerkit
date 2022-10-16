@@ -4,7 +4,7 @@ import { expectLog, expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'
 import { Environment } from '../../executer/environment'
-import { checkIfUpToDate } from '../../executer/scheduler/enqueue-next'
+import { checkCacheState } from '../../executer/scheduler/enqueue-next'
 import { read, write } from '../../parser/read-build-file'
 
 describe('cache', () => {
@@ -22,8 +22,8 @@ describe('cache', () => {
     const setupAfter = await suite.setup({ taskName: 'example' })
     const node = setupAfter.cli.node('example')
 
-    const checksumUpToDate = await checkIfUpToDate(node, 'checksum', setupAfter.environment)
-    const modifyDateUpToDate = await checkIfUpToDate(node, 'modify-date', setupAfter.environment)
+    const checksumUpToDate = await checkCacheState(node, 'checksum', setupAfter.environment)
+    const modifyDateUpToDate = await checkCacheState(node, 'modify-date', setupAfter.environment)
 
     if (expectInvalidate) {
       expect(checksumUpToDate).toBeFalsy()

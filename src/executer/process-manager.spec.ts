@@ -1,6 +1,8 @@
 import { ProcessManager } from './process-manager'
 import { ProcessListenerEventType } from './process-listener'
 import { environmentMock } from './environment-mock'
+import { checkForAbort } from './abort'
+import { sleep } from '../utils/sleep'
 
 describe('process-manager', () => {
   it('should complete on success', async () => {
@@ -71,6 +73,29 @@ describe('process-manager', () => {
     expect(processes).toEqual(['a', 'b', 'c'])
     expect(hasOversteppedLimits).toBeFalsy()
     expect(concurrencyCount).toBe(0)
+  })
+
+  it('should terminate on abort', async () => {
+    const env = environmentMock()
+    const manager = new ProcessManager(env, 0)
+    manager.task(
+      { type: 'task', name: 'test-success', id: 'a' },
+      (abort) =>
+        new Promise<void>(async (resolve, reject) => {
+          try {
+            while (true) {
+              await sleep(20)
+              checkForAbort(abort.signal)
+            }
+          } catch (e) {
+            reject(e)
+          }
+        })
+    )
+    setTimeout(() => {
+      env.abortCtrl.abort()
+    }, 200)
+    await manager.onComplete()
   })
   //
   // it('test tasks', async () => {
