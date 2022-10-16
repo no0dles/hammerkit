@@ -36,7 +36,6 @@ export interface PlannedTask {
   cwd: string
   deps: BuildFileReference[]
   src: BuildFileTaskSource[]
-  continuous: boolean
   platform: BuildFileTaskPlatform | null
   description: string | null
   shell: string | null
@@ -94,7 +93,6 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     name: buildTaskResult.name,
     cache: buildTaskResult.task.cache ?? extendedTask?.task?.cache ?? null,
     description: buildTaskResult.task.description ?? extendedTask?.task?.description ?? null,
-    continuous: buildTaskResult.task.continuous ?? false,
     cwd: workContext.cwd,
     image: buildTaskResult.task.image ?? extendedTask?.task?.image ?? null,
     platform: buildTaskResult.task.platform ?? extendedTask?.task?.platform ?? null,
@@ -188,7 +186,6 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
   const baseWorkNode: BaseWorkNode = {
     envs: task.envs,
     id,
-    continuous: task.continuous,
     description: templateValue(task.description, task.envs),
     name,
     cwd: task.cwd,

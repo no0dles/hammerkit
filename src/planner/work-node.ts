@@ -16,7 +16,6 @@ export interface BaseWorkNode {
   name: string
   cwd: string
   description: string | null
-  continuous: boolean
   deps: WorkNode[]
   src: WorkNodeSource[]
   generates: { path: string; inherited: boolean }[]

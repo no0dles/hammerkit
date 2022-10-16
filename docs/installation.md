@@ -35,9 +35,9 @@ brew install hammerkit
 Each release of hammerkit has a [release](https://github.com/no0dles/hammerkit/releases) on github with binaries for windows, macos and linux. 
 Those do not require to have node installed and support `arm` and `x86`.
 
-## Docker
+## Container
 
-The docker image on [docker hub](https://hub.docker.com/r/no0dles/hammerkit) contains hammerkit and can be used for dind. 
+The container image on [docker hub](https://hub.docker.com/r/no0dles/hammerkit) contains hammerkit and can be used for dind. 
 For container builds on CI systems its the recommended approach.
 
 ## Gitlab CI

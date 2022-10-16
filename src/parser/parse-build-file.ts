@@ -88,7 +88,6 @@ export async function parseBuildFile(
           return map
         }, {}),
       platform: null,
-      continuous: null,
       cache: value.caching || null,
     }
     if (Object.keys(result.tasks[key].unknownProps).length > 0) {

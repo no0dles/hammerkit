@@ -30,7 +30,7 @@ tasks:
 ```
 {% endcode %}
 
-This build file contains an example command which prints a statement to the console inside an alpine docker container.&#x20;
+This build file contains an example command which prints a statement to the console inside an alpine container.&#x20;
 
 {% hint style="warning" %}
 This requires to have a running docker deamon, if that's not the case, remove line 5 with the image property.

@@ -4,19 +4,40 @@ description: Runs the task in your build file.
 
 # Execute
 
-### Execute a task
+## Execute a task
+Tasks can be executed by name.
+
+```bash
+task example
+```
+
+## Execute tasks with labels
+Tasks can be executed by matching labels or filtered by label values. 
+
+### By matching labels
+The `-f type=build` will only execute tasks that have the given label value. 
+Dependant tasks do not need to fullfill the label requirement.
+```
+task -f type=build
+```
+
+### By matching labels
+The `-f build=ios` will only execute tasks have no matching label value.
+If the task has no matching label, but any of the dependency tasks has a match, the task will be excluded as well. 
+```
+task -e build=ios
+```
+
+## Options
+```
+Options:
+  -f, --filter <labels...>    filter task and services with labels
+  -e, --exclude <labels...>   exclude task and services with labels
+  -c, --concurrency <number>  parallel worker count (default: 4)
+  -w, --watch                 watch tasks (default: false)
+  -l, --log <mode>            log mode (choices: "interactive", "live", "grouped", default: "interactive")
+  --cache <method>            caching method to compare (choices: "checksum", "modify-date", "none", default: "modify-date")
+  --no-container              run every task locally without containers
+  -h, --help                  display help for command
 
 ```
-hammerkit <task_name> [options]
-```
-
-### Optional flags
-
-| Flag              |                                                                                                                               | Default     | CI Default |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------- | ---------- |
-| -c, --concurrency | Limit of how many task get executed at the same time. Watched task are excluded. To run without limitations, use the value 0. | 4           | 4          |
-| --cache           | ignore task caching and run everything even if its up-to-date                                                                 | modify-date | checksum   |
-| --no-container    | run every task locally, do not use containers when a task defines an image.                                                   | false       | false      |
-| -l, --log         | console log mode                                                                                                              | interactive | live       |
-| -w, --watch       | watch mode                                                                                                                    | false       | false      |
-

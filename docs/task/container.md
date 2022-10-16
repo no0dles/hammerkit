@@ -1,13 +1,13 @@
 ---
 description: >-
-  A task can be contained inside a docker container. This improves
+  A task can be contained inside a container. This improves
   cross-platform support for your build files and reduce the list locally
   installed tools that are required to run your tasks.
 ---
 
-# Docker
+# Container
 
-Every task can run inside a docker container. Everything thats needed is to set an `image` property on your task.
+Every task can run inside a container. Everything thats needed is to set an `image` property on your task.
 
 {% code title="build.yaml" %}
 ```yaml
@@ -19,7 +19,7 @@ tasks:
 ```
 {% endcode %}
 
-This example will run an `npm install` command inside a docker container with the image `node:14.16.0`. But the container has no access to the local files, nothing will get installed. In order to access your project files sources, generates and mounts can be used.
+This example will run an `npm install` command inside a container with the image `node:14.16.0`. But the container has no access to the local files, nothing will get installed. In order to access your project files sources, generates and mounts can be used.
 
 ### Adding source files/folders
 
@@ -101,5 +101,5 @@ tasks:
 {% hint style="info" %}
 ### File permission
 
-Each command in a docker container will be executed with the same pid/gid as on the local system. This ensures that all generated files and folders that are mounted to the container will end up with the same pid/gid. To ensure that there is no permission conflict, hammerkit will set the owner of the current work directory including all mounts to the current pid/gid before each task execution.
+Each command in a container will be executed with the same pid/gid as on the local system. This ensures that all generated files and folders that are mounted to the container will end up with the same pid/gid. To ensure that there is no permission conflict, hammerkit will set the owner of the current work directory including all mounts to the current pid/gid before each task execution.
 {% endhint %}

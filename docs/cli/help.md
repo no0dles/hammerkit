@@ -8,17 +8,17 @@ description: In desperate times there is maybe some enlightenment in here.
 Usage: hammerkit [options] [command]
 
 Options:
-  -V, --version                       output the version number
-  --verbose                           log debugging information (default: false)
-  -h, --help                          display help for command
+  -V, --version             output the version number
+  --verbose                 log debugging information (default: false)
+  --file                    set build file
+  -h, --help                display help for command
 
 Commands:
-  clean                               clear task cache
-  store <path>                        save task outputs into <path>
-  restore <path>                      restore task outputs from <path>
-  validate                            validate build.yaml
-  ...
-  <task_name> [options]               <task description>
-  ...
-  help [command]                      display help for command
+  ls [options]              list all tasks
+  clean [options]           clear task cache
+  store [options] <path>    save task outputs into <path>
+  restore [options] <path>  restore task outputs from <path>
+  validate [options]        validate build.yaml
+  exec [options] [task]     execute all tasks
+  help [command]            display help for command
 ```

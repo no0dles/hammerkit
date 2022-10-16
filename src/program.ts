@@ -188,7 +188,7 @@ export async function getProgram(
 
     program
       .command('exec', { isDefault: true })
-      .description('execute all tasks')
+      .description('execute task(s)')
       .arguments('[task]')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
