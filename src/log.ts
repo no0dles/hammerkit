@@ -1,6 +1,6 @@
 import { clearScreenDown, moveCursor } from 'readline'
 import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
-import { LogContext, Message, WorkNodeConsoleLogLevel } from './planner/work-node-status'
+import { Message, WorkNodeConsoleLogLevel } from './planner/work-node-status'
 import colors from 'colors'
 import { ConsoleContext } from './console/console-context'
 import { SchedulerNodeState, SchedulerServiceState, SchedulerState } from './executer/scheduler/scheduler-state'

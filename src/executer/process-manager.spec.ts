@@ -81,12 +81,13 @@ describe('process-manager', () => {
     manager.task(
       { type: 'task', name: 'test-success', id: 'a' },
       (abort) =>
-        new Promise<void>(async (resolve, reject) => {
+        new Promise<void>((resolve, reject) => {
           try {
-            while (true) {
+            while (!abort.signal.aborted) {
               await sleep(20)
               checkForAbort(abort.signal)
             }
+            resolve()
           } catch (e) {
             reject(e)
           }

@@ -1,5 +1,4 @@
 import { getTestSuite } from '../get-test-suite'
-import { WorkNode } from '../../planner/work-node'
 import { CliItem } from '../cli'
 
 describe('local', () => {

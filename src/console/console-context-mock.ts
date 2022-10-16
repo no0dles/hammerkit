@@ -1,10 +1,11 @@
 import { ConsoleContext } from './console-context'
 
+/* eslint-disable @typescript-eslint/no-empty-function */
 export function consoleContextMock(): ConsoleContext {
   return {
-    warn(message: string) {},
-    info(message: string) {},
-    error(message: string) {},
-    debug(message: string) {},
+    warn() {},
+    info() {},
+    error() {},
+    debug() {},
   }
 }

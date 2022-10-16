@@ -1,6 +1,6 @@
 import { KubernetesWorkService } from '../planner/work-service'
 import { exec } from 'child_process'
-import { getLogs } from '../log'
+import { getErrorMessage, getLogs } from '../log'
 import { waitOnAbort } from '../utils/abort-event'
 import { Environment } from './environment'
 import { State } from './state'
@@ -34,7 +34,7 @@ export function kubernetesService(service: KubernetesWorkService, state: State, 
       }
     })
     ps.on('error', (err) => {
-      // TODO error
+      status.write('error', getErrorMessage(err))
       state.patchService({
         service,
         type: 'end',
@@ -42,7 +42,7 @@ export function kubernetesService(service: KubernetesWorkService, state: State, 
       })
     })
     ps.on('close', (code) => {
-      // TODO error parsing
+      status.write('info', `exit with ${code}`)
       state.patchService({
         service,
         type: 'end',

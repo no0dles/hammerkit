@@ -2,7 +2,6 @@ import { WorkNode } from './work-node'
 import { WorkNodeValidation } from './work-node-validation'
 import { Environment } from '../executer/environment'
 import { WorkTree } from './work-tree'
-import { homedir } from 'os'
 import { KubernetesWorkService } from './work-service'
 import { read } from '../parser/read-build-file'
 

@@ -6,7 +6,6 @@ import { Environment } from '../executer/environment'
 import { StatusScopedConsole } from '../planner/work-node-status'
 import { ContainerWorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
-import { failNever } from '../utils/fail-never'
 import { createHash } from 'crypto'
 
 async function addWorkNodeCacheStats(
