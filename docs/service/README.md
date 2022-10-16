@@ -1,7 +1,7 @@
 ---
 description: >-
-A service is a continous task that does not end. 
-Something a task may require a service to perform.
+    A service is a continous task that does not end. 
+    Something a task may require a service to perform.
 ---
 
 # Service
@@ -38,7 +38,6 @@ tasks:
     needs: [postgres]
     cmds:
       - node index.js
-
 ```
 
 

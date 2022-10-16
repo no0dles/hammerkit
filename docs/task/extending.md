@@ -8,7 +8,7 @@ description: >-
 
 Extending tasks can save a lot of duplicated tasks in bigger projects and monorepos. With the task `extend` property a base configuration can be used as a template.&#x20;
 
-The following sections and examples use the two predefined tasks in the`build.tsc.yaml` file.&#x20;
+The following sections and examples use the two predefined tasks in the`build.tsc.yaml` file.
 
 {% code title="build.tsc.yaml" %}
 ```yaml
