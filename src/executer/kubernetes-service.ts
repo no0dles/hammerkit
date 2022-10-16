@@ -9,9 +9,9 @@ import { Process } from './process'
 export function kubernetesService(service: KubernetesWorkService, state: State, env: Environment): Process {
   return async (abort) => {
     const status = env.status.service(service)
-    const cmd = `kubectl port-forward ${service.selector.type}/${service.selector.name} --context ${
-      service.context
-    } ${service.ports.map((p) => `${p.hostPort}:${p.containerPort}`).join(' ')}`
+    const cmd = `kubectl port-forward ${service.selector.type}/${service.selector.name} --kubeconfig ${
+      service.kubeconfig
+    } --context ${service.context} ${service.ports.map((p) => `${p.hostPort}:${p.containerPort}`).join(' ')}`
     const ps = exec(cmd, {})
     ps.stdout?.on('data', async (data) => {
       for (const log of getLogs(data)) {

@@ -1,17 +1,17 @@
 import { getWorkNodeId } from './work-node-id'
 import { createBuildFile } from '../testing/create-build-file'
-import { getEnvironmentMock } from '../executer/get-environment-mock'
 import { findBuildTask, planTask } from './utils/plan-work-node'
 import { createWorkContext } from './work-context'
+import { environmentMock } from '../executer/environment-mock'
 
 async function compareTasks(firstTask: any, secondTask: any, expectEqual: boolean) {
-  const environmentMock = getEnvironmentMock()
-  const firstBuildFile = await createBuildFile(environmentMock, {
+  const environment = environmentMock()
+  const firstBuildFile = await createBuildFile(environment, {
     tasks: {
       test: firstTask,
     },
   })
-  const secondBuildFile = await createBuildFile(environmentMock, {
+  const secondBuildFile = await createBuildFile(environment, {
     tasks: {
       test: secondTask,
     },

@@ -21,7 +21,7 @@ export function watchService(service: ContainerWorkService, state: State, enviro
       const newStats = await getServiceNodeCacheStats(service, environment)
       const hasChanged = await hasStatsChanged(
         status,
-        { name: service.name, caching: service.caching ?? state.current.cacheMethod },
+        { name: service.name, caching: state.current.cacheMethod },
         currentState,
         newStats
       )

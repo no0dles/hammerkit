@@ -1,5 +1,5 @@
 import { WorkService } from '../../planner/work-service'
-import { ServiceDns } from '../events'
+import { ServiceDns } from '../service-dns'
 
 export interface ServicePendingState {
   type: 'pending'

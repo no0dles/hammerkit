@@ -2,7 +2,7 @@ import { TestSuite, TestSuiteSetup } from './test-suite'
 import { FileContext } from '../file/file-context'
 import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
-import { getConsoleContextMock } from '../console/get-console-context-mock'
+import { consoleContextMock } from '../console/console-context-mock'
 import { statusConsole } from '../planner/work-node-status'
 import { Environment } from '../executer/environment'
 import { WorkScope } from '../executer/work-scope'
@@ -40,7 +40,7 @@ export class ExampleTestSuite implements TestSuite {
       abortCtrl: new AbortController(),
       cwd: this.path,
       file: this.file,
-      console: getConsoleContextMock(),
+      console: consoleContextMock(),
       status: statusConsole(),
     }
 

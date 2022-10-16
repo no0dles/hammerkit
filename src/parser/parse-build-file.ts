@@ -9,6 +9,8 @@ import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { Environment } from '../executer/environment'
 import { parseBuildFileServices } from './parse-build-file-services'
 import { parseStringMap } from './parse-string-map'
+import { ParseContext } from './parse-context'
+import { parseString } from './parse-string'
 
 const validTaskKeys = ['envs', 'src', 'needs', 'deps', 'generates', 'labels', 'description', 'extend', 'cmds', 'watch']
 const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
@@ -46,7 +48,7 @@ export async function parseBuildFile(
     } else if (key === 'references') {
       result.references = await parseBuildFileReferences('reference', fileName, files, value || {}, context)
     } else if (key === 'envs') {
-      result.envs = parseEnvs(fileName, value || {}, result.envs)
+      result.envs = parseEnvs({ type: 'buildfile', fileName }, value || {}, result.envs)
     } else if (key === 'services') {
       result.services = parseBuildFileServices(fileName, value || {}, result)
     }
@@ -63,21 +65,22 @@ export async function parseBuildFile(
       throw new Error(`${fileName} task ${key} needs to be an object`)
     }
 
+    const ctx: ParseContext = { fileName, name: key, type: 'task' }
     const validKeys = value.image ? validDockerTaskKeys : validTaskKeys
     result.tasks[key] = {
-      envs: parseEnvs(fileName, value.envs || {}, {}),
-      mounts: parseStringArray(fileName, key, 'mounts', value.mounts),
-      src: parseBuildFileTaskSource(fileName, key, value.src, context),
-      deps: parseStringArray(fileName, key, 'deps', value.deps),
-      generates: parseStringArray(fileName, key, 'generates', value.generates),
-      description: value.description ? value.description.trim() : null,
-      labels: parseStringMap(fileName, 'task', key, value.labels),
+      envs: parseEnvs(ctx, value.envs || {}, {}),
+      mounts: parseStringArray(ctx, 'mounts', value.mounts),
+      src: parseBuildFileTaskSource(ctx, value.src, context),
+      deps: parseStringArray(ctx, 'deps', value.deps),
+      generates: parseStringArray(ctx, 'generates', value.generates),
+      description: parseString(ctx, 'description', value.description, true),
+      labels: parseStringMap(ctx, 'labels', value.labels),
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,
       needs: value.needs || null,
-      ports: parseStringArray(fileName, key, 'ports', value.ports),
-      cmds: parseBuildFileCommand(fileName, key, value.cmds),
+      ports: parseStringArray(ctx, 'ports', value.ports),
+      cmds: parseBuildFileCommand(ctx, value.cmds),
       unknownProps: Object.keys(value)
         .filter((k) => validKeys.indexOf(k) === -1)
         .reduce<{ [key: string]: any }>((map, k) => {

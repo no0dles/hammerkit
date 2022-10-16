@@ -1,6 +1,6 @@
 import { ContainerWorkNode } from '../planner/work-node'
 import { Environment } from './environment'
-import { isHostServiceDns, ServiceDns } from './events'
+import { isHostServiceDns, ServiceDns } from './service-dns'
 import { Container } from 'dockerode'
 import {
   convertToPosixPath,

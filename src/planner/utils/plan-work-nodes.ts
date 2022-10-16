@@ -30,7 +30,25 @@ export function planWorkNodes(build: BuildFile, options: WorkLabelScope): WorkTr
     removeNode(nodeId, context.workTree)
   }
 
+  removeUnusedServices(context.workTree)
+
   return context.workTree
+}
+
+function removeUnusedServices(workTree: WorkTree) {
+  const needs = new Set<string>()
+  for (const node of Object.values(workTree.nodes)) {
+    for (const need of node.needs) {
+      needs.add(need.id)
+    }
+  }
+
+  const services = Object.values(workTree.services)
+  for (const service of services) {
+    if (!needs.has(service.id)) {
+      delete workTree.services[service.id]
+    }
+  }
 }
 
 function removeNode(nodeId: string, workTree: WorkTree) {

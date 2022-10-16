@@ -1,5 +1,6 @@
 import { getTestSuite } from '../get-test-suite'
 import { WorkNode } from '../../planner/work-node'
+import { CliItem } from '../cli'
 
 describe('local', () => {
   const suite = getTestSuite('labels', ['build.yaml'])
@@ -47,7 +48,7 @@ describe('local', () => {
   })
 })
 
-function expectNodes(nodes: WorkNode[], expectedNodes: string[]) {
-  const nodeNames = Object.values(nodes).map((n) => n.name)
+function expectNodes(nodes: CliItem[], expectedNodes: string[]) {
+  const nodeNames = Object.values(nodes).map((n) => n.item.name)
   expect(nodeNames).toIncludeSameMembers(expectedNodes)
 }

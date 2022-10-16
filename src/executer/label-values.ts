@@ -5,6 +5,10 @@ export interface LabelValues {
   [key: string]: string[]
 }
 
+export function hasLabels(labels: LabelValues) {
+  return Object.keys(labels).length > 0
+}
+
 export function matchesAllLabels(filterLabels: LabelValues, node: WorkNode, nodes: WorkNodes): boolean {
   for (const [labelKey, filterValues] of Object.entries(filterLabels)) {
     const nodeValues = node.labels[labelKey]
@@ -14,7 +18,7 @@ export function matchesAllLabels(filterLabels: LabelValues, node: WorkNode, node
       }
     }
 
-    for (const nodeValue of nodeValues) {
+    for (const nodeValue of nodeValues || []) {
       if (filterValues.indexOf(nodeValue) === -1) {
         if (!hasNeedsWithMatch(node, nodes, (depNode) => matchesAllLabels(filterLabels, depNode, nodes))) {
           return false
@@ -47,7 +51,7 @@ export function hasDependencyWithMatch(root: WorkNode, matcher: (node: WorkNode)
 }
 
 export function matchesAnyLabel(filterLabels: LabelValues, node: WorkNode): boolean {
-  if (Object.keys(filterLabels).length === 0) {
+  if (!hasLabels(filterLabels)) {
     return false
   }
 

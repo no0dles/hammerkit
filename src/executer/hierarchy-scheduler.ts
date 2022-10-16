@@ -1,4 +1,4 @@
-import { ServiceDns } from './events'
+import { ServiceDns } from './service-dns'
 import { Environment } from './environment'
 import { SchedulerResult } from './scheduler/scheduler-result'
 import { isContainerWorkService } from '../planner/work-service'

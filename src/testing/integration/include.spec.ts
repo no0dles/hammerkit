@@ -21,7 +21,13 @@ describe('include', () => {
 
   it('should get included task', async () => {
     const { cli } = await suite.setup({ taskName: 'foo:bar' })
-    expect(cli.ls().map((n) => n.name)).toEqual(['foo:bar'])
-    expect(cli.ls()[0].cwd).toEqual(suite.path)
+    expect(cli.ls().map((n) => n.item.name)).toEqual(['foo:bar'])
+
+    const item = cli.ls()[0]
+    if (item.type === 'task') {
+      expect(item.item.cwd).toBe(suite.path)
+    } else {
+      expect(item.type).toBe('task')
+    }
   })
 })

@@ -3,10 +3,12 @@ import { join, resolve } from 'path'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
-import { Cli, getCli } from './testing/cli'
+import { Cli, getCli, isCliService, isCliTask } from './testing/cli'
 import { getBuildFile } from './parser/get-build-file'
 import { emptyWorkLabelScope, WorkScope } from './executer/work-scope'
 import { getWorkScope } from './get-work-context'
+import { printItem, printProperty, printTitle } from './log'
+import { hasLabels } from './executer/label-values'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const buildFile = await getBuildFile(fileName, environment)
@@ -56,9 +58,59 @@ export async function getProgram(
       .action(async (options) => {
         try {
           const cli = await createCli(fileName, environment, parseWorkScope(options))
-          for (const node of cli.ls()) {
-            console.log(`${node.name} - ${node.description}`) // TODO formatting
+          const items = cli.ls()
+
+          const tasks = items.filter(isCliTask)
+          const services = items.filter(isCliService)
+
+          if (services.length > 0) {
+            printTitle('Services')
+            for (const node of services) {
+              printItem(node.item)
+              printProperty(
+                'ports',
+                node.item.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
+              )
+              if (node.item.type === 'kubernetes') {
+                printProperty('context', node.item.context)
+                printProperty('selector', `${node.item.selector.type}/${node.item.selector.name}`)
+              } else {
+                printProperty('image', node.item.image)
+              }
+            }
           }
+
+          if (tasks.length > 0 && services.length > 0) {
+            process.stdout.write('\n')
+          }
+
+          if (tasks.length > 0) {
+            printTitle('Tasks')
+            for (const node of tasks) {
+              printItem(node.item)
+              if (node.item.needs.length > 0) {
+                printProperty('needs', node.item.needs.map((d) => d.name).join(', '))
+              }
+              if (node.item.deps.length > 0) {
+                printProperty('deps', node.item.deps.map((d) => d.name).join(', '))
+              }
+              if (node.item.type === 'container') {
+                printProperty('image', node.item.image)
+              }
+              if (node.item.caching) {
+                printProperty('caching', node.item.caching)
+              }
+              if (hasLabels(node.item.labels)) {
+                printProperty(
+                  'labels',
+                  `${Object.keys(node.item.labels)
+                    .map((key) => `${key}=${node.item.labels[key].join(',')}`)
+                    .join(' ')}`
+                )
+              }
+            }
+          }
+          process.stdout.write('\n')
         } catch (e) {
           environment.console.error(e)
           process.exit(1)

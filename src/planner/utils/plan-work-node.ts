@@ -21,6 +21,7 @@ import { BuildFileTaskPlatform } from '../../parser/build-file-task-platform'
 import { BuildTaskCommand } from '../../parser/build-file-task-command'
 import { CacheMethod } from '../../parser/cache-method'
 import { LabelValues } from '../../executer/label-values'
+import { homedir } from 'os'
 
 export interface BuildFileReference {
   build: BuildFile
@@ -270,13 +271,15 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
     if (!context.workTree.services[id]) {
       const workService: BaseWorkService = {
         id,
+        buildService: service,
         name: need.name,
-        caching: null, // TODO
+        description: service.description,
         ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),
       }
       if (service.image) {
         context.workTree.services[id] = {
           ...workService,
+          type: 'container',
           envs: service.envs || {},
           image: service.image,
           healthcheck: service.healthcheck,
@@ -291,6 +294,8 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
           ...workService,
           context: service.context,
           selector: service.selector,
+          kubeconfig: service.kubeconfig ?? getDefaultKubeConfig(),
+          type: 'kubernetes',
         }
       }
     }
@@ -300,6 +305,10 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
   }
 
   return result
+}
+
+function getDefaultKubeConfig(): string {
+  return join(homedir(), '.kube/config')
 }
 
 function parseWorkNodeCommand(

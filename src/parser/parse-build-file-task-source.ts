@@ -3,10 +3,10 @@ import { join } from 'path'
 import { parseStringArray } from './parse-string-array'
 import { BuildFileTaskSource } from './build-file-task-source'
 import { Environment } from '../executer/environment'
+import { ParseContext } from './parse-context'
 
 export function parseBuildFileTaskSource(
-  fileName: string,
-  taskName: string,
+  ctx: ParseContext,
   value: unknown,
   environment: Environment
 ): BuildFileTaskSource[] | null {
@@ -14,7 +14,7 @@ export function parseBuildFileTaskSource(
     return null
   }
 
-  const sources = parseStringArray(fileName, taskName, 'src', value)
+  const sources = parseStringArray(ctx, 'src', value)
   if (!sources) {
     return null
   }

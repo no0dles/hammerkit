@@ -1,15 +1,15 @@
-import { TestEnvironment } from './test-environment'
 import { getFileContext } from '../file/get-file-context'
-import { getConsoleContextMock } from '../console/get-console-context-mock'
 import { statusConsole } from '../planner/work-node-status'
+import { consoleContext } from '../log'
+import { Environment } from '../executer/environment'
 
-export function getTestContext(cwd: string): TestEnvironment {
-  const context: TestEnvironment = {
+export function getTestContext(cwd: string): Environment {
+  const context: Environment = {
     processEnvs: { ...process.env },
     abortCtrl: new AbortController(),
     cwd,
     file: getFileContext(cwd),
-    console: getConsoleContextMock(),
+    console: consoleContext(),
     status: statusConsole(),
   }
   return context

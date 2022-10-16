@@ -7,6 +7,7 @@ import { SchedulerNodeState, SchedulerServiceState, SchedulerState } from './exe
 import { NodeState } from './executer/scheduler/node-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { Environment } from './executer/environment'
+import { failNever } from './utils/fail-never'
 
 export function getLogs(chunk: Buffer | string): string[] {
   return chunk
@@ -107,8 +108,7 @@ function getStateText(state: NodeState | ServiceState): string {
   } else if (state.type === 'ready') {
     return colors.blue(state.type)
   } else {
-    //TODO fail never
-    return ''
+    failNever(state, 'unknown node state')
   }
 }
 
@@ -125,7 +125,18 @@ export function getNodeNameLengthForSchedulerState(schedulerState: SchedulerStat
   return getNodeNameLength(Names)
 }
 
-export function getNodeNameLength(names: () => Generator<string>): number {
+export function printProperty(name: string, value: string) {
+  process.stdout.write(`   ${colors.grey(`${name}:`)} ${value}\n`)
+}
+
+export function printItem(item: { name: string; description: string | null }) {
+  process.stdout.write(`• ${item.name}${item.description ? `: ${colors.white(item.description)}` : ''}\n`)
+}
+export function printTitle(name: string) {
+  process.stdout.write(`${colors.bgWhite(name + ':\n')}`)
+}
+
+export function getNodeNameLength(names: () => Generator<string> | Array<string>): number {
   let maxNodeNameLength = 0
   for (const name of names()) {
     if (name.length > maxNodeNameLength) {

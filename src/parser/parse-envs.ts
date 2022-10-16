@@ -1,5 +1,7 @@
+import { ParseContext, parseContextDescription } from './parse-context'
+
 export function parseEnvs(
-  fileName: string,
+  ctx: ParseContext,
   envs: unknown,
   baseEnvs: { [key: string]: string }
 ): { [key: string]: string } {
@@ -8,7 +10,7 @@ export function parseEnvs(
   }
 
   if (typeof envs !== 'object') {
-    throw new Error(`${fileName} envs need to be an object`)
+    throw new Error(`${parseContextDescription(ctx)} envs need to be an object`)
   }
 
   const result: { [key: string]: string } = {
@@ -20,7 +22,7 @@ export function parseEnvs(
     } else if (typeof value === 'number') {
       result[key] = value.toString()
     } else {
-      throw new Error(`${fileName} envs ${key} need to be a string or number`)
+      throw new Error(`${parseContextDescription(ctx)} envs ${key} need to be a string or number`)
     }
   }
 
