@@ -24,7 +24,7 @@ export function parseServiceSelector(
     if (key === 'type') {
       result.type = parseString(ctx, 'selector type', prop, false)
     } else if (key === 'name') {
-      result.type = parseString(ctx, 'selector name', prop, false)
+      result.name = parseString(ctx, 'selector name', prop, false)
     } else {
       throw new Error(`${parseContextDescription(ctx)} unknown property ${key} in healthcheck`)
     }

@@ -68,7 +68,14 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
 
   const logs = await env.status.read()
   for (const log of logs) {
-    if (isVerbose || (log.type === 'console' && log.console === 'stderr')) {
+    const stateType =
+      log.context.type === 'task'
+        ? schedulerState.node[log.context.id].type
+        : schedulerState.service[log.context.id].type
+    if (
+      isVerbose ||
+      (log.type === 'console' && log.console === 'stderr' && (stateType === 'crash' || stateType === 'error'))
+    ) {
       process.stdout.write(
         `${formatDate(log.date)} ${getType(log.context.type)} ${getNodeName(
           log.context.name,

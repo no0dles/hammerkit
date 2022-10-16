@@ -26,11 +26,11 @@ describe('cache', () => {
     const modifyDateUpToDate = await checkCacheState(node, 'modify-date', setupAfter.environment)
 
     if (expectInvalidate) {
-      expect(checksumUpToDate).toBeFalsy()
-      expect(modifyDateUpToDate).toBeFalsy()
+      expect(checksumUpToDate.changed).toBeTruthy()
+      expect(modifyDateUpToDate.changed).toBeTruthy()
     } else {
-      expect(checksumUpToDate).toBeTruthy()
-      expect(modifyDateUpToDate).toBeTruthy()
+      expect(checksumUpToDate.changed).toBeFalsy()
+      expect(modifyDateUpToDate.changed).toBeFalsy()
     }
   }
 

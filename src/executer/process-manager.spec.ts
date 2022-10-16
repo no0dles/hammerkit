@@ -1,8 +1,7 @@
 import { ProcessManager } from './process-manager'
 import { ProcessListenerEventType } from './process-listener'
 import { environmentMock } from './environment-mock'
-import { checkForAbort } from './abort'
-import { sleep } from '../utils/sleep'
+import { listenOnAbort } from '../utils/abort-event'
 
 describe('process-manager', () => {
   it('should complete on success', async () => {
@@ -81,16 +80,8 @@ describe('process-manager', () => {
     manager.task(
       { type: 'task', name: 'test-success', id: 'a' },
       (abort) =>
-        new Promise<void>((resolve, reject) => {
-          try {
-            while (!abort.signal.aborted) {
-              await sleep(20)
-              checkForAbort(abort.signal)
-            }
-            resolve()
-          } catch (e) {
-            reject(e)
-          }
+        new Promise<void>((resolve) => {
+          listenOnAbort(abort.signal, resolve)
         })
     )
     setTimeout(() => {

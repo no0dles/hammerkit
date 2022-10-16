@@ -73,7 +73,7 @@ export async function parseBuildFile(
       src: parseBuildFileTaskSource(ctx, value.src, context),
       deps: parseStringArray(ctx, 'deps', value.deps),
       generates: parseStringArray(ctx, 'generates', value.generates),
-      description: parseString(ctx, 'description', value.description, true),
+      description: parseString(ctx, 'description', value.description, true)?.trim() ?? null,
       labels: parseStringMap(ctx, 'labels', value.labels),
       image: value.image || null,
       extend: value.extend || null,
