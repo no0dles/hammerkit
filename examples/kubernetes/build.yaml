@@ -25,6 +25,8 @@ tasks:
     image: node:16.6.0-alpine
     deps: [install]
     needs: [postgres]
+    ports:
+      - 3000
     labels:
       app: example
     src:

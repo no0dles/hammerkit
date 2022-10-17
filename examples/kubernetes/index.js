@@ -1,14 +1,35 @@
-const { Client } = require('pg')
+const { Pool } = require('pg')
+const { createServer } = require('http')
 
-async function main() {
-  const client = new Client('postgres://api:123456@postgres:5432/api')
-  await client.connect()
-  const res = await client.query('SELECT $1::text as message', ['Hello world!'])
-  console.log(res.rows[0].message) // Hello world!
-  await client.end()
-}
+const pool = new Pool({
+  connectionString: 'postgres://api:123456@postgres:5432/api',
+})
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
+pool.on('error', () => {
+  console.error('pool has connection error')
+})
+
+const server = createServer(async function (req, res) {
+  let client
+  try {
+    client = await pool.connect()
+    const queryResult = await client.query('SELECT $1::text as message', ['Hello world from PG!'])
+
+    res.writeHead(200)
+    res.end(queryResult.rows[0].message)
+  } catch (e) {
+    res.writeHead(500)
+    res.end(e.message)
+  } finally {
+    client?.release()
+  }
+})
+
+process.on('SIGINT', async function () {
+  server.close()
+  await pool.end()
+})
+
+server.listen(3000, () => {
+  console.log(`Server is running on http://0.0.0.0:3000`)
 })
