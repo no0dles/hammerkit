@@ -8,7 +8,7 @@ description: >-
 
 ## Shell environment
 
-Environment variables which are available from the shell environment get passed into the command before execution.&#x20;
+Environment variables which are available from the shell environment get passed into the command before execution.
 
 {% code title="build.yaml" %}
 ```yaml

@@ -6,7 +6,9 @@ description: >-
 
 # References
 
-Each build file can have a reference map. The reference points to other build file containing more tasks. References can be used directly from the [cli](../cli/) or in [task dependencies](../task/dependencies.md).
+Each build file can have a reference map. 
+The reference points to other build file containing more tasks. 
+References can be used directly from the [cli](../cli/) or in [task dependencies](../task/dependencies.md).
 
 {% code title="build.yaml" %}
 ```yaml
@@ -24,7 +26,7 @@ tasks:
 ```
 {% endcode %}
 
-The task name `example` in the referenced build file will be prepended with the reference name `foo` and can be used as `foo:example`&#x20;
+The task name `example` in the referenced build file will be prepended with the reference name `foo` and can be used as `foo:example`
 
 {% tabs %}
 {% tab title="shell" %}

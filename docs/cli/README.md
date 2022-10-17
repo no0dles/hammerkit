@@ -4,21 +4,23 @@ description: All about the options that the hammerkit cli offers.
 
 # CLI
 
-## Installation / Upgrade
-
-The hammerkit cli can be easily installed and upgraded by npm/yarn.
-
-{% tabs %}
-{% tab title="npm" %}
-```bash
-npm i -g hammerkit
 ```
-{% endtab %}
+Usage: hammerkit [options] [command]
 
-{% tab title="yarn" %}
-```bash
-yarn add -g hammerkit
+Options:
+  -V, --version             output the version number
+  --verbose                 log debugging information (default: false)
+  --file                    set build file
+  -h, --help                display help for command
+
+Commands:
+  ls [options]              list all tasks
+  clean [options]           clear task cache
+  store [options] <path>    save task outputs into <path>
+  restore [options] <path>  restore task outputs from <path>
+  validate [options]        validate build.yaml
+  exec [options] [task]     execute all tasks
+  help [command]            display help for command
 ```
-{% endtab %}
-{% endtabs %}
+
 

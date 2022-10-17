@@ -1,5 +1,5 @@
 import commaner, { Command, Option } from 'commander'
-import { join, resolve } from 'path'
+import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
@@ -107,6 +107,12 @@ export async function getProgram(
                     .map((key) => `${key}=${node.item.labels[key].join(',')}`)
                     .join(' ')}`
                 )
+              }
+              if (node.item.src.length > 0) {
+                printProperty('src', node.item.src.map((d) => relative(node.item.cwd, d.absolutePath)).join(' '))
+              }
+              if (node.item.generates.length > 0) {
+                printProperty('generates', node.item.generates.map((d) => relative(node.item.cwd, d.path)).join(' '))
               }
             }
           }

@@ -17,7 +17,7 @@
 * [Service](docs/service/README.md)
   * [Container](docs/service/container.md)
   * [Kubernetes](docs/service/kubernetes.md)
-* [Labels](docs/labels/REAMDE.md) 
+* [Labels](docs/labels/README.md) 
 * [CLI](docs/cli/README.md)
   * [Init](docs/cli/init.md)
   * [ls](docs/cli/ls.md)
