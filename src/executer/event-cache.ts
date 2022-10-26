@@ -8,18 +8,18 @@ import { removeContainer } from '../docker/remove-container'
 import { existsVolume } from './get-docker-executor'
 import { WorkTree } from '../planner/work-tree'
 import { create, extract } from 'tar'
-import { createReadStream, createWriteStream } from 'fs'
 import { ContainerWorkNode, isContainerWorkNode, LocalWorkNode, WorkNode } from '../planner/work-node'
-import { pipeline } from 'stream/promises'
 import { usingContainer } from '../docker/using-container'
 
 export async function restoreCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
     const cachePath = getCacheDirectory(node.id)
-    const sourceCacheDir = join(path, 'cache', node.id)
+    const sourceCacheDir = join(path, node.id)
 
     await moveFiles(node, environment, function* () {
-      yield { from: sourceCacheDir, to: cachePath }
+      //yield { from: sourceCacheDir, to: cachePath }
+      yield { from: join(sourceCacheDir, 'stats.json'), to: join(cachePath, 'stats.json') }
+      yield { from: join(sourceCacheDir, 'description.json'), to: join(cachePath, 'description.json') }
     })
 
     if (isContainerWorkNode(node)) {
@@ -30,13 +30,14 @@ export async function restoreCache(path: string, workTree: WorkTree, environment
   }
 }
 
-async function restoreLocal(environment: Environment, node: LocalWorkNode, sourceCacheDir: string) {
-  const archiveFile = join(sourceCacheDir, 'generates.tgz')
-  if (await environment.file.exists(archiveFile)) {
-    await extract({
-      file: archiveFile,
-      cwd: node.cwd,
-    })
+async function restoreLocal(environment: Environment, node: LocalWorkNode, path: string) {
+  for (const generate of getGenerates(node, path)) {
+    if (await environment.file.exists(generate.filename)) {
+      await extract({
+        file: generate.filename,
+        cwd: node.cwd,
+      })
+    }
   }
 }
 
@@ -60,20 +61,26 @@ async function restoreContainer(environment: Environment, node: ContainerWorkNod
     async (container) => {
       await container.start()
 
-      const generates = node.generates.filter((g) => !g.inherited)
-      for (const generate of generates) {
-        const generateId = getGenerateId(node, generate.path)
-        const archiveFile = createReadStream(join(path, generateId + '-generates.tgz'))
-        await container.putArchive(archiveFile, {
-          path: dirname(generate.path),
-        })
+      for (const generate of getGenerates(node, path)) {
+        if (await environment.file.exists(generate.filename)) {
+          await container.putArchive(environment.file.readStream(generate.filename), {
+            path: dirname(generate.path),
+          })
+        }
       }
     }
   )
 }
 
-function getGenerateId(node: WorkNode, path: string): string {
-  return relative(node.cwd, path).split(sep).join('-')
+function* getGenerates(node: WorkNode, path: string) {
+  const generates = node.generates.filter((g) => !g.inherited)
+  for (const generate of generates) {
+    const generateId = relative(node.cwd, generate.path).split(sep).join('-')
+    yield {
+      filename: join(path, generateId + '-generates.tgz'),
+      path: generate.path,
+    }
+  }
 }
 
 async function archiveContainer(environment: Environment, node: ContainerWorkNode, path: string) {
@@ -95,51 +102,47 @@ async function archiveContainer(environment: Environment, node: ContainerWorkNod
     },
     async (container) => {
       await container.start()
+      for (const generatedArchive of getGenerates(node, path)) {
+        const readable = await container.getArchive({
+          path: generatedArchive.path,
+        })
 
-      const generates = node.generates.filter((g) => !g.inherited)
-      for (const generate of generates) {
-        const generateId = getGenerateId(node, generate.path)
-        const generateFilename = join(path, generateId + '-generates.tgz')
-        if (await environment.file.exists(generateFilename)) {
-          const archiveFile = createWriteStream(generateFilename)
-          const readable = await container.getArchive({
-            path: generate.path,
-          })
-
-          await pipeline(readable, archiveFile)
-        }
+        await environment.file.writeStream(generatedArchive.filename, readable)
       }
     }
   )
 }
 
-async function archiveLocal(node: LocalWorkNode, path: string) {
-  const archiveFile = createWriteStream(join(path, 'generates.tgz'))
-  await pipeline(
-    create(
-      {
-        cwd: node.cwd,
-        gzip: true,
-      },
-      node.generates.filter((g) => !g.inherited).map((g) => relative(node.cwd, g.path))
-    ),
-    archiveFile
-  )
+async function archiveLocal(environment: Environment, node: LocalWorkNode, path: string) {
+  for (const generatedArchive of getGenerates(node, path)) {
+    await environment.file.writeStream(
+      generatedArchive.filename,
+      create(
+        {
+          cwd: node.cwd,
+          gzip: true,
+        },
+        [relative(node.cwd, generatedArchive.path)]
+      )
+    )
+  }
 }
 
 export async function storeCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
     const cachePath = getCacheDirectory(node.id)
-    const sourceCacheDir = join(path, 'cache', node.id)
+    const sourceCacheDir = join(path, node.id)
 
     await moveFiles(node, environment, function* () {
-      yield { from: cachePath, to: sourceCacheDir }
+      //yield { from: cachePath, to: sourceCacheDir }
+      yield { from: join(cachePath, 'stats.json'), to: join(sourceCacheDir, 'stats.json') }
+      yield { from: join(cachePath, 'description.json'), to: join(sourceCacheDir, 'description.json') }
     })
 
     if (isContainerWorkNode(node)) {
       await archiveContainer(environment, node, sourceCacheDir)
     } else {
-      await archiveLocal(node, sourceCacheDir)
+      await archiveLocal(environment, node, sourceCacheDir)
     }
   }
 }

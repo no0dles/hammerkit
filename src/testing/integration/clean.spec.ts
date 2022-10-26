@@ -12,7 +12,7 @@ describe('clean', () => {
 
   it('should clean generated outputs locally', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
-    const result = await cli.exec({ cacheDefault: 'none', noContainer: true })
+    const result = await cli.exec({ cacheDefault: 'none' })
     await expectSuccessfulResult(result, environment)
 
     const outputPath = join(suite.path, 'node_modules')

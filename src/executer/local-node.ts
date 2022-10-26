@@ -40,7 +40,7 @@ export function localNode(node: WorkNode, state: State, environment: Environment
         }
       }
 
-      await writeWorkNodeCache(node, state.current.cacheMethod, environment)
+      await writeWorkNodeCache(node, environment)
 
       state.patchNode({
         type: 'completed',

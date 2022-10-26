@@ -165,7 +165,7 @@ export function dockerNode(
         }
       }
 
-      await writeWorkNodeCache(node, state.current.cacheMethod, environment)
+      await writeWorkNodeCache(node, environment)
 
       state.patchNode({
         node,

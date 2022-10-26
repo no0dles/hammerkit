@@ -9,12 +9,8 @@ export function getCacheDescriptionFile(nodeId: string): string {
   return join(getCacheDirectory(nodeId), 'description.json')
 }
 
-export function getCacheStatsDirectory(nodeId: string, cwd: string): string {
-  return join(getCacheDirectory(nodeId), createHash('sha1').update(cwd).digest('hex'))
-}
-
-export function getCacheStatsFile(type: 'container' | 'local', nodeId: string, cwd: string): string {
-  return join(getCacheStatsDirectory(nodeId, cwd), type + '-stats.json')
+export function getCacheStatsFile(nodeId: string): string {
+  return join(getCacheDirectory(nodeId), 'stats.json')
 }
 
 export function getHammerkitDirectory(): string {

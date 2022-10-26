@@ -1,7 +1,20 @@
-import { appendFile, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs'
+import {
+  appendFile,
+  copyFile,
+  createReadStream,
+  createWriteStream,
+  mkdir,
+  readdir,
+  readFile,
+  ReadStream,
+  rm,
+  stat,
+  writeFile,
+} from 'fs'
 import { dirname, join, isAbsolute } from 'path'
 import { watch } from 'chokidar'
 import { FileContext, Stats } from './file-context'
+import { Stream } from 'stream'
 
 function handleCallback<T>(callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void): Promise<T>
 function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
@@ -50,6 +63,15 @@ export function getFileContext(cwd: string): FileContext {
     writeFile(path: string, content: string): Promise<void> {
       return handleCallback((cb) => writeFile(getAbsolutePath(cwd, path), content, cb))
     },
+    async writeStream(path: string, stream: Stream): Promise<void> {
+      const writeStream = createWriteStream(path)
+      await new Promise<void>((resolve, reject) => {
+        stream
+          .pipe(writeStream)
+          .on('error', (err) => reject(err))
+          .on('close', () => resolve())
+      })
+    },
     listFiles(path: string): Promise<string[]> {
       return handleCallback((cb) => readdir(getAbsolutePath(cwd, path), cb))
     },
@@ -63,6 +85,9 @@ export function getFileContext(cwd: string): FileContext {
           }
         })
       )
+    },
+    readStream(path: string): ReadStream {
+      return createReadStream(path)
     },
     read(path: string): Promise<string> {
       return handleCallback((cb) =>

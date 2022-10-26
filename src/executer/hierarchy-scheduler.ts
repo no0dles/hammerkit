@@ -61,18 +61,17 @@ export async function schedule(
         }
 
         const ctx = logContext('task', nodeState.node)
-        if (isContainerWorkNode(nodeState.node) && currentState.noContainer) {
-          environment.status.context(ctx).write('info', 'execute docker task locally because of the --no-container arg')
-        }
+        // if (isContainerWorkNode(nodeState.node) && currentState.noContainer) {
+        //   environment.status.context(ctx).write('info', 'execute docker task locally because of the --no-container arg')
+        // }
 
         state.patchNode({
           type: 'starting',
           node: nodeState.node,
           started: new Date(),
-          abortController:
-            isContainerWorkNode(nodeState.node) && !currentState.noContainer
-              ? processManager.task(ctx, dockerNode(nodeState.node, serviceContainers, state, environment))
-              : processManager.task(ctx, localNode(nodeState.node, state, environment)),
+          abortController: isContainerWorkNode(nodeState.node) // && !currentState.noContainer
+            ? processManager.task(ctx, dockerNode(nodeState.node, serviceContainers, state, environment))
+            : processManager.task(ctx, localNode(nodeState.node, state, environment)),
         })
       }
     }

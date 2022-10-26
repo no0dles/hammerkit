@@ -10,6 +10,7 @@ import { createHash } from 'crypto'
 
 async function addWorkNodeCacheStats(
   result: WorkNodeCacheFileStats,
+  cwd: string,
   path: string,
   matcher: (file: string) => boolean,
   context: Environment
@@ -23,14 +24,14 @@ async function addWorkNodeCacheStats(
   if (stats.type === 'file') {
     if (matcher(path)) {
       const checksum = await calculateChecksum(context, path)
-      result.files[relative(result.cwd, path)] = { lastModified: stats.lastModified, checksum }
+      result.files[relative(cwd, path)] = { lastModified: stats.lastModified, checksum }
     }
   } else if (stats.type === 'directory') {
     const files = await context.file.listFiles(path)
     for (const file of files) {
       const subPath = join(path, file)
       if (matcher(subPath)) {
-        await addWorkNodeCacheStats(result, join(path, file), matcher, context)
+        await addWorkNodeCacheStats(result, cwd, join(path, file), matcher, context)
       }
     }
   }
@@ -74,12 +75,18 @@ export async function getWorkNodeCacheStats(
   environment: Environment
 ): Promise<WorkNodeCacheFileStats> {
   const result: WorkNodeCacheFileStats = {
-    cwd: cache.cwd,
+    created: new Date(),
     files: {},
   }
 
   for (const src of cache.src) {
-    await addWorkNodeCacheStats(result, src.absolutePath, (file) => src.matcher(file, cache.cwd), environment)
+    await addWorkNodeCacheStats(
+      result,
+      cache.cwd,
+      src.absolutePath,
+      (file) => src.matcher(file, cache.cwd),
+      environment
+    )
   }
 
   return result

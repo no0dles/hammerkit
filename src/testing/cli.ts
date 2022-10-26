@@ -21,7 +21,7 @@ import { WorkService } from '../planner/work-service'
 export interface CliExecOptions {
   workers: number
   watch: boolean
-  noContainer: boolean
+  //noContainer: boolean
   logMode: LogMode
   cacheDefault: CacheMethod
 }
@@ -64,13 +64,13 @@ export function getCli(workTree: WorkTree, environment: Environment): Cli {
   return {
     execWatch(options?: Partial<CliExecOptions>): CliExecResult {
       const processManager = new ProcessManager(environment, options?.workers ?? 0)
-      const noContainer = options?.noContainer ?? false
+      //const noContainer = options?.noContainer ?? false
       const state = createSchedulerState({
         services: workTree.services,
         nodes: workTree.nodes,
         watch: options?.watch ?? false,
         logMode: options?.logMode ?? isCI ? 'live' : 'interactive',
-        noContainer,
+        //noContainer,
         cacheMethod: options?.cacheDefault ?? 'checksum',
       })
       const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')

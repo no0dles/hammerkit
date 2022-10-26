@@ -16,7 +16,7 @@ describe('cache', () => {
     const setupBefore = await suite.setup({ taskName: 'example' })
     const nodeBefore = setupBefore.cli.node('example')
 
-    await writeWorkNodeCache(nodeBefore, 'checksum', setupBefore.environment)
+    await writeWorkNodeCache(nodeBefore, setupBefore.environment)
     await action(setupBefore.environment)
 
     const setupAfter = await suite.setup({ taskName: 'example' })

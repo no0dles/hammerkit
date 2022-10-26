@@ -210,7 +210,7 @@ export async function getProgram(
           .default(isCI ? 'checksum' : 'modify-date')
           .choices(['checksum', 'modify-date', 'none'])
       )
-      .addOption(new Option('--no-container', 'run every task locally without containers').default(true))
+      //.addOption(new Option('--no-container', 'run every task locally without containers').default(true))
       .action(async (task, options) => {
         try {
           const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
@@ -219,7 +219,7 @@ export async function getProgram(
             watch: options.watch,
             workers: options.concurrency,
             logMode: options.log,
-            noContainer: !(options.container ?? true),
+            //noContainer: !(options.container ?? true),
           })
 
           if (!result.success) {
