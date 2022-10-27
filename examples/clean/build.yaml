@@ -1,6 +1,15 @@
 tasks:
   example:
     description: clean example
+    generates:
+      - node_modules
+    src:
+      - package.json
+    cmds:
+      - npm install
+
+  docker:example:
+    description: clean example
     image: node:16.6.0-alpine
     mounts:
       - $PWD/.npm:/.npm
