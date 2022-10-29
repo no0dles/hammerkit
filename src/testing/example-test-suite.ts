@@ -1,4 +1,4 @@
-import { TestSuite, TestSuiteSetup } from './test-suite'
+import { TestSuite } from './test-suite'
 import { FileContext } from '../file/file-context'
 import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
@@ -7,6 +7,7 @@ import { statusConsole } from '../planner/work-node-status'
 import { Environment } from '../executer/environment'
 import { WorkScope } from '../executer/work-scope'
 import { createCli } from '../program'
+import { TestSuiteSetup } from './test-suite-setup'
 
 interface Test {
   cwd: string

@@ -1,6 +1,5 @@
-import { Cli } from './cli'
-import { Environment } from '../executer/environment'
 import { WorkScope } from '../executer/work-scope'
+import { TestSuiteSetup } from './test-suite-setup'
 
 export interface TestSuite {
   path: string
@@ -8,9 +7,4 @@ export interface TestSuite {
   setup(scope: WorkScope): Promise<TestSuiteSetup>
 
   close(): Promise<void>
-}
-
-export interface TestSuiteSetup {
-  cli: Cli
-  environment: Environment
 }

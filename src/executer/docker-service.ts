@@ -1,7 +1,7 @@
 import { ContainerWorkService } from '../planner/work-service'
 import { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
-import { getDocker } from './execute-docker'
+import { convertToPosixPath, getContainerMounts, getDocker } from './execute-docker'
 import { pull } from '../docker/pull'
 import { logStream } from '../docker/stream'
 import { waitOnAbort } from '../utils/abort-event'
@@ -16,6 +16,9 @@ export function dockerService(service: ContainerWorkService, state: State, envir
   return async (abort) => {
     const status = environment.status.service(service)
     let container: Container | null = null
+
+    const volumes = service.volumes
+    const mounts = await getContainerMounts(service, environment)
 
     try {
       checkForAbort(abort.signal)
@@ -35,6 +38,10 @@ export function dockerService(service: ContainerWorkService, state: State, envir
         }, {}),
         Cmd: service.cmd ? service.cmd.split(' ') : undefined,
         HostConfig: {
+          Binds: [
+            ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
+            ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+          ],
           PortBindings: service.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
             map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
             return map

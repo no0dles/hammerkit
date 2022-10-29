@@ -1,6 +1,5 @@
 import { WorkNodeCommand } from '../planner/work-node-command'
 import { platform } from 'os'
-import { CacheMethod } from '../parser/cache-method'
 import { PlannedTask } from '../planner/utils/plan-work-node'
 
 export interface WorkNodeCacheDescription {

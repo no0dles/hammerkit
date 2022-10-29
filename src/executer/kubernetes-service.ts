@@ -1,7 +1,7 @@
 import { KubernetesWorkService } from '../planner/work-service'
 import { exec } from 'child_process'
 import { getErrorMessage, getLogs } from '../log'
-import { listenOnAbort, waitOnAbort } from '../utils/abort-event'
+import { listenOnAbort } from '../utils/abort-event'
 import { Environment } from './environment'
 import { State } from './state'
 import { Process } from './process'

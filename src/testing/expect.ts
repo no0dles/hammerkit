@@ -38,12 +38,6 @@ export async function expectLog(
 ): Promise<void> {
   const state = getNodeState(result.state, name)
   const logs = env.status.task(state.node).read()
-  for (const log of logs) {
-    if (log.message === message) {
-      return
-    }
-  }
-
   expect(logs).toContain(message)
 }
 export async function expectContainsLog(

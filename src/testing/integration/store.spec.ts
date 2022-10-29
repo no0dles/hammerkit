@@ -35,7 +35,7 @@ describe('store/restore', () => {
     expect(existsSync(generatedPath)).toBeTruthy()
 
     const execAfterRestore = await cli.exec()
-    expect(execAfterRestore.success).toBeTruthy()
+    await expectSuccessfulResult(execAfterRestore, environment)
 
     const node = cli.node('example')
     const nodeState = execAfterRestore.state.node[node.id]
@@ -51,13 +51,15 @@ describe('store/restore', () => {
     const cacheStoragePath = join(environment.cwd, 'storage')
 
     await cli.clean()
-    await cli.exec()
+    const firstExecResult = await cli.exec()
+    await expectSuccessfulResult(firstExecResult, environment)
+
     await cli.store(cacheStoragePath)
     await cli.clean()
     await cli.restore(cacheStoragePath)
 
     const execAfterRestore = await cli.exec()
-    expect(execAfterRestore.success).toBeTruthy()
+    await expectSuccessfulResult(execAfterRestore, environment)
 
     const node = cli.node('example:docker')
     const nodeState = execAfterRestore.state.node[node.id]

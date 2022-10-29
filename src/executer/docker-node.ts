@@ -158,7 +158,6 @@ export function dockerNode(
           state.patchNode({
             node,
             type: 'crash',
-            //command,
             exitCode: result.result.ExitCode ?? 1,
           })
           return

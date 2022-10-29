@@ -4,12 +4,13 @@ import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { dirname, join, relative, sep } from 'path'
 import { moveFiles } from '../file/move-files'
 import { convertToPosixPath, getContainerVolumes, getDocker, getVolumeName } from './execute-docker'
-import { removeContainer } from '../docker/remove-container'
 import { existsVolume } from './get-docker-executor'
 import { WorkTree } from '../planner/work-tree'
 import { create, extract } from 'tar'
 import { ContainerWorkNode, isContainerWorkNode, LocalWorkNode, WorkNode } from '../planner/work-node'
 import { usingContainer } from '../docker/using-container'
+import { isContainerWorkService } from '../planner/work-service'
+import { CliCleanOptions } from '../cli'
 
 export async function restoreCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
@@ -17,7 +18,6 @@ export async function restoreCache(path: string, workTree: WorkTree, environment
     const sourceCacheDir = join(path, node.id)
 
     await moveFiles(node, environment, function* () {
-      //yield { from: sourceCacheDir, to: cachePath }
       yield { from: join(sourceCacheDir, 'stats.json'), to: join(cachePath, 'stats.json') }
       yield { from: join(sourceCacheDir, 'description.json'), to: join(cachePath, 'description.json') }
     })
@@ -134,7 +134,6 @@ export async function storeCache(path: string, workTree: WorkTree, environment: 
     const sourceCacheDir = join(path, node.id)
 
     await moveFiles(node, environment, function* () {
-      //yield { from: cachePath, to: sourceCacheDir }
       yield { from: join(cachePath, 'stats.json'), to: join(sourceCacheDir, 'stats.json') }
       yield { from: join(cachePath, 'description.json'), to: join(sourceCacheDir, 'description.json') }
     })
@@ -147,37 +146,11 @@ export async function storeCache(path: string, workTree: WorkTree, environment: 
   }
 }
 
-export async function cleanCache(workTree: WorkTree, environment: Environment): Promise<void> {
-  for (const node of iterateWorkNodes(workTree.nodes)) {
-    const status = environment.status.task(node)
-    const docker = await getDocker(status)
-
-    const containers = await docker.listContainers({
-      all: true,
-      filters: {
-        label: [`hammerkit-id=${node.id}`],
-      },
-    })
-    for (const container of containers) {
-      await removeContainer(docker.getContainer(container.Id))
-    }
-  }
-
-  for (const service of iterateWorkServices(workTree.services)) {
-    const status = environment.status.service(service)
-    const docker = await getDocker(status)
-
-    const containers = await docker.listContainers({
-      all: true,
-      filters: {
-        label: [`hammerkit-id=${service.id}`],
-      },
-    })
-    for (const container of containers) {
-      await removeContainer(docker.getContainer(container.Id))
-    }
-  }
-
+export async function cleanCache(
+  workTree: WorkTree,
+  environment: Environment,
+  options: CliCleanOptions
+): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
     const nodeStatus = environment.status.task(node)
     const docker = await getDocker(nodeStatus)
@@ -205,6 +178,27 @@ export async function cleanCache(workTree: WorkTree, environment: Environment): 
     if (await environment.file.exists(cachePath)) {
       nodeStatus.write('info', `remove cache ${cachePath}`)
       await environment.file.remove(cachePath)
+    }
+  }
+
+  if (options.service) {
+    for (const service of iterateWorkServices(workTree.services)) {
+      if (!isContainerWorkService(service)) {
+        continue
+      }
+
+      const nodeStatus = environment.status.service(service)
+      const docker = await getDocker(nodeStatus)
+      for (const volume of service.volumes) {
+        const volumeExists = await existsVolume(docker, volume.name)
+        if (!volumeExists) {
+          continue
+        }
+
+        nodeStatus.write('info', `remove volume ${volume.name}`)
+        const containerVolume = await docker.getVolume(volume.name)
+        await containerVolume.remove()
+      }
     }
   }
 }

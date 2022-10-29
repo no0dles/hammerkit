@@ -19,9 +19,20 @@ export async function schedule(
   state.on((currentState) => {
     for (const [, nodeState] of Object.entries(currentState.node)) {
       if (nodeState.type === 'pending') {
+        const endedNeeds = nodeState.node.needs
+          .map((need) => currentState.service[need.id])
+          .filter((service) => service.type === 'end')
+        if (endedNeeds.length > 0) {
+          state.patchNode({
+            type: 'canceled',
+            node: nodeState.node,
+          })
+          continue
+        }
+
         const pendingNeeds = nodeState.node.needs
           .map((need) => currentState.service[need.id])
-          .filter((service) => service.type === 'pending' || service.type === 'end')
+          .filter((service) => service.type === 'pending')
 
         const hasOpenDeps = nodeState.node.deps.some((dep) => currentState.node[dep.id].type !== 'completed')
 
@@ -61,15 +72,12 @@ export async function schedule(
         }
 
         const ctx = logContext('task', nodeState.node)
-        // if (isContainerWorkNode(nodeState.node) && currentState.noContainer) {
-        //   environment.status.context(ctx).write('info', 'execute docker task locally because of the --no-container arg')
-        // }
 
         state.patchNode({
           type: 'starting',
           node: nodeState.node,
           started: new Date(),
-          abortController: isContainerWorkNode(nodeState.node) // && !currentState.noContainer
+          abortController: isContainerWorkNode(nodeState.node)
             ? processManager.task(ctx, dockerNode(nodeState.node, serviceContainers, state, environment))
             : processManager.task(ctx, localNode(nodeState.node, state, environment)),
         })

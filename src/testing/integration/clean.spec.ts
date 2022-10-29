@@ -36,4 +36,16 @@ describe('clean', () => {
     await cli.clean()
     expect(await existsVolume(docker, volumeName)).toBeFalsy()
   })
+
+  it('should clean and restore created data in volumes', async () => {
+    const { cli, environment } = await suite.setup({ taskName: 'example:service' })
+
+    await cli.clean({ service: true })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
+
+    await cli.clean({ service: true })
+    const resultAfterClean = await cli.exec()
+    await expectSuccessfulResult(resultAfterClean, environment)
+  })
 })

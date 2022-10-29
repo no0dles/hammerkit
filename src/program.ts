@@ -3,7 +3,7 @@ import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
-import { Cli, getCli, isCliService, isCliTask } from './testing/cli'
+import { Cli, getCli, isCliService, isCliTask } from './cli'
 import { getBuildFile } from './parser/get-build-file'
 import { emptyWorkLabelScope, WorkScope } from './executer/work-scope'
 import { getWorkScope } from './get-work-context'
@@ -56,86 +56,79 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (options) => {
-        try {
-          const cli = await createCli(fileName, environment, parseWorkScope(options))
-          const items = cli.ls()
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        const items = cli.ls()
 
-          const tasks = items.filter(isCliTask)
-          const services = items.filter(isCliService)
+        const tasks = items.filter(isCliTask)
+        const services = items.filter(isCliService)
 
-          if (services.length > 0) {
-            printTitle('Services')
-            for (const node of services) {
-              printItem(node.item)
-              printProperty(
-                'ports',
-                node.item.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
-              )
-              if (node.item.type === 'kubernetes') {
-                printProperty('context', node.item.context)
-                printProperty('selector', `${node.item.selector.type}/${node.item.selector.name}`)
-              } else {
-                printProperty('image', node.item.image)
-              }
+        if (services.length > 0) {
+          printTitle('Services')
+          for (const node of services) {
+            printItem(node.item)
+            printProperty(
+              'ports',
+              node.item.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
+            )
+            if (node.item.type === 'kubernetes-service') {
+              printProperty('context', node.item.context)
+              printProperty('selector', `${node.item.selector.type}/${node.item.selector.name}`)
+            } else {
+              printProperty('image', node.item.image)
             }
           }
-
-          if (tasks.length > 0 && services.length > 0) {
-            process.stdout.write('\n')
-          }
-
-          if (tasks.length > 0) {
-            printTitle('Tasks')
-            for (const node of tasks) {
-              printItem(node.item)
-              if (node.item.needs.length > 0) {
-                printProperty('needs', node.item.needs.map((d) => d.name).join(', '))
-              }
-              if (node.item.deps.length > 0) {
-                printProperty('deps', node.item.deps.map((d) => d.name).join(', '))
-              }
-              if (node.item.type === 'container') {
-                printProperty('image', node.item.image)
-              }
-              if (node.item.caching) {
-                printProperty('caching', node.item.caching)
-              }
-              if (hasLabels(node.item.labels)) {
-                printProperty(
-                  'labels',
-                  `${Object.keys(node.item.labels)
-                    .map((key) => `${key}=${node.item.labels[key].join(',')}`)
-                    .join(' ')}`
-                )
-              }
-              if (node.item.src.length > 0) {
-                printProperty('src', node.item.src.map((d) => relative(node.item.cwd, d.absolutePath)).join(' '))
-              }
-              if (node.item.generates.length > 0) {
-                printProperty('generates', node.item.generates.map((d) => relative(node.item.cwd, d.path)).join(' '))
-              }
-            }
-          }
-          process.stdout.write('\n')
-        } catch (e) {
-          environment.console.error(e)
-          process.exit(1)
         }
+
+        if (tasks.length > 0 && services.length > 0) {
+          process.stdout.write('\n')
+        }
+
+        if (tasks.length > 0) {
+          printTitle('Tasks')
+          for (const node of tasks) {
+            printItem(node.item)
+            if (node.item.needs.length > 0) {
+              printProperty('needs', node.item.needs.map((d) => d.name).join(', '))
+            }
+            if (node.item.deps.length > 0) {
+              printProperty('deps', node.item.deps.map((d) => d.name).join(', '))
+            }
+            if (node.item.type === 'container') {
+              printProperty('image', node.item.image)
+            }
+            if (node.item.caching) {
+              printProperty('caching', node.item.caching)
+            }
+            if (hasLabels(node.item.labels)) {
+              printProperty(
+                'labels',
+                `${Object.keys(node.item.labels)
+                  .map((key) => `${key}=${node.item.labels[key].join(',')}`)
+                  .join(' ')}`
+              )
+            }
+            if (node.item.src.length > 0) {
+              printProperty('src', node.item.src.map((d) => relative(node.item.cwd, d.absolutePath)).join(' '))
+            }
+            if (node.item.generates.length > 0) {
+              printProperty('generates', node.item.generates.map((d) => relative(node.item.cwd, d.path)).join(' '))
+            }
+          }
+        }
+        process.stdout.write('\n')
       })
 
     program
       .command('clean')
       .description('clear task cache')
+      .addOption(new Option('--service', 'clean data volumes of services'))
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (options) => {
-        try {
-          const cli = await createCli(fileName, environment, parseWorkScope(options))
-          await cli.clean()
-        } catch (e) {
-          environment.console.error(e)
-          process.exit(1)
-        }
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        await cli.clean({
+          service: options.service,
+        })
       })
 
     program
@@ -144,13 +137,8 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
-        try {
-          const cli = await createCli(fileName, environment, parseWorkScope(options))
-          await cli.store(resolve(path))
-        } catch (e) {
-          environment.console.error(e)
-          process.exit(1)
-        }
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        await cli.store(resolve(path))
       })
 
     program
@@ -159,13 +147,8 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
-        try {
-          const cli = await createCli(fileName, environment, parseWorkScope(options))
-          await cli.restore(resolve(path))
-        } catch (e) {
-          environment.console.error(e)
-          process.exit(1)
-        }
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        await cli.restore(resolve(path))
       })
 
     program
@@ -185,11 +168,20 @@ export async function getProgram(
             environment.console.warn(validation.message)
           }
         }
-        if (errors === 0) {
-          process.exit(0)
-        } else {
-          process.exit(1)
+        if (errors !== 0) {
+          program.error('Detected errors in your build.yaml', { exitCode: 1 })
         }
+      })
+
+    program
+      .command('shutdown')
+      .description('end all container tasks/services')
+      .arguments('[task]')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (task, options) => {
+        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
+        cli.shutdown()
       })
 
     program
@@ -210,23 +202,17 @@ export async function getProgram(
           .default(isCI ? 'checksum' : 'modify-date')
           .choices(['checksum', 'modify-date', 'none'])
       )
-      //.addOption(new Option('--no-container', 'run every task locally without containers').default(true))
       .action(async (task, options) => {
-        try {
-          const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
-          const result = await cli.exec({
-            cacheDefault: options.cache,
-            watch: options.watch,
-            workers: options.concurrency,
-            logMode: options.log,
-            //noContainer: !(options.container ?? true),
-          })
+        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
+        const result = await cli.exec({
+          cacheDefault: options.cache,
+          watch: options.watch,
+          workers: options.concurrency,
+          logMode: options.log,
+        })
 
-          if (!result.success) {
-            process.exit(1)
-          }
-        } catch (e) {
-          process.exit(1)
+        if (!result.success) {
+          program.error('Execution was not successful', { exitCode: 1 })
         }
       })
   } else {
@@ -255,7 +241,10 @@ tasks:
   program.version(require('../package.json').version)
   program.option('--verbose', 'log debugging information', false)
   program.option('--file', 'set build file', 'build.yaml')
-  program.name('hammerkit')
+  program.configureOutput({
+    writeOut: (str) => environment.console.info(str),
+    writeErr: (str) => environment.console.error(str),
+  })
 
   return { program, args }
 }

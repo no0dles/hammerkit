@@ -1,11 +1,12 @@
 import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
 import { WorkService } from './work-service'
 import { WorkNode } from './work-node'
+import { getEnvironmentConfig } from '../utils/environment-config'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
 
-const StatusBufferMax = 3000
+const StatusBufferMax = getEnvironmentConfig('STATUS_BUFFER_LIMIT', 300)
 
 export interface ConsoleMessage {
   type: 'console'
@@ -68,12 +69,17 @@ export function statusConsole(): StatusConsole {
     buffer.push(message)
     emit.emit(message)
     if (context.id in contextBuffer) {
-      contextBuffer[context.id].buffer.push(message)
+      const scopedBuffer = contextBuffer[context.id]
+      scopedBuffer.buffer.push(message)
+      if (scopedBuffer.buffer.length > StatusBufferMax) {
+        const removedBuffer = buffer.splice(0, 1)[0]
+        const bufferIndex = buffer.indexOf(removedBuffer)
+        if (bufferIndex >= 0) {
+          buffer.splice(bufferIndex, 1)
+        }
+      }
     } else {
       contextBuffer[context.id] = { buffer: [message] }
-    }
-    if (buffer.length > StatusBufferMax) {
-      buffer.splice(0, 1) // TODO set limits for contextBuffer
     }
   }
 

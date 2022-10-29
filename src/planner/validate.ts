@@ -12,7 +12,7 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
     if (!service.description) {
       yield { type: 'warn', message: `missing description`, node: service }
     }
-    if (service.type === 'container') {
+    if (service.type === 'container-service') {
       if (!service.healthcheck) {
         yield { type: 'warn', message: 'missing healthcheck', node: service }
       }

@@ -11,7 +11,6 @@ export async function startNode(
   abort: AbortController,
   environment: Environment
 ): Promise<boolean> {
-  // TODO check how it behaves on noContainer override
   const cacheState = await checkCacheState(node, state.current.cacheMethod, environment)
   if (!cacheState.changed) {
     state.patchNode({

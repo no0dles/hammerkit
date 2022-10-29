@@ -1,6 +1,6 @@
-import { join } from 'path'
 import { WorkNodePath } from '../work-node-path'
 import { homedir } from 'os'
+import { normalizePath } from './normalize-path'
 
 export function parseWorkNodeMount(cwd: string, dir: string): WorkNodePath {
   const parts = dir.split(':')
@@ -10,16 +10,6 @@ export function parseWorkNodeMount(cwd: string, dir: string): WorkNodePath {
     return parseLocalMount(cwd, parts[0], parts[1])
   } else {
     throw new Error(`invalid mount ${dir}`)
-  }
-}
-
-function normalizePath(cwd: string, pwd: string, path: string) {
-  if (path.startsWith('/')) {
-    return path
-  } else if (path.startsWith('$PWD')) {
-    return join(pwd, path.substr('$PWD'.length))
-  } else {
-    return join(cwd, path)
   }
 }
 

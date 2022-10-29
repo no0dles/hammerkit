@@ -22,6 +22,7 @@ import { BuildTaskCommand } from '../../parser/build-file-task-command'
 import { CacheMethod } from '../../parser/cache-method'
 import { LabelValues } from '../../executer/label-values'
 import { homedir } from 'os'
+import { parseWorkServiceVolume } from './parse-work-service-volume'
 
 export interface BuildFileReference {
   build: BuildFile
@@ -200,8 +201,6 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
     generates: parseLocalWorkNodeGenerate(task, context, task.envs),
     plannedTask: task,
     needs: parseWorkNodeNeeds(task.needs, context),
-    // console: nodeConsole(),
-    // status: statusConsole(),
     labels: mapLabels(task.labels),
     caching: task.cache ?? null,
   }
@@ -279,7 +278,7 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
       if (service.image) {
         context.workTree.services[id] = {
           ...workService,
-          type: 'container',
+          type: 'container-service',
           cmd: service.cmd,
           envs: service.envs || {},
           image: service.image,
@@ -287,8 +286,9 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
           mounts: (service.mounts || [])
             .map((m) => templateValue(m, service.envs))
             .map((m) => parseWorkNodeMount(need.build.path, m)),
-          //caching: service.cache ??,
-          //volumes: service.volumes || {}, // TODO volume impl
+          volumes: (service.volumes || [])
+            .map((m) => templateValue(m, service.envs))
+            .map((m) => parseWorkServiceVolume(need.build.path, m)),
         }
       } else if (!!service.context && !!service.selector) {
         context.workTree.services[id] = {
@@ -296,7 +296,7 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
           context: service.context,
           selector: service.selector,
           kubeconfig: service.kubeconfig ?? getDefaultKubeConfig(),
-          type: 'kubernetes',
+          type: 'kubernetes-service',
         }
       }
     }

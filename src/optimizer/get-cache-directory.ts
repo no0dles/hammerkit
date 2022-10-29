@@ -1,5 +1,4 @@
 import { join } from 'path'
-import { createHash } from 'crypto'
 
 export function getCacheDirectory(nodeId: string): string {
   return join(getHammerkitDirectory(), 'cache', nodeId)

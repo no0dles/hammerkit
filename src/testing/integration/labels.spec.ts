@@ -1,5 +1,5 @@
 import { getTestSuite } from '../get-test-suite'
-import { CliItem } from '../cli'
+import { CliItem } from '../../cli'
 
 describe('local', () => {
   const suite = getTestSuite('labels', ['build.yaml'])

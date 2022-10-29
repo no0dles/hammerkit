@@ -1,4 +1,26 @@
+services:
+  postgres:
+    image: postgres:12
+    envs:
+      POSTGRES_USER: api
+      POSTGRES_DB: api
+      POSTGRES_PASSWORD: 123456
+    volumes:
+      - "postgres-db:/var/lib/postgresql/data"
+    healthcheck:
+      cmd: "pg_isready -U postgres"
+    ports:
+      - 5432
+
 tasks:
+  example:service:
+    needs: [postgres]
+    image: postgres:12
+    envs:
+      PGPASSWORD: 123456
+    cmds:
+      - psql -h postgres -U api -d api -c "CREATE TABLE test (id uuid primary key)"
+
   example:
     description: clean example
     generates:

@@ -1,14 +1,14 @@
 import { awaitStream } from '../docker/stream'
 import Dockerode, { Container, Exec, ExecInspectInfo } from 'dockerode'
 import { sep, extname } from 'path'
-import { ContainerWorkNode } from '../planner/work-node'
+import { ContainerWorkNode, isContainerWorkNode } from '../planner/work-node'
 import { WorkNodePath } from '../planner/work-node-path'
 import { platform } from 'os'
 import { Environment } from './environment'
 import { createHash } from 'crypto'
-import { AbortableFunctionContext } from '../utils/abortable-function'
 import { listenOnAbort } from '../utils/abort-event'
 import { StatusScopedConsole } from '../planner/work-node-status'
+import { ContainerWorkService } from '../planner/work-service'
 
 interface WorkNodeVolume {
   name: string
@@ -37,26 +37,31 @@ export async function getContainerVolumes(node: ContainerWorkNode): Promise<Work
   return volumes
 }
 
-export async function getContainerMounts(node: ContainerWorkNode, context: Environment): Promise<WorkNodePath[]> {
+export async function getContainerMounts(
+  node: ContainerWorkNode | ContainerWorkService,
+  context: Environment
+): Promise<WorkNodePath[]> {
   const result: WorkNodePath[] = []
 
-  for (const source of node.src) {
-    const exists = await context.file.exists(source.absolutePath)
+  if (isContainerWorkNode(node)) {
+    for (const source of node.src) {
+      const exists = await context.file.exists(source.absolutePath)
 
-    if (exists) {
-      result.push({
-        localPath: source.absolutePath,
-        containerPath: source.absolutePath,
-      })
-    } else {
-      if (extname(source.absolutePath)) {
-        await context.file.writeFile(source.absolutePath, '')
-      } else {
-        await context.file.createDirectory(source.absolutePath)
+      if (exists) {
         result.push({
           localPath: source.absolutePath,
           containerPath: source.absolutePath,
         })
+      } else {
+        if (extname(source.absolutePath)) {
+          await context.file.writeFile(source.absolutePath, '')
+        } else {
+          await context.file.createDirectory(source.absolutePath)
+          result.push({
+            localPath: source.absolutePath,
+            containerPath: source.absolutePath,
+          })
+        }
       }
     }
   }
@@ -192,30 +197,6 @@ export async function execCommand(
         resolve({ type: 'timeout' })
         resolved = true
       }, timeout)
-    } else {
-      //pollStatus(abortContext, exec, resolve, reject)
     }
   })
-}
-
-export function pollStatus(
-  abortContext: AbortableFunctionContext,
-  exec: Exec,
-  resolve: (result: ExecResult) => void,
-  reject: (err: Error) => void
-): void {
-  if (abortContext.isAborted()) {
-    return
-  }
-
-  exec
-    .inspect()
-    .then((result) => {
-      if (!result.Running) {
-        resolve({ type: 'result', result })
-      } else {
-        setTimeout(() => pollStatus(abortContext, exec, resolve, reject), 50)
-      }
-    })
-    .catch(reject)
 }

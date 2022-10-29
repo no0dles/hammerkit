@@ -5,6 +5,7 @@ import {
   ExecutionBuildServiceHealthCheck,
   ExecutionBuildServiceSelector,
 } from '../parser/build-file-service'
+import { WorkServiceVolume } from './work-service-volume'
 
 export interface BaseWorkService {
   id: string
@@ -14,29 +15,23 @@ export interface BaseWorkService {
   buildService: ExecutionBuildService
 }
 
-export type WorkService = ContainerWorkService | KubernetesWorkService // | LocalWorkService
+export type WorkService = ContainerWorkService | KubernetesWorkService
 
-export const isContainerWorkService = (svc: WorkService): svc is ContainerWorkService => 'image' in svc
+export const isContainerWorkService = (svc: WorkService): svc is ContainerWorkService =>
+  'image' in svc && svc.type === 'container-service'
 
 export interface ContainerWorkService extends BaseWorkService {
-  type: 'container'
+  type: 'container-service'
   envs: { [key: string]: string }
   image: string
   cmd: string | null
   mounts: WorkNodePath[]
-  // volumes: { [volumeName: string]: string } // TODO when cache/restore works with volumes
+  volumes: WorkServiceVolume[]
   healthcheck: ExecutionBuildServiceHealthCheck | null
 }
 
-// export interface LocalWorkService extends BaseWorkService {
-//   type: 'local'
-//   envs: { [key: string]: string }
-//   cmd: string
-//   healthcheck: ExecutionBuildServiceHealthCheck | null
-// }
-
 export interface KubernetesWorkService extends BaseWorkService {
-  type: 'kubernetes'
+  type: 'kubernetes-service'
   context: string
   kubeconfig: string
   selector: ExecutionBuildServiceSelector

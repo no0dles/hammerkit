@@ -48,6 +48,7 @@ export function parseBuildFileServices(
       ports: parseStringArray(ctx, 'ports', serviceValue.ports),
       envs: parseEnvs(ctx, serviceValue.envs, buildFile.envs),
       mounts: parseStringArray(ctx, 'mounts', serviceValue.mounts),
+      volumes: parseStringArray(ctx, 'volumes', serviceValue.volumes),
       healthcheck: parseHealthcheck(ctx, serviceValue.healthcheck),
       labels: parseStringMap(ctx, 'labels', serviceValue.labels),
       cmd: parseString(ctx, 'cmd', serviceValue.cmd, true),

@@ -5,7 +5,7 @@ import { listenOnAbort } from '../utils/abort-event'
 
 describe('process-manager', () => {
   it('should complete on success', async () => {
-    const manager = new ProcessManager(environmentMock(), 0)
+    const manager = new ProcessManager(environmentMock(process.cwd()), 0)
 
     let currentIndex = 0
     const expectedEvents: ProcessListenerEventType[] = ['started', 'ended']
@@ -22,7 +22,7 @@ describe('process-manager', () => {
   })
 
   it('should complete on error', async () => {
-    const manager = new ProcessManager(environmentMock(), 0)
+    const manager = new ProcessManager(environmentMock(process.cwd()), 0)
 
     let currentIndex = 0
     const expectedEvents: ProcessListenerEventType[] = ['started', 'ended']
@@ -39,7 +39,7 @@ describe('process-manager', () => {
   })
 
   it('should not start more than worker count', async () => {
-    const manager = new ProcessManager(environmentMock(), 1)
+    const manager = new ProcessManager(environmentMock(process.cwd()), 1)
 
     const processes: string[] = []
     let concurrencyCount = 0
@@ -75,7 +75,7 @@ describe('process-manager', () => {
   })
 
   it('should terminate on abort', async () => {
-    const env = environmentMock()
+    const env = environmentMock(process.cwd())
     const manager = new ProcessManager(env, 0)
     manager.task(
       { type: 'task', name: 'test-success', id: 'a' },
@@ -89,60 +89,4 @@ describe('process-manager', () => {
     }, 200)
     await manager.onComplete()
   })
-  //
-  // it('test tasks', async () => {
-  //   const emitter = new ProcessManager<{ type: 'result'; value: number }>(new AbortController())
-  //   emitter.task(
-  //     'test',
-  //     () =>
-  //       new Promise<{ type: 'result'; value: number }>((resolve) =>
-  //         setTimeout(() => resolve({ type: 'result', value: 3 }), 3000)
-  //       )
-  //   )
-  //   emitter.task(
-  //     'test',
-  //     () =>
-  //       new Promise<{ type: 'result'; value: number }>((resolve) =>
-  //         setTimeout(() => resolve({ type: 'result', value: 1 }), 1000)
-  //       )
-  //   )
-  //
-  //   const result1 = await emitter.next()
-  //   expect(result1).toBeDefined()
-  //   if (result1) {
-  //     expect(result1.value).toBe(1)
-  //   }
-  //
-  //   const result2 = await emitter.next()
-  //   expect(result2).toBeDefined()
-  //   if (result2) {
-  //     expect(result2.value).toBe(3)
-  //   }
-  //
-  //   const result3 = await emitter.next()
-  //   expect(result3).toBeNull()
-  // })
-  //
-  // it('test interupt', async () => {
-  //   const emitter = new ProcessManager(new AbortController())
-  //   emitter.task(
-  //     'test',
-  //     () =>
-  //       new Promise<{ type: 'result'; value: number }>((resolve) =>
-  //         setTimeout(() => resolve({ type: 'result', value: 3 }), 3000)
-  //       )
-  //   )
-  //   const result1Promise = emitter.next()
-  //
-  //   emitter.task(
-  //     'test',
-  //     () =>
-  //       new Promise<{ type: 'result'; value: number }>((resolve) =>
-  //         setTimeout(() => resolve({ type: 'result', value: 1 }), 1000)
-  //       )
-  //   )
-  //
-  //   expect(await result1Promise).toEqual({ value: 1, type: 'result' })
-  //   expect(await emitter.next()).toEqual({ value: 3, type: 'result' })
-  // })
 })

@@ -74,7 +74,8 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
         : schedulerState.service[log.context.id].type
     if (
       isVerbose ||
-      (log.type === 'console' && log.console === 'stderr' && (stateType === 'crash' || stateType === 'error'))
+      (log.type === 'console' && log.console === 'stderr' && (stateType === 'crash' || stateType === 'error')) ||
+      (log.type === 'status' && log.level === 'error')
     ) {
       process.stdout.write(
         `${formatDate(log.date)} ${getType(log.context.type)} ${getNodeName(
@@ -90,8 +91,8 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     if (state.type === 'end') {
       if (state.reason === 'crash') {
         message += ` crashed`
-        process.stdout.write(`${message}\n`)
       }
+      process.stdout.write(`${message}\n`)
     }
   }
 
@@ -99,6 +100,9 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     let message = `${getType('task')} ${getNodeName(state.node.name, maxNodeNameLength)} - ${getStateText(state)}`
     if (state.type === 'completed') {
       message += ` in ${state.duration}ms`
+      if (state.cached) {
+        message += ' [CACHED]'
+      }
     }
     if (state.type === 'crash') {
       message += ` exited with ${state.exitCode}`

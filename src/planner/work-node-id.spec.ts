@@ -5,7 +5,7 @@ import { createWorkContext } from './work-context'
 import { environmentMock } from '../executer/environment-mock'
 
 async function compareTasks(firstTask: any, secondTask: any, expectEqual: boolean) {
-  const environment = environmentMock()
+  const environment = environmentMock(process.cwd())
   const firstBuildFile = await createBuildFile(environment, {
     tasks: {
       test: firstTask,

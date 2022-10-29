@@ -41,4 +41,4 @@ export interface ContainerWorkNode extends BaseWorkNode {
   ports: WorkNodePort[]
 }
 
-export const isContainerWorkNode = (val: WorkNode): val is ContainerWorkNode => val.type === 'container'
+export const isContainerWorkNode = (val: WorkNode | WorkService): val is ContainerWorkNode => val.type === 'container'

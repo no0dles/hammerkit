@@ -22,5 +22,5 @@ getProgram(
   },
   process.argv
 ).then(({ program, args }) => {
-  program.parse(args)
+  return program.parseAsync(args)
 })
