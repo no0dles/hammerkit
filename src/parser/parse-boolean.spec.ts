@@ -29,12 +29,12 @@ describe('parse-boolean', () => {
     expect(value).toBeFalsy()
   })
 
-  it('should allow 2', () => {
-    expect(parseBoolean(context, 'watch', 2, false)).toThrow()
+  it('should not allow 2', () => {
+    expect(() => parseBoolean(context, 'watch', 2, false)).toThrow()
   })
 
-  it('should allow "test"', () => {
-    expect(parseBoolean(context, 'watch', 'test', false)).toThrow()
+  it('should not allow "test"', () => {
+    expect(() => parseBoolean(context, 'watch', 'test', false)).toThrow()
   })
 
   it('should parse null if optional', () => {
@@ -48,6 +48,6 @@ describe('parse-boolean', () => {
   })
 
   it('should not allow null if optional', () => {
-    expect(parseBoolean(context, 'watch', null, false)).toThrow()
+    expect(() => parseBoolean(context, 'watch', null, false)).toThrow()
   })
 })
