@@ -1,7 +1,7 @@
-import { WorkServiceVolume } from '../work-service-volume'
 import { normalizePath } from './normalize-path'
+import { WorkVolume } from '../work-volume'
 
-export function parseWorkServiceVolume(cwd: string, dir: string): WorkServiceVolume {
+export function parseWorkServiceVolume(cwd: string, dir: string): WorkVolume {
   const parts = dir.split(':')
   if (parts.length === 2) {
     return parseVolume(cwd, parts[0], parts[1])
@@ -10,7 +10,7 @@ export function parseWorkServiceVolume(cwd: string, dir: string): WorkServiceVol
   }
 }
 
-function parseVolume(cwd: string, name: string, containerPath: string): WorkServiceVolume {
+function parseVolume(cwd: string, name: string, containerPath: string): WorkVolume {
   return {
     name,
     containerPath: normalizePath(cwd, cwd, containerPath),

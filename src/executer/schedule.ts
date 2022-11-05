@@ -4,18 +4,23 @@ import { SchedulerResult } from './scheduler/scheduler-result'
 import { isContainerWorkService } from '../planner/work-service'
 import { dockerService } from './docker-service'
 import { kubernetesService } from './kubernetes-service'
-import { isContainerWorkNode } from '../planner/work-node'
+import { isContainerWorkNode, WorkNode } from '../planner/work-node'
 import { dockerNode } from './docker-node'
 import { localNode } from './local-node'
 import { State } from './state'
 import { ProcessManager } from './process-manager'
 import { logContext } from '../planner/work-node-status'
+import { startWatchProcesses } from '../start-watch-processes'
 
 export async function schedule(
   processManager: ProcessManager,
   state: State,
   environment: Environment
 ): Promise<SchedulerResult> {
+  if (state.current.watch) {
+    startWatchProcesses(state, processManager, environment)
+  }
+
   state.on((currentState) => {
     for (const [, nodeState] of Object.entries(currentState.node)) {
       if (nodeState.type === 'pending') {

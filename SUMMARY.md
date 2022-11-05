@@ -29,7 +29,7 @@
 
 ## External Links
 
-* [Dockerfile](https://hub.docker.com/r/no0dles/hammerkit)
+* [Docker Hub](https://hub.docker.com/r/no0dles/hammerkit)
 * [Homebrew Repository](https://github.com/no0dles/homebrew-hammerkit)
 
 ## Release Blog

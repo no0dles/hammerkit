@@ -1,12 +1,13 @@
 import { BuildFile } from '../parser/build-file'
 import { WorkNodeSource } from './work-node-source'
 import { WorkNodeCommand } from './work-node-command'
-import { WorkNodePath } from './work-node-path'
 import { WorkNodePort } from './work-node-port'
 import { WorkService } from './work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { PlannedTask } from './utils/plan-work-node'
 import { LabelValues } from '../executer/label-values'
+import { WorkMount } from './work-mount'
+import { WorkVolume } from './work-volume'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -37,8 +38,12 @@ export interface ContainerWorkNode extends BaseWorkNode {
   type: 'container'
   image: string
   shell: string
-  mounts: WorkNodePath[]
+  user: string | null
+  mounts: WorkMount[]
   ports: WorkNodePort[]
+  volumes: WorkVolume[]
 }
 
 export const isContainerWorkNode = (val: WorkNode | WorkService): val is ContainerWorkNode => val.type === 'container'
+export const isWorkNode = (val: WorkNode | WorkService): val is WorkNode =>
+  val.type === 'container' || val.type === 'local'

@@ -7,17 +7,15 @@ import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work
 import { createSchedulerState } from './executer/create-scheduler-state'
 import { isCI } from './utils/ci'
 import { getLogger } from './console/get-logger'
-import { schedule } from './executer/hierarchy-scheduler'
+import { schedule } from './executer/schedule'
 import { cleanCache, restoreCache, storeCache } from './executer/event-cache'
 import { validate } from './planner/validate'
 import { WorkTree } from './planner/work-tree'
 import { Environment } from './executer/environment'
-import { startWatchProcesses } from './start-watch-processes'
 import { SchedulerState } from './executer/scheduler/scheduler-state'
 import { ReadonlyState } from './executer/readonly-state'
 import { ProcessManager } from './executer/process-manager'
 import { WorkService } from './planner/work-service'
-import { getDocker } from './executer/execute-docker'
 import { removeContainer } from './docker/remove-container'
 
 export interface CliExecOptions {
@@ -81,10 +79,6 @@ export function getCli(workTree: WorkTree, environment: Environment): Cli {
       const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
       const logger = getLogger(logMode, state, environment)
 
-      if (options?.watch) {
-        startWatchProcesses(state, processManager, environment)
-      }
-
       return {
         state,
         start: async () => {
@@ -96,32 +90,26 @@ export function getCli(workTree: WorkTree, environment: Environment): Cli {
     },
     async shutdown(): Promise<void> {
       for (const node of iterateWorkNodes(workTree.nodes)) {
-        const status = environment.status.task(node)
-        const docker = await getDocker(status)
-
-        const containers = await docker.listContainers({
+        const containers = await environment.docker.listContainers({
           all: true,
           filters: {
             label: [`hammerkit-id=${node.id}`],
           },
         })
         for (const container of containers) {
-          await removeContainer(docker.getContainer(container.Id))
+          await removeContainer(environment.docker.getContainer(container.Id))
         }
       }
 
       for (const service of iterateWorkServices(workTree.services)) {
-        const status = environment.status.service(service)
-        const docker = await getDocker(status)
-
-        const containers = await docker.listContainers({
+        const containers = await environment.docker.listContainers({
           all: true,
           filters: {
             label: [`hammerkit-id=${service.id}`],
           },
         })
         for (const container of containers) {
-          await removeContainer(docker.getContainer(container.Id))
+          await removeContainer(environment.docker.getContainer(container.Id))
         }
       }
     },

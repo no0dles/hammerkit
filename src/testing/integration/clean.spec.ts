@@ -2,8 +2,8 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
-import { getDocker, getVolumeName } from '../../executer/execute-docker'
 import { existsVolume } from '../../executer/get-docker-executor'
+import { getVolumeName } from '../../planner/utils/plan-work-volume'
 
 describe('clean', () => {
   const suite = getTestSuite('clean', ['build.yaml', 'package.json'])
@@ -30,11 +30,10 @@ describe('clean', () => {
 
     const outputPath = join(suite.path, 'node_modules')
     const volumeName = getVolumeName(outputPath)
-    const docker = await getDocker(environment.status.task(node))
-    expect(await existsVolume(docker, volumeName)).toBeTruthy()
+    expect(await existsVolume(environment, volumeName)).toBeTruthy()
 
     await cli.clean()
-    expect(await existsVolume(docker, volumeName)).toBeFalsy()
+    expect(await existsVolume(environment, volumeName)).toBeFalsy()
   })
 
   it('should clean and restore created data in volumes', async () => {

@@ -1,25 +1,25 @@
-import Dockerode, { Container } from 'dockerode'
+import { Container } from 'dockerode'
 import { execCommand } from './execute-docker'
 import { StatusScopedConsole } from '../planner/work-node-status'
+import { Environment } from './environment'
 
 export async function setUserPermission(
   directory: string,
   status: StatusScopedConsole,
-  docker: Dockerode,
+  environment: Environment,
   container: Container,
-  user: string,
-  abort: AbortSignal
+  user: string
 ): Promise<void> {
   status.write('debug', `set permission on ${directory}`)
   const result = await execCommand(
     status,
-    docker,
+    environment,
     container,
     '/',
     ['chown', user, directory],
+    null,
     undefined,
-    undefined,
-    abort
+    undefined
   )
   if (result.type === 'canceled') {
     return

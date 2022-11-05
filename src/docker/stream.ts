@@ -1,11 +1,10 @@
 import { Duplex } from 'stream'
 import { getLogs } from '../log'
-import Dockerode from 'dockerode'
 import { ConsoleType, StatusScopedConsole } from '../planner/work-node-status'
 
-export async function awaitStream(status: StatusScopedConsole, docker: Dockerode, stream: Duplex): Promise<void> {
+export async function awaitStream(status: StatusScopedConsole, stream: Duplex): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    logStream(status, docker, stream)
+    logStream(status, stream)
 
     stream.on('error', reject)
     stream.on('end', resolve)
@@ -15,7 +14,6 @@ export async function awaitStream(status: StatusScopedConsole, docker: Dockerode
 
 export function logStream(
   status: StatusScopedConsole,
-  docker: Dockerode,
   stream: Duplex | NodeJS.ReadStream | NodeJS.ReadWriteStream
 ): void {
   demuxStream(stream, writeLog(status, 'stdout'), writeLog(status, 'stderr'))

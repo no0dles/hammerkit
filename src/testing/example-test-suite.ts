@@ -8,6 +8,7 @@ import { Environment } from '../executer/environment'
 import { WorkScope } from '../executer/work-scope'
 import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
+import { getContainerCli } from '../executer/execute-docker'
 
 interface Test {
   cwd: string
@@ -43,6 +44,7 @@ export class ExampleTestSuite implements TestSuite {
       file: this.file,
       console: consoleContextMock(),
       status: statusConsole(),
+      docker: getContainerCli(),
     }
 
     for (const file of this.files) {

@@ -1,18 +1,19 @@
-import Dockerode, { VolumeInspectInfo } from 'dockerode'
+import { VolumeInspectInfo } from 'dockerode'
+import { Environment } from './environment'
 
-export async function existsVolume(docker: Dockerode, volumeName: string): Promise<VolumeInspectInfo | false> {
+export async function existsVolume(environment: Environment, volumeName: string): Promise<VolumeInspectInfo | false> {
   try {
-    const volume = await docker.getVolume(volumeName)
+    const volume = await environment.docker.getVolume(volumeName)
     return await volume.inspect()
   } catch (e) {
     return false
   }
 }
 
-export async function ensureVolumeExists(docker: Dockerode, volumeName: string): Promise<void> {
-  const volumeExists = await existsVolume(docker, volumeName)
+export async function ensureVolumeExists(environment: Environment, volumeName: string): Promise<void> {
+  const volumeExists = await existsVolume(environment, volumeName)
   if (!volumeExists) {
-    await docker.createVolume({
+    await environment.docker.createVolume({
       Name: volumeName,
       Driver: 'local',
       Labels: { app: 'hammerkit' },

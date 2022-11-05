@@ -1,22 +1,23 @@
 import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
-import Dockerode, { Container } from 'dockerode'
+import { Container } from 'dockerode'
 import { execCommand } from './execute-docker'
 import { StatusScopedConsole } from '../planner/work-node-status'
+import { Environment } from './environment'
 
 export async function checkReadiness(
   status: StatusScopedConsole,
   healthCheck: ExecutionBuildServiceHealthCheck,
-  docker: Dockerode,
+  environment: Environment,
   container: Container,
   abort: AbortSignal
 ): Promise<boolean> {
   const result = await execCommand(
     status,
-    docker,
+    environment,
     container,
     undefined,
     healthCheck.cmd.split(' '),
-    undefined,
+    null,
     2000,
     abort
   )

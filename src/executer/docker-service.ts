@@ -1,8 +1,7 @@
 import { ContainerWorkService } from '../planner/work-service'
 import { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
-import { convertToPosixPath, getContainerMounts, getDocker } from './execute-docker'
-import { pull } from '../docker/pull'
+import { convertToPosixPath } from './execute-docker'
 import { logStream } from '../docker/stream'
 import { waitOnAbort } from '../utils/abort-event'
 import { getErrorMessage } from '../log'
@@ -11,24 +10,26 @@ import { checkReadiness } from './check-readiness'
 import { Environment } from './environment'
 import { State } from './state'
 import { Process } from './process'
+import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
 
 export function dockerService(service: ContainerWorkService, state: State, environment: Environment): Process {
   return async (abort) => {
     const status = environment.status.service(service)
     let container: Container | null = null
 
-    const volumes = service.volumes
-    const mounts = await getContainerMounts(service, environment)
+    await prepareMounts(service, environment)
+    checkForAbort(abort.signal)
+
+    await pullImage(service, environment)
+    checkForAbort(abort.signal)
+
+    await prepareVolume(service, environment)
+    checkForAbort(abort.signal)
 
     try {
       checkForAbort(abort.signal)
-
-      const docker = await getDocker(status)
-      await pull(status, docker, service.image)
-
-      checkForAbort(abort.signal)
       status.write('debug', `create container with image ${service.image}`)
-      container = await docker.createContainer({
+      container = await environment.docker.createContainer({
         Image: service.image,
         Env: Object.keys(service.envs).map((k) => `${k}=${service.envs[k]}`),
         Labels: { app: 'hammerkit', 'hammerkit-id': service.id, 'hammerkit-type': 'service' },
@@ -39,8 +40,8 @@ export function dockerService(service: ContainerWorkService, state: State, envir
         Cmd: service.cmd ? service.cmd.split(' ') : undefined,
         HostConfig: {
           Binds: [
-            ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-            ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+            ...service.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
+            ...service.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
           ],
           PortBindings: service.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
             map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
@@ -50,9 +51,11 @@ export function dockerService(service: ContainerWorkService, state: State, envir
       })
 
       const stream = await container.attach({ stream: true, stdout: true, stderr: true })
-      logStream(status, docker, stream)
+      logStream(status, stream)
 
       await container.start()
+
+      await setUserPermissions(service, container, environment)
 
       if (!service.healthcheck) {
         const currentState = state.current.service[service.id]
@@ -67,7 +70,7 @@ export function dockerService(service: ContainerWorkService, state: State, envir
       } else {
         let ready = false
         do {
-          ready = await checkReadiness(status, service.healthcheck, docker, container, abort.signal)
+          ready = await checkReadiness(status, service.healthcheck, environment, container, abort.signal)
           if (!ready) {
             await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
           }

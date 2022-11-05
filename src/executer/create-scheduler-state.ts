@@ -20,6 +20,7 @@ export function createSchedulerState(input: CreateSchedulerState): State {
     service: {},
     node: {},
     cacheMethod: input.cacheMethod,
+    watch: input.watch,
   }
 
   for (const node of iterateWorkNodes(input.nodes)) {

@@ -4,6 +4,7 @@ import { getProgram } from './program'
 import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
 import { statusConsole } from './planner/work-node-status'
+import { getContainerCli } from './executer/execute-docker'
 
 const abortCtrl = new AbortController()
 
@@ -19,6 +20,7 @@ getProgram(
     file: getFileContext(process.cwd()),
     console: consoleContext(),
     status: statusConsole(),
+    docker: getContainerCli(),
   },
   process.argv
 ).then(({ program, args }) => {

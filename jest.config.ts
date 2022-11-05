@@ -16,6 +16,7 @@ const config: Config.InitialOptions = {
   testTimeout: 45000,
   testRegex: ['src/.*\\.spec\\.ts$'],
   testEnvironment: 'node',
+  maxConcurrency: 1,
   collectCoverage: true,
   coverageDirectory: '<rootDir>/coverage',
   collectCoverageFrom: ['<rootDir>/src/**'],

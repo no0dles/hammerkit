@@ -3,7 +3,7 @@ import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-wor
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { dirname, join, relative, sep } from 'path'
 import { moveFiles } from '../file/move-files'
-import { convertToPosixPath, getContainerVolumes, getDocker, getVolumeName } from './execute-docker'
+import { convertToPosixPath } from './execute-docker'
 import { existsVolume } from './get-docker-executor'
 import { WorkTree } from '../planner/work-tree'
 import { create, extract } from 'tar'
@@ -11,6 +11,7 @@ import { ContainerWorkNode, isContainerWorkNode, LocalWorkNode, WorkNode } from 
 import { usingContainer } from '../docker/using-container'
 import { isContainerWorkService } from '../planner/work-service'
 import { CliCleanOptions } from '../cli'
+import { getVolumeName } from '../planner/utils/plan-work-volume'
 
 export async function restoreCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
@@ -42,7 +43,6 @@ async function restoreLocal(environment: Environment, node: LocalWorkNode, path:
 }
 
 async function restoreContainer(environment: Environment, node: ContainerWorkNode, path: string) {
-  const volumes = await getContainerVolumes(node)
   await usingContainer(
     environment,
     node,
@@ -55,12 +55,10 @@ async function restoreContainer(environment: Environment, node: ContainerWorkNod
       Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
       HostConfig: {
         AutoRemove: true,
-        Binds: [...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+        Binds: [...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
       },
     },
     async (container) => {
-      await container.start()
-
       for (const generate of getGenerates(node, path)) {
         if (await environment.file.exists(generate.filename)) {
           await container.putArchive(environment.file.readStream(generate.filename), {
@@ -84,7 +82,6 @@ function* getGenerates(node: WorkNode, path: string) {
 }
 
 async function archiveContainer(environment: Environment, node: ContainerWorkNode, path: string) {
-  const volumes = await getContainerVolumes(node)
   await usingContainer(
     environment,
     node,
@@ -97,11 +94,10 @@ async function archiveContainer(environment: Environment, node: ContainerWorkNod
       Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
       HostConfig: {
         AutoRemove: true,
-        Binds: [...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+        Binds: [...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
       },
     },
     async (container) => {
-      await container.start()
       for (const generatedArchive of getGenerates(node, path)) {
         const readable = await container.getArchive({
           path: generatedArchive.path,
@@ -153,7 +149,6 @@ export async function cleanCache(
 ): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
     const nodeStatus = environment.status.task(node)
-    const docker = await getDocker(nodeStatus)
 
     for (const generate of node.generates) {
       if (generate.inherited) {
@@ -161,10 +156,10 @@ export async function cleanCache(
       }
 
       const volumeName = getVolumeName(generate.path)
-      const volumeExists = await existsVolume(docker, volumeName)
+      const volumeExists = await existsVolume(environment, volumeName)
       if (volumeExists) {
         nodeStatus.write('info', `remove volume ${volumeName}`)
-        const volume = await docker.getVolume(volumeName)
+        const volume = await environment.docker.getVolume(volumeName)
         await volume.remove()
       } else {
         nodeStatus.write('info', `generate ${generate} has no volume ${volumeName}`)
@@ -188,15 +183,14 @@ export async function cleanCache(
       }
 
       const nodeStatus = environment.status.service(service)
-      const docker = await getDocker(nodeStatus)
       for (const volume of service.volumes) {
-        const volumeExists = await existsVolume(docker, volume.name)
+        const volumeExists = await existsVolume(environment, volume.name)
         if (!volumeExists) {
           continue
         }
 
         nodeStatus.write('info', `remove volume ${volume.name}`)
-        const containerVolume = await docker.getVolume(volume.name)
+        const containerVolume = await environment.docker.getVolume(volume.name)
         await containerVolume.remove()
       }
     }

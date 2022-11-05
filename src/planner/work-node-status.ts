@@ -1,6 +1,6 @@
 import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
 import { WorkService } from './work-service'
-import { WorkNode } from './work-node'
+import { isWorkNode, WorkNode } from './work-node'
 import { getEnvironmentConfig } from '../utils/environment-config'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -44,6 +44,7 @@ export interface StatusConsole extends Emitter<Message> {
   service(service: WorkService): StatusScopedConsole
 
   task(task: WorkNode): StatusScopedConsole
+  from(node: WorkNode | WorkService): StatusScopedConsole
   context(ctx: LogContext): StatusScopedConsole
 
   read(): Generator<Message>
@@ -89,6 +90,13 @@ export function statusConsole(): StatusConsole {
     },
     service(service: WorkService): StatusScopedConsole {
       return this.context(logContext('service', service))
+    },
+    from(node: WorkNode | WorkService): StatusScopedConsole {
+      if (isWorkNode(node)) {
+        return this.task(node)
+      } else {
+        return this.service(node)
+      }
     },
     context(context: LogContext): StatusScopedConsole {
       return {

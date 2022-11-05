@@ -1,11 +1,12 @@
 import { WorkNodePort } from './work-node-port'
-import { WorkNodePath } from './work-node-path'
 import {
   ExecutionBuildService,
   ExecutionBuildServiceHealthCheck,
   ExecutionBuildServiceSelector,
 } from '../parser/build-file-service'
-import { WorkServiceVolume } from './work-service-volume'
+import { WorkMount } from './work-mount'
+import { WorkNode } from './work-node'
+import { WorkVolume } from './work-volume'
 
 export interface BaseWorkService {
   id: string
@@ -17,7 +18,7 @@ export interface BaseWorkService {
 
 export type WorkService = ContainerWorkService | KubernetesWorkService
 
-export const isContainerWorkService = (svc: WorkService): svc is ContainerWorkService =>
+export const isContainerWorkService = (svc: WorkService | WorkNode): svc is ContainerWorkService =>
   'image' in svc && svc.type === 'container-service'
 
 export interface ContainerWorkService extends BaseWorkService {
@@ -25,8 +26,9 @@ export interface ContainerWorkService extends BaseWorkService {
   envs: { [key: string]: string }
   image: string
   cmd: string | null
-  mounts: WorkNodePath[]
-  volumes: WorkServiceVolume[]
+  user: string | null
+  mounts: WorkMount[]
+  volumes: WorkVolume[]
   healthcheck: ExecutionBuildServiceHealthCheck | null
 }
 

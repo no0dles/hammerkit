@@ -22,14 +22,13 @@ export function localNode(node: WorkNode, state: State, environment: Environment
     }
 
     try {
-      const envs = getProcessEnvs(replaceEnvVariables(node, status, environment.processEnvs), environment)
+      const envs = getProcessEnvs(replaceEnvVariables(node, environment.processEnvs), environment)
       for (const cmd of node.cmds) {
         checkForAbort(abort.signal)
 
-        const command = templateValue(cmd.cmd, envs)
-        status.write('info', `execute cmd "${command}" locally`)
+        status.write('info', `execute cmd "${cmd.cmd}" locally`)
 
-        const exitCode = await executeCommand(status, abort.signal, cmd.path, command, envs)
+        const exitCode = await executeCommand(status, abort.signal, cmd.path, cmd.cmd, envs)
         if (exitCode !== 0) {
           state.patchNode({
             type: 'crash',

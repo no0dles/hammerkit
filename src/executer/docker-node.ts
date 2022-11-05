@@ -1,29 +1,69 @@
 import { ContainerWorkNode } from '../planner/work-node'
 import { Environment } from './environment'
 import { isHostServiceDns, ServiceDns } from './service-dns'
-import { Container } from 'dockerode'
-import {
-  convertToPosixPath,
-  execCommand,
-  getContainerMounts,
-  getContainerVolumes,
-  getDocker,
-  startContainer,
-} from './execute-docker'
+import { ContainerCreateOptions } from 'dockerode'
+import { convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
-import { pull } from '../docker/pull'
-import { ensureVolumeExists } from './get-docker-executor'
 import { replaceEnvVariables } from '../environment/replace-env-variables'
-import { platform } from 'os'
-import { setUserPermission } from './set-user-permission'
-import { templateValue } from '../planner/utils/template-value'
 import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { getErrorMessage } from '../log'
-import { removeContainer } from '../docker/remove-container'
 import { getDuration } from './states'
 import { State } from './state'
 import { Process } from './process'
 import { startNode } from './start-node'
+import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
+import { usingContainer } from '../docker/using-container'
+import { printContainerOptions } from './print-container-options'
+
+function buildCreateOptions(
+  node: ContainerWorkNode,
+  serviceContainers: { [key: string]: ServiceDns },
+  environment: Environment
+): ContainerCreateOptions {
+  const links: string[] = []
+  const hosts: string[] = []
+
+  for (const need of node.needs) {
+    const dns = serviceContainers[need.id]
+    if (isHostServiceDns(dns)) {
+      hosts.push(`${need.name}:${dns.host}`)
+    } else {
+      if (!dns.containerId) {
+        throw new Error(`service ${need.name} is not running`)
+      }
+
+      links.push(`${dns.containerId}:${need.name}`)
+    }
+  }
+
+  const envs = replaceEnvVariables(node, environment.processEnvs)
+  return {
+    Image: node.image,
+    Tty: true,
+    Entrypoint: node.shell,
+    Cmd: ['-c', 'sleep 3600'],
+    Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
+    WorkingDir: convertToPosixPath(node.cwd),
+    Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
+    HostConfig: {
+      Binds: [
+        ...node.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
+        ...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+      ],
+      PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+        map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
+        return map
+      }, {}),
+      ExtraHosts: hosts,
+      Links: links,
+      AutoRemove: true,
+    },
+    ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
+      map[`${port.containerPort}/tcp`] = {}
+      return map
+    }, {}),
+  }
+}
 
 export function dockerNode(
   node: ContainerWorkNode,
@@ -35,143 +75,73 @@ export function dockerNode(
     const status = environment.status.task(node)
     status.write('info', `execute ${node.name} in container`)
 
+    await prepareMounts(node, environment)
+    checkForAbort(abort.signal)
+
+    await pullImage(node, environment)
+    checkForAbort(abort.signal)
+
+    await prepareVolume(node, environment)
+    checkForAbort(abort.signal)
+
     if (await startNode(node, started, state, abort, environment)) {
       return
     }
 
-    let container: Container | null = null
-
     try {
-      const docker = await getDocker(status)
+      const containerOptions = buildCreateOptions(node, serviceContainers, environment)
+      printContainerOptions(status, containerOptions)
 
-      const volumes = await getContainerVolumes(node)
-      const mounts = await getContainerMounts(node, environment)
+      const success = await usingContainer(environment, node, containerOptions, async (container) => {
+        await setUserPermissions(node, container, environment)
 
-      checkForAbort(abort.signal)
-      await pull(status, docker, node.image)
+        for (const cmd of node.cmds) {
+          checkForAbort(abort.signal)
 
-      checkForAbort(abort.signal)
-      for (const volume of volumes) {
-        await ensureVolumeExists(docker, volume.name)
-      }
+          status.write('info', `execute cmd "${cmd.cmd}" in container`)
 
-      const links: string[] = []
-      const hosts: string[] = []
+          const result = await execCommand(
+            status,
+            environment,
+            container,
+            convertToPosixPath(cmd.path),
+            [node.shell, '-c', cmd.cmd],
+            node.user,
+            undefined,
+            abort.signal
+          )
 
-      for (const need of node.needs) {
-        const dns = serviceContainers[need.id]
-        if (isHostServiceDns(dns)) {
-          hosts.push(`${need.name}:${dns.host}`)
-          status.write('debug', `extra host ${need.name}:${dns.host}`)
-        } else {
-          if (!dns.containerId) {
-            throw new Error(`service ${need.name} is not running`)
+          if (result.type === 'timeout') {
+            throw new Error(`command ${cmd.cmd} timed out`)
           }
 
-          links.push(`${dns.containerId}:${need.name}`)
-          status.write('debug', `link container ${dns.containerId}:${need.name}`)
+          if (result.type === 'canceled') {
+            throw new AbortError()
+          }
+
+          if (result.result.ExitCode !== 0) {
+            state.patchNode({
+              node,
+              type: 'crash',
+              exitCode: result.result.ExitCode ?? 1,
+            })
+            return false
+          }
         }
-      }
 
-      const envs = replaceEnvVariables(node, status, environment.processEnvs)
-
-      checkForAbort(abort.signal)
-      status.write('debug', `create container with image ${node.image} with ${node.shell}`)
-      container = await docker.createContainer({
-        Image: node.image,
-        Tty: true,
-        Entrypoint: node.shell,
-        Cmd: ['-c', 'sleep 3600'],
-        Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
-        WorkingDir: convertToPosixPath(node.cwd),
-        Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
-        HostConfig: {
-          Binds: [
-            ...mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-            ...volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
-          ],
-          PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-            map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-            return map
-          }, {}),
-          ExtraHosts: hosts,
-          Links: links,
-          AutoRemove: true,
-        },
-        ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
-          map[`${port.containerPort}/tcp`] = {}
-          return map
-        }, {}),
+        return true
       })
 
-      const user =
-        platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
-          ? `${process.getuid()}:${process.getgid()}`
-          : undefined
+      if (success) {
+        await writeWorkNodeCache(node, environment)
 
-      for (const mount of mounts) {
-        status.write('debug', `bind mount ${mount.localPath}:${mount.containerPath}`)
+        state.patchNode({
+          node,
+          type: 'completed',
+          cached: false,
+          duration: getDuration(started),
+        })
       }
-      for (const volume of volumes) {
-        status.write('debug', `volume mount ${volume.name}:${volume.containerPath}`)
-      }
-
-      status.write('debug', `starting container with image ${node.image}`)
-      await startContainer(status, container)
-
-      if (user) {
-        await setUserPermission(node.cwd, status, docker, container, user, abort.signal)
-        for (const volume of volumes) {
-          await setUserPermission(volume.containerPath, status, docker, container, user, abort.signal)
-        }
-        for (const mount of mounts) {
-          await setUserPermission(mount.containerPath, status, docker, container, user, abort.signal)
-        }
-      }
-
-      for (const cmd of node.cmds) {
-        checkForAbort(abort.signal)
-
-        const command = templateValue(cmd.cmd, node.envs)
-        status.write('info', `execute cmd "${command}" in container`)
-
-        const result = await execCommand(
-          status,
-          docker,
-          container,
-          convertToPosixPath(cmd.path),
-          [node.shell, '-c', command],
-          user,
-          undefined,
-          abort.signal
-        )
-
-        if (result.type === 'timeout') {
-          throw new Error(`command ${command} timed out`)
-        }
-
-        if (result.type === 'canceled') {
-          throw new AbortError()
-        }
-
-        if (result.result.ExitCode !== 0) {
-          state.patchNode({
-            node,
-            type: 'crash',
-            exitCode: result.result.ExitCode ?? 1,
-          })
-          return
-        }
-      }
-
-      await writeWorkNodeCache(node, environment)
-
-      state.patchNode({
-        node,
-        type: 'completed',
-        cached: false,
-        duration: getDuration(started),
-      })
     } catch (e) {
       if (e instanceof AbortError) {
         state.patchNode({
@@ -184,14 +154,6 @@ export function dockerNode(
           type: 'error',
           errorMessage: getErrorMessage(e),
         })
-      }
-    } finally {
-      if (container) {
-        try {
-          await removeContainer(container)
-        } catch (e) {
-          status.write('error', `remove of container failed ${getErrorMessage(e)}`)
-        }
       }
     }
   }

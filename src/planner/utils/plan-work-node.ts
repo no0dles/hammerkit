@@ -13,7 +13,6 @@ import { BuildFileTask } from '../../parser/build-file-task'
 import { WorkNodeCommand } from '../work-node-command'
 import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
-import { WorkNodePath } from '../work-node-path'
 import { parseWorkNodePort } from './parse-work-node-port'
 import { BaseWorkService, WorkService } from '../work-service'
 import { getWorkServiceId } from '../work-service-id'
@@ -21,8 +20,11 @@ import { BuildFileTaskPlatform } from '../../parser/build-file-task-platform'
 import { BuildTaskCommand } from '../../parser/build-file-task-command'
 import { CacheMethod } from '../../parser/cache-method'
 import { LabelValues } from '../../executer/label-values'
-import { homedir } from 'os'
+import { homedir, platform } from 'os'
 import { parseWorkServiceVolume } from './parse-work-service-volume'
+import { WorkMount } from '../work-mount'
+import { getContainerVolumes } from './plan-work-volume'
+import { getContainerMounts } from './get-container-mounts'
 
 export interface BuildFileReference {
   build: BuildFile
@@ -206,13 +208,16 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
   }
 
   if (task.image) {
+    const mounts = parseContainerWorkNodeMount(task, context, task.envs)
     return {
       ...baseWorkNode,
       type: 'container',
+      user: getContainerUser(),
       image: templateValue(task.image, task.envs),
       shell: templateValue(task.shell, task.envs) || '/bin/sh',
-      mounts: parseContainerWorkNodeMount(task, context, task.envs),
+      mounts: getContainerMounts(baseWorkNode, mounts),
       ports: parseContainerWorkNodePorts(task, context, task.envs),
+      volumes: getContainerVolumes(baseWorkNode),
     }
   } else {
     return {
@@ -234,7 +239,7 @@ function parseContainerWorkNodeMount(
   task: PlannedTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
-): WorkNodePath[] {
+): WorkMount[] {
   return task.mounts.map((m) => templateValue(m, envs)).map((m) => parseWorkNodeMount(context.cwd, m))
 }
 
@@ -261,6 +266,12 @@ function parseLocalWorkNodeSource(
     .map((src) => mapSource(src, context.cwd))
 }
 
+function getContainerUser(): string | null {
+  return platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
+    ? `${process.getuid()}:${process.getgid()}`
+    : null
+}
+
 export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkContext): WorkService[] {
   const result: WorkService[] = []
 
@@ -282,6 +293,7 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
           cmd: service.cmd,
           envs: service.envs || {},
           image: service.image,
+          user: getContainerUser(),
           healthcheck: service.healthcheck,
           mounts: (service.mounts || [])
             .map((m) => templateValue(m, service.envs))

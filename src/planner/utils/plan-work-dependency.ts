@@ -1,4 +1,5 @@
-import { WorkNode } from '../work-node'
+import { isContainerWorkNode, WorkNode } from '../work-node'
+import { getVolumeName } from './plan-work-volume'
 
 export function planWorkDependency(deps: WorkNode[], node: WorkNode): void {
   for (const depNode of deps) {
@@ -11,12 +12,27 @@ export function planWorkDependency(deps: WorkNode[], node: WorkNode): void {
     for (const src of depNode.src) {
       if (node.src.indexOf(src) === -1) {
         node.src.push(src)
+
+        if (isContainerWorkNode(node)) {
+          node.mounts.push({
+            localPath: src.absolutePath,
+            containerPath: src.absolutePath,
+          })
+        }
       }
     }
 
     for (const generate of depNode.generates) {
       if (!node.generates.some((g) => g.path === generate.path)) {
         node.generates.push({ path: generate.path, inherited: true })
+
+        if (isContainerWorkNode(node)) {
+          const name = getVolumeName(generate.path)
+          node.volumes.push({
+            name,
+            containerPath: generate.path,
+          })
+        }
       }
     }
 
