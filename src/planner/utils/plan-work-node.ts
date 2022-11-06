@@ -208,16 +208,16 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
   }
 
   if (task.image) {
-    const mounts = parseContainerWorkNodeMount(task, context, task.envs)
+    const mounts = getContainerMounts(baseWorkNode, parseContainerWorkNodeMount(task, context, task.envs))
     return {
       ...baseWorkNode,
       type: 'container',
       user: getContainerUser(),
       image: templateValue(task.image, task.envs),
       shell: templateValue(task.shell, task.envs) || '/bin/sh',
-      mounts: getContainerMounts(baseWorkNode, mounts),
+      mounts,
       ports: parseContainerWorkNodePorts(task, context, task.envs),
-      volumes: getContainerVolumes(baseWorkNode),
+      volumes: getContainerVolumes(baseWorkNode, mounts),
     }
   } else {
     return {

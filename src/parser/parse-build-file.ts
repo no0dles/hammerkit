@@ -13,7 +13,19 @@ import { ParseContext } from './parse-context'
 import { parseString } from './parse-string'
 import { parseBoolean } from './parse-boolean'
 
-const validTaskKeys = ['envs', 'src', 'needs', 'deps', 'generates', 'labels', 'description', 'extend', 'cmds', 'watch']
+const validTaskKeys = [
+  'envs',
+  'src',
+  'needs',
+  'deps',
+  'generates',
+  'labels',
+  'description',
+  'extend',
+  'cmds',
+  'watch',
+  'continuous',
+]
 const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
 
 export async function parseBuildFile(

@@ -22,16 +22,10 @@ export function planWorkDependency(deps: WorkNode[], node: WorkNode): void {
       }
     }
 
-    for (const generate of depNode.generates) {
-      if (!node.generates.some((g) => g.path === generate.path)) {
-        node.generates.push({ path: generate.path, inherited: true })
-
-        if (isContainerWorkNode(node)) {
-          const name = getVolumeName(generate.path)
-          node.volumes.push({
-            name,
-            containerPath: generate.path,
-          })
+    if (isContainerWorkNode(depNode) && isContainerWorkNode(node)) {
+      for (const volume of depNode.volumes) {
+        if (!node.volumes.some((v) => v.name === volume.name)) {
+          node.volumes.push(volume)
         }
       }
     }
