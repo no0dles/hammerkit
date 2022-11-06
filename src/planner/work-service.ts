@@ -26,7 +26,7 @@ export interface ContainerWorkService extends BaseWorkService {
   envs: { [key: string]: string }
   image: string
   cmd: string | null
-  user: string | null
+  //user: string | null
   mounts: WorkMount[]
   volumes: WorkVolume[]
   healthcheck: ExecutionBuildServiceHealthCheck | null

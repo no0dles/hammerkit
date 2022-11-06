@@ -43,7 +43,7 @@ export async function prepareMounts(
 }
 
 export async function setUserPermissions(
-  node: ContainerWorkNode | ContainerWorkService,
+  node: ContainerWorkNode,
   container: Container,
   environment: Environment
 ): Promise<void> {

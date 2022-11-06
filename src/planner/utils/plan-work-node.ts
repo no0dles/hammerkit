@@ -293,7 +293,7 @@ export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkCon
           cmd: service.cmd,
           envs: service.envs || {},
           image: service.image,
-          user: getContainerUser(),
+          // user: getContainerUser(),
           healthcheck: service.healthcheck,
           mounts: (service.mounts || [])
             .map((m) => templateValue(m, service.envs))

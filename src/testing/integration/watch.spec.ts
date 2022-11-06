@@ -40,9 +40,9 @@ describe('watch', () => {
       }
     })
 
+    const result = await exec.start()
     expect(appendedFile).toBeTruthy()
     expect(restarted).toBeTruthy()
-    const result = await exec.start()
     expect(result.success).toBeFalsy()
     expect(result.state.node[apiNode.id].type).toEqual('canceled')
   })
