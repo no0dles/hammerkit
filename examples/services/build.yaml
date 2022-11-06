@@ -9,8 +9,6 @@ services:
       POSTGRES_PASSWORD: 123456
     healthcheck:
       cmd: "pg_isready -U postgres"
-    ports:
-      - 5432
 
 tasks:
   install:

@@ -1,11 +1,10 @@
-import { TestSuite } from './test-suite'
+import { TestSuite, TestSuiteOptions } from './test-suite'
 import { FileContext } from '../file/file-context'
 import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
 import { consoleContextMock } from '../console/console-context-mock'
 import { statusConsole } from '../planner/work-node-status'
 import { Environment } from '../executer/environment'
-import { WorkScope } from '../executer/work-scope'
 import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
 import { getContainerCli } from '../executer/execute-docker'
@@ -33,12 +32,12 @@ export class ExampleTestSuite implements TestSuite {
     }
   }
 
-  async setup(scope: WorkScope): Promise<TestSuiteSetup> {
+  async setup(scope: TestSuiteOptions): Promise<TestSuiteSetup> {
     await this.file.remove(this.path)
     await this.file.createDirectory(this.path)
 
     const environment: Environment = {
-      processEnvs: { ...process.env },
+      processEnvs: { ...process.env, ...(scope.envs ?? {}) },
       abortCtrl: new AbortController(),
       cwd: this.path,
       file: this.file,
@@ -58,7 +57,11 @@ export class ExampleTestSuite implements TestSuite {
     })
 
     const cli = await createCli(fileName, environment, scope)
-    await cli.clean()
+    await cli.clean({ service: true })
+
+    // reset cli clean stats
+    environment.console = consoleContextMock()
+    environment.status = statusConsole()
 
     return {
       cli,

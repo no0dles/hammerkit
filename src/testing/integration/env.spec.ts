@@ -35,16 +35,18 @@ describe('env', () => {
   })
 
   it('should use process env', async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'example_with_shell_env' })
-    environment.processEnvs['VERSION'] = '1.0.0'
+    const { cli, environment } = await suite.setup({
+      taskName: 'example_with_shell_env',
+      envs: {
+        VERSION: '1.0.0',
+      },
+    })
     const result = await cli.exec()
     await expectSuccessfulResult(result, environment)
     await expectLog(result, environment, `example_with_shell_env`, '1.0.0')
   })
 
   it('should throw if process env is missing', async () => {
-    const { cli } = await suite.setup({ taskName: 'example_with_shell_env' })
-    const result = await cli.exec()
-    expect(result.success).toBeFalsy()
+    await expect(suite.setup({ taskName: 'example_with_shell_env' })).rejects.toThrow('missing env $VERSION')
   })
 })

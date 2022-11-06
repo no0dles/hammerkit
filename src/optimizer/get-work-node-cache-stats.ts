@@ -93,18 +93,17 @@ export async function getWorkNodeCacheStats(
 }
 
 export interface CacheState {
-  changed: boolean
+  //changed: boolean
   stateKey: string
 }
 
-export async function getCacheState(
+export function getCacheState(
   status: StatusScopedConsole,
   node: { name: string; caching: CacheMethod },
   cache: WorkNodeCacheFileStats | WorkServiceCacheFileStats | null,
   current: WorkNodeCacheFileStats | WorkServiceCacheFileStats
-): Promise<CacheState> {
+): CacheState {
   if (cache) {
-    let changed = false
     for (const key of Object.keys(cache.files)) {
       if (
         (node.caching === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
@@ -117,20 +116,12 @@ export async function getCacheState(
             : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
         )
         status.write('debug', `${node.name} can't be skipped because ${key} has been modified`)
-        changed = true
         break
       }
     }
-
-    return {
-      changed,
-      stateKey: getStateKey(current, node.caching),
-    }
-  } else {
-    return {
-      changed: true,
-      stateKey: getStateKey(current, node.caching),
-    }
+  }
+  return {
+    stateKey: getStateKey(current, node.caching),
   }
 }
 

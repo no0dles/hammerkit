@@ -27,6 +27,7 @@ export function createSchedulerState(input: CreateSchedulerState): State {
     state.node[node.id] = {
       type: 'pending',
       node: node,
+      stateKey: null,
     }
   }
 
@@ -34,6 +35,7 @@ export function createSchedulerState(input: CreateSchedulerState): State {
     state.service[service.id] = {
       type: 'pending',
       service,
+      stateKey: null,
     }
   }
 

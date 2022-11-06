@@ -8,12 +8,17 @@ import { Process } from './process'
 import { StatusScopedConsole } from '../planner/work-node-status'
 import { sleep } from '../utils/sleep'
 
-export function kubernetesService(service: KubernetesWorkService, state: State, env: Environment): Process {
+export function kubernetesService(
+  service: KubernetesWorkService,
+  stateKey: string,
+  state: State,
+  env: Environment
+): Process {
   return async (abort) => {
     const status = env.status.service(service)
 
     do {
-      await startForward(service, state, status, abort)
+      await startForward(service, stateKey, state, status, abort)
       if (!abort.signal.aborted) {
         await sleep(1000)
       }
@@ -23,6 +28,7 @@ export function kubernetesService(service: KubernetesWorkService, state: State, 
 
 function startForward(
   service: KubernetesWorkService,
+  stateKey: string,
   state: State,
   status: StatusScopedConsole,
   abort: AbortController
@@ -40,9 +46,9 @@ function startForward(
       }
       state.patchService({
         service,
-        abortController: abort,
-        type: 'ready',
+        type: 'running',
         dns: { host: 'host-gateway' },
+        stateKey,
       })
     })
     ps.stderr?.on('data', async (data) => {
@@ -56,6 +62,7 @@ function startForward(
         service,
         type: 'end',
         reason: 'crash',
+        stateKey,
       })
     })
     ps.on('close', (code) => {
@@ -64,6 +71,7 @@ function startForward(
         service,
         type: 'end',
         reason: 'crash',
+        stateKey,
       })
       resolve()
     })

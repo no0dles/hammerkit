@@ -9,8 +9,6 @@ services:
       - "postgres-db:/var/lib/postgresql/data"
     healthcheck:
       cmd: "pg_isready -U postgres"
-    ports:
-      - 5432
 
 tasks:
   example:service:

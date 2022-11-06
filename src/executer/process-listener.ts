@@ -1,11 +1,11 @@
 import { ProcessItem } from './process-item'
 import { LogContext } from '../planner/work-node-status'
 
-export type ProcessListenerEventType = 'ended' | 'started'
+export type ProcessListenerEventType = 'ended' | 'started' | 'cancel'
 
 export interface ProcessListenerEvent {
   type: ProcessListenerEventType
-  process: ProcessItem
+  context: LogContext
 }
 
 export interface PendingItem {

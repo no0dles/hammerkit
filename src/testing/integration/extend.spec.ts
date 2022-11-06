@@ -8,10 +8,10 @@ describe('extend', () => {
   it('should merge env variables', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_env' })
     const node = await cli.node('extend_env')
-    expect(node.envs).toEqual({
-      NAME: 'base',
-      KEEP: 'value',
-    })
+    expect(node.envs).toContainEntries([
+      ['NAME', 'base'],
+      ['KEEP', 'value'],
+    ])
   })
 
   it('should extend and override', async () => {

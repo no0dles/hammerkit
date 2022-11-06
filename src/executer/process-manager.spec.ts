@@ -49,7 +49,7 @@ describe('process-manager', () => {
         concurrencyCount++
       } else if (evt.type === 'ended') {
         concurrencyCount--
-        processes.push(evt.process.context.id)
+        processes.push(evt.context.id)
       }
       if (concurrencyCount > 1) {
         hasOversteppedLimits = true
@@ -88,5 +88,38 @@ describe('process-manager', () => {
       env.abortCtrl.abort()
     }, 200)
     await manager.onComplete()
+  })
+
+  it('should abort if task with same id is already started', async () => {
+    const manager = new ProcessManager(environmentMock(process.cwd()), 0)
+
+    const processes: string[] = []
+    let concurrencyCount = 0
+    let hasOversteppedLimits = false
+    manager.on((evt) => {
+      if (evt.type === 'started') {
+        concurrencyCount++
+      } else if (evt.type === 'ended') {
+        concurrencyCount--
+        processes.push(evt.context.id)
+      }
+      if (concurrencyCount > 1) {
+        hasOversteppedLimits = true
+      }
+    })
+
+    const abortController = manager.task(
+      { type: 'task', name: 'test-success', id: 'a' },
+      () => new Promise<void>((resolve) => setTimeout(() => resolve(), 200))
+    )
+    manager.task(
+      { type: 'task', name: 'test-success', id: 'a' },
+      () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100))
+    )
+    expect(abortController.signal.aborted).toBeTruthy()
+    await manager.onComplete()
+    expect(processes).toEqual(['a', 'a'])
+    expect(hasOversteppedLimits).toBeFalsy()
+    expect(concurrencyCount).toBe(0)
   })
 })

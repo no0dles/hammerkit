@@ -7,8 +7,14 @@ import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
 import { State } from './state'
 import { Process } from './process'
+import { ProcessManager } from './process-manager'
 
-export function watchService(service: ContainerWorkService, state: State, environment: Environment): Process {
+export function watchService(
+  service: ContainerWorkService,
+  state: State,
+  processManager: ProcessManager,
+  environment: Environment
+): Process {
   return async (abort: AbortController) => {
     let currentState = await getServiceNodeCacheStats(service, environment)
 
@@ -19,26 +25,24 @@ export function watchService(service: ContainerWorkService, state: State, enviro
       }
 
       const newStats = await getServiceNodeCacheStats(service, environment)
-      const cacheState = await getCacheState(
+      const currentFileState = getCacheState(
         status,
         { name: service.name, caching: state.current.cacheMethod },
         currentState,
         newStats
       )
-      if (!cacheState.changed) {
+      currentState = newStats
+
+      const currentServiceState = state.current.service[service.id]
+      if (currentServiceState.stateKey === currentFileState.stateKey) {
         return
       }
-      currentState = newStats // TODO revisit with stateKey
 
       status.write('debug', `source changed for service ${service.name}, restart process`)
-
-      const serviceState = state.current.service[service.id]
-      if (serviceState.type === 'running') {
-        serviceState.abortController.abort() // TODO await stop
-      }
       state.patchService({
         type: 'pending',
         service,
+        stateKey: currentFileState.stateKey,
       })
     }, 100)
 

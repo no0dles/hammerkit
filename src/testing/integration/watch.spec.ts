@@ -10,8 +10,8 @@ describe('watch', () => {
     const { cli, environment } = await suite.setup({ taskName: 'api' })
     const apiNode = cli.node('api')
     const exec = cli.execWatch({ watch: true })
-    exec.state.on((state) => {
-      if (state.node[apiNode.id].type === 'running') {
+    exec.processManager.on((evt) => {
+      if (evt.context.id === apiNode.id && evt.type === 'started') {
         environment.abortCtrl.abort()
       }
     })
@@ -28,8 +28,8 @@ describe('watch', () => {
     let appendedFile = false
     let restarted = false
 
-    exec.state.on((state) => {
-      if (state.node[apiNode.id].type === 'running') {
+    exec.processManager.on((evt) => {
+      if (evt.type === 'started' && evt.context.id === apiNode.id) {
         if (!appendedFile) {
           appendedFile = true
           environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
@@ -40,6 +40,8 @@ describe('watch', () => {
       }
     })
 
+    expect(appendedFile).toBeTruthy()
+    expect(restarted).toBeTruthy()
     const result = await exec.start()
     expect(result.success).toBeFalsy()
     expect(result.state.node[apiNode.id].type).toEqual('canceled')

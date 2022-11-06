@@ -5,7 +5,6 @@ import { isContainerWorkService } from './planner/work-service'
 import { watchService } from './executer/watch-service'
 import { State } from './executer/state'
 import { ProcessManager } from './executer/process-manager'
-import { logContext } from './planner/work-node-status'
 
 export function startWatchProcesses(state: State, processManager: ProcessManager, environment: Environment) {
   for (const node of iterateWorkNodes(state.current.node)) {
@@ -14,7 +13,10 @@ export function startWatchProcesses(state: State, processManager: ProcessManager
         environment.status.task(node.node).write('debug', 'do not start files watches for continuous task')
         continue
       }
-      processManager.background(logContext('task', node.node), watchNode(node.node, state, environment))
+      processManager.background(
+        { type: 'task', id: node.node.id + '-watch', name: node.node.name },
+        watchNode(node.node, state, processManager, environment)
+      )
     }
   }
   for (const service of iterateWorkServices(state.current.service)) {
@@ -23,8 +25,8 @@ export function startWatchProcesses(state: State, processManager: ProcessManager
     }
     if (service.service.mounts.length > 0) {
       processManager.background(
-        logContext('service', service.service),
-        watchService(service.service, state, environment)
+        { type: 'service', id: service.service.id + '-watch', name: service.service.name },
+        watchService(service.service, state, processManager, environment)
       )
     }
   }

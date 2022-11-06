@@ -15,23 +15,6 @@ export function getContainerCli(): Dockerode {
   return dockerInstance
 }
 
-// export async function getDocker(status: StatusScopedConsole): Promise<Dockerode> {
-//   if (!dockerInstance) {
-//     dockerInstance = new Dockerode()
-//
-//     try {
-//       await dockerInstance.version()
-//     } catch (e) {
-//       if (e instanceof Error && e.message.indexOf('ECONNREFUSED') >= 0) {
-//         status.write('error', `docker is not running, try running in local shell or start`)
-//       }
-//
-//       throw e
-//     }
-//   }
-//   return dockerInstance
-// }
-
 export async function startContainer(status: StatusScopedConsole, container: Container): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const handle = setTimeout(() => {
@@ -45,7 +28,19 @@ export async function startContainer(status: StatusScopedConsole, container: Con
       })
       .catch((e) => {
         clearTimeout(handle)
-        reject(e)
+        if ('json' in e && 'message' in e.json) {
+          const errorMessage = e.json.message
+          const portBlocked = /Bind for .*:\d+ failed: port is already allocated/.exec(errorMessage)
+          if (portBlocked) {
+            reject(new Error(portBlocked[0]))
+          } else {
+            reject(new Error(errorMessage))
+          }
+        } else if ('json' in e && e.json instanceof Buffer) {
+          reject(new Error(e.json.toString()))
+        } else {
+          reject(e)
+        }
       })
   })
 }

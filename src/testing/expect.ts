@@ -11,8 +11,14 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
         expect({
           nodeId: state.node.id,
           status: state.type,
-          logs: Array.from(env.status.task(state.node).read()),
+          updates: Array.from(env.status.task(state.node).read()).map((s) => `${s.level}: ${s.message}`),
+          logs: Array.from(env.status.task(state.node).logs()).map((l) => `${l.console}: ${l.message}`),
           errorMessage: state.type === 'error' ? state.errorMessage : undefined,
+          needs: state.node.needs.map((need) => ({
+            name: need.name,
+            updates: Array.from(env.status.service(need).read()).map((s) => `${s.level}: ${s.message}`),
+            logs: Array.from(env.status.service(need).logs()).map((l) => `${l.console}: ${l.message}`),
+          })),
         }).toEqual({
           nodeId: state.node.id,
           status: 'completed',
@@ -37,9 +43,7 @@ export async function expectLog(
   message: string
 ): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = Array.from(env.status.task(state.node).read())
-    .filter((n) => n.type === 'console')
-    .map((n) => n.message)
+  const logs = Array.from(env.status.task(state.node).logs()).map((n) => n.message)
   expect(logs).toContain(message)
 }
 export async function expectContainsLog(
@@ -49,7 +53,7 @@ export async function expectContainsLog(
   message: string
 ): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = env.status.task(state.node).read()
+  const logs = env.status.task(state.node).logs()
   for (const log of logs) {
     if (log.message.indexOf(message) >= 0) {
       return

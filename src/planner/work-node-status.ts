@@ -2,11 +2,13 @@ import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
 import { WorkService } from './work-service'
 import { isWorkNode, WorkNode } from './work-node'
 import { getEnvironmentConfig } from '../utils/environment-config'
+import { isVerbose } from '../log'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
 
 const StatusBufferMax = getEnvironmentConfig('STATUS_BUFFER_LIMIT', 300)
+const ConsoleBufferMax = getEnvironmentConfig('CONSOLE_BUFFER_LIMIT', 30)
 
 export interface ConsoleMessage {
   type: 'console'
@@ -26,11 +28,17 @@ export interface StatusMessage {
 
 export type Message = ConsoleMessage | StatusMessage
 
-export interface LogContext {
-  type: 'task' | 'service'
-  name: string
-  id: string
-}
+export type LogContext =
+  | {
+      type: 'task' | 'service'
+      name: string
+      id: string
+    }
+  | {
+      type: 'cli'
+      id: 'general'
+      name: 'hammerkit'
+    }
 
 export function logContext(type: 'task' | 'service', node: WorkNode | WorkService): LogContext {
   return {
@@ -47,7 +55,7 @@ export interface StatusConsole extends Emitter<Message> {
   from(node: WorkNode | WorkService): StatusScopedConsole
   context(ctx: LogContext): StatusScopedConsole
 
-  read(): Generator<Message>
+  read(): Generator<StatusMessage>
 }
 
 export interface StatusScopedConsole {
@@ -55,32 +63,65 @@ export interface StatusScopedConsole {
 
   console(type: ConsoleType, message: string): void
 
-  read(): Generator<Message>
+  read(): Generator<StatusMessage>
 
-  current(): Message | null
+  current(): StatusMessage | null
+  currentLog(): ConsoleMessage | null
+  logs(): Generator<ConsoleMessage>
+}
+
+class BufferContext<T> {
+  private scopedBuffer: { [key: string]: T[] } = {}
+  private buffer: T[] = []
+
+  constructor(private limit: number) {}
+
+  add(id: string, data: T) {
+    this.buffer.push(data)
+    if (id in this.scopedBuffer) {
+      const scopedBuffer = this.scopedBuffer[id]
+      scopedBuffer.push(data)
+      if (scopedBuffer.length > this.limit) {
+        const removedBuffer = this.buffer.splice(0, 1)[0]
+        const bufferIndex = this.buffer.indexOf(removedBuffer)
+        if (bufferIndex >= 0) {
+          this.buffer.splice(bufferIndex, 1)
+        }
+      }
+    } else {
+      this.scopedBuffer[id] = [data]
+    }
+  }
+
+  current(id: string): T | null {
+    if (!(id in this.scopedBuffer)) {
+      return null
+    }
+    const value = this.scopedBuffer[id]
+    return value[value.length - 1]
+  }
+
+  get(id?: string): T[] {
+    if (id) {
+      return this.scopedBuffer[id] ?? []
+    } else {
+      return this.buffer
+    }
+  }
 }
 
 export function statusConsole(): StatusConsole {
-  const buffer: Message[] = []
-  const contextBuffer: { [key: string]: { buffer: Message[] } } = {}
+  const statusBuffer = new BufferContext<StatusMessage>(StatusBufferMax)
+  const consoleBuffer = new BufferContext<ConsoleMessage>(ConsoleBufferMax)
 
   const emit = emitter<Message>()
 
   function addMessage(context: LogContext, message: Message) {
-    buffer.push(message)
     emit.emit(message)
-    if (context.id in contextBuffer) {
-      const scopedBuffer = contextBuffer[context.id]
-      scopedBuffer.buffer.push(message)
-      if (scopedBuffer.buffer.length > StatusBufferMax) {
-        const removedBuffer = buffer.splice(0, 1)[0]
-        const bufferIndex = buffer.indexOf(removedBuffer)
-        if (bufferIndex >= 0) {
-          buffer.splice(bufferIndex, 1)
-        }
-      }
-    } else {
-      contextBuffer[context.id] = { buffer: [message] }
+    if (message.type === 'console') {
+      consoleBuffer.add(context.id, message)
+    } else if (isVerbose || message.level !== 'debug') {
+      statusBuffer.add(context.id, message)
     }
   }
 
@@ -100,15 +141,19 @@ export function statusConsole(): StatusConsole {
     },
     context(context: LogContext): StatusScopedConsole {
       return {
-        current() {
-          if (!(context.id in contextBuffer)) {
-            return null
-          }
-          const value = contextBuffer[context.id]
-          return value.buffer[value.buffer.length - 1]
+        currentLog() {
+          return consoleBuffer.current(context.id)
         },
-        *read(): Generator<Message> {
-          for (const log of contextBuffer[context.id]?.buffer || []) {
+        current() {
+          return statusBuffer.current(context.id)
+        },
+        *logs(): Generator<ConsoleMessage> {
+          for (const log of consoleBuffer.get(context.id)) {
+            yield log
+          }
+        },
+        *read(): Generator<StatusMessage> {
+          for (const log of statusBuffer.get(context.id)) {
             yield log
           }
         },
@@ -135,8 +180,8 @@ export function statusConsole(): StatusConsole {
     on(listener: EmitListener<Message>): EmitHandle {
       return emit.on(listener)
     },
-    *read(): Generator<Message> {
-      for (const message of buffer) {
+    *read(): Generator<StatusMessage> {
+      for (const message of statusBuffer.get()) {
         yield message
       }
     },

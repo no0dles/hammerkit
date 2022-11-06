@@ -24,7 +24,6 @@ describe('clean', () => {
 
   it('should clean generated outputs in containers', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'docker:example' })
-    const node = cli.node('docker:example')
     const result = await cli.exec({ cacheDefault: 'none' })
     await expectSuccessfulResult(result, environment)
 
@@ -39,7 +38,6 @@ describe('clean', () => {
   it('should clean and restore created data in volumes', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example:service' })
 
-    await cli.clean({ service: true })
     const result = await cli.exec()
     await expectSuccessfulResult(result, environment)
 

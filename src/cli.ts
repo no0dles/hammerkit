@@ -31,6 +31,7 @@ export interface CliCleanOptions {
 
 export interface CliExecResult {
   state: ReadonlyState<SchedulerState>
+  processManager: ProcessManager
   start: () => Promise<SchedulerResult>
 }
 
@@ -81,6 +82,7 @@ export function getCli(workTree: WorkTree, environment: Environment): Cli {
 
       return {
         state,
+        processManager,
         start: async () => {
           const result = await schedule(processManager, state, environment)
           await logger.complete(result, environment)

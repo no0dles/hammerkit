@@ -1,6 +1,5 @@
 import { join } from 'path'
 import { getTestSuite } from '../get-test-suite'
-import { iterateWorkNodes } from '../../planner/utils/plan-work-nodes'
 
 describe('cancellation', () => {
   const suite = getTestSuite('cancellation', ['build.yaml'])
@@ -9,19 +8,20 @@ describe('cancellation', () => {
 
   async function testAbort(taskName: string, expectedState: string) {
     const { cli, environment } = await suite.setup({ taskName })
-    let nodeId = ''
     const exec = await cli.execWatch({ logMode: 'live' })
-    exec.state.on((state) => {
-      for (const node of iterateWorkNodes(state.node)) {
-        if (node.node.name.startsWith('long_') && node.type === 'running') {
-          nodeId = node.node.id
-          environment.abortCtrl.abort()
-        }
+    const abortNode = Object.values(exec.state.current.node).find((n) => n.node.name.startsWith('long_'))
+    exec.processManager.on((evt) => {
+      if (evt.type === 'started' && evt.context.id === abortNode?.node.id) {
+        environment.abortCtrl.abort()
       }
     })
     const result = await exec.start()
     expect(result.success).toBeFalsy()
-    expect(result.state.node[nodeId].type).toEqual(expectedState)
+    if (abortNode) {
+      expect(result.state.node[abortNode.node.id].type).toEqual(expectedState)
+    } else {
+      expect(abortNode).toBeDefined()
+    }
     expect(await environment.file.exists(join(suite.path, 'test'))).toBeFalsy()
   }
 

@@ -10,6 +10,7 @@ export function checkForLoop(state: SchedulerState): void {
       state.node[nodeState.node.id] = {
         type: 'error',
         node: nodeState.node,
+        stateKey: null,
         errorMessage,
       }
     }

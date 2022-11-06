@@ -8,7 +8,9 @@ export async function write(filename: string, content: any, context: Environment
 }
 
 export async function read(fileName: string, context: Environment): Promise<any> {
-  context.console.debug(`read ${fileName} build file`)
+  context.status
+    .context({ type: 'cli', id: 'general', name: 'hammerkit' })
+    .write('debug', `read ${fileName} build file`)
   let content: string
   try {
     content = await context.file.read(fileName)

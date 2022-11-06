@@ -11,8 +11,6 @@ describe('store/restore', () => {
   it('should clean and restore created outputs locally', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
 
-    await cli.clean()
-
     const generatedPath = join(environment.cwd, 'node_modules')
     const cacheStoragePath = join(environment.cwd, 'storage')
 
@@ -50,7 +48,6 @@ describe('store/restore', () => {
 
     const cacheStoragePath = join(environment.cwd, 'storage')
 
-    await cli.clean()
     const firstExecResult = await cli.exec()
     await expectSuccessfulResult(firstExecResult, environment)
 

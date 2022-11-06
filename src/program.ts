@@ -12,7 +12,7 @@ import { hasLabels } from './executer/label-values'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const buildFile = await getBuildFile(fileName, environment)
-  const workTree = getWorkScope(buildFile, workScope)
+  const workTree = getWorkScope(buildFile, workScope, environment)
   return getCli(workTree, environment)
 }
 

@@ -1,4 +1,5 @@
 import { getTestSuite } from '../testing/get-test-suite'
+import { expectSuccessfulResult } from '../testing/expect'
 
 describe('execute', () => {
   const suite = getTestSuite('hello-world-node', ['build.yaml', 'package.json', 'index.js'])
@@ -25,7 +26,7 @@ describe('execute', () => {
 
     const result = await exec.start()
 
-    expect(result.success).toBeTruthy()
+    await expectSuccessfulResult(result, environment)
   })
 
   it('should restart watching task if once failed', async () => {

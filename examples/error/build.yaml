@@ -2,10 +2,12 @@ tasks:
   local_error:
     description: local error
     cmds:
+      - echo "some error reason"
       - exit 1
 
   docker_error:
     description: docker error
     image: alpine:latest
     cmds:
+      - echo "some error reason"
       - exit 1

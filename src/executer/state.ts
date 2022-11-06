@@ -6,29 +6,39 @@ import { ServiceState } from './scheduler/service-state'
 export class State {
   private listeners: StateListener<SchedulerState>[] = []
 
-  constructor(public current: Readonly<SchedulerState>) {}
+  constructor(public current: SchedulerState) {}
 
-  patchNode(newState: NodeState) {
-    const newValue: SchedulerState = {
-      ...this.current,
-      node: {
-        ...this.current.node,
-      },
+  private assignState(state: any, newValue: any) {
+    const currentKeys = Object.keys(state)
+    const newKeys = Object.keys(newValue)
+    const keysToRemove = currentKeys.filter((k) => newKeys.indexOf(k) === -1)
+
+    for (const key of keysToRemove) {
+      delete state[key]
     }
-    newValue.node[newState.node.id] = newState
-    this.current = newValue
+    for (const key of newKeys) {
+      state[key] = newValue[key]
+    }
+  }
+
+  resetNode<T extends NodeState>(newState: T): T {
+    const state = this.current.node[newState.node.id]
+    this.assignState(state, newState)
     this.notifyListeners(this.current)
+    return state as T
+  }
+
+  patchNode<T extends NodeState>(newState: T, stateKey: string | null): T {
+    const state = this.current.node[newState.node.id]
+    if (state.stateKey === stateKey) {
+      this.assignState(state, newState)
+      this.notifyListeners(this.current)
+    }
+    return state as T
   }
 
   patchService(newState: ServiceState) {
-    const newValue: SchedulerState = {
-      ...this.current,
-      service: {
-        ...this.current.service,
-      },
-    }
-    newValue.service[newState.service.id] = newState
-    this.current = newValue
+    this.assignState(this.current.service[newState.service.id], newState)
     this.notifyListeners(this.current)
   }
 

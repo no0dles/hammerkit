@@ -4,25 +4,45 @@ import { ServiceDns } from '../service-dns'
 export interface ServicePendingState {
   type: 'pending'
   service: WorkService
+  stateKey: string | null
 }
 
-export interface ServiceRunningState {
-  type: 'running'
-  abortController: AbortController
+export interface ServiceStartingState {
+  type: 'starting'
   service: WorkService
+  stateKey: string | null
 }
 
 export interface ServiceReadyState {
   type: 'ready'
-  abortController: AbortController
+  service: WorkService
+  stateKey: string
+}
+
+export interface ServiceRunningState {
+  type: 'running'
   service: WorkService
   dns: ServiceDns
+  stateKey: string
 }
 
 export interface ServiceEndState {
   type: 'end'
   service: WorkService
-  reason: 'canceled' | 'crash'
+  reason: 'crash' | 'terminated'
+  stateKey: string
 }
 
-export type ServiceState = ServicePendingState | ServiceRunningState | ServiceReadyState | ServiceEndState
+export interface ServiceCanceledState {
+  type: 'canceled'
+  service: WorkService
+  stateKey: string | null
+}
+
+export type ServiceState =
+  | ServicePendingState
+  | ServiceStartingState
+  | ServiceRunningState
+  | ServiceReadyState
+  | ServiceEndState
+  | ServiceCanceledState

@@ -12,7 +12,12 @@ import { State } from './state'
 import { Process } from './process'
 import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
 
-export function dockerService(service: ContainerWorkService, state: State, environment: Environment): Process {
+export function dockerService(
+  service: ContainerWorkService,
+  stateKey: string,
+  state: State,
+  environment: Environment
+): Process {
   return async (abort) => {
     const status = environment.status.service(service)
     let container: Container | null = null
@@ -58,15 +63,12 @@ export function dockerService(service: ContainerWorkService, state: State, envir
       await setUserPermissions(service, container, environment)
 
       if (!service.healthcheck) {
-        const currentState = state.current.service[service.id]
-        if (currentState.type === 'running') {
-          state.patchService({
-            type: 'ready',
-            service,
-            dns: { containerId: container.id },
-            abortController: currentState.abortController,
-          })
-        }
+        state.patchService({
+          type: 'running',
+          service,
+          dns: { containerId: container.id },
+          stateKey,
+        })
       } else {
         let ready = false
         do {
@@ -77,15 +79,12 @@ export function dockerService(service: ContainerWorkService, state: State, envir
         } while (!ready && !abort.signal.aborted)
 
         if (ready) {
-          const currentState = state.current.service[service.id]
-          if (currentState.type === 'running') {
-            state.patchService({
-              type: 'ready',
-              service,
-              dns: { containerId: container.id },
-              abortController: currentState.abortController,
-            })
-          }
+          state.patchService({
+            type: 'running',
+            service,
+            dns: { containerId: container.id },
+            stateKey,
+          })
         }
       }
 
@@ -94,14 +93,15 @@ export function dockerService(service: ContainerWorkService, state: State, envir
       state.patchService({
         type: 'end',
         service,
-        reason: 'canceled',
+        stateKey,
+        reason: 'terminated',
       })
     } catch (e) {
       if (e instanceof AbortError) {
         state.patchService({
-          type: 'end',
+          type: 'canceled',
           service,
-          reason: 'canceled',
+          stateKey,
         })
       } else {
         status.write('error', getErrorMessage(e))
@@ -109,6 +109,7 @@ export function dockerService(service: ContainerWorkService, state: State, envir
           type: 'end',
           service,
           reason: 'crash',
+          stateKey,
         })
       }
     } finally {
