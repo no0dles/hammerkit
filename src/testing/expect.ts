@@ -26,6 +26,11 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
       }
     }
   }
+  const status = Array.from(env.status.read())
+  const errorStatus = status
+    .filter((s) => s.level === 'warn' || s.level === 'error')
+    .map((s) => `${s.context.type}:${s.context.name} - ${s.level} ${s.message}`)
+  expect(errorStatus).toEqual([])
 }
 
 function getNodeState(state: SchedulerState, name: string): NodeState {

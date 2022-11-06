@@ -19,7 +19,7 @@ export async function startContainer(status: StatusScopedConsole, container: Con
   return new Promise<void>((resolve, reject) => {
     const handle = setTimeout(() => {
       status.write('warn', 'start of container is potentially stuck on start')
-    }, 1000)
+    }, 3000)
     container
       .start()
       .then(() => {

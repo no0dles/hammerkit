@@ -207,6 +207,12 @@ export function getNodeName(name: string, maxNodeNameLength: number): string {
 }
 
 export function writeNodeLogToConsole(log: Message, maxNodeNameLength: number): void {
+  if (log.type === 'status') {
+    if (log.level === 'debug' && !isVerbose) {
+      return
+    }
+  }
+
   const content =
     log.type === 'console'
       ? log.console === 'stdout'
