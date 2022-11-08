@@ -20,7 +20,7 @@ export function getWorkNodeCacheDescription(task: PlannedTask): WorkNodeCacheDes
     shell: task.shell ?? undefined,
     image: task.image ?? undefined,
     platform: task.image ? 'container' : platform(),
-    generates: task.generates.sort() ?? undefined,
+    generates: task.generates.map((g) => g.path).sort() ?? undefined,
     src: task.src.map((s) => s.relativePath).sort() ?? undefined,
     deps: task.deps.map((d) => d.name).sort() ?? undefined,
     envs:

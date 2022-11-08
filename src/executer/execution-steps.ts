@@ -1,7 +1,7 @@
 import { ContainerWorkNode, isContainerWorkNode, WorkNode } from '../planner/work-node'
 import { pull } from '../docker/pull'
 import { Environment } from './environment'
-import { ensureVolumeExists } from './get-docker-executor'
+import { ensureVolumeExists, recreateVolume } from './get-docker-executor'
 import { ContainerWorkService, isContainerWorkService, WorkService } from '../planner/work-service'
 import { extname } from 'path'
 import { setUserPermission } from './set-user-permission'
@@ -18,7 +18,13 @@ export async function pullImage(node: WorkNode | WorkService, environment: Envir
 export async function prepareVolume(node: WorkNode | WorkService, environment: Environment): Promise<void> {
   if (isContainerWorkNode(node) || isContainerWorkService(node)) {
     for (const volume of node.volumes) {
-      await ensureVolumeExists(environment, volume.name)
+      if (volume.resetOnChange && !volume.inherited) {
+        environment.status.from(node).write('debug', 'recreate volume')
+        await recreateVolume(environment, volume.name)
+      } else {
+        environment.status.from(node).write('debug', 'ensure volume exists')
+        await ensureVolumeExists(environment, volume.name)
+      }
     }
   }
 }

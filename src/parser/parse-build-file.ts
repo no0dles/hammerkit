@@ -9,9 +9,10 @@ import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { Environment } from '../executer/environment'
 import { parseBuildFileServices } from './parse-build-file-services'
 import { parseStringMap } from './parse-string-map'
-import { ParseContext } from './parse-context'
+import { ParseContext, parseContextDescription } from './parse-context'
 import { parseString } from './parse-string'
 import { parseBoolean } from './parse-boolean'
+import { BuildFileTaskGenerate } from './build-file-task'
 
 const validTaskKeys = [
   'envs',
@@ -25,6 +26,7 @@ const validTaskKeys = [
   'cmds',
   'watch',
   'continuous',
+  'cache',
 ]
 const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
 
@@ -85,7 +87,7 @@ export async function parseBuildFile(
       mounts: parseStringArray(ctx, 'mounts', value.mounts),
       src: parseBuildFileTaskSource(ctx, value.src, context),
       deps: parseStringArray(ctx, 'deps', value.deps),
-      generates: parseStringArray(ctx, 'generates', value.generates),
+      generates: parseGenerateArray(ctx, 'generates', value.generates),
       description: parseString(ctx, 'description', value.description, true)?.trim() ?? null,
       labels: parseStringMap(ctx, 'labels', value.labels),
       image: value.image || null,
@@ -102,7 +104,7 @@ export async function parseBuildFile(
           return map
         }, {}),
       platform: null,
-      cache: value.caching || null,
+      cache: value.cache || null,
     }
     if (Object.keys(result.tasks[key].unknownProps).length > 0) {
       context.console.warn(`unknown props ${Object.keys(result.tasks[key].unknownProps)} for ${key} in ${fileName}`)
@@ -110,4 +112,28 @@ export async function parseBuildFile(
   }
 
   return result
+}
+
+function parseGenerateArray(
+  ctx: ParseContext,
+  valueName: string,
+  value: unknown
+): (BuildFileTaskGenerate | string)[] | null {
+  if (!value) {
+    return null
+  }
+  if (value instanceof Array) {
+    return value.map<BuildFileTaskGenerate | string>((v, i) => {
+      if (typeof v === 'string') {
+        return v
+      } else {
+        return {
+          path: parseString(ctx, `generate[${i}].path`, v.path, false),
+          resetOnChange: parseBoolean(ctx, `generate[${i}].resetOnChange`, v.resetOnChange, true) || false,
+        }
+      }
+    })
+  } else {
+    throw new Error(`${parseContextDescription(ctx)} ${valueName} needs to be a string array`)
+  }
 }

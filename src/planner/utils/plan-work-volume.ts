@@ -22,8 +22,10 @@ export function getContainerVolumes(task: BaseWorkNode, mounts: WorkMount[]): Wo
 
     const name = getVolumeName(generate.path)
     volumes.push({
+      resetOnChange: generate.resetOnChange,
       name,
       containerPath: generate.path,
+      inherited: generate.inherited,
     })
   }
 

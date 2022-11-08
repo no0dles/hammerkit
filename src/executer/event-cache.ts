@@ -4,7 +4,7 @@ import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { dirname, join, relative, sep } from 'path'
 import { moveFiles } from '../file/move-files'
 import { convertToPosixPath } from './execute-docker'
-import { existsVolume } from './get-docker-executor'
+import { existsVolume, removeVolume } from './get-docker-executor'
 import { WorkTree } from '../planner/work-tree'
 import { create, extract } from 'tar'
 import { ContainerWorkNode, isContainerWorkNode, LocalWorkNode, WorkNode } from '../planner/work-node'
@@ -159,8 +159,7 @@ export async function cleanCache(
       const volumeExists = await existsVolume(environment, volumeName)
       if (volumeExists) {
         nodeStatus.write('info', `remove volume ${volumeName}`)
-        const volume = await environment.docker.getVolume(volumeName)
-        await volume.remove()
+        await removeVolume(environment, volumeName)
       } else {
         nodeStatus.write('info', `generate ${generate} has no volume ${volumeName}`)
       }
@@ -190,8 +189,7 @@ export async function cleanCache(
         }
 
         nodeStatus.write('info', `remove volume ${volume.name}`)
-        const containerVolume = await environment.docker.getVolume(volume.name)
-        await containerVolume.remove()
+        await removeVolume(environment, volume.name)
       }
     }
   }

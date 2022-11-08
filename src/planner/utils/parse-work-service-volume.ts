@@ -13,6 +13,8 @@ export function parseWorkServiceVolume(cwd: string, dir: string): WorkVolume {
 function parseVolume(cwd: string, name: string, containerPath: string): WorkVolume {
   return {
     name,
+    resetOnChange: false,
     containerPath: normalizePath(cwd, cwd, containerPath),
+    inherited: false,
   }
 }

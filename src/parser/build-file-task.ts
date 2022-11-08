@@ -10,7 +10,7 @@ export interface BuildFileTask {
   continuous: boolean | null
   description: string | null
   shell: string | null
-  generates: string[] | null
+  generates: (BuildFileTaskGenerate | string)[] | null
   extend: string | null
   image: string | null
   mounts: string[] | null
@@ -21,4 +21,9 @@ export interface BuildFileTask {
   unknownProps: { [key: string]: any }
   labels: { [key: string]: string }
   cache: CacheMethod | null
+}
+
+export interface BuildFileTaskGenerate {
+  resetOnChange?: boolean
+  path: string
 }

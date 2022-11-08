@@ -20,7 +20,7 @@ export interface BaseWorkNode {
   description: string | null
   deps: WorkNode[]
   src: WorkNodeSource[]
-  generates: { path: string; inherited: boolean }[]
+  generates: WorkNodeGenerate[]
   envs: { [key: string]: string }
   cmds: WorkNodeCommand[]
   plannedTask: PlannedTask
@@ -28,6 +28,12 @@ export interface BaseWorkNode {
   needs: WorkService[]
   labels: LabelValues
   caching: CacheMethod | null
+}
+
+export interface WorkNodeGenerate {
+  path: string
+  inherited: boolean
+  resetOnChange: boolean
 }
 
 export interface LocalWorkNode extends BaseWorkNode {

@@ -25,7 +25,10 @@ export function planWorkDependency(deps: WorkNode[], node: WorkNode): void {
     if (isContainerWorkNode(depNode) && isContainerWorkNode(node)) {
       for (const volume of depNode.volumes) {
         if (!node.volumes.some((v) => v.name === volume.name)) {
-          node.volumes.push(volume)
+          node.volumes.push({
+            ...volume,
+            inherited: true,
+          })
         }
       }
     }

@@ -86,7 +86,7 @@ export function dockerNode(
       printContainerOptions(status, containerOptions)
 
       const success = await usingContainer(environment, node, containerOptions, async (container) => {
-        await setUserPermissions(node, container, environment)
+        // await setUserPermissions(node, container, environment)
 
         for (const cmd of node.cmds) {
           checkForAbort(abort.signal)

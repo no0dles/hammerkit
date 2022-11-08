@@ -1,5 +1,5 @@
 import { BuildFile } from '../../parser/build-file'
-import { BaseWorkNode, WorkNode } from '../work-node'
+import { BaseWorkNode, WorkNode, WorkNodeGenerate } from '../work-node'
 import { createSubWorkContext, WorkContext } from '../work-context'
 import { templateValue } from './template-value'
 import { planWorkCommand } from './plan-work-command'
@@ -9,7 +9,7 @@ import { planWorkDependency } from './plan-work-dependency'
 import { join } from 'path'
 import { BuildFileTaskSource } from '../../parser/build-file-task-source'
 import { WorkNodeSource } from '../work-node-source'
-import { BuildFileTask } from '../../parser/build-file-task'
+import { BuildFileTask, BuildFileTaskGenerate } from '../../parser/build-file-task'
 import { WorkNodeCommand } from '../work-node-command'
 import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
@@ -43,7 +43,7 @@ export interface PlannedTask {
   platform: BuildFileTaskPlatform | null
   description: string | null
   shell: string | null
-  generates: string[]
+  generates: BuildFileTaskGenerate[]
   image: string | null
   mounts: string[]
   cmds: BuildTaskCommand[]
@@ -101,7 +101,7 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     image: buildTaskResult.task.image ?? extendedTask?.task?.image ?? null,
     platform: buildTaskResult.task.platform ?? extendedTask?.task?.platform ?? null,
     mounts: buildTaskResult.task.mounts || extendedTask?.task?.mounts || [],
-    generates: buildTaskResult.task.generates || extendedTask?.task?.generates || [],
+    generates: (buildTaskResult.task.generates || extendedTask?.task?.generates || []).map((g) => mapGenerate(g)),
     shell: buildTaskResult.task.shell ?? extendedTask?.task?.shell ?? null,
     ports: buildTaskResult.task.ports || extendedTask?.task?.ports || [],
     src: buildTaskResult.task.src || extendedTask?.task?.src || [],
@@ -114,6 +114,14 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     envs,
     deps: mergeReferences(getReferences(extendedTask, 'deps'), getReferences(buildTaskResult, 'deps')),
     needs: mergeReferences(getReferences(extendedTask, 'needs'), getReferences(buildTaskResult, 'needs')),
+  }
+}
+
+function mapGenerate(generate: string | BuildFileTaskGenerate): BuildFileTaskGenerate {
+  if (typeof generate === 'string') {
+    return { path: generate, resetOnChange: false }
+  } else {
+    return { path: generate.path, resetOnChange: generate.resetOnChange ?? false }
   }
 }
 
@@ -247,10 +255,12 @@ function parseLocalWorkNodeGenerate(
   task: PlannedTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
-): { path: string; inherited: boolean }[] {
-  return getAbsolutePaths(task.generates, context.cwd)
-    .map((g) => templateValue(g, envs))
-    .map((path) => ({ path, inherited: false }))
+): WorkNodeGenerate[] {
+  return task.generates.map((g) => ({
+    path: join(context.cwd, templateValue(g.path, envs)),
+    resetOnChange: g.resetOnChange ?? false,
+    inherited: false,
+  }))
 }
 
 function parseLocalWorkNodeSource(
