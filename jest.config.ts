@@ -21,7 +21,7 @@ const config: Config.InitialOptions = {
   coverageDirectory: '<rootDir>/coverage',
   collectCoverageFrom: ['<rootDir>/src/**'],
   coverageReporters: ['json', 'html', 'lcov'],
-  reporters: ['github-actions', 'summary'],
+  reporters: ['github-actions', 'default', 'summary'],
 }
 
 export default config

@@ -5,6 +5,8 @@ import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
 import { statusConsole } from './planner/work-node-status'
 import { getContainerCli } from './executer/execute-docker'
+import { Writable } from 'stream'
+import { emptyWritable } from './utils/empty-writable'
 
 const abortCtrl = new AbortController()
 
@@ -18,9 +20,11 @@ getProgram(
     abortCtrl,
     processEnvs: process.env,
     file: getFileContext(process.cwd()),
-    console: consoleContext(),
-    status: statusConsole(),
+    console: consoleContext(process.stdout),
+    status: statusConsole(emptyWritable()),
     docker: getContainerCli(),
+    stdout: process.stdout,
+    stdoutColumns: process.stdout.columns,
   },
   process.argv
 ).then(({ program, args }) => {

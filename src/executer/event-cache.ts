@@ -158,8 +158,7 @@ export async function cleanCache(
       const volumeName = getVolumeName(generate.path)
       const volumeExists = await existsVolume(environment, volumeName)
       if (volumeExists) {
-        nodeStatus.write('info', `remove volume ${volumeName}`)
-        await removeVolume(environment, volumeName)
+        await removeVolume(environment, nodeStatus, volumeName)
       } else {
         nodeStatus.write('info', `generate ${generate} has no volume ${volumeName}`)
       }
@@ -188,8 +187,7 @@ export async function cleanCache(
           continue
         }
 
-        nodeStatus.write('info', `remove volume ${volume.name}`)
-        await removeVolume(environment, volume.name)
+        await removeVolume(environment, nodeStatus, volume.name)
       }
     }
   }

@@ -3,6 +3,7 @@ import { WorkService } from './work-service'
 import { isWorkNode, WorkNode } from './work-node'
 import { getEnvironmentConfig } from '../utils/environment-config'
 import { isVerbose } from '../log'
+import { Writable } from 'stream'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
@@ -110,7 +111,7 @@ class BufferContext<T> {
   }
 }
 
-export function statusConsole(): StatusConsole {
+export function statusConsole(writable: Writable): StatusConsole {
   const statusBuffer = new BufferContext<StatusMessage>(StatusBufferMax)
   const consoleBuffer = new BufferContext<ConsoleMessage>(ConsoleBufferMax)
 
@@ -118,6 +119,7 @@ export function statusConsole(): StatusConsole {
 
   function addMessage(context: LogContext, message: Message) {
     emit.emit(message)
+    writable.write(JSON.stringify({ context, message }) + '\n')
     if (message.type === 'console') {
       consoleBuffer.add(context.id, message)
     } else if (isVerbose || message.level !== 'debug') {

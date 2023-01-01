@@ -21,7 +21,7 @@ export function groupedLogger(state: ReadonlyState<SchedulerState>, env: Environ
       if (node.type === 'crash' || node.type === 'error' || node.type === 'completed') {
         completedNodes.push(node.node.id)
         for (const log of env.status.task(node.node).read()) {
-          writeNodeLogToConsole(log, maxNodeNameLength)
+          writeNodeLogToConsole(env, log, maxNodeNameLength)
         }
       }
     }
@@ -34,7 +34,7 @@ export function groupedLogger(state: ReadonlyState<SchedulerState>, env: Environ
       if (service.type === 'end') {
         completedServices.push(service.service.id)
         for (const log of env.status.service(service.service).read()) {
-          writeNodeLogToConsole(log, maxNodeNameLength)
+          writeNodeLogToConsole(env, log, maxNodeNameLength)
         }
       }
     }

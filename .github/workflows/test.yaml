@@ -23,6 +23,12 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+      - name: Archive test artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: console-log
+          path: |
+            logs
       - name: Upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
         with:
@@ -72,3 +78,9 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+      - name: Archive test artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: console-log
+          path: |
+            logs

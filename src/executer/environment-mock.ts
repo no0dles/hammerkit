@@ -1,17 +1,21 @@
 import { statusConsole } from '../planner/work-node-status'
 import { Environment } from './environment'
-import { consoleContextMock } from '../console/console-context-mock'
+import { Writable } from 'stream'
 import { getFileContext } from '../file/get-file-context'
 import { getContainerCli } from './execute-docker'
+import { consoleContext } from '../log'
+import { emptyWritable } from '../utils/empty-writable'
 
 export function environmentMock(cwd: string): Environment {
   return {
     cwd,
     file: getFileContext(cwd),
-    console: consoleContextMock(),
+    console: consoleContext(emptyWritable()),
     abortCtrl: new AbortController(),
     processEnvs: {},
-    status: statusConsole(),
+    status: statusConsole(emptyWritable()),
     docker: getContainerCli(),
+    stdout: emptyWritable(),
+    stdoutColumns: 80,
   }
 }

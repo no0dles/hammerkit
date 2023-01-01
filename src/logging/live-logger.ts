@@ -9,7 +9,7 @@ export function liveLogger(state: ReadonlyState<SchedulerState>, env: Environmen
   const maxNodeNameLength = getNodeNameLengthForWorkTree(state.current.node, state.current.service)
 
   env.status.on((log) => {
-    writeNodeLogToConsole(log, maxNodeNameLength)
+    writeNodeLogToConsole(env, log, maxNodeNameLength)
   })
 
   return {

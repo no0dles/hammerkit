@@ -19,11 +19,13 @@ export async function prepareVolume(node: WorkNode | WorkService, environment: E
   if (isContainerWorkNode(node) || isContainerWorkService(node)) {
     for (const volume of node.volumes) {
       if (volume.resetOnChange && !volume.inherited) {
-        environment.status.from(node).write('debug', 'recreate volume')
-        await recreateVolume(environment, volume.name)
+        const scopedConsole = environment.status.from(node)
+        scopedConsole.write('debug', 'recreate volume')
+        await recreateVolume(environment, scopedConsole, volume.name)
       } else {
-        environment.status.from(node).write('debug', 'ensure volume exists')
-        await ensureVolumeExists(environment, volume.name)
+        const scopedConsole = environment.status.from(node)
+        scopedConsole.write('debug', 'ensure volume exists')
+        await ensureVolumeExists(environment, scopedConsole, volume.name)
       }
     }
   }

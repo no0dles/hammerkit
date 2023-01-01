@@ -22,7 +22,7 @@ export function interactiveLogger(state: ReadonlyState<SchedulerState>, env: Env
     }
   }
 
-  hideCursor()
+  hideCursor(env)
   tickerFn()
 
   state.on((currentState) => {
@@ -32,9 +32,9 @@ export function interactiveLogger(state: ReadonlyState<SchedulerState>, env: Env
   return {
     async complete(evt: SchedulerResult, env): Promise<void> {
       running = false
-      clearScreenDown(process.stdout)
+      clearScreenDown(env.stdout)
       await printWorkTreeResult(evt.state, env)
-      showCursor()
+      showCursor(env)
     },
   }
 }

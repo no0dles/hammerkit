@@ -2,12 +2,13 @@ import { TestSuite, TestSuiteOptions } from './test-suite'
 import { FileContext } from '../file/file-context'
 import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
-import { consoleContextMock } from '../console/console-context-mock'
 import { statusConsole } from '../planner/work-node-status'
 import { Environment } from '../executer/environment'
 import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
 import { getContainerCli } from '../executer/execute-docker'
+import { createWriteStream } from 'fs'
+import { consoleContext } from '../log'
 
 interface Test {
   cwd: string
@@ -20,7 +21,7 @@ export class ExampleTestSuite implements TestSuite {
 
   readonly path: string
 
-  constructor(exampleName: string, private files: string[]) {
+  constructor(private exampleName: string, private files: string[]) {
     this.exampleDirectory = join(__dirname, '../../examples/', exampleName)
     this.path = join(process.cwd(), 'temp', exampleName)
     this.file = getFileContext(this.path)
@@ -36,14 +37,26 @@ export class ExampleTestSuite implements TestSuite {
     await this.file.remove(this.path)
     await this.file.createDirectory(this.path)
 
+    const logPath = join(process.cwd(), 'logs')
+    const stdoutFile = join(logPath, this.exampleName + '-stout.log')
+    const statusFile = join(logPath, this.exampleName + '-status.log')
+    const consoleFile = join(logPath, this.exampleName + '-console.log')
+
+    await this.file.createDirectory(logPath)
+    await this.file.remove(stdoutFile)
+    await this.file.remove(statusFile)
+    await this.file.remove(consoleFile)
+
     const environment: Environment = {
       processEnvs: { ...process.env, ...(scope.envs ?? {}) },
       abortCtrl: new AbortController(),
       cwd: this.path,
       file: this.file,
-      console: consoleContextMock(),
-      status: statusConsole(),
+      console: consoleContext(createWriteStream(consoleFile)),
+      status: statusConsole(createWriteStream(statusFile)),
       docker: getContainerCli(),
+      stdout: createWriteStream(stdoutFile),
+      stdoutColumns: 80,
     }
 
     for (const file of this.files) {
@@ -60,8 +73,7 @@ export class ExampleTestSuite implements TestSuite {
     await cli.clean({ service: true })
 
     // reset cli clean stats
-    environment.console = consoleContextMock()
-    environment.status = statusConsole()
+    environment.status = statusConsole(createWriteStream(statusFile, { flags: 'a' }))
 
     return {
       cli,

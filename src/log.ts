@@ -8,6 +8,7 @@ import { NodeState } from './executer/scheduler/node-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { Environment } from './executer/environment'
 import { failNever } from './utils/fail-never'
+import { Writable } from 'stream'
 
 export function getLogs(chunk: Buffer | string): string[] {
   return chunk
@@ -39,19 +40,19 @@ export function getErrorMessage(e: unknown): string {
   }
 }
 
-export function consoleContext(): ConsoleContext {
+export function consoleContext(stream: Writable): ConsoleContext {
   return {
     debug(message: string): void {
-      process.stdout.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('debug')}: ${message}\n`)
+      stream.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('debug')}: ${message}\n`)
     },
     error(message: string): void {
-      process.stdout.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('error')}: ${message}\n`)
+      stream.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('error')}: ${message}\n`)
     },
     info(message: string): void {
-      process.stdout.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('info')}: ${message}\n`)
+      stream.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('info')}: ${message}\n`)
     },
     warn(message: string): void {
-      process.stdout.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('warn')}: ${message}\n`)
+      stream.write(`${formatDate(new Date())} ${getType('cli')} ${getLogLevel('warn')}: ${message}\n`)
     },
   }
 }
@@ -70,7 +71,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
 
   for (const log of env.status.read()) {
     if (isVerbose || (log.type === 'status' && log.level === 'error')) {
-      process.stdout.write(
+      env.stdout.write(
         `${formatDate(log.date)} ${getType(log.context.type)} ${getNodeName(
           log.context.name,
           maxNodeNameLength
@@ -83,7 +84,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     if (state.type === 'end' && state.reason === 'crash') {
       const message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)}`
       for (const log of env.status.service(state.service).logs()) {
-        process.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
+        env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
     }
   }
@@ -92,7 +93,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     if (state.type === 'error' || state.type === 'crash') {
       const message = `${getType('task')} ${getNodeName(state.node.name, maxNodeNameLength)}`
       for (const log of env.status.task(state.node).logs()) {
-        process.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
+        env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
     }
   }
@@ -106,7 +107,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
       if (state.reason === 'crash') {
         message += ` crashed`
       }
-      process.stdout.write(`${message}\n`)
+      env.stdout.write(`${message}\n`)
     }
   }
 
@@ -127,7 +128,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     if (state.type === 'error') {
       message += ` with message ${state.errorMessage}`
     }
-    process.stdout.write(`${message}\n`)
+    env.stdout.write(`${message}\n`)
   }
 }
 
@@ -168,15 +169,15 @@ export function getNodeNameLengthForSchedulerState(schedulerState: SchedulerStat
   return getNodeNameLength(Names)
 }
 
-export function printProperty(name: string, value: string) {
-  process.stdout.write(`   ${colors.grey(`${name}:`)} ${value}\n`)
+export function printProperty(env: Environment, name: string, value: string) {
+  env.stdout.write(`   ${colors.grey(`${name}:`)} ${value}\n`)
 }
 
-export function printItem(item: { name: string; description: string | null }) {
-  process.stdout.write(`• ${item.name}${item.description ? `: ${colors.white(item.description)}` : ''}\n`)
+export function printItem(env: Environment, item: { name: string; description: string | null }) {
+  env.stdout.write(`• ${item.name}${item.description ? `: ${colors.white(item.description)}` : ''}\n`)
 }
-export function printTitle(name: string) {
-  process.stdout.write(`${colors.bgWhite(name + ':\n')}`)
+export function printTitle(env: Environment, name: string) {
+  env.stdout.write(`${colors.bgWhite(name + ':\n')}`)
 }
 
 export function getNodeNameLength(names: () => Generator<string> | Array<string>): number {
@@ -206,7 +207,7 @@ export function getNodeName(name: string, maxNodeNameLength: number): string {
   return colors.white(name) + ' '.repeat(Math.max(0, maxNodeNameLength - name.length))
 }
 
-export function writeNodeLogToConsole(log: Message, maxNodeNameLength: number): void {
+export function writeNodeLogToConsole(env: Environment, log: Message, maxNodeNameLength: number): void {
   if (log.type === 'status') {
     if (log.level === 'debug' && !isVerbose) {
       return
@@ -219,7 +220,7 @@ export function writeNodeLogToConsole(log: Message, maxNodeNameLength: number): 
         ? colors.white(log.message)
         : colors.red(log.message)
       : `${getLogLevel(log.level)} - ${log.message}`
-  process.stdout.write(
+  env.stdout.write(
     `${formatDate(log.date)} ${colors.grey(log.context.type + ':')} ${getNodeName(
       log.context.name,
       maxNodeNameLength
@@ -243,7 +244,7 @@ export function formatDate(date: Date): string {
 }
 
 export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environment, ticker: number): void {
-  clearScreenDown(process.stdout)
+  clearScreenDown(env.stdout)
 
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
 
@@ -257,7 +258,7 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
       message += ` ${currentMessage.message}`
     }
 
-    count += printWithTruncate(message)
+    count += printWithTruncate(env, message)
   }
 
   for (const state of iterateWorkNodes(schedulerState.node)) {
@@ -296,10 +297,10 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
       message += ` ${state.errorMessage}`
     }
 
-    count += printWithTruncate(message)
+    count += printWithTruncate(env, message)
   }
 
-  moveCursor(process.stdout, 0, -1 * count)
+  moveCursor(env.stdout, 0, -1 * count)
 }
 
 function countChar(message: string, char: string): number {
@@ -312,23 +313,23 @@ function countChar(message: string, char: string): number {
   return result
 }
 
-function printWithTruncate(message: string): number {
+function printWithTruncate(env: Environment, message: string): number {
   let lineCount = 0
   let index = 0
   do {
     const newLineCount = countChar(message, '\n')
-    process.stdout.write(`${message.substr(index, process.stdout.columns)}\n`)
-    index += process.stdout.columns
+    env.stdout.write(`${message.substr(index, env.stdoutColumns)}\n`)
+    index += env.stdoutColumns
     lineCount++
     lineCount += newLineCount
   } while (index < message.length)
   return lineCount
 }
 
-export function hideCursor(): void {
-  process.stdout.write('\x1B[?25l')
+export function hideCursor(env: Environment): void {
+  env.stdout.write('\x1B[?25l')
 }
 
-export function showCursor(): void {
-  process.stdout.write('\x1B[?25h')
+export function showCursor(env: Environment): void {
+  env.stdout.write('\x1B[?25h')
 }

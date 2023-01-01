@@ -63,44 +63,46 @@ export async function getProgram(
         const services = items.filter(isCliService)
 
         if (services.length > 0) {
-          printTitle('Services')
+          printTitle(environment, 'Services')
           for (const node of services) {
-            printItem(node.item)
+            printItem(environment, node.item)
             printProperty(
+              environment,
               'ports',
               node.item.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
             )
             if (node.item.type === 'kubernetes-service') {
-              printProperty('context', node.item.context)
-              printProperty('selector', `${node.item.selector.type}/${node.item.selector.name}`)
+              printProperty(environment, 'context', node.item.context)
+              printProperty(environment, 'selector', `${node.item.selector.type}/${node.item.selector.name}`)
             } else {
-              printProperty('image', node.item.image)
+              printProperty(environment, 'image', node.item.image)
             }
           }
         }
 
         if (tasks.length > 0 && services.length > 0) {
-          process.stdout.write('\n')
+          environment.stdout.write('\n')
         }
 
         if (tasks.length > 0) {
-          printTitle('Tasks')
+          printTitle(environment, 'Tasks')
           for (const node of tasks) {
-            printItem(node.item)
+            printItem(environment, node.item)
             if (node.item.needs.length > 0) {
-              printProperty('needs', node.item.needs.map((d) => d.name).join(', '))
+              printProperty(environment, 'needs', node.item.needs.map((d) => d.name).join(', '))
             }
             if (node.item.deps.length > 0) {
-              printProperty('deps', node.item.deps.map((d) => d.name).join(', '))
+              printProperty(environment, 'deps', node.item.deps.map((d) => d.name).join(', '))
             }
             if (node.item.type === 'container') {
-              printProperty('image', node.item.image)
+              printProperty(environment, 'image', node.item.image)
             }
             if (node.item.caching) {
-              printProperty('caching', node.item.caching)
+              printProperty(environment, 'caching', node.item.caching)
             }
             if (hasLabels(node.item.labels)) {
               printProperty(
+                environment,
                 'labels',
                 `${Object.keys(node.item.labels)
                   .map((key) => `${key}=${node.item.labels[key].join(',')}`)
@@ -108,14 +110,22 @@ export async function getProgram(
               )
             }
             if (node.item.src.length > 0) {
-              printProperty('src', node.item.src.map((d) => relative(node.item.cwd, d.absolutePath)).join(' '))
+              printProperty(
+                environment,
+                'src',
+                node.item.src.map((d) => relative(node.item.cwd, d.absolutePath)).join(' ')
+              )
             }
             if (node.item.generates.length > 0) {
-              printProperty('generates', node.item.generates.map((d) => relative(node.item.cwd, d.path)).join(' '))
+              printProperty(
+                environment,
+                'generates',
+                node.item.generates.map((d) => relative(node.item.cwd, d.path)).join(' ')
+              )
             }
           }
         }
-        process.stdout.write('\n')
+        environment.stdout.write('\n')
       })
 
     program
