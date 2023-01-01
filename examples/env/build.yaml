@@ -9,7 +9,7 @@ tasks:
 
   example_docker:
     description: env inside docker container
-    image: alpine
+    image: alpine:latest
     cmds:
       - echo $NODE_VERSION
 

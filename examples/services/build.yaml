@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:12
+    image: postgres:12-alpine
     labels:
       app: example
     envs:

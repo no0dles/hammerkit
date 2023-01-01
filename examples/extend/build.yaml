@@ -11,7 +11,7 @@ tasks:
     deps: [extend_env]
 
   base_container_task:
-    image: alpine
+    image: alpine:latest
     envs:
       NAME: base
     cmds:

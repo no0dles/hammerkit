@@ -1,6 +1,6 @@
 tasks:
   create_dir:
-    image: alpine
+    image: alpine:latest
     src:
       - dirname.txt
     cmds:
@@ -10,7 +10,7 @@ tasks:
         resetOnChange: true
 
   read:
-    image: alpine
+    image: alpine:latest
     cache: none
     deps: [create_dir]
     cmds:
