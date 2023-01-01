@@ -60,7 +60,7 @@ export function dockerService(
 
       await container.start()
 
-      // await setUserPermissions(service, container, environment)
+      //await setUserPermissions(service, container, environment)
 
       if (!service.healthcheck) {
         state.patchService({

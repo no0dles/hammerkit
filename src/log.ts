@@ -56,7 +56,7 @@ export function consoleContext(): ConsoleContext {
   }
 }
 
-export const isVerbose = process.argv.some((a) => a === '--verbose')
+export const isVerbose = process.argv.some((a) => a === '--verbose') || process.env['VERBOSE'] === 'true'
 
 const typeLength = ['service', 'task', 'cli']
   .map((s) => s.length)

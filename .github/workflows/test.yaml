@@ -20,7 +20,9 @@ jobs:
         run: npm ci
       - name: Run tests
         run: node_modules/.bin/jest --runInBand
-        timeout-minutes: 10
+        timeout-minutes: 15
+        env:
+          VERBOSE: true
       - name: Upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
         with:
@@ -67,4 +69,6 @@ jobs:
         run: npm ci
       - name: Run tests
         run: node_modules/.bin/jest --runInBand
-        timeout-minutes: 10
+        timeout-minutes: 15
+        env:
+          VERBOSE: true

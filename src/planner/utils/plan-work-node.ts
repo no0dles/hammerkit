@@ -276,10 +276,10 @@ function parseLocalWorkNodeSource(
     .map((src) => mapSource(src, context.cwd))
 }
 
-function getContainerUser(): string {
+function getContainerUser(): string | null {
   return platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
     ? `${process.getuid()}:${process.getgid()}`
-    : `0:0`
+    : null
 }
 
 export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkContext): WorkService[] {
