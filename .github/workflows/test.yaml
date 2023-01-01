@@ -24,6 +24,7 @@ jobs:
         env:
           VERBOSE: true
       - name: Archive test artifacts
+        if: failure()
         uses: actions/upload-artifact@v3
         with:
           name: console-log
@@ -80,6 +81,7 @@ jobs:
           VERBOSE: true
       - name: Archive test artifacts
         uses: actions/upload-artifact@v3
+        if: failure()
         with:
           name: console-log
           path: |
