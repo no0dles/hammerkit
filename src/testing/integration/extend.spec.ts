@@ -22,7 +22,7 @@ describe('extend', () => {
     })
     expect(node.type).toBe('container')
     if (node.type === 'container') {
-      expect(node.image).toBe('alpine')
+      expect(node.image).toBe('alpine:latest')
     }
   })
 

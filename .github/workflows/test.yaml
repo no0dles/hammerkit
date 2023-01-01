@@ -74,7 +74,7 @@ jobs:
         uses: docker-practice/actions-setup-docker@master
       - name: Install npm packages
         run: npm ci
-      - name: Pull node image
+      - name: Pull postgres test image
         run: docker pull postgres:12-alpine
       - name: Pull node image
         run: docker pull node:16.6.0-alpine
