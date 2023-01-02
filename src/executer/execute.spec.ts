@@ -2,7 +2,7 @@ import { getTestSuite } from '../testing/get-test-suite'
 import { expectSuccessfulResult } from '../testing/expect'
 
 describe('execute', () => {
-  const suite = getTestSuite('hello-world-node', ['build.yaml', 'package.json', 'index.js'])
+  const suite = getTestSuite('hello-world-node', ['.hammerkit.yaml', 'package.json', 'index.js'])
 
   afterAll(() => suite.close())
 

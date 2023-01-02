@@ -2,7 +2,7 @@ import { join } from 'path'
 import { getTestSuite } from '../get-test-suite'
 
 describe('cancellation', () => {
-  const suite = getTestSuite('cancellation', ['build.yaml'])
+  const suite = getTestSuite('cancellation', ['.hammerkit.yaml'])
 
   afterAll(() => suite.close())
 

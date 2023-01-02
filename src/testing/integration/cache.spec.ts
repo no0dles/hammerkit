@@ -8,7 +8,7 @@ import { checkCacheState } from '../../executer/scheduler/enqueue-next'
 import { read, write } from '../../parser/read-build-file'
 
 describe('cache', () => {
-  const suite = getTestSuite('cache', ['build.yaml', 'package.json', 'package-lock.json'])
+  const suite = getTestSuite('cache', ['.hammerkit.yaml', 'package.json', 'package-lock.json'])
 
   afterAll(() => suite.close())
 
@@ -49,9 +49,9 @@ describe('cache', () => {
 
   it('should invalid cache on image change', async () => {
     await testCache(async (environment) => {
-      const buildFile = await read('build.yaml', environment)
+      const buildFile = await read('.hammerkit.yaml', environment)
       buildFile.tasks['example'].image = '15.0.0'
-      await write('build.yaml', buildFile, environment)
+      await write('.hammerkit.yaml', buildFile, environment)
     }, true)
   })
 })

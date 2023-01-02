@@ -63,7 +63,7 @@ export class ExampleTestSuite implements TestSuite {
       await this.file.copy(join(this.exampleDirectory, file), join(this.path, file))
     }
 
-    const fileName = join(this.path, 'build.yaml')
+    const fileName = join(this.path, '.hammerkit.yaml')
 
     this.tests.push({
       cwd: this.path,

@@ -3,7 +3,7 @@ import { expectSuccessfulResult } from '../expect'
 import { Environment } from '../../executer/environment'
 
 describe('glob', () => {
-  const suite = getTestSuite('glob', ['build.yaml', 'test.md', 'test.txt'])
+  const suite = getTestSuite('glob', ['.hammerkit.yaml', 'test.md', 'test.txt'])
 
   afterAll(() => suite.close())
 

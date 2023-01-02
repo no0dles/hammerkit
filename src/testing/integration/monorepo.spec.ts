@@ -2,7 +2,7 @@ import { expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 
 describe('monorepo', () => {
-  const suite = getTestSuite('monorepo', ['build.yaml', 'projects', 'build.npm.yaml', 'build.tsc.yaml'])
+  const suite = getTestSuite('monorepo', ['.hammerkit.yaml', 'projects', 'build.npm.yaml', 'build.tsc.yaml'])
 
   afterAll(() => suite.close())
 

@@ -9,7 +9,7 @@ description: >-
 
 Every task can run inside a container. Everything thats needed is to set an `image` property on your task.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   install:
@@ -25,7 +25,7 @@ This example will run an `npm install` command inside a container with the image
 
 All source files and folders will be mounted on container start and can be accessed inside the container.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   install:
@@ -59,7 +59,7 @@ tasks:
 
 For other files and folders that do not belong into sources/generates mounts can be used. They can be relative, absolute or relative to the user directory.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
     tasks:
       install:
@@ -86,7 +86,7 @@ Each source and generate of all dependencies get mounted into container automati
 
 Each command will be executed per default within a `sh` shell. The shell can also be override by adding a `shell` property to the task.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   shell_example:

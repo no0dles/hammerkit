@@ -6,7 +6,7 @@ import { existsVolume } from '../../executer/get-docker-executor'
 import { getVolumeName } from '../../planner/utils/plan-work-volume'
 
 describe('clean', () => {
-  const suite = getTestSuite('clean', ['build.yaml', 'package.json'])
+  const suite = getTestSuite('clean', ['.hammerkit.yaml', 'package.json'])
 
   afterAll(() => suite.close())
 

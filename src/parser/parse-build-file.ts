@@ -24,7 +24,6 @@ const validTaskKeys = [
   'description',
   'extend',
   'cmds',
-  'watch',
   'continuous',
   'cache',
 ]

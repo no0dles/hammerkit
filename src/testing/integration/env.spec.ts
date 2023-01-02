@@ -2,7 +2,7 @@ import { expectLog, expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 
 describe('env', () => {
-  const suite = getTestSuite('env', ['build.yaml', '.env'])
+  const suite = getTestSuite('env', ['.hammerkit.yaml', '.env'])
 
   afterAll(() => suite.close())
 

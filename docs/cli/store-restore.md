@@ -12,7 +12,7 @@ The store/restore commands are intended to be used in a CI system. The store com
 
 To demonstrate the behavior we use the following example below. A simple node typescript project, that requires to install npm dependencies and compile the typescript source code.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   install:

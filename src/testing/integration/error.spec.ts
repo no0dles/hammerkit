@@ -1,7 +1,7 @@
 import { getTestSuite } from '../get-test-suite'
 
 describe('error', () => {
-  const suite = getTestSuite('error', ['build.yaml'])
+  const suite = getTestSuite('error', ['.hammerkit.yaml'])
 
   afterAll(() => suite.close())
 

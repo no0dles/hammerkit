@@ -16,7 +16,7 @@ If a dependency task has changed or has no source files defined, the task gets e
 
 The following example defines the `package.json` and `package-lock.json` as a source file. Before each run the checksum of those two files are compared with the checksum of the last successful run and if equal the task will get skipped.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   install:
@@ -32,7 +32,7 @@ tasks:
 
 The next example defines the `src` folder as the task source. The check if the task can be skipped, the entire folder will be recursively traversed.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   build:
@@ -51,7 +51,7 @@ Keep in mind that the recursive traverse can be quite expensive on huge folders.
 
 This example defines a glob pattern `src/**/*.ts` as the task source. This is similar to the folder source, but filters for example the extension type.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   build:

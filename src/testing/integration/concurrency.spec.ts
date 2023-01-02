@@ -2,7 +2,7 @@ import { expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 
 describe('concurrency', () => {
-  const suite = getTestSuite('concurrency', ['build.yaml'])
+  const suite = getTestSuite('concurrency', ['.hammerkit.yaml'])
 
   afterAll(() => suite.close())
 

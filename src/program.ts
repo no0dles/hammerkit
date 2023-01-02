@@ -9,6 +9,7 @@ import { emptyWorkLabelScope, WorkScope } from './executer/work-scope'
 import { getWorkScope } from './get-work-context'
 import { printItem, printProperty, printTitle } from './log'
 import { hasLabels } from './executer/label-values'
+import { getDefaultBuildFilename } from './parser/default-build-file'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const buildFile = await getBuildFile(fileName, environment)
@@ -44,7 +45,10 @@ export async function getProgram(
 
   const args = [...argv]
   const fileIndex = args.indexOf('--file')
-  const fileName = join(environment.cwd, fileIndex >= 0 ? args[fileIndex + 1] : 'build.yaml')
+  const fileName = join(
+    environment.cwd,
+    fileIndex >= 0 ? args[fileIndex + 1] : await getDefaultBuildFilename(environment.cwd, environment)
+  )
   if (fileIndex >= 0) {
     args.splice(fileIndex, 2)
   }
@@ -163,7 +167,7 @@ export async function getProgram(
 
     program
       .command('validate')
-      .description('validate build.yaml')
+      .description('validate hammerkit configurations')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (options) => {
@@ -179,7 +183,7 @@ export async function getProgram(
           }
         }
         if (errors !== 0) {
-          program.error('Detected errors in your build.yaml', { exitCode: 1 })
+          program.error('Detected errors in the hammerkit configuration', { exitCode: 1 })
         }
       })
 
@@ -232,7 +236,7 @@ export async function getProgram(
 
     program
       .command('init')
-      .description('creates default build.yaml')
+      .description('creates default .hammerkit.yaml')
       .action(async () => {
         const content = `envs: {}
 
@@ -250,7 +254,7 @@ tasks:
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   program.version(require('../package.json').version)
   program.option('--verbose', 'log debugging information', false)
-  program.option('--file', 'set build file', 'build.yaml')
+  program.option('--file', 'set build file', '.hammerkit.yaml')
   program.configureOutput({
     writeOut: (str) => environment.console.info(str),
     writeErr: (str) => environment.console.error(str),

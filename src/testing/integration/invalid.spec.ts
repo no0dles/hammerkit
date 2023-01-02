@@ -2,7 +2,7 @@ import { getTestSuite } from '../get-test-suite'
 import { emptyWorkLabelScope } from '../../executer/work-scope'
 
 describe('invalid', () => {
-  const suite = getTestSuite('invalid', ['build.yaml'])
+  const suite = getTestSuite('invalid', ['.hammerkit.yaml'])
 
   afterAll(() => suite.close())
 

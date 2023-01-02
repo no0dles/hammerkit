@@ -1,7 +1,7 @@
 import { getTestSuite } from '../get-test-suite'
 
 describe('watch-dependency', () => {
-  const suite = getTestSuite('watch-dependency', ['build.yaml', 'source.txt'])
+  const suite = getTestSuite('watch-dependency', ['.hammerkit.yaml', 'source.txt'])
 
   afterAll(() => suite.close())
 

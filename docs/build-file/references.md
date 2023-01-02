@@ -10,14 +10,14 @@ Each build file can have a reference map.
 The reference points to other build file containing more tasks. 
 References can be used directly from the [cli](../cli/) or in [task dependencies](../task/dependencies.md).
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 references:
-  foo: project/foo/build.yaml
+  foo: project/foo
 ```
 {% endcode %}
 
-{% code title="project/foo/build.yaml" %}
+{% code title="project/foo/.hammerkit.yaml" %}
 ```yaml
 tasks:
   example:

@@ -2,7 +2,7 @@ import 'jest-extended'
 import { getTestSuite } from '../get-test-suite'
 
 describe('unknown', () => {
-  const suite = getTestSuite('unknown', ['build.yaml'])
+  const suite = getTestSuite('unknown', ['.hammerkit.yaml'])
 
   afterAll(() => suite.close())
 

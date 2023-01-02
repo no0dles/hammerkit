@@ -25,7 +25,7 @@ hammerkit init
 
 ### Result
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```
 envs: {}
 

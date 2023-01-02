@@ -50,7 +50,7 @@ With the following build file all the mentioned steps are executed by running `h
 When the content of the package.json gets modified, it will first install the npm packages and then restart the api. 
 Removing the need for any manual interaction.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   install:

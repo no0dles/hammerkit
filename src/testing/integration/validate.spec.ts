@@ -2,7 +2,7 @@ import 'jest-extended'
 import { getTestSuite } from '../get-test-suite'
 
 describe('validate', () => {
-  const suite = getTestSuite('validate', ['build.yaml', 'build-loop.yaml'])
+  const suite = getTestSuite('validate', ['.hammerkit.yaml', 'build-loop.yaml'])
   async function validateTask(name: string, expectedErrors: string[]) {
     const { cli } = await suite.setup({ taskName: name })
 

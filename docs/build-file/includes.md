@@ -29,7 +29,7 @@ tasks:
 
 For the npm install an include is used, because there is for each project a package.json, but the task definition can be reused.
 
-{% code title="project/a/build.yaml" %}
+{% code title="project/a/.hammerkit.yaml" %}
 ```yaml
 tasks:
   build:
@@ -44,7 +44,7 @@ includes:
 
 The include is used for the [task dependency](../task/dependencies.md) of the build task and ensures that the node\_modules is installed before.
 
-{% code title="project/b/build.yaml" %}
+{% code title="project/b/.hammerkit.yaml" %}
 ```yaml
 tasks:
   build:
@@ -53,7 +53,7 @@ tasks:
       - node_modules/.bin/tsc -b
 
 references:
-  a: ../a/build.yaml
+  a: ../a
             
 includes:
   npm: ../../build.npm.yaml

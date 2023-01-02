@@ -11,4 +11,4 @@ tasks:
       - echo name example
 
 includes:
-  foo: ./foo/build.yaml
+  foo: ./foo

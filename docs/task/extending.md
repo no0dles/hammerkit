@@ -38,7 +38,7 @@ tasks:
 
 Extending the `tsc:build` task will use all defined properties as a base. If nothing else is defined, it will be an exact copy with the working directory of the current build file.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   build:
@@ -53,7 +53,7 @@ includes:
 
 Every extended task can override defined or undefined properties. In this example the dependency gets cleared and runs without a dependency to the `install` task.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   build:

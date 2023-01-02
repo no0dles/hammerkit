@@ -8,7 +8,7 @@ description: >-
 
 Every task can have list of dependencies. Those will be executed before and if any of them fails abort the all pending tasks. Dependencies can be chained as deep as needed, as long as there is no loop.&#x20;
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   install:

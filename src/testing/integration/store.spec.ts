@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { expectSuccessfulResult } from '../expect'
 
 describe('store/restore', () => {
-  const suite = getTestSuite('store-restore', ['build.yaml', 'package.json'])
+  const suite = getTestSuite('store-restore', ['.hammerkit.yaml', 'package.json'])
 
   afterAll(() => suite.close())
 

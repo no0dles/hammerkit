@@ -5,5 +5,5 @@ tasks:
       - b:build
 
 references:
-  a: projects/a/build.yaml
-  b: projects/b/build.yaml
+  a: projects/a
+  b: projects/b

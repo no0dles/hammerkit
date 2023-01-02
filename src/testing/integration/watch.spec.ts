@@ -2,7 +2,7 @@ import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'
 
 describe('watch', () => {
-  const suite = getTestSuite('watch', ['build.yaml', 'src', 'package.json', 'package-lock.json', 'tsconfig.json'])
+  const suite = getTestSuite('watch', ['.hammerkit.yaml', 'src', 'package.json', 'package-lock.json', 'tsconfig.json'])
 
   afterAll(() => suite.close())
 

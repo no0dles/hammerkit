@@ -6,7 +6,7 @@ description: Short introduction to get started with your first build file
 
 ## Create your first build file
 
-To get started with hammerkit, you will need to create your first build file. Build files are usually called `build.yaml` and can be created from scratch manually or by using the init command.&#x20;
+To get started with hammerkit, you will need to create your first build file. Build files are usually called `.hammerkit.yaml` and can be created from scratch manually or by using the init command.&#x20;
 
 {% tabs %}
 {% tab title="shell" %}
@@ -18,7 +18,7 @@ hammerkit init
 
 If you created your build file with the init command, the build file will look like the example below.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 envs: {}
 

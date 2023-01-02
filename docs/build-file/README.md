@@ -6,7 +6,7 @@ description: A summary of all build file configuration options
 
 The build file is a yaml file with the filename `build.yaml` inside your project directory. It contains a list of [tasks](../task/) which can be executed over the [cli](../cli/).&#x20;
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 envs:
   NODE_VERSION: 14.16.0
@@ -19,7 +19,7 @@ tasks:
       - tsc -b
 
 references:
-  subProject: ./packages/subproject/build.yaml
+  subProject: ./packages/subproject
 
 includes:
   npm: ./build.npm.yaml

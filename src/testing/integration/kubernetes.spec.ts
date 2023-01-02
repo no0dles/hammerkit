@@ -2,7 +2,7 @@ import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
 
 describe('kubernetes', () => {
-  const suite = getTestSuite('kubernetes', ['index.js', 'package.json', 'package-lock.json', 'build.yaml'])
+  const suite = getTestSuite('kubernetes', ['index.js', 'package.json', 'package-lock.json', '.hammerkit.yaml'])
 
   afterAll(() => suite.close())
 

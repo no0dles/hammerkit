@@ -10,7 +10,7 @@ description: >-
 
 Environment variables which are available from the shell environment get passed into the command before execution.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   example:
@@ -35,7 +35,7 @@ NPM_TOKEN=abc
 ```
 {% endcode %}
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 tasks:
   example:
@@ -50,7 +50,7 @@ tasks:
 
 Environment variables can be defined in the build file itself. They are can be defined for the entire build file or only for specific tasks.
 
-{% code title="build.yaml" %}
+{% code title=".hammerkit.yaml" %}
 ```yaml
 envs:
   NODE_VERSION: 14.16.0
