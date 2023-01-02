@@ -1,6 +1,5 @@
 ---
-description: >-
-A task can declare needs on services. Hammerkit awaits the start of tasks until all service needs are ready.
+description: >- A task can declare needs on services. Hammerkit awaits the start of tasks until all service needs are ready.
 ---
 
 # Needs
@@ -22,4 +21,5 @@ tasks:
     needs: [postgres]
     cmds:
       - node index.js
+
 ```
