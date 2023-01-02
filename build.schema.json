@@ -100,6 +100,13 @@
         "type": "string"
       }
     },
+    "taskNeed": {
+      "type": "array",
+      "description": "A list of task service needs that get ready before the current task",
+      "items": {
+        "type": "string"
+      }
+    },
     "mount": {
       "type": "array",
       "description": "A list of file paths that get mounted into the container",
@@ -109,8 +116,9 @@
     },
     "taskPort": {
       "type": "array",
-      "description": "A list of ports that get exposed on the host from the container",
+      "description": "A list of ports that get exposed on the host from the container <localPort>:<targetPort>",
       "items": {
+        "description": "<localPort>:<targetPort>",
         "type": "string"
       }
     },
@@ -133,8 +141,20 @@
         "envs": {
           "$ref": "#/definitions/envMap"
         },
+        "needs": {
+          "$ref": "#/definitions/taskNeed"
+        },
         "deps": {
           "$ref": "#/definitions/taskDependency"
+        },
+        "cache": {
+          "type": "string",
+          "description": "compare type for detecting changes in source files",
+          "enum": ["checksum", "modify-date", "none"]
+        },
+        "continuous": {
+          "type": "boolean",
+          "description": "The task runs continuous and does not end without cancellation"
         },
         "watch": {
           "type": "boolean",
@@ -177,8 +197,20 @@
         "envs": {
           "$ref": "#/definitions/envMap"
         },
+        "needs": {
+          "$ref": "#/definitions/taskNeed"
+        },
         "deps": {
           "$ref": "#/definitions/taskDependency"
+        },
+        "cache": {
+          "type": "string",
+          "description": "compare type for detecting changes in source files",
+          "enum": ["checksum", "modify-date", "none"]
+        },
+        "continuous": {
+          "type": "boolean",
+          "description": "The task runs continuous and does not end without cancellation"
         },
         "watch": {
           "type": "boolean",
@@ -219,6 +251,43 @@
     },
     "service": {
       "description": "A daemon in the background",
+      "anyOf": [{
+        "$ref": "#/definitions/containerService"
+      }, {
+        "$ref": "#/definitions/kubernetesService"
+      }]
+    },
+    "kubernetesService": {
+      "required": ["context", "selector", "ports"],
+      "additionalProperties": false,
+      "properties": {
+        "kubeconfig": {
+          "type": "string",
+          "description": ""
+        },
+        "context": {
+          "type": "string",
+          "description": ""
+        },
+        "ports": {
+          "$ref": "#/definitions/taskPort"
+        },
+        "selector": {
+          "required": ["type", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["deployment", "service", "pod"]
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "containerService": {
       "required": ["image"],
       "additionalProperties": false,
       "properties": {
@@ -237,6 +306,9 @@
         },
         "healthcheck": {
           "$ref": "#/definitions/serviceHealthcheck"
+        },
+        "volumes": {
+          "$ref": "#/definitions/volume"
         },
         "mounts": {
           "$ref": "#/definitions/mount"
