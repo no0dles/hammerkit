@@ -10,7 +10,7 @@ tasks:
     src:
       - package.json
     cmds:
-      - npm install hammerkit
+      - npm install
 
   example:
     description: store and restore example with local task
@@ -19,4 +19,4 @@ tasks:
     src:
       - package.json
     cmds:
-      - npm install hammerkit
+      - npm install

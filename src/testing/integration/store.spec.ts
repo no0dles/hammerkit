@@ -64,5 +64,5 @@ describe('store/restore', () => {
     if (nodeState.type === 'completed') {
       expect(nodeState.cached).toBeTruthy()
     }
-  })
+  }, 90000)
 })
