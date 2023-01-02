@@ -1,6 +1,6 @@
 ---
 description: >-
-    A service is a continous task that does not end. 
+    A service is a continuous task that does not end. 
     Something a task may require a service to perform.
 ---
 

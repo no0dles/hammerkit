@@ -124,13 +124,13 @@ jobs:
           echo ::set-output name=VERSION::${GITHUB_REF:11}
       - name: Install npm packages
         run: npm ci
+      - name: Build .npmrc
+        run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish package
         run: npm publish --tag beta
         if: contains(steps.version.outputs.version, 'beta')
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish package
         run: npm publish
         if: "!contains(steps.version.outputs.version, 'beta')"
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
