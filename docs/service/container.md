@@ -1,8 +1,29 @@
----
-description: >-
-A service is a continous task that does not end.
-Something a task may require a service to perform.
----
+# Container service
+Container services run in the same network as the other container tasks.
+By default they are started when needed from by a task and stopped when no longer needed by future tasks.
+
+## Differences to docker-compose
+Services are similar to a `docker compose`, but are better integrated with your tasks.
+Compared to [docker compose v3](https://docs.docker.com/compose/compose-file/) the container service lacks a lot of features.
+There are some aspects to container services, that should still make them more appealing.
+
+### Seamless integration
+Hammerkit is aware of the task dependency tree and can make decisions about the lifetime of a service.
+Depending on your setup, this can result in less cpu/memory usage in general.
+
+It ensures simplicity and reduces the need for another tool that needs to be started and awaited, before you can run your task.
+
+### Reusage
+Services can be included or references similar to tasks.
+This makes it possible to reuse services and their state for multiple hammerkit files/projects.
+
+Making it possible to run just one database for multiple projects and reducing required cpu/memory. 
+
+### Store/Restore
+The [store/restore](./cli/store-restore.md) command from the hammerkit cli can be used for services as well.
+Enabling the functionality to export / import volume data of services.
+
+This can be used to seed database data or backup and restore project data states.
 
 ## Ports
 Services can expose ports to the host machine.
