@@ -1,64 +1,53 @@
-import { createWorkTree } from '../testing/create-work-tree'
-import { execute } from './execute'
-import { getExecutionContextMock } from './get-execution-context-mock'
-import { ExecutionContextMock } from './execution-context-mock'
-import { WorkTree } from '../planner/work-tree'
+import { getTestSuite } from '../testing/get-test-suite'
+import { expectSuccessfulResult } from '../testing/expect'
 
 describe('execute', () => {
-  let ctx: ExecutionContextMock
-  let workTree: WorkTree
-  let nodeId: string
+  const suite = getTestSuite('hello-world-node', ['.hammerkit.yaml', 'package.json', 'index.js'])
 
-  beforeEach(async () => {
-    ctx = getExecutionContextMock()
-    ctx.watch = true
-
-    workTree = await createWorkTree(
-      ctx.environment,
-      {
-        tasks: {
-          api: {
-            cmds: ['node index.js'],
-            src: ['index.js', 'package.json'],
-          },
-        },
-      },
-      'api'
-    )
-    nodeId = workTree.rootNode.id
-
-    await ctx.environment.file.createDirectory(ctx.environment.cwd)
-    await ctx.environment.file.writeFile(`${ctx.environment.cwd}/index.js`, "console.log('hello')")
-    await ctx.environment.file.writeFile(`${ctx.environment.cwd}/package.json`, '{}')
-  })
+  afterAll(() => suite.close())
 
   it('should restart watching task if once completed', async () => {
-    const resultPromise = execute(workTree, ctx)
+    const { cli, environment } = await suite.setup({ taskName: 'api' })
 
-    const runningApi = await ctx.executor.waitForExecution(nodeId)
-    runningApi.end()
+    const node = cli.node('api')
+    const exec = cli.execWatch({ watch: true })
 
-    await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
+    let count = 0
+    exec.state.on((state) => {
+      if (state.node[node.id].type === 'completed') {
+        count++
+        if (count === 1) {
+          environment.file.appendFile(`${environment.cwd}/index.js`, '\n')
+        } else if (count === 2) {
+          environment.abortCtrl.abort()
+        }
+      }
+    })
 
-    await ctx.executor.waitForExecution(nodeId)
-    await ctx.environment.abortCtrl.abort()
+    const result = await exec.start()
 
-    const result = await resultPromise
-    expect(result.success).toBeFalsy()
+    await expectSuccessfulResult(result, environment)
   })
 
   it('should restart watching task if once failed', async () => {
-    const resultPromise = execute(workTree, ctx)
+    const { cli, environment } = await suite.setup({ taskName: 'api_crashing' })
 
-    const runningApi = await ctx.executor.waitForExecution(nodeId)
-    runningApi.fail(new Error('runtime error'))
+    const node = cli.node('api_crashing')
+    const exec = cli.execWatch({ watch: true })
 
-    await ctx.environment.file.appendFile(`${ctx.environment.cwd}/index.js`, '\n')
+    let count = 0
+    exec.state.on((state) => {
+      if (state.node[node.id].type === 'crash') {
+        count++
+        if (count === 1) {
+          environment.file.appendFile(`${environment.cwd}/index.js`, '\n')
+        } else if (count === 2) {
+          environment.abortCtrl.abort()
+        }
+      }
+    })
 
-    await ctx.executor.waitForExecution(nodeId)
-    await ctx.environment.abortCtrl.abort()
-
-    const result = await resultPromise
+    const result = await exec.start()
     expect(result.success).toBeFalsy()
   })
 })

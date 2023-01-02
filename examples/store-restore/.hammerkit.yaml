@@ -1,0 +1,22 @@
+tasks:
+  example:docker:
+    description: store and restore example with docker task
+    image: node:16.6.0-alpine
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    generates:
+      - node_modules
+    src:
+      - package.json
+    cmds:
+      - npm install
+
+  example:
+    description: store and restore example with local task
+    generates:
+      - node_modules
+    src:
+      - package.json
+    cmds:
+      - npm install

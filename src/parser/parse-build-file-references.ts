@@ -2,6 +2,7 @@ import { dirname, join } from 'path'
 import { readBuildFile } from './read-build-file'
 import { BuildFile } from './build-file'
 import { Environment } from '../executer/environment'
+import { getDefaultBuildFilename } from './default-build-file'
 
 export async function parseBuildFileReferences(
   type: string,
@@ -22,9 +23,21 @@ export async function parseBuildFileReferences(
   for (const [key, value] of Object.entries(refs || {})) {
     const referenceFileName = join(dirname(fileName), value)
     if (!(await context.file.exists(referenceFileName))) {
-      throw new Error(`${fileName} ${type} ${key} not found`)
+      throw new Error(`${fileName} ${type} ${key} ${referenceFileName} not found`)
     }
-    result[key] = await readBuildFile(referenceFileName, files, context)
+    const stats = await context.file.stats(referenceFileName)
+    if (stats.type === 'directory') {
+      const defaultReferenceFileName = join(
+        referenceFileName,
+        await getDefaultBuildFilename(referenceFileName, context)
+      )
+      if (!(await context.file.exists(defaultReferenceFileName))) {
+        throw new Error(`${fileName} ${type} ${key} ${defaultReferenceFileName} not found in ${referenceFileName}`)
+      }
+      result[key] = await readBuildFile(defaultReferenceFileName, files, context)
+    } else {
+      result[key] = await readBuildFile(referenceFileName, files, context)
+    }
   }
   return result
 }

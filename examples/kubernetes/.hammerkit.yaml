@@ -1,0 +1,35 @@
+services:
+  postgres:
+    context: docker-desktop
+    ports:
+      - 5432:5432
+    selector:
+      type: deployment
+      name: postgres
+
+tasks:
+  install:
+    image: node:16.6.0-alpine
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    cmds:
+      - npm install
+
+  api:
+    image: node:16.6.0-alpine
+    deps: [install]
+    needs: [postgres]
+    ports:
+      - 3000
+    labels:
+      app: example
+    src:
+      - index.js
+    cmds:
+      - node index.js

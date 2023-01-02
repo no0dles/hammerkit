@@ -1,7 +1,20 @@
-import { appendFile, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs'
-import { dirname, join } from 'path'
+import {
+  appendFile,
+  copyFile,
+  createReadStream,
+  createWriteStream,
+  mkdir,
+  readdir,
+  readFile,
+  ReadStream,
+  rm,
+  stat,
+  writeFile,
+} from 'fs'
+import { dirname, join, isAbsolute } from 'path'
 import { watch } from 'chokidar'
 import { FileContext, Stats } from './file-context'
+import { Stream } from 'stream'
 
 function handleCallback<T>(callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void): Promise<T>
 function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
@@ -17,11 +30,19 @@ function handleCallback(callback: (cb: (err: Error | null, value?: any) => void)
   })
 }
 
-export function getFileContext(): FileContext {
+function getAbsolutePath(cwd: string, path: string) {
+  if (isAbsolute(path)) {
+    return path
+  } else {
+    return join(cwd, path)
+  }
+}
+
+export function getFileContext(cwd: string): FileContext {
   return {
     stats(path: string): Promise<Stats> {
       return new Promise<Stats>((resolve, reject) => {
-        stat(path, (err, stats) => {
+        stat(getAbsolutePath(cwd, path), (err, stats) => {
           if (err) {
             reject(err)
           } else {
@@ -37,17 +58,26 @@ export function getFileContext(): FileContext {
       })
     },
     appendFile(path: string, content: string): Promise<void> {
-      return handleCallback((cb) => appendFile(path, content, cb))
+      return handleCallback((cb) => appendFile(getAbsolutePath(cwd, path), content, cb))
     },
     writeFile(path: string, content: string): Promise<void> {
-      return handleCallback((cb) => writeFile(path, content, cb))
+      return handleCallback((cb) => writeFile(getAbsolutePath(cwd, path), content, cb))
+    },
+    async writeStream(path: string, stream: Stream): Promise<void> {
+      const writeStream = createWriteStream(path)
+      await new Promise<void>((resolve, reject) => {
+        stream
+          .pipe(writeStream)
+          .on('error', (err) => reject(err))
+          .on('close', () => resolve())
+      })
     },
     listFiles(path: string): Promise<string[]> {
-      return handleCallback((cb) => readdir(path, cb))
+      return handleCallback((cb) => readdir(getAbsolutePath(cwd, path), cb))
     },
     exists(path: string): Promise<boolean> {
       return handleCallback((cb) =>
-        stat(path, (err) => {
+        stat(getAbsolutePath(cwd, path), (err) => {
           if (err) {
             cb(null, false)
           } else {
@@ -56,9 +86,12 @@ export function getFileContext(): FileContext {
         })
       )
     },
+    readStream(path: string): ReadStream {
+      return createReadStream(path)
+    },
     read(path: string): Promise<string> {
       return handleCallback((cb) =>
-        readFile(path, (err, content) => {
+        readFile(getAbsolutePath(cwd, path), (err, content) => {
           if (err) {
             cb(err, null)
           } else {
@@ -68,37 +101,41 @@ export function getFileContext(): FileContext {
       )
     },
     async copy(source: string, destination: string): Promise<void> {
-      const exists = await this.exists(source)
+      const absoluteSource = getAbsolutePath(cwd, source)
+      const absoluteDestination = getAbsolutePath(cwd, destination)
+
+      const exists = await this.exists(absoluteSource)
       if (!exists) {
         return
       }
 
-      const stats = await this.stats(source)
+      const stats = await this.stats(absoluteSource)
       if (stats.type === 'directory') {
-        await this.createDirectory(destination)
-        for (const child of await this.listFiles(source)) {
-          await this.copy(join(source, child), join(destination, child))
+        await this.createDirectory(absoluteDestination)
+        for (const child of await this.listFiles(absoluteSource)) {
+          await this.copy(join(absoluteSource, child), join(absoluteDestination, child))
         }
       } else {
-        const destinationDirectory = dirname(destination)
+        const destinationDirectory = dirname(absoluteDestination)
         const existsDestinationDirectory = await this.exists(destinationDirectory)
         if (!existsDestinationDirectory) {
           await this.createDirectory(destinationDirectory)
         }
 
-        return handleCallback((cb) => copyFile(source, destination, cb))
+        return handleCallback((cb) => copyFile(absoluteSource, absoluteDestination, cb))
       }
     },
     createDirectory(path: string): Promise<string> {
-      return handleCallback((cb) => mkdir(path, { recursive: true }, cb))
+      return handleCallback((cb) => mkdir(getAbsolutePath(cwd, path), { recursive: true }, cb))
     },
     async remove(path: string): Promise<void> {
-      if (await this.exists(path)) {
-        return handleCallback((cb) => rm(path, { recursive: true }, cb))
+      const absolutePath = getAbsolutePath(cwd, path)
+      if (await this.exists(absolutePath)) {
+        return handleCallback((cb) => rm(absolutePath, { recursive: true }, cb))
       }
     },
     watch(path: string, callback: (fileName: string) => void): { close(): void } {
-      const watcher = watch(path)
+      const watcher = watch(getAbsolutePath(cwd, path))
       watcher.on('add', (fileName) => {
         callback(fileName)
       })

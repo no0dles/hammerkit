@@ -1,3 +1,6 @@
+import { Readable } from 'stream'
+import { ReadStream } from 'fs'
+
 export interface FileContext {
   createDirectory(path: string): Promise<string>
 
@@ -6,10 +9,12 @@ export interface FileContext {
   stats(path: string): Promise<Stats>
 
   writeFile(path: string, content: string): Promise<void>
+  writeStream(path: string, stream: Readable | NodeJS.ReadableStream): Promise<void>
 
   appendFile(path: string, content: string): Promise<void>
 
   read(path: string): Promise<string>
+  readStream(path: string): ReadStream
 
   copy(source: string, destination: string): Promise<void>
 

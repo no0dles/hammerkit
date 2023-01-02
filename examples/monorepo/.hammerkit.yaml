@@ -1,0 +1,9 @@
+tasks:
+  build:
+    deps:
+      - a:build
+      - b:build
+
+references:
+  a: projects/a
+  b: projects/b

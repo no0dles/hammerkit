@@ -7,8 +7,26 @@ import { parseStringArray } from './parse-string-array'
 import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 import { parseBuildFileCommand } from './parse-build-file-task-command'
 import { Environment } from '../executer/environment'
+import { parseBuildFileServices } from './parse-build-file-services'
+import { parseStringMap } from './parse-string-map'
+import { ParseContext, parseContextDescription } from './parse-context'
+import { parseString } from './parse-string'
+import { parseBoolean } from './parse-boolean'
+import { BuildFileTaskGenerate } from './build-file-task'
 
-const validTaskKeys = ['envs', 'src', 'deps', 'generates', 'description', 'extend', 'cmds', 'watch']
+const validTaskKeys = [
+  'envs',
+  'src',
+  'needs',
+  'deps',
+  'generates',
+  'labels',
+  'description',
+  'extend',
+  'cmds',
+  'continuous',
+  'cache',
+]
 const validDockerTaskKeys = ['image', 'mounts', 'ports', 'shell', ...validTaskKeys]
 
 export async function parseBuildFile(
@@ -24,6 +42,7 @@ export async function parseBuildFile(
     path: dirname(fileName),
     references: {},
     envs: {},
+    services: {},
   }
   files[fileName] = result
 
@@ -43,7 +62,9 @@ export async function parseBuildFile(
     } else if (key === 'references') {
       result.references = await parseBuildFileReferences('reference', fileName, files, value || {}, context)
     } else if (key === 'envs') {
-      result.envs = parseEnvs(fileName, value || {}, result.envs)
+      result.envs = parseEnvs({ type: 'buildfile', fileName }, value || {}, result.envs)
+    } else if (key === 'services') {
+      result.services = parseBuildFileServices(fileName, value || {}, result)
     }
   }
 
@@ -58,19 +79,23 @@ export async function parseBuildFile(
       throw new Error(`${fileName} task ${key} needs to be an object`)
     }
 
+    const ctx: ParseContext = { fileName, name: key, type: 'task' }
     const validKeys = value.image ? validDockerTaskKeys : validTaskKeys
     result.tasks[key] = {
-      envs: parseEnvs(fileName, value.envs || {}, {}),
-      mounts: parseStringArray(fileName, key, 'mounts', value.mounts),
-      src: parseBuildFileTaskSource(fileName, key, value.src, context),
-      deps: parseStringArray(fileName, key, 'deps', value.deps),
-      generates: parseStringArray(fileName, key, 'generates', value.generates),
-      description: value.description ? value.description.trim() : null,
+      envs: parseEnvs(ctx, value.envs || {}, {}),
+      mounts: parseStringArray(ctx, 'mounts', value.mounts),
+      src: parseBuildFileTaskSource(ctx, value.src, context),
+      deps: parseStringArray(ctx, 'deps', value.deps),
+      generates: parseGenerateArray(ctx, 'generates', value.generates),
+      description: parseString(ctx, 'description', value.description, true)?.trim() ?? null,
+      labels: parseStringMap(ctx, 'labels', value.labels),
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,
-      ports: parseStringArray(fileName, key, 'ports', value.ports),
-      cmds: parseBuildFileCommand(fileName, key, value.cmds),
+      needs: value.needs || null,
+      continuous: parseBoolean(ctx, 'continuous', value.continuous, true),
+      ports: parseStringArray(ctx, 'ports', value.ports),
+      cmds: parseBuildFileCommand(ctx, value.cmds),
       unknownProps: Object.keys(value)
         .filter((k) => validKeys.indexOf(k) === -1)
         .reduce<{ [key: string]: any }>((map, k) => {
@@ -78,7 +103,7 @@ export async function parseBuildFile(
           return map
         }, {}),
       platform: null,
-      continuous: null,
+      cache: value.cache || null,
     }
     if (Object.keys(result.tasks[key].unknownProps).length > 0) {
       context.console.warn(`unknown props ${Object.keys(result.tasks[key].unknownProps)} for ${key} in ${fileName}`)
@@ -86,4 +111,28 @@ export async function parseBuildFile(
   }
 
   return result
+}
+
+function parseGenerateArray(
+  ctx: ParseContext,
+  valueName: string,
+  value: unknown
+): (BuildFileTaskGenerate | string)[] | null {
+  if (!value) {
+    return null
+  }
+  if (value instanceof Array) {
+    return value.map<BuildFileTaskGenerate | string>((v, i) => {
+      if (typeof v === 'string') {
+        return v
+      } else {
+        return {
+          path: parseString(ctx, `generate[${i}].path`, v.path, false),
+          resetOnChange: parseBoolean(ctx, `generate[${i}].resetOnChange`, v.resetOnChange, true) || false,
+        }
+      }
+    })
+  } else {
+    throw new Error(`${parseContextDescription(ctx)} ${valueName} needs to be a string array`)
+  }
 }

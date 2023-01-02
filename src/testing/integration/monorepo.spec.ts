@@ -1,19 +1,15 @@
 import { expectSuccessfulResult } from '../expect'
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
-import { clean } from '../../executer/clean'
 import { getTestSuite } from '../get-test-suite'
-import { execute } from '../../executer/execute'
 
 describe('monorepo', () => {
-  const suite = getTestSuite('monorepo', ['build.yaml', 'projects', 'build.npm.yaml', 'build.tsc.yaml'])
+  const suite = getTestSuite('monorepo', ['.hammerkit.yaml', 'projects', 'build.npm.yaml', 'build.tsc.yaml'])
 
   afterAll(() => suite.close())
 
   it('should build and clean monorepo', async () => {
-    const { buildFile, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'build')
-    const result = await execute(workTree, executionContext)
-    await expectSuccessfulResult(result)
-    await clean(workTree.nodes, executionContext.environment, executionContext.executor)
+    const { cli, environment } = await suite.setup({ taskName: 'build' })
+    const result = await cli.exec()
+    await expectSuccessfulResult(result, environment)
+    await cli.clean()
   }, 120000)
 })

@@ -1,20 +1,57 @@
-import { BuildFile } from '../parser/build-file'
-import { planWorkNodes } from '../planner/utils/plan-work-nodes'
-import { planWorkTree } from '../planner/utils/plan-work-tree'
-import { WorkNode } from '../planner/work-node'
+import { WorkNode } from './work-node'
 import { WorkNodeValidation } from './work-node-validation'
 import { Environment } from '../executer/environment'
+import { WorkTree } from './work-tree'
+import { KubernetesWorkService } from './work-service'
+import { read } from '../parser/read-build-file'
 
-export async function* validate(
-  buildFile: BuildFile,
-  context: Environment,
-  name?: string
-): AsyncGenerator<WorkNodeValidation> {
-  const tree = name ? planWorkTree(buildFile, name).nodes : planWorkNodes(buildFile)
+export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkNodeValidation> {
   const cycleNodes: WorkNode[] = []
 
-  for (const key of Object.keys(tree)) {
-    const node = tree[key]
+  for (const service of Object.values(workTree.services)) {
+    if (!service.description) {
+      yield { type: 'warn', message: `missing description`, node: service }
+    }
+    if (service.type === 'container-service') {
+      if (!service.healthcheck) {
+        yield { type: 'warn', message: 'missing healthcheck', node: service }
+      }
+
+      for (const mount of service.mounts) {
+        if (!(await context.file.exists(mount.localPath))) {
+          yield {
+            type: 'warn',
+            message: `mount ${mount.localPath} does not exist`,
+            node: service,
+          }
+        }
+      }
+    } else {
+      if (!(await context.file.exists(service.kubeconfig))) {
+        yield {
+          type: 'warn',
+          message: `kubeconfig ${service.kubeconfig} does not exist`,
+          node: service,
+        }
+      } else if (!(await checkIfContextExists(service, context))) {
+        yield {
+          type: 'warn',
+          message: `context ${service.context} does not exist in kubeconfig ${service.kubeconfig}`,
+          node: service,
+        }
+      }
+    }
+
+    for (const key of Object.keys(service.buildService.unknownProps)) {
+      yield {
+        type: 'warn',
+        message: `${key} is an unknown configuration`,
+        node: service,
+      }
+    }
+  }
+
+  for (const node of Object.values(workTree.nodes)) {
     if (!node.description) {
       yield { type: 'warn', message: `missing description`, node: node }
     }
@@ -33,7 +70,7 @@ export async function* validate(
       }
     }
 
-    for (const key of Object.keys(node.unknownProps)) {
+    for (const key of Object.keys(node.plannedTask.buildTask.unknownProps)) {
       yield {
         type: 'warn',
         message: `${key} is an unknown configuration`,
@@ -51,7 +88,7 @@ export async function* validate(
   }
 }
 
-function hasCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
+export function hasCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
   if (currentPath.indexOf(node) >= 0) {
     return [...currentPath, node]
   }
@@ -64,4 +101,12 @@ function hasCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
   }
 
   return null
+}
+
+export async function checkIfContextExists(service: KubernetesWorkService, context: Environment): Promise<boolean> {
+  const kubeconfig = await read(service.kubeconfig, context)
+  if (kubeconfig.contexts && kubeconfig.contexts instanceof Array) {
+    return kubeconfig.contexts.some((c: any) => c['name'] === service.context)
+  }
+  return false
 }

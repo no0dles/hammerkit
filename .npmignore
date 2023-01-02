@@ -4,6 +4,7 @@ src
 examples
 coverage
 build.yaml
+.hammerkit.yaml
 jest.config.ts
 tsconfig.json
 .npm

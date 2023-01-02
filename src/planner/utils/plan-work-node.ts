@@ -1,184 +1,232 @@
 import { BuildFile } from '../../parser/build-file'
-import { BaseWorkNode, WorkNode } from '../work-node'
-import { WorkContext } from '../work-context'
-import { WorkNodes } from '../work-nodes'
+import { BaseWorkNode, WorkNode, WorkNodeGenerate } from '../work-node'
+import { createSubWorkContext, WorkContext } from '../work-context'
 import { templateValue } from './template-value'
 import { planWorkCommand } from './plan-work-command'
 import { splitName } from './split-name'
-import { findBuildTask } from './find-build-task'
 import { parseWorkNodeMount } from './parse-work-node-mount'
 import { planWorkDependency } from './plan-work-dependency'
-import { join } from 'path'
+import { extname, join } from 'path'
 import { BuildFileTaskSource } from '../../parser/build-file-task-source'
 import { WorkNodeSource } from '../work-node-source'
-import { BuildFileTask } from '../../parser/build-file-task'
+import { BuildFileTask, BuildFileTaskGenerate } from '../../parser/build-file-task'
 import { WorkNodeCommand } from '../work-node-command'
-import { BuildTaskCommand } from '../../parser/build-file-task-command'
-import { nodeConsole } from '../work-node-status'
 import { getWorkNodeId } from '../work-node-id'
 import { WorkNodePort } from '../work-node-port'
-import { WorkNodePath } from '../work-node-path'
 import { parseWorkNodePort } from './parse-work-node-port'
+import { BaseWorkService, WorkService } from '../work-service'
+import { getWorkServiceId } from '../work-service-id'
+import { BuildFileTaskPlatform } from '../../parser/build-file-task-platform'
+import { BuildTaskCommand } from '../../parser/build-file-task-command'
+import { CacheMethod } from '../../parser/cache-method'
+import { LabelValues } from '../../executer/label-values'
+import { homedir, platform } from 'os'
+import { parseWorkServiceVolume } from './parse-work-service-volume'
+import { WorkMount } from '../work-mount'
+import { getContainerVolumes } from './plan-work-volume'
+import { getContainerMounts } from './get-container-mounts'
+import { normalizePath } from './normalize-path'
 
-export interface MergedBuildFileTask {
-  image: string | null
-  envs: { [key: string]: string }
-  cmds: BuildTaskCommand[]
-  description: string | null
-  shell: string | null
-  unknownProps: { [key: string]: any }
-  src: BuildFileTaskSource[]
-  mounts: string[]
-  ports: string[]
-  generates: string[]
-  continuous: boolean
-}
-
-export interface MergedDependency {
+export interface BuildFileReference {
   build: BuildFile
   name: string
+  context: WorkContext
 }
 
-export function getMergedBuildTask(
-  build: BuildFile,
-  task: BuildFileTask
-): { task: MergedBuildFileTask; deps: MergedDependency[] } {
+export interface PlannedTask {
+  build: BuildFile
+  buildTask: BuildFileTask
+  name: string
+  cwd: string
+  continuous: boolean
+  deps: BuildFileReference[]
+  src: BuildFileTaskSource[]
+  platform: BuildFileTaskPlatform | null
+  description: string | null
+  shell: string | null
+  generates: BuildFileTaskGenerate[]
+  image: string | null
+  mounts: string[]
+  cmds: BuildTaskCommand[]
+  needs: BuildFileReference[]
+  envs: { [key: string]: string }
+  ports: string[]
+  labels: { [key: string]: string }
+  cache: CacheMethod | null
+}
+
+export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskResult): PlannedTask {
+  let extendedTask: BuildTaskResult | null = null
+
+  if (buildTaskResult.task.extend) {
+    extendedTask = findBuildTask(workContext, { taskName: buildTaskResult.task.extend })
+    if (extendedTask.task.extend) {
+      throw new Error(`nested extend ${extendedTask.name} is not allowed for task ${buildTaskResult.name}`)
+    }
+  }
+
   const envs = {
-    ...build.envs,
-    ...(task.envs || {}),
+    ...(extendedTask?.task?.envs || {}),
+    ...buildTaskResult.context.build.envs,
+    ...(buildTaskResult.task.envs || {}),
   }
 
-  if (task.extend) {
-    const extend = findBuildTask(build, task.extend)
-    const extendEnvs = {
-      ...extend.task.envs,
-      ...envs,
+  const getReferences = (task: BuildTaskResult | null, prop: 'needs' | 'deps'): BuildFileReference[] => {
+    if (!task) {
+      return []
     }
-    return {
-      task: {
-        image: task.image || extend.task.image,
-        envs: extendEnvs,
-        ports: task.ports || extend.task.ports || [],
-        cmds: task.cmds || extend.task.cmds || [],
-        description: task.description || extend.task.description,
-        shell: task.shell || extend.task.shell,
-        continuous: task.continuous || extend.task.continuous || false,
-        unknownProps: task.unknownProps,
-        src: [...(extend.task.src || []), ...(task.src || [])],
-        mounts: [...(extend.task.mounts || []), ...(task.mounts || [])],
-        generates: [...(extend.task.generates || []), ...(task.generates || [])],
-      },
-      deps: [
-        ...(extend.task.deps || []).map((d) => ({ name: d, build: extend.build })),
-        ...(task.deps || []).map((d) => ({ name: d, build: build })),
-      ],
+
+    const value = task.task[prop]
+    if (!value) {
+      return []
     }
-  } else {
-    return {
-      task: {
-        image: task.image,
-        src: task.src || [],
-        cmds: task.cmds || [],
-        continuous: task.continuous || false,
-        generates: task.generates || [],
-        description: task.description,
-        shell: task.shell,
-        ports: task.ports || [],
-        unknownProps: task.unknownProps,
-        mounts: task.mounts || [],
-        envs,
-      },
-      deps: [...(task.deps || []).map((d) => ({ name: d, build: build }))],
-    }
+
+    return value.map((d) => ({
+      name: d,
+      build: buildTaskResult.context.build,
+      context: task.context,
+    }))
+  }
+
+  const mergeReferences = (first: BuildFileReference[], second: BuildFileReference[]): BuildFileReference[] => {
+    return [...first, ...second]
+  }
+
+  return {
+    buildTask: buildTaskResult.task,
+    build: buildTaskResult.context.build,
+    name: buildTaskResult.name,
+    cache: buildTaskResult.task.cache ?? extendedTask?.task?.cache ?? null,
+    description: buildTaskResult.task.description ?? extendedTask?.task?.description ?? null,
+    cwd: workContext.cwd,
+    image: buildTaskResult.task.image ?? extendedTask?.task?.image ?? null,
+    platform: buildTaskResult.task.platform ?? extendedTask?.task?.platform ?? null,
+    mounts: buildTaskResult.task.mounts || extendedTask?.task?.mounts || [],
+    generates: (buildTaskResult.task.generates || extendedTask?.task?.generates || []).map((g) => mapGenerate(g)),
+    shell: buildTaskResult.task.shell ?? extendedTask?.task?.shell ?? null,
+    ports: buildTaskResult.task.ports || extendedTask?.task?.ports || [],
+    src: buildTaskResult.task.src || extendedTask?.task?.src || [],
+    cmds: buildTaskResult.task.cmds || extendedTask?.task?.cmds || [],
+    continuous: buildTaskResult.task.continuous ?? extendedTask?.task?.continuous ?? false,
+    labels: {
+      ...(extendedTask?.task?.labels || {}),
+      ...(buildTaskResult.task.labels || {}),
+    },
+    envs,
+    deps: mergeReferences(getReferences(extendedTask, 'deps'), getReferences(buildTaskResult, 'deps')),
+    needs: mergeReferences(getReferences(extendedTask, 'needs'), getReferences(buildTaskResult, 'needs')),
   }
 }
 
-export function planWorkNode(build: BuildFile, taskName: string, nodes: WorkNodes, context: WorkContext): WorkNode {
-  if (build.tasks[taskName]) {
-    const { task, deps } = getMergedBuildTask(build, build.tasks[taskName])
-    const id = getWorkNodeId(context.currentWorkdir, task, deps)
-    if (nodes[id]) {
-      return nodes[id]
-    }
-
-    const name = [...context.namePrefix, taskName].join(':')
-    const node = parseWorkNode(
-      {
-        envs: task.envs,
-        id,
-        continuous: task.continuous,
-        description: templateValue(task.description, task.envs),
-        name,
-        cwd: context.currentWorkdir,
-        cmds: parseWorkNodeCommand(task, context, task.envs),
-        deps: [],
-        unknownProps: task.unknownProps,
-        buildFile: build,
-        taskName: taskName,
-        src: parseLocalWorkNodeSource(task, context, task.envs),
-        generates: parseLocalWorkNodeGenerate(task, context, task.envs),
-        mergedDeps: deps,
-        mergedTask: task,
-        status: {
-          name,
-          state: { type: 'pending', pendingDependencies: {} },
-          defer: new AbortController(),
-          console: nodeConsole(),
-        },
-      },
-      task,
-      context
-    )
-
-    nodes[id] = node
-
-    const depNodes = deps.map((dep) => {
-      const depName = templateValue(dep.name, dep.build.envs)
-      const depNode = planWorkNode(dep.build, depName, nodes, {
-        ...context,
-        idPrefix: null,
-      })
-      if (!depNode) {
-        throw new Error(`unable to find dependency ${dep} for task ${taskName} in ${dep.build.path}`)
-      }
-      return depNode
-    })
-
-    planWorkDependency(depNodes, node, taskName, nodes, context)
-
-    return node
+function mapGenerate(generate: string | BuildFileTaskGenerate): BuildFileTaskGenerate {
+  if (typeof generate === 'string') {
+    return { path: generate, resetOnChange: false }
   } else {
-    const ref = splitName(taskName)
+    return { path: generate.path, resetOnChange: generate.resetOnChange ?? false }
+  }
+}
+
+export type BuildTaskResult = { task: BuildFileTask; name: string; context: WorkContext }
+export type BuildTaskSelector = { taskName: string }
+
+export function findBuildTask(context: WorkContext, selector: BuildTaskSelector): BuildTaskResult {
+  if (context.build.tasks[selector.taskName]) {
+    return { task: context.build.tasks[selector.taskName], context, name: selector.taskName }
+  } else {
+    const ref = splitName(selector.taskName)
     if (ref.prefix) {
-      if (build.references[ref.prefix]) {
-        return planWorkNode(build.references[ref.prefix], ref.taskName, nodes, {
-          ...context,
-          currentWorkdir: build.references[ref.prefix].path,
-          idPrefix: null,
-          namePrefix: [...context.namePrefix, ref.prefix],
-        })
-      } else if (build.includes[ref.prefix]) {
-        return planWorkNode(build.includes[ref.prefix], ref.taskName, nodes, {
-          ...context,
-          idPrefix: ref.prefix,
-          namePrefix: [...context.namePrefix, ref.prefix],
-        })
+      if (context.build.references[ref.prefix]) {
+        return findBuildTask(
+          createSubWorkContext(context, {
+            name: ref.prefix,
+            type: 'references',
+          }),
+          { taskName: ref.taskName }
+        )
+      } else if (context.build.includes[ref.prefix]) {
+        return findBuildTask(
+          createSubWorkContext(context, {
+            name: ref.prefix,
+            type: 'includes',
+          }),
+          {
+            taskName: ref.taskName,
+          }
+        )
       }
     }
 
-    throw new Error(`unable to find ${taskName} in ${build.path}`)
+    throw new Error(`unable to find ${selector.taskName} in ${context.build.path}`)
   }
 }
 
-function parseWorkNode(baseWorkNode: BaseWorkNode, task: MergedBuildFileTask, context: WorkContext): WorkNode {
+export function getWorkNode(context: WorkContext, selector: BuildTaskSelector): WorkNode {
+  const rootNode = findBuildTask(context, selector)
+  const plannedTask = planTask(rootNode.context, rootNode)
+
+  const id = getWorkNodeId(plannedTask)
+  if (context.workTree.nodes[id]) {
+    return context.workTree.nodes[id]
+  }
+
+  const node = parseWorkNode(id, plannedTask, rootNode.context)
+  context.workTree.nodes[id] = node
+
+  const depNodes: WorkNode[] = []
+  for (const plannedDep of plannedTask.deps) {
+    const depName = templateValue(plannedDep.name, plannedDep.build.envs)
+    const depNode = getWorkNode(plannedDep.context, { taskName: depName })
+    if (!depNodes.some((d) => d.id === depNode.id)) {
+      depNodes.push(depNode)
+    }
+  }
+
+  planWorkDependency(depNodes, node)
+
+  return node
+}
+
+export function mapLabels(labels: { [key: string]: string }): LabelValues {
+  const result: LabelValues = {}
+  for (const [key, value] of Object.entries(labels)) {
+    result[key] = [value]
+  }
+  return result
+}
+
+function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): WorkNode {
+  const name = [...context.namePrefix, task.name].join(':')
+
+  const baseWorkNode: BaseWorkNode = {
+    envs: task.envs,
+    id,
+    description: templateValue(task.description, task.envs),
+    continuous: task.continuous,
+    name,
+    cwd: task.cwd,
+    cmds: parseWorkNodeCommand(task, context, task.envs),
+    deps: [],
+    buildFile: task.build,
+    taskName: task.name,
+    src: parseLocalWorkNodeSource(task, context, task.envs),
+    generates: parseLocalWorkNodeGenerate(task, context, task.envs),
+    plannedTask: task,
+    needs: parseWorkNodeNeeds(task.needs, context),
+    labels: mapLabels(task.labels),
+    caching: task.cache ?? null,
+  }
+
   if (task.image) {
+    const mounts = getContainerMounts(baseWorkNode, parseContainerWorkNodeMount(task, context, task.envs))
     return {
       ...baseWorkNode,
       type: 'container',
+      user: getContainerUser(),
       image: templateValue(task.image, task.envs),
       shell: templateValue(task.shell, task.envs) || '/bin/sh',
-      mounts: parseContainerWorkNodeMount(task, context, task.envs),
+      mounts,
       ports: parseContainerWorkNodePorts(task, context, task.envs),
+      volumes: getContainerVolumes(baseWorkNode, mounts),
     }
   } else {
     return {
@@ -188,8 +236,8 @@ function parseWorkNode(baseWorkNode: BaseWorkNode, task: MergedBuildFileTask, co
   }
 }
 
-function parseContainerWorkNodePorts(
-  task: MergedBuildFileTask,
+export function parseContainerWorkNodePorts(
+  task: PlannedTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
 ): WorkNodePort[] {
@@ -197,25 +245,38 @@ function parseContainerWorkNodePorts(
 }
 
 function parseContainerWorkNodeMount(
-  task: MergedBuildFileTask,
+  task: PlannedTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
-): WorkNodePath[] {
-  return task.mounts.map((m) => templateValue(m, envs)).map((m) => parseWorkNodeMount(context.currentWorkdir, m))
+): WorkMount[] {
+  const mounts = task.mounts.map((m) => templateValue(m, envs)).map((m) => parseWorkNodeMount(context.cwd, m))
+  const fileGenerates = task.generates
+    .filter((g) => extname(g.path).length > 1)
+    .map<WorkMount>((g) => {
+      const path = normalizePath(context.cwd, context.cwd, templateValue(g.path, envs))
+
+      return {
+        localPath: path,
+        containerPath: path,
+      }
+    })
+  return [...mounts, ...fileGenerates]
 }
 
 function parseLocalWorkNodeGenerate(
-  task: MergedBuildFileTask,
+  task: PlannedTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
-): { path: string; inherited: boolean }[] {
-  return getAbsolutePaths(task.generates, context.currentWorkdir)
-    .map((g) => templateValue(g, envs))
-    .map((path) => ({ path, inherited: false }))
+): WorkNodeGenerate[] {
+  return task.generates.map((g) => ({
+    path: join(context.cwd, templateValue(g.path, envs)),
+    resetOnChange: g.resetOnChange ?? false,
+    inherited: false,
+  }))
 }
 
 function parseLocalWorkNodeSource(
-  task: MergedBuildFileTask,
+  task: PlannedTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
 ): WorkNodeSource[] {
@@ -224,11 +285,69 @@ function parseLocalWorkNodeSource(
       relativePath: templateValue(src.relativePath, envs),
       matcher: src.matcher,
     }))
-    .map((src) => mapSource(src, context.currentWorkdir))
+    .map((src) => mapSource(src, context.cwd))
+}
+
+function getContainerUser(): string | null {
+  return platform() === 'linux' || platform() === 'freebsd' || platform() === 'openbsd' || platform() === 'sunos'
+    ? `${process.getuid()}:${process.getgid()}`
+    : null
+}
+
+export function parseWorkNodeNeeds(needs: BuildFileReference[], context: WorkContext): WorkService[] {
+  const result: WorkService[] = []
+
+  for (const need of needs) {
+    const service = need.build.services[need.name]
+    const id = getWorkServiceId(need.build, service)
+    if (!context.workTree.services[id]) {
+      const workService: BaseWorkService = {
+        id,
+        buildService: service,
+        name: need.name,
+        description: service.description,
+        ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkNodePort(m)),
+      }
+      if (service.image) {
+        context.workTree.services[id] = {
+          ...workService,
+          type: 'container-service',
+          cmd: service.cmd,
+          envs: service.envs || {},
+          image: service.image,
+          // user: getContainerUser(),
+          healthcheck: service.healthcheck,
+          mounts: (service.mounts || [])
+            .map((m) => templateValue(m, service.envs))
+            .map((m) => parseWorkNodeMount(need.build.path, m)),
+          volumes: (service.volumes || [])
+            .map((m) => templateValue(m, service.envs))
+            .map((m) => parseWorkServiceVolume(need.build.path, m)),
+        }
+      } else if (!!service.context && !!service.selector) {
+        context.workTree.services[id] = {
+          ...workService,
+          context: service.context,
+          selector: service.selector,
+          kubeconfig: service.kubeconfig ?? getDefaultKubeConfig(),
+          type: 'kubernetes-service',
+        }
+      }
+    }
+    if (!result.some((s) => s.id === id)) {
+      result.push(context.workTree.services[id])
+    }
+  }
+
+  return result
+}
+
+function getDefaultKubeConfig(): string {
+  return join(homedir(), '.kube/config')
 }
 
 function parseWorkNodeCommand(
-  task: MergedBuildFileTask,
+  task: PlannedTask,
   context: WorkContext,
   envs: { [key: string]: string } | null
 ): WorkNodeCommand[] {
@@ -244,18 +363,18 @@ function parseWorkNodeCommand(
         }
       }
     }),
-    context.currentWorkdir
+    context.cwd
   )
 }
 
-function mapSource(src: BuildFileTaskSource, workDir: string): WorkNodeSource {
+export function mapSource(src: BuildFileTaskSource, workDir: string): WorkNodeSource {
   return {
     matcher: src.matcher,
     absolutePath: join(workDir, src.relativePath),
   }
 }
 
-function getAbsolutePaths(dirs: string[] | null, workingDir: string): string[] {
+export function getAbsolutePaths(dirs: string[] | null, workingDir: string): string[] {
   if (!dirs) {
     return []
   }

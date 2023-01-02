@@ -4,7 +4,7 @@ tasks:
     extend: tsc:build
 
 references:
-  a: ../a/build.yaml
+  a: ../a
 
 includes:
   npm: ../../build.npm.yaml

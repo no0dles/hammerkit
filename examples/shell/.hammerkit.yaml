@@ -1,0 +1,6 @@
+tasks:
+  shell_example:
+    image: alpine:latest
+    shell: bash
+    cmds:
+      - echo $RANDOM

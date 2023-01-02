@@ -1,40 +1,40 @@
-import { ExecutionContext } from '../executer/execution-context'
-import { WorkTree } from '../planner/work-tree'
 import { hideCursor, printWorkTreeResult, showCursor, writeWorkTreeStatus } from '../log'
-import { ExecuteResult } from '../executer/execute-result'
 import { clearScreenDown } from 'readline'
-import { LogStrategy } from './log-strategy'
+import { SchedulerState } from '../executer/scheduler/scheduler-state'
+import { Logger } from './log-mode'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
+import { Environment } from '../executer/environment'
+import { ReadonlyState } from '../executer/readonly-state'
 
-export function interactiveLogger(): LogStrategy {
+export function interactiveLogger(state: ReadonlyState<SchedulerState>, env: Environment): Logger {
   let running = true
   let count = 0
 
+  const tickerFn = () => {
+    if (!running) {
+      return
+    }
+
+    count++
+    writeWorkTreeStatus(state.current, env, count)
+    if (running) {
+      setTimeout(tickerFn, 100)
+    }
+  }
+
+  hideCursor(env)
+  tickerFn()
+
+  state.on((currentState) => {
+    writeWorkTreeStatus(currentState, env, count)
+  })
+
   return {
-    start(executionContext: ExecutionContext, workTree: WorkTree) {
-      hideCursor()
-      writeWorkTreeStatus(workTree, count)
-
-      const tickerFn = () => {
-        count++
-        writeWorkTreeStatus(workTree, count)
-        if (running) {
-          setTimeout(tickerFn, 100)
-        }
-      }
-      tickerFn()
-
-      executionContext.events.on(({ workTree }) => {
-        writeWorkTreeStatus(workTree, count)
-      })
-    },
-    async finish(workTree: WorkTree, result: ExecuteResult) {
+    async complete(evt: SchedulerResult, env): Promise<void> {
       running = false
-      clearScreenDown(process.stdout)
-      await printWorkTreeResult(workTree, result, true)
-      showCursor()
-    },
-    abort(e: Error) {
-      process.stderr.write(`${e.message}\n`)
+      clearScreenDown(env.stdout)
+      await printWorkTreeResult(evt.state, env)
+      showCursor(env)
     },
   }
 }

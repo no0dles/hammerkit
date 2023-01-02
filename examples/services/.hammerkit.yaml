@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:12-alpine
+    labels:
+      app: example
+    envs:
+      POSTGRES_USER: api
+      POSTGRES_DB: api
+      POSTGRES_PASSWORD: 123456
+    healthcheck:
+      cmd: "pg_isready -U postgres"
+
+tasks:
+  install:
+    image: node:16.6.0-alpine
+    labels:
+      stage: build
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+      - package-lock.json
+    cmds:
+      - npm install
+
+  api:
+    image: node:16.6.0-alpine
+    deps: [install]
+    needs: [postgres]
+    labels:
+      stage: run
+      app: example
+    src:
+      - index.js
+      - config.json
+    cmds:
+      - node index.js

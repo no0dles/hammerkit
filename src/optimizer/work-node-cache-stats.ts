@@ -1,5 +1,10 @@
 export interface WorkNodeCacheFileStats {
-  cwd: string
+  created: Date
+  files: {
+    [key: string]: { lastModified: number; checksum: string }
+  }
+}
+export interface WorkServiceCacheFileStats {
   files: {
     [key: string]: { lastModified: number; checksum: string }
   }

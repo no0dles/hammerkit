@@ -1,9 +1,0 @@
-tasks:
-  build:
-    deps:
-      - a:build
-      - b:build
-
-references:
-  a: projects/a/build.yaml
-  b: projects/b/build.yaml

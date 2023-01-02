@@ -1,12 +1,12 @@
-import { BuildFile } from '../parser/build-file'
-import { TestContext } from './test-context'
-import { ExecutionContext } from '../executer/execution-context'
-import { TestSuiteOptions } from './test-suite-options'
+import { WorkScope } from '../executer/work-scope'
+import { TestSuiteSetup } from './test-suite-setup'
+
+export type TestSuiteOptions = WorkScope & { envs?: { [key: string]: string } }
 
 export interface TestSuite {
-  setup(
-    executionOptions?: TestSuiteOptions
-  ): Promise<{ context: TestContext; executionContext: ExecutionContext; buildFile: BuildFile }>
+  path: string
+
+  setup(scope: TestSuiteOptions): Promise<TestSuiteSetup>
 
   close(): Promise<void>
 }

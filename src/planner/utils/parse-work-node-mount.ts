@@ -1,8 +1,8 @@
-import { join } from 'path'
-import { WorkNodePath } from '../work-node-path'
 import { homedir } from 'os'
+import { normalizePath } from './normalize-path'
+import { WorkMount } from '../work-mount'
 
-export function parseWorkNodeMount(cwd: string, dir: string): WorkNodePath {
+export function parseWorkNodeMount(cwd: string, dir: string): WorkMount {
   const parts = dir.split(':')
   if (parts.length === 1) {
     return parseLocalMount(cwd, dir, dir)
@@ -13,17 +13,7 @@ export function parseWorkNodeMount(cwd: string, dir: string): WorkNodePath {
   }
 }
 
-function normalizePath(cwd: string, pwd: string, path: string) {
-  if (path.startsWith('/')) {
-    return path
-  } else if (path.startsWith('$PWD')) {
-    return join(pwd, path.substr('$PWD'.length))
-  } else {
-    return join(cwd, path)
-  }
-}
-
-function parseLocalMount(cwd: string, localPath: string, containerPath: string): WorkNodePath {
+function parseLocalMount(cwd: string, localPath: string, containerPath: string): WorkMount {
   return {
     localPath: normalizePath(cwd, homedir(), localPath),
     containerPath: normalizePath(cwd, cwd, containerPath),

@@ -1,46 +1,43 @@
 import { join } from 'path'
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { getTestSuite } from '../get-test-suite'
-import { execute } from '../../executer/execute'
 
 describe('cancellation', () => {
-  const suite = getTestSuite('cancellation', ['build.yaml'])
+  const suite = getTestSuite('cancellation', ['.hammerkit.yaml'])
 
   afterAll(() => suite.close())
 
   async function testAbort(taskName: string, expectedState: string) {
-    const { buildFile, context, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, taskName)
-    executionContext.events.on((evt) => {
-      if (evt.newState.type === 'running' && !executionContext.environment.abortCtrl.signal.aborted) {
-        evt.workTree.nodes[evt.nodeId].status.console.on((log) => {
-          if (log.message.startsWith('execute cmd ')) {
-            setTimeout(() => {
-              executionContext.environment.abortCtrl.abort()
-            }, 2000)
-          }
-        })
+    const { cli, environment } = await suite.setup({ taskName })
+    const exec = await cli.execWatch({ logMode: 'live' })
+    const abortNode = Object.values(exec.state.current.node).find((n) => n.node.name.startsWith('long_'))
+    exec.processManager.on((evt) => {
+      if (evt.type === 'started' && evt.context.id === abortNode?.node.id) {
+        environment.abortCtrl.abort()
       }
     })
-    const result = await execute(workTree, executionContext)
+    const result = await exec.start()
     expect(result.success).toBeFalsy()
-    expect(result.nodes[workTree.rootNode.id].state.type).toEqual(expectedState)
-    expect(await context.file.exists(join(buildFile.path, 'test'))).toBeFalsy()
+    if (abortNode) {
+      expect(result.state.node[abortNode.node.id].type).toEqual(expectedState)
+    } else {
+      expect(abortNode).toBeDefined()
+    }
+    expect(await environment.file.exists(join(suite.path, 'test'))).toBeFalsy()
   }
 
   it('should cancel local task with dependencies', async () => {
-    await testAbort('local_cancel', 'aborted')
+    await testAbort('local_cancel', 'canceled')
   })
 
   it('should cancel local task', async () => {
-    await testAbort('long_running_local', 'aborted')
+    await testAbort('long_running_local', 'canceled')
   })
 
   it('should cancel docker task', async () => {
-    await testAbort('long_running_docker', 'aborted')
+    await testAbort('long_running_docker', 'canceled')
   })
 
   it('should cancel docker task with dependencies', async () => {
-    await testAbort('local_cancel', 'aborted')
+    await testAbort('docker_cancel', 'canceled')
   })
 })

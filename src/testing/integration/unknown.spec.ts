@@ -1,14 +1,15 @@
 import 'jest-extended'
 import { getTestSuite } from '../get-test-suite'
-import { validate } from '../../planner/validate'
 
 describe('unknown', () => {
-  const suite = getTestSuite('unknown', ['build.yaml'])
+  const suite = getTestSuite('unknown', ['.hammerkit.yaml'])
+
+  afterAll(() => suite.close())
 
   async function validateTask(name: string, expectedErrors: string[]) {
-    const { buildFile, context } = await suite.setup()
+    const { cli } = await suite.setup({ taskName: name })
     let i = 0
-    for await (const message of validate(buildFile, context, name)) {
+    for await (const message of cli.validate()) {
       expect(expectedErrors[i++]).toEqual(message.message)
     }
     expect(i).toEqual(expectedErrors.length)

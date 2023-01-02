@@ -20,7 +20,16 @@ jobs:
         run: npm ci
       - name: Run tests
         run: node_modules/.bin/jest --runInBand
-        timeout-minutes: 10
+        timeout-minutes: 15
+        env:
+          VERBOSE: true
+      - name: Archive test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: console-log
+          path: |
+            logs
       - name: Upload coverage
         uses: codacy/codacy-coverage-reporter-action@master
         with:
@@ -65,6 +74,19 @@ jobs:
         uses: docker-practice/actions-setup-docker@master
       - name: Install npm packages
         run: npm ci
+      - name: Pull postgres test image
+        run: docker pull postgres:12-alpine
+      - name: Pull node image
+        run: docker pull node:16.6.0-alpine
       - name: Run tests
         run: node_modules/.bin/jest --runInBand
-        timeout-minutes: 10
+        timeout-minutes: 15
+        env:
+          VERBOSE: true
+      - name: Archive test artifacts
+        uses: actions/upload-artifact@v3
+        if: failure()
+        with:
+          name: console-log
+          path: |
+            logs

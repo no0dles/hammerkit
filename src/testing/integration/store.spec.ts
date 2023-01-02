@@ -1,59 +1,68 @@
 import { join } from 'path'
-import { expectSuccessfulResult } from '../expect'
-import { restore } from '../../executer/restore'
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
-import { store } from '../../executer/store'
-import { clean } from '../../executer/clean'
-import { planWorkNodes } from '../../planner/utils/plan-work-nodes'
 import { getTestSuite } from '../get-test-suite'
-import { execute } from '../../executer/execute'
 import { existsSync } from 'fs'
-import { getLocalExecutor } from '../../executer/get-local-executor'
+import { expectSuccessfulResult } from '../expect'
 
 describe('store/restore', () => {
-  const suite = getTestSuite('store-restore', ['build.yaml', 'package.json'])
+  const suite = getTestSuite('store-restore', ['.hammerkit.yaml', 'package.json'])
 
   afterAll(() => suite.close())
 
-  it('should clean created outputs locally', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    executionContext.cacheMethod = 'none'
-    executionContext.executor = getLocalExecutor()
+  it('should clean and restore created outputs locally', async () => {
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
 
-    const outputPath = join(buildFile.path, 'test-output')
-    const generatedPath = join(buildFile.path, 'node_modules')
+    const generatedPath = join(environment.cwd, 'node_modules')
+    const cacheStoragePath = join(environment.cwd, 'storage')
 
-    const workTree = planWorkTree(buildFile, 'example')
-    const result = await execute(workTree, executionContext)
-    await expectSuccessfulResult(result)
+    expect(existsSync(generatedPath)).toBeFalsy()
+    expect(existsSync(cacheStoragePath)).toBeFalsy()
+
+    const result = await cli.exec({})
+    await expectSuccessfulResult(result, environment)
 
     expect(existsSync(generatedPath)).toBeTruthy()
-    expect(existsSync(outputPath)).toBeFalsy()
+    expect(existsSync(cacheStoragePath)).toBeFalsy()
 
-    await store(workTree.nodes, outputPath, context, executionContext.executor)
-    await clean(workTree.nodes, context, executionContext.executor)
+    await cli.store(cacheStoragePath)
+    expect(existsSync(cacheStoragePath)).toBeTruthy()
 
-    expect(existsSync(outputPath)).toBeTruthy()
+    await cli.clean()
     expect(existsSync(generatedPath)).toBeFalsy()
 
-    await restore(workTree.nodes, outputPath, context, executionContext.executor)
-    expect(existsSync(outputPath)).toBeTruthy()
+    await cli.restore(cacheStoragePath)
     expect(existsSync(generatedPath)).toBeTruthy()
+
+    const execAfterRestore = await cli.exec()
+    await expectSuccessfulResult(execAfterRestore, environment)
+
+    const node = cli.node('example')
+    const nodeState = execAfterRestore.state.node[node.id]
+    expect(nodeState.type).toBe('completed')
+    if (nodeState.type === 'completed') {
+      expect(nodeState.cached).toBeTruthy()
+    }
   })
 
-  it('should not store anything if nothing got generated', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    const workNodes = planWorkNodes(buildFile)
-    const outputPath = join(buildFile.path, 'test-output')
-    const generatedPath = join(buildFile.path, 'node_modules')
+  it('should clean and restore created outputs in container', async () => {
+    const { cli, environment } = await suite.setup({ taskName: 'example:docker' })
 
-    expect(existsSync(generatedPath)).toBeFalsy()
-    expect(existsSync(outputPath)).toBeFalsy()
+    const cacheStoragePath = join(environment.cwd, 'storage')
 
-    await store(workNodes, outputPath, context, executionContext.executor)
-    await restore(workNodes, outputPath, context, executionContext.executor)
+    const firstExecResult = await cli.exec()
+    await expectSuccessfulResult(firstExecResult, environment)
 
-    expect(existsSync(generatedPath)).toBeFalsy()
-    expect(existsSync(outputPath)).toBeFalsy()
-  })
+    await cli.store(cacheStoragePath)
+    await cli.clean()
+    await cli.restore(cacheStoragePath)
+
+    const execAfterRestore = await cli.exec()
+    await expectSuccessfulResult(execAfterRestore, environment)
+
+    const node = cli.node('example:docker')
+    const nodeState = execAfterRestore.state.node[node.id]
+    expect(nodeState.type).toBe('completed')
+    if (nodeState.type === 'completed') {
+      expect(nodeState.cached).toBeTruthy()
+    }
+  }, 90000)
 })

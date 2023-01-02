@@ -4,7 +4,7 @@ import { getCacheStatsFile } from './get-cache-directory'
 import { WorkNodeCacheFileStats } from './work-node-cache-stats'
 
 export async function readCache(node: WorkNode, context: Environment): Promise<WorkNodeCacheFileStats | null> {
-  const cacheFile = getCacheStatsFile(node.id, node.cwd)
+  const cacheFile = getCacheStatsFile(node.id)
   if (!(await context.file.exists(cacheFile))) {
     return null
   }
@@ -12,7 +12,7 @@ export async function readCache(node: WorkNode, context: Environment): Promise<W
   try {
     return JSON.parse(await context.file.read(cacheFile))
   } catch (e) {
-    node.status.console.write('internal', 'error', `unable to read cache ${cacheFile}`)
+    context.status.task(node).write('error', `unable to read cache ${cacheFile}`)
   }
 
   return null

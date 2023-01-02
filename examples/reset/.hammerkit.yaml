@@ -1,0 +1,17 @@
+tasks:
+  create_dir:
+    image: alpine:latest
+    src:
+      - dirname.txt
+    cmds:
+      - cat dirname.txt | xargs mkdir
+    generates:
+      - path: test
+        resetOnChange: true
+
+  read:
+    image: alpine:latest
+    cache: none
+    deps: [create_dir]
+    cmds:
+      - ls test

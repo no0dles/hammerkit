@@ -1,0 +1,25 @@
+tasks:
+  base:
+    image: node:16.6.0-alpine
+    labels:
+      app: base
+    cmds:
+      - node --eval "console.log('base')"
+
+  foo:
+    image: node:16.6.0-alpine
+    deps: [base]
+    cmds:
+      - node --eval "console.log('foo')"
+    labels:
+      app: foo
+
+  bar:
+    image: node:16.6.0-alpine
+    deps: [base]
+    cmds:
+      - node --eval "console.log('bar')"
+    labels:
+      app: bar
+
+

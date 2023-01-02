@@ -1,51 +1,58 @@
-import { join } from 'path'
-import { appendFileSync } from 'fs'
-import { writeWorkNodeCache } from '../../optimizer/write-work-node-cache'
-import { optimize } from '../../optimizer/optimize'
-import { planWorkTree } from '../../planner/utils/plan-work-tree'
 import { getTestSuite } from '../get-test-suite'
+import { expectSuccessfulResult } from '../expect'
+import { Environment } from '../../executer/environment'
 
 describe('glob', () => {
-  const suite = getTestSuite('glob', ['build.yaml', 'test.md', 'test.txt'])
+  const suite = getTestSuite('glob', ['.hammerkit.yaml', 'test.md', 'test.txt'])
 
   afterAll(() => suite.close())
 
+  async function testCache(expectInvalidate: boolean, action?: (env: Environment) => Promise<void>) {
+    const { cli, environment } = await suite.setup({ taskName: 'example' })
+
+    const result1 = await cli.exec()
+    await expectSuccessfulResult(result1, environment)
+
+    const node = cli.node('example')
+    const nodeState1 = result1.state.node[node.id]
+
+    expect(nodeState1.type).toEqual('completed')
+    if (nodeState1.type === 'completed') {
+      expect(nodeState1.duration).toBeGreaterThanOrEqual(100)
+    }
+
+    if (action) {
+      await action(environment)
+    }
+
+    const result2 = await cli.exec()
+    await expectSuccessfulResult(result2, environment)
+
+    const nodeState2 = result2.state.node[node.id]
+
+    expect(nodeState2.type).toEqual('completed')
+    if (nodeState2.type === 'completed') {
+      if (expectInvalidate) {
+        expect(nodeState2.cached).toBeFalsy()
+      } else {
+        expect(nodeState2.cached).toBeTruthy()
+      }
+    }
+  }
+
   it('should remove task after written cache', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'example')
-    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
-
-    await optimize(workTree, executionContext)
-    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
-
-    await writeWorkNodeCache(workTree.rootNode, context)
-    await optimize(workTree, executionContext)
-    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('completed')
+    await testCache(false)
   })
 
   it('should keep being cached after ignored file changed', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'example')
-    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
-
-    await writeWorkNodeCache(workTree.rootNode, context)
-
-    appendFileSync(join(buildFile.path, 'test.txt'), '\n')
-
-    await optimize(workTree, executionContext)
-    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('completed')
+    await testCache(false, async (env) => {
+      await env.file.appendFile('test.txt', '\n')
+    })
   })
 
   it('should invalid cache after file has changed', async () => {
-    const { buildFile, context, executionContext } = await suite.setup()
-    const workTree = planWorkTree(buildFile, 'example')
-    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
-
-    await writeWorkNodeCache(workTree.rootNode, context)
-
-    appendFileSync(join(buildFile.path, 'test.md'), '\n')
-
-    await optimize(workTree, executionContext)
-    expect(workTree.nodes[workTree.rootNode.id].status.state.type).toEqual('pending')
+    await testCache(true, async (env) => {
+      await env.file.appendFile('test.md', '\n')
+    })
   })
 })

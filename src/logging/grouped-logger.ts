@@ -1,31 +1,48 @@
-import { ExecutionContext } from '../executer/execution-context'
-import { WorkTree } from '../planner/work-tree'
-import { getNodeNameLength, printWorkTreeResult } from '../log'
-import { ExecuteResult } from '../executer/execute-result'
-import { LogStrategy } from './log-strategy'
-import { logMessageToConsole } from './message-to-console'
+import { getNodeNameLengthForWorkTree, printWorkTreeResult, writeNodeLogToConsole } from '../log'
+import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
+import { SchedulerState } from '../executer/scheduler/scheduler-state'
+import { Logger } from './log-mode'
+import { SchedulerResult } from '../executer/scheduler/scheduler-result'
+import { Environment } from '../executer/environment'
+import { ReadonlyState } from '../executer/readonly-state'
 
-export function groupedLogger(): LogStrategy {
-  let maxNodeNameLength = 0
+export function groupedLogger(state: ReadonlyState<SchedulerState>, env: Environment): Logger {
+  const maxNodeNameLength = getNodeNameLengthForWorkTree(state.current.node, state.current.service)
+
+  const completedNodes: string[] = []
+  const completedServices: string[] = []
+
+  state.on((currentState) => {
+    for (const node of iterateWorkNodes(currentState.node)) {
+      if (completedNodes.indexOf(node.node.id) >= 0) {
+        continue
+      }
+
+      if (node.type === 'crash' || node.type === 'error' || node.type === 'completed') {
+        completedNodes.push(node.node.id)
+        for (const log of env.status.task(node.node).read()) {
+          writeNodeLogToConsole(env, log, maxNodeNameLength)
+        }
+      }
+    }
+
+    for (const service of iterateWorkServices(currentState.service)) {
+      if (completedServices.indexOf(service.service.id) >= 0) {
+        continue
+      }
+
+      if (service.type === 'end') {
+        completedServices.push(service.service.id)
+        for (const log of env.status.service(service.service).read()) {
+          writeNodeLogToConsole(env, log, maxNodeNameLength)
+        }
+      }
+    }
+  })
 
   return {
-    start(executionContext: ExecutionContext, workTree: WorkTree) {
-      maxNodeNameLength = getNodeNameLength(workTree)
-
-      executionContext.events.on(async (evt) => {
-        if (evt.newState.type === 'completed' || evt.newState.type === 'failed' || evt.newState.type === 'aborted') {
-          const node = workTree.nodes[evt.nodeId]
-          for (const log of await node.status.console.read()) {
-            logMessageToConsole(node, log, maxNodeNameLength)
-          }
-        }
-      })
-    },
-    async finish(workTree: WorkTree, result: ExecuteResult): Promise<void> {
-      await printWorkTreeResult(workTree, result, false)
-    },
-    abort(e: Error) {
-      process.stderr.write(`${e.message}\n`)
+    async complete(evt: SchedulerResult, env): Promise<void> {
+      await printWorkTreeResult(evt.state, env)
     },
   }
 }

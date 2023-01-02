@@ -1,20 +1,41 @@
 import commaner, { Command, Option } from 'commander'
-import { join, resolve } from 'path'
-import { getBuildFile } from './parser/get-build-file'
-import { iterateWorkNodes, planWorkNodes } from './planner/utils/plan-work-nodes'
-import { execute } from './executer/execute'
-import { planWorkTree } from './planner/utils/plan-work-tree'
-import { restore } from './executer/restore'
-import { store } from './executer/store'
-import { clean } from './executer/clean'
-import { validate } from './planner/validate'
+import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
-import { ExecutionContext } from './executer/execution-context'
-import { getLocalExecutor } from './executer/get-local-executor'
-import { getDockerExecutor } from './executer/get-docker-executor'
-import { getLogger } from './logging/get-logger'
 import { isCI } from './utils/ci'
-import { emitter } from './utils/emitter'
+import { parseLabelArguments } from './parser/parse-label-arguments'
+import { Cli, getCli, isCliService, isCliTask } from './cli'
+import { getBuildFile } from './parser/get-build-file'
+import { emptyWorkLabelScope, WorkScope } from './executer/work-scope'
+import { getWorkScope } from './get-work-context'
+import { printItem, printProperty, printTitle } from './log'
+import { hasLabels } from './executer/label-values'
+import { getDefaultBuildFilename } from './parser/default-build-file'
+
+export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
+  const buildFile = await getBuildFile(fileName, environment)
+  const workTree = getWorkScope(buildFile, workScope, environment)
+  return getCli(workTree, environment)
+}
+
+function parseWorkScope(options: unknown): WorkScope {
+  const scope = emptyWorkLabelScope()
+  if (typeof options !== 'object') {
+    return scope
+  }
+  if (options === undefined || options === null) {
+    return scope
+  }
+
+  for (const [key, value] of Object.entries(options)) {
+    if (key === 'filter' && value instanceof Array) {
+      scope.filterLabels = parseLabelArguments(value)
+    } else if (key === 'exclude' && value instanceof Array) {
+      scope.excludeLabels = parseLabelArguments(value)
+    }
+  }
+
+  return scope
+}
 
 export async function getProgram(
   environment: Environment,
@@ -24,59 +45,136 @@ export async function getProgram(
 
   const args = [...argv]
   const fileIndex = args.indexOf('--file')
-  const fileName = join(environment.cwd, fileIndex >= 0 ? args[fileIndex + 1] : 'build.yaml')
+  const fileName = join(
+    environment.cwd,
+    fileIndex >= 0 ? args[fileIndex + 1] : await getDefaultBuildFilename(environment.cwd, environment)
+  )
   if (fileIndex >= 0) {
     args.splice(fileIndex, 2)
   }
 
   if (await environment.file.exists(fileName)) {
-    const buildFile = await getBuildFile(fileName, environment)
-    const workNodes = planWorkNodes(buildFile)
-    const reservedCommands = ['clean', 'store', 'restore', 'validate']
+    program
+      .command('ls')
+      .description('list all tasks')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (options) => {
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        const items = cli.ls()
+
+        const tasks = items.filter(isCliTask)
+        const services = items.filter(isCliService)
+
+        if (services.length > 0) {
+          printTitle(environment, 'Services')
+          for (const node of services) {
+            printItem(environment, node.item)
+            printProperty(
+              environment,
+              'ports',
+              node.item.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
+            )
+            if (node.item.type === 'kubernetes-service') {
+              printProperty(environment, 'context', node.item.context)
+              printProperty(environment, 'selector', `${node.item.selector.type}/${node.item.selector.name}`)
+            } else {
+              printProperty(environment, 'image', node.item.image)
+            }
+          }
+        }
+
+        if (tasks.length > 0 && services.length > 0) {
+          environment.stdout.write('\n')
+        }
+
+        if (tasks.length > 0) {
+          printTitle(environment, 'Tasks')
+          for (const node of tasks) {
+            printItem(environment, node.item)
+            if (node.item.needs.length > 0) {
+              printProperty(environment, 'needs', node.item.needs.map((d) => d.name).join(', '))
+            }
+            if (node.item.deps.length > 0) {
+              printProperty(environment, 'deps', node.item.deps.map((d) => d.name).join(', '))
+            }
+            if (node.item.type === 'container') {
+              printProperty(environment, 'image', node.item.image)
+            }
+            if (node.item.caching) {
+              printProperty(environment, 'caching', node.item.caching)
+            }
+            if (hasLabels(node.item.labels)) {
+              printProperty(
+                environment,
+                'labels',
+                `${Object.keys(node.item.labels)
+                  .map((key) => `${key}=${node.item.labels[key].join(',')}`)
+                  .join(' ')}`
+              )
+            }
+            if (node.item.src.length > 0) {
+              printProperty(
+                environment,
+                'src',
+                node.item.src.map((d) => relative(node.item.cwd, d.absolutePath)).join(' ')
+              )
+            }
+            if (node.item.generates.length > 0) {
+              printProperty(
+                environment,
+                'generates',
+                node.item.generates.map((d) => relative(node.item.cwd, d.path)).join(' ')
+              )
+            }
+          }
+        }
+        environment.stdout.write('\n')
+      })
 
     program
       .command('clean')
       .description('clear task cache')
-      .action(async () => {
-        try {
-          await clean(workNodes, environment, getDockerExecutor())
-        } catch (e) {
-          environment.console.error(e)
-          process.exit(1)
-        }
+      .addOption(new Option('--service', 'clean data volumes of services'))
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (options) => {
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        await cli.clean({
+          service: options.service,
+        })
       })
 
     program
       .command('store <path>')
       .description('save task outputs into <path>')
-      .action(async (path) => {
-        try {
-          await store(workNodes, resolve(path), environment, getDockerExecutor())
-        } catch (e) {
-          environment.console.error(e)
-          process.exit(1)
-        }
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (path, options) => {
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        await cli.store(resolve(path))
       })
 
     program
       .command('restore <path>')
       .description('restore task outputs from <path>')
-      .action(async (path) => {
-        try {
-          await restore(workNodes, resolve(path), environment, getDockerExecutor())
-        } catch (e) {
-          environment.console.error(e)
-          process.exit(1)
-        }
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (path, options) => {
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        await cli.restore(resolve(path))
       })
 
     program
       .command('validate')
-      .description('validate build.yaml')
-      .action(async () => {
+      .description('validate hammerkit configurations')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (options) => {
         let errors = 0
 
-        for await (const validation of validate(buildFile, environment)) {
+        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        for await (const validation of cli.validate()) {
           if (validation.type === 'error') {
             errors++
             environment.console.error(validation.message)
@@ -84,62 +182,53 @@ export async function getProgram(
             environment.console.warn(validation.message)
           }
         }
-        if (errors === 0) {
-          process.exit(0)
-        } else {
-          process.exit(1)
+        if (errors !== 0) {
+          program.error('Detected errors in the hammerkit configuration', { exitCode: 1 })
         }
       })
 
-    for (const node of iterateWorkNodes(workNodes)) {
-      if (reservedCommands.indexOf(node.name) >= 0) {
-        environment.console.warn(`${node.name} is reserved, please use another name`)
-        continue
-      }
+    program
+      .command('shutdown')
+      .description('end all container tasks/services')
+      .arguments('[task]')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (task, options) => {
+        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
+        cli.shutdown()
+      })
 
-      program
-        .command(node.name)
-        .description(node.description || '')
-        .option('-c, --concurrency <number>', 'parallel worker count', parseInt, 4)
-        .addOption(new Option('-w, --watch', 'watch tasks').default(false))
-        .addOption(
-          new Option('-l, --log <mode>', 'log mode')
-            .default(isCI ? 'live' : 'interactive')
-            .choices(['interactive', 'live', 'grouped'])
-        )
-        .addOption(
-          new Option('--cache <method>', 'caching method to compare')
-            .default(isCI ? 'checksum' : 'modify-date')
-            .choices(['checksum', 'modify-date', 'none'])
-        )
-        .addOption(new Option('--no-container', 'run every task locally without containers').default(false))
-        .action(async (options) => {
-          const executionContext: ExecutionContext = {
-            workers: options.concurrency, // TODO rename
-            cacheMethod: options.cache,
-            watch: options.watch,
-            events: emitter(),
-            executor: options.container ? getDockerExecutor() : getLocalExecutor(),
-            environment: environment,
-          }
-
-          const logger = getLogger(options.log)
-
-          try {
-            const workTree = planWorkTree(buildFile, node.name)
-            logger.start(executionContext, workTree)
-            const result = await execute(workTree, executionContext)
-            await logger.finish(workTree, result)
-
-            if (!result.success) {
-              process.exit(1)
-            }
-          } catch (e) {
-            logger.abort(e)
-            process.exit(1)
-          }
+    program
+      .command('exec', { isDefault: true })
+      .description('execute task(s)')
+      .arguments('[task]')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
+      .addOption(new Option('-w, --watch', 'watch tasks').default(false))
+      .addOption(
+        new Option('-l, --log <mode>', 'log mode')
+          .default(isCI ? 'live' : 'interactive')
+          .choices(['interactive', 'live', 'grouped'])
+      )
+      .addOption(
+        new Option('--cache <method>', 'caching method to compare')
+          .default(isCI ? 'checksum' : 'modify-date')
+          .choices(['checksum', 'modify-date', 'none'])
+      )
+      .action(async (task, options) => {
+        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
+        const result = await cli.exec({
+          cacheDefault: options.cache,
+          watch: options.watch,
+          workers: options.concurrency,
+          logMode: options.log,
         })
-    }
+
+        if (!result.success) {
+          program.error('Execution was not successful', { exitCode: 1 })
+        }
+      })
   } else {
     if (fileIndex >= 0) {
       environment.console.warn(`unable to find build file ${fileName}`)
@@ -147,7 +236,7 @@ export async function getProgram(
 
     program
       .command('init')
-      .description('creates default build.yaml')
+      .description('creates default .hammerkit.yaml')
       .action(async () => {
         const content = `envs: {}
 
@@ -165,8 +254,11 @@ tasks:
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   program.version(require('../package.json').version)
   program.option('--verbose', 'log debugging information', false)
-  program.option('--file', 'set build file', 'build.yaml')
-  program.name('hammerkit')
+  program.option('--file', 'set build file', '.hammerkit.yaml')
+  program.configureOutput({
+    writeOut: (str) => environment.console.info(str),
+    writeErr: (str) => environment.console.error(str),
+  })
 
   return { program, args }
 }

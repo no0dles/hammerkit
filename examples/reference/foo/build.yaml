@@ -5,5 +5,5 @@ tasks:
       - cat foobar.txt
 
 references:
-  base: ../build.yaml
+  base: ../.hammerkit.yaml
   sub: ./build-sub.yaml

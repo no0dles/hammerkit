@@ -1,16 +1,13 @@
-import { WorkNode } from '../planner/work-node'
-
 export function replaceEnvVariables(
-  node: WorkNode,
+  envs: { [key: string]: string },
   processEnv: { [key: string]: string | undefined }
 ): { [key: string]: string } {
-  const result = { ...node.envs }
+  const result = { ...envs }
   for (const key of Object.keys(result)) {
     const value = result[key]
     if (value.startsWith('$')) {
       const processEnvValue = processEnv[value.substr(1)]
       if (processEnvValue) {
-        node.status.console.write('internal', 'debug', `use process env ${value.substr(1)}`)
         result[key] = processEnvValue
       } else {
         throw new Error(`missing env ${value}`)

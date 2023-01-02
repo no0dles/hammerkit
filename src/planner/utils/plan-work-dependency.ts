@@ -1,14 +1,7 @@
-import { WorkNode } from '../work-node'
-import { WorkNodes } from '../work-nodes'
-import { WorkContext } from '../work-context'
+import { isContainerWorkNode, WorkNode } from '../work-node'
+import { getVolumeName } from './plan-work-volume'
 
-export function planWorkDependency(
-  deps: WorkNode[],
-  node: WorkNode,
-  taskName: string,
-  nodes: WorkNodes,
-  context: WorkContext
-): void {
+export function planWorkDependency(deps: WorkNode[], node: WorkNode): void {
   for (const depNode of deps) {
     if (node.deps.some((d) => d.id === depNode.id)) {
       continue
@@ -16,22 +9,30 @@ export function planWorkDependency(
 
     node.deps.push(depNode)
 
-    if (node.status.state.type === 'pending') {
-      node.status.state.pendingDependencies[depNode.id] = depNode
-    }
-
     for (const src of depNode.src) {
       if (node.src.indexOf(src) === -1) {
         node.src.push(src)
+
+        if (isContainerWorkNode(node)) {
+          node.mounts.push({
+            localPath: src.absolutePath,
+            containerPath: src.absolutePath,
+          })
+        }
       }
     }
 
-    for (const generate of depNode.generates) {
-      if (!node.generates.some((g) => g.path === generate.path)) {
-        node.generates.push({ path: generate.path, inherited: true })
+    if (isContainerWorkNode(depNode) && isContainerWorkNode(node)) {
+      for (const volume of depNode.volumes) {
+        if (!node.volumes.some((v) => v.name === volume.name)) {
+          node.volumes.push({
+            ...volume,
+            inherited: true,
+          })
+        }
       }
     }
 
-    planWorkDependency(depNode.deps, node, taskName, nodes, context)
+    planWorkDependency(depNode.deps, node)
   }
 }

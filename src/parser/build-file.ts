@@ -1,4 +1,5 @@
 import { BuildFileTask } from './build-file-task'
+import { ExecutionBuildService } from './build-file-service'
 
 export interface BuildFile {
   fileName: string
@@ -7,4 +8,5 @@ export interface BuildFile {
   tasks: { [key: string]: BuildFileTask }
   references: { [key: string]: BuildFile }
   includes: { [key: string]: BuildFile }
+  services: { [key: string]: ExecutionBuildService }
 }
