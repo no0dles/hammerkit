@@ -4,7 +4,7 @@ import { WorkNodeCacheFileStats, WorkServiceCacheFileStats } from './work-node-c
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { StatusScopedConsole } from '../planner/work-node-status'
-import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkService, isContainerWorkService, WorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { createHash } from 'crypto'
 
@@ -56,15 +56,19 @@ async function addWorkServiceCacheStats(result: WorkServiceCacheFileStats, path:
 }
 
 export async function getServiceNodeCacheStats(
-  cache: ContainerWorkService,
+  cache: WorkService,
   environment: Environment
 ): Promise<WorkServiceCacheFileStats> {
   const result: WorkServiceCacheFileStats = {
     files: {},
   }
 
-  for (const mount of cache.mounts) {
-    await addWorkServiceCacheStats(result, mount.localPath, environment)
+  if (isContainerWorkService(cache)) {
+    for (const mount of cache.mounts) {
+      await addWorkServiceCacheStats(result, mount.localPath, environment)
+    }
+  } else {
+    await addWorkServiceCacheStats(result, cache.kubeconfig, environment)
   }
 
   return result

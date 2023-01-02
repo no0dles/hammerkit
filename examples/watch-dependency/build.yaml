@@ -1,0 +1,32 @@
+tasks:
+  first:
+    image: alpine:latest
+    cmds:
+      - cat source.txt > first.txt
+      - echo "first step" >> first.txt
+    src:
+      - source.txt
+    generates:
+      - first.txt
+
+  second:
+    image: alpine:latest
+    deps: [first]
+    cmds:
+      - cat first.txt > second.txt
+      - echo "second step" >> second.txt
+    src:
+      - first.txt
+    generates:
+      - second.txt
+
+  third:
+    image: alpine:latest
+    deps: [second]
+    cmds:
+      - cat second.txt > third.txt
+      - echo "third step" >> third.txt
+    src:
+      - second.txt
+    generates:
+      - third.txt

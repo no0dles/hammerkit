@@ -6,9 +6,18 @@ import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { getServiceNodeCacheStats, getStateKey } from '../optimizer/get-work-node-cache-stats'
 import { NodeState } from './scheduler/node-state'
 
-export async function startNode(node: NodeState, state: State, environment: Environment): Promise<void> {
+export async function startNode(
+  node: NodeState,
+  state: State,
+  environment: Environment,
+  abortSignal: AbortSignal
+): Promise<void> {
   const cacheState = await checkCacheState(node.node, state.current.cacheMethod, environment)
   const currentState = state.current.node[node.node.id]
+
+  if (abortSignal.aborted) {
+    return
+  }
 
   if (!!currentState.stateKey && currentState.stateKey !== cacheState.stateKey) {
     const status = environment.status.task(node.node)
@@ -40,12 +49,24 @@ export async function startNode(node: NodeState, state: State, environment: Envi
   }
 }
 
-export async function startService(service: WorkService, state: State, environment: Environment): Promise<void> {
+export async function startService(
+  service: WorkService,
+  state: State,
+  environment: Environment,
+  abortSignal: AbortSignal
+): Promise<void> {
+  const currentStats = await getServiceNodeCacheStats(service, environment)
+  const stateKey = getStateKey(currentStats, state.current.cacheMethod)
+
+  if (abortSignal.aborted) {
+    return
+  }
+
   if (!isContainerWorkService(service)) {
     state.patchService({
       type: 'ready',
       service,
-      stateKey: '', // TODO statekey from kube config
+      stateKey,
     })
     return
   }

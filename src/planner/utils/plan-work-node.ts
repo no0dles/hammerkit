@@ -6,7 +6,7 @@ import { planWorkCommand } from './plan-work-command'
 import { splitName } from './split-name'
 import { parseWorkNodeMount } from './parse-work-node-mount'
 import { planWorkDependency } from './plan-work-dependency'
-import { join } from 'path'
+import { extname, join } from 'path'
 import { BuildFileTaskSource } from '../../parser/build-file-task-source'
 import { WorkNodeSource } from '../work-node-source'
 import { BuildFileTask, BuildFileTaskGenerate } from '../../parser/build-file-task'
@@ -25,6 +25,7 @@ import { parseWorkServiceVolume } from './parse-work-service-volume'
 import { WorkMount } from '../work-mount'
 import { getContainerVolumes } from './plan-work-volume'
 import { getContainerMounts } from './get-container-mounts'
+import { normalizePath } from './normalize-path'
 
 export interface BuildFileReference {
   build: BuildFile
@@ -248,7 +249,18 @@ function parseContainerWorkNodeMount(
   context: WorkContext,
   envs: { [key: string]: string } | null
 ): WorkMount[] {
-  return task.mounts.map((m) => templateValue(m, envs)).map((m) => parseWorkNodeMount(context.cwd, m))
+  const mounts = task.mounts.map((m) => templateValue(m, envs)).map((m) => parseWorkNodeMount(context.cwd, m))
+  const fileGenerates = task.generates
+    .filter((g) => extname(g.path).length > 1)
+    .map<WorkMount>((g) => {
+      const path = normalizePath(context.cwd, context.cwd, templateValue(g.path, envs))
+
+      return {
+        localPath: path,
+        containerPath: path,
+      }
+    })
+  return [...mounts, ...fileGenerates]
 }
 
 function parseLocalWorkNodeGenerate(

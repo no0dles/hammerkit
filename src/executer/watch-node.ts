@@ -44,8 +44,6 @@ export function watchNode(
         node,
         stateKey: currentFileState.stateKey,
       })
-
-      // TODO set dependants as pending
     }, 100)
 
     const fileWatchers: FileWatcher[] = []

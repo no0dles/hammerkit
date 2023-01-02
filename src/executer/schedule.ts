@@ -46,9 +46,8 @@ export async function schedule(
             name: nodeState.node.name,
             id: nodeState.node.id + '-cache',
           },
-          async () => {
-            // TODO abort improvement
-            await startNode(nodeState, state, environment)
+          async (abort) => {
+            await startNode(nodeState, state, environment, abort.signal)
           }
         )
       } else if (nodeState.type === 'ready') {
@@ -88,9 +87,8 @@ export async function schedule(
                 name: pendingNeed.service.name,
                 id: pendingNeed.service.id + '-cache',
               },
-              async () => {
-                // TODO abort improvement
-                await startService(pendingNeed.service, state, environment)
+              async (abort) => {
+                await startService(pendingNeed.service, state, environment, abort.signal)
               }
             )
           }
