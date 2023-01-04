@@ -44,7 +44,7 @@ export interface PlannedTask {
   platform: BuildFileTaskPlatform | null
   description: string | null
   shell: string | null
-  generates: BuildFileTaskGenerate[]
+  generates: WorkNodeGenerate[]
   image: string | null
   mounts: string[]
   cmds: BuildTaskCommand[]
@@ -118,11 +118,17 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
   }
 }
 
-function mapGenerate(generate: string | BuildFileTaskGenerate): BuildFileTaskGenerate {
+function mapGenerate(generate: string | BuildFileTaskGenerate): WorkNodeGenerate {
   if (typeof generate === 'string') {
-    return { path: generate, resetOnChange: false }
+    return { path: generate, resetOnChange: false, export: false, inherited: false, isFile: false }
   } else {
-    return { path: generate.path, resetOnChange: generate.resetOnChange ?? false }
+    return {
+      path: generate.path,
+      resetOnChange: generate.resetOnChange ?? false,
+      export: generate.export ?? false,
+      inherited: false,
+      isFile: false,
+    }
   }
 }
 
@@ -197,6 +203,7 @@ export function mapLabels(labels: { [key: string]: string }): LabelValues {
 function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): WorkNode {
   const name = [...context.namePrefix, task.name].join(':')
 
+  const generates = parseLocalWorkNodeGenerate(task, context, task.envs)
   const baseWorkNode: BaseWorkNode = {
     envs: task.envs,
     id,
@@ -209,7 +216,7 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
     buildFile: task.build,
     taskName: task.name,
     src: parseLocalWorkNodeSource(task, context, task.envs),
-    generates: parseLocalWorkNodeGenerate(task, context, task.envs),
+    generates,
     plannedTask: task,
     needs: parseWorkNodeNeeds(task.needs, context),
     labels: mapLabels(task.labels),
@@ -217,7 +224,7 @@ function parseWorkNode(id: string, task: PlannedTask, context: WorkContext): Wor
   }
 
   if (task.image) {
-    const mounts = getContainerMounts(baseWorkNode, parseContainerWorkNodeMount(task, context, task.envs))
+    const mounts = getContainerMounts(baseWorkNode, parseContainerWorkNodeMount(task, context, generates, task.envs))
     return {
       ...baseWorkNode,
       type: 'container',
@@ -247,19 +254,16 @@ export function parseContainerWorkNodePorts(
 function parseContainerWorkNodeMount(
   task: PlannedTask,
   context: WorkContext,
+  generates: WorkNodeGenerate[],
   envs: { [key: string]: string } | null
 ): WorkMount[] {
   const mounts = task.mounts.map((m) => templateValue(m, envs)).map((m) => parseWorkNodeMount(context.cwd, m))
-  const fileGenerates = task.generates
-    .filter((g) => extname(g.path).length > 1)
-    .map<WorkMount>((g) => {
-      const path = normalizePath(context.cwd, context.cwd, templateValue(g.path, envs))
-
-      return {
-        localPath: path,
-        containerPath: path,
-      }
-    })
+  const fileGenerates = generates
+    .filter((g) => g.isFile)
+    .map<WorkMount>((g) => ({
+      localPath: g.path,
+      containerPath: g.path,
+    }))
   return [...mounts, ...fileGenerates]
 }
 
@@ -268,11 +272,16 @@ function parseLocalWorkNodeGenerate(
   context: WorkContext,
   envs: { [key: string]: string } | null
 ): WorkNodeGenerate[] {
-  return task.generates.map((g) => ({
-    path: join(context.cwd, templateValue(g.path, envs)),
-    resetOnChange: g.resetOnChange ?? false,
-    inherited: false,
-  }))
+  return task.generates.map((g) => {
+    const filePath = join(context.cwd, templateValue(g.path, envs))
+    return {
+      path: filePath,
+      resetOnChange: g.resetOnChange,
+      export: g.export,
+      isFile: extname(g.path).length > 1,
+      inherited: g.inherited,
+    }
+  })
 }
 
 function parseLocalWorkNodeSource(

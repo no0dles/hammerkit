@@ -1,0 +1,16 @@
+tasks:
+  example_file:
+    image: alpine
+    generates:
+      - path: test.txt
+        export: true
+    cmds:
+      - echo "hello" > test.txt
+
+  example_dir:
+    image: alpine
+    generates:
+      - path: dist
+        export: true
+    cmds:
+      - echo "hello" > dist/test.txt

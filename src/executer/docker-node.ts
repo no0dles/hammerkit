@@ -12,6 +12,7 @@ import { Process } from './process'
 import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
+import { extract } from 'tar'
 
 function buildCreateOptions(
   node: ContainerWorkNode,
@@ -124,6 +125,29 @@ export function dockerNode(
             )
             return false
           }
+        }
+
+        for (const generate of node.generates) {
+          if (!generate.export || generate.inherited || generate.isFile) {
+            continue
+          }
+
+          const readable = await container.getArchive({
+            path: generate.path,
+          })
+          await environment.file.createDirectory(generate.path)
+          await new Promise<void>((resolve, reject) => {
+            readable
+              .pipe(
+                extract({
+                  cwd: generate.path,
+                  newer: true,
+                  stripComponents: 1,
+                })
+              )
+              .on('close', () => resolve())
+              .on('error', (err) => reject(err))
+          })
         }
 
         return true

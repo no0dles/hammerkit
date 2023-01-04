@@ -34,6 +34,8 @@ export interface WorkNodeGenerate {
   path: string
   inherited: boolean
   resetOnChange: boolean
+  export: boolean
+  isFile: boolean
 }
 
 export interface LocalWorkNode extends BaseWorkNode {

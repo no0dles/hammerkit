@@ -26,4 +26,5 @@ export interface BuildFileTask {
 export interface BuildFileTaskGenerate {
   resetOnChange?: boolean
   path: string
+  export?: boolean
 }

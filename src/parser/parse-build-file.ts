@@ -128,7 +128,8 @@ function parseGenerateArray(
       } else {
         return {
           path: parseString(ctx, `generate[${i}].path`, v.path, false),
-          resetOnChange: parseBoolean(ctx, `generate[${i}].resetOnChange`, v.resetOnChange, true) || false,
+          resetOnChange: parseBoolean(ctx, `generate[${i}].resetOnChange`, v.resetOnChange, true) ?? false,
+          export: parseBoolean(ctx, `generate[${i}].export`, v.export, true) ?? false,
         }
       }
     })
