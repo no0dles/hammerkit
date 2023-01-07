@@ -1,6 +1,6 @@
 import { createHash } from 'crypto'
-import { PlannedTask } from './utils/plan-work-node'
 import { getWorkNodeCacheDescription } from '../optimizer/work-node-cache-description'
+import { PlannedTask } from './utils/planned-task'
 
 export function getWorkNodeId(task: PlannedTask): string {
   const description = getWorkNodeCacheDescription(task)

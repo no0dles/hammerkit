@@ -2,7 +2,7 @@ import { WorkNode } from './work-node'
 import { WorkNodeValidation } from './work-node-validation'
 import { Environment } from '../executer/environment'
 import { WorkTree } from './work-tree'
-import { KubernetesWorkService } from './work-service'
+import { KubernetesWorkService, WorkService } from './work-service'
 import { read } from '../parser/read-build-file'
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkNodeValidation> {
@@ -79,7 +79,7 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
     }
 
     if (cycleNodes.indexOf(node) === -1) {
-      const cyclePath = hasCycle(node, [])
+      const cyclePath = hasDependencyCycle(node, [])
       if (cyclePath) {
         cycleNodes.push(...cyclePath)
         yield { type: 'error', message: `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`, node: node }
@@ -88,13 +88,28 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
   }
 }
 
-export function hasCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
+export function hasNeedCycle(node: WorkService, currentPath: WorkService[]): WorkService[] | null {
+  if (currentPath.indexOf(node) >= 0) {
+    return [...currentPath, node]
+  }
+
+  for (const dep of node.needs) {
+    const depHasCycle = hasNeedCycle(dep, [...currentPath, node])
+    if (depHasCycle) {
+      return depHasCycle
+    }
+  }
+
+  return null
+}
+
+export function hasDependencyCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
   if (currentPath.indexOf(node) >= 0) {
     return [...currentPath, node]
   }
 
   for (const dep of node.deps) {
-    const depHasCycle = hasCycle(dep, [...currentPath, node])
+    const depHasCycle = hasDependencyCycle(dep, [...currentPath, node])
     if (depHasCycle) {
       return depHasCycle
     }

@@ -1,5 +1,6 @@
 import { WorkService } from '../../planner/work-service'
 import { ServiceDns } from '../service-dns'
+import { NodeState } from './node-state'
 
 export interface ServicePendingState {
   type: 'pending'
@@ -33,6 +34,13 @@ export interface ServiceEndState {
   stateKey: string
 }
 
+export interface ServiceErrorState {
+  type: 'error'
+  service: WorkService
+  stateKey: string | null
+  errorMessage: string
+}
+
 export interface ServiceCanceledState {
   type: 'canceled'
   service: WorkService
@@ -44,5 +52,8 @@ export type ServiceState =
   | ServiceStartingState
   | ServiceRunningState
   | ServiceReadyState
+  | ServiceErrorState
   | ServiceEndState
   | ServiceCanceledState
+
+export const isServiceState = (val: ServiceState | NodeState): val is ServiceState => 'service' in val

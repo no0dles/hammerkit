@@ -10,4 +10,10 @@ describe('invalid', () => {
     const result = await cli.exec()
     expect(result.success).toBeFalsy()
   })
+
+  it('should detect loop in services', async () => {
+    const { cli } = await suite.setup({ taskName: 'loopservice' })
+    const result = await cli.exec()
+    expect(result.success).toBeFalsy()
+  })
 })

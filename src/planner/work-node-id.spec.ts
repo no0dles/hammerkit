@@ -1,8 +1,9 @@
 import { getWorkNodeId } from './work-node-id'
 import { createBuildFile } from '../testing/create-build-file'
-import { findBuildTask, planTask } from './utils/plan-work-node'
 import { createWorkContext } from './work-context'
 import { environmentMock } from '../executer/environment-mock'
+import { findBuildTask } from './utils/find-build-value'
+import { planTask } from './utils/plan-task'
 
 async function compareTasks(firstTask: any, secondTask: any, expectEqual: boolean) {
   const environment = environmentMock(process.cwd())
@@ -17,9 +18,9 @@ async function compareTasks(firstTask: any, secondTask: any, expectEqual: boolea
     },
   })
   const firstContext = createWorkContext(firstBuildFile)
-  const firstMerged = planTask(firstContext, findBuildTask(firstContext, { taskName: 'test' }))
+  const firstMerged = planTask(firstContext, findBuildTask(firstContext, { name: 'test' }))
   const secondContext = createWorkContext(secondBuildFile)
-  const secondMerged = planTask(secondContext, findBuildTask(secondContext, { taskName: 'test' }))
+  const secondMerged = planTask(secondContext, findBuildTask(secondContext, { name: 'test' }))
   const firstNodeId = getWorkNodeId(firstMerged)
   const secondNodeId = getWorkNodeId(secondMerged)
   if (expectEqual) {

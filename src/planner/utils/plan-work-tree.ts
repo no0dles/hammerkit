@@ -7,7 +7,7 @@ import { WorkTaskScope } from '../../executer/work-scope'
 
 export function planWorkTree(build: BuildFile, options: WorkTaskScope): WorkTree & { rootNode: WorkNode } {
   const context = createWorkContext(build)
-  const result = getWorkNode(context, { taskName: options.taskName })
+  const result = getWorkNode(context, { name: options.taskName })
   return {
     ...context.workTree,
     rootNode: result,

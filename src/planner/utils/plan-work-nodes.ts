@@ -90,7 +90,7 @@ function addWorkNodes(context: WorkContext, files: string[]) {
 
   files.push(context.build.fileName)
   for (const taskName of Object.keys(context.build.tasks)) {
-    getWorkNode(context, { taskName })
+    getWorkNode(context, { name: taskName })
   }
 
   for (const name of Object.keys(context.build.references)) {

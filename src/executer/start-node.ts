@@ -5,6 +5,7 @@ import { State } from './state'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { getServiceNodeCacheStats, getStateKey } from '../optimizer/get-work-node-cache-stats'
 import { NodeState } from './scheduler/node-state'
+import { ServiceDns } from './service-dns'
 
 export async function startNode(
   node: NodeState,
@@ -52,6 +53,7 @@ export async function startNode(
 export async function startService(
   service: WorkService,
   state: State,
+  serviceContainers: { [key: string]: ServiceDns },
   environment: Environment,
   abortSignal: AbortSignal
 ): Promise<void> {

@@ -1,6 +1,6 @@
 import { WorkNodeCommand } from '../planner/work-node-command'
 import { platform } from 'os'
-import { PlannedTask } from '../planner/utils/plan-work-node'
+import { PlannedTask } from '../planner/utils/planned-task'
 
 export interface WorkNodeCacheDescription {
   cwd?: string

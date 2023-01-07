@@ -1,4 +1,17 @@
+services:
+  foodb:
+    image: postgres:12-alpine
+    needs: [bardb]
+  bardb:
+    image: postgres:12-alpine
+    needs: [foodb]
+
 tasks:
+  loopservice:
+    needs: [foodb]
+    cmds:
+      - echo bar
+
   bar:
     deps: [foo]
     cmds:

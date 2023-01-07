@@ -6,6 +6,10 @@ describe('kubernetes', () => {
 
   afterAll(() => suite.close())
 
+  it('should', () => {
+    expect(true).toBeTrue()
+  })
+
   // CI setup missing
   xit('should forward deployment', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'api' })

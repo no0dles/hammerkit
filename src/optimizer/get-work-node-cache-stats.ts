@@ -4,7 +4,7 @@ import { WorkNodeCacheFileStats, WorkServiceCacheFileStats } from './work-node-c
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { StatusScopedConsole } from '../planner/work-node-status'
-import { ContainerWorkService, isContainerWorkService, WorkService } from '../planner/work-service'
+import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { createHash } from 'crypto'
 

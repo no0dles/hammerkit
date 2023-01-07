@@ -13,15 +13,13 @@ import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './e
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
+import { WorkService } from '../planner/work-service'
 
-function buildCreateOptions(
-  node: ContainerWorkNode,
-  serviceContainers: { [key: string]: ServiceDns }
-): ContainerCreateOptions {
+export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkService[]) {
   const links: string[] = []
   const hosts: string[] = []
 
-  for (const need of node.needs) {
+  for (const need of needs) {
     const dns = serviceContainers[need.id]
     if (isHostServiceDns(dns)) {
       hosts.push(`${need.name}:${dns.host}`)
@@ -33,6 +31,14 @@ function buildCreateOptions(
       links.push(`${dns.containerId}:${need.name}`)
     }
   }
+  return { links, hosts }
+}
+
+function buildCreateOptions(
+  node: ContainerWorkNode,
+  serviceContainers: { [key: string]: ServiceDns }
+): ContainerCreateOptions {
+  const network = getNeedsNetwork(serviceContainers, node.needs)
 
   return {
     Image: node.image,
@@ -51,8 +57,8 @@ function buildCreateOptions(
         map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
         return map
       }, {}),
-      ExtraHosts: hosts,
-      Links: links,
+      ExtraHosts: network.hosts,
+      Links: network.links,
       AutoRemove: true,
     },
     ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {

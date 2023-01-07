@@ -1,4 +1,18 @@
 services:
+  api:
+    image: node:16.6.0-alpine
+    deps: [install]
+    needs: [postgres]
+    labels:
+      stage: run
+      app: example
+    mounts:
+      - server.js
+      - config.json
+    cmd: node server.js
+    healthcheck:
+      cmd: "wget -qO- http://localhost:3000"
+
   postgres:
     image: postgres:12-alpine
     labels:
@@ -26,6 +40,12 @@ tasks:
       - package-lock.json
     cmds:
       - npm install
+
+  test:
+    image: node:16.6.0-alpine
+    needs: [api]
+    cmds:
+      - wget -qO- http://api:3000
 
   api:
     image: node:16.6.0-alpine

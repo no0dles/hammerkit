@@ -10,11 +10,14 @@ import { checkReadiness } from './check-readiness'
 import { Environment } from './environment'
 import { State } from './state'
 import { Process } from './process'
-import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
+import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
+import { getNeedsNetwork } from './docker-node'
+import { ServiceDns } from './service-dns'
 
 export function dockerService(
   service: ContainerWorkService,
   stateKey: string,
+  serviceContainers: { [key: string]: ServiceDns },
   state: State,
   environment: Environment
 ): Process {
@@ -33,6 +36,9 @@ export function dockerService(
 
     try {
       checkForAbort(abort.signal)
+
+      const network = getNeedsNetwork(serviceContainers, service.needs)
+
       status.write('debug', `create container with image ${service.image}`)
       container = await environment.docker.createContainer({
         Image: service.image,
@@ -43,7 +49,10 @@ export function dockerService(
           return map
         }, {}),
         Cmd: service.cmd ? service.cmd.split(' ') : undefined,
+        WorkingDir: service.cwd ? convertToPosixPath(service.cwd) : undefined,
         HostConfig: {
+          ExtraHosts: network.hosts,
+          Links: network.links,
           Binds: [
             ...service.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
             ...service.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
