@@ -9,6 +9,7 @@ import { getDefaultKubeConfig } from './get-default-kube-config'
 import { BuildFileNameSelector, findBuildService } from './find-build-value'
 import { ExecutionBuildService } from '../../parser/build-file-service'
 import { assignDependencies } from './assign-dependencies'
+import { mapLabels } from './map-labels'
 
 export function getWorkService(context: WorkContext, selector: BuildFileNameSelector): WorkService {
   const service = findBuildService(context, selector)
@@ -51,6 +52,7 @@ export function parseWorkNodeNeeds(
     ports: (service.ports || []).map((m) => templateValue(m, service.envs)).map((m) => parseWorkPort(m)),
     needs: [],
     deps: [],
+    labels: mapLabels(service.labels),
   }
   if (service.image) {
     return {

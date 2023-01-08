@@ -5,7 +5,7 @@ import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
 import { Cli, getCli, isCliService, isCliTask } from './cli'
 import { getBuildFile } from './parser/get-build-file'
-import { emptyWorkLabelScope, WorkScope } from './executer/work-scope'
+import { emptyWorkLabelScope, WorkLabelScope, WorkScope, WorkScopeMode } from './executer/work-scope'
 import { getWorkScope } from './get-work-context'
 import { printItem, printProperty, printTitle } from './log'
 import { hasLabels } from './executer/label-values'
@@ -17,8 +17,8 @@ export async function createCli(fileName: string, environment: Environment, work
   return getCli(workTree, environment)
 }
 
-function parseWorkScope(options: unknown): WorkScope {
-  const scope = emptyWorkLabelScope()
+function parseWorkLabelScope(options: unknown, mode: WorkScopeMode): WorkLabelScope {
+  const scope = emptyWorkLabelScope(mode)
   if (typeof options !== 'object') {
     return scope
   }
@@ -60,7 +60,7 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (options) => {
-        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        const cli = await createCli(fileName, environment, parseWorkLabelScope(options, 'all'))
         const items = cli.ls()
 
         const tasks = items.filter(isCliTask)
@@ -139,7 +139,7 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (options) => {
-        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        const cli = await createCli(fileName, environment, parseWorkLabelScope(options, 'all'))
         await cli.clean({
           service: options.service,
         })
@@ -151,7 +151,7 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
-        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        const cli = await createCli(fileName, environment, parseWorkLabelScope(options, 'all'))
         await cli.store(resolve(path))
       })
 
@@ -161,7 +161,7 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
-        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        const cli = await createCli(fileName, environment, parseWorkLabelScope(options, 'all'))
         await cli.restore(resolve(path))
       })
 
@@ -173,7 +173,7 @@ export async function getProgram(
       .action(async (options) => {
         let errors = 0
 
-        const cli = await createCli(fileName, environment, parseWorkScope(options))
+        const cli = await createCli(fileName, environment, parseWorkLabelScope(options, 'all'))
         for await (const validation of cli.validate()) {
           if (validation.type === 'error') {
             errors++
@@ -194,8 +194,63 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (task, options) => {
-        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
+        const cli = await createCli(
+          fileName,
+          environment,
+          task ? { taskName: task } : parseWorkLabelScope(options, 'all')
+        )
         cli.shutdown()
+      })
+
+    program
+      .command('up')
+      .description('start services(s)')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
+      .addOption(new Option('-w, --watch', 'watch tasks').default(false))
+      .addOption(new Option('-d, --daemon', 'run services in background').default(false))
+      .addOption(
+        new Option('-l, --log <mode>', 'log mode')
+          .default(isCI ? 'live' : 'interactive')
+          .choices(['interactive', 'live', 'grouped'])
+      )
+      .addOption(
+        new Option('--cache <method>', 'caching method to compare')
+          .default(isCI ? 'checksum' : 'modify-date')
+          .choices(['checksum', 'modify-date', 'none'])
+      )
+      .action(async (options) => {
+        const scope = parseWorkLabelScope(options, 'service')
+        const cli = await createCli(fileName, environment, scope)
+        const result = await cli.runUp({
+          cacheDefault: options.cache,
+          watch: options.watch,
+          workers: options.concurrency,
+          logMode: options.log,
+          daemon: options.daemon,
+        })
+
+        if (!result.success) {
+          program.error('Execution was not successful', { exitCode: 1 })
+        } else {
+          process.exit()
+        }
+      })
+
+    program
+      .command('down')
+      .description('stop services(s)')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (options) => {
+        const scope = parseWorkLabelScope(options, 'service')
+        const cli = await createCli(fileName, environment, scope)
+        const result = await cli.runDown()
+
+        if (!result.success) {
+          program.error('Execution was not successful', { exitCode: 1 })
+        }
       })
 
     program
@@ -217,8 +272,12 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (task, options) => {
-        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkScope(options))
-        const result = await cli.exec({
+        const cli = await createCli(
+          fileName,
+          environment,
+          task ? { taskName: task } : parseWorkLabelScope(options, 'all')
+        )
+        const result = await cli.runExec({
           cacheDefault: options.cache,
           watch: options.watch,
           workers: options.concurrency,

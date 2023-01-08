@@ -10,7 +10,7 @@ describe('execute', () => {
     const { cli, environment } = await suite.setup({ taskName: 'api' })
 
     const node = cli.node('api')
-    const exec = cli.execWatch({ watch: true })
+    const exec = await cli.exec({ watch: true })
 
     let count = 0
     exec.state.on((state) => {
@@ -33,7 +33,7 @@ describe('execute', () => {
     const { cli, environment } = await suite.setup({ taskName: 'api_crashing' })
 
     const node = cli.node('api_crashing')
-    const exec = cli.execWatch({ watch: true })
+    const exec = await cli.exec({ watch: true })
 
     let count = 0
     exec.state.on((state) => {

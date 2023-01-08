@@ -8,7 +8,7 @@ describe('monorepo', () => {
 
   it('should build and clean monorepo', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'build' })
-    const result = await cli.exec()
+    const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
     await cli.clean()
   }, 120000)

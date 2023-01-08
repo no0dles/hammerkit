@@ -10,6 +10,7 @@ describe('local', () => {
     const { cli } = await suite.setup({
       filterLabels: { app: ['bar'] },
       excludeLabels: {},
+      mode: 'all',
     })
     expectNodes(cli.ls(), ['bar', 'base'])
   })
@@ -18,6 +19,7 @@ describe('local', () => {
     const { cli } = await suite.setup({
       filterLabels: { app: ['foo'] },
       excludeLabels: {},
+      mode: 'all',
     })
     expectNodes(cli.ls(), ['foo', 'base'])
   })
@@ -26,6 +28,7 @@ describe('local', () => {
     const { cli } = await suite.setup({
       filterLabels: {},
       excludeLabels: { app: ['foo'] },
+      mode: 'all',
     })
     expectNodes(cli.ls(), ['bar', 'base'])
   })
@@ -34,6 +37,7 @@ describe('local', () => {
     const { cli } = await suite.setup({
       filterLabels: {},
       excludeLabels: { app: ['base'] },
+      mode: 'all',
     })
     expectNodes(cli.ls(), [])
   })
@@ -42,6 +46,7 @@ describe('local', () => {
     const { cli } = await suite.setup({
       filterLabels: { app: ['foo', 'bar'] },
       excludeLabels: {},
+      mode: 'all',
     })
     expectNodes(cli.ls(), ['foo', 'bar', 'base'])
   })

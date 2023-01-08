@@ -42,7 +42,7 @@ describe('cache', () => {
 
   it('should mount generations of dependant tasks', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'dependant' })
-    const result = await cli.exec()
+    const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
     await expectLog(result, environment, `dependant`, 'node_modules')
   })

@@ -9,7 +9,7 @@ describe('watch', () => {
   it('should run watch task and cancel', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'api' })
     const apiNode = cli.node('api')
-    const exec = cli.execWatch({ watch: true })
+    const exec = await cli.exec({ watch: true })
     exec.processManager.on((evt) => {
       if (evt.context.id === apiNode.id && evt.type === 'started') {
         environment.abortCtrl.abort()
@@ -23,7 +23,7 @@ describe('watch', () => {
   it('should restart task if dependency updates', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'api' })
     const apiNode = cli.node('api')
-    const exec = cli.execWatch({ watch: true })
+    const exec = await cli.exec({ watch: true })
 
     let appendedFile = false
     let restarted = false

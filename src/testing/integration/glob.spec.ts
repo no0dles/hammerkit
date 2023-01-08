@@ -10,7 +10,7 @@ describe('glob', () => {
   async function testCache(expectInvalidate: boolean, action?: (env: Environment) => Promise<void>) {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
 
-    const result1 = await cli.exec()
+    const result1 = await cli.runExec()
     await expectSuccessfulResult(result1, environment)
 
     const node = cli.node('example')
@@ -25,7 +25,7 @@ describe('glob', () => {
       await action(environment)
     }
 
-    const result2 = await cli.exec()
+    const result2 = await cli.runExec()
     await expectSuccessfulResult(result2, environment)
 
     const nodeState2 = result2.state.node[node.id]

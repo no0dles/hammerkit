@@ -52,7 +52,12 @@ async function restoreContainer(environment: Environment, node: ContainerWorkNod
       Entrypoint: 'sh',
       Cmd: ['-c', 'sleep 3600'],
       WorkingDir: convertToPosixPath(node.cwd),
-      Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
+      Labels: {
+        app: 'hammerkit',
+        'hammerkit-id': node.id,
+        'hammerkit-pid': process.pid.toString(),
+        'hammerkit-type': 'task',
+      },
       HostConfig: {
         AutoRemove: true,
         Binds: [...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
@@ -91,7 +96,12 @@ async function archiveContainer(environment: Environment, node: ContainerWorkNod
       Entrypoint: 'sh',
       Cmd: ['-c', 'sleep 3600'],
       WorkingDir: convertToPosixPath(node.cwd),
-      Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
+      Labels: {
+        app: 'hammerkit',
+        'hammerkit-id': node.id,
+        'hammerkit-pid': process.pid.toString(),
+        'hammerkit-type': 'task',
+      },
       HostConfig: {
         AutoRemove: true,
         Binds: [...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],

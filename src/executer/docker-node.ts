@@ -36,6 +36,7 @@ export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }
 
 function buildCreateOptions(
   node: ContainerWorkNode,
+  stateKey: string,
   serviceContainers: { [key: string]: ServiceDns }
 ): ContainerCreateOptions {
   const network = getNeedsNetwork(serviceContainers, node.needs)
@@ -47,7 +48,13 @@ function buildCreateOptions(
     Cmd: ['-c', 'sleep 3600'],
     Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
     WorkingDir: convertToPosixPath(node.cwd),
-    Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
+    Labels: {
+      app: 'hammerkit',
+      'hammerkit-id': node.id,
+      'hammerkit-pid': process.pid.toString(),
+      'hammerkit-type': 'task',
+      'hammerkit-state': stateKey,
+    },
     HostConfig: {
       Binds: [
         ...node.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
@@ -89,7 +96,7 @@ export function dockerNode(
       await prepareVolume(node, environment)
       checkForAbort(abort.signal)
 
-      const containerOptions = buildCreateOptions(node, serviceContainers)
+      const containerOptions = buildCreateOptions(node, stateKey, serviceContainers)
       printContainerOptions(status, containerOptions)
 
       const success = await usingContainer(environment, node, containerOptions, async (container) => {

@@ -3,9 +3,10 @@ services:
     image: node:16.6.0-alpine
     deps: [install]
     needs: [postgres]
+    ports:
+      - 3000
     labels:
-      stage: run
-      app: example
+      task: dev
     mounts:
       - server.js
       - config.json

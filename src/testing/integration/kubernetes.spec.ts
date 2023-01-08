@@ -13,7 +13,7 @@ describe('kubernetes', () => {
   // CI setup missing
   xit('should forward deployment', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'api' })
-    const result = await cli.exec()
+    const result = await cli.runExec()
     expectSuccessfulResult(result, environment)
   })
 })

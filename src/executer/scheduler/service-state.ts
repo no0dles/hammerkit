@@ -25,6 +25,7 @@ export interface ServiceRunningState {
   service: WorkService
   dns: ServiceDns
   stateKey: string
+  remote: { pid?: number; containerId: string } | null
 }
 
 export interface ServiceEndState {

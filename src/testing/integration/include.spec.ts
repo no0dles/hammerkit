@@ -8,14 +8,14 @@ describe('include', () => {
 
   it('should run included task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
-    const result = await cli.exec()
+    const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
     await expectLog(result, environment, `foo:bar`, 'foobar')
   })
 
   it('should get name:example', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'name:example' })
-    const result = await cli.exec()
+    const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
   })
 

@@ -7,6 +7,7 @@ import {
 import { WorkMount } from './work-mount'
 import { WorkNode } from './work-node'
 import { WorkVolume } from './work-volume'
+import { LabelValues } from '../executer/label-values'
 
 export interface BaseWorkService {
   id: string
@@ -15,6 +16,7 @@ export interface BaseWorkService {
   ports: WorkPort[]
   needs: WorkService[]
   deps: WorkNode[]
+  labels: LabelValues
   buildService: ExecutionBuildService
 }
 

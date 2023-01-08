@@ -43,7 +43,13 @@ export function dockerService(
       container = await environment.docker.createContainer({
         Image: service.image,
         Env: Object.keys(service.envs).map((k) => `${k}=${service.envs[k]}`),
-        Labels: { app: 'hammerkit', 'hammerkit-id': service.id, 'hammerkit-type': 'service' },
+        Labels: {
+          app: 'hammerkit',
+          'hammerkit-id': service.id,
+          'hammerkit-pid': process.pid.toString(),
+          'hammerkit-type': 'service',
+          'hammerkit-state': stateKey,
+        },
         ExposedPorts: service.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
           map[`${port.containerPort}/tcp`] = {}
           return map
@@ -69,14 +75,13 @@ export function dockerService(
 
       await container.start()
 
-      //await setUserPermissions(service, container, environment)
-
       if (!service.healthcheck) {
         state.patchService({
           type: 'running',
           service,
           dns: { containerId: container.id },
           stateKey,
+          remote: null,
         })
       } else {
         let ready = false
@@ -93,18 +98,21 @@ export function dockerService(
             service,
             dns: { containerId: container.id },
             stateKey,
+            remote: null,
           })
         }
       }
 
-      await waitOnAbort(abort.signal)
+      if (!state.current.daemon) {
+        await waitOnAbort(abort.signal)
 
-      state.patchService({
-        type: 'end',
-        service,
-        stateKey,
-        reason: 'terminated',
-      })
+        state.patchService({
+          type: 'end',
+          service,
+          stateKey,
+          reason: 'terminated',
+        })
+      }
     } catch (e) {
       if (e instanceof AbortError) {
         state.patchService({
@@ -122,7 +130,7 @@ export function dockerService(
         })
       }
     } finally {
-      if (container) {
+      if (container && !state.current.daemon) {
         try {
           await removeContainer(container)
         } catch (e) {
