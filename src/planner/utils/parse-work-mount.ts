@@ -2,7 +2,7 @@ import { homedir } from 'os'
 import { normalizePath } from './normalize-path'
 import { WorkMount } from '../work-mount'
 
-export function parseWorkNodeMount(cwd: string, dir: string): WorkMount {
+export function parseWorkMount(cwd: string, dir: string): WorkMount {
   const parts = dir.split(':')
   if (parts.length === 1) {
     return parseLocalMount(cwd, dir, dir)

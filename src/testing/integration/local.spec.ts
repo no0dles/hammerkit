@@ -8,7 +8,7 @@ describe('local', () => {
 
   it('should run local task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
-    const result = await cli.exec()
+    const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
   })
 })

@@ -8,7 +8,7 @@ describe('cancellation', () => {
 
   async function testAbort(taskName: string, expectedState: string) {
     const { cli, environment } = await suite.setup({ taskName })
-    const exec = await cli.execWatch({ logMode: 'live' })
+    const exec = await cli.exec({ logMode: 'live' })
     const abortNode = Object.values(exec.state.current.node).find((n) => n.node.name.startsWith('long_'))
     exec.processManager.on((evt) => {
       if (evt.type === 'started' && evt.context.id === abortNode?.node.id) {

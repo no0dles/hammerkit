@@ -8,7 +8,7 @@ describe('watch-dependency', () => {
   it('should run watch task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'third' })
     const thirdNode = cli.node('third')
-    const exec = cli.execWatch({ watch: true })
+    const exec = await cli.exec({ watch: true })
 
     let content = ''
     let changed = false

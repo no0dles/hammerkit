@@ -1,3 +1,7 @@
+services:
+  bardb:
+    image: postgres:12-alpine
+
 tasks:
   bar:
     description: example task

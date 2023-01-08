@@ -1,6 +1,6 @@
-import { WorkNodePort } from '../work-node-port'
+import { WorkPort } from '../work-port'
 
-export function parseWorkNodePort(port: string): WorkNodePort {
+export function parseWorkPort(port: string): WorkPort {
   const parts = port.split(':')
   if (parts.length === 1) {
     const port = parsePort(parts[0])

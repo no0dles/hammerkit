@@ -67,6 +67,7 @@ export async function execCommand(
   timeout: number | undefined,
   abort: AbortSignal | undefined
 ): Promise<ExecResult> {
+  const abortController = new AbortController()
   const exec = await container.exec({
     Cmd: cmd,
     WorkingDir: cwd,
@@ -75,11 +76,19 @@ export async function execCommand(
     AttachStdin: true,
     AttachStderr: true,
     User: user ?? undefined,
+    abortSignal: abortController.signal,
   })
 
   status.write('debug', `received exec id ${exec.id}`)
-  const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
+  const stream = await exec.start({
+    stdin: true,
+    hijack: true,
+    Detach: false,
+    Tty: false,
+    abortSignal: abortController.signal,
+  })
 
+  let timeoutHandle: NodeJS.Timer | undefined = undefined
   return new Promise<ExecResult>((resolve, reject) => {
     let resolved = false
 
@@ -91,6 +100,10 @@ export async function execCommand(
 
         resolved = true
         resolve({ type: 'canceled' })
+        abortController.abort()
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle)
+        }
       })
     }
 
@@ -107,18 +120,23 @@ export async function execCommand(
 
           resolve({ type: 'result', result })
           resolved = true
+          abortController.abort()
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle)
+          }
         })
       })
       .catch(reject)
 
     if (timeout) {
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         if (resolved) {
           return
         }
 
         resolve({ type: 'timeout' })
         resolved = true
+        abortController.abort()
       }, timeout)
     }
   })

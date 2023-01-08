@@ -1,4 +1,4 @@
-export interface WorkNodePort {
+export interface WorkPort {
   hostPort: number
   containerPort: number
 }

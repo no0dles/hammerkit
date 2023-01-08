@@ -1,13 +1,13 @@
 import { BuildFile } from '../parser/build-file'
 import { WorkNodeSource } from './work-node-source'
 import { WorkNodeCommand } from './work-node-command'
-import { WorkNodePort } from './work-node-port'
+import { WorkPort } from './work-port'
 import { WorkService } from './work-service'
 import { CacheMethod } from '../parser/cache-method'
-import { PlannedTask } from './utils/plan-work-node'
 import { LabelValues } from '../executer/label-values'
 import { WorkMount } from './work-mount'
 import { WorkVolume } from './work-volume'
+import { PlannedTask } from './utils/planned-task'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -34,6 +34,8 @@ export interface WorkNodeGenerate {
   path: string
   inherited: boolean
   resetOnChange: boolean
+  export: boolean
+  isFile: boolean
 }
 
 export interface LocalWorkNode extends BaseWorkNode {
@@ -46,7 +48,7 @@ export interface ContainerWorkNode extends BaseWorkNode {
   shell: string
   user: string | null
   mounts: WorkMount[]
-  ports: WorkNodePort[]
+  ports: WorkPort[]
   volumes: WorkVolume[]
 }
 

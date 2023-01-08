@@ -31,12 +31,12 @@ export async function read(fileName: string, context: Environment): Promise<any>
 export async function readBuildFile(
   fileName: string,
   files: { [key: string]: BuildFile },
-  context: Environment
+  environment: Environment
 ): Promise<BuildFile> {
   if (files[fileName]) {
     return files[fileName]
   }
 
-  const input = await read(fileName, context)
-  return parseBuildFile(fileName, files, input, context)
+  const input = await read(fileName, environment)
+  return parseBuildFile(fileName, files, input, environment)
 }

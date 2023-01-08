@@ -52,6 +52,8 @@ export function parseBuildFileServices(
       healthcheck: parseHealthcheck(ctx, serviceValue.healthcheck),
       labels: parseStringMap(ctx, 'labels', serviceValue.labels),
       cmd: parseString(ctx, 'cmd', serviceValue.cmd, true),
+      needs: parseStringArray(ctx, 'needs', serviceValue.needs),
+      deps: parseStringArray(ctx, 'deps', serviceValue.deps),
       unknownProps: Object.keys(serviceValue)
         .filter((k) => validKeys.indexOf(k) === -1)
         .reduce<{ [key: string]: any }>((map, k) => {

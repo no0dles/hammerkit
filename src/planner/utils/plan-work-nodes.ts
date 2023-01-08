@@ -11,18 +11,23 @@ import { WorkTree } from '../work-tree'
 import { createSubWorkContext, createWorkContext, WorkContext } from '../work-context'
 import { WorkLabelScope } from '../../executer/work-scope'
 import { matchesAllLabels, matchesAnyLabel } from '../../executer/label-values'
+import { getWorkService } from './parse-work-node-needs'
 
 export function planWorkNodes(build: BuildFile, options: WorkLabelScope): WorkTree {
   const context = createWorkContext(build)
-  addWorkNodes(context, [])
+  if (options.mode === 'all') {
+    addWorkNodes(context, [])
+  } else {
+    addWorkServices(context, [])
+  }
 
   const nodesIdsToRemove: string[] = []
-  for (const [nodeId, node] of Object.entries(context.workTree.nodes)) {
+  for (const node of iterateWorkNodes(context.workTree.nodes)) {
     if (
-      !matchesAllLabels(options.filterLabels, node, context.workTree.nodes) ||
+      !matchesAllLabels(options.filterLabels, node, context.workTree) ||
       matchesAnyLabel(options.excludeLabels, node)
     ) {
-      nodesIdsToRemove.push(nodeId)
+      nodesIdsToRemove.push(node.id)
     }
   }
 
@@ -30,7 +35,9 @@ export function planWorkNodes(build: BuildFile, options: WorkLabelScope): WorkTr
     removeNode(nodeId, context.workTree)
   }
 
-  removeUnusedServices(context.workTree)
+  if (options.mode === 'all') {
+    removeUnusedServices(context.workTree)
+  }
 
   return context.workTree
 }
@@ -90,7 +97,7 @@ function addWorkNodes(context: WorkContext, files: string[]) {
 
   files.push(context.build.fileName)
   for (const taskName of Object.keys(context.build.tasks)) {
-    getWorkNode(context, { taskName })
+    getWorkNode(context, { name: taskName })
   }
 
   for (const name of Object.keys(context.build.references)) {
@@ -99,5 +106,24 @@ function addWorkNodes(context: WorkContext, files: string[]) {
 
   for (const name of Object.keys(context.build.includes)) {
     addWorkNodes(createSubWorkContext(context, { type: 'includes', name }), files)
+  }
+}
+
+function addWorkServices(context: WorkContext, files: string[]) {
+  if (files.indexOf(context.build.fileName) !== -1) {
+    return
+  }
+
+  files.push(context.build.fileName)
+  for (const serviceName of Object.keys(context.build.services)) {
+    getWorkService(context, { name: serviceName })
+  }
+
+  for (const name of Object.keys(context.build.references)) {
+    addWorkServices(createSubWorkContext(context, { type: 'references', name }), files)
+  }
+
+  for (const name of Object.keys(context.build.includes)) {
+    addWorkServices(createSubWorkContext(context, { type: 'includes', name }), files)
   }
 }

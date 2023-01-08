@@ -12,15 +12,14 @@ import { Process } from './process'
 import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
+import { extract } from 'tar'
+import { WorkService } from '../planner/work-service'
 
-function buildCreateOptions(
-  node: ContainerWorkNode,
-  serviceContainers: { [key: string]: ServiceDns }
-): ContainerCreateOptions {
+export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkService[]) {
   const links: string[] = []
   const hosts: string[] = []
 
-  for (const need of node.needs) {
+  for (const need of needs) {
     const dns = serviceContainers[need.id]
     if (isHostServiceDns(dns)) {
       hosts.push(`${need.name}:${dns.host}`)
@@ -32,6 +31,15 @@ function buildCreateOptions(
       links.push(`${dns.containerId}:${need.name}`)
     }
   }
+  return { links, hosts }
+}
+
+function buildCreateOptions(
+  node: ContainerWorkNode,
+  stateKey: string,
+  serviceContainers: { [key: string]: ServiceDns }
+): ContainerCreateOptions {
+  const network = getNeedsNetwork(serviceContainers, node.needs)
 
   return {
     Image: node.image,
@@ -40,7 +48,13 @@ function buildCreateOptions(
     Cmd: ['-c', 'sleep 3600'],
     Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
     WorkingDir: convertToPosixPath(node.cwd),
-    Labels: { app: 'hammerkit', 'hammerkit-id': node.id, 'hammerkit-type': 'task' },
+    Labels: {
+      app: 'hammerkit',
+      'hammerkit-id': node.id,
+      'hammerkit-pid': process.pid.toString(),
+      'hammerkit-type': 'task',
+      'hammerkit-state': stateKey,
+    },
     HostConfig: {
       Binds: [
         ...node.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
@@ -50,8 +64,8 @@ function buildCreateOptions(
         map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
         return map
       }, {}),
-      ExtraHosts: hosts,
-      Links: links,
+      ExtraHosts: network.hosts,
+      Links: network.links,
       AutoRemove: true,
     },
     ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
@@ -82,7 +96,7 @@ export function dockerNode(
       await prepareVolume(node, environment)
       checkForAbort(abort.signal)
 
-      const containerOptions = buildCreateOptions(node, serviceContainers)
+      const containerOptions = buildCreateOptions(node, stateKey, serviceContainers)
       printContainerOptions(status, containerOptions)
 
       const success = await usingContainer(environment, node, containerOptions, async (container) => {
@@ -124,6 +138,29 @@ export function dockerNode(
             )
             return false
           }
+        }
+
+        for (const generate of node.generates) {
+          if (!generate.export || generate.inherited || generate.isFile) {
+            continue
+          }
+
+          const readable = await container.getArchive({
+            path: generate.path,
+          })
+          await environment.file.createDirectory(generate.path)
+          await new Promise<void>((resolve, reject) => {
+            readable
+              .pipe(
+                extract({
+                  cwd: generate.path,
+                  newer: true,
+                  stripComponents: 1,
+                })
+              )
+              .on('close', () => resolve())
+              .on('error', (err) => reject(err))
+          })
         }
 
         return true

@@ -1,7 +1,7 @@
 import { BaseWorkNode } from '../work-node'
 import { WorkMount } from '../work-mount'
 
-export function getContainerMounts(task: BaseWorkNode, workMount: WorkMount[]): WorkMount[] {
+export function getMounts(task: BaseWorkNode, workMount: WorkMount[]): WorkMount[] {
   const result: WorkMount[] = [
     ...task.src.map((source) => ({
       localPath: source.absolutePath,

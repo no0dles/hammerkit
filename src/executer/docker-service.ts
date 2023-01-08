@@ -10,11 +10,14 @@ import { checkReadiness } from './check-readiness'
 import { Environment } from './environment'
 import { State } from './state'
 import { Process } from './process'
-import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
+import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
+import { getNeedsNetwork } from './docker-node'
+import { ServiceDns } from './service-dns'
 
 export function dockerService(
   service: ContainerWorkService,
   stateKey: string,
+  serviceContainers: { [key: string]: ServiceDns },
   state: State,
   environment: Environment
 ): Process {
@@ -33,17 +36,29 @@ export function dockerService(
 
     try {
       checkForAbort(abort.signal)
+
+      const network = getNeedsNetwork(serviceContainers, service.needs)
+
       status.write('debug', `create container with image ${service.image}`)
       container = await environment.docker.createContainer({
         Image: service.image,
         Env: Object.keys(service.envs).map((k) => `${k}=${service.envs[k]}`),
-        Labels: { app: 'hammerkit', 'hammerkit-id': service.id, 'hammerkit-type': 'service' },
+        Labels: {
+          app: 'hammerkit',
+          'hammerkit-id': service.id,
+          'hammerkit-pid': process.pid.toString(),
+          'hammerkit-type': 'service',
+          'hammerkit-state': stateKey,
+        },
         ExposedPorts: service.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
           map[`${port.containerPort}/tcp`] = {}
           return map
         }, {}),
         Cmd: service.cmd ? service.cmd.split(' ') : undefined,
+        WorkingDir: service.cwd ? convertToPosixPath(service.cwd) : undefined,
         HostConfig: {
+          ExtraHosts: network.hosts,
+          Links: network.links,
           Binds: [
             ...service.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
             ...service.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
@@ -60,14 +75,13 @@ export function dockerService(
 
       await container.start()
 
-      //await setUserPermissions(service, container, environment)
-
       if (!service.healthcheck) {
         state.patchService({
           type: 'running',
           service,
           dns: { containerId: container.id },
           stateKey,
+          remote: null,
         })
       } else {
         let ready = false
@@ -84,18 +98,21 @@ export function dockerService(
             service,
             dns: { containerId: container.id },
             stateKey,
+            remote: null,
           })
         }
       }
 
-      await waitOnAbort(abort.signal)
+      if (!state.current.daemon) {
+        await waitOnAbort(abort.signal)
 
-      state.patchService({
-        type: 'end',
-        service,
-        stateKey,
-        reason: 'terminated',
-      })
+        state.patchService({
+          type: 'end',
+          service,
+          stateKey,
+          reason: 'terminated',
+        })
+      }
     } catch (e) {
       if (e instanceof AbortError) {
         state.patchService({
@@ -113,7 +130,7 @@ export function dockerService(
         })
       }
     } finally {
-      if (container) {
+      if (container && !state.current.daemon) {
         try {
           await removeContainer(container)
         } catch (e) {

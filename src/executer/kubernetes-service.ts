@@ -49,6 +49,7 @@ function startForward(
         type: 'running',
         dns: { host: 'host-gateway' },
         stateKey,
+        remote: null,
       })
     })
     ps.stderr?.on('data', async (data) => {

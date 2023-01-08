@@ -4,6 +4,8 @@ export interface ExecutionBuildService {
   description: string | null
   ports: string[] | null
   mounts: string[] | null
+  deps: string[] | null
+  needs: string[] | null
   cmd: string | null
   volumes: string[] | null
   healthcheck: ExecutionBuildServiceHealthCheck | null

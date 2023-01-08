@@ -1,6 +1,5 @@
 import { statusConsole } from '../planner/work-node-status'
 import { Environment } from './environment'
-import { Writable } from 'stream'
 import { getFileContext } from '../file/get-file-context'
 import { getContainerCli } from './execute-docker'
 import { consoleContext } from '../log'

@@ -9,15 +9,15 @@ describe('reference', () => {
 
   it('should run included task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
-    const result = await cli.exec()
+    const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
     await expectLog(result, environment, `foo:bar`, 'foobar')
     await expectLog(result, environment, `example`, 'hammertime')
   })
 
   it('should list task with references tasks nested', async () => {
-    const { cli } = await suite.setup(emptyWorkLabelScope())
+    const { cli } = await suite.setup(emptyWorkLabelScope('all'))
     const workNodes = cli.ls()
-    expect(workNodes.map((t) => t.item.name)).toEqual(['example', 'foo:bar', 'foo:sub:sub'])
+    expect(workNodes.map((t) => t.item.name)).toEqual(['foo:bardb', 'example', 'foo:bar', 'foo:sub:sub'])
   })
 })

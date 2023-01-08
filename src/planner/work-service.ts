@@ -1,4 +1,4 @@
-import { WorkNodePort } from './work-node-port'
+import { WorkPort } from './work-port'
 import {
   ExecutionBuildService,
   ExecutionBuildServiceHealthCheck,
@@ -7,12 +7,16 @@ import {
 import { WorkMount } from './work-mount'
 import { WorkNode } from './work-node'
 import { WorkVolume } from './work-volume'
+import { LabelValues } from '../executer/label-values'
 
 export interface BaseWorkService {
   id: string
   name: string
   description: string | null
-  ports: WorkNodePort[]
+  ports: WorkPort[]
+  needs: WorkService[]
+  deps: WorkNode[]
+  labels: LabelValues
   buildService: ExecutionBuildService
 }
 
@@ -26,6 +30,7 @@ export interface ContainerWorkService extends BaseWorkService {
   envs: { [key: string]: string }
   image: string
   cmd: string | null
+  cwd: string | null
   //user: string | null
   mounts: WorkMount[]
   volumes: WorkVolume[]

@@ -13,6 +13,7 @@ export function getWorkScope(buildFile: BuildFile, contextFilter: WorkScope, env
   const tree = isContextTaskFilter(contextFilter)
     ? planWorkTree(buildFile, { taskName: contextFilter.taskName })
     : planWorkNodes(buildFile, contextFilter)
+
   for (const node of iterateWorkNodes(tree.nodes)) {
     node.envs = replaceEnvVariables(node.envs, environment.processEnvs)
     if (!isContainerWorkNode(node)) {

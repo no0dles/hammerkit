@@ -5,7 +5,6 @@ import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
 import { statusConsole } from './planner/work-node-status'
 import { getContainerCli } from './executer/execute-docker'
-import { Writable } from 'stream'
 import { emptyWritable } from './utils/empty-writable'
 
 const abortCtrl = new AbortController()

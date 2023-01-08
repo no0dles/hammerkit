@@ -14,4 +14,5 @@ export interface SchedulerState {
   service: SchedulerServiceState
   cacheMethod: CacheMethod
   watch: boolean
+  daemon: boolean
 }
