@@ -10,29 +10,16 @@ import { getWorkNode } from './plan-work-node'
 import { WorkTree } from '../work-tree'
 import { createSubWorkContext, createWorkContext, WorkContext } from '../work-context'
 import { WorkLabelScope } from '../../executer/work-scope'
-import { matchesAllLabels, matchesAnyLabel } from '../../executer/label-values'
 import { getWorkService } from './parse-work-node-needs'
+import { appliesToLabels } from '../../executer/label-values'
 
 export function planWorkNodes(build: BuildFile, options: WorkLabelScope): WorkTree {
   const context = createWorkContext(build)
-  if (options.mode === 'all') {
-    addWorkNodes(context, [])
+
+  if (options.mode === 'service') {
+    addWorkServices(context, options, [])
   } else {
-    addWorkServices(context, [])
-  }
-
-  const nodesIdsToRemove: string[] = []
-  for (const node of iterateWorkNodes(context.workTree.nodes)) {
-    if (
-      !matchesAllLabels(options.filterLabels, node, context.workTree) ||
-      matchesAnyLabel(options.excludeLabels, node)
-    ) {
-      nodesIdsToRemove.push(node.id)
-    }
-  }
-
-  for (const nodeId of nodesIdsToRemove) {
-    removeNode(nodeId, context.workTree)
+    addWorkNodes(context, options, [])
   }
 
   if (options.mode === 'all') {
@@ -46,7 +33,7 @@ function removeUnusedServices(workTree: WorkTree) {
   const needs = new Set<string>()
   for (const node of Object.values(workTree.nodes)) {
     for (const need of node.needs) {
-      needs.add(need.id)
+      needs.add(need.service.id)
     }
   }
 
@@ -90,40 +77,71 @@ export function* iterateWorkNodes(nodes: WorkNodes | SchedulerNodeState): Genera
   }
 }
 
-function addWorkNodes(context: WorkContext, files: string[]) {
+function addWorkNodes(context: WorkContext, options: WorkLabelScope, files: string[]) {
   if (files.indexOf(context.build.fileName) !== -1) {
     return
   }
 
   files.push(context.build.fileName)
   for (const taskName of Object.keys(context.build.tasks)) {
-    getWorkNode(context, { name: taskName })
+    const node = getWorkNode(context, { name: taskName })
+    if (appliesToLabels(node.labels, options)) {
+      addNode(context, node)
+    }
   }
 
   for (const name of Object.keys(context.build.references)) {
-    addWorkNodes(createSubWorkContext(context, { type: 'references', name }), files)
+    addWorkNodes(createSubWorkContext(context, { type: 'references', name }), options, files)
   }
 
   for (const name of Object.keys(context.build.includes)) {
-    addWorkNodes(createSubWorkContext(context, { type: 'includes', name }), files)
+    addWorkNodes(createSubWorkContext(context, { type: 'includes', name }), options, files)
   }
 }
 
-function addWorkServices(context: WorkContext, files: string[]) {
+function addService(context: WorkContext, service: WorkService) {
+  if (context.workTree.services[service.id]) {
+    return
+  }
+
+  context.workTree.services[service.id] = service
+  for (const node of service.deps) {
+    addNode(context, node)
+  }
+  for (const need of service.needs) {
+    addService(context, need.service)
+  }
+}
+
+function addNode(context: WorkContext, node: WorkNode) {
+  if (context.workTree.nodes[node.id]) {
+    return
+  }
+
+  context.workTree.nodes[node.id] = node
+  for (const dep of node.deps) {
+    addNode(context, dep)
+  }
+}
+
+function addWorkServices(context: WorkContext, options: WorkLabelScope, files: string[]) {
   if (files.indexOf(context.build.fileName) !== -1) {
     return
   }
 
   files.push(context.build.fileName)
   for (const serviceName of Object.keys(context.build.services)) {
-    getWorkService(context, { name: serviceName })
+    const service = getWorkService(context, { name: serviceName })
+    if (appliesToLabels(service.labels, options)) {
+      addService(context, service)
+    }
   }
 
   for (const name of Object.keys(context.build.references)) {
-    addWorkServices(createSubWorkContext(context, { type: 'references', name }), files)
+    addWorkServices(createSubWorkContext(context, { type: 'references', name }), options, files)
   }
 
   for (const name of Object.keys(context.build.includes)) {
-    addWorkServices(createSubWorkContext(context, { type: 'includes', name }), files)
+    addWorkServices(createSubWorkContext(context, { type: 'includes', name }), options, files)
   }
 }

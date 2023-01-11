@@ -1,11 +1,15 @@
 import { BuildFile } from '../parser/build-file'
 import { WorkTree } from './work-tree'
+import { WorkNodes } from './work-nodes'
+import { WorkServices } from './work-services'
 
 export interface WorkContext {
   cwd: string
   namePrefix: string[]
   build: BuildFile
   workTree: WorkTree
+  nodes: WorkNodes
+  services: WorkServices
 }
 
 export function createWorkContext(build: BuildFile): WorkContext {
@@ -13,6 +17,8 @@ export function createWorkContext(build: BuildFile): WorkContext {
     cwd: build.path,
     namePrefix: [],
     build,
+    nodes: {},
+    services: {},
     workTree: { nodes: {}, services: {} },
   }
 }
@@ -25,6 +31,8 @@ export function createSubWorkContext(
   return {
     build: subBuildFile,
     workTree: context.workTree,
+    services: context.services,
+    nodes: context.nodes,
     cwd: options.type === 'references' ? subBuildFile.path : context.cwd,
     namePrefix: [...context.namePrefix, options.name],
   }

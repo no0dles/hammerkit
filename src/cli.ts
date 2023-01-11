@@ -18,7 +18,6 @@ import { ProcessManager } from './executer/process-manager'
 import { WorkService } from './planner/work-service'
 import { removeContainer } from './docker/remove-container'
 import { updateServiceStatus } from './service/update-service-status'
-import { WorkLabelScope } from './executer/work-scope'
 import { scheduleUp } from './executer/schedule-up'
 import { scheduleDown } from './executer/schedule-down'
 import { State } from './executer/state'
@@ -45,10 +44,12 @@ export interface CliTaskItem {
   type: 'task'
   item: WorkNode
 }
+
 export interface CliServiceItem {
   type: 'service'
   item: WorkService
 }
+
 export const isCliTask = (val: CliItem): val is CliTaskItem => val.type === 'task'
 export const isCliService = (val: CliItem): val is CliServiceItem => val.type === 'service'
 export type CliItem = CliTaskItem | CliServiceItem
@@ -58,14 +59,16 @@ export class Cli {
 
   async setup(
     scheduler: (process: ProcessManager, state: State, environment: Environment) => Promise<SchedulerResult>,
+    workTreeSelector: (workTree: WorkTree) => WorkTree,
     options?: Partial<CliExecOptions>
   ): Promise<CliExecResult> {
     const processManager = new ProcessManager(this.environment, options?.workers ?? 0)
     const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
+    const processWorkTree = workTreeSelector(this.workTree)
     const state = createSchedulerState({
       daemon: options?.daemon ?? false,
-      services: this.workTree.services,
-      nodes: this.workTree.nodes,
+      services: processWorkTree.services,
+      nodes: processWorkTree.nodes,
       watch: options?.watch ?? false,
       logMode,
       cacheMethod: options?.cacheDefault ?? 'checksum',
@@ -113,7 +116,7 @@ export class Cli {
   }
 
   async up(options?: Partial<CliExecOptions>): Promise<CliExecResult> {
-    return await this.setup(scheduleUp, options)
+    return await this.setup(scheduleUp, (workTree) => workTree, options)
   }
 
   async runUp(options?: Partial<CliExecOptions>): Promise<SchedulerResult> {
@@ -122,7 +125,7 @@ export class Cli {
   }
 
   async down(): Promise<CliExecResult> {
-    return await this.setup(scheduleDown, {})
+    return await this.setup(scheduleDown, (workTree) => ({ services: workTree.services, nodes: {} }), {})
   }
 
   async runDown(): Promise<SchedulerResult> {
@@ -131,7 +134,7 @@ export class Cli {
   }
 
   async exec(options?: Partial<CliExecOptions>): Promise<CliExecResult> {
-    return await this.setup(scheduleExecution, options)
+    return await this.setup(scheduleExecution, (workTree) => workTree, options)
   }
 
   async runExec(options?: Partial<CliExecOptions>): Promise<SchedulerResult> {

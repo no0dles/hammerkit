@@ -5,7 +5,7 @@ export function hasServiceAnActiveNeed(currentState: SchedulerState, serviceId: 
   let hasNeed = false
   for (const nodeState of iterateWorkNodes(currentState.node)) {
     if (nodeState.type === 'running' || nodeState.type === 'starting' || nodeState.type === 'pending') {
-      if (nodeState.node.needs.some((n) => n.id === serviceId)) {
+      if (nodeState.node.needs.some((n) => n.service.id === serviceId)) {
         hasNeed = true
         break
       }
@@ -20,7 +20,7 @@ export function hasServiceAnActiveNeed(currentState: SchedulerState, serviceId: 
         serviceState.type === 'starting' ||
         serviceState.type === 'pending'
       ) {
-        if (serviceState.service.needs.some((n) => n.id === serviceId)) {
+        if (serviceState.service.needs.some((n) => n.service.id === serviceId)) {
           hasNeed = true
           break
         }

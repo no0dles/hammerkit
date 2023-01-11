@@ -21,12 +21,46 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     ...(buildTaskResult.result.envs || {}),
   }
 
-  const getReferences = (task: BuildTaskResult<BuildFileTask> | null, prop: 'needs' | 'deps'): BuildFileReference[] => {
+  const getNeedReferences = (
+    task: BuildTaskResult<BuildFileTask> | null
+  ): { name: string; reference: BuildFileReference }[] => {
     if (!task) {
       return []
     }
 
-    const value = task.result[prop]
+    const value = task.result.needs
+    if (!value) {
+      return []
+    }
+
+    return value.map<{ name: string; reference: BuildFileReference }>((d) => {
+      if (typeof d === 'string') {
+        return {
+          name: d,
+          reference: {
+            name: d,
+            build: buildTaskResult.context.build,
+            context: task.context,
+          },
+        }
+      } else {
+        return {
+          name: d.name,
+          reference: {
+            name: d.service,
+            build: buildTaskResult.context.build,
+            context: task.context,
+          },
+        }
+      }
+    })
+  }
+  const getDepReferences = (task: BuildTaskResult<BuildFileTask> | null): BuildFileReference[] => {
+    if (!task) {
+      return []
+    }
+
+    const value = task.result.deps
     if (!value) {
       return []
     }
@@ -38,7 +72,7 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
     }))
   }
 
-  const mergeReferences = (first: BuildFileReference[], second: BuildFileReference[]): BuildFileReference[] => {
+  const mergeReferences = <T>(first: T[], second: T[]): T[] => {
     return [...first, ...second]
   }
 
@@ -63,7 +97,7 @@ export function planTask(workContext: WorkContext, buildTaskResult: BuildTaskRes
       ...(buildTaskResult.result.labels || {}),
     },
     envs,
-    deps: mergeReferences(getReferences(extendedTask, 'deps'), getReferences(buildTaskResult, 'deps')),
-    needs: mergeReferences(getReferences(extendedTask, 'needs'), getReferences(buildTaskResult, 'needs')),
+    deps: mergeReferences(getDepReferences(extendedTask), getDepReferences(buildTaskResult)),
+    needs: mergeReferences(getNeedReferences(extendedTask), getNeedReferences(buildTaskResult)),
   }
 }

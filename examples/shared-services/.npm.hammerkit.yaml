@@ -1,0 +1,16 @@
+tasks:
+  install:
+    image: node:16.6.0-alpine
+    labels:
+      stage: build
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+      - package-lock.json
+    cmds:
+      - npm install

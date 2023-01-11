@@ -15,12 +15,12 @@ export function getWorkService(context: WorkContext, selector: BuildFileNameSele
   const service = findBuildService(context, selector)
   const id = getWorkServiceId(service.context.build, service.result)
 
-  if (context.workTree.services[id]) {
-    return context.workTree.services[id]
+  if (context.services[id]) {
+    return context.services[id]
   }
 
   const value = parseWorkNodeNeeds(id, service.name, service.result, service.context)
-  context.workTree.services[id] = value
+  context.services[id] = value
 
   assignDependencies(
     (service.result.deps || []).map((dep) => ({
@@ -32,7 +32,17 @@ export function getWorkService(context: WorkContext, selector: BuildFileNameSele
   )
 
   for (const need of service.result.needs || []) {
-    value.needs.push(getWorkService(service.context, { name: need }))
+    if (typeof need === 'string') {
+      value.needs.push({
+        name: need,
+        service: getWorkService(service.context, { name: need }),
+      })
+    } else {
+      value.needs.push({
+        name: need.name,
+        service: getWorkService(service.context, { name: need.service }),
+      })
+    }
   }
 
   return value

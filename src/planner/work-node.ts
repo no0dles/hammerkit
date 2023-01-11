@@ -2,7 +2,7 @@ import { BuildFile } from '../parser/build-file'
 import { WorkNodeSource } from './work-node-source'
 import { WorkNodeCommand } from './work-node-command'
 import { WorkPort } from './work-port'
-import { WorkService } from './work-service'
+import { WorkNeed, WorkService } from './work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { LabelValues } from '../executer/label-values'
 import { WorkMount } from './work-mount'
@@ -25,7 +25,7 @@ export interface BaseWorkNode {
   cmds: WorkNodeCommand[]
   plannedTask: PlannedTask
   buildFile: BuildFile
-  needs: WorkService[]
+  needs: WorkNeed[]
   labels: LabelValues
   caching: CacheMethod | null
 }

@@ -13,14 +13,14 @@ import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './e
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
-import { WorkService } from '../planner/work-service'
+import { WorkNeed } from '../planner/work-service'
 
-export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkService[]) {
+export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkNeed[]) {
   const links: string[] = []
   const hosts: string[] = []
 
   for (const need of needs) {
-    const dns = serviceContainers[need.id]
+    const dns = serviceContainers[need.name]
     if (isHostServiceDns(dns)) {
       hosts.push(`${need.name}:${dns.host}`)
     } else {

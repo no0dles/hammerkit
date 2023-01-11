@@ -7,6 +7,7 @@ import { parseHealthcheck } from './parse-healthcheck'
 import { ParseContext, parseContextDescription } from './parse-context'
 import { parseString } from './parse-string'
 import { parseServiceSelector } from './parse-service-selector'
+import { parseNeedArray } from './parse-need-array'
 
 const validKeys = ['image', 'ports', 'envs', 'mounts', 'volumes', 'healthcheck', 'context', 'selector', 'kubeconfig']
 
@@ -52,7 +53,7 @@ export function parseBuildFileServices(
       healthcheck: parseHealthcheck(ctx, serviceValue.healthcheck),
       labels: parseStringMap(ctx, 'labels', serviceValue.labels),
       cmd: parseString(ctx, 'cmd', serviceValue.cmd, true),
-      needs: parseStringArray(ctx, 'needs', serviceValue.needs),
+      needs: parseNeedArray(ctx, 'needs', serviceValue.needs),
       deps: parseStringArray(ctx, 'deps', serviceValue.deps),
       unknownProps: Object.keys(serviceValue)
         .filter((k) => validKeys.indexOf(k) === -1)

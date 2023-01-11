@@ -22,7 +22,7 @@ export interface PlannedTask {
   image: string | null
   mounts: string[]
   cmds: BuildTaskCommand[]
-  needs: BuildFileReference[]
+  needs: { name: string; reference: BuildFileReference }[]
   envs: { [key: string]: string }
   ports: string[]
   labels: { [key: string]: string }

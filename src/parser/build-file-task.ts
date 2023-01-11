@@ -2,6 +2,7 @@ import { BuildFileTaskSource } from './build-file-task-source'
 import { BuildTaskCommand } from './build-file-task-command'
 import { BuildFileTaskPlatform } from './build-file-task-platform'
 import { CacheMethod } from './cache-method'
+import { ExecutionServiceNeed } from './build-file-service'
 
 export interface BuildFileTask {
   deps: string[] | null
@@ -15,7 +16,7 @@ export interface BuildFileTask {
   image: string | null
   mounts: string[] | null
   cmds: BuildTaskCommand[] | null
-  needs: string[] | null
+  needs: (string | ExecutionServiceNeed)[] | null
   envs: { [key: string]: string } | null
   ports: string[] | null
   unknownProps: { [key: string]: any }

@@ -16,7 +16,7 @@ export async function parseBuildFileReferences(
   }
 
   if (typeof refs !== 'object') {
-    throw new Error(`${fileName} references need to be an object`)
+    throw new Error(`${fileName} ${type} need to be an object`)
   }
 
   const result: { [key: string]: BuildFile } = {}

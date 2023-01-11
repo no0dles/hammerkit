@@ -1,6 +1,6 @@
 import { NodeState } from './scheduler/node-state'
 import { isServiceState, ServiceState } from './scheduler/service-state'
-import { WorkService } from '../planner/work-service'
+import { WorkNeed } from '../planner/work-service'
 import { ProcessManager } from './process-manager'
 import { State } from './state'
 import { Environment } from './environment'
@@ -9,14 +9,14 @@ import { schedulePendingServices } from './schedule-pending-services'
 
 export function ensureNeeds(
   nodeOrServiceState: NodeState | ServiceState,
-  needs: WorkService[],
+  needs: WorkNeed[],
   processManager: ProcessManager,
   state: State,
   environment: Environment,
   currentState: SchedulerState
 ): boolean {
   const endedNeeds = needs
-    .map((need) => currentState.service[need.id])
+    .map((need) => currentState.service[need.service.id])
     .filter((service) => service.type === 'end' || service.type === 'canceled')
 
   if (endedNeeds.length > 0) {
@@ -46,7 +46,7 @@ export function ensureNeeds(
   }
 
   const pendingNeeds = needs
-    .map((need) => currentState.service[need.id])
+    .map((need) => currentState.service[need.service.id])
     .filter((service) => service.type === 'pending')
 
   if (pendingNeeds.length > 0) {
@@ -54,7 +54,7 @@ export function ensureNeeds(
     return false
   }
 
-  const hasNotReadyNeeds = needs.some((need) => currentState.service[need.id].type !== 'running')
+  const hasNotReadyNeeds = needs.some((need) => currentState.service[need.service.id].type !== 'running')
   if (hasNotReadyNeeds) {
     return false
   }

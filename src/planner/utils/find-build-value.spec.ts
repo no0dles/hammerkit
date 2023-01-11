@@ -12,6 +12,8 @@ describe('find-build-value', () => {
       {
         build: buildFile,
         cwd: '/home/user/proj',
+        nodes: {},
+        services: {},
         workTree: { nodes: {}, services: {} },
         namePrefix: [],
       },

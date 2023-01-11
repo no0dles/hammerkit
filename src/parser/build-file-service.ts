@@ -5,7 +5,7 @@ export interface ExecutionBuildService {
   ports: string[] | null
   mounts: string[] | null
   deps: string[] | null
-  needs: string[] | null
+  needs: (string | ExecutionServiceNeed)[] | null
   cmd: string | null
   volumes: string[] | null
   healthcheck: ExecutionBuildServiceHealthCheck | null
@@ -14,6 +14,11 @@ export interface ExecutionBuildService {
   context: string | null
   kubeconfig: string | null
   selector: ExecutionBuildServiceSelector | null
+}
+
+export interface ExecutionServiceNeed {
+  service: string
+  name: string
 }
 
 export interface ExecutionBuildServiceSelector {

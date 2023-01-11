@@ -86,6 +86,13 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
       for (const log of env.status.service(state.service).logs()) {
         env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
+    } else if (state.type === 'running') {
+      const message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)}`
+      if (state.remote) {
+        env.stdout.write(`${formatDate(new Date())} ${message} - already started\n`)
+      } else {
+        env.stdout.write(`${formatDate(new Date())} ${message} - sucessfull started\n`)
+      }
     }
   }
 
@@ -253,6 +260,10 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
   for (const state of iterateWorkServices(schedulerState.service)) {
     let message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)} - ${getStateText(state)}`
 
+    if (state.type === 'running' && state.remote) {
+      message += ` [REMOTE]`
+    }
+
     const currentMessage = env.status.service(state.service).current()
     if (currentMessage) {
       message += ` ${currentMessage.message}`
@@ -268,7 +279,9 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
       const totalDepCount = state.node.deps.length
       const totalServiceCount = state.node.needs.length
       const completedDepCount = state.node.deps.filter((d) => schedulerState.node[d.id]?.type === 'completed').length
-      const runningServiceCount = state.node.needs.filter((n) => schedulerState.service[n.id]?.type === 'ready').length
+      const runningServiceCount = state.node.needs.filter(
+        (n) => schedulerState.service[n.service.id]?.type === 'ready'
+      ).length
       if (totalDepCount > 0 && completedDepCount !== totalDepCount) {
         message += ` | ${colors.grey(` awaiting dependencies (${completedDepCount}/${totalDepCount})`)}`
       }

@@ -13,6 +13,7 @@ import { ParseContext, parseContextDescription } from './parse-context'
 import { parseString } from './parse-string'
 import { parseBoolean } from './parse-boolean'
 import { BuildFileTaskGenerate } from './build-file-task'
+import { parseNeedArray } from './parse-need-array'
 
 const validTaskKeys = [
   'envs',
@@ -92,7 +93,7 @@ export async function parseBuildFile(
       image: value.image || null,
       extend: value.extend || null,
       shell: value.shell || null,
-      needs: value.needs || null,
+      needs: parseNeedArray(ctx, 'needs', value.needs),
       continuous: parseBoolean(ctx, 'continuous', value.continuous, true),
       ports: parseStringArray(ctx, 'ports', value.ports),
       cmds: parseBuildFileCommand(ctx, value.cmds),

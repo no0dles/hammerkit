@@ -14,10 +14,15 @@ export interface BaseWorkService {
   name: string
   description: string | null
   ports: WorkPort[]
-  needs: WorkService[]
+  needs: WorkNeed[]
   deps: WorkNode[]
   labels: LabelValues
   buildService: ExecutionBuildService
+}
+
+export interface WorkNeed {
+  name: string
+  service: WorkService
 }
 
 export type WorkService = ContainerWorkService | KubernetesWorkService

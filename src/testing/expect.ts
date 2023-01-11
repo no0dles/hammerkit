@@ -16,8 +16,8 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
           errorMessage: state.type === 'error' ? state.errorMessage : undefined,
           needs: state.node.needs.map((need) => ({
             name: need.name,
-            updates: Array.from(env.status.service(need).read()).map((s) => `${s.level}: ${s.message}`),
-            logs: Array.from(env.status.service(need).logs()).map((l) => `${l.console}: ${l.message}`),
+            updates: Array.from(env.status.service(need.service).read()).map((s) => `${s.level}: ${s.message}`),
+            logs: Array.from(env.status.service(need.service).logs()).map((l) => `${l.console}: ${l.message}`),
           })),
         }).toEqual({
           nodeId: state.node.id,

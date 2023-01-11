@@ -94,7 +94,7 @@ export function hasNeedCycle(node: WorkService, currentPath: WorkService[]): Wor
   }
 
   for (const dep of node.needs) {
-    const depHasCycle = hasNeedCycle(dep, [...currentPath, node])
+    const depHasCycle = hasNeedCycle(dep.service, [...currentPath, node])
     if (depHasCycle) {
       return depHasCycle
     }

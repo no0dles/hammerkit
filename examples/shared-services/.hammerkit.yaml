@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:12-alpine
+    labels:
+      app: example
+    envs:
+      POSTGRES_USER: api
+      POSTGRES_DB: api
+      POSTGRES_PASSWORD: 123456
+    healthcheck:
+      cmd: "pg_isready -U postgres"
+
+references:
+  a: ./projects/a
+  b: ./projects/b

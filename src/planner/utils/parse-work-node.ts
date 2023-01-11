@@ -37,7 +37,10 @@ export function parseWorkNode(id: string, task: PlannedTask, context: WorkContex
   }
 
   for (const service of task.needs) {
-    baseWorkNode.needs.push(getWorkService(service.context, { name: service.name }))
+    baseWorkNode.needs.push({
+      name: service.name,
+      service: getWorkService(service.reference.context, { name: service.reference.name }),
+    })
   }
 
   if (task.image) {
