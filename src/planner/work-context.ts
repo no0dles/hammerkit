@@ -19,7 +19,7 @@ export function createWorkContext(build: BuildFile): WorkContext {
     build,
     nodes: {},
     services: {},
-    workTree: { nodes: {}, services: {} },
+    workTree: { nodes: {}, services: {}, environments: {} },
   }
 }
 

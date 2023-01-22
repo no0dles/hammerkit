@@ -14,7 +14,7 @@ describe('find-build-value', () => {
         cwd: '/home/user/proj',
         nodes: {},
         services: {},
-        workTree: { nodes: {}, services: {} },
+        workTree: { nodes: {}, services: {}, environments: {} },
         namePrefix: [],
       },
       { name: 'foo:bardb' }

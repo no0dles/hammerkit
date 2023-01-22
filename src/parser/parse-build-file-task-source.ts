@@ -4,6 +4,7 @@ import { parseStringArray } from './parse-string-array'
 import { BuildFileTaskSource } from './build-file-task-source'
 import { Environment } from '../executer/environment'
 import { ParseContext } from './parse-context'
+import { WorkNodeSource } from '../planner/work-node-source'
 
 export function parseBuildFileTaskSource(
   ctx: ParseContext,
@@ -19,7 +20,15 @@ export function parseBuildFileTaskSource(
     return null
   }
 
+  return parseNodeSource(sources)
+}
+
+export function parseNodeSource(sources: string[] | null): BuildFileTaskSource[] {
   const result: BuildFileTaskSource[] = []
+
+  if (!sources) {
+    return result
+  }
 
   for (const source of sources) {
     const wildcardIndex = source.indexOf('*')
@@ -30,9 +39,9 @@ export function parseBuildFileTaskSource(
             const matcher = new Minimatch(join(cwd, source), { dot: true })
             const match = matcher.match(file)
             if (match) {
-              environment.console.debug(`file ${file} matches source ${source}`)
+              // TODO environment.console.debug(`file ${file} matches source ${source}`)
             } else {
-              environment.console.debug(`file ${file} does not matche source ${source}`)
+              // TODO environment.console.debug(`file ${file} does not matche source ${source}`)
             }
             return match
           },
@@ -45,9 +54,9 @@ export function parseBuildFileTaskSource(
             const matcher = new Minimatch(join(cwd, source), { dot: true })
             const match = matcher.match(file)
             if (match) {
-              environment.console.debug(`file ${file} matches source ${source}`)
+              // TODO environment.console.debug(`file ${file} matches source ${source}`)
             } else {
-              environment.console.debug(`file ${file} does not matche source ${source}`)
+              // TODO environment.console.debug(`file ${file} does not matche source ${source}`)
             }
             return match
           },

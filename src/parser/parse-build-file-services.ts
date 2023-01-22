@@ -8,6 +8,7 @@ import { ParseContext, parseContextDescription } from './parse-context'
 import { parseString } from './parse-string'
 import { parseServiceSelector } from './parse-service-selector'
 import { parseNeedArray } from './parse-need-array'
+import { parseBuildFileTaskSource } from './parse-build-file-task-source'
 
 const validKeys = ['image', 'ports', 'envs', 'mounts', 'volumes', 'healthcheck', 'context', 'selector', 'kubeconfig']
 
@@ -55,6 +56,7 @@ export function parseBuildFileServices(
       cmd: parseString(ctx, 'cmd', serviceValue.cmd, true),
       needs: parseNeedArray(ctx, 'needs', serviceValue.needs),
       deps: parseStringArray(ctx, 'deps', serviceValue.deps),
+      src: parseStringArray(ctx, 'src', serviceValue.src),
       unknownProps: Object.keys(serviceValue)
         .filter((k) => validKeys.indexOf(k) === -1)
         .reduce<{ [key: string]: any }>((map, k) => {

@@ -3,21 +3,16 @@ services:
     image: node:16.6.0-alpine
     deps: [install]
     needs: [postgres]
-    ports:
-      - :3000
-    labels:
-      task: dev
-    mounts:
-      - server.js
-      - config.json
     cmd: node server.js
+    envs:
+      DATABASE_URL: postgres://api:123456@postgres:5432/api
+    ports: [3000]
+    mounts: [server.js]
     healthcheck:
       cmd: "wget -qO- http://localhost:3000"
 
   postgres:
     image: postgres:12-alpine
-    labels:
-      app: example
     ports:
       - 5432
     envs:
@@ -30,11 +25,6 @@ services:
 tasks:
   install:
     image: node:16.6.0-alpine
-    labels:
-      stage: build
-    #mounts:
-    #  - $PWD/.npm:/.npm
-    #  - $PWD/.config:/.config
     src:
       - package.json
       - package-lock.json
@@ -44,21 +34,19 @@ tasks:
     cmds:
       - npm install
 
-  test:
-    image: node:16.6.0-alpine
-    needs: [api]
-    cmds:
-      - wget -qO- http://api:3000
+references:
+  spa: ./spa
 
-  api:
-    image: node:16.6.0-alpine
-    deps: [install]
-    needs: [postgres]
-    labels:
-      stage: run
-      app: example
-    src:
-      - index.js
-      - config.json
-    cmds:
-      - node index.js
+environments:
+  development:
+    namespace: default
+    context: popos
+    ingresses:
+      - host: web.hammerkit.dev
+        service: spa:web
+        servicePort: 4200
+        path: /
+      - host: api.hammerkit.dev
+        service: api
+        servicePort: 3000
+        path: /

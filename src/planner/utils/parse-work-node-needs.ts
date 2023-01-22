@@ -10,6 +10,7 @@ import { BuildFileNameSelector, findBuildService } from './find-build-value'
 import { ExecutionBuildService } from '../../parser/build-file-service'
 import { assignDependencies } from './assign-dependencies'
 import { mapLabels } from './map-labels'
+import { parseBuildFileTaskSource, parseNodeSource } from '../../parser/parse-build-file-task-source'
 
 export function getWorkService(context: WorkContext, selector: BuildFileNameSelector): WorkService {
   const service = findBuildService(context, selector)
@@ -74,6 +75,7 @@ export function parseWorkNodeNeeds(
       cwd: service.cmd ? context.cwd : null,
       // user: getContainerUser(),
       healthcheck: service.healthcheck,
+      src: parseNodeSource(service.src),
       mounts: (service.mounts || [])
         .map((m) => templateValue(m, service.envs))
         .map((m) => parseWorkMount(context.build.path, m)),

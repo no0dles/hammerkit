@@ -21,6 +21,7 @@ import { updateServiceStatus } from './service/update-service-status'
 import { scheduleUp } from './executer/schedule-up'
 import { scheduleDown } from './executer/schedule-down'
 import { State } from './executer/state'
+import { deployKubernetes } from './executer/kubernetes/schedule-kubernetes'
 
 export interface CliExecOptions {
   workers: number
@@ -29,6 +30,8 @@ export interface CliExecOptions {
   logMode: LogMode
   cacheDefault: CacheMethod
 }
+
+export interface CliDeployOptions {}
 
 export interface CliCleanOptions {
   service: boolean
@@ -119,13 +122,22 @@ export class Cli {
     return await this.setup(scheduleUp, (workTree) => workTree, options)
   }
 
+  async deploy(envName: string, options?: Partial<CliDeployOptions>) {
+    const env = this.workTree.environments[envName]
+    return await deployKubernetes(this.workTree, env, options)
+  }
+
   async runUp(options?: Partial<CliExecOptions>): Promise<SchedulerResult> {
     const run = await this.up(options)
     return await run.start()
   }
 
   async down(): Promise<CliExecResult> {
-    return await this.setup(scheduleDown, (workTree) => ({ services: workTree.services, nodes: {} }), {})
+    return await this.setup(
+      scheduleDown,
+      (workTree) => ({ services: workTree.services, nodes: {}, environments: {} }),
+      {}
+    )
   }
 
   async runDown(): Promise<SchedulerResult> {

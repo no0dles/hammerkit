@@ -14,6 +14,7 @@ import { getDefaultBuildFilename } from './parser/default-build-file'
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const buildFile = await getBuildFile(fileName, environment)
   const workTree = getWorkScope(buildFile, workScope, environment)
+  workTree.environments = buildFile.environments // TODO
   return getCli(workTree, environment)
 }
 
@@ -200,6 +201,23 @@ export async function getProgram(
           task ? { taskName: task } : parseWorkLabelScope(options, 'all')
         )
         cli.shutdown()
+      })
+
+    program
+      .command('deploy <env>')
+      .description('deploy services(s)')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .action(async (env, options) => {
+        const scope = parseWorkLabelScope(options, 'service')
+        const cli = await createCli(fileName, environment, scope)
+        const result = await cli.deploy(env, {})
+
+        if (!result.success) {
+          program.error('Execution was not successful', { exitCode: 1 })
+        } else {
+          process.exit()
+        }
       })
 
     program

@@ -44,6 +44,7 @@ export async function parseBuildFile(
     references: {},
     envs: {},
     services: {},
+    environments: {},
   }
   files[fileName] = result
 
@@ -66,6 +67,8 @@ export async function parseBuildFile(
       result.envs = parseEnvs({ type: 'buildfile', fileName }, value || {}, result.envs)
     } else if (key === 'services') {
       result.services = parseBuildFileServices(fileName, value || {}, result)
+    } else if (key === 'environments') {
+      result.environments = value // TODO
     }
   }
 

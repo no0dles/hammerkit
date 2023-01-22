@@ -1,4 +1,4 @@
 export interface WorkPort {
-  hostPort: number
+  hostPort: number | null
   containerPort: number
 }

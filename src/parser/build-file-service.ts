@@ -5,6 +5,7 @@ export interface ExecutionBuildService {
   ports: string[] | null
   mounts: string[] | null
   deps: string[] | null
+  src: string[] | null
   needs: (string | ExecutionServiceNeed)[] | null
   cmd: string | null
   volumes: string[] | null

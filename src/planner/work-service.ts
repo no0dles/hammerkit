@@ -8,6 +8,8 @@ import { WorkMount } from './work-mount'
 import { WorkNode } from './work-node'
 import { WorkVolume } from './work-volume'
 import { LabelValues } from '../executer/label-values'
+import { WorkNodeSource } from './work-node-source'
+import { BuildFileTaskSource } from '../parser/build-file-task-source'
 
 export interface BaseWorkService {
   id: string
@@ -37,6 +39,7 @@ export interface ContainerWorkService extends BaseWorkService {
   cmd: string | null
   cwd: string | null
   //user: string | null
+  src: BuildFileTaskSource[] // TODO
   mounts: WorkMount[]
   volumes: WorkVolume[]
   healthcheck: ExecutionBuildServiceHealthCheck | null
