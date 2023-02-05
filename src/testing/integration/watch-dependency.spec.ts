@@ -13,7 +13,7 @@ describe('watch-dependency', () => {
     let content = ''
     let changed = false
     exec.processManager.on(async (evt) => {
-      if (evt.type === 'ended' && evt.context.id === thirdNode.id) {
+      if (evt.type === 'ended' && evt.item.id === thirdNode.id) {
         if (changed) {
           content = await environment.file.read('third.txt')
           environment.abortCtrl.abort()

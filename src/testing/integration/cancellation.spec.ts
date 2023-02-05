@@ -11,14 +11,14 @@ describe('cancellation', () => {
     const exec = await cli.exec({ logMode: 'live' })
     const abortNode = Object.values(exec.state.current.node).find((n) => n.node.name.startsWith('long_'))
     exec.processManager.on((evt) => {
-      if (evt.type === 'started' && evt.context.id === abortNode?.node.id) {
+      if (evt.type === 'started' && evt.item.id === abortNode?.itemId && evt.processName === 'task') {
         environment.abortCtrl.abort()
       }
     })
     const result = await exec.start()
     expect(result.success).toBeFalsy()
     if (abortNode) {
-      expect(result.state.node[abortNode.node.id].type).toEqual(expectedState)
+      expect(result.state.node[abortNode.itemId].type).toEqual(expectedState)
     } else {
       expect(abortNode).toBeDefined()
     }

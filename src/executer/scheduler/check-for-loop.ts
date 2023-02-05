@@ -7,11 +7,12 @@ export function checkForLoop(state: SchedulerState): void {
     const cyclePath = hasDependencyCycle(nodeState.node, [])
     if (cyclePath && cyclePath.length > 0) {
       const errorMessage = `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`
-      state.node[nodeState.node.id] = {
+      state.node[nodeState.itemId] = {
         type: 'error',
         node: nodeState.node,
         stateKey: null,
         errorMessage,
+        itemId: nodeState.itemId,
       }
     }
   }
@@ -19,11 +20,12 @@ export function checkForLoop(state: SchedulerState): void {
     const cyclePath = hasNeedCycle(serviceState.service, [])
     if (cyclePath && cyclePath.length > 0) {
       const errorMessage = `service cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`
-      state.service[serviceState.service.id] = {
+      state.service[serviceState.itemId] = {
         type: 'error',
         service: serviceState.service,
         stateKey: null,
         errorMessage,
+        itemId: serviceState.itemId,
       }
     }
   }

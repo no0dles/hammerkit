@@ -1,51 +1,61 @@
-import { WorkService } from '../../planner/work-service'
 import { ServiceDns } from '../service-dns'
 import { NodeState } from './node-state'
+import { WorkService } from '../../planner/work-service'
+import { WorkItem } from '../../planner/work-item'
+import { WorkNode } from '../../planner/work-node'
+import { WorkServices } from '../../planner/work-services'
 
 export interface ServicePendingState {
   type: 'pending'
-  service: WorkService
+  service: WorkItem<WorkService>
   stateKey: string | null
+  itemId: string
 }
 
 export interface ServiceStartingState {
   type: 'starting'
-  service: WorkService
+  service: WorkItem<WorkService>
   stateKey: string | null
+  itemId: string
 }
 
 export interface ServiceReadyState {
   type: 'ready'
-  service: WorkService
+  service: WorkItem<WorkService>
   stateKey: string
+  itemId: string
 }
 
 export interface ServiceRunningState {
   type: 'running'
-  service: WorkService
+  service: WorkItem<WorkService>
   dns: ServiceDns
   stateKey: string
   remote: { pid?: number; containerId: string } | null
+  itemId: string
 }
 
 export interface ServiceEndState {
   type: 'end'
-  service: WorkService
+  service: WorkItem<WorkService>
   reason: 'crash' | 'terminated'
   stateKey: string
+  itemId: string
 }
 
 export interface ServiceErrorState {
   type: 'error'
-  service: WorkService
+  service: WorkItem<WorkService>
   stateKey: string | null
   errorMessage: string
+  itemId: string
 }
 
 export interface ServiceCanceledState {
   type: 'canceled'
-  service: WorkService
+  service: WorkItem<WorkService>
   stateKey: string | null
+  itemId: string
 }
 
 export type ServiceState =

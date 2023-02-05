@@ -1,58 +1,68 @@
 import { WorkNode } from '../../planner/work-node'
+import { WorkItem } from '../../planner/work-item'
+import { WorkService } from '../../planner/work-service'
 
 export interface NodePendingState {
   type: 'pending'
-  node: WorkNode
+  node: WorkItem<WorkNode>
+  itemId: string
   stateKey: string | null
 }
 
 export interface NodeStartingState {
   type: 'starting'
-  node: WorkNode
+  node: WorkItem<WorkNode>
   started: Date
+  itemId: string
   stateKey: string | null
 }
 
 export interface NodeReadyState {
   type: 'ready'
-  node: WorkNode
+  node: WorkItem<WorkNode>
   started: Date
   stateKey: string
+  itemId: string
 }
 
 export interface NodeRunningState {
   type: 'running'
-  node: WorkNode
+  node: WorkItem<WorkNode>
   started: Date
   stateKey: string
+  itemId: string
 }
 
 export interface NodeCompletedState {
   type: 'completed'
-  node: WorkNode
+  node: WorkItem<WorkNode>
   duration: number
   cached: boolean
   stateKey: string
+  itemId: string
 }
 
 export interface NodeErrorState {
   type: 'error'
-  node: WorkNode
+  node: WorkItem<WorkNode>
   errorMessage: string
   stateKey: string | null
+  itemId: string
 }
 
 export interface NodeCanceledState {
   type: 'canceled'
-  node: WorkNode
+  node: WorkItem<WorkNode>
   stateKey: string | null
+  itemId: string
 }
 
 export interface NodeCrashState {
   type: 'crash'
-  node: WorkNode
+  node: WorkItem<WorkNode>
   exitCode: number
   stateKey: string
+  itemId: string
 }
 
 export type NodeState =

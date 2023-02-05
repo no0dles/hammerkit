@@ -6,6 +6,7 @@ describe('parse-work-volume', () => {
       name: 'projdata',
       containerPath: '/usr/data',
       resetOnChange: false,
+      export: false,
       inherited: false,
     })
   })

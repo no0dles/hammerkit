@@ -2,8 +2,22 @@ import { ProcessManager } from './process-manager'
 import { ProcessListenerEventType } from './process-listener'
 import { environmentMock } from './environment-mock'
 import { listenOnAbort } from '../utils/abort-event'
+import { WorkItem } from '../planner/work-item'
+import { logContext, statusConsole } from '../planner/work-node-status'
+import { emptyWritable } from '../utils/empty-writable'
 
 describe('process-manager', () => {
+  function fakeWorkItem(id: string) {
+    return {
+      id,
+      status: statusConsole(emptyWritable()).context(logContext(id, 'task', null as any)),
+      deps: [],
+      needs: [],
+      name: 'test',
+      data: null,
+    } as WorkItem<any>
+  }
+
   it('should complete on success', async () => {
     const manager = new ProcessManager(environmentMock(process.cwd()), 0)
 
@@ -13,10 +27,7 @@ describe('process-manager', () => {
       expect(evt.type).toBe(expectedEvents[currentIndex++])
     })
 
-    manager.task(
-      { type: 'task', name: 'test-success', id: 'a' },
-      () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100))
-    )
+    manager.task(fakeWorkItem('a'), () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100)))
     await manager.onComplete()
     expect(currentIndex).toBe(2)
   })
@@ -31,7 +42,7 @@ describe('process-manager', () => {
     })
 
     manager.task(
-      { type: 'task', name: 'test-error', id: 'a' },
+      fakeWorkItem('a'),
       () => new Promise<void>((resolve, reject) => setTimeout(() => reject(new Error('3')), 100))
     )
     await manager.onComplete()
@@ -49,25 +60,16 @@ describe('process-manager', () => {
         concurrencyCount++
       } else if (evt.type === 'ended') {
         concurrencyCount--
-        processes.push(evt.context.id)
+        processes.push(evt.item.id)
       }
       if (concurrencyCount > 1) {
         hasOversteppedLimits = true
       }
     })
 
-    manager.task(
-      { type: 'task', name: 'test-success', id: 'a' },
-      () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100))
-    )
-    manager.task(
-      { type: 'task', name: 'test-success', id: 'b' },
-      () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100))
-    )
-    manager.task(
-      { type: 'task', name: 'test-success', id: 'c' },
-      () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100))
-    )
+    manager.task(fakeWorkItem('a'), () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100)))
+    manager.task(fakeWorkItem('b'), () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100)))
+    manager.task(fakeWorkItem('c'), () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100)))
     await manager.onComplete()
     expect(processes).toEqual(['a', 'b', 'c'])
     expect(hasOversteppedLimits).toBeFalsy()
@@ -78,7 +80,7 @@ describe('process-manager', () => {
     const env = environmentMock(process.cwd())
     const manager = new ProcessManager(env, 0)
     manager.task(
-      { type: 'task', name: 'test-success', id: 'a' },
+      fakeWorkItem('a'),
       (abort) =>
         new Promise<void>((resolve) => {
           listenOnAbort(abort.signal, resolve)
@@ -101,7 +103,7 @@ describe('process-manager', () => {
         concurrencyCount++
       } else if (evt.type === 'ended') {
         concurrencyCount--
-        processes.push(evt.context.id)
+        processes.push(evt.item.id)
       }
       if (concurrencyCount > 1) {
         hasOversteppedLimits = true
@@ -109,13 +111,10 @@ describe('process-manager', () => {
     })
 
     const abortController = manager.task(
-      { type: 'task', name: 'test-success', id: 'a' },
+      fakeWorkItem('a'),
       () => new Promise<void>((resolve) => setTimeout(() => resolve(), 200))
     )
-    manager.task(
-      { type: 'task', name: 'test-success', id: 'a' },
-      () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100))
-    )
+    manager.task(fakeWorkItem('a'), () => new Promise<void>((resolve) => setTimeout(() => resolve(), 100)))
     expect(abortController.signal.aborted).toBeTruthy()
     await manager.onComplete()
     expect(processes).toEqual(['a', 'a'])

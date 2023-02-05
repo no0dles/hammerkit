@@ -1,4 +1,3 @@
-import { WorkNode } from '../planner/work-node'
 import { Environment } from './environment'
 import { getWorkNodeCacheStats, getCacheState } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
@@ -8,26 +7,27 @@ import { waitOnAbort } from '../utils/abort-event'
 import { State } from './state'
 import { Process } from './process'
 import { ProcessManager } from './process-manager'
+import { WorkItem } from '../planner/work-item'
+import { WorkNode } from '../planner/work-node'
 
 export function watchNode(
-  node: WorkNode,
+  node: WorkItem<WorkNode>,
   state: State,
   processManager: ProcessManager,
   environment: Environment
 ): Process {
   return async (abort: AbortController) => {
-    const status = environment.status.task(node)
-    let currentState = await getWorkNodeCacheStats(node, environment)
+    let currentState = await getWorkNodeCacheStats(node.data, environment)
 
     const debouncer = new Debouncer(async () => {
       if (environment.abortCtrl.signal.aborted) {
         return
       }
 
-      const newStats = await getWorkNodeCacheStats(node, environment)
+      const newStats = await getWorkNodeCacheStats(node.data, environment)
       const currentFileState = getCacheState(
-        status,
-        { name: node.name, caching: node.caching ?? state.current.cacheMethod },
+        node.status,
+        { name: node.name, caching: node.data.caching ?? state.current.cacheMethod },
         currentState,
         newStats
       )
@@ -38,10 +38,11 @@ export function watchNode(
         return
       }
 
-      status.write('debug', `source changed for node ${node.name}, restart process`)
+      node.status.write('debug', `source changed for node ${node.name}, restart process`)
       state.resetNode({
         type: 'pending',
-        node,
+        node: node,
+        itemId: node.id,
         stateKey: currentFileState.stateKey,
       })
     }, 100)
@@ -49,14 +50,14 @@ export function watchNode(
     const fileWatchers: FileWatcher[] = []
     const sources: string[] = []
 
-    for (const src of node.src) {
-      status.write('debug', `watch ${src.absolutePath} source`)
+    for (const src of node.data.src) {
+      node.status.write('debug', `watch ${src.absolutePath} source`)
 
       const watcher = environment.file.watch(src.absolutePath, async (fileName) => {
         const absoluteFileName = join(src.absolutePath, fileName)
 
-        if (src.matcher(absoluteFileName, node.cwd)) {
-          status.write('debug', `source ${absoluteFileName} change for watched task ${node.name}`)
+        if (src.matcher(absoluteFileName, node.data.cwd)) {
+          node.status.write('debug', `source ${absoluteFileName} change for watched task ${node.name}`)
           debouncer.bounce()
         }
       })

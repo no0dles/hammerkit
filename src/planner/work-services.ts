@@ -1,5 +1,6 @@
 import { WorkService } from './work-service'
+import { WorkItem } from './work-item'
 
 export interface WorkServices {
-  [key: string]: WorkService
+  [key: string]: WorkItem<WorkService>
 }

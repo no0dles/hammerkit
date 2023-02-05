@@ -13,57 +13,57 @@ import { Process } from './process'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
 import { getNeedsNetwork } from './docker-node'
 import { ServiceDns } from './service-dns'
+import { WorkItem } from '../planner/work-item'
 
 export function dockerService(
-  service: ContainerWorkService,
+  item: WorkItem<ContainerWorkService>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
   state: State,
   environment: Environment
 ): Process {
   return async (abort) => {
-    const status = environment.status.service(service)
     let container: Container | null = null
 
-    await prepareMounts(service, environment)
+    await prepareMounts(item, environment)
     checkForAbort(abort.signal)
 
-    await pullImage(service, environment)
+    await pullImage(item, environment)
     checkForAbort(abort.signal)
 
-    await prepareVolume(service, environment)
+    await prepareVolume(item, environment)
     checkForAbort(abort.signal)
 
     try {
       checkForAbort(abort.signal)
 
-      const network = getNeedsNetwork(serviceContainers, service.needs)
+      const network = getNeedsNetwork(serviceContainers, item.needs)
 
-      status.write('debug', `create container with image ${service.image}`)
+      item.status.write('debug', `create container with image ${item.data.image}`)
       container = await environment.docker.createContainer({
-        Image: service.image,
-        Env: Object.keys(service.envs).map((k) => `${k}=${service.envs[k]}`),
+        Image: item.data.image,
+        Env: Object.keys(item.data.envs).map((k) => `${k}=${item.data.envs[k]}`),
         Labels: {
           app: 'hammerkit',
-          'hammerkit-id': service.id,
+          'hammerkit-id': item.id,
           'hammerkit-pid': process.pid.toString(),
           'hammerkit-type': 'service',
           'hammerkit-state': stateKey,
         },
-        ExposedPorts: service.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
+        ExposedPorts: item.data.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
           map[`${port.containerPort}/tcp`] = {}
           return map
         }, {}),
-        Cmd: service.cmd ? service.cmd.split(' ') : undefined,
-        WorkingDir: service.cwd ? convertToPosixPath(service.cwd) : undefined,
+        Cmd: item.data.cmd ? [item.data.cmd.parsed.command, ...item.data.cmd.parsed.args] : undefined,
+        WorkingDir: item.data.cwd ? convertToPosixPath(item.data.cwd) : undefined,
         HostConfig: {
           ExtraHosts: network.hosts,
           Links: network.links,
           Binds: [
-            ...service.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-            ...service.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+            ...item.data.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
+            ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
           ],
-          PortBindings: service.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+          PortBindings: item.data.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
             map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
             return map
           }, {}),
@@ -71,22 +71,23 @@ export function dockerService(
       })
 
       const stream = await container.attach({ stream: true, stdout: true, stderr: true })
-      logStream(status, stream)
+      logStream(item.status, stream)
 
       await container.start()
 
-      if (!service.healthcheck) {
+      if (!item.data.healthcheck) {
         state.patchService({
           type: 'running',
-          service,
+          service: item,
           dns: { containerId: container.id },
           stateKey,
           remote: null,
+          itemId: item.id,
         })
       } else {
         let ready = false
         do {
-          ready = await checkReadiness(status, service.healthcheck, environment, container, abort.signal)
+          ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, abort.signal)
           if (!ready) {
             await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
           }
@@ -95,10 +96,11 @@ export function dockerService(
         if (ready) {
           state.patchService({
             type: 'running',
-            service,
+            service: item,
             dns: { containerId: container.id },
             stateKey,
             remote: null,
+            itemId: item.id,
           })
         }
       }
@@ -108,7 +110,8 @@ export function dockerService(
 
         state.patchService({
           type: 'end',
-          service,
+          service: item,
+          itemId: item.id,
           stateKey,
           reason: 'terminated',
         })
@@ -117,14 +120,16 @@ export function dockerService(
       if (e instanceof AbortError) {
         state.patchService({
           type: 'canceled',
-          service,
+          service: item,
+          itemId: item.id,
           stateKey,
         })
       } else {
-        status.write('error', getErrorMessage(e))
+        item.status.write('error', getErrorMessage(e))
         state.patchService({
           type: 'end',
-          service,
+          service: item,
+          itemId: item.id,
           reason: 'crash',
           stateKey,
         })
@@ -134,7 +139,7 @@ export function dockerService(
         try {
           await removeContainer(container)
         } catch (e) {
-          status.write('error', `remove of container failed ${getErrorMessage(e)}`)
+          item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
         }
       }
     }

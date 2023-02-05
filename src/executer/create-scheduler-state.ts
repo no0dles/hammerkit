@@ -30,14 +30,16 @@ export function createSchedulerState(input: CreateSchedulerState): State {
       type: 'pending',
       node: node,
       stateKey: null,
+      itemId: node.id,
     }
   }
 
   for (const service of iterateWorkServices(input.services)) {
     state.service[service.id] = {
       type: 'pending',
-      service,
+      service: service,
       stateKey: null,
+      itemId: service.id,
     }
   }
 

@@ -4,17 +4,19 @@ import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
 import { Cli, getCli, isCliService, isCliTask } from './cli'
-import { getBuildFile } from './parser/get-build-file'
 import { emptyWorkLabelScope, WorkLabelScope, WorkScope, WorkScopeMode } from './executer/work-scope'
-import { getWorkScope } from './get-work-context'
 import { printItem, printProperty, printTitle } from './log'
 import { hasLabels } from './executer/label-values'
-import { getDefaultBuildFilename } from './parser/default-build-file'
+import { getBuildFilename } from './parser/default-build-file'
+import { createParseContext } from './schema/schema-parser'
+import { getWorkContext } from './schema/work-scope-parser'
+import { parseReferences } from './schema/reference-parser'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
-  const buildFile = await getBuildFile(fileName, environment)
-  const workTree = getWorkScope(buildFile, workScope, environment)
-  workTree.environments = buildFile.environments // TODO
+  const { ctx, scope } = await createParseContext(fileName, environment)
+  const referencedScope = await parseReferences(ctx, environment)
+  const workTree = await getWorkContext(referencedScope, workScope, environment)
+  // workTree.environments = buildFile.environments // TODO
   return getCli(workTree, environment)
 }
 
@@ -48,7 +50,7 @@ export async function getProgram(
   const fileIndex = args.indexOf('--file')
   const fileName = join(
     environment.cwd,
-    fileIndex >= 0 ? args[fileIndex + 1] : await getDefaultBuildFilename(environment.cwd, environment)
+    fileIndex >= 0 ? args[fileIndex + 1] : await getBuildFilename(environment.cwd, environment)
   )
   if (fileIndex >= 0) {
     args.splice(fileIndex, 2)
@@ -70,17 +72,17 @@ export async function getProgram(
         if (services.length > 0) {
           printTitle(environment, 'Services')
           for (const node of services) {
-            printItem(environment, node.item)
+            printItem(environment, node.item.data)
             printProperty(
               environment,
               'ports',
-              node.item.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
+              node.item.data.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
             )
-            if (node.item.type === 'kubernetes-service') {
-              printProperty(environment, 'context', node.item.context)
-              printProperty(environment, 'selector', `${node.item.selector.type}/${node.item.selector.name}`)
+            if (node.item.data.type === 'kubernetes-service') {
+              printProperty(environment, 'context', node.item.data.context)
+              printProperty(environment, 'selector', `${node.item.data.selector.type}/${node.item.data.selector.name}`)
             } else {
-              printProperty(environment, 'image', node.item.image)
+              printProperty(environment, 'image', node.item.data.image)
             }
           }
         }
@@ -92,40 +94,40 @@ export async function getProgram(
         if (tasks.length > 0) {
           printTitle(environment, 'Tasks')
           for (const node of tasks) {
-            printItem(environment, node.item)
+            printItem(environment, node.item.data)
             if (node.item.needs.length > 0) {
               printProperty(environment, 'needs', node.item.needs.map((d) => d.name).join(', '))
             }
             if (node.item.deps.length > 0) {
               printProperty(environment, 'deps', node.item.deps.map((d) => d.name).join(', '))
             }
-            if (node.item.type === 'container') {
-              printProperty(environment, 'image', node.item.image)
+            if (node.item.data.type === 'container-task') {
+              printProperty(environment, 'image', node.item.data.image)
             }
-            if (node.item.caching) {
-              printProperty(environment, 'caching', node.item.caching)
+            if (node.item.data.caching) {
+              printProperty(environment, 'caching', node.item.data.caching)
             }
-            if (hasLabels(node.item.labels)) {
+            if (hasLabels(node.item.data.labels)) {
               printProperty(
                 environment,
                 'labels',
-                `${Object.keys(node.item.labels)
-                  .map((key) => `${key}=${node.item.labels[key].join(',')}`)
+                `${Object.keys(node.item.data.labels)
+                  .map((key) => `${key}=${node.item.data.labels[key].join(',')}`)
                   .join(' ')}`
               )
             }
-            if (node.item.src.length > 0) {
+            if (node.item.data.src.length > 0) {
               printProperty(
                 environment,
                 'src',
-                node.item.src.map((d) => relative(node.item.cwd, d.absolutePath)).join(' ')
+                node.item.data.src.map((d) => relative(node.item.data.cwd, d.absolutePath)).join(' ')
               )
             }
-            if (node.item.generates.length > 0) {
+            if (node.item.data.generates.length > 0) {
               printProperty(
                 environment,
                 'generates',
-                node.item.generates.map((d) => relative(node.item.cwd, d.path)).join(' ')
+                node.item.data.generates.map((d) => relative(node.item.data.cwd, d.path)).join(' ')
               )
             }
           }

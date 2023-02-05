@@ -25,7 +25,7 @@ describe('include', () => {
 
     const item = cli.ls()[0]
     if (item.type === 'task') {
-      expect(item.item.cwd).toBe(suite.path)
+      expect(item.item.data.cwd).toBe(suite.path)
     } else {
       expect(item.type).toBe('task')
     }

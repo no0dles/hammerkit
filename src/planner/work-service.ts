@@ -1,53 +1,44 @@
 import { WorkPort } from './work-port'
-import {
-  ExecutionBuildService,
-  ExecutionBuildServiceHealthCheck,
-  ExecutionBuildServiceSelector,
-} from '../parser/build-file-service'
 import { WorkMount } from './work-mount'
 import { WorkNode } from './work-node'
 import { WorkVolume } from './work-volume'
 import { LabelValues } from '../executer/label-values'
-import { WorkNodeSource } from './work-node-source'
-import { BuildFileTaskSource } from '../parser/build-file-task-source'
+import { ParseScope } from '../schema/parse-context'
+import { WorkSource } from './work-source'
+import { WorkHealthcheck } from './work-healthcheck'
+import { WorkKubernetesSelector } from './work-kubernetes-selector'
+import { WorkCommand } from './work-command'
 
 export interface BaseWorkService {
-  id: string
   name: string
   description: string | null
   ports: WorkPort[]
-  needs: WorkNeed[]
-  deps: WorkNode[]
   labels: LabelValues
-  buildService: ExecutionBuildService
-}
-
-export interface WorkNeed {
-  name: string
-  service: WorkService
+  scope: ParseScope
 }
 
 export type WorkService = ContainerWorkService | KubernetesWorkService
 
-export const isContainerWorkService = (svc: WorkService | WorkNode): svc is ContainerWorkService =>
-  'image' in svc && svc.type === 'container-service'
+export const isContainerWorkService = (
+  svc: WorkService | WorkNode | KubernetesWorkService
+): svc is ContainerWorkService => 'image' in svc && svc.type === 'container-service'
 
 export interface ContainerWorkService extends BaseWorkService {
   type: 'container-service'
   envs: { [key: string]: string }
   image: string
-  cmd: string | null
+  cmd: WorkCommand | null
   cwd: string | null
   //user: string | null
-  src: BuildFileTaskSource[] // TODO
+  src: WorkSource[]
   mounts: WorkMount[]
   volumes: WorkVolume[]
-  healthcheck: ExecutionBuildServiceHealthCheck | null
+  healthcheck: WorkHealthcheck | null
 }
 
 export interface KubernetesWorkService extends BaseWorkService {
   type: 'kubernetes-service'
   context: string
   kubeconfig: string
-  selector: ExecutionBuildServiceSelector
+  selector: WorkKubernetesSelector
 }

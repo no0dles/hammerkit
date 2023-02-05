@@ -7,6 +7,7 @@ import { logContext } from '../planner/work-node-status'
 import { removeContainer } from '../docker/remove-container'
 import { isContainerWorkService } from '../planner/work-service'
 import { getErrorMessage } from '../log'
+import { isContainerWorkServiceItem } from '../planner/work-item'
 
 export function unscheduleServices(
   currentState: SchedulerState,
@@ -26,11 +27,10 @@ export function unscheduleServices(
       continue
     }
 
-    const ctx = logContext('service', serviceState.service)
-    environment.status.service(serviceState.service).write('info', 'stop unused service')
+    serviceState.service.status.write('info', 'stop unused service')
     if (serviceState.type === 'ready' || !serviceState.remote) {
-      processManager.abort(ctx)
-    } else if (isContainerWorkService(serviceState.service) && serviceState.remote) {
+      processManager.abort(serviceState.itemId)
+    } else if (isContainerWorkServiceItem(serviceState.service) && serviceState.remote) {
       removeContainer(environment.docker.getContainer(serviceState.remote.containerId))
         .then(() => {
           state.patchService({
@@ -38,6 +38,7 @@ export function unscheduleServices(
             type: 'end',
             reason: 'terminated',
             stateKey: serviceState.stateKey,
+            itemId: serviceState.itemId,
           })
         })
         .catch((err) => {
@@ -46,12 +47,14 @@ export function unscheduleServices(
             type: 'error',
             errorMessage: getErrorMessage(err),
             stateKey: serviceState.stateKey,
+            itemId: serviceState.itemId,
           })
         })
       state.patchService({
         service: serviceState.service,
         type: 'canceled',
         stateKey: serviceState.stateKey,
+        itemId: serviceState.itemId,
       })
     }
   }

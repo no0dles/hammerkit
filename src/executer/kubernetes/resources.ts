@@ -18,6 +18,7 @@ import { getContainer, KubernetesServiceVolume } from './volumes'
 import { create } from 'tar'
 import { dirname, relative } from 'path'
 import { BuildFileEnvironment, BuildFileEnvironmentIngress } from '../../parser/build-file-environment'
+import { isContainerWorkServiceItem, WorkItem } from '../../planner/work-item'
 
 function getVersion(): string {
   return require('../../../package.json').version
@@ -97,11 +98,11 @@ export async function ensureKubernetesPersistentVolumeClaimExists(
   )
 }
 
-function getServiceName(service: WorkService) {
+function getServiceName(service: WorkItem<WorkService>) {
   return `${service.name.replace(/:/, '-')}-${service.id}`
 }
 
-export async function ensureKubernetesServiceExists(env: BuildFileEnvironment, service: ContainerWorkService) {
+export async function ensureKubernetesServiceExists(env: BuildFileEnvironment, service: WorkItem<WorkService>) {
   const name = getServiceName(service)
 
   const svc: V1Service = {
@@ -119,7 +120,7 @@ export async function ensureKubernetesServiceExists(env: BuildFileEnvironment, s
       selector: {
         'hammerkit.dev/id': service.id,
       },
-      ports: service.ports.map((port) => ({
+      ports: service.data.ports.map((port) => ({
         port: port.hostPort ?? port.containerPort,
         targetPort: port.containerPort,
       })),
@@ -139,7 +140,10 @@ export async function ensureKubernetesServiceExists(env: BuildFileEnvironment, s
   )
 }
 
-export async function getServiceIp(env: BuildFileEnvironment, workService: WorkService): Promise<string> {
+export async function getServiceIp(
+  env: BuildFileEnvironment,
+  workService: WorkItem<ContainerWorkService>
+): Promise<string> {
   const name = getServiceName(workService)
   const svc = await k8sApi.readNamespacedService(name, env.namespace)
 
@@ -148,11 +152,14 @@ export async function getServiceIp(env: BuildFileEnvironment, workService: WorkS
 
 export async function ensureKubernetesDeploymentExists(
   env: BuildFileEnvironment,
-  service: ContainerWorkService,
+  service: WorkItem<ContainerWorkService>,
   volumes: KubernetesServiceVolume[]
 ) {
   const hostAliases: V1HostAlias[] = []
   for (const need of service.needs) {
+    if (!isContainerWorkServiceItem(need.service)) {
+      continue
+    }
     const ip = await getServiceIp(env, need.service)
     hostAliases.push({
       ip,
@@ -184,22 +191,22 @@ export async function ensureKubernetesDeploymentExists(
         },
         spec: {
           initContainers: service.deps.reduce<V1Container[]>(
-            (containers, d) => [...containers, ...getContainer(d, volumes)],
+            (containers, d) => [...containers, ...getContainer(d.data, volumes)],
             []
           ),
           hostAliases: hostAliases,
           containers: [
             {
               name: service.name.replace(/:/, '-'),
-              image: service.image,
-              workingDir: service.cwd ?? undefined,
-              env: Object.keys(service.envs).map((key) => ({
+              image: service.data.image,
+              workingDir: service.data.cwd ?? undefined,
+              env: Object.keys(service.data.envs).map((key) => ({
                 name: key,
-                value: service.envs[key],
+                value: service.data.envs[key],
               })),
-              command: service.cmd ? [service.cmd.split(' ')[0]] : undefined,
-              args: service.cmd ? service.cmd.split(' ').slice(1) : undefined,
-              ports: service.ports.map((p) => ({
+              command: service.data.cmd ? [service.data.cmd.parsed.command] : undefined,
+              args: service.data.cmd ? service.data.cmd.parsed.args : undefined,
+              ports: service.data.ports.map((p) => ({
                 containerPort: p.containerPort,
               })),
               volumeMounts: volumes.map((v) => v.volumeMount),
@@ -233,7 +240,7 @@ export async function ensureKubernetesDeploymentExists(
 export async function ensureIngress(
   env: BuildFileEnvironment,
   ingress: BuildFileEnvironmentIngress,
-  service: ContainerWorkService
+  service: WorkItem<ContainerWorkService>
 ) {
   const resource: V1Ingress = {
     kind: 'Ingress',
@@ -291,7 +298,7 @@ export async function ensureIngress(
 
 export async function ensurePersistentData(
   env: BuildFileEnvironment,
-  service: ContainerWorkService,
+  service: WorkItem<ContainerWorkService>,
   volumes: KubernetesServiceVolume[]
 ) {
   if (volumes.length === 0) {

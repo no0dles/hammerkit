@@ -4,11 +4,14 @@ import { Environment } from '../executer/environment'
 import { WorkTree } from './work-tree'
 import { KubernetesWorkService, WorkService } from './work-service'
 import { read } from '../parser/read-build-file'
+import { iterateWorkNodes, iterateWorkServices } from './utils/plan-work-nodes'
+import { WorkItem } from './work-item'
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkNodeValidation> {
-  const cycleNodes: WorkNode[] = []
+  const cycleNodes: WorkItem<WorkNode | WorkService>[] = []
 
-  for (const service of Object.values(workTree.services)) {
+  for (const item of iterateWorkServices(workTree.services)) {
+    const service = item.data
     if (!service.description) {
       yield { type: 'warn', message: `missing description`, node: service }
     }
@@ -42,21 +45,23 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       }
     }
 
-    for (const key of Object.keys(service.buildService.unknownProps)) {
-      yield {
-        type: 'warn',
-        message: `${key} is an unknown configuration`,
-        node: service,
-      }
-    }
+    // TODO
+    // for (const key of Object.keys(service.scope.unknownProps)) {
+    //   yield {
+    //     type: 'warn',
+    //     message: `${key} is an unknown configuration`,
+    //     node: service,
+    //   }
+    // }
   }
 
-  for (const node of Object.values(workTree.nodes)) {
+  for (const item of iterateWorkNodes(workTree.nodes)) {
+    const node = item.data
     if (!node.description) {
       yield { type: 'warn', message: `missing description`, node: node }
     }
 
-    if ((!node.cmds || node.cmds.length === 0) && (!node.deps || node.deps.length === 0)) {
+    if ((!node.cmds || node.cmds.length === 0) && (!item.deps || item.deps.length === 0)) {
       yield { type: 'warn', message: `task is empty`, node: node }
     }
 
@@ -70,25 +75,30 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       }
     }
 
-    for (const key of Object.keys(node.plannedTask.buildTask.unknownProps)) {
-      yield {
-        type: 'warn',
-        message: `${key} is an unknown configuration`,
-        node: node,
-      }
-    }
+    // TODO
+    // for (const key of Object.keys(node.plannedTask.buildTask.unknownProps)) {
+    //   yield {
+    //     type: 'warn',
+    //     message: `${key} is an unknown configuration`,
+    //     node: node,
+    //   }
+    // }
 
-    if (cycleNodes.indexOf(node) === -1) {
-      const cyclePath = hasDependencyCycle(node, [])
+    if (cycleNodes.indexOf(item) === -1) {
+      const cyclePath = hasDependencyCycle(item, [])
       if (cyclePath) {
         cycleNodes.push(...cyclePath)
         yield { type: 'error', message: `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`, node: node }
       }
     }
   }
+  // TODO check for deps of needs and needs of deps
 }
 
-export function hasNeedCycle(node: WorkService, currentPath: WorkService[]): WorkService[] | null {
+export function hasNeedCycle(
+  node: WorkItem<WorkNode | WorkService>,
+  currentPath: WorkItem<WorkNode | WorkService>[]
+): WorkItem<any>[] | null {
   if (currentPath.indexOf(node) >= 0) {
     return [...currentPath, node]
   }
@@ -103,7 +113,10 @@ export function hasNeedCycle(node: WorkService, currentPath: WorkService[]): Wor
   return null
 }
 
-export function hasDependencyCycle(node: WorkNode, currentPath: WorkNode[]): WorkNode[] | null {
+export function hasDependencyCycle(
+  node: WorkItem<WorkNode | WorkService>,
+  currentPath: WorkItem<WorkNode | WorkService>[]
+): WorkItem<WorkNode | WorkService>[] | null {
   if (currentPath.indexOf(node) >= 0) {
     return [...currentPath, node]
   }

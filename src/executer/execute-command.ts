@@ -4,17 +4,19 @@ import { getLogs } from '../log'
 import { AbortError } from './abort'
 import { listenOnAbort } from '../utils/abort-event'
 import { StatusScopedConsole } from '../planner/work-node-status'
+import { Environment } from './environment'
 
 export async function executeCommand(
   status: StatusScopedConsole,
   abortSignal: AbortSignal,
   cwd: string,
   command: string,
-  envs: { [key: string]: string }
+  envs: { [key: string]: string },
+  environment: Environment
 ): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const ps = exec(command, {
-      env: envs,
+      env: { ...envs, PATH: environment.processEnvs['PATH'] },
       cwd,
       shell: platform() === 'win32' ? 'powershell.exe' : undefined,
     })

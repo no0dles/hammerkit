@@ -26,6 +26,7 @@ export function getContainerVolumes(task: BaseWorkNode, mounts: WorkMount[]): Wo
       name,
       containerPath: generate.path,
       inherited: generate.inherited,
+      export: generate.export,
     })
   }
 

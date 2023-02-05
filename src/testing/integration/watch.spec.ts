@@ -11,7 +11,7 @@ describe('watch', () => {
     const apiNode = cli.node('api')
     const exec = await cli.exec({ watch: true })
     exec.processManager.on((evt) => {
-      if (evt.context.id === apiNode.id && evt.type === 'started') {
+      if (evt.item.id === apiNode.id && evt.type === 'started') {
         environment.abortCtrl.abort()
       }
     })
@@ -29,7 +29,7 @@ describe('watch', () => {
     let restarted = false
 
     exec.processManager.on((evt) => {
-      if (evt.type === 'started' && evt.context.id === apiNode.id) {
+      if (evt.type === 'started' && evt.item.id === apiNode.id) {
         if (!appendedFile) {
           appendedFile = true
           environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')

@@ -7,7 +7,7 @@ export async function updateServiceStatus(state: State, environment: Environment
     const currentServices = await environment.docker.listContainers({
       all: true,
       filters: {
-        label: [`hammerkit-id=${service.service.id}`],
+        label: [`hammerkit-id=${service.itemId}`],
       },
     })
     const currentService = currentServices[0]
@@ -21,6 +21,7 @@ export async function updateServiceStatus(state: State, environment: Environment
 
     state.patchService({
       service: service.service,
+      itemId: service.itemId,
       type: 'running',
       remote: { containerId: currentService.Id, pid: servicePid },
       stateKey: serviceState,

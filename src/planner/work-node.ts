@@ -1,37 +1,31 @@
-import { BuildFile } from '../parser/build-file'
-import { WorkNodeSource } from './work-node-source'
-import { WorkNodeCommand } from './work-node-command'
-import { WorkPort } from './work-port'
-import { WorkNeed, WorkService } from './work-service'
+import { WorkSource } from './work-source'
+import { WorkCommand } from './work-command'
+import { WorkService } from './work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { LabelValues } from '../executer/label-values'
 import { WorkMount } from './work-mount'
 import { WorkVolume } from './work-volume'
-import { PlannedTask } from './utils/planned-task'
+import { ParseScope } from '../schema/parse-context'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
 export interface BaseWorkNode {
-  id: string
-  taskName: string
   name: string
   cwd: string
-  continuous: boolean
   description: string | null
-  deps: WorkNode[]
-  src: WorkNodeSource[]
+  src: WorkSource[]
   generates: WorkNodeGenerate[]
   envs: { [key: string]: string }
-  cmds: WorkNodeCommand[]
-  plannedTask: PlannedTask
-  buildFile: BuildFile
-  needs: WorkNeed[]
+  cmds: WorkCommand[]
+  scope: ParseScope
   labels: LabelValues
+  shell: string
   caching: CacheMethod | null
 }
 
 export interface WorkNodeGenerate {
   path: string
+  volumeName: string
   inherited: boolean
   resetOnChange: boolean
   export: boolean
@@ -39,19 +33,18 @@ export interface WorkNodeGenerate {
 }
 
 export interface LocalWorkNode extends BaseWorkNode {
-  type: 'local'
+  type: 'local-task'
 }
 
 export interface ContainerWorkNode extends BaseWorkNode {
-  type: 'container'
+  type: 'container-task'
   image: string
-  shell: string
   user: string | null
   mounts: WorkMount[]
-  ports: WorkPort[]
   volumes: WorkVolume[]
 }
 
-export const isContainerWorkNode = (val: WorkNode | WorkService): val is ContainerWorkNode => val.type === 'container'
+export const isContainerWorkNode = (val: WorkNode | WorkService): val is ContainerWorkNode =>
+  val.type === 'container-task'
 export const isWorkNode = (val: WorkNode | WorkService): val is WorkNode =>
-  val.type === 'container' || val.type === 'local'
+  val.type === 'container-task' || val.type === 'local-task'

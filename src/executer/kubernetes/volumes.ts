@@ -4,6 +4,7 @@ import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
 import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMount'
 import { isContainerWorkNode, WorkNode } from '../../planner/work-node'
 import { V1Container } from '@kubernetes/client-node'
+import { WorkItem } from '../../planner/work-item'
 
 export interface KubernetesServiceVolume {
   volume: V1Volume
@@ -35,9 +36,9 @@ export function getContainer(node: WorkNode, volumes: KubernetesServiceVolume[])
       value: node.envs[key],
     })),
     image: node.image,
-    command: [cmd.cmd.split(' ')[0]],
-    args: cmd.cmd.split(' ').slice(1),
-    workingDir: cmd.path,
+    command: [cmd.parsed.command],
+    args: cmd.parsed.args,
+    workingDir: cmd.cwd,
     volumeMounts: volumes.map((v) => v.volumeMount),
   }))
 }
@@ -69,10 +70,10 @@ function appendVolume(
   return volumes[name]
 }
 
-export function getServiceVolumes(service: ContainerWorkService): KubernetesServiceVolume[] {
+export function getServiceVolumes(service: WorkItem<ContainerWorkService>): KubernetesServiceVolume[] {
   const volumes: { [key: string]: KubernetesServiceVolume } = {}
-  for (const mount of service.mounts) {
-    const volume = appendVolume(service, volumes, mount.containerPath)
+  for (const mount of service.data.mounts) {
+    const volume = appendVolume(service.data, volumes, mount.containerPath)
     if (volume.localPaths.indexOf(mount.localPath) === -1) {
       volume.localPaths.push(mount.localPath)
     }
@@ -82,14 +83,15 @@ export function getServiceVolumes(service: ContainerWorkService): KubernetesServ
   //   appendVolume(service, volumes, src.relativePath)
   // }
 
-  for (const volume of service.volumes) {
-    appendVolume(service, volumes, volume.containerPath)
+  for (const volume of service.data.volumes) {
+    appendVolume(service.data, volumes, volume.containerPath)
   }
 
+  // TODO check if needed, dep mounts should be inherited
   for (const dep of service.deps) {
-    if (isContainerWorkNode(dep)) {
-      for (const mount of dep.mounts) {
-        const volume = appendVolume(service, volumes, mount.containerPath)
+    if (isContainerWorkNode(dep.data)) {
+      for (const mount of dep.data.mounts) {
+        const volume = appendVolume(service.data, volumes, mount.containerPath)
         if (volume.localPaths.indexOf(mount.localPath) === -1) {
           volume.localPaths.push(mount.localPath)
         }

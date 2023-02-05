@@ -22,14 +22,14 @@ export class State {
   }
 
   resetNode<T extends NodeState>(newState: T): T {
-    const state = this.current.node[newState.node.id]
+    const state = this.current.node[newState.itemId]
     this.assignState(state, newState)
     this.notifyListeners(this.current)
     return state as T
   }
 
   patchNode<T extends NodeState>(newState: T, stateKey: string | null): T {
-    const state = this.current.node[newState.node.id]
+    const state = this.current.node[newState.itemId]
     if (state.stateKey === stateKey) {
       this.assignState(state, newState)
       this.notifyListeners(this.current)
@@ -38,7 +38,7 @@ export class State {
   }
 
   patchService(newState: ServiceState) {
-    this.assignState(this.current.service[newState.service.id], newState)
+    this.assignState(this.current.service[newState.itemId], newState)
     this.notifyListeners(this.current)
   }
 

@@ -10,6 +10,7 @@ import { isContainerWorkNode } from '../planner/work-node'
 import { dockerNode } from './docker-node'
 import { localNode } from './local-node'
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
+import { isContainerWorkTaskItem, isLocalWorkTaskItem } from '../planner/work-item'
 
 export function scheduleNodes(
   currentState: SchedulerState,
@@ -28,6 +29,7 @@ export function scheduleNodes(
         {
           type: 'starting',
           node: nodeState.node,
+          itemId: nodeState.itemId,
           started: new Date(),
           stateKey: null,
         },
@@ -35,14 +37,11 @@ export function scheduleNodes(
       )
 
       processManager.background(
-        {
-          type: 'task',
-          name: nodeState.node.name,
-          id: nodeState.node.id + '-cache',
-        },
+        nodeState.node,
         async (abort) => {
           await startNode(nodeState, state, environment, abort.signal)
-        }
+        },
+        'cache'
       )
     } else if (nodeState.type === 'ready') {
       if (!ensureNeeds(nodeState, nodeState.node.needs, processManager, state, environment, currentState)) {
@@ -57,14 +56,17 @@ export function scheduleNodes(
           node: nodeState.node,
           stateKey: nodeState.stateKey,
           started: nodeState.started,
+          itemId: nodeState.itemId,
         },
         nodeState.stateKey
       )
-      const ctx = logContext('task', nodeState.node)
-      if (isContainerWorkNode(nodeState.node)) {
-        processManager.task(ctx, dockerNode(nodeState.node, nodeState.stateKey, serviceContainers, state, environment))
-      } else {
-        processManager.task(ctx, localNode(nodeState.node, nodeState.stateKey, state, environment))
+      if (isContainerWorkTaskItem(nodeState.node)) {
+        processManager.task(
+          nodeState.node,
+          dockerNode(nodeState.node, nodeState.stateKey, serviceContainers, state, environment)
+        )
+      } else if (isLocalWorkTaskItem(nodeState.node)) {
+        processManager.task(nodeState.node, localNode(nodeState.node, nodeState.stateKey, state, environment))
       }
     }
   }

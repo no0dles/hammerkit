@@ -1,15 +1,15 @@
 import { NodeState } from './scheduler/node-state'
 import { isServiceState, ServiceState } from './scheduler/service-state'
-import { WorkNeed } from '../planner/work-service'
 import { ProcessManager } from './process-manager'
 import { State } from './state'
 import { Environment } from './environment'
 import { SchedulerState } from './scheduler/scheduler-state'
 import { schedulePendingServices } from './schedule-pending-services'
+import { WorkItemNeed } from '../planner/work-item'
 
 export function ensureNeeds(
   nodeOrServiceState: NodeState | ServiceState,
-  needs: WorkNeed[],
+  needs: WorkItemNeed[],
   processManager: ProcessManager,
   state: State,
   environment: Environment,
@@ -23,6 +23,7 @@ export function ensureNeeds(
     if (isServiceState(nodeOrServiceState)) {
       state.patchService({
         type: 'error',
+        itemId: nodeOrServiceState.itemId,
         service: nodeOrServiceState.service,
         stateKey: nodeOrServiceState.stateKey,
         errorMessage: endedNeeds
@@ -33,6 +34,7 @@ export function ensureNeeds(
       state.patchNode(
         {
           type: 'error',
+          itemId: nodeOrServiceState.itemId,
           node: nodeOrServiceState.node,
           stateKey: nodeOrServiceState.stateKey,
           errorMessage: endedNeeds

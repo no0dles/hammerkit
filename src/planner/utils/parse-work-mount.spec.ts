@@ -8,56 +8,56 @@ function normalizePath(val: string): string {
 
 describe('parse-work-node-mount', () => {
   it('should parse "subdir"', () => {
-    expect(parseWorkMount('/home/test', 'subdir')).toEqual({
+    expect(parseWorkMount('/home/test', 'subdir')).toMatchObject({
       localPath: normalizePath('/home/test/subdir'),
       containerPath: normalizePath('/home/test/subdir'),
     })
   })
 
   it('should parse "./subdir"', () => {
-    expect(parseWorkMount('/home/test', './subdir')).toEqual({
+    expect(parseWorkMount('/home/test', './subdir')).toMatchObject({
       localPath: normalizePath('/home/test/subdir'),
       containerPath: normalizePath('/home/test/subdir'),
     })
   })
 
   it('should parse "./subdir:./otherdir"', () => {
-    expect(parseWorkMount('/home/test', './subdir:./otherdir')).toEqual({
+    expect(parseWorkMount('/home/test', './subdir:./otherdir')).toMatchObject({
       localPath: normalizePath('/home/test/subdir'),
       containerPath: normalizePath('/home/test/otherdir'),
     })
   })
 
   it('should parse "$PWD/subdir:/subdir"', () => {
-    expect(parseWorkMount('/home/test', '$PWD/subdir:/subdir')).toEqual({
+    expect(parseWorkMount('/home/test', '$PWD/subdir:/subdir')).toMatchObject({
       localPath: join(homedir(), 'subdir'),
       containerPath: '/subdir',
     })
   })
 
   it('should parse "$PWD/subdir:$PWD/subdir"', () => {
-    expect(parseWorkMount('/home/test', '$PWD/subdir:$PWD/subdir')).toEqual({
+    expect(parseWorkMount('/home/test', '$PWD/subdir:$PWD/subdir')).toMatchObject({
       localPath: join(homedir(), 'subdir'),
       containerPath: normalizePath('/home/test/subdir'),
     })
   })
 
   it('should parse "/subdir:/otherdir"', () => {
-    expect(parseWorkMount('/home/test', '/subdir:/otherdir')).toEqual({
+    expect(parseWorkMount('/home/test', '/subdir:/otherdir')).toMatchObject({
       localPath: '/subdir',
       containerPath: '/otherdir',
     })
   })
 
   it('should parse "/subdir:otherdir"', () => {
-    expect(parseWorkMount('/home/test', '/subdir:otherdir')).toEqual({
+    expect(parseWorkMount('/home/test', '/subdir:otherdir')).toMatchObject({
       localPath: '/subdir',
       containerPath: normalizePath('/home/test/otherdir'),
     })
   })
 
   it('should parse "subdir:/otherdir"', () => {
-    expect(parseWorkMount('/home/test', 'subdir:/otherdir')).toEqual({
+    expect(parseWorkMount('/home/test', 'subdir:/otherdir')).toMatchObject({
       localPath: normalizePath('/home/test/subdir'),
       containerPath: '/otherdir',
     })

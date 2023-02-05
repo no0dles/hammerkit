@@ -7,11 +7,11 @@ import { convertToPosixPath } from './execute-docker'
 import { existsVolume, removeVolume } from './get-docker-executor'
 import { WorkTree } from '../planner/work-tree'
 import { create, extract } from 'tar'
-import { ContainerWorkNode, isContainerWorkNode, LocalWorkNode, WorkNode } from '../planner/work-node'
+import { ContainerWorkNode, LocalWorkNode, WorkNode } from '../planner/work-node'
 import { usingContainer } from '../docker/using-container'
-import { isContainerWorkService } from '../planner/work-service'
 import { CliCleanOptions } from '../cli'
 import { getVolumeName } from '../planner/utils/plan-work-volume'
+import { isContainerWorkItem, isLocalWorkTaskItem, WorkItem } from '../planner/work-item'
 
 export async function restoreCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
@@ -23,10 +23,10 @@ export async function restoreCache(path: string, workTree: WorkTree, environment
       yield { from: join(sourceCacheDir, 'description.json'), to: join(cachePath, 'description.json') }
     })
 
-    if (isContainerWorkNode(node)) {
+    if (isContainerWorkItem(node)) {
       await restoreContainer(environment, node, sourceCacheDir)
-    } else {
-      await restoreLocal(environment, node, sourceCacheDir)
+    } else if (isLocalWorkTaskItem(node)) {
+      await restoreLocal(environment, node.data, sourceCacheDir)
     }
   }
 }
@@ -42,29 +42,29 @@ async function restoreLocal(environment: Environment, node: LocalWorkNode, path:
   }
 }
 
-async function restoreContainer(environment: Environment, node: ContainerWorkNode, path: string) {
+async function restoreContainer(environment: Environment, item: WorkItem<ContainerWorkNode>, path: string) {
   await usingContainer(
     environment,
-    node,
+    item,
     {
-      Image: node.image,
+      Image: item.data.image,
       Tty: true,
       Entrypoint: 'sh',
       Cmd: ['-c', 'sleep 3600'],
-      WorkingDir: convertToPosixPath(node.cwd),
+      WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': node.id,
+        'hammerkit-id': item.id,
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
         AutoRemove: true,
-        Binds: [...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+        Binds: [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
       },
     },
     async (container) => {
-      for (const generate of getGenerates(node, path)) {
+      for (const generate of getGenerates(item.data, path)) {
         if (await environment.file.exists(generate.filename)) {
           await container.putArchive(environment.file.readStream(generate.filename), {
             path: dirname(generate.path),
@@ -86,29 +86,29 @@ function* getGenerates(node: WorkNode, path: string) {
   }
 }
 
-async function archiveContainer(environment: Environment, node: ContainerWorkNode, path: string) {
+async function archiveContainer(environment: Environment, item: WorkItem<ContainerWorkNode>, path: string) {
   await usingContainer(
     environment,
-    node,
+    item,
     {
-      Image: node.image,
+      Image: item.data.image,
       Tty: true,
       Entrypoint: 'sh',
       Cmd: ['-c', 'sleep 3600'],
-      WorkingDir: convertToPosixPath(node.cwd),
+      WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': node.id,
+        'hammerkit-id': item.id,
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
         AutoRemove: true,
-        Binds: [...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+        Binds: [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
       },
     },
     async (container) => {
-      for (const generatedArchive of getGenerates(node, path)) {
+      for (const generatedArchive of getGenerates(item.data, path)) {
         const readable = await container.getArchive({
           path: generatedArchive.path,
         })
@@ -119,16 +119,16 @@ async function archiveContainer(environment: Environment, node: ContainerWorkNod
   )
 }
 
-async function archiveLocal(environment: Environment, node: LocalWorkNode, path: string) {
-  for (const generatedArchive of getGenerates(node, path)) {
+async function archiveLocal(environment: Environment, node: WorkItem<LocalWorkNode>, path: string) {
+  for (const generatedArchive of getGenerates(node.data, path)) {
     await environment.file.writeStream(
       generatedArchive.filename,
       create(
         {
-          cwd: node.cwd,
+          cwd: node.data.cwd,
           gzip: true,
         },
-        [relative(node.cwd, generatedArchive.path)]
+        [relative(node.data.cwd, generatedArchive.path)]
       )
     )
   }
@@ -144,9 +144,9 @@ export async function storeCache(path: string, workTree: WorkTree, environment: 
       yield { from: join(cachePath, 'description.json'), to: join(sourceCacheDir, 'description.json') }
     })
 
-    if (isContainerWorkNode(node)) {
+    if (isContainerWorkItem(node)) {
       await archiveContainer(environment, node, sourceCacheDir)
-    } else {
+    } else if (isLocalWorkTaskItem(node)) {
       await archiveLocal(environment, node, sourceCacheDir)
     }
   }
@@ -158,9 +158,7 @@ export async function cleanCache(
   options: CliCleanOptions
 ): Promise<void> {
   for (const node of iterateWorkNodes(workTree.nodes)) {
-    const nodeStatus = environment.status.task(node)
-
-    for (const generate of node.generates) {
+    for (const generate of node.data.generates) {
       if (generate.inherited) {
         continue
       }
@@ -168,36 +166,35 @@ export async function cleanCache(
       const volumeName = getVolumeName(generate.path)
       const volumeExists = await existsVolume(environment, volumeName)
       if (volumeExists) {
-        await removeVolume(environment, nodeStatus, volumeName)
+        await removeVolume(environment, node.status, volumeName)
       } else {
-        nodeStatus.write('info', `generate ${generate} has no volume ${volumeName}`)
+        node.status.write('info', `generate ${generate} has no volume ${volumeName}`)
       }
 
-      nodeStatus.write('info', `remove local directory ${generate.path}`)
+      node.status.write('info', `remove local directory ${generate.path}`)
       await environment.file.remove(generate.path)
     }
 
     const cachePath = getCacheDirectory(node.id)
     if (await environment.file.exists(cachePath)) {
-      nodeStatus.write('info', `remove cache ${cachePath}`)
+      node.status.write('info', `remove cache ${cachePath}`)
       await environment.file.remove(cachePath)
     }
   }
 
   if (options.service) {
     for (const service of iterateWorkServices(workTree.services)) {
-      if (!isContainerWorkService(service)) {
+      if (service.data.type !== 'container-service') {
         continue
       }
 
-      const nodeStatus = environment.status.service(service)
-      for (const volume of service.volumes) {
+      for (const volume of service.data.volumes) {
         const volumeExists = await existsVolume(environment, volume.name)
         if (!volumeExists) {
           continue
         }
 
-        await removeVolume(environment, nodeStatus, volume.name)
+        await removeVolume(environment, service.status, volume.name)
       }
     }
   }

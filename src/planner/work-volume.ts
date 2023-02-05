@@ -3,4 +3,5 @@ export interface WorkVolume {
   containerPath: string
   resetOnChange: boolean
   inherited: boolean
+  export: boolean
 }

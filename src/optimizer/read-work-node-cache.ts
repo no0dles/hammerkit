@@ -1,9 +1,13 @@
-import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
 import { getCacheStatsFile } from './get-cache-directory'
 import { WorkNodeCacheFileStats } from './work-node-cache-stats'
+import { WorkItem } from '../planner/work-item'
+import { WorkNode } from '../planner/work-node'
 
-export async function readCache(node: WorkNode, context: Environment): Promise<WorkNodeCacheFileStats | null> {
+export async function readCache(
+  node: WorkItem<WorkNode>,
+  context: Environment
+): Promise<WorkNodeCacheFileStats | null> {
   const cacheFile = getCacheStatsFile(node.id)
   if (!(await context.file.exists(cacheFile))) {
     return null
@@ -12,7 +16,7 @@ export async function readCache(node: WorkNode, context: Environment): Promise<W
   try {
     return JSON.parse(await context.file.read(cacheFile))
   } catch (e) {
-    context.status.task(node).write('error', `unable to read cache ${cacheFile}`)
+    node.status.write('error', `unable to read cache ${cacheFile}`)
   }
 
   return null

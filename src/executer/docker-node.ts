@@ -1,4 +1,3 @@
-import { ContainerWorkNode } from '../planner/work-node'
 import { Environment } from './environment'
 import { isHostServiceDns, ServiceDns } from './service-dns'
 import { ContainerCreateOptions } from 'dockerode'
@@ -13,9 +12,10 @@ import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './e
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
-import { WorkNeed } from '../planner/work-service'
+import { ContainerWorkNode } from '../planner/work-node'
+import { WorkItem, WorkItemNeed } from '../planner/work-item'
 
-export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkNeed[]) {
+export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
   const hosts: string[] = []
 
@@ -35,85 +35,93 @@ export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }
 }
 
 function buildCreateOptions(
-  node: ContainerWorkNode,
+  item: WorkItem<ContainerWorkNode>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns }
 ): ContainerCreateOptions {
-  const network = getNeedsNetwork(serviceContainers, node.needs)
+  const network = getNeedsNetwork(serviceContainers, item.needs)
+  const binds = getContainerBinds(item)
 
   return {
-    Image: node.image,
+    Image: item.data.image,
     Tty: true,
-    Entrypoint: node.shell,
+    Entrypoint: item.data.shell,
     Cmd: ['-c', 'sleep 3600'],
-    Env: Object.keys(node.envs).map((k) => `${k}=${node.envs[k]}`),
-    WorkingDir: convertToPosixPath(node.cwd),
+    Env: Object.keys(item.data.envs).map((k) => `${k}=${item.data.envs[k]}`),
+    WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
-      'hammerkit-id': node.id,
+      'hammerkit-id': item.id,
       'hammerkit-pid': process.pid.toString(),
       'hammerkit-type': 'task',
       'hammerkit-state': stateKey,
     },
     HostConfig: {
-      Binds: [
-        ...node.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-        ...node.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
-      ],
-      PortBindings: node.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-        map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-        return map
-      }, {}),
+      Binds: binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}`),
       ExtraHosts: network.hosts,
       Links: network.links,
       AutoRemove: true,
     },
-    ExposedPorts: node.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
-      map[`${port.containerPort}/tcp`] = {}
-      return map
-    }, {}),
   }
 }
 
+interface ContainerBind {
+  localPath: string
+  containerPath: string
+}
+function getContainerBinds(item: WorkItem<ContainerWorkNode>): ContainerBind[] {
+  const items: ContainerBind[] = [
+    ...item.data.mounts,
+    ...item.data.volumes.map((v) => ({ localPath: v.name, containerPath: v.containerPath })),
+    ...item.data.src.map((s) => ({ localPath: s.absolutePath, containerPath: s.absolutePath })),
+    ...item.data.generates.filter((g) => !g.isFile).map((v) => ({ localPath: v.volumeName, containerPath: v.path })),
+  ]
+  return items.reduce<ContainerBind[]>((array, item) => {
+    if (array.findIndex((i) => i.containerPath === item.containerPath) === -1) {
+      array.push(item)
+    }
+    return array
+  }, [])
+}
+
 export function dockerNode(
-  node: ContainerWorkNode,
+  item: WorkItem<ContainerWorkNode>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
   state: State,
   environment: Environment
 ): Process {
   return async (abort, started) => {
-    const status = environment.status.task(node)
-    status.write('info', `execute ${node.name} in container`)
+    item.status.write('info', `execute ${item.name} in container`)
 
     try {
-      await prepareMounts(node, environment)
+      await prepareMounts(item, environment)
       checkForAbort(abort.signal)
 
-      await pullImage(node, environment)
+      await pullImage(item, environment)
       checkForAbort(abort.signal)
 
-      await prepareVolume(node, environment)
+      await prepareVolume(item, environment)
       checkForAbort(abort.signal)
 
-      const containerOptions = buildCreateOptions(node, stateKey, serviceContainers)
-      printContainerOptions(status, containerOptions)
+      const containerOptions = buildCreateOptions(item, stateKey, serviceContainers)
+      printContainerOptions(item.status, containerOptions)
 
-      const success = await usingContainer(environment, node, containerOptions, async (container) => {
-        await setUserPermissions(node, container, environment)
+      const success = await usingContainer(environment, item, containerOptions, async (container) => {
+        await setUserPermissions(item, container, environment)
 
-        for (const cmd of node.cmds) {
+        for (const cmd of item.data.cmds) {
           checkForAbort(abort.signal)
 
-          status.write('info', `execute cmd "${cmd.cmd}" in container`)
+          item.status.write('info', `execute cmd "${cmd.cmd}" in container`)
 
           const result = await execCommand(
-            status,
+            item.status,
             environment,
             container,
-            convertToPosixPath(cmd.path),
-            [node.shell, '-c', cmd.cmd],
-            node.user,
+            convertToPosixPath(cmd.cwd),
+            [item.data.shell, '-c', cmd.cmd],
+            item.data.user,
             undefined,
             abort.signal
           )
@@ -129,10 +137,11 @@ export function dockerNode(
           if (result.result.ExitCode !== 0) {
             state.patchNode(
               {
-                node,
+                node: item,
                 stateKey,
                 type: 'crash',
                 exitCode: result.result.ExitCode ?? 1,
+                itemId: item.id,
               },
               stateKey
             )
@@ -140,7 +149,7 @@ export function dockerNode(
           }
         }
 
-        for (const generate of node.generates) {
+        for (const generate of item.data.generates) {
           if (!generate.export || generate.inherited || generate.isFile) {
             continue
           }
@@ -167,15 +176,16 @@ export function dockerNode(
       })
 
       if (success) {
-        await writeWorkNodeCache(node, environment)
+        await writeWorkNodeCache(item, environment)
 
         state.patchNode(
           {
-            node,
+            node: item,
             stateKey,
             type: 'completed',
             cached: false,
             duration: getDuration(started),
+            itemId: item.id,
           },
           stateKey
         )
@@ -184,19 +194,21 @@ export function dockerNode(
       if (e instanceof AbortError) {
         state.patchNode(
           {
-            node,
+            node: item,
             stateKey,
             type: 'canceled',
+            itemId: item.id,
           },
           stateKey
         )
       } else {
         state.patchNode(
           {
-            node,
+            node: item,
             stateKey,
             type: 'error',
             errorMessage: getErrorMessage(e),
+            itemId: item.id,
           },
           stateKey
         )

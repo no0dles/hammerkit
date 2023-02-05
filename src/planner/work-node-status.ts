@@ -1,9 +1,10 @@
 import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
-import { WorkService } from './work-service'
-import { isWorkNode, WorkNode } from './work-node'
 import { getEnvironmentConfig } from '../utils/environment-config'
 import { isVerbose } from '../log'
 import { Writable } from 'stream'
+import { WorkItem } from './work-item'
+import { WorkService } from './work-service'
+import { WorkNode } from './work-node'
 
 export type WorkNodeConsoleLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
@@ -29,6 +30,7 @@ export interface StatusMessage {
 
 export type Message = ConsoleMessage | StatusMessage
 
+// TODO replace with WorkItem
 export type LogContext =
   | {
       type: 'task' | 'service'
@@ -41,19 +43,16 @@ export type LogContext =
       name: 'hammerkit'
     }
 
-export function logContext(type: 'task' | 'service', node: WorkNode | WorkService): LogContext {
+export function logContext(id: string, type: 'task' | 'service', node: WorkService | WorkNode): LogContext {
   return {
     type,
     name: node.name,
-    id: node.id,
+    id: id,
   }
 }
 
 export interface StatusConsole extends Emitter<Message> {
-  service(service: WorkService): StatusScopedConsole
-
-  task(task: WorkNode): StatusScopedConsole
-  from(node: WorkNode | WorkService): StatusScopedConsole
+  from(id: string, node: WorkService | WorkNode): StatusScopedConsole
   context(ctx: LogContext): StatusScopedConsole
 
   read(): Generator<StatusMessage>
@@ -128,17 +127,11 @@ export function statusConsole(writable: Writable): StatusConsole {
   }
 
   return {
-    task(task: WorkNode): StatusScopedConsole {
-      return this.context(logContext('task', task))
-    },
-    service(service: WorkService): StatusScopedConsole {
-      return this.context(logContext('service', service))
-    },
-    from(node: WorkNode | WorkService): StatusScopedConsole {
-      if (isWorkNode(node)) {
-        return this.task(node)
+    from(id: string, item: WorkService | WorkNode): StatusScopedConsole {
+      if (item.type === 'kubernetes-service' || item.type === 'container-service') {
+        return this.context(logContext(id, 'service', item))
       } else {
-        return this.service(node)
+        return this.context(logContext(id, 'task', item))
       }
     },
     context(context: LogContext): StatusScopedConsole {

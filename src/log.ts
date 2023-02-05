@@ -83,7 +83,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
   for (const state of iterateWorkServices(schedulerState.service)) {
     if (state.type === 'end' && state.reason === 'crash') {
       const message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)}`
-      for (const log of env.status.service(state.service).logs()) {
+      for (const log of state.service.status.logs()) {
         env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
     } else if (state.type === 'running') {
@@ -99,7 +99,7 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
   for (const state of iterateWorkNodes(schedulerState.node)) {
     if (state.type === 'error' || state.type === 'crash') {
       const message = `${getType('task')} ${getNodeName(state.node.name, maxNodeNameLength)}`
-      for (const log of env.status.task(state.node).logs()) {
+      for (const log of state.node.status.logs()) {
         env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
     }
@@ -264,7 +264,7 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
       message += ` [REMOTE]`
     }
 
-    const currentMessage = env.status.service(state.service).current()
+    const currentMessage = state.service.status.current()
     if (currentMessage) {
       message += ` ${currentMessage.message}`
     }
@@ -291,13 +291,13 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
     }
     if (state.type === 'starting' || state.type === 'ready') {
       message += ` | ${spinner[ticker % spinner.length]}`
-      const currentMessage = env.status.task(state.node).current()
+      const currentMessage = state.node.status.current()
       if (currentMessage) {
         message += ` ${currentMessage.message}`
       }
     } else if (state.type === 'running') {
       message += ` | ${spinner[ticker % spinner.length]}`
-      const currentMessage = env.status.task(state.node).currentLog()
+      const currentMessage = state.node.status.currentLog()
       if (currentMessage) {
         message += ` ${currentMessage.message}`
       }

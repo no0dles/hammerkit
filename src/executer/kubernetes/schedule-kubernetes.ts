@@ -12,32 +12,33 @@ import {
 } from './resources'
 import { getServiceVolumes } from './volumes'
 import { BuildFileEnvironment } from '../../parser/build-file-environment'
+import { isContainerWorkServiceItem } from '../../planner/work-item'
 
 export async function deployKubernetes(
   workTree: WorkTree,
   env: BuildFileEnvironment,
   options?: Partial<CliDeployOptions>
 ): Promise<SchedulerResult> {
-  for (const service of iterateWorkServices(workTree.services)) {
+  for (const item of iterateWorkServices(workTree.services)) {
     try {
-      if (isContainerWorkService(service)) {
-        await ensureKubernetesServiceExists(env, service)
+      if (isContainerWorkServiceItem(item)) {
+        await ensureKubernetesServiceExists(env, item)
 
-        const volumes = getServiceVolumes(service)
+        const volumes = getServiceVolumes(item)
         for (const volume of volumes) {
-          await ensureKubernetesPersistentVolumeClaimExists(env, service, volume.name)
+          await ensureKubernetesPersistentVolumeClaimExists(env, item.data, volume.name)
         }
 
-        await ensurePersistentData(env, service, volumes)
+        await ensurePersistentData(env, item, volumes)
 
-        if (isContainerWorkService(service)) {
+        if (isContainerWorkService(item.data)) {
           // TODO remove if failed? already exists
-          await ensureKubernetesDeploymentExists(env, service, volumes)
+          await ensureKubernetesDeploymentExists(env, item, volumes)
         }
 
         for (const ingress of env.ingresses) {
-          if (ingress.service === service.name) {
-            await ensureIngress(env, ingress, service)
+          if (ingress.service === item.data.name) {
+            await ensureIngress(env, ingress, item)
           }
         }
       }

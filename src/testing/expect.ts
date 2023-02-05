@@ -9,18 +9,18 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
     for (const state of iterateWorkNodes(result.state.node)) {
       if (state.type !== 'completed') {
         expect({
-          nodeId: state.node.id,
+          nodeId: state.itemId,
           status: state.type,
-          updates: Array.from(env.status.task(state.node).read()).map((s) => `${s.level}: ${s.message}`),
-          logs: Array.from(env.status.task(state.node).logs()).map((l) => `${l.console}: ${l.message}`),
+          updates: Array.from(state.node.status.read()).map((s) => `${s.level}: ${s.message}`),
+          logs: Array.from(state.node.status.logs()).map((l) => `${l.console}: ${l.message}`),
           errorMessage: state.type === 'error' ? state.errorMessage : undefined,
           needs: state.node.needs.map((need) => ({
             name: need.name,
-            updates: Array.from(env.status.service(need.service).read()).map((s) => `${s.level}: ${s.message}`),
-            logs: Array.from(env.status.service(need.service).logs()).map((l) => `${l.console}: ${l.message}`),
+            updates: Array.from(need.service.status.read()).map((s) => `${s.level}: ${s.message}`),
+            logs: Array.from(need.service.status.logs()).map((l) => `${l.console}: ${l.message}`),
           })),
         }).toEqual({
-          nodeId: state.node.id,
+          nodeId: state.itemId,
           status: 'completed',
         })
       }
@@ -48,7 +48,7 @@ export async function expectLog(
   message: string
 ): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = Array.from(env.status.task(state.node).logs()).map((n) => n.message)
+  const logs = Array.from(state.node.status.logs()).map((n) => n.message)
   expect(logs).toContain(message)
 }
 export async function expectContainsLog(
@@ -58,7 +58,7 @@ export async function expectContainsLog(
   message: string
 ): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = env.status.task(state.node).logs()
+  const logs = state.node.status.logs()
   for (const log of logs) {
     if (log.message.indexOf(message) >= 0) {
       return

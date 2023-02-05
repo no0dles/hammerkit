@@ -14,26 +14,26 @@ export function groupedLogger(state: ReadonlyState<SchedulerState>, env: Environ
 
   state.on((currentState) => {
     for (const node of iterateWorkNodes(currentState.node)) {
-      if (completedNodes.indexOf(node.node.id) >= 0) {
+      if (completedNodes.indexOf(node.itemId) >= 0) {
         continue
       }
 
       if (node.type === 'crash' || node.type === 'error' || node.type === 'completed') {
-        completedNodes.push(node.node.id)
-        for (const log of env.status.task(node.node).read()) {
+        completedNodes.push(node.itemId)
+        for (const log of node.node.status.read()) {
           writeNodeLogToConsole(env, log, maxNodeNameLength)
         }
       }
     }
 
     for (const service of iterateWorkServices(currentState.service)) {
-      if (completedServices.indexOf(service.service.id) >= 0) {
+      if (completedServices.indexOf(service.itemId) >= 0) {
         continue
       }
 
       if (service.type === 'end') {
-        completedServices.push(service.service.id)
-        for (const log of env.status.service(service.service).read()) {
+        completedServices.push(service.itemId)
+        for (const log of service.service.status.read()) {
           writeNodeLogToConsole(env, log, maxNodeNameLength)
         }
       }

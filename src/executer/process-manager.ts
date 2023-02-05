@@ -2,14 +2,17 @@ import { listenOnAbort } from '../utils/abort-event'
 import { ProcessItem } from './process-item'
 import { Process } from './process'
 import { ProcessListener, ProcessListenerEvent } from './process-listener'
-import { LogContext } from '../planner/work-node-status'
 import { Environment } from './environment'
 import { getErrorMessage } from '../log'
+import { WorkItem } from '../planner/work-item'
+import { WorkNode } from '../planner/work-node'
+import { WorkService } from '../planner/work-service'
 
 interface PendingProcess {
   abortController: AbortController
   process: Process
-  context: LogContext
+  item: WorkItem<WorkService | WorkNode>
+  processName: string
 }
 
 export class ProcessManager {
@@ -36,26 +39,26 @@ export class ProcessManager {
     })
   }
 
-  abort(context: LogContext): void {
-    this.pendingProcesses = this.pendingProcesses.filter((p) => p.context.id !== context.id)
-    const processes = this.processes.filter((p) => p.context.id === context.id)
+  abort(id: string): void {
+    this.pendingProcesses = this.pendingProcesses.filter((p) => p.item.id !== id)
+    const processes = this.processes.filter((p) => p.id === id)
     for (const process of processes) {
       process.abortController.abort()
     }
   }
 
-  background(context: LogContext, process: Process): AbortController {
+  background(item: WorkItem<WorkNode | WorkService>, process: Process, processName: string): AbortController {
     const abortController = new AbortController()
     listenOnAbort(this.env.abortCtrl.signal, () => {
       abortController.abort()
     })
 
-    this.startProcess({ process, context, abortController })
+    this.startProcess({ process, processName, item, abortController })
 
     return abortController
   }
 
-  task(context: LogContext, process: Process): AbortController {
+  task(item: WorkItem<WorkNode | WorkService>, process: Process): AbortController {
     const abortController = new AbortController()
     listenOnAbort(this.env.abortCtrl.signal, () => {
       abortController.abort()
@@ -63,15 +66,15 @@ export class ProcessManager {
 
     const hasFreeWorker = this.workerLimit === 0 || this.workerLimit > this.processes.length
     if (hasFreeWorker) {
-      const hasBlockingProcess = this.processes.some((p) => p.context.id === context.id)
+      const hasBlockingProcess = this.processes.some((p) => p.id === item.id)
       if (hasBlockingProcess) {
-        this.abort(context)
-        this.pendingProcesses.push({ context, process, abortController })
+        this.abort(item.id)
+        this.pendingProcesses.push({ item, process, processName: 'task', abortController })
       } else {
-        this.startProcess({ process, context, abortController })
+        this.startProcess({ process, item, processName: 'task', abortController })
       }
     } else {
-      this.pendingProcesses.push({ context, process, abortController })
+      this.pendingProcesses.push({ item, process, processName: 'task', abortController })
     }
 
     return abortController
@@ -80,7 +83,7 @@ export class ProcessManager {
   private enqueuePendingProcesses() {
     const nextProcess = this.pendingProcesses[0]
     if (nextProcess) {
-      const hasBlockingProcess = this.processes.some((p) => p.context.id === nextProcess.context.id)
+      const hasBlockingProcess = this.processes.some((p) => p.id === nextProcess.item.id)
       if (hasBlockingProcess) {
         return
       }
@@ -95,24 +98,24 @@ export class ProcessManager {
   private startProcess(pendingProcess: PendingProcess) {
     const started = new Date()
     const item: ProcessItem = {
-      context: pendingProcess.context,
+      id: pendingProcess.item.id,
       started,
       abortController: pendingProcess.abortController,
       promise: pendingProcess
         .process(pendingProcess.abortController, started)
         .catch((err) => {
-          this.env.status.context(pendingProcess.context).write('error', getErrorMessage(err))
+          pendingProcess.item.status.write('error', getErrorMessage(err))
         })
         .finally(() => {
           const index = this.processes.indexOf(item)
           this.processes.splice(index, 1)
-          this.notifyListeners({ context: item.context, type: 'ended' })
+          this.notifyListeners({ item: pendingProcess.item, type: 'ended' })
           this.enqueuePendingProcesses()
         }),
     }
 
     this.processes.push(item)
-    this.notifyListeners({ context: item.context, type: 'started' })
+    this.notifyListeners({ item: pendingProcess.item, processName: pendingProcess.processName, type: 'started' })
   }
 
   private notifyListeners(evt: ProcessListenerEvent): void {
@@ -121,10 +124,10 @@ export class ProcessManager {
         listener(
           evt,
           this.processes,
-          this.pendingProcesses.map((p) => ({ context: p.context }))
+          this.pendingProcesses.map((p) => ({ item: p.item }))
         )
       } catch (e) {
-        this.env.status.context(evt.context).write('error', getErrorMessage(e))
+        evt.item.status.write('error', getErrorMessage(e))
       }
     }
   }

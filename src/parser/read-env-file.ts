@@ -3,15 +3,15 @@ import { Environment } from '../executer/environment'
 
 export async function readEnvFile(
   path: string,
-  baseEnv: { [key: string]: string },
-  environment: Environment
+  environment: Environment,
+  baseEnv: { [key: string]: string } = {}
 ): Promise<{ [key: string]: string }> {
   const directory = join(path, '.env')
 
   let envs: { [key: string]: string } = { ...baseEnv }
 
   if (basename(path) !== path) {
-    envs = { ...(await readEnvFile(basename(path), envs, environment)) }
+    envs = { ...(await readEnvFile(basename(path), environment, envs)) }
   }
 
   const exists = await environment.file.exists(directory)

@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:12-alpine
+    ports: [5432]
     labels:
       app: example
     envs:

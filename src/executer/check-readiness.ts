@@ -1,12 +1,12 @@
-import { ExecutionBuildServiceHealthCheck } from '../parser/build-file-service'
 import { Container } from 'dockerode'
 import { execCommand } from './execute-docker'
 import { StatusScopedConsole } from '../planner/work-node-status'
 import { Environment } from './environment'
+import { WorkHealthcheck } from '../planner/work-healthcheck'
 
 export async function checkReadiness(
   status: StatusScopedConsole,
-  healthCheck: ExecutionBuildServiceHealthCheck,
+  healthCheck: WorkHealthcheck,
   environment: Environment,
   container: Container,
   abort: AbortSignal
@@ -16,7 +16,7 @@ export async function checkReadiness(
     environment,
     container,
     undefined,
-    healthCheck.cmd.split(' '),
+    [healthCheck.cmd.parsed.command, ...healthCheck.cmd.parsed.args],
     null,
     2000,
     abort

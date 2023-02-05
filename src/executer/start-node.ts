@@ -6,6 +6,7 @@ import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { getServiceNodeCacheStats, getStateKey } from '../optimizer/get-work-node-cache-stats'
 import { NodeState } from './scheduler/node-state'
 import { ServiceDns } from './service-dns'
+import { WorkItem } from '../planner/work-item'
 
 export async function startNode(
   node: NodeState,
@@ -21,8 +22,7 @@ export async function startNode(
   }
 
   if (!!currentState.stateKey && currentState.stateKey !== cacheState.stateKey) {
-    const status = environment.status.task(node.node)
-    status.write('debug', `cache check for ${node.node.name} no longer valid, skipping result`)
+    node.node.status.write('debug', `cache check for ${node.node.name} no longer valid, skipping result`)
     return
   }
 
@@ -31,6 +31,7 @@ export async function startNode(
       {
         type: 'completed',
         node: node.node,
+        itemId: node.itemId,
         cached: true,
         stateKey: cacheState.stateKey,
         duration: currentState.type === 'starting' ? getDuration(currentState.started) : 0,
@@ -41,6 +42,7 @@ export async function startNode(
     state.patchNode(
       {
         type: 'ready',
+        itemId: node.itemId,
         node: node.node,
         stateKey: cacheState.stateKey,
         started: currentState.type === 'starting' ? currentState.started : new Date(),
@@ -51,12 +53,13 @@ export async function startNode(
 }
 
 export async function startService(
-  service: WorkService,
+  item: WorkItem<WorkService>,
   state: State,
   serviceContainers: { [key: string]: ServiceDns },
   environment: Environment,
   abortSignal: AbortSignal
 ): Promise<void> {
+  const service = item.data
   const currentStats = await getServiceNodeCacheStats(service, environment)
   const stateKey = getStateKey(currentStats, state.current.cacheMethod)
 
@@ -67,25 +70,26 @@ export async function startService(
   if (!isContainerWorkService(service)) {
     state.patchService({
       type: 'ready',
-      service,
+      service: item,
       stateKey,
+      itemId: item.id,
     })
     return
   }
 
   const fileStats = await getServiceNodeCacheStats(service, environment)
   const fileStateKey = getStateKey(fileStats, 'checksum')
-  const currentState = state.current.service[service.id]
+  const currentState = state.current.service[item.id]
 
   if (!!currentState.stateKey && currentState.stateKey !== fileStateKey) {
-    const status = environment.status.service(service)
-    status.write('debug', `cache check for ${service.name} no longer valid, skipping result`)
+    item.status.write('debug', `cache check for ${service.name} no longer valid, skipping result`)
     return
   }
 
   state.patchService({
     type: 'ready',
-    service,
+    service: item,
     stateKey: fileStateKey,
+    itemId: item.id,
   })
 }

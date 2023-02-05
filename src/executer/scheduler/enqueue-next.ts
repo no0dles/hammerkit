@@ -1,28 +1,28 @@
-import { WorkNode } from '../../planner/work-node'
 import { readCache } from '../../optimizer/read-work-node-cache'
 import { getWorkNodeCacheStats, getStateKey } from '../../optimizer/get-work-node-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
+import { WorkItem } from '../../planner/work-item'
+import { WorkNode } from '../../planner/work-node'
 
 export async function checkCacheState(
-  node: WorkNode,
+  item: WorkItem<WorkNode>,
   defaultCacheMethod: CacheMethod,
   environment: Environment
 ): Promise<{ cached: boolean; stateKey: string }> {
-  const status = environment.status.task(node)
-  const caching = node.caching ?? defaultCacheMethod
+  const caching = item.data.caching ?? defaultCacheMethod
 
-  const currentStats = await getWorkNodeCacheStats(node, environment)
+  const currentStats = await getWorkNodeCacheStats(item.data, environment)
   const stateKey = getStateKey(currentStats, caching)
 
   if (caching === 'none') {
-    status.write('debug', `${node.name} is skipping cache check, because caching is disabled`)
+    item.status.write('debug', `${item.name} is skipping cache check, because caching is disabled`)
     return { cached: false, stateKey }
   }
 
-  const cache = await readCache(node, environment)
+  const cache = await readCache(item, environment)
   if (cache === null) {
-    status.write('debug', `${node.name} is skipping cache check, because there was none found`)
+    item.status.write('debug', `${item.name} is skipping cache check, because there was none found`)
     return { cached: false, stateKey }
   }
 

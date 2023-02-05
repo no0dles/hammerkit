@@ -1,4 +1,3 @@
-import { WorkNode } from '../planner/work-node'
 import { Environment } from './environment'
 import { AbortError, checkForAbort } from './abort'
 import { executeCommand } from './execute-command'
@@ -7,24 +6,31 @@ import { getErrorMessage } from '../log'
 import { getDuration } from './states'
 import { State } from './state'
 import { Process } from './process'
+import { WorkItem } from '../planner/work-item'
+import { LocalWorkNode } from '../planner/work-node'
 
-export function localNode(node: WorkNode, stateKey: string, state: State, environment: Environment): Process {
+export function localNode(
+  item: WorkItem<LocalWorkNode>,
+  stateKey: string,
+  state: State,
+  environment: Environment
+): Process {
   return async (abort, started) => {
-    const status = environment.status.task(node)
-    status.write('info', `execute ${node.name} locally`)
+    item.status.write('info', `execute ${item.name} locally`)
 
     try {
-      for (const cmd of node.cmds) {
+      for (const cmd of item.data.cmds) {
         checkForAbort(abort.signal)
 
-        status.write('info', `execute cmd "${cmd.cmd}" locally`)
+        item.status.write('info', `execute cmd "${cmd.cmd}" locally`)
 
-        const exitCode = await executeCommand(status, abort.signal, cmd.path, cmd.cmd, node.envs)
+        const exitCode = await executeCommand(item.status, abort.signal, cmd.cwd, cmd.cmd, item.data.envs, environment)
         if (exitCode !== 0) {
           state.patchNode(
             {
               type: 'crash',
-              node,
+              node: item,
+              itemId: item.id,
               exitCode,
               stateKey,
             },
@@ -34,12 +40,13 @@ export function localNode(node: WorkNode, stateKey: string, state: State, enviro
         }
       }
 
-      await writeWorkNodeCache(node, environment)
+      await writeWorkNodeCache(item, environment)
 
       state.patchNode(
         {
           type: 'completed',
-          node: node,
+          node: item,
+          itemId: item.id,
           cached: false,
           stateKey,
           duration: getDuration(started),
@@ -51,7 +58,8 @@ export function localNode(node: WorkNode, stateKey: string, state: State, enviro
         state.patchNode(
           {
             type: 'canceled',
-            node,
+            node: item,
+            itemId: item.id,
             stateKey,
           },
           stateKey
@@ -60,7 +68,8 @@ export function localNode(node: WorkNode, stateKey: string, state: State, enviro
         state.patchNode(
           {
             type: 'error',
-            node,
+            node: item,
+            itemId: item.id,
             stateKey,
             errorMessage: getErrorMessage(e),
           },

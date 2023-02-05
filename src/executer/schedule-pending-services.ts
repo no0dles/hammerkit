@@ -8,38 +8,36 @@ import { startService } from './start-node'
 import { ensureNeeds } from './ensure-needs'
 
 export function schedulePendingServices(
-  services: ServiceState[],
+  servicesStates: ServiceState[],
   state: State,
   processManager: ProcessManager,
   environment: Environment,
   currentState: SchedulerState
 ) {
-  for (const service of services) {
-    if (service.type !== 'pending') {
+  for (const serviceState of servicesStates) {
+    if (serviceState.type !== 'pending') {
       continue
     }
 
-    if (!ensureNeeds(service, service.service.needs, processManager, state, environment, currentState)) {
+    if (!ensureNeeds(serviceState, serviceState.service.needs, processManager, state, environment, currentState)) {
       continue
     }
 
     state.patchService({
       type: 'starting',
-      service: service.service,
+      service: serviceState.service,
       stateKey: null,
+      itemId: serviceState.itemId,
     })
 
-    const serviceContainers = getServiceContainers(currentState, service.service.needs)
+    const serviceContainers = getServiceContainers(currentState, serviceState.service.needs)
 
     processManager.background(
-      {
-        type: 'service',
-        name: service.service.name,
-        id: service.service.id + '-cache',
-      },
+      serviceState.service,
       async (abort) => {
-        await startService(service.service, state, serviceContainers, environment, abort.signal)
-      }
+        await startService(serviceState.service, state, serviceContainers, environment, abort.signal)
+      },
+      'cache'
     )
   }
 }

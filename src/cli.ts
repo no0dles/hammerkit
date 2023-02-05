@@ -15,13 +15,14 @@ import { Environment } from './executer/environment'
 import { SchedulerState } from './executer/scheduler/scheduler-state'
 import { ReadonlyState } from './executer/readonly-state'
 import { ProcessManager } from './executer/process-manager'
-import { WorkService } from './planner/work-service'
 import { removeContainer } from './docker/remove-container'
 import { updateServiceStatus } from './service/update-service-status'
 import { scheduleUp } from './executer/schedule-up'
 import { scheduleDown } from './executer/schedule-down'
 import { State } from './executer/state'
 import { deployKubernetes } from './executer/kubernetes/schedule-kubernetes'
+import { WorkItem } from './planner/work-item'
+import { WorkService } from './planner/work-service'
 
 export interface CliExecOptions {
   workers: number
@@ -45,12 +46,12 @@ export interface CliExecResult {
 
 export interface CliTaskItem {
   type: 'task'
-  item: WorkNode
+  item: WorkItem<WorkNode>
 }
 
 export interface CliServiceItem {
   type: 'service'
-  item: WorkService
+  item: WorkItem<WorkService>
 }
 
 export const isCliTask = (val: CliItem): val is CliTaskItem => val.type === 'task'
@@ -179,7 +180,7 @@ export class Cli {
     return validate(this.workTree, this.environment)
   }
 
-  node(name: string): WorkNode {
+  node(name: string): WorkItem<WorkNode> {
     const node = Object.values(this.workTree.nodes).find((n) => n.name == name)
     if (!node) {
       throw new Error(`unable to find node ${name}`)
