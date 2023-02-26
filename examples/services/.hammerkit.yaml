@@ -32,9 +32,9 @@ tasks:
     image: node:16.6.0-alpine
     labels:
       stage: build
-    #mounts:
-    #  - $PWD/.npm:/.npm
-    #  - $PWD/.config:/.config
+    mounts:
+      - $PWD/.npm:/.npm
+      - $PWD/.config:/.config
     src:
       - package.json
       - package-lock.json

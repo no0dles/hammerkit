@@ -4,7 +4,6 @@ import { ContainerCreateOptions } from 'dockerode'
 import { convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
-import { Process } from './process'
 import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
@@ -66,103 +65,102 @@ function buildCreateOptions(
   }
 }
 
-export function dockerNode(
+export async function dockerNode(
   item: WorkItemState<ContainerWorkNode, NodeState>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
-  environment: Environment
-): Process {
-  return async (abort) => {
-    item.status.write('info', `execute ${item.name} in container`)
+  environment: Environment,
+  abort: AbortController
+): Promise<void> {
+  item.status.write('info', `execute ${item.name} in container`)
 
-    try {
-      await prepareMounts(item, environment)
-      checkForAbort(abort.signal)
+  try {
+    await prepareMounts(item, environment)
+    checkForAbort(abort.signal)
 
-      await pullImage(item, environment)
-      checkForAbort(abort.signal)
+    await pullImage(item, environment)
+    checkForAbort(abort.signal)
 
-      await prepareVolume(item, environment)
-      checkForAbort(abort.signal)
+    await prepareVolume(item, environment)
+    checkForAbort(abort.signal)
 
-      const containerOptions = buildCreateOptions(item, stateKey, serviceContainers)
-      printContainerOptions(item.status, containerOptions)
+    const containerOptions = buildCreateOptions(item, stateKey, serviceContainers)
+    printContainerOptions(item.status, containerOptions)
 
-      await usingContainer(environment, item, containerOptions, async (container) => {
-        await setUserPermissions(item, container, environment)
+    await usingContainer(environment, item, containerOptions, async (container) => {
+      await setUserPermissions(item, container, environment)
 
-        for (const cmd of item.data.cmds) {
-          checkForAbort(abort.signal)
+      for (const cmd of item.data.cmds) {
+        checkForAbort(abort.signal)
 
-          item.status.write('info', `execute cmd "${cmd.cmd}" in container`)
+        item.status.write('info', `execute cmd "${cmd.cmd}" in container`)
 
-          const result = await execCommand(
-            item.status,
-            environment,
-            container,
-            convertToPosixPath(cmd.cwd),
-            [item.data.shell, '-c', cmd.cmd],
-            item.data.user,
-            undefined,
-            abort.signal
-          )
+        const result = await execCommand(
+          item.status,
+          environment,
+          container,
+          convertToPosixPath(cmd.cwd),
+          [item.data.shell, '-c', cmd.cmd],
+          item.data.user,
+          undefined,
+          abort.signal
+        )
 
-          if (result.type === 'timeout') {
-            throw new Error(`command ${cmd.cmd} timed out`)
-          }
-
-          if (result.type === 'canceled') {
-            throw new AbortError()
-          }
-
-          if (result.result.ExitCode !== 0) {
-            item.state.set({
-              stateKey,
-              type: 'crash',
-              exitCode: result.result.ExitCode ?? 1,
-            })
-            return false
-          }
+        if (result.type === 'timeout') {
+          throw new Error(`command ${cmd.cmd} timed out`)
         }
 
-        for (const generate of item.data.generates) {
-          if (!generate.export || generate.inherited || generate.isFile) {
-            continue
-          }
-
-          const readable = await container.getArchive({
-            path: generate.path,
-          })
-          await environment.file.createDirectory(generate.path)
-          await new Promise<void>((resolve, reject) => {
-            readable
-              .pipe(
-                extract({
-                  cwd: generate.path,
-                  newer: true,
-                  stripComponents: 1,
-                })
-              )
-              .on('close', () => resolve())
-              .on('error', (err) => reject(err))
-          })
+        if (result.type === 'canceled') {
+          throw new AbortError()
         }
 
-        return true
-      })
-    } catch (e) {
-      if (e instanceof AbortError) {
-        item.state.set({
-          stateKey,
-          type: 'canceled',
+        if (result.result.ExitCode !== 0) {
+          item.state.set({
+            stateKey,
+            type: 'crash',
+            exitCode: result.result.ExitCode ?? 1,
+          })
+          return false
+        }
+      }
+
+      for (const generate of item.data.generates) {
+        if (!generate.export || generate.inherited || generate.isFile) {
+          continue
+        }
+
+        const readable = await container.getArchive({
+          path: generate.path,
         })
-      } else {
-        item.state.set({
-          stateKey,
-          type: 'error',
-          errorMessage: getErrorMessage(e),
+        await environment.file.createDirectory(generate.path)
+        await new Promise<void>((resolve, reject) => {
+          readable
+            .pipe(
+              extract({
+                cwd: generate.path,
+                newer: true,
+                stripComponents: 1,
+              })
+            )
+            .on('close', () => resolve())
+            .on('error', (err) => reject(err))
         })
       }
+
+      return true
+    })
+  } catch (e) {
+    if (e instanceof AbortError) {
+      item.state.set({
+        stateKey,
+        type: 'canceled',
+      })
+    } else {
+      item.state.set({
+        stateKey,
+        type: 'error',
+        errorMessage: getErrorMessage(e),
+      })
     }
   }
 }

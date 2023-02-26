@@ -77,8 +77,6 @@ export class Cli {
       start: async () => {
         checkForLoop(workTree)
 
-        // TODO up/down
-
         if (!hasError(workTree)) {
           await updateServiceStatus(workTree, this.environment)
 

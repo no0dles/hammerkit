@@ -26,7 +26,6 @@ export async function readEnvFile(
       const key = envVar.substr(0, index)
       const value = envVar.substr(index + 1)
       if (!envs[key]) {
-        // environment.status..debug(`load env variable ${key} from ${directory} file`)
         envs[key] = value
       }
     }

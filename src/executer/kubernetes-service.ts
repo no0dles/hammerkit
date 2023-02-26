@@ -1,7 +1,6 @@
 import { exec } from 'child_process'
 import { getErrorMessage, getLogs } from '../log'
 import { listenOnAbort } from '../utils/abort-event'
-import { Process } from './process'
 import { StatusScopedConsole } from '../planner/work-node-status'
 import { sleep } from '../utils/sleep'
 import { WorkItemState } from '../planner/work-item'
@@ -9,18 +8,17 @@ import { KubernetesWorkService } from '../planner/work-service'
 import { ServiceState } from './scheduler/service-state'
 
 // TODO change ServiceState => ServiceReadyState
-export function kubernetesService(
+export async function kubernetesService(
   service: WorkItemState<KubernetesWorkService, ServiceState>,
-  stateKey: string
-): Process {
-  return async (abort) => {
-    do {
-      await startForward(service, stateKey, service.status, abort)
-      if (!abort.signal.aborted) {
-        await sleep(1000)
-      }
-    } while (!abort.signal.aborted)
-  }
+  stateKey: string,
+  abort: AbortController
+): Promise<void> {
+  do {
+    await startForward(service, stateKey, service.status, abort)
+    if (!abort.signal.aborted) {
+      await sleep(1000)
+    }
+  } while (!abort.signal.aborted)
 }
 
 function startForward(

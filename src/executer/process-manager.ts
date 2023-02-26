@@ -1,6 +1,5 @@
 import { listenOnAbort } from '../utils/abort-event'
 import { ProcessItem } from './process-item'
-import { Process } from './process'
 import { getErrorMessage } from '../log'
 import { WorkItem } from '../planner/work-item'
 import { WorkNode } from '../planner/work-node'
@@ -8,7 +7,7 @@ import { WorkService } from '../planner/work-service'
 
 interface PendingProcess {
   abortController: AbortController
-  process: Process
+  factory: () => Promise<void>
   item: WorkItem<WorkService | WorkNode>
   resolve: () => void
   reject: (err: unknown) => void
@@ -20,7 +19,7 @@ export class ProcessManager {
 
   constructor(private abortSignal: AbortSignal, private workerLimit: number) {}
 
-  task(item: WorkItem<WorkNode>, process: () => Promise<void>): Promise<void> {
+  task(item: WorkItem<WorkNode>, factory: () => Promise<void>): Promise<void> {
     const abortController = new AbortController()
     listenOnAbort(this.abortSignal, () => {
       abortController.abort()
@@ -29,9 +28,9 @@ export class ProcessManager {
     return new Promise<void>((resolve, reject) => {
       const hasFreeWorker = this.workerLimit === 0 || this.workerLimit > this.processes.length
       if (hasFreeWorker) {
-        this.startProcess({ process, item, abortController, resolve, reject })
+        this.startProcess({ factory, item, abortController, resolve, reject })
       } else {
-        this.pendingProcesses.push({ item, process, abortController, resolve, reject })
+        this.pendingProcesses.push({ item, factory, abortController, resolve, reject })
       }
     })
   }
@@ -52,13 +51,10 @@ export class ProcessManager {
   }
 
   private startProcess(pendingProcess: PendingProcess) {
-    const started = new Date()
     const item: ProcessItem = {
       id: pendingProcess.item.name,
-      started,
-      abortController: pendingProcess.abortController,
       promise: pendingProcess
-        .process(pendingProcess.abortController, started)
+        .factory()
         .then(() => {
           pendingProcess.resolve()
         })

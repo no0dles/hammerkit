@@ -78,11 +78,9 @@ export async function executeWorkService(
       type: 'starting',
       stateKey: null,
     })
-    // TODO await processManager for process limit
 
     const currentStats = await getWorkCacheStats(work.data, environment)
     const stateKey = await getStateKey(currentStats, work.data.caching ?? options.cacheDefault)
-    const started = new Date()
 
     let currentStateKey = stateKey
     let required = true
@@ -128,9 +126,9 @@ export async function executeWorkService(
 
       try {
         if (isContainerWorkServiceItem(work)) {
-          await dockerService(work, stateKey, serviceContainers, environment, options)(abortController, started)
+          await dockerService(work, stateKey, serviceContainers, environment, options, abortController)
         } else if (isKubernetesWorkServiceItem(work)) {
-          await kubernetesService(work, stateKey)(abortController, started)
+          await kubernetesService(work, stateKey, abortController)
         }
       } catch (e) {
         if (e instanceof AbortError) {
@@ -217,8 +215,6 @@ export async function executeWorkTask(
         )
         checkForAbort(environment.abortCtrl.signal)
 
-        // TODO await processManager for process limit
-
         await options.processManager.task(work, async () => {
           currentStateKey = watchState.current
           work.state.set({
@@ -230,9 +226,9 @@ export async function executeWorkTask(
           try {
             if (isContainerWorkTaskItem(work)) {
               const serviceContainers = getServiceContainers(work.needs)
-              await dockerNode(work, currentStateKey, serviceContainers, environment)(abortController, started)
+              await dockerNode(work, currentStateKey, serviceContainers, environment, abortController)
             } else if (isLocalWorkTaskItem(work)) {
-              await localNode(work, currentStateKey, environment)(abortController, started)
+              await localNode(work, currentStateKey, environment, abortController)
             }
             checkForAbort(environment.abortCtrl.signal)
 

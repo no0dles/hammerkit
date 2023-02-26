@@ -3,7 +3,6 @@ import { join, relative } from 'path'
 import { WorkCacheFileStats } from './work-node-cache-stats'
 import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
-import { StatusScopedConsole } from '../planner/work-node-status'
 import { WorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { createHash } from 'crypto'
@@ -51,39 +50,6 @@ export async function getWorkCacheStats(
   }
 
   return result
-}
-
-export interface CacheState {
-  //changed: boolean
-  stateKey: string
-}
-
-export function getCacheState(
-  status: StatusScopedConsole,
-  node: { name: string; caching: CacheMethod },
-  cache: WorkCacheFileStats | null, // TODO remove
-  current: WorkCacheFileStats
-): CacheState {
-  if (cache) {
-    for (const key of Object.keys(cache.files)) {
-      if (
-        (node.caching === 'checksum' && current.files[key]?.checksum !== cache.files[key].checksum) ||
-        (node.caching === 'modify-date' && current.files[key]?.lastModified !== cache.files[key].lastModified)
-      ) {
-        status.write(
-          'debug',
-          node.caching === 'checksum'
-            ? `${key} changed from checksum ${cache.files[key].checksum} to ${current.files[key]?.checksum}`
-            : `${key} changed from last modified ${cache.files[key].lastModified} to ${current.files[key]?.lastModified}`
-        )
-        status.write('debug', `${node.name} can't be skipped because ${key} has been modified`)
-        break
-      }
-    }
-  }
-  return {
-    stateKey: getStateKey(current, node.caching),
-  }
 }
 
 export function getStateKey(stats: WorkCacheFileStats, cacheMethod: CacheMethod): string {
