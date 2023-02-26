@@ -7,6 +7,7 @@ import { Container } from 'dockerode'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkNode, isContainerWorkNode } from '../planner/work-node'
 import { ContainerWorkService } from '../planner/work-service'
+import { getContainerBinds } from './get-container-binds'
 
 export async function pullImage(
   node: WorkItem<ContainerWorkNode | ContainerWorkService>,
@@ -82,13 +83,12 @@ export async function setUserPermissions(
   environment: Environment
 ): Promise<void> {
   if (item.data.user) {
+    const binds = getContainerBinds(item)
+
     await setUserPermission(item.data.cwd, item.status, environment, container, item.data.user)
 
-    for (const volume of item.data.volumes) {
-      await setUserPermission(volume.containerPath, item.status, environment, container, item.data.user)
-    }
-    for (const mount of item.data.mounts) {
-      await setUserPermission(mount.containerPath, item.status, environment, container, item.data.user)
+    for (const bind of binds) {
+      await setUserPermission(bind.containerPath, item.status, environment, container, item.data.user)
     }
   }
 }

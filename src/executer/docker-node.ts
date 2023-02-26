@@ -13,6 +13,7 @@ import { ContainerWorkNode } from '../planner/work-node'
 import { WorkItem, WorkItemNeed, WorkItemState } from '../planner/work-item'
 import { NodeState } from './scheduler/node-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
+import { getContainerBinds } from './get-container-binds'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -63,26 +64,6 @@ function buildCreateOptions(
       AutoRemove: true,
     },
   }
-}
-
-interface ContainerBind {
-  localPath: string
-  containerPath: string
-}
-function getContainerBinds(item: WorkItem<ContainerWorkNode>): ContainerBind[] {
-  const items: ContainerBind[] = [
-    ...item.data.mounts,
-    ...item.data.volumes.map((v) => ({ localPath: v.name, containerPath: v.containerPath })),
-    ...item.data.src.map((s) => ({ localPath: s.absolutePath, containerPath: s.absolutePath })),
-    ...item.data.generates.filter((g) => !g.isFile).map((v) => ({ localPath: v.volumeName, containerPath: v.path })),
-    ...item.data.generates.filter((g) => g.isFile).map((v) => ({ localPath: v.path, containerPath: v.path })),
-  ]
-  return items.reduce<ContainerBind[]>((array, item) => {
-    if (array.findIndex((i) => i.containerPath === item.containerPath) === -1) {
-      array.push(item)
-    }
-    return array
-  }, [])
 }
 
 export function dockerNode(
