@@ -19,7 +19,7 @@ export async function setUserPermission(
     ['chown', user, directory],
     null,
     undefined,
-    new AbortSignal()
+    new AbortController().signal
   )
   if (result.type === 'canceled') {
     return

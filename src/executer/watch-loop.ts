@@ -32,7 +32,6 @@ export async function watchLoop(
     ? watchStateKey(work, currentStats, environment, options)
     : new State<CacheState>(currentStats)
 
-  let stopped = false
   let currentRun: CurrentRun = {
     abortController: new AbortController(),
     cacheState: watchState.current,
@@ -58,7 +57,6 @@ export async function watchLoop(
     try {
       await factory(currentState, currentRun.abortController.signal, () => {
         currentRun.abortController.abort()
-        stopped = true
       })
     } catch (e) {
       if (e instanceof AbortError) {
