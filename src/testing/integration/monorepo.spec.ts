@@ -1,4 +1,4 @@
-import { expectSuccessfulResult } from '../expect'
+import { expectSuccessfulExecution } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 
 describe('monorepo', () => {
@@ -8,8 +8,7 @@ describe('monorepo', () => {
 
   it('should build and clean monorepo', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'build' })
-    const result = await cli.runExec()
-    await expectSuccessfulResult(result, environment)
+    await expectSuccessfulExecution(cli.exec(), environment)
     await cli.clean()
   }, 120000)
 })

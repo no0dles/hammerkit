@@ -10,6 +10,6 @@ export const buildFileKubernetesServiceSchema = object({
   selector: buildFileKubernetesServiceSelectorSchema,
   labels: labelsSchema.optional(),
   ports: array(union([string(), number()])),
-})
+}).strict()
 
 export type BuildFileKubernetesServiceSchema = z.infer<typeof buildFileKubernetesServiceSchema>

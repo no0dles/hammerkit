@@ -2,7 +2,6 @@ import { EmitHandle, EmitListener, emitter, Emitter } from '../utils/emitter'
 import { getEnvironmentConfig } from '../utils/environment-config'
 import { isVerbose } from '../log'
 import { Writable } from 'stream'
-import { WorkItem } from './work-item'
 import { WorkService } from './work-service'
 import { WorkNode } from './work-node'
 
@@ -35,24 +34,21 @@ export type LogContext =
   | {
       type: 'task' | 'service'
       name: string
-      id: string
     }
   | {
       type: 'cli'
-      id: 'general'
       name: 'hammerkit'
     }
 
-export function logContext(id: string, type: 'task' | 'service', node: WorkService | WorkNode): LogContext {
+export function logContext(type: 'task' | 'service', node: WorkService | WorkNode): LogContext {
   return {
     type,
     name: node.name,
-    id: id,
   }
 }
 
 export interface StatusConsole extends Emitter<Message> {
-  from(id: string, node: WorkService | WorkNode): StatusScopedConsole
+  from(node: WorkService | WorkNode): StatusScopedConsole
   context(ctx: LogContext): StatusScopedConsole
 
   read(): Generator<StatusMessage>
@@ -120,35 +116,35 @@ export function statusConsole(writable: Writable): StatusConsole {
     emit.emit(message)
     writable.write(JSON.stringify({ context, message }) + '\n')
     if (message.type === 'console') {
-      consoleBuffer.add(context.id, message)
+      consoleBuffer.add(context.name, message)
     } else if (isVerbose || message.level !== 'debug') {
-      statusBuffer.add(context.id, message)
+      statusBuffer.add(context.name, message)
     }
   }
 
   return {
-    from(id: string, item: WorkService | WorkNode): StatusScopedConsole {
+    from(item: WorkService | WorkNode): StatusScopedConsole {
       if (item.type === 'kubernetes-service' || item.type === 'container-service') {
-        return this.context(logContext(id, 'service', item))
+        return this.context(logContext('service', item))
       } else {
-        return this.context(logContext(id, 'task', item))
+        return this.context(logContext('task', item))
       }
     },
     context(context: LogContext): StatusScopedConsole {
       return {
         currentLog() {
-          return consoleBuffer.current(context.id)
+          return consoleBuffer.current(context.name)
         },
         current() {
-          return statusBuffer.current(context.id)
+          return statusBuffer.current(context.name)
         },
         *logs(): Generator<ConsoleMessage> {
-          for (const log of consoleBuffer.get(context.id)) {
+          for (const log of consoleBuffer.get(context.name)) {
             yield log
           }
         },
         *read(): Generator<StatusMessage> {
-          for (const log of statusBuffer.get(context.id)) {
+          for (const log of statusBuffer.get(context.name)) {
             yield log
           }
         },

@@ -1,21 +1,20 @@
 import { ParseContext, ParseScope } from './parse-context'
 import { BuildFileSchema } from './build-file-schema'
 import { BuildFileTaskSchema, isBuildFileContainerTaskSchema } from './build-file-task-schema'
-import {
-  BuildFileServiceSchema,
-  isBuildFileContainerSchema,
-  isBuildFileKubernetesServiceSchema,
-} from './build-file-service-schema'
+import { BuildFileServiceSchema, isBuildFileKubernetesServiceSchema } from './build-file-service-schema'
 import { splitName } from '../planner/utils/split-name'
 import { readEnvFile } from '../parser/read-env-file'
 import { Environment } from '../executer/environment'
 import { LabelValues, mergeLabels } from '../executer/label-values'
 import { mergeEnvironmentVariables } from '../environment/merge-environment-variables'
+import { BuildFileEnvironmentSchema } from './build-file-environment-schema'
+import { BuildFileContainerTaskSchema } from './build-file-container-task-schema'
 
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
   tasks: { [key: string]: ReferenceTask }
   services: { [key: string]: ReferenceService }
+  environments: { [key: string]: ReferenceEnvironment }
   envFiles: { [key: string]: { [key: string]: string } }
 }
 
@@ -63,16 +62,28 @@ export interface ReferenceService {
   labels: LabelValues
 }
 
+export interface ReferenceEnvironment {
+  type: 'environment'
+  scope: ParseScope
+  name: string
+  schema: BuildFileEnvironmentSchema
+}
+
 function combinePath(namePrefix: string, name: string): string {
   return namePrefix.length > 0 ? `${namePrefix}:${name}` : name
 }
 
-export async function parseReferences(ctx: ParseContext, environment: Environment): Promise<ReferencedContext> {
+export async function parseReferences(
+  ctx: ParseContext,
+  mainScope: ParseScope,
+  environment: Environment
+): Promise<ReferencedContext> {
   const reference: ReferencedContext = {
     files: {},
     tasks: {},
     services: {},
     envFiles: {},
+    environments: {},
   }
 
   for (const file of Object.values(ctx.files)) {
@@ -100,6 +111,18 @@ export async function parseReferences(ctx: ParseContext, environment: Environmen
         }
       }
     }
+
+    if (file.schema.environments) {
+      for (const [envName, env] of Object.entries(file.schema.environments)) {
+        reference.environments[envName] = {
+          type: 'environment',
+          schema: env,
+          scope: file,
+          name: envName,
+        }
+      }
+    }
+
     if (file.schema.services) {
       for (const [serviceName, service] of Object.entries(file.schema.services)) {
         const relativeName = combinePath(file.namePrefix, serviceName)
@@ -144,21 +167,52 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   const extend = findTask(reference, task.scope, task.schema.extend, null).task
   applySchemaExtension(reference, extend)
 
-  applyIfNotSet(task.schema, extend.schema, ['src', 'generates', 'labels', 'cmds', 'cache', 'envs', 'shell'])
+  task.schema.shell = task.schema.shell ?? extend.schema.shell
+  task.schema.cache = task.schema.cache ?? extend.schema.cache
+
+  task.schema.cmds = extendArray(task.schema.cmds, extend.schema.cmds)
+  task.schema.src = extendArray(task.schema.src, extend.schema.src)
+  task.schema.generates = extendArray(task.schema.generates, extend.schema.generates)
+
+  task.schema.labels = extendObject(task.schema.labels, extend.schema.labels)
+  task.envs = mergeEnvironmentVariables(task.envs, extend.schema.envs)
+
   if (isBuildFileContainerTaskSchema(extend.schema)) {
-    applyIfNotSet(task.schema, extend.schema, ['image', 'mounts', 'volumes'])
+    const taskSchema = task.schema as BuildFileContainerTaskSchema
+    taskSchema.image = taskSchema.image ?? extend.schema.image
+    taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
+    taskSchema.volumes = extendArray(taskSchema.volumes, extend.schema.volumes)
   }
 
   resolveNeeds(reference, task, extend.scope, extend.schema)
   resolveDeps(reference, task, extend.scope, extend.schema)
 }
 
-function applyIfNotSet<T>(base: Partial<T>, extend: T, keys: (keyof T)[]) {
-  for (const key of keys) {
-    if (extend[key] && !base[key]) {
-      base[key] = extend[key]
-    }
+function extendArray<T>(base: T[] | undefined, extend: T[] | undefined): T[] | undefined {
+  if (!extend) {
+    return base
   }
+
+  if (!base) {
+    return [...extend]
+  }
+
+  return [...extend, ...base]
+}
+
+function extendObject<T>(
+  base: { [key: string]: T } | undefined,
+  extend: { [key: string]: T } | undefined
+): { [key: string]: T } | undefined {
+  if (!extend) {
+    return base
+  }
+
+  if (!base) {
+    return { ...extend }
+  }
+
+  return { ...extend, ...base }
 }
 
 function resolveDeps(
@@ -184,7 +238,7 @@ function resolveNeeds(
   scope: ParseScope,
   schema: BuildFileTaskSchema | BuildFileServiceSchema
 ) {
-  if (!isBuildFileContainerSchema(schema)) {
+  if (isBuildFileKubernetesServiceSchema(schema)) {
     return
   }
 

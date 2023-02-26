@@ -19,7 +19,8 @@
     "prepack": "tsc -b tsconfig.json",
     "build": "tsc -b tsconfig.json",
     "test": "jest",
-    "format": "prettier -w src/** && eslint . --fix --ext .ts"
+    "format": "prettier -w src/** && eslint . --fix --ext .ts",
+    "lint": "eslint . --ext .ts"
   },
   "dependencies": {
     "chokidar": "^3.5.3",

@@ -2,12 +2,12 @@ services:
   foodb:
     image: postgres:12-alpine
     needs: [bardb]
-    ports: [5432]
+    ports: [:5432]
 
   bardb:
     image: postgres:12-alpine
     needs: [foodb]
-    ports: [5432]
+    ports: [:5432]
 
 tasks:
   loopservice:

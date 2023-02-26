@@ -4,13 +4,15 @@ import { ReferenceService, ReferenceTask } from '../../schema/reference-parser'
 import { appendWorkNode } from './append-work-node'
 import { WorkTree } from '../work-tree'
 import { Environment } from '../../executer/environment'
-import { WorkItem } from '../work-item'
+import { WorkItemState } from '../work-item'
 import { mergeLabels } from '../../executer/label-values'
+import { NodeState } from '../../executer/scheduler/node-state'
+import { ServiceState } from '../../executer/scheduler/service-state'
 
 export function appendWorkDependencies(
   workTree: WorkTree,
   referenced: ReferenceService | ReferenceTask,
-  item: WorkItem<WorkNode | WorkService>,
+  item: WorkItemState<WorkNode, NodeState> | WorkItemState<WorkService, ServiceState>,
   environment: Environment
 ): void {
   for (const dep of referenced.deps) {
@@ -21,8 +23,8 @@ export function appendWorkDependencies(
 
     if (isWorkNode(item.data) || isContainerWorkService(item.data)) {
       for (const src of depNode.data.src) {
-        if (item.data.src.indexOf(src) === -1) {
-          item.data.src.push(src) // TODO compare
+        if (!item.data.src.some((s) => s.absolutePath === src.absolutePath)) {
+          item.data.src.push({ ...src, inherited: true })
         }
       }
     }
@@ -32,6 +34,9 @@ export function appendWorkDependencies(
       (isContainerWorkNode(item.data) || isContainerWorkService(item.data))
     ) {
       for (const generate of depNode.data.generates) {
+        if (generate.isFile) {
+          continue
+        }
         if (!item.data.volumes.some((v) => v.name === generate.volumeName)) {
           item.data.volumes.push({
             name: generate.volumeName,

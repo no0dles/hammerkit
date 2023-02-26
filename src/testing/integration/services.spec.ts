@@ -14,8 +14,8 @@ describe('services', () => {
   afterAll(() => suite.close())
 
   it('should run with needed service', async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'api' })
-    const result = await cli.runExec()
+    const { cli, environment } = await suite.setup({})
+    const result = await cli.runUp({ daemon: true })
     await expectSuccessfulResult(result, environment)
   }, 120000)
 
@@ -26,8 +26,7 @@ describe('services', () => {
   }, 120000)
 
   it('should start services up', async () => {
-    const { cli, environment } = await suite.setup({
-      mode: 'service',
+    const { cli } = await suite.setup({
       filterLabels: { task: ['dev'] },
       excludeLabels: {},
     })

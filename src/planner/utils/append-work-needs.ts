@@ -4,12 +4,14 @@ import { WorkService } from '../work-service'
 import { WorkTree } from '../work-tree'
 import { appendWorkService } from './append-work-service'
 import { Environment } from '../../executer/environment'
-import { WorkItem } from '../work-item'
+import { WorkItemState } from '../work-item'
+import { NodeState } from '../../executer/scheduler/node-state'
+import { ServiceState } from '../../executer/scheduler/service-state'
 
 export function appendWorkNeeds(
   workTree: WorkTree,
   referenced: ReferenceService | ReferenceTask,
-  item: WorkItem<WorkNode | WorkService>,
+  item: WorkItemState<WorkNode, NodeState> | WorkItemState<WorkService, ServiceState>,
   environment: Environment
 ) {
   for (const need of referenced.needs) {
@@ -18,5 +20,8 @@ export function appendWorkNeeds(
       service: serviceNeed,
       name: need.relativeName,
     })
+    if (!serviceNeed.requiredBy.some((r) => r.name === item.name)) {
+      serviceNeed.requiredBy.push(item)
+    }
   }
 }

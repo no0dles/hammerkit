@@ -14,9 +14,9 @@ import { getVolumeName } from '../planner/utils/plan-work-volume'
 import { isContainerWorkItem, isLocalWorkTaskItem, WorkItem } from '../planner/work-item'
 
 export async function restoreCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
-  for (const node of iterateWorkNodes(workTree.nodes)) {
-    const cachePath = getCacheDirectory(node.id)
-    const sourceCacheDir = join(path, node.id)
+  for (const node of iterateWorkNodes(workTree)) {
+    const cachePath = getCacheDirectory(node.id())
+    const sourceCacheDir = join(path, node.id())
 
     await moveFiles(node, environment, function* () {
       yield { from: join(sourceCacheDir, 'stats.json'), to: join(cachePath, 'stats.json') }
@@ -54,7 +54,7 @@ async function restoreContainer(environment: Environment, item: WorkItem<Contain
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id,
+        'hammerkit-id': item.id(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
@@ -98,13 +98,20 @@ async function archiveContainer(environment: Environment, item: WorkItem<Contain
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id,
+        'hammerkit-id': item.id(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
         AutoRemove: true,
-        Binds: [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+        Binds: [
+          ...item.data.volumes
+            .filter((v) => !v.inherited)
+            .map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
+          ...item.data.generates
+            .filter((v) => !v.inherited && !v.isFile)
+            .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
+        ],
       },
     },
     async (container) => {
@@ -135,9 +142,9 @@ async function archiveLocal(environment: Environment, node: WorkItem<LocalWorkNo
 }
 
 export async function storeCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
-  for (const node of iterateWorkNodes(workTree.nodes)) {
-    const cachePath = getCacheDirectory(node.id)
-    const sourceCacheDir = join(path, node.id)
+  for (const node of iterateWorkNodes(workTree)) {
+    const cachePath = getCacheDirectory(node.id())
+    const sourceCacheDir = join(path, node.id())
 
     await moveFiles(node, environment, function* () {
       yield { from: join(cachePath, 'stats.json'), to: join(sourceCacheDir, 'stats.json') }
@@ -157,7 +164,7 @@ export async function cleanCache(
   environment: Environment,
   options: CliCleanOptions
 ): Promise<void> {
-  for (const node of iterateWorkNodes(workTree.nodes)) {
+  for (const node of iterateWorkNodes(workTree)) {
     for (const generate of node.data.generates) {
       if (generate.inherited) {
         continue
@@ -175,7 +182,7 @@ export async function cleanCache(
       await environment.file.remove(generate.path)
     }
 
-    const cachePath = getCacheDirectory(node.id)
+    const cachePath = getCacheDirectory(node.id())
     if (await environment.file.exists(cachePath)) {
       node.status.write('info', `remove cache ${cachePath}`)
       await environment.file.remove(cachePath)
@@ -183,7 +190,7 @@ export async function cleanCache(
   }
 
   if (options.service) {
-    for (const service of iterateWorkServices(workTree.services)) {
+    for (const service of iterateWorkServices(workTree)) {
       if (service.data.type !== 'container-service') {
         continue
       }

@@ -7,12 +7,15 @@ import {
 import { BuildFileTaskSchema } from './build-file-task-schema'
 import { BuildFileContainerTaskSchema } from './build-file-container-task-schema'
 
-export const buildFileServiceSchema = union([buildFileContainerServiceSchema, buildFileKubernetesServiceSchema])
+export const buildFileServiceSchema = union([
+  buildFileContainerServiceSchema,
+  buildFileKubernetesServiceSchema,
+]).describe('service')
 
 export type BuildFileServiceSchema = z.infer<typeof buildFileServiceSchema>
 
 export const isBuildFileKubernetesServiceSchema = (
-  val: BuildFileServiceSchema
+  val: BuildFileServiceSchema | BuildFileTaskSchema
 ): val is BuildFileKubernetesServiceSchema => 'context' in val
 
 export const isBuildFileContainerSchema = (

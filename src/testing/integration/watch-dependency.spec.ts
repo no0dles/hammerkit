@@ -11,15 +11,20 @@ describe('watch-dependency', () => {
     const exec = await cli.exec({ watch: true })
 
     let content = ''
-    let changed = false
-    exec.processManager.on(async (evt) => {
-      if (evt.type === 'ended' && evt.item.id === thirdNode.id) {
-        if (changed) {
+    let changedStateKey = ''
+    exec.state.on('test-status', async (evt) => {
+      const currentState = evt.nodes[thirdNode.name].state.current
+      if (currentState.type === 'completed') {
+        if (
+          changedStateKey != '' &&
+          currentState.stateKey !== changedStateKey &&
+          !environment.abortCtrl.signal.aborted
+        ) {
           content = await environment.file.read('third.txt')
           environment.abortCtrl.abort()
-        } else {
+        } else if (changedStateKey === '') {
           await environment.file.appendFile('source.txt', 'world\n')
-          changed = true
+          changedStateKey = currentState.stateKey
         }
       }
     })

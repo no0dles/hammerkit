@@ -1,28 +1,46 @@
-import { WorkNodes } from '../work-nodes'
-import { WorkServices } from '../work-services'
-import { NodeState } from '../../executer/scheduler/node-state'
-import { ServiceState } from '../../executer/scheduler/service-state'
-import { SchedulerNodeState, SchedulerServiceState } from '../../executer/scheduler/scheduler-state'
-import { WorkItem } from '../work-item'
+import { WorkItemState } from '../work-item'
 import { WorkNode } from '../work-node'
 import { WorkService } from '../work-service'
+import { WorkTree } from '../work-tree'
+import { ServiceState } from '../../executer/scheduler/service-state'
+import { NodeState } from '../../executer/scheduler/node-state'
 
-export function iterateWorkServices(services: WorkServices): Generator<WorkItem<WorkService>>
-export function iterateWorkServices(services: SchedulerServiceState): Generator<ServiceState>
-export function* iterateWorkServices(
-  services: WorkServices | SchedulerServiceState
-): Generator<WorkItem<WorkService> | ServiceState> {
-  for (const serviceId of Object.keys(services)) {
-    const service = services[serviceId]
+export function* iterateWorkServices(workTree: WorkTree): Generator<WorkItemState<WorkService, ServiceState>> {
+  for (const service of Object.values(workTree.services)) {
     yield service
   }
 }
 
-export function iterateWorkNodes(nodes: WorkNodes): Generator<WorkItem<WorkNode>>
-export function iterateWorkNodes(nodes: SchedulerNodeState): Generator<NodeState>
-export function* iterateWorkNodes(nodes: WorkNodes | SchedulerNodeState): Generator<WorkItem<WorkNode> | NodeState> {
-  for (const nodeId of Object.keys(nodes)) {
-    const node = nodes[nodeId]
+export function* iterateWorkNodes(workTree: WorkTree): Generator<WorkItemState<WorkNode, NodeState>> {
+  for (const node of Object.values(workTree.nodes)) {
     yield node
   }
+}
+
+export function hasErrorTask(workTree: WorkTree): boolean {
+  for (const node of iterateWorkNodes(workTree)) {
+    if (node.state.current.type === 'error') {
+      return true
+    }
+  }
+  return false
+}
+
+export function hasErrorService(workTree: WorkTree): boolean {
+  for (const node of iterateWorkServices(workTree)) {
+    if (node.state.current.type === 'error') {
+      return true
+    }
+  }
+  return false
+}
+
+export function hasError(workTree: WorkTree): boolean {
+  if (hasErrorService(workTree)) {
+    return true
+  }
+  if (hasErrorTask(workTree)) {
+    return true
+  }
+  return false
 }

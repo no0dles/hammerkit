@@ -1,17 +1,21 @@
 import { exec } from 'child_process'
 import { getErrorMessage, getLogs } from '../log'
 import { listenOnAbort } from '../utils/abort-event'
-import { State } from './state'
 import { Process } from './process'
 import { StatusScopedConsole } from '../planner/work-node-status'
 import { sleep } from '../utils/sleep'
-import { WorkItem } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
 import { KubernetesWorkService } from '../planner/work-service'
+import { ServiceState } from './scheduler/service-state'
 
-export function kubernetesService(service: WorkItem<KubernetesWorkService>, stateKey: string, state: State): Process {
+// TODO change ServiceState => ServiceReadyState
+export function kubernetesService(
+  service: WorkItemState<KubernetesWorkService, ServiceState>,
+  stateKey: string
+): Process {
   return async (abort) => {
     do {
-      await startForward(service, stateKey, state, service.status, abort)
+      await startForward(service, stateKey, service.status, abort)
       if (!abort.signal.aborted) {
         await sleep(1000)
       }
@@ -20,9 +24,8 @@ export function kubernetesService(service: WorkItem<KubernetesWorkService>, stat
 }
 
 function startForward(
-  item: WorkItem<KubernetesWorkService>,
+  item: WorkItemState<KubernetesWorkService, ServiceState>,
   stateKey: string,
-  state: State,
   status: StatusScopedConsole,
   abort: AbortController
 ) {
@@ -38,9 +41,7 @@ function startForward(
       for (const log of getLogs(data)) {
         status.console('stdout', log)
       }
-      state.patchService({
-        service: item,
-        itemId: item.id,
+      item.state.set({
         type: 'running',
         dns: { host: 'host-gateway' },
         stateKey,
@@ -54,9 +55,7 @@ function startForward(
     })
     ps.on('error', (err) => {
       status.write('error', getErrorMessage(err))
-      state.patchService({
-        service: item,
-        itemId: item.id,
+      item.state.set({
         type: 'end',
         reason: 'crash',
         stateKey,
@@ -64,9 +63,7 @@ function startForward(
     })
     ps.on('close', (code) => {
       status.write('info', `exit with ${code}`)
-      state.patchService({
-        service: item,
-        itemId: item.id,
+      item.state.set({
         type: 'end',
         reason: 'crash',
         stateKey,

@@ -4,7 +4,7 @@ import { ensureVolumeExists, recreateVolume } from './get-docker-executor'
 import { extname } from 'path'
 import { setUserPermission } from './set-user-permission'
 import { Container } from 'dockerode'
-import { isContainerWorkTaskItem, WorkItem } from '../planner/work-item'
+import { WorkItem } from '../planner/work-item'
 import { ContainerWorkNode, isContainerWorkNode } from '../planner/work-node'
 import { ContainerWorkService } from '../planner/work-service'
 
@@ -59,6 +59,19 @@ export async function prepareMounts(
       await environment.file.writeFile(mount.localPath, '')
     } else {
       await environment.file.createDirectory(mount.localPath)
+    }
+  }
+  if (isContainerWorkNode(item.data)) {
+    for (const gen of item.data.generates) {
+      if (!gen.isFile) {
+        continue
+      }
+      const exists = await environment.file.exists(gen.path)
+      if (exists) {
+        continue
+      }
+
+      await environment.file.writeFile(gen.path, '')
     }
   }
 }

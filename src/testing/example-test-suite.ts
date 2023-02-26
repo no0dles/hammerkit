@@ -39,6 +39,7 @@ export class ExampleTestSuite implements TestSuite {
 
     const logPath = join(process.cwd(), 'logs')
     const stdoutFile = join(logPath, this.exampleName + '-stout.log')
+    const stderrFile = join(logPath, this.exampleName + '-stderr.log')
     const statusFile = join(logPath, this.exampleName + '-status.log')
     const consoleFile = join(logPath, this.exampleName + '-console.log')
 
@@ -56,6 +57,7 @@ export class ExampleTestSuite implements TestSuite {
       status: statusConsole(createWriteStream(statusFile)),
       docker: getContainerCli(),
       stdout: createWriteStream(stdoutFile),
+      stderr: createWriteStream(stderrFile),
       stdoutColumns: 80,
     }
 
@@ -70,6 +72,7 @@ export class ExampleTestSuite implements TestSuite {
     })
 
     const cli = await createCli(fileName, environment, scope)
+    await cli.shutdown()
     await cli.clean({ service: true })
 
     // reset cli clean stats

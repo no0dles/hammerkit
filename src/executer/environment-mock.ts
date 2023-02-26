@@ -15,6 +15,7 @@ export function environmentMock(cwd: string): Environment {
     status: statusConsole(emptyWritable()),
     docker: getContainerCli(),
     stdout: emptyWritable(),
+    stderr: emptyWritable(),
     stdoutColumns: 80,
   }
 }

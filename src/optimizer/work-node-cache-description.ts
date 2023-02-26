@@ -1,5 +1,6 @@
 import { platform } from 'os'
 import { WorkNode } from '../planner/work-node'
+import { getEnvironmentVariables } from '../environment/replace-env-variables'
 
 export interface WorkNodeCacheDescription {
   cwd?: string
@@ -15,17 +16,17 @@ export interface WorkNodeCacheDescription {
 }
 
 export function getWorkNodeCacheDescription(task: WorkNode): WorkNodeCacheDescription {
+  const envs = getEnvironmentVariables(task.envs)
   return {
     shell: task.shell ?? undefined,
     platform: task.type === 'container-task' ? task.image : platform(),
     generates: task.generates.map((g) => g.path).sort() ?? undefined,
     src: task.src.map((s) => s.source).sort() ?? undefined,
-    // TODO verify if thats correct deps: task.deps.map((d) => d.name).sort() ?? undefined,
     envs:
-      Object.keys(task.envs)
+      Object.keys(envs)
         .sort()
         .reduce<{ [key: string]: string }>((map, key) => {
-          map[key] = task.envs[key]
+          map[key] = envs[key]
           return map
         }, {}) ?? undefined,
     cmds: task.cmds.map((c) => ({ cmd: c.cmd, cwd: c.cwd })),

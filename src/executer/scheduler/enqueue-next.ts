@@ -1,5 +1,5 @@
 import { readCache } from '../../optimizer/read-work-node-cache'
-import { getWorkNodeCacheStats, getStateKey } from '../../optimizer/get-work-node-cache-stats'
+import { getStateKey, getWorkCacheStats } from '../../optimizer/get-work-node-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
 import { WorkItem } from '../../planner/work-item'
@@ -12,7 +12,7 @@ export async function checkCacheState(
 ): Promise<{ cached: boolean; stateKey: string }> {
   const caching = item.data.caching ?? defaultCacheMethod
 
-  const currentStats = await getWorkNodeCacheStats(item.data, environment)
+  const currentStats = await getWorkCacheStats(item.data, environment)
   const stateKey = getStateKey(currentStats, caching)
 
   if (caching === 'none') {
@@ -22,7 +22,7 @@ export async function checkCacheState(
 
   const cache = await readCache(item, environment)
   if (cache === null) {
-    item.status.write('debug', `${item.name} is skipping cache check, because there was none found`)
+    item.status.write('debug', `no cache found for ${item.id()}`)
     return { cached: false, stateKey }
   }
 

@@ -1,12 +1,13 @@
 import { Minimatch } from 'minimatch'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { WorkSource } from '../work-source'
 import { templateValue } from './template-value'
+import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
 
 export function parseWorkSource(
   cwd: string,
   sources: string[] | null | undefined,
-  envs: { [key: string]: string } | null
+  envs: WorkEnvironmentVariables
 ): WorkSource[] {
   const result: WorkSource[] = []
 
@@ -21,15 +22,10 @@ export function parseWorkSource(
         const absolutePath = cwd
         result.push({
           matcher: (file, cwd) => {
-            const matcher = new Minimatch(absolutePath, { dot: true })
-            const match = matcher.match(file)
-            if (match) {
-              // TODO environment.console.debug(`file ${file} matches source ${source}`)
-            } else {
-              // TODO environment.console.debug(`file ${file} does not matche source ${source}`)
-            }
-            return match
+            const matcher = new Minimatch(source, { dot: true })
+            return matcher.match(relative(cwd, file))
           },
+          inherited: false,
           source,
           absolutePath,
         })
@@ -39,14 +35,9 @@ export function parseWorkSource(
         result.push({
           matcher: (file, cwd) => {
             const matcher = new Minimatch(join(cwd, source), { dot: true })
-            const match = matcher.match(file)
-            if (match) {
-              // TODO environment.console.debug(`file ${file} matches source ${source}`)
-            } else {
-              // TODO environment.console.debug(`file ${file} does not matche source ${source}`)
-            }
-            return match
+            return matcher.match(file)
           },
+          inherited: false,
           source,
           absolutePath,
         })
@@ -54,12 +45,22 @@ export function parseWorkSource(
     } else {
       const absolutePath = join(cwd, templateValue(source, envs))
       result.push({
-        matcher: (file, cwd) => file.startsWith(absolutePath),
+        matcher: (file) => file.startsWith(absolutePath),
         absolutePath,
         source,
+        inherited: false,
       })
     }
   }
 
   return result
+}
+
+export function createSource(absolutePath: string): WorkSource {
+  return {
+    matcher: (file) => file.startsWith(absolutePath),
+    absolutePath,
+    source: absolutePath,
+    inherited: false,
+  }
 }

@@ -1,11 +1,12 @@
-import { WorkNodes } from './work-nodes'
-import { WorkServices } from './work-services'
-import { BuildFileEnvironment } from '../parser/build-file-environment'
-import { ContainerWorkNode, LocalWorkNode } from './work-node'
-import { ContainerWorkService, KubernetesWorkService } from './work-service'
+import { WorkEnvironment } from './work-environment'
+import { WorkItemState } from './work-item'
+import { WorkNode } from './work-node'
+import { NodeState } from '../executer/scheduler/node-state'
+import { WorkService } from './work-service'
+import { ServiceState } from '../executer/scheduler/service-state'
 
 export interface WorkTree {
-  nodes: WorkNodes
-  services: WorkServices
-  environments: { [key: string]: BuildFileEnvironment }
+  nodes: { [key: string]: WorkItemState<WorkNode, NodeState> }
+  services: { [key: string]: WorkItemState<WorkService, ServiceState> }
+  environments: { [key: string]: WorkEnvironment }
 }

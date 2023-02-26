@@ -10,8 +10,8 @@ describe('concurrency', () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
 
     const exec = await cli.exec({ workers: 1 })
-    exec.state.on((state) => {
-      const runningNodes = Object.values(state.node).filter((n) => n.type === 'running')
+    exec.state.on('check-status', (state) => {
+      const runningNodes = Object.values(state.nodes).filter((n) => n.state.current.type === 'running')
       expect(runningNodes.length).toBeLessThanOrEqual(1)
     })
 

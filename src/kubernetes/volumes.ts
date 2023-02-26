@@ -1,10 +1,11 @@
-import { ContainerWorkService, WorkService } from '../../planner/work-service'
+import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { dirname } from 'path'
 import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
 import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMount'
-import { isContainerWorkNode, WorkNode } from '../../planner/work-node'
+import { isContainerWorkNode, WorkNode } from '../planner/work-node'
 import { V1Container } from '@kubernetes/client-node'
-import { WorkItem } from '../../planner/work-item'
+import { WorkItem } from '../planner/work-item'
+import { getEnvironmentVariables } from '../environment/replace-env-variables'
 
 export interface KubernetesServiceVolume {
   volume: V1Volume
@@ -29,11 +30,12 @@ export function getContainer(node: WorkNode, volumes: KubernetesServiceVolume[])
     throw new Error('not supported local node')
   }
 
+  const envs = getEnvironmentVariables(node.envs)
   return node.cmds.map<V1Container>((cmd, index) => ({
     name: node.name.replace(/:/, '-') + '-' + index,
-    env: Object.keys(node.envs).map((key) => ({
+    env: Object.entries(envs).map(([key, value]) => ({
       name: key,
-      value: node.envs[key],
+      value,
     })),
     image: node.image,
     command: [cmd.parsed.command],

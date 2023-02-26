@@ -4,6 +4,7 @@ import { read } from '../parser/read-build-file'
 import { ParseContext, ParseScope } from './parse-context'
 import { dirname, join } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
+import { ParseError } from './parse-error'
 
 export async function createParseContext(
   fileName: string,
@@ -13,19 +14,22 @@ export async function createParseContext(
     files: {},
   }
 
-  const scope = await appendBuildFile(ctx, environment, fileName, [])
+  const scope = await appendBuildFile(dirname(fileName), ctx, environment, fileName, [])
 
   return { ctx, scope }
 }
 
 export async function appendBuildFile(
+  cwd: string,
   ctx: ParseContext,
   environment: Environment,
   fileName: string,
   namePrefix: string[]
 ): Promise<ParseScope> {
-  if (ctx.files[fileName]) {
-    return ctx.files[fileName]
+  const relativeName = namePrefix.join(':')
+  const key = `${cwd}:${fileName}`
+  if (ctx.files[key]) {
+    return ctx.files[key]
   }
 
   const input = await read(fileName, environment)
@@ -33,18 +37,18 @@ export async function appendBuildFile(
   if (result.success) {
     const scope: ParseScope = {
       fileName,
-      cwd: dirname(fileName),
+      cwd,
       schema: result.data,
-      namePrefix: namePrefix.join(':'),
+      namePrefix: relativeName,
       references: {},
     }
-    ctx.files[fileName] = scope
+    ctx.files[key] = scope
 
     if (scope.schema.references) {
       for (const referenceName of Object.keys(scope.schema.references)) {
         const reference = scope.schema.references[referenceName]
         const referenceFilename = await getBuildFilename(join(scope.cwd, reference), environment)
-        const referenceScope = await appendBuildFile(ctx, environment, referenceFilename, [
+        const referenceScope = await appendBuildFile(dirname(referenceFilename), ctx, environment, referenceFilename, [
           ...namePrefix,
           referenceName,
         ])
@@ -58,8 +62,8 @@ export async function appendBuildFile(
     if (scope.schema.includes) {
       for (const includeName of Object.keys(scope.schema.includes)) {
         const include = scope.schema.includes[includeName]
-        const includeFilename = await getBuildFilename(join(scope.cwd, include), environment)
-        const includeScope = await appendBuildFile(ctx, environment, includeFilename, [...namePrefix, includeName])
+        const includeFilename = await getBuildFilename(join(dirname(scope.fileName), include), environment)
+        const includeScope = await appendBuildFile(cwd, ctx, environment, includeFilename, [...namePrefix, includeName])
         if (scope.references[includeName]) {
           throw new Error(includeName + ' already exists')
         }
@@ -69,6 +73,6 @@ export async function appendBuildFile(
 
     return scope
   } else {
-    throw result.error
+    throw new ParseError(result.error, fileName)
   }
 }

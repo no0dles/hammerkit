@@ -1,4 +1,4 @@
-import { getWorkNodeCacheStats } from './get-work-node-cache-stats'
+import { getWorkCacheStats } from './get-work-node-cache-stats'
 import { Environment } from '../executer/environment'
 import { getCacheDescriptionFile, getCacheDirectory, getCacheStatsFile } from './get-cache-directory'
 import { getWorkNodeCacheDescription } from './work-node-cache-description'
@@ -6,10 +6,10 @@ import { WorkItem } from '../planner/work-item'
 import { WorkNode } from '../planner/work-node'
 
 export async function writeWorkNodeCache(node: WorkItem<WorkNode>, context: Environment): Promise<void> {
-  const cachePath = getCacheDirectory(node.id)
-  const cacheFile = getCacheStatsFile(node.id)
-  const cacheDescriptionFile = getCacheDescriptionFile(node.id)
-  const cache = await getWorkNodeCacheStats(node.data, context)
+  const cachePath = getCacheDirectory(node.id())
+  const cacheFile = getCacheStatsFile(node.id())
+  const cacheDescriptionFile = getCacheDescriptionFile(node.id())
+  const cache = await getWorkCacheStats(node.data, context)
   const taskDescription = getWorkNodeCacheDescription(node.data)
 
   await context.file.createDirectory(cachePath)

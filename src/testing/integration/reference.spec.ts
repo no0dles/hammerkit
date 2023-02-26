@@ -1,6 +1,5 @@
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
-import { emptyWorkLabelScope } from '../../executer/work-scope'
 
 describe('reference', () => {
   const suite = getTestSuite('reference', ['.hammerkit.yaml', 'foo'])
@@ -16,7 +15,7 @@ describe('reference', () => {
   })
 
   it('should list task with references tasks nested', async () => {
-    const { cli } = await suite.setup(emptyWorkLabelScope('all'))
+    const { cli } = await suite.setup({})
     const workNodes = cli.ls()
     expect(workNodes.map((t) => t.item.name)).toEqual(['foo:bardb', 'example', 'foo:bar', 'foo:sub:sub'])
   })

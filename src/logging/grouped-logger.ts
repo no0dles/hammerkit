@@ -1,39 +1,43 @@
-import { getNodeNameLengthForWorkTree, printWorkTreeResult, writeNodeLogToConsole } from '../log'
+import { getNodeNameLengthForSchedulerState, printWorkTreeResult, writeNodeLogToConsole } from '../log'
 import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
-import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { Logger } from './log-mode'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 import { Environment } from '../executer/environment'
-import { ReadonlyState } from '../executer/readonly-state'
+import { WorkTree } from '../planner/work-tree'
+import { State } from '../executer/state'
 
-export function groupedLogger(state: ReadonlyState<SchedulerState>, env: Environment): Logger {
-  const maxNodeNameLength = getNodeNameLengthForWorkTree(state.current.node, state.current.service)
+export function groupedLogger(state: State<WorkTree>, env: Environment): Logger {
+  const maxNodeNameLength = getNodeNameLengthForSchedulerState(state.current)
 
   const completedNodes: string[] = []
   const completedServices: string[] = []
 
-  state.on((currentState) => {
-    for (const node of iterateWorkNodes(currentState.node)) {
-      if (completedNodes.indexOf(node.itemId) >= 0) {
+  state.on('log-status', (currentState) => {
+    for (const node of iterateWorkNodes(currentState)) {
+      if (completedNodes.indexOf(node.name) >= 0) {
         continue
       }
 
-      if (node.type === 'crash' || node.type === 'error' || node.type === 'completed') {
-        completedNodes.push(node.itemId)
-        for (const log of node.node.status.read()) {
+      if (
+        node.state.current.type === 'crash' ||
+        node.state.current.type === 'error' ||
+        node.state.current.type === 'completed'
+      ) {
+        completedNodes.push(node.name)
+        for (const log of node.status.read()) {
           writeNodeLogToConsole(env, log, maxNodeNameLength)
         }
       }
     }
 
-    for (const service of iterateWorkServices(currentState.service)) {
-      if (completedServices.indexOf(service.itemId) >= 0) {
+    for (const service of iterateWorkServices(currentState)) {
+      if (completedServices.indexOf(service.name) >= 0) {
         continue
       }
 
-      if (service.type === 'end') {
-        completedServices.push(service.itemId)
-        for (const log of service.service.status.read()) {
+      if (service.state.current.type === 'end') {
+        completedServices.push(service.name)
+        for (const log of service.status.read()) {
           writeNodeLogToConsole(env, log, maxNodeNameLength)
         }
       }

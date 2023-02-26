@@ -1,4 +1,4 @@
-import { array, number, object, string, union, z } from 'zod'
+import { array, boolean, number, object, string, union, z } from 'zod'
 import { envsSchema } from './envs-schema'
 import { buildFileNeedSchema } from './build-file-need-schema'
 import { labelsSchema } from './labels-schema'
@@ -16,7 +16,10 @@ export const buildFileContainerServiceSchema = object({
   cmd: string().optional(),
   volumes: array(string()).optional(),
   labels: labelsSchema.optional(),
+  continuous: boolean().optional(),
   healthcheck: buildFileServiceContainerHealthcheck.optional(),
 })
+  .strict()
+  .describe('container service')
 
 export type BuildFileContainerServiceSchema = z.infer<typeof buildFileContainerServiceSchema>

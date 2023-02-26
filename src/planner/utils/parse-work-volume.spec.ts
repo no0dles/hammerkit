@@ -2,7 +2,7 @@ import { parseWorkVolume } from './parse-work-volume'
 
 describe('parse-work-volume', () => {
   it('should parse projdata:/usr/data', () => {
-    expect(parseWorkVolume('/home/user/proj', 'projdata:/usr/data')).toEqual({
+    expect(parseWorkVolume('/home/user/proj', 'projdata:/usr/data', { replacements: [], variables: {} })).toEqual({
       name: 'projdata',
       containerPath: '/usr/data',
       resetOnChange: false,

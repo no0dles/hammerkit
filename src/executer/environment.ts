@@ -13,5 +13,6 @@ export interface Environment {
   status: StatusConsole
   docker: Dockerode
   stdout: Writable
+  stderr: Writable
   stdoutColumns: number
 }

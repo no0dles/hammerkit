@@ -3,12 +3,12 @@ import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work
 import { Message, WorkNodeConsoleLogLevel } from './planner/work-node-status'
 import colors from 'colors'
 import { ConsoleContext } from './console/console-context'
-import { SchedulerNodeState, SchedulerServiceState, SchedulerState } from './executer/scheduler/scheduler-state'
 import { NodeState } from './executer/scheduler/node-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { Environment } from './executer/environment'
 import { failNever } from './utils/fail-never'
 import { Writable } from 'stream'
+import { WorkTree } from './planner/work-tree'
 
 export function getLogs(chunk: Buffer | string): string[] {
   return chunk
@@ -66,7 +66,7 @@ export function getType(type: 'service' | 'task' | 'cli'): string {
   return colors.grey(getNodeName(type, typeLength) + ':')
 }
 
-export async function printWorkTreeResult(schedulerState: SchedulerState, env: Environment): Promise<void> {
+export async function printWorkTreeResult(schedulerState: WorkTree, env: Environment): Promise<void> {
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
 
   for (const log of env.status.read()) {
@@ -80,15 +80,15 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     }
   }
 
-  for (const state of iterateWorkServices(schedulerState.service)) {
-    if (state.type === 'end' && state.reason === 'crash') {
-      const message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)}`
-      for (const log of state.service.status.logs()) {
+  for (const service of iterateWorkServices(schedulerState)) {
+    if (service.state.current.type === 'end' && service.state.current.reason === 'crash') {
+      const message = `${getType('service')} ${getNodeName(service.name, maxNodeNameLength)}`
+      for (const log of service.status.logs()) {
         env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
-    } else if (state.type === 'running') {
-      const message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)}`
-      if (state.remote) {
+    } else if (service.state.current.type === 'running') {
+      const message = `${getType('service')} ${getNodeName(service.name, maxNodeNameLength)}`
+      if (service.state.current.remote) {
         env.stdout.write(`${formatDate(new Date())} ${message} - already started\n`)
       } else {
         env.stdout.write(`${formatDate(new Date())} ${message} - sucessfull started\n`)
@@ -96,44 +96,44 @@ export async function printWorkTreeResult(schedulerState: SchedulerState, env: E
     }
   }
 
-  for (const state of iterateWorkNodes(schedulerState.node)) {
-    if (state.type === 'error' || state.type === 'crash') {
-      const message = `${getType('task')} ${getNodeName(state.node.name, maxNodeNameLength)}`
-      for (const log of state.node.status.logs()) {
+  for (const node of iterateWorkNodes(schedulerState)) {
+    if (node.state.current.type === 'error' || node.state.current.type === 'crash') {
+      const message = `${getType('task')} ${getNodeName(node.name, maxNodeNameLength)}`
+      for (const log of node.status.logs()) {
         env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
     }
   }
 
-  for (const state of iterateWorkServices(schedulerState.service)) {
+  for (const service of iterateWorkServices(schedulerState)) {
     let message = `${formatDate(new Date())} ${getType('service')} ${getNodeName(
-      state.service.name,
+      service.name,
       maxNodeNameLength
-    )} - ${getStateText(state)}`
-    if (state.type === 'end') {
-      if (state.reason === 'crash') {
+    )} - ${getStateText(service.state.current)}`
+    if (service.state.current.type === 'end') {
+      if (service.state.current.reason === 'crash') {
         message += ` crashed`
       }
       env.stdout.write(`${message}\n`)
     }
   }
 
-  for (const state of iterateWorkNodes(schedulerState.node)) {
+  for (const node of iterateWorkNodes(schedulerState)) {
     let message = `${formatDate(new Date())} ${getType('task')} ${getNodeName(
-      state.node.name,
+      node.name,
       maxNodeNameLength
-    )} - ${getStateText(state)}`
-    if (state.type === 'completed') {
-      message += ` in ${state.duration}ms`
-      if (state.cached) {
+    )} - ${getStateText(node.state.current)}`
+    if (node.state.current.type === 'completed') {
+      message += ` in ${node.state.current.duration}ms`
+      if (node.state.current.cached) {
         message += ' [CACHED]'
       }
     }
-    if (state.type === 'crash') {
-      message += ` exited with ${state.exitCode}`
+    if (node.state.current.type === 'crash') {
+      message += ` exited with ${node.state.current.exitCode}`
     }
-    if (state.type === 'error') {
-      message += ` with message ${state.errorMessage}`
+    if (node.state.current.type === 'error') {
+      message += ` with message ${node.state.current.errorMessage}`
     }
     env.stdout.write(`${message}\n`)
   }
@@ -163,13 +163,13 @@ function getStateText(state: NodeState | ServiceState): string {
   }
 }
 
-export function getNodeNameLengthForSchedulerState(schedulerState: SchedulerState): number {
+export function getNodeNameLengthForSchedulerState(schedulerState: WorkTree): number {
   function* Names(): Generator<string> {
-    for (const node of iterateWorkNodes(schedulerState.node)) {
-      yield node.node.name
+    for (const node of iterateWorkNodes(schedulerState)) {
+      yield node.name
     }
-    for (const service of iterateWorkServices(schedulerState.service)) {
-      yield service.service.name
+    for (const service of iterateWorkServices(schedulerState)) {
+      yield service.name
     }
   }
 
@@ -195,19 +195,6 @@ export function getNodeNameLength(names: () => Generator<string> | Array<string>
     }
   }
   return maxNodeNameLength
-}
-
-export function getNodeNameLengthForWorkTree(nodes: SchedulerNodeState, services: SchedulerServiceState): number {
-  function* Names(): Generator<string> {
-    for (const node of iterateWorkNodes(nodes)) {
-      yield node.node.name
-    }
-    for (const service of iterateWorkServices(services)) {
-      yield service.service.name
-    }
-  }
-
-  return getNodeNameLength(Names)
 }
 
 export function getNodeName(name: string, maxNodeNameLength: number): string {
@@ -250,21 +237,23 @@ export function formatDate(date: Date): string {
   )
 }
 
-export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environment, ticker: number): void {
+export function writeWorkTreeStatus(schedulerState: WorkTree, env: Environment, ticker: number): void {
   clearScreenDown(env.stdout)
 
   const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
 
   let count = 0
 
-  for (const state of iterateWorkServices(schedulerState.service)) {
-    let message = `${getType('service')} ${getNodeName(state.service.name, maxNodeNameLength)} - ${getStateText(state)}`
+  for (const service of iterateWorkServices(schedulerState)) {
+    let message = `${getType('service')} ${getNodeName(service.name, maxNodeNameLength)} - ${getStateText(
+      service.state.current
+    )}`
 
-    if (state.type === 'running' && state.remote) {
+    if (service.state.current.type === 'running' && service.state.current.remote) {
       message += ` [REMOTE]`
     }
 
-    const currentMessage = state.service.status.current()
+    const currentMessage = service.status.currentLog()
     if (currentMessage) {
       message += ` ${currentMessage.message}`
     }
@@ -272,16 +261,16 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
     count += printWithTruncate(env, message)
   }
 
-  for (const state of iterateWorkNodes(schedulerState.node)) {
-    let message = `${getType('task')} ${getNodeName(state.node.name, maxNodeNameLength)} - ${getStateText(state)}`
+  for (const node of iterateWorkNodes(schedulerState)) {
+    let message = `${getType('task')} ${getNodeName(node.name, maxNodeNameLength)} - ${getStateText(
+      node.state.current
+    )}`
 
-    if (state.type === 'pending') {
-      const totalDepCount = state.node.deps.length
-      const totalServiceCount = state.node.needs.length
-      const completedDepCount = state.node.deps.filter((d) => schedulerState.node[d.id]?.type === 'completed').length
-      const runningServiceCount = state.node.needs.filter(
-        (n) => schedulerState.service[n.service.id]?.type === 'ready'
-      ).length
+    if (node.state.current.type === 'pending') {
+      const totalDepCount = node.deps.length
+      const totalServiceCount = node.needs.length
+      const completedDepCount = node.deps.filter((d) => d.state.current.type === 'completed').length
+      const runningServiceCount = node.needs.filter((n) => n.service.state.current.type === 'ready').length
       if (totalDepCount > 0 && completedDepCount !== totalDepCount) {
         message += ` | ${colors.grey(` awaiting dependencies (${completedDepCount}/${totalDepCount})`)}`
       }
@@ -289,25 +278,25 @@ export function writeWorkTreeStatus(schedulerState: SchedulerState, env: Environ
         message += ` | ${colors.grey(` awaiting service (${runningServiceCount}/${totalServiceCount})`)}`
       }
     }
-    if (state.type === 'starting' || state.type === 'ready') {
+    if (node.state.current.type === 'starting' || node.state.current.type === 'ready') {
       message += ` | ${spinner[ticker % spinner.length]}`
-      const currentMessage = state.node.status.current()
+      const currentMessage = node.status.current()
       if (currentMessage) {
         message += ` ${currentMessage.message}`
       }
-    } else if (state.type === 'running') {
+    } else if (node.state.current.type === 'running') {
       message += ` | ${spinner[ticker % spinner.length]}`
-      const currentMessage = state.node.status.currentLog()
+      const currentMessage = node.status.currentLog()
       if (currentMessage) {
         message += ` ${currentMessage.message}`
       }
-    } else if (state.type === 'completed') {
-      message += ` in ${state.duration}ms`
-      if (state.cached) {
+    } else if (node.state.current.type === 'completed') {
+      message += ` in ${node.state.current.duration}ms`
+      if (node.state.current.cached) {
         message += ' [CACHED]'
       }
-    } else if (state.type === 'error') {
-      message += ` ${state.errorMessage}`
+    } else if (node.state.current.type === 'error') {
+      message += ` ${node.state.current.errorMessage}`
     }
 
     count += printWithTruncate(env, message)

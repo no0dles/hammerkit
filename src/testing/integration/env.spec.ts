@@ -47,6 +47,8 @@ describe('env', () => {
   })
 
   it('should throw if process env is missing', async () => {
-    await expect(suite.setup({ taskName: 'example_with_shell_env' })).rejects.toThrow('missing env $VERSION')
+    await expect(suite.setup({ taskName: 'example_with_shell_env' })).rejects.toThrow(
+      'missing environment variable VERSION'
+    )
   })
 })

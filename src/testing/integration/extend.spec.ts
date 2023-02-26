@@ -8,7 +8,7 @@ describe('extend', () => {
   it('should merge env variables', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_env' })
     const node = await cli.node('extend_env')
-    expect(node.data.envs).toContainEntries([
+    expect(node.data.envs.variables).toContainEntries([
       ['NAME', 'base'],
       ['KEEP', 'value'],
     ])
@@ -17,7 +17,7 @@ describe('extend', () => {
   it('should extend and override', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_container_task' })
     const node = await cli.node('extend_container_task')
-    expect(node.data.envs).toEqual({
+    expect(node.data.envs.variables).toEqual({
       NAME: 'override',
     })
     expect(node.data.type).toBe('container-task')

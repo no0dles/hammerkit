@@ -1,95 +1,81 @@
 import { checkCacheState } from './scheduler/enqueue-next'
 import { getDuration } from './states'
 import { Environment } from './environment'
-import { State } from './state'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
-import { getServiceNodeCacheStats, getStateKey } from '../optimizer/get-work-node-cache-stats'
+import { getStateKey, getWorkCacheStats } from '../optimizer/get-work-node-cache-stats'
 import { NodeState } from './scheduler/node-state'
 import { ServiceDns } from './service-dns'
-import { WorkItem } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
+import { CliExecOptions } from '../cli'
+import { WorkNode } from '../planner/work-node'
+import { ServiceState } from './scheduler/service-state'
 
 export async function startNode(
-  node: NodeState,
-  state: State,
+  node: WorkItemState<WorkNode, NodeState>,
   environment: Environment,
+  options: CliExecOptions,
   abortSignal: AbortSignal
 ): Promise<void> {
-  const cacheState = await checkCacheState(node.node, state.current.cacheMethod, environment)
-  const currentState = state.current.node[node.node.id]
+  const cacheState = await checkCacheState(node, options.cacheDefault, environment)
 
   if (abortSignal.aborted) {
     return
   }
 
-  if (!!currentState.stateKey && currentState.stateKey !== cacheState.stateKey) {
-    node.node.status.write('debug', `cache check for ${node.node.name} no longer valid, skipping result`)
+  if (!!node.state.current.stateKey && node.state.current.stateKey !== cacheState.stateKey) {
+    node.status.write('debug', `cache check for ${node.name} no longer valid, skipping result`)
     return
   }
 
   if (cacheState.cached) {
-    state.patchNode(
-      {
-        type: 'completed',
-        node: node.node,
-        itemId: node.itemId,
-        cached: true,
-        stateKey: cacheState.stateKey,
-        duration: currentState.type === 'starting' ? getDuration(currentState.started) : 0,
-      },
-      node.stateKey
-    )
+    node.state.set({
+      type: 'completed',
+      cached: true,
+      stateKey: cacheState.stateKey,
+      duration: node.state.current.type === 'starting' ? getDuration(node.state.current.started) : 0,
+    })
   } else {
-    state.patchNode(
-      {
-        type: 'ready',
-        itemId: node.itemId,
-        node: node.node,
-        stateKey: cacheState.stateKey,
-        started: currentState.type === 'starting' ? currentState.started : new Date(),
-      },
-      node.stateKey
-    )
+    node.state.set({
+      type: 'ready',
+      stateKey: cacheState.stateKey,
+      started: node.state.current.type === 'starting' ? node.state.current.started : new Date(),
+    })
   }
 }
 
 export async function startService(
-  item: WorkItem<WorkService>,
-  state: State,
+  item: WorkItemState<WorkService, ServiceState>,
   serviceContainers: { [key: string]: ServiceDns },
   environment: Environment,
+  options: CliExecOptions,
   abortSignal: AbortSignal
 ): Promise<void> {
   const service = item.data
-  const currentStats = await getServiceNodeCacheStats(service, environment)
-  const stateKey = getStateKey(currentStats, state.current.cacheMethod)
+  const currentStats = await getWorkCacheStats(service, environment)
+  const stateKey = getStateKey(currentStats, options.cacheDefault)
 
   if (abortSignal.aborted) {
     return
   }
 
   if (!isContainerWorkService(service)) {
-    state.patchService({
+    item.state.set({
       type: 'ready',
-      service: item,
       stateKey,
-      itemId: item.id,
     })
     return
   }
 
-  const fileStats = await getServiceNodeCacheStats(service, environment)
+  const fileStats = await getWorkCacheStats(service, environment)
   const fileStateKey = getStateKey(fileStats, 'checksum')
-  const currentState = state.current.service[item.id]
 
-  if (!!currentState.stateKey && currentState.stateKey !== fileStateKey) {
+  if (!!item.state.current.stateKey && item.state.current.stateKey !== fileStateKey) {
     item.status.write('debug', `cache check for ${service.name} no longer valid, skipping result`)
     return
   }
 
-  state.patchService({
+  item.state.set({
     type: 'ready',
-    service: item,
     stateKey: fileStateKey,
-    itemId: item.id,
   })
 }

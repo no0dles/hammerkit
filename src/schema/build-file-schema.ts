@@ -13,6 +13,8 @@ export const buildFileSchema = object({
   includes: record(string()).optional(),
   environments: record(buildFileEnvironmentSchema).optional(),
   labels: labelsSchema.optional(),
-}).describe('Build file with support for containerization\nhttps://no0dles.gitbook.io/hammerkit/build-file')
+})
+  .strict()
+  .describe('Build file with support for containerization\nhttps://no0dles.gitbook.io/hammerkit/build-file')
 
 export type BuildFileSchema = z.infer<typeof buildFileSchema>

@@ -1,11 +1,18 @@
-import { SchedulerState } from './scheduler/scheduler-state'
 import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
+import { WorkItemState } from '../planner/work-item'
+import { WorkService } from '../planner/work-service'
+import { ServiceState } from './scheduler/service-state'
+import { WorkTree } from '../planner/work-tree'
 
-export function hasServiceAnActiveNeed(currentState: SchedulerState, serviceId: string) {
+export function hasServiceAnActiveNeed(currentState: WorkTree, service: WorkItemState<WorkService, ServiceState>) {
   let hasNeed = false
-  for (const nodeState of iterateWorkNodes(currentState.node)) {
-    if (nodeState.type === 'running' || nodeState.type === 'starting' || nodeState.type === 'pending') {
-      if (nodeState.node.needs.some((n) => n.service.id === serviceId)) {
+  for (const node of iterateWorkNodes(currentState)) {
+    if (
+      node.state.current.type === 'running' ||
+      node.state.current.type === 'starting' ||
+      node.state.current.type === 'pending'
+    ) {
+      if (node.needs.some((n) => n.service.id === service.id)) {
         hasNeed = true
         break
       }
@@ -13,14 +20,14 @@ export function hasServiceAnActiveNeed(currentState: SchedulerState, serviceId: 
   }
 
   if (!hasNeed) {
-    for (const serviceState of iterateWorkServices(currentState.service)) {
+    for (const serviceState of iterateWorkServices(currentState)) {
       if (
-        serviceState.type === 'ready' ||
-        serviceState.type === 'running' ||
-        serviceState.type === 'starting' ||
-        serviceState.type === 'pending'
+        serviceState.state.current.type === 'ready' ||
+        serviceState.state.current.type === 'running' ||
+        serviceState.state.current.type === 'starting' ||
+        serviceState.state.current.type === 'pending'
       ) {
-        if (serviceState.service.needs.some((n) => n.service.id === serviceId)) {
+        if (serviceState.needs.some((n) => n.service.id === service.id)) {
           hasNeed = true
           break
         }

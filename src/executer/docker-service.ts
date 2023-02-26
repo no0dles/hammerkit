@@ -8,44 +8,45 @@ import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
 import { Environment } from './environment'
-import { State } from './state'
 import { Process } from './process'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
 import { getNeedsNetwork } from './docker-node'
 import { ServiceDns } from './service-dns'
-import { WorkItem } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
+import { CliExecOptions } from '../cli'
+import { ServiceState } from './scheduler/service-state'
+import { getEnvironmentVariables } from '../environment/replace-env-variables'
 
 export function dockerService(
-  item: WorkItem<ContainerWorkService>,
+  item: WorkItemState<ContainerWorkService, ServiceState>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
-  state: State,
-  environment: Environment
+  environment: Environment,
+  options: CliExecOptions
 ): Process {
   return async (abort) => {
     let container: Container | null = null
 
-    await prepareMounts(item, environment)
-    checkForAbort(abort.signal)
-
-    await pullImage(item, environment)
-    checkForAbort(abort.signal)
-
-    await prepareVolume(item, environment)
-    checkForAbort(abort.signal)
-
     try {
+      await prepareMounts(item, environment)
+      checkForAbort(abort.signal)
+
+      await pullImage(item, environment)
+      checkForAbort(abort.signal)
+
+      await prepareVolume(item, environment)
       checkForAbort(abort.signal)
 
       const network = getNeedsNetwork(serviceContainers, item.needs)
 
       item.status.write('debug', `create container with image ${item.data.image}`)
+      const envs = getEnvironmentVariables(item.data.envs)
       container = await environment.docker.createContainer({
         Image: item.data.image,
-        Env: Object.keys(item.data.envs).map((k) => `${k}=${item.data.envs[k]}`),
+        Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
         Labels: {
           app: 'hammerkit',
-          'hammerkit-id': item.id,
+          'hammerkit-id': item.id(),
           'hammerkit-pid': process.pid.toString(),
           'hammerkit-type': 'service',
           'hammerkit-state': stateKey,
@@ -60,13 +61,16 @@ export function dockerService(
           ExtraHosts: network.hosts,
           Links: network.links,
           Binds: [
+            ...item.data.src.map((s) => `${s.absolutePath}:${s.absolutePath}`),
             ...item.data.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
             ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
           ],
-          PortBindings: item.data.ports.reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-            map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-            return map
-          }, {}),
+          PortBindings: item.data.ports
+            .filter((p) => !!p.hostPort)
+            .reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+              map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
+              return map
+            }, {}),
         },
       })
 
@@ -76,13 +80,11 @@ export function dockerService(
       await container.start()
 
       if (!item.data.healthcheck) {
-        state.patchService({
+        item.state.set({
           type: 'running',
-          service: item,
           dns: { containerId: container.id },
           stateKey,
           remote: null,
-          itemId: item.id,
         })
       } else {
         let ready = false
@@ -94,48 +96,41 @@ export function dockerService(
         } while (!ready && !abort.signal.aborted)
 
         if (ready) {
-          state.patchService({
+          item.state.set({
             type: 'running',
-            service: item,
             dns: { containerId: container.id },
             stateKey,
             remote: null,
-            itemId: item.id,
           })
         }
       }
 
-      if (!state.current.daemon) {
+      // TODO check if container crashes
+      if (!options.daemon) {
         await waitOnAbort(abort.signal)
 
-        state.patchService({
+        item.state.set({
           type: 'end',
-          service: item,
-          itemId: item.id,
           stateKey,
           reason: 'terminated',
         })
       }
     } catch (e) {
       if (e instanceof AbortError) {
-        state.patchService({
+        item.state.set({
           type: 'canceled',
-          service: item,
-          itemId: item.id,
           stateKey,
         })
       } else {
         item.status.write('error', getErrorMessage(e))
-        state.patchService({
+        item.state.set({
           type: 'end',
-          service: item,
-          itemId: item.id,
           reason: 'crash',
           stateKey,
         })
       }
     } finally {
-      if (container && !state.current.daemon) {
+      if (container && !options.daemon) {
         try {
           await removeContainer(container)
         } catch (e) {

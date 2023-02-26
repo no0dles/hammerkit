@@ -1,9 +1,9 @@
-import { SchedulerState } from './scheduler/scheduler-state'
 import { iterateWorkServices } from '../planner/utils/plan-work-nodes'
+import { WorkTree } from '../planner/work-tree'
 
-export function areAllServicesRunning(state: SchedulerState): boolean {
-  for (const service of iterateWorkServices(state.service)) {
-    if (service.type !== 'running') {
+export function areAllServicesRunning(workTree: WorkTree): boolean {
+  for (const service of iterateWorkServices(workTree)) {
+    if (service.state.current.type !== 'running') {
       return false
     }
   }

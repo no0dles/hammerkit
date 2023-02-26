@@ -6,7 +6,7 @@ tasks:
       - tsconfig.json
       - src
     cmds:
-      - node_modules/.bin/tsc
+      - node_modules/.bin/tsc -b
     generates:
       - dist
 

@@ -7,29 +7,27 @@ describe('watch', () => {
   afterAll(() => suite.close())
 
   it('should run watch task and cancel', async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'api' })
-    const apiNode = cli.node('api')
-    const exec = await cli.exec({ watch: true })
-    exec.processManager.on((evt) => {
-      if (evt.item.id === apiNode.id && evt.type === 'started') {
+    const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
+    const exec = await cli.up({ watch: true })
+    exec.state.on('test-status', (evt) => {
+      if (evt.services['api'].state.current.type === 'running') {
         environment.abortCtrl.abort()
       }
     })
     const result = await exec.start()
     expect(result.success).toBeFalsy()
-    expect(result.state.node[apiNode.id].type).toEqual('canceled')
+    expect(result.state.services['api'].state.current.type).toEqual('canceled')
   })
 
   it('should restart task if dependency updates', async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'api' })
-    const apiNode = cli.node('api')
-    const exec = await cli.exec({ watch: true })
+    const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
+    const exec = await cli.up({ watch: true })
 
     let appendedFile = false
     let restarted = false
 
-    exec.processManager.on((evt) => {
-      if (evt.type === 'started' && evt.item.id === apiNode.id) {
+    exec.state.on('test-status', (evt) => {
+      if (evt.services['api'].state.current.type === 'running') {
         if (!appendedFile) {
           appendedFile = true
           environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
@@ -44,6 +42,6 @@ describe('watch', () => {
     expect(appendedFile).toBeTruthy()
     expect(restarted).toBeTruthy()
     expect(result.success).toBeFalsy()
-    expect(result.state.node[apiNode.id].type).toEqual('canceled')
+    expect(result.state.services['api'].state.current.type).toEqual('canceled')
   })
 })

@@ -3,17 +3,16 @@ import { isHostServiceDns, ServiceDns } from './service-dns'
 import { ContainerCreateOptions } from 'dockerode'
 import { convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
-import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
 import { getErrorMessage } from '../log'
-import { getDuration } from './states'
-import { State } from './state'
 import { Process } from './process'
 import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
 import { ContainerWorkNode } from '../planner/work-node'
-import { WorkItem, WorkItemNeed } from '../planner/work-item'
+import { WorkItem, WorkItemNeed, WorkItemState } from '../planner/work-item'
+import { NodeState } from './scheduler/node-state'
+import { getEnvironmentVariables } from '../environment/replace-env-variables'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -41,17 +40,18 @@ function buildCreateOptions(
 ): ContainerCreateOptions {
   const network = getNeedsNetwork(serviceContainers, item.needs)
   const binds = getContainerBinds(item)
+  const envs = getEnvironmentVariables(item.data.envs)
 
   return {
     Image: item.data.image,
     Tty: true,
     Entrypoint: item.data.shell,
     Cmd: ['-c', 'sleep 3600'],
-    Env: Object.keys(item.data.envs).map((k) => `${k}=${item.data.envs[k]}`),
+    Env: Object.entries(envs).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
-      'hammerkit-id': item.id,
+      'hammerkit-id': item.id(),
       'hammerkit-pid': process.pid.toString(),
       'hammerkit-type': 'task',
       'hammerkit-state': stateKey,
@@ -75,6 +75,7 @@ function getContainerBinds(item: WorkItem<ContainerWorkNode>): ContainerBind[] {
     ...item.data.volumes.map((v) => ({ localPath: v.name, containerPath: v.containerPath })),
     ...item.data.src.map((s) => ({ localPath: s.absolutePath, containerPath: s.absolutePath })),
     ...item.data.generates.filter((g) => !g.isFile).map((v) => ({ localPath: v.volumeName, containerPath: v.path })),
+    ...item.data.generates.filter((g) => g.isFile).map((v) => ({ localPath: v.path, containerPath: v.path })),
   ]
   return items.reduce<ContainerBind[]>((array, item) => {
     if (array.findIndex((i) => i.containerPath === item.containerPath) === -1) {
@@ -85,13 +86,12 @@ function getContainerBinds(item: WorkItem<ContainerWorkNode>): ContainerBind[] {
 }
 
 export function dockerNode(
-  item: WorkItem<ContainerWorkNode>,
+  item: WorkItemState<ContainerWorkNode, NodeState>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
-  state: State,
   environment: Environment
 ): Process {
-  return async (abort, started) => {
+  return async (abort) => {
     item.status.write('info', `execute ${item.name} in container`)
 
     try {
@@ -107,7 +107,7 @@ export function dockerNode(
       const containerOptions = buildCreateOptions(item, stateKey, serviceContainers)
       printContainerOptions(item.status, containerOptions)
 
-      const success = await usingContainer(environment, item, containerOptions, async (container) => {
+      await usingContainer(environment, item, containerOptions, async (container) => {
         await setUserPermissions(item, container, environment)
 
         for (const cmd of item.data.cmds) {
@@ -135,16 +135,11 @@ export function dockerNode(
           }
 
           if (result.result.ExitCode !== 0) {
-            state.patchNode(
-              {
-                node: item,
-                stateKey,
-                type: 'crash',
-                exitCode: result.result.ExitCode ?? 1,
-                itemId: item.id,
-              },
-              stateKey
-            )
+            item.state.set({
+              stateKey,
+              type: 'crash',
+              exitCode: result.result.ExitCode ?? 1,
+            })
             return false
           }
         }
@@ -174,44 +169,18 @@ export function dockerNode(
 
         return true
       })
-
-      if (success) {
-        await writeWorkNodeCache(item, environment)
-
-        state.patchNode(
-          {
-            node: item,
-            stateKey,
-            type: 'completed',
-            cached: false,
-            duration: getDuration(started),
-            itemId: item.id,
-          },
-          stateKey
-        )
-      }
     } catch (e) {
       if (e instanceof AbortError) {
-        state.patchNode(
-          {
-            node: item,
-            stateKey,
-            type: 'canceled',
-            itemId: item.id,
-          },
-          stateKey
-        )
+        item.state.set({
+          stateKey,
+          type: 'canceled',
+        })
       } else {
-        state.patchNode(
-          {
-            node: item,
-            stateKey,
-            type: 'error',
-            errorMessage: getErrorMessage(e),
-            itemId: item.id,
-          },
-          stateKey
-        )
+        item.state.set({
+          stateKey,
+          type: 'error',
+          errorMessage: getErrorMessage(e),
+        })
       }
     }
   }

@@ -9,54 +9,67 @@ import { getDefaultKubeConfig } from './get-default-kube-config'
 import { parseWorkCommand } from './parse-work-command'
 import { parseWorkVolumes } from './parse-work-volume'
 import { parseWorkMounts } from './parse-work-mounts'
-import { parseWorkSource } from './parse-work-source'
+import { createSource, parseWorkSource } from './parse-work-source'
 import { appendWorkDependencies } from './append-work-dependencies'
 import { appendWorkNeeds } from './append-work-needs'
 import { Environment } from '../../executer/environment'
-import { WorkItem } from '../work-item'
+import { WorkItemState } from '../work-item'
+import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
+import { ServiceState } from '../../executer/scheduler/service-state'
+import { State } from '../../executer/state'
 
 export function appendWorkService(
   workTree: WorkTree,
   service: ReferenceService,
   environment: Environment
-): WorkItem<WorkService> {
-  const workService = parseService(service)
-  const id = getWorkServiceId(workService)
-  if (!workTree.services[id]) {
-    const workTreeService: WorkItem<WorkService> = {
-      id,
+): WorkItemState<WorkService, ServiceState> {
+  const workService = parseService(service, environment)
+  if (!workTree.services[workService.name]) {
+    const workTreeService: WorkItemState<WorkService, ServiceState> = {
+      id: () => getWorkServiceId(workService), // TODO lazy caching
       name: workService.name,
       data: workService,
-      status: environment.status.from(id, workService),
+      status: environment.status.from(workService),
       deps: [],
       needs: [],
+      requiredBy: [],
+      state: new State<ServiceState>({
+        type: 'pending',
+        stateKey: null,
+      }),
     }
-    workTree.services[id] = workTreeService
+    workTree.services[workTreeService.name] = workTreeService
     appendWorkDependencies(workTree, service, workTreeService, environment)
     appendWorkNeeds(workTree, service, workTreeService, environment)
     return workTreeService
   } else {
-    // TODO check for conflicts
-    return workTree.services[id]
+    return workTree.services[workService.name]
   }
 }
 
-function parseService(service: ReferenceService): WorkService {
+function parseService(service: ReferenceService, environment: Environment): WorkService {
+  const envs = buildEnvironmentVariables(service.envs, environment)
   const workService: BaseWorkService = {
+    cwd: service.cwd,
     name: service.relativeName,
-    ports: parseWorkPorts(service.schema, service.envs),
+    ports: parseWorkPorts(service.schema, envs),
     scope: service.scope,
     labels: service.labels,
-    description: templateValue(service.schema.description || '', service.envs),
+    description: templateValue(service.schema.description || '', envs),
   }
 
   if (isBuildFileKubernetesServiceSchema(service.schema)) {
+    const kubeconfig = service.schema.kubeconfig ?? getDefaultKubeConfig()
     return <KubernetesWorkService>{
       type: 'kubernetes-service',
       ...workService,
-      kubeconfig: service.schema.kubeconfig ?? getDefaultKubeConfig(),
-      selector: service.schema.selector,
-      context: service.schema.context,
+      kubeconfig,
+      selector: {
+        name: templateValue(service.schema.selector.name, envs),
+        type: templateValue(service.schema.selector.type, envs),
+      },
+      context: templateValue(service.schema.context, envs),
+      src: [createSource(kubeconfig)],
     }
   } else {
     return <ContainerWorkService>{
@@ -64,16 +77,16 @@ function parseService(service: ReferenceService): WorkService {
       type: 'container-service',
       healthcheck: service.schema.healthcheck
         ? {
-            cmd: parseWorkCommand(service.cwd, service.schema.healthcheck, service.envs),
+            cmd: parseWorkCommand(service.cwd, service.schema.healthcheck, envs),
           }
         : null,
-      envs: service.envs,
+      envs: buildEnvironmentVariables(service.envs, environment),
       image: service.schema.image,
       cwd: service.cwd,
-      cmd: service.schema.cmd ? parseWorkCommand(service.cwd, service.schema.cmd, service.envs) : null,
-      volumes: parseWorkVolumes(service.cwd, service.schema.volumes),
-      mounts: parseWorkMounts(service.cwd, service.schema, service.envs),
-      src: parseWorkSource(service.cwd, service.schema.src, service.envs),
+      cmd: service.schema.cmd ? parseWorkCommand(service.cwd, service.schema.cmd, envs) : null,
+      volumes: parseWorkVolumes(service.cwd, service.schema.volumes, envs),
+      mounts: parseWorkMounts(service.cwd, service.schema, envs),
+      src: parseWorkSource(service.cwd, service.schema.src, envs),
     }
   }
 }

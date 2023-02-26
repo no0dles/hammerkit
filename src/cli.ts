@@ -3,44 +3,43 @@ import { WorkNodeValidation } from './planner/work-node-validation'
 import { WorkNode } from './planner/work-node'
 import { LogMode } from './logging/log-mode'
 import { CacheMethod } from './parser/cache-method'
-import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
-import { createSchedulerState } from './executer/create-scheduler-state'
+import { hasError, iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
 import { isCI } from './utils/ci'
 import { getLogger } from './console/get-logger'
-import { scheduleExecution } from './executer/schedule-execution'
 import { cleanCache, restoreCache, storeCache } from './executer/event-cache'
 import { validate } from './planner/validate'
 import { WorkTree } from './planner/work-tree'
 import { Environment } from './executer/environment'
-import { SchedulerState } from './executer/scheduler/scheduler-state'
-import { ReadonlyState } from './executer/readonly-state'
 import { ProcessManager } from './executer/process-manager'
 import { removeContainer } from './docker/remove-container'
 import { updateServiceStatus } from './service/update-service-status'
-import { scheduleUp } from './executer/schedule-up'
-import { scheduleDown } from './executer/schedule-down'
-import { State } from './executer/state'
-import { deployKubernetes } from './executer/kubernetes/schedule-kubernetes'
 import { WorkItem } from './planner/work-item'
 import { WorkService } from './planner/work-service'
+import { deployKubernetes } from './kubernetes/schedule-kubernetes'
+import { createKubernetesInstances } from './kubernetes/kubernetes-instance'
+import { checkForLoop } from './executer/scheduler/check-for-loop'
+import { State } from './executer/state'
+import { executeWorkTree } from './executer/execute-work-task'
+import { getSchedulerExecuteResult } from './executer/get-scheduler-execute-result'
+import { resetWorkTree } from './executer/reset-work-tree'
 
+export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
+  type: ExecuteKind
   workers: number
   watch: boolean
   daemon: boolean
   logMode: LogMode
   cacheDefault: CacheMethod
+  processManager: ProcessManager
 }
-
-export interface CliDeployOptions {}
 
 export interface CliCleanOptions {
   service: boolean
 }
 
 export interface CliExecResult {
-  state: ReadonlyState<SchedulerState>
-  processManager: ProcessManager
+  state: State<WorkTree>
   start: () => Promise<SchedulerResult>
 }
 
@@ -61,32 +60,40 @@ export type CliItem = CliTaskItem | CliServiceItem
 export class Cli {
   constructor(private workTree: WorkTree, private environment: Environment) {}
 
-  async setup(
-    scheduler: (process: ProcessManager, state: State, environment: Environment) => Promise<SchedulerResult>,
-    workTreeSelector: (workTree: WorkTree) => WorkTree,
-    options?: Partial<CliExecOptions>
-  ): Promise<CliExecResult> {
-    const processManager = new ProcessManager(this.environment, options?.workers ?? 0)
+  setup(type: ExecuteKind, options?: Partial<CliExecOptions>): CliExecResult {
+    const processManager = new ProcessManager(this.environment.abortCtrl.signal, options?.workers ?? 0)
     const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
-    const processWorkTree = workTreeSelector(this.workTree)
-    const state = createSchedulerState({
-      daemon: options?.daemon ?? false,
-      services: processWorkTree.services,
-      nodes: processWorkTree.nodes,
-      watch: options?.watch ?? false,
-      logMode,
-      cacheMethod: options?.cacheDefault ?? 'checksum',
-    })
 
-    await updateServiceStatus(state, this.environment)
+    const workTree = resetWorkTree(this.workTree)
+    const processWorkTree = new State<WorkTree>(workTree, [
+      ...Object.values(workTree.services).map((s) => s.state),
+      ...Object.values(workTree.nodes).map((s) => s.state),
+    ])
 
-    const logger = getLogger(logMode, state, this.environment)
+    const logger = getLogger(logMode, processWorkTree, this.environment)
 
     return {
-      state,
-      processManager,
+      state: processWorkTree,
       start: async () => {
-        const result = await scheduler(processManager, state, this.environment)
+        checkForLoop(workTree)
+
+        // TODO up/down
+
+        if (!hasError(workTree)) {
+          await updateServiceStatus(workTree, this.environment)
+
+          await executeWorkTree(workTree, this.environment, {
+            daemon: options?.daemon ?? false,
+            watch: options?.watch ?? false,
+            logMode,
+            cacheDefault: options?.cacheDefault ?? 'checksum',
+            workers: options?.workers ?? 0,
+            processManager,
+            type,
+          })
+        }
+
+        const result = getSchedulerExecuteResult(workTree)
         await logger.complete(result, this.environment)
         return result
       },
@@ -94,11 +101,11 @@ export class Cli {
   }
 
   async shutdown(): Promise<void> {
-    for (const node of iterateWorkNodes(this.workTree.nodes)) {
+    for (const node of iterateWorkNodes(this.workTree)) {
       const containers = await this.environment.docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${node.id}`],
+          label: [`hammerkit-id=${node.id()}`],
         },
       })
       for (const container of containers) {
@@ -106,11 +113,11 @@ export class Cli {
       }
     }
 
-    for (const service of iterateWorkServices(this.workTree.services)) {
+    for (const service of iterateWorkServices(this.workTree)) {
       const containers = await this.environment.docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${service.id}`],
+          label: [`hammerkit-id=${service.id()}`],
         },
       })
       for (const container of containers) {
@@ -119,26 +126,22 @@ export class Cli {
     }
   }
 
-  async up(options?: Partial<CliExecOptions>): Promise<CliExecResult> {
-    return await this.setup(scheduleUp, (workTree) => workTree, options)
+  up(options?: Partial<CliExecOptions>): CliExecResult {
+    return this.setup('up', options)
   }
 
-  async deploy(envName: string, options?: Partial<CliDeployOptions>) {
+  async deploy(envName: string) {
     const env = this.workTree.environments[envName]
-    return await deployKubernetes(this.workTree, env, options)
+    return await deployKubernetes(createKubernetesInstances(), this.workTree, env)
   }
 
   async runUp(options?: Partial<CliExecOptions>): Promise<SchedulerResult> {
-    const run = await this.up(options)
+    const run = this.up(options)
     return await run.start()
   }
 
-  async down(): Promise<CliExecResult> {
-    return await this.setup(
-      scheduleDown,
-      (workTree) => ({ services: workTree.services, nodes: {}, environments: {} }),
-      {}
-    )
+  down(): CliExecResult {
+    return this.setup('down', {})
   }
 
   async runDown(): Promise<SchedulerResult> {
@@ -146,12 +149,12 @@ export class Cli {
     return await run.start()
   }
 
-  async exec(options?: Partial<CliExecOptions>): Promise<CliExecResult> {
-    return await this.setup(scheduleExecution, (workTree) => workTree, options)
+  exec(options?: Partial<CliExecOptions>): CliExecResult {
+    return this.setup('execute', options)
   }
 
   async runExec(options?: Partial<CliExecOptions>): Promise<SchedulerResult> {
-    const run = await this.exec(options)
+    const run = this.exec(options)
     return await run.start()
   }
 
@@ -169,11 +172,19 @@ export class Cli {
     await storeCache(path, this.workTree, this.environment)
   }
 
+  services(): CliServiceItem[] {
+    return Array.from(iterateWorkServices(this.workTree)).map<CliServiceItem>((item) => ({
+      item,
+      type: 'service',
+    }))
+  }
+
+  tasks(): CliTaskItem[] {
+    return Array.from(iterateWorkNodes(this.workTree)).map<CliTaskItem>((item) => ({ item, type: 'task' }))
+  }
+
   ls(): CliItem[] {
-    return [
-      ...Array.from(iterateWorkServices(this.workTree.services)).map<CliItem>((item) => ({ item, type: 'service' })),
-      ...Array.from(iterateWorkNodes(this.workTree.nodes)).map<CliItem>((item) => ({ item, type: 'task' })),
-    ]
+    return [...this.services(), ...this.tasks()]
   }
 
   validate(): AsyncGenerator<WorkNodeValidation> {
@@ -181,11 +192,19 @@ export class Cli {
   }
 
   node(name: string): WorkItem<WorkNode> {
-    const node = Object.values(this.workTree.nodes).find((n) => n.name == name)
+    const node = this.workTree.nodes[name]
     if (!node) {
-      throw new Error(`unable to find node ${name}`)
+      throw new Error(`unable to find task ${name}`)
     }
     return node
+  }
+
+  service(name: string): WorkItem<WorkService> {
+    const service = this.workTree.services[name]
+    if (!service) {
+      throw new Error(`unable to find service ${name}`)
+    }
+    return service
   }
 }
 

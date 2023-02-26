@@ -13,48 +13,55 @@ import { getWorkNodeId } from '../work-node-id'
 import { appendWorkDependencies } from './append-work-dependencies'
 import { appendWorkNeeds } from './append-work-needs'
 import { Environment } from '../../executer/environment'
-import { WorkItem } from '../work-item'
+import { WorkItemState } from '../work-item'
+import { NodeState } from '../../executer/scheduler/node-state'
+import { State } from '../../executer/state'
+import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
 
 export function appendWorkNode(
   workTree: WorkTree,
   cwd: string,
   task: ReferenceTask,
   environment: Environment
-): WorkItem<WorkNode> {
-  const node = parseNode(cwd, task)
-  const nodeId = getWorkNodeId(node)
-  if (!workTree.nodes[nodeId]) {
-    const workTreeNode: WorkItem<WorkNode> = {
-      id: nodeId,
+): WorkItemState<WorkNode, NodeState> {
+  const node = parseNode(cwd, task, environment)
+  if (!workTree.nodes[node.name]) {
+    const workTreeNode: WorkItemState<WorkNode, NodeState> = {
+      id: () => getWorkNodeId(node), // TODO lazy caching
       name: node.name,
       data: node,
-      status: environment.status.from(nodeId, node),
+      status: environment.status.from(node),
       needs: [],
       deps: [],
+      requiredBy: [],
+      state: new State<NodeState>({
+        type: 'pending',
+        stateKey: null,
+      }),
     }
-    workTree.nodes[nodeId] = workTreeNode
+    workTree.nodes[node.name] = workTreeNode
     appendWorkDependencies(workTree, task, workTreeNode, environment)
     appendWorkNeeds(workTree, task, workTreeNode, environment)
     return workTreeNode
   } else {
-    // TODO check for conflicts
-    return workTree.nodes[nodeId]
+    return workTree.nodes[node.name]
   }
 }
 
-function parseNode(cwd: string, task: ReferenceTask): ContainerWorkNode | LocalWorkNode {
+function parseNode(cwd: string, task: ReferenceTask, environment: Environment): ContainerWorkNode | LocalWorkNode {
+  const envs = buildEnvironmentVariables(task.envs, environment)
   const baseWorkNode: BaseWorkNode = {
-    envs: task.envs,
-    description: templateValue(task.schema.description || '', task.envs).trim(),
+    envs,
+    description: templateValue(task.schema.description || '', envs).trim(),
     name: task.relativeName,
     cwd,
-    cmds: parseWorkCommands(cwd, task.schema.cmds || [], task.envs),
-    src: parseWorkSource(cwd, task.schema.src, task.envs),
-    generates: parseWorkGenerate(cwd, task.schema, task.envs),
+    cmds: parseWorkCommands(cwd, task.schema.cmds || [], envs),
+    src: parseWorkSource(cwd, task.schema.src, envs),
+    generates: parseWorkGenerate(cwd, task.schema, envs),
     scope: task.scope,
     labels: task.labels,
     caching: task.schema.cache ?? null,
-    shell: task.schema.shell ? templateValue(task.schema.shell, task.envs) : '/bin/sh',
+    shell: task.schema.shell ? templateValue(task.schema.shell, envs) : '/bin/sh',
   }
 
   if (isBuildFileContainerTaskSchema(task.schema)) {
@@ -62,9 +69,9 @@ function parseNode(cwd: string, task: ReferenceTask): ContainerWorkNode | LocalW
       ...baseWorkNode,
       type: 'container-task',
       user: getContainerUser(),
-      image: templateValue(task.schema.image, task.envs),
-      mounts: parseWorkMounts(cwd, task.schema, task.envs),
-      volumes: parseWorkVolumes(cwd, task.schema.volumes), // TODO envs
+      image: templateValue(task.schema.image, envs),
+      mounts: parseWorkMounts(cwd, task.schema, envs),
+      volumes: parseWorkVolumes(cwd, task.schema.volumes, envs),
     }
   } else {
     return <LocalWorkNode>{

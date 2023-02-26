@@ -1,6 +1,6 @@
-import { SchedulerState } from './scheduler-state'
+import { WorkTree } from '../../planner/work-tree'
 
 export interface SchedulerResult {
-  state: SchedulerState
+  state: WorkTree
   success: boolean
 }

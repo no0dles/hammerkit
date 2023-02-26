@@ -35,11 +35,10 @@ describe('store/restore', () => {
     const execAfterRestore = await cli.runExec()
     await expectSuccessfulResult(execAfterRestore, environment)
 
-    const node = cli.node('example')
-    const nodeState = execAfterRestore.state.node[node.id]
-    expect(nodeState.type).toBe('completed')
-    if (nodeState.type === 'completed') {
-      expect(nodeState.cached).toBeTruthy()
+    const nodeState = execAfterRestore.state.nodes['example']
+    expect(nodeState.state.current.type).toBe('completed')
+    if (nodeState.state.current.type === 'completed') {
+      expect(nodeState.state.current.cached).toBeTruthy()
     }
   })
 
@@ -51,6 +50,8 @@ describe('store/restore', () => {
     const firstExecResult = await cli.runExec()
     await expectSuccessfulResult(firstExecResult, environment)
 
+    // TODO test store if path does not exists
+
     await cli.store(cacheStoragePath)
     await cli.clean()
     await cli.restore(cacheStoragePath)
@@ -58,11 +59,10 @@ describe('store/restore', () => {
     const execAfterRestore = await cli.runExec()
     await expectSuccessfulResult(execAfterRestore, environment)
 
-    const node = cli.node('example:docker')
-    const nodeState = execAfterRestore.state.node[node.id]
-    expect(nodeState.type).toBe('completed')
-    if (nodeState.type === 'completed') {
-      expect(nodeState.cached).toBeTruthy()
+    const nodeState = execAfterRestore.state.nodes['example:docker']
+    expect(nodeState.state.current.type).toBe('completed')
+    if (nodeState.state.current.type === 'completed') {
+      expect(nodeState.state.current.cached).toBeTruthy()
     }
   }, 90000)
 })

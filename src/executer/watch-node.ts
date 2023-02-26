@@ -1,48 +1,46 @@
 import { Environment } from './environment'
-import { getWorkNodeCacheStats, getCacheState } from '../optimizer/get-work-node-cache-stats'
+import { getCacheState, getWorkCacheStats } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
-import { State } from './state'
 import { Process } from './process'
 import { ProcessManager } from './process-manager'
-import { WorkItem } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
 import { WorkNode } from '../planner/work-node'
+import { CliExecOptions } from '../cli'
+import { NodeState } from './scheduler/node-state'
 
 export function watchNode(
-  node: WorkItem<WorkNode>,
-  state: State,
+  node: WorkItemState<WorkNode, NodeState>,
   processManager: ProcessManager,
-  environment: Environment
+  environment: Environment,
+  options: CliExecOptions
 ): Process {
   return async (abort: AbortController) => {
-    let currentState = await getWorkNodeCacheStats(node.data, environment)
+    let currentState = await getWorkCacheStats(node.data, environment)
 
     const debouncer = new Debouncer(async () => {
       if (environment.abortCtrl.signal.aborted) {
         return
       }
 
-      const newStats = await getWorkNodeCacheStats(node.data, environment)
+      const newStats = await getWorkCacheStats(node.data, environment)
       const currentFileState = getCacheState(
         node.status,
-        { name: node.name, caching: node.data.caching ?? state.current.cacheMethod },
+        { name: node.name, caching: node.data.caching ?? options.cacheDefault },
         currentState,
         newStats
       )
       currentState = newStats
 
-      const currentNodeState = state.current.node[node.id]
-      if (currentNodeState.stateKey === currentFileState.stateKey) {
+      if (node.state.current.stateKey === currentFileState.stateKey) {
         return
       }
 
       node.status.write('debug', `source changed for node ${node.name}, restart process`)
-      state.resetNode({
+      node.state.set({
         type: 'pending',
-        node: node,
-        itemId: node.id,
         stateKey: currentFileState.stateKey,
       })
     }, 100)

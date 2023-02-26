@@ -11,4 +11,4 @@ tasks:
     generates:
       - node_modules
     cmds:
-      - npm install
+      - npm ci

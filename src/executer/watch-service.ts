@@ -1,66 +1,65 @@
 import { Environment } from './environment'
-import { getServiceNodeCacheStats, getCacheState } from '../optimizer/get-work-node-cache-stats'
+import { getCacheState, getWorkCacheStats } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
-import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
-import { State } from './state'
 import { Process } from './process'
 import { ProcessManager } from './process-manager'
-import { WorkItem } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
+import { CliExecOptions } from '../cli'
+import { ServiceState } from './scheduler/service-state'
 
 export function watchService(
-  item: WorkItem<ContainerWorkService>,
-  state: State,
+  item: WorkItemState<ContainerWorkService, ServiceState>,
   processManager: ProcessManager,
-  environment: Environment
+  environment: Environment,
+  options: CliExecOptions
 ): Process {
   const service = item.data
   return async (abort: AbortController) => {
-    let currentState = await getServiceNodeCacheStats(service, environment)
+    let currentState = await getWorkCacheStats(service, environment)
 
     const debouncer = new Debouncer(async () => {
       if (environment.abortCtrl.signal.aborted) {
         return
       }
 
-      const newStats = await getServiceNodeCacheStats(service, environment)
+      const newStats = await getWorkCacheStats(service, environment)
       const currentFileState = getCacheState(
         item.status,
-        { name: service.name, caching: state.current.cacheMethod },
+        { name: service.name, caching: options.cacheDefault },
         currentState,
         newStats
       )
       currentState = newStats
 
-      const currentServiceState = state.current.service[item.id]
-      if (currentServiceState.stateKey === currentFileState.stateKey) {
+      if (item.state.current.stateKey === currentFileState.stateKey) {
         return
       }
 
-      item.status.write('debug', `source changed for service ${service.name}, restart process`)
-      state.patchService({
-        type: 'pending',
-        service: item,
-        itemId: item.id,
-        stateKey: currentFileState.stateKey,
-      })
+      if (item.state.current.type === 'running') {
+        item.status.write('debug', `source changed for service ${service.name}, restart process`)
+        // await item.state.restart() // TODO
+      } else if (item.state.current.type === 'error') {
+        // TODO other states
+        item.state.set({
+          type: 'pending',
+          stateKey: currentFileState.stateKey,
+        })
+      }
     }, 100)
 
     const fileWatchers: FileWatcher[] = []
-    const mounts: string[] = []
 
-    for (const mount of service.mounts) {
-      item.status.write('debug', `watch ${mount.localPath} mount`)
+    for (const src of service.src) {
+      item.status.write('debug', `watch ${src.absolutePath} src`)
 
-      const watcher = environment.file.watch(mount.localPath, async (fileName) => {
-        const absoluteFileName = join(mount.localPath, fileName)
-        item.status.write('debug', `source ${absoluteFileName} change for watched service ${service.name}`)
+      const watcher = environment.file.watch(src.absolutePath, async (fileName) => {
+        item.status.write('debug', `source ${fileName} change for watched service ${service.name}`)
         debouncer.bounce()
       })
 
-      mounts.push(mount.localPath)
       fileWatchers.push(watcher)
     }
 

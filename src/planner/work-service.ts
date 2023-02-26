@@ -8,9 +8,12 @@ import { WorkSource } from './work-source'
 import { WorkHealthcheck } from './work-healthcheck'
 import { WorkKubernetesSelector } from './work-kubernetes-selector'
 import { WorkCommand } from './work-command'
+import { CacheMethod } from '../parser/cache-method'
+import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 
 export interface BaseWorkService {
   name: string
+  cwd: string
   description: string | null
   ports: WorkPort[]
   labels: LabelValues
@@ -25,12 +28,13 @@ export const isContainerWorkService = (
 
 export interface ContainerWorkService extends BaseWorkService {
   type: 'container-service'
-  envs: { [key: string]: string }
+  envs: WorkEnvironmentVariables
   image: string
   cmd: WorkCommand | null
-  cwd: string | null
   //user: string | null
   src: WorkSource[]
+  continuous: boolean
+  caching: CacheMethod | null
   mounts: WorkMount[]
   volumes: WorkVolume[]
   healthcheck: WorkHealthcheck | null
@@ -40,5 +44,7 @@ export interface KubernetesWorkService extends BaseWorkService {
   type: 'kubernetes-service'
   context: string
   kubeconfig: string
+  caching: CacheMethod | null
   selector: WorkKubernetesSelector
+  src: WorkSource[]
 }

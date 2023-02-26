@@ -9,12 +9,11 @@ describe('execute', () => {
   it('should restart watching task if once completed', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'api' })
 
-    const node = cli.node('api')
     const exec = await cli.exec({ watch: true })
 
     let count = 0
-    exec.state.on((state) => {
-      if (state.node[node.id].type === 'completed') {
+    exec.state.on('test-status', (state) => {
+      if (state.nodes['api'].state.current.type === 'completed') {
         count++
         if (count === 1) {
           environment.file.appendFile(`${environment.cwd}/index.js`, '\n')
@@ -32,12 +31,11 @@ describe('execute', () => {
   it('should restart watching task if once failed', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'api_crashing' })
 
-    const node = cli.node('api_crashing')
     const exec = await cli.exec({ watch: true })
 
     let count = 0
-    exec.state.on((state) => {
-      if (state.node[node.id].type === 'crash') {
+    exec.state.on('test-status', (state) => {
+      if (state.nodes['api_crashing'].state.current.type === 'crash') {
         count++
         if (count === 1) {
           environment.file.appendFile(`${environment.cwd}/index.js`, '\n')

@@ -10,7 +10,7 @@ import { WorkItem } from './work-item'
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkNodeValidation> {
   const cycleNodes: WorkItem<WorkNode | WorkService>[] = []
 
-  for (const item of iterateWorkServices(workTree.services)) {
+  for (const item of iterateWorkServices(workTree)) {
     const service = item.data
     if (!service.description) {
       yield { type: 'warn', message: `missing description`, node: service }
@@ -44,18 +44,9 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
         }
       }
     }
-
-    // TODO
-    // for (const key of Object.keys(service.scope.unknownProps)) {
-    //   yield {
-    //     type: 'warn',
-    //     message: `${key} is an unknown configuration`,
-    //     node: service,
-    //   }
-    // }
   }
 
-  for (const item of iterateWorkNodes(workTree.nodes)) {
+  for (const item of iterateWorkNodes(workTree)) {
     const node = item.data
     if (!node.description) {
       yield { type: 'warn', message: `missing description`, node: node }
@@ -74,15 +65,6 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
         }
       }
     }
-
-    // TODO
-    // for (const key of Object.keys(node.plannedTask.buildTask.unknownProps)) {
-    //   yield {
-    //     type: 'warn',
-    //     message: `${key} is an unknown configuration`,
-    //     node: node,
-    //   }
-    // }
 
     if (cycleNodes.indexOf(item) === -1) {
       const cyclePath = hasDependencyCycle(item, [])

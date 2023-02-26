@@ -1,13 +1,13 @@
 import { Logger, LogMode } from '../logging/log-mode'
-import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { groupedLogger } from '../logging/grouped-logger'
 import { liveLogger } from '../logging/live-logger'
 import { interactiveLogger } from '../logging/interactive-logger'
 import { failNever } from '../utils/fail-never'
 import { Environment } from '../executer/environment'
-import { ReadonlyState } from '../executer/readonly-state'
+import { WorkTree } from '../planner/work-tree'
+import { State } from '../executer/state'
 
-export function getLogger(mode: LogMode, state: ReadonlyState<SchedulerState>, env: Environment): Logger {
+export function getLogger(mode: LogMode, state: State<WorkTree>, env: Environment): Logger {
   if (mode === 'grouped') {
     return groupedLogger(state, env)
   } else if (mode === 'live') {

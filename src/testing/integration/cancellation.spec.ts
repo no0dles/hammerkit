@@ -9,16 +9,17 @@ describe('cancellation', () => {
   async function testAbort(taskName: string, expectedState: string) {
     const { cli, environment } = await suite.setup({ taskName })
     const exec = await cli.exec({ logMode: 'live' })
-    const abortNode = Object.values(exec.state.current.node).find((n) => n.node.name.startsWith('long_'))
-    exec.processManager.on((evt) => {
-      if (evt.type === 'started' && evt.item.id === abortNode?.itemId && evt.processName === 'task') {
+    const abortNode = Object.values(exec.state.current.nodes).find((n) => n.data.name.startsWith('long_'))
+    expect_toBeDefined(abortNode)
+    exec.state.on('check-status', (evt) => {
+      if (evt.nodes[abortNode.name].state.current.type === 'running') {
         environment.abortCtrl.abort()
       }
     })
     const result = await exec.start()
     expect(result.success).toBeFalsy()
     if (abortNode) {
-      expect(result.state.node[abortNode.itemId].type).toEqual(expectedState)
+      expect(abortNode.state.current.type).toEqual(expectedState)
     } else {
       expect(abortNode).toBeDefined()
     }
@@ -41,3 +42,7 @@ describe('cancellation', () => {
     await testAbort('docker_cancel', 'canceled')
   })
 })
+
+function expect_toBeDefined<T>(arg: T): asserts arg is NonNullable<T> {
+  expect(arg).toBeDefined()
+}

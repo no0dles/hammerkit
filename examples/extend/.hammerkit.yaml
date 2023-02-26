@@ -2,27 +2,38 @@ tasks:
   base_env:
     envs:
       NAME: base
+    cmds:
+      - echo "base_env $NAME"
 
   base_dep:
     deps: [base_env]
+    cmds:
+      - echo "base_dep $NAME"
 
   extend_dep:
     extend: base_dep
     deps: [extend_env]
+    cmds:
+      - echo extend_dep
 
   base_container_task:
     image: alpine:latest
     envs:
       NAME: base
     cmds:
-      - echo base
+      - echo "base_container_task $NAME"
 
   extend_container_task:
     extend: base_container_task
     envs:
       NAME: override
+    cmds:
+      - echo "extend_container_task $NAME"
 
   extend_env:
     extend: base_env
     envs:
       KEEP: value
+    cmds:
+      - echo "extend_env $NAME"
+      - echo "extend_env $KEEP"

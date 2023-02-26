@@ -2,8 +2,14 @@ import { normalizePath } from './normalize-path'
 import { WorkVolume } from '../work-volume'
 import { BuildFileVolumeSchema } from '../../schema/build-file-volume-schema'
 import { getVolumeName } from './plan-work-volume'
+import { templateValue } from './template-value'
+import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
 
-export function parseWorkVolume(cwd: string, volume: BuildFileVolumeSchema): WorkVolume {
+export function parseWorkVolume(
+  cwd: string,
+  volume: BuildFileVolumeSchema,
+  envs: WorkEnvironmentVariables
+): WorkVolume {
   if (typeof volume === 'string') {
     const parts = volume.split(':')
     if (parts.length === 2) {
@@ -12,21 +18,26 @@ export function parseWorkVolume(cwd: string, volume: BuildFileVolumeSchema): Wor
       throw new Error(`invalid volume ${volume}`)
     }
   } else {
+    const path = templateValue(volume.path, envs)
     return {
-      containerPath: volume.path,
+      containerPath: path,
       export: volume.export ?? false,
-      name: volume.name ?? getVolumeName(volume.path),
+      name: volume.name ? templateValue(volume.name, envs) : getVolumeName(path),
       inherited: false,
       resetOnChange: volume.resetOnChange ?? false,
     }
   }
 }
 
-export function parseWorkVolumes(cwd: string, volumes: BuildFileVolumeSchema[] | null | undefined): WorkVolume[] {
+export function parseWorkVolumes(
+  cwd: string,
+  volumes: BuildFileVolumeSchema[] | null | undefined,
+  envs: WorkEnvironmentVariables
+): WorkVolume[] {
   if (!volumes) {
     return []
   }
-  return volumes.map((v) => parseWorkVolume(cwd, v))
+  return volumes.map((v) => parseWorkVolume(cwd, v, envs))
 }
 
 function parseVolume(cwd: string, name: string, containerPath: string): WorkVolume {

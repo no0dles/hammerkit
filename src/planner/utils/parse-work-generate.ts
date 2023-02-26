@@ -4,11 +4,12 @@ import { templateValue } from './template-value'
 import { BuildFileTaskSchema } from '../../schema/build-file-task-schema'
 import { BuildFileVolumeSchema } from '../../schema/build-file-volume-schema'
 import { getVolumeName } from './plan-work-volume'
+import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
 
 export function parseWorkGenerate(
   cwd: string,
   schema: BuildFileTaskSchema,
-  envs: { [key: string]: string }
+  envs: WorkEnvironmentVariables
 ): WorkNodeGenerate[] {
   if (!schema.generates) {
     return []

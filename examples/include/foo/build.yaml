@@ -1,7 +1,7 @@
 services:
   bardb:
     image: postgres:12-alpine
-    ports: [5432]
+    ports: [:5432]
 
 tasks:
   bar:

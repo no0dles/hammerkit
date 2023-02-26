@@ -27,8 +27,8 @@ export function matchesAnyLabel(filter: LabelValues, value: LabelValues): boolea
 
 export function appliesToLabels(labels: LabelValues, options: WorkLabelScope): boolean {
   return (
-    (!hasLabels(options.filterLabels) || matchesAnyLabel(options.filterLabels, labels)) &&
-    !matchesAnyLabel(options.excludeLabels, labels)
+    (!hasLabels(options.filterLabels ?? {}) || matchesAnyLabel(options.filterLabels ?? {}, labels)) &&
+    !matchesAnyLabel(options.excludeLabels ?? {}, labels)
   )
 }
 

@@ -6,6 +6,7 @@ import { LabelValues } from '../executer/label-values'
 import { WorkMount } from './work-mount'
 import { WorkVolume } from './work-volume'
 import { ParseScope } from '../schema/parse-context'
+import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 
 export type WorkNode = LocalWorkNode | ContainerWorkNode
 
@@ -15,7 +16,7 @@ export interface BaseWorkNode {
   description: string | null
   src: WorkSource[]
   generates: WorkNodeGenerate[]
-  envs: { [key: string]: string }
+  envs: WorkEnvironmentVariables
   cmds: WorkCommand[]
   scope: ParseScope
   labels: LabelValues

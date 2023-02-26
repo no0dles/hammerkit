@@ -1,26 +1,58 @@
 import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
-import { SchedulerState } from '../executer/scheduler/scheduler-state'
 import { NodeState } from '../executer/scheduler/node-state'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 import { Environment } from '../executer/environment'
+import { WorkTree } from '../planner/work-tree'
+import { WorkItemState } from '../planner/work-item'
+import { WorkNode } from '../planner/work-node'
+import { CliExecResult } from '../cli'
+import { getSchedulerExecuteResult } from '../executer/get-scheduler-execute-result'
+
+export async function expectSuccessfulExecution(exec: CliExecResult, env: Environment): Promise<void> {
+  const badResult = new Promise<SchedulerResult>((resolve) => {
+    exec.state.on('expected-status', (workTree) => {
+      if (env.abortCtrl.signal.aborted) {
+        return
+      }
+
+      const hasErrorNode = Object.values(workTree.nodes).some(
+        (n) => n.state.current.type === 'error' || n.state.current.type === 'crash'
+      )
+      const hasErrorService = Object.values(workTree.services).some(
+        (n) => n.state.current.type === 'error' || n.state.current.type === 'end'
+      )
+      if (!hasErrorNode && !hasErrorService) {
+        return
+      }
+
+      const stateResult = getSchedulerExecuteResult(workTree)
+      if (!stateResult.success) {
+        resolve(stateResult)
+        env.abortCtrl.abort()
+      }
+    })
+  })
+  const result = await Promise.race([badResult, exec.start()])
+  await expectSuccessfulResult(result, env)
+}
 
 export async function expectSuccessfulResult(result: SchedulerResult, env: Environment): Promise<void> {
   if (!result.success) {
-    for (const state of iterateWorkNodes(result.state.node)) {
-      if (state.type !== 'completed') {
+    for (const node of iterateWorkNodes(result.state)) {
+      if (node.state.current.type !== 'completed') {
         expect({
-          nodeId: state.itemId,
-          status: state.type,
-          updates: Array.from(state.node.status.read()).map((s) => `${s.level}: ${s.message}`),
-          logs: Array.from(state.node.status.logs()).map((l) => `${l.console}: ${l.message}`),
-          errorMessage: state.type === 'error' ? state.errorMessage : undefined,
-          needs: state.node.needs.map((need) => ({
+          nodeId: node.id,
+          status: node.state.current.type,
+          updates: Array.from(node.status.read()).map((s) => `${s.level}: ${s.message}`),
+          logs: Array.from(node.status.logs()).map((l) => `${l.console}: ${l.message}`),
+          errorMessage: node.state.current.type === 'error' ? node.state.current.errorMessage : undefined,
+          needs: node.needs.map((need) => ({
             name: need.name,
             updates: Array.from(need.service.status.read()).map((s) => `${s.level}: ${s.message}`),
             logs: Array.from(need.service.status.logs()).map((l) => `${l.console}: ${l.message}`),
           })),
         }).toEqual({
-          nodeId: state.itemId,
+          nodeId: node.id,
           status: 'completed',
         })
       }
@@ -33,8 +65,8 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
   expect(errorStatus).toEqual([])
 }
 
-function getNodeState(state: SchedulerState, name: string): NodeState {
-  const node = Object.values(state.node).find((n) => n.node.name === name)
+function getNodeState(state: WorkTree, name: string): WorkItemState<WorkNode, NodeState> {
+  const node = Object.values(state.nodes).find((n) => n.name === name)
   if (!node) {
     throw new Error(`could not find node ${name}`)
   }
@@ -48,7 +80,7 @@ export async function expectLog(
   message: string
 ): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = Array.from(state.node.status.logs()).map((n) => n.message)
+  const logs = Array.from(state.status.logs()).map((n) => n.message)
   expect(logs).toContain(message)
 }
 export async function expectContainsLog(
@@ -58,7 +90,7 @@ export async function expectContainsLog(
   message: string
 ): Promise<void> {
   const state = getNodeState(result.state, name)
-  const logs = state.node.status.logs()
+  const logs = state.status.logs()
   for (const log of logs) {
     if (log.message.indexOf(message) >= 0) {
       return

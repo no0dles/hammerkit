@@ -2,11 +2,12 @@ import { BuildFileTaskCommandSchema } from '../../schema/build-file-task-command
 import { WorkCommand } from '../work-command'
 import { join } from 'path'
 import { templateValue } from './template-value'
+import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
 
 export function parseWorkCommands(
   cwd: string,
   cmds: BuildFileTaskCommandSchema[],
-  envs: { [key: string]: string }
+  envs: WorkEnvironmentVariables
 ): WorkCommand[] {
   return cmds.map((cmd) => parseWorkCommand(cwd, cmd, envs))
 }
@@ -14,7 +15,7 @@ export function parseWorkCommands(
 export function parseWorkCommand(
   cwd: string,
   cmd: BuildFileTaskCommandSchema,
-  envs: { [key: string]: string }
+  envs: WorkEnvironmentVariables
 ): WorkCommand {
   if (typeof cmd === 'string') {
     return {
