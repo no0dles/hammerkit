@@ -19,9 +19,9 @@ import { deployKubernetes } from './kubernetes/schedule-kubernetes'
 import { createKubernetesInstances } from './kubernetes/kubernetes-instance'
 import { checkForLoop } from './executer/scheduler/check-for-loop'
 import { State } from './executer/state'
-import { executeWorkTree } from './executer/execute-work-task'
 import { getSchedulerExecuteResult } from './executer/get-scheduler-execute-result'
 import { resetWorkTree } from './executer/reset-work-tree'
+import { executeWorkTree } from './executer/execute-work-tree'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -93,6 +93,7 @@ export class Cli {
 
         const result = getSchedulerExecuteResult(workTree)
         await logger.complete(result, this.environment)
+
         return result
       },
     }

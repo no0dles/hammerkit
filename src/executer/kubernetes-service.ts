@@ -11,21 +11,21 @@ import { ServiceState } from './scheduler/service-state'
 export async function kubernetesService(
   service: WorkItemState<KubernetesWorkService, ServiceState>,
   stateKey: string,
-  abort: AbortController
+  abort: AbortSignal
 ): Promise<void> {
   do {
     await startForward(service, stateKey, service.status, abort)
-    if (!abort.signal.aborted) {
+    if (!abort.aborted) {
       await sleep(1000)
     }
-  } while (!abort.signal.aborted)
+  } while (!abort.aborted)
 }
 
 function startForward(
   item: WorkItemState<KubernetesWorkService, ServiceState>,
   stateKey: string,
   status: StatusScopedConsole,
-  abort: AbortController
+  abort: AbortSignal
 ) {
   const service = item.data
   const cmd = `kubectl port-forward ${service.selector.type}/${service.selector.name} --kubeconfig ${
@@ -70,7 +70,7 @@ function startForward(
     })
   })
 
-  listenOnAbort(abort.signal, () => {
+  listenOnAbort(abort, () => {
     ps.kill()
   })
 }

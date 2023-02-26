@@ -2,14 +2,20 @@ import { readCache } from '../../optimizer/read-work-node-cache'
 import { getStateKey, getWorkCacheStats } from '../../optimizer/get-work-node-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
-import { WorkItem } from '../../planner/work-item'
+import { isWorkTaskItem, WorkItem } from '../../planner/work-item'
 import { WorkNode } from '../../planner/work-node'
+import { WorkService } from '../../planner/work-service'
+
+export interface CacheState {
+  cached: boolean
+  stateKey: string
+}
 
 export async function checkCacheState(
-  item: WorkItem<WorkNode>,
+  item: WorkItem<WorkNode | WorkService>,
   defaultCacheMethod: CacheMethod,
   environment: Environment
-): Promise<{ cached: boolean; stateKey: string }> {
+): Promise<CacheState> {
   const caching = item.data.caching ?? defaultCacheMethod
 
   const currentStats = await getWorkCacheStats(item.data, environment)
@@ -20,15 +26,24 @@ export async function checkCacheState(
     return { cached: false, stateKey }
   }
 
-  const cache = await readCache(item, environment)
-  if (cache === null) {
-    item.status.write('debug', `no cache found for ${item.id()}`)
-    return { cached: false, stateKey }
+  if (isWorkTaskItem(item)) {
+    const cache = await readCache(item, environment)
+    if (cache === null) {
+      item.status.write('debug', `no cache found for ${item.id()}`)
+      return { cached: false, stateKey }
+    }
+
+    const cacheKey = getStateKey(cache, caching)
+    if (cacheKey === stateKey) {
+      return {
+        cached: true,
+        stateKey,
+      }
+    }
   }
 
-  const cacheKey = getStateKey(cache, caching)
   return {
-    cached: cacheKey === stateKey,
+    cached: false,
     stateKey,
   }
 }

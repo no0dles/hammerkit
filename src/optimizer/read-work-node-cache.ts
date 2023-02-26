@@ -3,6 +3,7 @@ import { getCacheStatsFile } from './get-cache-directory'
 import { WorkCacheFileStats } from './work-node-cache-stats'
 import { WorkItem } from '../planner/work-item'
 import { WorkNode } from '../planner/work-node'
+import { WorkService } from '../planner/work-service'
 
 export async function readCache(node: WorkItem<WorkNode>, context: Environment): Promise<WorkCacheFileStats | null> {
   const cacheFile = getCacheStatsFile(node.id())

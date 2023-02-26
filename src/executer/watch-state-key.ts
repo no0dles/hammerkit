@@ -2,30 +2,29 @@ import { WorkItem } from '../planner/work-item'
 import { WorkNode } from '../planner/work-node'
 import { WorkService } from '../planner/work-service'
 import { Environment } from './environment'
-import { getStateKey, getWorkCacheStats } from '../optimizer/get-work-node-cache-stats'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
 import { waitOnAbort } from '../utils/abort-event'
 import { CliExecOptions } from '../cli'
 import { State } from './state'
+import { CacheState, checkCacheState } from './scheduler/enqueue-next'
 
 export function watchStateKey(
   item: WorkItem<WorkNode | WorkService>,
-  stateKey: string,
+  cacheStats: CacheState,
   environment: Environment,
   options: CliExecOptions
-): State<string> {
-  const state = new State<string>(stateKey)
+): State<CacheState> {
+  const state = new State<CacheState>(cacheStats)
   const debouncer = new Debouncer(async () => {
     if (environment.abortCtrl.signal.aborted) {
       return
     }
 
-    const newStats = await getWorkCacheStats(item.data, environment)
-    const stateKey = getStateKey(newStats, item.data.caching ?? options.cacheDefault)
-    if (state.current !== stateKey) {
-      state.set(stateKey)
+    const cacheState = await checkCacheState(item, item.data.caching ?? options.cacheDefault, environment)
+    if (state.current.stateKey !== cacheState.stateKey) {
+      state.set(cacheState)
     }
   }, 100)
 

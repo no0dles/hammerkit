@@ -70,19 +70,19 @@ export async function dockerNode(
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
   environment: Environment,
-  abort: AbortController
+  abort: AbortSignal
 ): Promise<void> {
   item.status.write('info', `execute ${item.name} in container`)
 
   try {
     await prepareMounts(item, environment)
-    checkForAbort(abort.signal)
+    checkForAbort(abort)
 
     await pullImage(item, environment)
-    checkForAbort(abort.signal)
+    checkForAbort(abort)
 
     await prepareVolume(item, environment)
-    checkForAbort(abort.signal)
+    checkForAbort(abort)
 
     const containerOptions = buildCreateOptions(item, stateKey, serviceContainers)
     printContainerOptions(item.status, containerOptions)
@@ -91,7 +91,7 @@ export async function dockerNode(
       await setUserPermissions(item, container, environment)
 
       for (const cmd of item.data.cmds) {
-        checkForAbort(abort.signal)
+        checkForAbort(abort)
 
         item.status.write('info', `execute cmd "${cmd.cmd}" in container`)
 
@@ -103,7 +103,7 @@ export async function dockerNode(
           [item.data.shell, '-c', cmd.cmd],
           item.data.user,
           undefined,
-          abort.signal
+          abort
         )
 
         if (result.type === 'timeout') {

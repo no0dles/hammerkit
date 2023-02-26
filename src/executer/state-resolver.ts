@@ -64,7 +64,7 @@ export function awaitState<T>(
     })
     listenOnAbort(abort, () => {
       listener.close()
-      reject()
+      reject(new AbortError())
     })
   })
 }

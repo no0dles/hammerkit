@@ -22,19 +22,19 @@ export async function dockerService(
   serviceContainers: { [key: string]: ServiceDns },
   environment: Environment,
   options: CliExecOptions,
-  abort: AbortController
+  abort: AbortSignal
 ): Promise<void> {
   let container: Container | null = null
 
   try {
     await prepareMounts(item, environment)
-    checkForAbort(abort.signal)
+    checkForAbort(abort)
 
     await pullImage(item, environment)
-    checkForAbort(abort.signal)
+    checkForAbort(abort)
 
     await prepareVolume(item, environment)
-    checkForAbort(abort.signal)
+    checkForAbort(abort)
 
     const network = getNeedsNetwork(serviceContainers, item.needs)
 
@@ -88,11 +88,11 @@ export async function dockerService(
     } else {
       let ready = false
       do {
-        ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, abort.signal)
+        ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, abort)
         if (!ready) {
           await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
         }
-      } while (!ready && !abort.signal.aborted)
+      } while (!ready && !abort.aborted)
 
       if (ready) {
         item.state.set({
@@ -106,7 +106,7 @@ export async function dockerService(
 
     // TODO check if container crashes
     if (!options.daemon) {
-      await waitOnAbort(abort.signal)
+      await waitOnAbort(abort)
 
       item.state.set({
         type: 'end',

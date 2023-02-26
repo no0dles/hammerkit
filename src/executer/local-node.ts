@@ -11,18 +11,18 @@ export async function localNode(
   item: WorkItemState<LocalWorkNode, NodeState>,
   stateKey: string,
   environment: Environment,
-  abort: AbortController
+  abort: AbortSignal
 ): Promise<void> {
   item.status.write('info', `execute ${item.name} locally`)
 
   const envs = getEnvironmentVariables(item.data.envs)
   try {
     for (const cmd of item.data.cmds) {
-      checkForAbort(abort.signal)
+      checkForAbort(abort)
 
       item.status.write('info', `execute cmd "${cmd.cmd}" locally`)
 
-      const exitCode = await executeCommand(item.status, abort.signal, cmd.cwd, cmd.cmd, envs, environment)
+      const exitCode = await executeCommand(item.status, abort, cmd.cwd, cmd.cmd, envs, environment)
       if (exitCode !== 0) {
         item.state.set({
           type: 'crash',
