@@ -5,7 +5,6 @@ import { Environment } from './environment'
 import { Debouncer } from '../utils/debouncer'
 import { FileWatcher } from '../file/file-context'
 import { join } from 'path'
-import { waitOnAbort } from '../utils/abort-event'
 import { CliExecOptions } from '../cli'
 import { State } from './state'
 import { CacheState, checkCacheState } from './scheduler/enqueue-next'
@@ -16,7 +15,18 @@ export function watchStateKey(
   environment: Environment,
   options: CliExecOptions
 ): State<CacheState> {
-  const state = new State<CacheState>(cacheStats)
+  const fileWatchers: FileWatcher[] = []
+  const state = new State<CacheState>(
+    cacheStats,
+    () => {
+      for (const fileWatcher of fileWatchers) {
+        fileWatcher.close()
+      }
+
+      debouncer.clear()
+    },
+    []
+  )
   const debouncer = new Debouncer(async () => {
     if (environment.abortCtrl.signal.aborted) {
       return
@@ -27,8 +37,6 @@ export function watchStateKey(
       state.set(cacheState)
     }
   }, 100)
-
-  const fileWatchers: FileWatcher[] = []
 
   for (const src of item.data.src) {
     if (src.inherited) {
@@ -48,14 +56,6 @@ export function watchStateKey(
 
     fileWatchers.push(watcher)
   }
-
-  waitOnAbort(environment.abortCtrl.signal).then(() => {
-    for (const fileWatcher of fileWatchers) {
-      fileWatcher.close()
-    }
-
-    debouncer.clear()
-  })
 
   return state
 }

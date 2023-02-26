@@ -19,7 +19,7 @@ describe('process-manager', () => {
   }
 
   it('should complete on success', async () => {
-    const manager = new ProcessManager(new AbortController().signal, 0)
+    const manager = new ProcessManager(0)
 
     let called = false
     await manager.task(
@@ -36,7 +36,7 @@ describe('process-manager', () => {
   })
 
   it('should throw error', async () => {
-    const manager = new ProcessManager(new AbortController().signal, 0)
+    const manager = new ProcessManager(0)
 
     await expect(
       manager.task(
@@ -47,7 +47,7 @@ describe('process-manager', () => {
   })
 
   it('should not start more than worker count', async () => {
-    const manager = new ProcessManager(new AbortController().signal, 1)
+    const manager = new ProcessManager(1)
 
     let concurrencyCount = 0
 

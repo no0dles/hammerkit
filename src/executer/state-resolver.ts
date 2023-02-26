@@ -6,9 +6,10 @@ export function untilChanged<T>(key: string, state: State<T>, abort: AbortSignal
   return new Promise<T>((resolve, reject) => {
     const handle = state.on(key, (value) => {
       handle.close()
+      abortListener.close()
       resolve(value)
     })
-    listenOnAbort(abort, () => {
+    const abortListener = listenOnAbort(abort, () => {
       handle.close()
       reject(new AbortError())
     })
@@ -31,11 +32,12 @@ export function isState<T, R extends T>(
         return
       }
 
+      abortListener.close()
       resolve(value)
       listener.close()
     })
 
-    listenOnAbort(abort, () => {
+    const abortListener = listenOnAbort(abort, () => {
       listener.close()
       reject(new AbortError())
     })
@@ -60,9 +62,10 @@ export function awaitState<T>(
       }
 
       listener.close()
+      abortListener.close()
       resolve()
     })
-    listenOnAbort(abort, () => {
+    const abortListener = listenOnAbort(abort, () => {
       listener.close()
       reject(new AbortError())
     })

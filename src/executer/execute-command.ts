@@ -34,6 +34,8 @@ export async function executeCommand(
       reject(err)
     })
     ps.on('close', (code) => {
+      abortListener.close()
+
       if (abortSignal.aborted) {
         reject(new AbortError())
         return
@@ -42,7 +44,7 @@ export async function executeCommand(
       resolve(code ?? 0)
     })
 
-    listenOnAbort(abortSignal, () => {
+    const abortListener = listenOnAbort(abortSignal, () => {
       ps.kill()
     })
   })

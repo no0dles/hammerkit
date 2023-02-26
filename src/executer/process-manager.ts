@@ -1,4 +1,3 @@
-import { listenOnAbort } from '../utils/abort-event'
 import { ProcessItem } from './process-item'
 import { getErrorMessage } from '../log'
 import { WorkItem } from '../planner/work-item'
@@ -6,7 +5,6 @@ import { WorkNode } from '../planner/work-node'
 import { WorkService } from '../planner/work-service'
 
 interface PendingProcess {
-  abortController: AbortController
   factory: () => Promise<void>
   item: WorkItem<WorkService | WorkNode>
   resolve: () => void
@@ -17,20 +15,15 @@ export class ProcessManager {
   private processes: ProcessItem[] = []
   private pendingProcesses: PendingProcess[] = []
 
-  constructor(private abortSignal: AbortSignal, private workerLimit: number) {}
+  constructor(private workerLimit: number) {}
 
   task(item: WorkItem<WorkNode>, factory: () => Promise<void>): Promise<void> {
-    const abortController = new AbortController()
-    listenOnAbort(this.abortSignal, () => {
-      abortController.abort()
-    })
-
     return new Promise<void>((resolve, reject) => {
       const hasFreeWorker = this.workerLimit === 0 || this.workerLimit > this.processes.length
       if (hasFreeWorker) {
-        this.startProcess({ factory, item, abortController, resolve, reject })
+        this.startProcess({ factory, item, resolve, reject })
       } else {
-        this.pendingProcesses.push({ item, factory, abortController, resolve, reject })
+        this.pendingProcesses.push({ item, factory, resolve, reject })
       }
     })
   }

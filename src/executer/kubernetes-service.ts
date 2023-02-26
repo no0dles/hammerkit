@@ -66,11 +66,12 @@ function startForward(
         reason: 'crash',
         stateKey,
       })
+      abortListener.close()
       resolve()
     })
   })
 
-  listenOnAbort(abort, () => {
+  const abortListener = listenOnAbort(abort, () => {
     ps.kill()
   })
 }

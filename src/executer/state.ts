@@ -6,16 +6,23 @@ export interface StateHandle {
 
 export class State<T> {
   private listeners: { key: string; listener: StateListener<T> }[] = []
+  private handles: StateHandle[] = []
 
-  constructor(public current: Readonly<T>, private subStates: State<any>[] = []) {
+  constructor(
+    public current: Readonly<T>,
+    private onDestroy: () => void = () => {},
+    private subStates: State<any>[] = []
+  ) {
     this.attachToStores(subStates)
   }
 
   private attachToStores(subStates: State<any>[]) {
     for (const state of subStates) {
-      state.on('sub-state-forward', () => {
-        this.notifyListeners(this.current)
-      })
+      this.handles.push(
+        state.on('sub-state-forward', () => {
+          this.notifyListeners(this.current)
+        })
+      )
     }
   }
 
@@ -43,5 +50,12 @@ export class State<T> {
     for (const listener of [...this.listeners]) {
       listener.listener(evt)
     }
+  }
+
+  close() {
+    for (const handle of this.handles) {
+      handle.close()
+    }
+    this.onDestroy()
   }
 }

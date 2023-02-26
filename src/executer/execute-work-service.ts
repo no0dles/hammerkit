@@ -9,11 +9,7 @@ import {
   awaitRequirement,
   awaitRunningNeeds,
 } from './await-completed-dependencies'
-import { getStateKey, getWorkCacheStats } from '../optimizer/get-work-node-cache-stats'
-import { watchStateKey } from './watch-state-key'
-import { State } from './state'
-import { listenOnAbort } from '../utils/abort-event'
-import { AbortError, checkForAbort } from './abort'
+import { AbortError } from './abort'
 import { getServiceContainers } from './get-service-containers'
 import { dockerService } from './docker-service'
 import { kubernetesService } from './kubernetes-service'

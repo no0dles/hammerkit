@@ -49,7 +49,7 @@ export async function watchLoop(
     })
   }
 
-  listenOnAbort(environment.abortCtrl.signal, () => {
+  const abortListener = listenOnAbort(environment.abortCtrl.signal, () => {
     currentRun.abortController.abort()
   })
 
@@ -72,7 +72,7 @@ export async function watchLoop(
     }
 
     if (!watchMode) {
-      return
+      break
     }
 
     if (currentState.stateKey !== watchState.current.stateKey) {
@@ -82,4 +82,6 @@ export async function watchLoop(
     await untilChanged('watch-source-change', watchState, environment.abortCtrl.signal)
     work.status.write('debug', 'sources changed')
   } while (watchMode)
+
+  abortListener.close()
 }

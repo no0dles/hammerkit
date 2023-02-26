@@ -65,7 +65,7 @@ export async function execCommand(
   cmd: string[],
   user: string | null,
   timeout: number | undefined,
-  abort: AbortSignal | undefined
+  abort: AbortSignal
 ): Promise<ExecResult> {
   const abortController = new AbortController()
   const exec = await container.exec({
@@ -92,20 +92,18 @@ export async function execCommand(
   return new Promise<ExecResult>((resolve, reject) => {
     let resolved = false
 
-    if (abort) {
-      listenOnAbort(abort, () => {
-        if (resolved) {
-          return
-        }
+    const abortListener = listenOnAbort(abort, () => {
+      if (resolved) {
+        return
+      }
 
-        resolved = true
-        resolve({ type: 'canceled' })
-        abortController.abort()
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle)
-        }
-      })
-    }
+      resolved = true
+      resolve({ type: 'canceled' })
+      abortController.abort()
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle)
+      }
+    })
 
     awaitStream(status, stream)
       .then(() => {
@@ -118,6 +116,7 @@ export async function execCommand(
             return
           }
 
+          abortListener.close()
           resolve({ type: 'result', result })
           resolved = true
           abortController.abort()
@@ -134,6 +133,7 @@ export async function execCommand(
           return
         }
 
+        abortListener.close()
         resolve({ type: 'timeout' })
         resolved = true
         abortController.abort()

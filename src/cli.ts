@@ -61,11 +61,11 @@ export class Cli {
   constructor(private workTree: WorkTree, private environment: Environment) {}
 
   setup(type: ExecuteKind, options?: Partial<CliExecOptions>): CliExecResult {
-    const processManager = new ProcessManager(this.environment.abortCtrl.signal, options?.workers ?? 0)
+    const processManager = new ProcessManager(options?.workers ?? 0)
     const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
 
     const workTree = resetWorkTree(this.workTree)
-    const processWorkTree = new State<WorkTree>(workTree, [
+    const processWorkTree = new State<WorkTree>(workTree, () => {}, [
       ...Object.values(workTree.services).map((s) => s.state),
       ...Object.values(workTree.nodes).map((s) => s.state),
     ])

@@ -12,6 +12,7 @@ import { consoleContext } from '../log'
 
 interface Test {
   cwd: string
+  close(): void
 }
 
 export class ExampleTestSuite implements TestSuite {
@@ -29,6 +30,7 @@ export class ExampleTestSuite implements TestSuite {
 
   async close(): Promise<void> {
     for (const test of this.tests) {
+      test.close()
       await this.file.remove(test.cwd)
     }
   }
@@ -69,6 +71,9 @@ export class ExampleTestSuite implements TestSuite {
 
     this.tests.push({
       cwd: this.path,
+      close() {
+        environment.abortCtrl.abort()
+      },
     })
 
     const cli = await createCli(fileName, environment, scope)
