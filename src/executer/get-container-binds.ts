@@ -1,8 +1,8 @@
 import { WorkItem } from '../planner/work-item'
-import { ContainerWorkNode } from '../planner/work-node'
+import { ContainerWorkTask } from '../planner/work-task'
 import { ContainerBind } from './container-bind'
 
-export function getContainerBinds(item: WorkItem<ContainerWorkNode>): ContainerBind[] {
+export function getContainerBinds(item: WorkItem<ContainerWorkTask>): ContainerBind[] {
   const items: ContainerBind[] = [
     ...item.data.mounts,
     ...item.data.volumes.map((v) => ({ localPath: v.name, containerPath: v.containerPath })),

@@ -3,12 +3,12 @@ import { AbortError, checkForAbort } from './abort'
 import { executeCommand } from './execute-command'
 import { getErrorMessage } from '../log'
 import { WorkItemState } from '../planner/work-item'
-import { LocalWorkNode } from '../planner/work-node'
-import { NodeState } from './scheduler/node-state'
+import { LocalWorkTask } from '../planner/work-task'
+import { TaskState } from './scheduler/task-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 
-export async function localNode(
-  item: WorkItemState<LocalWorkNode, NodeState>,
+export async function localTask(
+  item: WorkItemState<LocalWorkTask, TaskState>,
   stateKey: string,
   environment: Environment,
   abort: AbortSignal

@@ -16,7 +16,7 @@ describe('reference', () => {
 
   it('should list task with references tasks nested', async () => {
     const { cli } = await suite.setup({})
-    const workNodes = cli.ls()
-    expect(workNodes.map((t) => t.item.name)).toEqual(['foo:bardb', 'example', 'foo:bar', 'foo:sub:sub'])
+    const workItems = cli.ls()
+    expect(workItems.map((t) => t.item.name)).toEqual(['foo:bardb', 'example', 'foo:bar', 'foo:sub:sub'])
   })
 })

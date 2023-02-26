@@ -27,7 +27,7 @@ export async function ensureKubernetesServiceExists(
     spec: {
       type: 'ClusterIP',
       selector: {
-        'hammerkit.dev/id': service.id(),
+        'hammerkit.dev/id': service.cacheId(),
       },
       ports: service.data.ports.map((port) => ({
         port: port.hostPort ?? port.containerPort,

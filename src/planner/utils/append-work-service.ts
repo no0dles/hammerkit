@@ -17,6 +17,7 @@ import { WorkItemState } from '../work-item'
 import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
 import { ServiceState } from '../../executer/scheduler/service-state'
 import { State } from '../../executer/state'
+import { lazyResolver } from '../../executer/lazy-resolver'
 
 export function appendWorkService(
   workTree: WorkTree,
@@ -26,7 +27,7 @@ export function appendWorkService(
   const workService = parseService(service, environment)
   if (!workTree.services[workService.name]) {
     const workTreeService: WorkItemState<WorkService, ServiceState> = {
-      id: () => getWorkServiceId(workService), // TODO lazy caching
+      cacheId: lazyResolver(() => getWorkServiceId(workService)),
       name: workService.name,
       data: workService,
       status: environment.status.from(workService),

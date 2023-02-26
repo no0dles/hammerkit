@@ -6,7 +6,7 @@ function normalizePath(val: string): string {
   return val.split(posix.sep).join(sep)
 }
 
-describe('parse-work-node-mount', () => {
+describe('parse-work-mount', () => {
   it('should parse "subdir"', () => {
     expect(parseWorkMount('/home/test', 'subdir')).toMatchObject({
       localPath: normalizePath('/home/test/subdir'),

@@ -9,10 +9,10 @@ describe('cancellation', () => {
   async function testAbort(taskName: string, expectedState: string) {
     const { cli, environment } = await suite.setup({ taskName })
     const exec = await cli.exec({ logMode: 'live' })
-    const abortNode = Object.values(exec.state.current.nodes).find((n) => n.data.name.startsWith('long_'))
+    const abortNode = Object.values(exec.state.current.tasks).find((n) => n.data.name.startsWith('long_'))
     expect_toBeDefined(abortNode)
     exec.state.on('check-status', (evt) => {
-      if (evt.nodes[abortNode.name].state.current.type === 'running') {
+      if (evt.tasks[abortNode.name].state.current.type === 'running') {
         environment.abortCtrl.abort()
       }
     })

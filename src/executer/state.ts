@@ -8,12 +8,10 @@ export class State<T> {
   private listeners: { key: string; listener: StateListener<T> }[] = []
   private handles: StateHandle[] = []
 
-  constructor(
-    public current: Readonly<T>,
-    private onDestroy: () => void = () => {},
-    private subStates: State<any>[] = []
-  ) {
-    this.attachToStores(subStates)
+  constructor(public current: Readonly<T>, private options?: { onDestroy?: () => void; subStates?: State<any>[] }) {
+    if (this.options?.subStates) {
+      this.attachToStores(this.options.subStates)
+    }
   }
 
   private attachToStores(subStates: State<any>[]) {
@@ -56,6 +54,8 @@ export class State<T> {
     for (const handle of this.handles) {
       handle.close()
     }
-    this.onDestroy()
+    if (this.options?.onDestroy) {
+      this.options?.onDestroy()
+    }
   }
 }

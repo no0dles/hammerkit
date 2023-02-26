@@ -1,17 +1,17 @@
 import { ReferenceService, ReferenceTask } from '../../schema/reference-parser'
-import { WorkNode } from '../work-node'
+import { WorkTask } from '../work-task'
 import { WorkService } from '../work-service'
 import { WorkTree } from '../work-tree'
 import { appendWorkService } from './append-work-service'
 import { Environment } from '../../executer/environment'
 import { WorkItemState } from '../work-item'
-import { NodeState } from '../../executer/scheduler/node-state'
+import { TaskState } from '../../executer/scheduler/task-state'
 import { ServiceState } from '../../executer/scheduler/service-state'
 
 export function appendWorkNeeds(
   workTree: WorkTree,
   referenced: ReferenceService | ReferenceTask,
-  item: WorkItemState<WorkNode, NodeState> | WorkItemState<WorkService, ServiceState>,
+  item: WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>,
   environment: Environment
 ) {
   for (const need of referenced.needs) {

@@ -43,14 +43,14 @@ export async function ensureKubernetesDeploymentExists(
     spec: {
       selector: {
         matchLabels: {
-          'hammerkit.dev/id': service.id(),
+          'hammerkit.dev/id': service.cacheId(),
         },
       },
       replicas: 1,
       template: {
         metadata: {
           labels: {
-            'hammerkit.dev/id': service.id(),
+            'hammerkit.dev/id': service.cacheId(),
           },
         },
         spec: {

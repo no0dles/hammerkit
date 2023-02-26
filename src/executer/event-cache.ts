@@ -1,5 +1,5 @@
 import { Environment } from './environment'
-import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
+import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { dirname, join, relative, sep } from 'path'
 import { moveFiles } from '../file/move-files'
@@ -7,42 +7,42 @@ import { convertToPosixPath } from './execute-docker'
 import { existsVolume, removeVolume } from './get-docker-executor'
 import { WorkTree } from '../planner/work-tree'
 import { create, extract } from 'tar'
-import { ContainerWorkNode, LocalWorkNode, WorkNode } from '../planner/work-node'
+import { ContainerWorkTask, LocalWorkTask, WorkTask } from '../planner/work-task'
 import { usingContainer } from '../docker/using-container'
 import { CliCleanOptions } from '../cli'
 import { getVolumeName } from '../planner/utils/plan-work-volume'
 import { isContainerWorkItem, isLocalWorkTaskItem, WorkItem } from '../planner/work-item'
 
 export async function restoreCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
-  for (const node of iterateWorkNodes(workTree)) {
-    const cachePath = getCacheDirectory(node.id())
-    const sourceCacheDir = join(path, node.id())
+  for (const task of iterateWorkTasks(workTree)) {
+    const cachePath = getCacheDirectory(task.cacheId())
+    const sourceCacheDir = join(path, task.cacheId())
 
-    await moveFiles(node, environment, function* () {
+    await moveFiles(task, environment, function* () {
       yield { from: join(sourceCacheDir, 'stats.json'), to: join(cachePath, 'stats.json') }
       yield { from: join(sourceCacheDir, 'description.json'), to: join(cachePath, 'description.json') }
     })
 
-    if (isContainerWorkItem(node)) {
-      await restoreContainer(environment, node, sourceCacheDir)
-    } else if (isLocalWorkTaskItem(node)) {
-      await restoreLocal(environment, node.data, sourceCacheDir)
+    if (isContainerWorkItem(task)) {
+      await restoreContainer(environment, task, sourceCacheDir)
+    } else if (isLocalWorkTaskItem(task)) {
+      await restoreLocal(environment, task.data, sourceCacheDir)
     }
   }
 }
 
-async function restoreLocal(environment: Environment, node: LocalWorkNode, path: string) {
-  for (const generate of getGenerates(node, path)) {
+async function restoreLocal(environment: Environment, task: LocalWorkTask, path: string) {
+  for (const generate of getGenerates(task, path)) {
     if (await environment.file.exists(generate.filename)) {
       await extract({
         file: generate.filename,
-        cwd: node.cwd,
+        cwd: task.cwd,
       })
     }
   }
 }
 
-async function restoreContainer(environment: Environment, item: WorkItem<ContainerWorkNode>, path: string) {
+async function restoreContainer(environment: Environment, item: WorkItem<ContainerWorkTask>, path: string) {
   await usingContainer(
     environment,
     item,
@@ -54,7 +54,7 @@ async function restoreContainer(environment: Environment, item: WorkItem<Contain
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
+        'hammerkit-id': item.cacheId(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
@@ -75,10 +75,10 @@ async function restoreContainer(environment: Environment, item: WorkItem<Contain
   )
 }
 
-function* getGenerates(node: WorkNode, path: string) {
-  const generates = node.generates.filter((g) => !g.inherited)
+function* getGenerates(task: WorkTask, path: string) {
+  const generates = task.generates.filter((g) => !g.inherited)
   for (const generate of generates) {
-    const generateId = relative(node.cwd, generate.path).split(sep).join('-')
+    const generateId = relative(task.cwd, generate.path).split(sep).join('-')
     yield {
       filename: join(path, generateId + '-generates.tgz'),
       path: generate.path,
@@ -86,7 +86,7 @@ function* getGenerates(node: WorkNode, path: string) {
   }
 }
 
-async function archiveContainer(environment: Environment, item: WorkItem<ContainerWorkNode>, path: string) {
+async function archiveContainer(environment: Environment, item: WorkItem<ContainerWorkTask>, path: string) {
   await usingContainer(
     environment,
     item,
@@ -98,7 +98,7 @@ async function archiveContainer(environment: Environment, item: WorkItem<Contain
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
+        'hammerkit-id': item.cacheId(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
@@ -126,35 +126,35 @@ async function archiveContainer(environment: Environment, item: WorkItem<Contain
   )
 }
 
-async function archiveLocal(environment: Environment, node: WorkItem<LocalWorkNode>, path: string) {
-  for (const generatedArchive of getGenerates(node.data, path)) {
+async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTask>, path: string) {
+  for (const generatedArchive of getGenerates(task.data, path)) {
     await environment.file.writeStream(
       generatedArchive.filename,
       create(
         {
-          cwd: node.data.cwd,
+          cwd: task.data.cwd,
           gzip: true,
         },
-        [relative(node.data.cwd, generatedArchive.path)]
+        [relative(task.data.cwd, generatedArchive.path)]
       )
     )
   }
 }
 
 export async function storeCache(path: string, workTree: WorkTree, environment: Environment): Promise<void> {
-  for (const node of iterateWorkNodes(workTree)) {
-    const cachePath = getCacheDirectory(node.id())
-    const sourceCacheDir = join(path, node.id())
+  for (const task of iterateWorkTasks(workTree)) {
+    const cachePath = getCacheDirectory(task.cacheId())
+    const sourceCacheDir = join(path, task.cacheId())
 
-    await moveFiles(node, environment, function* () {
+    await moveFiles(task, environment, function* () {
       yield { from: join(cachePath, 'stats.json'), to: join(sourceCacheDir, 'stats.json') }
       yield { from: join(cachePath, 'description.json'), to: join(sourceCacheDir, 'description.json') }
     })
 
-    if (isContainerWorkItem(node)) {
-      await archiveContainer(environment, node, sourceCacheDir)
-    } else if (isLocalWorkTaskItem(node)) {
-      await archiveLocal(environment, node, sourceCacheDir)
+    if (isContainerWorkItem(task)) {
+      await archiveContainer(environment, task, sourceCacheDir)
+    } else if (isLocalWorkTaskItem(task)) {
+      await archiveLocal(environment, task, sourceCacheDir)
     }
   }
 }
@@ -164,8 +164,8 @@ export async function cleanCache(
   environment: Environment,
   options: CliCleanOptions
 ): Promise<void> {
-  for (const node of iterateWorkNodes(workTree)) {
-    for (const generate of node.data.generates) {
+  for (const task of iterateWorkTasks(workTree)) {
+    for (const generate of task.data.generates) {
       if (generate.inherited) {
         continue
       }
@@ -173,18 +173,18 @@ export async function cleanCache(
       const volumeName = getVolumeName(generate.path)
       const volumeExists = await existsVolume(environment, volumeName)
       if (volumeExists) {
-        await removeVolume(environment, node.status, volumeName)
+        await removeVolume(environment, task.status, volumeName)
       } else {
-        node.status.write('info', `generate ${generate} has no volume ${volumeName}`)
+        task.status.write('info', `generate ${generate} has no volume ${volumeName}`)
       }
 
-      node.status.write('info', `remove local directory ${generate.path}`)
+      task.status.write('info', `remove local directory ${generate.path}`)
       await environment.file.remove(generate.path)
     }
 
-    const cachePath = getCacheDirectory(node.id())
+    const cachePath = getCacheDirectory(task.cacheId())
     if (await environment.file.exists(cachePath)) {
-      node.status.write('info', `remove cache ${cachePath}`)
+      task.status.write('info', `remove cache ${cachePath}`)
       await environment.file.remove(cachePath)
     }
   }

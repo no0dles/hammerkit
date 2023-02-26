@@ -30,7 +30,7 @@ export async function ensurePersistentData(
       namespace: env.namespace,
       name,
       labels: {
-        'hammerkit.dev/id': service.id(),
+        'hammerkit.dev/id': service.cacheId(),
       },
       annotations: {
         'hammerkit.dev/version': getVersion(),

@@ -8,9 +8,9 @@ import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './e
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
-import { ContainerWorkNode } from '../planner/work-node'
+import { ContainerWorkTask } from '../planner/work-task'
 import { WorkItem, WorkItemNeed, WorkItemState } from '../planner/work-item'
-import { NodeState } from './scheduler/node-state'
+import { TaskState } from './scheduler/task-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { getContainerBinds } from './get-container-binds'
 
@@ -34,7 +34,7 @@ export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }
 }
 
 function buildCreateOptions(
-  item: WorkItem<ContainerWorkNode>,
+  item: WorkItem<ContainerWorkTask>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns }
 ): ContainerCreateOptions {
@@ -51,7 +51,7 @@ function buildCreateOptions(
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
-      'hammerkit-id': item.id(),
+      'hammerkit-id': item.cacheId(),
       'hammerkit-pid': process.pid.toString(),
       'hammerkit-type': 'task',
       'hammerkit-state': stateKey,
@@ -65,8 +65,8 @@ function buildCreateOptions(
   }
 }
 
-export async function dockerNode(
-  item: WorkItemState<ContainerWorkNode, NodeState>,
+export async function dockerTask(
+  item: WorkItemState<ContainerWorkTask, TaskState>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
   environment: Environment,

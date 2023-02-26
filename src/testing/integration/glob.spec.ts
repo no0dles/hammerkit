@@ -13,11 +13,11 @@ describe('glob', () => {
     const result1 = await cli.runExec()
     await expectSuccessfulResult(result1, environment)
 
-    const nodeState1 = result1.state.nodes['example']
+    const taskState1 = result1.state.tasks['example']
 
-    expect(nodeState1.state.current.type).toEqual('completed')
-    if (nodeState1.state.current.type === 'completed') {
-      expect(nodeState1.state.current.duration).toBeGreaterThanOrEqual(100)
+    expect(taskState1.state.current.type).toEqual('completed')
+    if (taskState1.state.current.type === 'completed') {
+      expect(taskState1.state.current.duration).toBeGreaterThanOrEqual(100)
     }
 
     if (action) {
@@ -27,14 +27,14 @@ describe('glob', () => {
     const result2 = await cli.runExec()
     await expectSuccessfulResult(result2, environment)
 
-    const nodeState2 = result2.state.nodes['example']
+    const taskState2 = result2.state.tasks['example']
 
-    expect(nodeState2.state.current.type).toEqual('completed')
-    if (nodeState2.state.current.type === 'completed') {
+    expect(taskState2.state.current.type).toEqual('completed')
+    if (taskState2.state.current.type === 'completed') {
       if (expectInvalidate) {
-        expect(nodeState2.state.current.cached).toBeFalsy()
+        expect(taskState2.state.current.cached).toBeFalsy()
       } else {
-        expect(nodeState2.state.current.cached).toBeTruthy()
+        expect(taskState2.state.current.cached).toBeTruthy()
       }
     }
   }

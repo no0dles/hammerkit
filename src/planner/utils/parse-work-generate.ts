@@ -1,4 +1,4 @@
-import { WorkNodeGenerate } from '../work-node'
+import { WorkTaskGenerate } from '../work-task'
 import { extname, join } from 'path'
 import { templateValue } from './template-value'
 import { BuildFileTaskSchema } from '../../schema/build-file-task-schema'
@@ -10,7 +10,7 @@ export function parseWorkGenerate(
   cwd: string,
   schema: BuildFileTaskSchema,
   envs: WorkEnvironmentVariables
-): WorkNodeGenerate[] {
+): WorkTaskGenerate[] {
   if (!schema.generates) {
     return []
   }

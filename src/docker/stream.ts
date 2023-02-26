@@ -1,6 +1,6 @@
 import { Duplex } from 'stream'
 import { getLogs } from '../log'
-import { ConsoleType, StatusScopedConsole } from '../planner/work-node-status'
+import { ConsoleType, StatusScopedConsole } from '../planner/work-item-status'
 
 export async function awaitStream(status: StatusScopedConsole, stream: Duplex): Promise<void> {
   return new Promise<void>((resolve, reject) => {

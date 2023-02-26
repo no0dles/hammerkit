@@ -10,13 +10,13 @@ export function hasLabels(labels: LabelValues) {
 
 export function matchesAnyLabel(filter: LabelValues, value: LabelValues): boolean {
   for (const [labelKey, filterValues] of Object.entries(filter)) {
-    const nodeValues = value[labelKey]
-    if (nodeValues === null || nodeValues === undefined || nodeValues.length === 0) {
+    const labelValues = value[labelKey]
+    if (labelValues === null || labelValues === undefined || labelValues.length === 0) {
       continue
     }
 
-    for (const nodeValue of nodeValues) {
-      if (filterValues.indexOf(nodeValue) >= 0) {
+    for (const labelValue of labelValues) {
+      if (filterValues.indexOf(labelValue) >= 0) {
         return true
       }
     }

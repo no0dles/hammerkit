@@ -13,7 +13,7 @@ describe('execute', () => {
 
     let count = 0
     exec.state.on('test-status', (state) => {
-      if (state.nodes['api'].state.current.type === 'completed') {
+      if (state.tasks['api'].state.current.type === 'completed') {
         count++
         if (count === 1) {
           environment.file.appendFile(`${environment.cwd}/index.js`, '\n')
@@ -35,7 +35,7 @@ describe('execute', () => {
 
     let count = 0
     exec.state.on('test-status', (state) => {
-      if (state.nodes['api_crashing'].state.current.type === 'crash') {
+      if (state.tasks['api_crashing'].state.current.type === 'crash') {
         count++
         if (count === 1) {
           environment.file.appendFile(`${environment.cwd}/index.js`, '\n')

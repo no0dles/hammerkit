@@ -2,7 +2,7 @@ import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { dirname } from 'path'
 import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
 import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMount'
-import { isContainerWorkNode, WorkNode } from '../planner/work-node'
+import { isContainerWorkTask, WorkTask } from '../planner/work-task'
 import { V1Container } from '@kubernetes/client-node'
 import { WorkItem } from '../planner/work-item'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
@@ -25,19 +25,19 @@ export function getVolumeName(service: WorkService, containerPath: string) {
   }
 }
 
-export function getContainer(node: WorkNode, volumes: KubernetesServiceVolume[]): V1Container[] {
-  if (!isContainerWorkNode(node)) {
-    throw new Error('not supported local node')
+export function getContainer(task: WorkTask, volumes: KubernetesServiceVolume[]): V1Container[] {
+  if (!isContainerWorkTask(task)) {
+    throw new Error('not supported local task')
   }
 
-  const envs = getEnvironmentVariables(node.envs)
-  return node.cmds.map<V1Container>((cmd, index) => ({
-    name: node.name.replace(/:/, '-') + '-' + index,
+  const envs = getEnvironmentVariables(task.envs)
+  return task.cmds.map<V1Container>((cmd, index) => ({
+    name: task.name.replace(/:/, '-') + '-' + index,
     env: Object.entries(envs).map(([key, value]) => ({
       name: key,
       value,
     })),
-    image: node.image,
+    image: task.image,
     command: [cmd.parsed.command],
     args: cmd.parsed.args,
     workingDir: cmd.cwd,
@@ -91,7 +91,7 @@ export function getServiceVolumes(service: WorkItem<ContainerWorkService>): Kube
 
   // TODO check if needed, dep mounts should be inherited
   for (const dep of service.deps) {
-    if (isContainerWorkNode(dep.data)) {
+    if (isContainerWorkTask(dep.data)) {
       for (const mount of dep.data.mounts) {
         const volume = appendVolume(service.data, volumes, mount.containerPath)
         if (volume.localPaths.indexOf(mount.localPath) === -1) {

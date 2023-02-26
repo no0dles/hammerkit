@@ -20,21 +20,21 @@ describe('local', () => {
     expectNodes(cli.ls(), ['foo', 'base'])
   })
 
-  it('should exclude foo labeled nodes', async () => {
+  it('should exclude foo labeled tasks', async () => {
     const { cli } = await suite.setup({
       excludeLabels: { app: ['foo'] },
     })
     expectNodes(cli.ls(), ['bar', 'base'])
   })
 
-  it('should exclude base labeled nodes', async () => {
+  it('should exclude base labeled tasks', async () => {
     const { cli } = await suite.setup({
       excludeLabels: { app: ['base'] },
     })
     expectNodes(cli.ls(), [])
   })
 
-  it('should run nodes with label app=bar or app=foo', async () => {
+  it('should run tasks with label app=bar or app=foo', async () => {
     const { cli } = await suite.setup({
       filterLabels: { app: ['foo', 'bar'] },
     })
@@ -42,7 +42,7 @@ describe('local', () => {
   })
 })
 
-function expectNodes(nodes: CliItem[], expectedNodes: string[]) {
-  const nodeNames = Object.values(nodes).map((n) => n.item.name)
-  expect(nodeNames).toIncludeSameMembers(expectedNodes)
+function expectNodes(items: CliItem[], expectedNames: string[]) {
+  const itemNames = items.map((n) => n.item.name)
+  expect(itemNames).toIncludeSameMembers(expectedNames)
 }

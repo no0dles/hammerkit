@@ -8,14 +8,14 @@ import { WorkVolume } from './work-volume'
 import { ParseScope } from '../schema/parse-context'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 
-export type WorkNode = LocalWorkNode | ContainerWorkNode
+export type WorkTask = LocalWorkTask | ContainerWorkTask
 
-export interface BaseWorkNode {
+export interface BaseWorkTask {
   name: string
   cwd: string
   description: string | null
   src: WorkSource[]
-  generates: WorkNodeGenerate[]
+  generates: WorkTaskGenerate[]
   envs: WorkEnvironmentVariables
   cmds: WorkCommand[]
   scope: ParseScope
@@ -24,7 +24,7 @@ export interface BaseWorkNode {
   caching: CacheMethod | null
 }
 
-export interface WorkNodeGenerate {
+export interface WorkTaskGenerate {
   path: string
   volumeName: string
   inherited: boolean
@@ -33,11 +33,11 @@ export interface WorkNodeGenerate {
   isFile: boolean
 }
 
-export interface LocalWorkNode extends BaseWorkNode {
+export interface LocalWorkTask extends BaseWorkTask {
   type: 'local-task'
 }
 
-export interface ContainerWorkNode extends BaseWorkNode {
+export interface ContainerWorkTask extends BaseWorkTask {
   type: 'container-task'
   image: string
   user: string | null
@@ -45,7 +45,7 @@ export interface ContainerWorkNode extends BaseWorkNode {
   volumes: WorkVolume[]
 }
 
-export const isContainerWorkNode = (val: WorkNode | WorkService): val is ContainerWorkNode =>
+export const isContainerWorkTask = (val: WorkTask | WorkService): val is ContainerWorkTask =>
   val.type === 'container-task'
-export const isWorkNode = (val: WorkNode | WorkService): val is WorkNode =>
+export const isWorkTask = (val: WorkTask | WorkService): val is WorkTask =>
   val.type === 'container-task' || val.type === 'local-task'

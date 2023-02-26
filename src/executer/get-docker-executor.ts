@@ -1,6 +1,6 @@
 import { VolumeInspectInfo } from 'dockerode'
 import { Environment } from './environment'
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 import { getErrorMessage } from '../log'
 
 export async function existsVolume(environment: Environment, volumeName: string): Promise<VolumeInspectInfo | false> {

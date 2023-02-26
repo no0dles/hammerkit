@@ -1,8 +1,8 @@
 import { platform } from 'os'
-import { WorkNode } from '../planner/work-node'
+import { WorkTask } from '../planner/work-task'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 
-export interface WorkNodeCacheDescription {
+export interface WorkTaskCacheDescription {
   cwd?: string
   deps?: string[]
   src?: string[]
@@ -15,7 +15,7 @@ export interface WorkNodeCacheDescription {
   platform?: string
 }
 
-export function getWorkNodeCacheDescription(task: WorkNode): WorkNodeCacheDescription {
+export function getWorkTaskCacheDescription(task: WorkTask): WorkTaskCacheDescription {
   const envs = getEnvironmentVariables(task.envs)
   return {
     shell: task.shell ?? undefined,

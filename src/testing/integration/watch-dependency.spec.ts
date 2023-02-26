@@ -7,13 +7,13 @@ describe('watch-dependency', () => {
 
   it('should run watch task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'third' })
-    const thirdNode = cli.node('third')
+    const thirdNode = cli.task('third')
     const exec = await cli.exec({ watch: true })
 
     let content = ''
     let changedStateKey = ''
     exec.state.on('test-status', async (evt) => {
-      const currentState = evt.nodes[thirdNode.name].state.current
+      const currentState = evt.tasks[thirdNode.name].state.current
       if (currentState.type === 'completed') {
         if (
           changedStateKey != '' &&

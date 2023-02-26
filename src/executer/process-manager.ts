@@ -1,12 +1,12 @@
 import { ProcessItem } from './process-item'
 import { getErrorMessage } from '../log'
 import { WorkItem } from '../planner/work-item'
-import { WorkNode } from '../planner/work-node'
+import { WorkTask } from '../planner/work-task'
 import { WorkService } from '../planner/work-service'
 
 interface PendingProcess {
   factory: () => Promise<void>
-  item: WorkItem<WorkService | WorkNode>
+  item: WorkItem<WorkService | WorkTask>
   resolve: () => void
   reject: (err: unknown) => void
 }
@@ -17,7 +17,7 @@ export class ProcessManager {
 
   constructor(private workerLimit: number) {}
 
-  task(item: WorkItem<WorkNode>, factory: () => Promise<void>): Promise<void> {
+  task(item: WorkItem<WorkTask>, factory: () => Promise<void>): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const hasFreeWorker = this.workerLimit === 0 || this.workerLimit > this.processes.length
       if (hasFreeWorker) {

@@ -1,6 +1,6 @@
 import { isWorkTaskItem, WorkItem, WorkItemState } from '../planner/work-item'
-import { WorkNode } from '../planner/work-node'
-import { NodeCompletedState, NodeState } from './scheduler/node-state'
+import { WorkTask } from '../planner/work-task'
+import { TaskCompletedState, TaskState } from './scheduler/task-state'
 import { awaitState, isState } from './state-resolver'
 import { ServiceRunningState, ServiceState } from './scheduler/service-state'
 import { WorkService } from '../planner/work-service'
@@ -44,8 +44,8 @@ export async function awaitNoRequirements(svc: WorkItemState<WorkService, Servic
 }
 
 export async function awaitCompletedDependencies(
-  work: WorkItem<WorkNode | WorkService>,
-  deps: WorkItemState<WorkNode, NodeState>[],
+  work: WorkItem<WorkTask | WorkService>,
+  deps: WorkItemState<WorkTask, TaskState>[],
   abort: AbortSignal
 ): Promise<void> {
   for (const dep of deps) {
@@ -55,15 +55,15 @@ export async function awaitCompletedDependencies(
 }
 
 export function awaitCompleted(
-  work: WorkItem<WorkNode | WorkService>,
-  dep: WorkItemState<WorkNode, NodeState>,
+  work: WorkItem<WorkTask | WorkService>,
+  dep: WorkItemState<WorkTask, TaskState>,
   abort: AbortSignal
-): Promise<NodeCompletedState | null> {
+): Promise<TaskCompletedState | null> {
   return isState('await-completed-' + work.name, dep.state, isCompleted, abort)
 }
 
 export function awaitRunningNeed(
-  work: WorkItem<WorkNode | WorkService>,
+  work: WorkItem<WorkTask | WorkService>,
   dep: WorkItemState<WorkService, ServiceState>,
   abort: AbortSignal
 ): Promise<ServiceRunningState | null> {
@@ -71,7 +71,7 @@ export function awaitRunningNeed(
 }
 
 export async function awaitRunningNeeds(
-  work: WorkItem<WorkNode | WorkService>,
+  work: WorkItem<WorkTask | WorkService>,
   needs: WorkItemState<WorkService, ServiceState>[],
   abort: AbortSignal
 ): Promise<void> {
@@ -80,7 +80,7 @@ export async function awaitRunningNeeds(
     await awaitRunningNeed(work, need, abort)
   }
 }
-function isCompleted(val: NodeState): val is NodeCompletedState {
+function isCompleted(val: TaskState): val is TaskCompletedState {
   return val.type === 'completed'
 }
 function isRunning(val: ServiceState): val is ServiceRunningState {

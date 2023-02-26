@@ -5,19 +5,19 @@ import { extname } from 'path'
 import { setUserPermission } from './set-user-permission'
 import { Container } from 'dockerode'
 import { WorkItem } from '../planner/work-item'
-import { ContainerWorkNode, isContainerWorkNode } from '../planner/work-node'
+import { ContainerWorkTask, isContainerWorkTask } from '../planner/work-task'
 import { ContainerWorkService } from '../planner/work-service'
 import { getContainerBinds } from './get-container-binds'
 
 export async function pullImage(
-  node: WorkItem<ContainerWorkNode | ContainerWorkService>,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   environment: Environment
 ): Promise<void> {
-  await pull(node.status, environment, node.data.image)
+  await pull(item.status, environment, item.data.image)
 }
 
 export async function prepareVolume(
-  item: WorkItem<ContainerWorkNode | ContainerWorkService>,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   environment: Environment
 ): Promise<void> {
   for (const volume of item.data.volumes) {
@@ -29,7 +29,7 @@ export async function prepareVolume(
       await ensureVolumeExists(environment, item.status, volume.name)
     }
   }
-  if (isContainerWorkNode(item.data)) {
+  if (isContainerWorkTask(item.data)) {
     for (const generate of item.data.generates) {
       if (generate.isFile) {
         continue
@@ -46,7 +46,7 @@ export async function prepareVolume(
 }
 
 export async function prepareMounts(
-  item: WorkItem<ContainerWorkNode | ContainerWorkService>,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   environment: Environment
 ): Promise<void> {
   for (const mount of item.data.mounts) {
@@ -62,7 +62,7 @@ export async function prepareMounts(
       await environment.file.createDirectory(mount.localPath)
     }
   }
-  if (isContainerWorkNode(item.data)) {
+  if (isContainerWorkTask(item.data)) {
     for (const gen of item.data.generates) {
       if (!gen.isFile) {
         continue
@@ -78,7 +78,7 @@ export async function prepareMounts(
 }
 
 export async function setUserPermissions(
-  item: WorkItem<ContainerWorkNode>,
+  item: WorkItem<ContainerWorkTask>,
   container: Container,
   environment: Environment
 ): Promise<void> {

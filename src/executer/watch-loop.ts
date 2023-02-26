@@ -2,14 +2,14 @@ import { watchStateKey } from './watch-state-key'
 import { State } from './state'
 import { WorkItemState } from '../planner/work-item'
 import { WorkService } from '../planner/work-service'
-import { WorkNode } from '../planner/work-node'
+import { WorkTask } from '../planner/work-task'
 import { Environment } from './environment'
 import { CliExecOptions } from '../cli'
 import { listenOnAbort } from '../utils/abort-event'
 import { untilChanged } from './state-resolver'
 import { AbortError, checkForAbort } from './abort'
 import { ServiceState } from './scheduler/service-state'
-import { NodeState } from './scheduler/node-state'
+import { TaskState } from './scheduler/task-state'
 import { CacheState, checkCacheState } from './scheduler/enqueue-next'
 
 export interface CurrentRun {
@@ -18,7 +18,7 @@ export interface CurrentRun {
 }
 
 export async function watchLoop(
-  work: WorkItemState<WorkService, ServiceState> | WorkItemState<WorkNode, NodeState>,
+  work: WorkItemState<WorkService, ServiceState> | WorkItemState<WorkTask, TaskState>,
   environment: Environment,
   options: CliExecOptions,
   factory: (cacheState: CacheState, abortSignal: AbortSignal, stop: () => void) => Promise<void>

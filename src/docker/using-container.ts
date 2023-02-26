@@ -5,11 +5,11 @@ import { getErrorMessage } from '../log'
 import { startContainer } from '../executer/execute-docker'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { ContainerWorkNode } from '../planner/work-node'
+import { ContainerWorkTask } from '../planner/work-task'
 
 export async function usingContainer<T>(
   environment: Environment,
-  item: WorkItem<ContainerWorkNode | ContainerWorkService>,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   createOptions: ContainerCreateOptions,
   callback: (container: Container) => Promise<T>
 ) {

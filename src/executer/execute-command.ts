@@ -3,7 +3,7 @@ import { platform } from 'os'
 import { getLogs } from '../log'
 import { AbortError } from './abort'
 import { listenOnAbort } from '../utils/abort-event'
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 import { Environment } from './environment'
 
 export async function executeCommand(

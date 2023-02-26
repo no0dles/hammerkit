@@ -4,7 +4,7 @@ import { sep } from 'path'
 import { platform } from 'os'
 import { Environment } from './environment'
 import { listenOnAbort } from '../utils/abort-event'
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 
 let dockerInstance: Dockerode | null = null
 

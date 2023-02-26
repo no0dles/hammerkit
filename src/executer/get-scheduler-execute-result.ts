@@ -1,10 +1,10 @@
 import { SchedulerResult } from './scheduler/scheduler-result'
 import { WorkTree } from '../planner/work-tree'
-import { iterateWorkNodes, iterateWorkServices } from '../planner/utils/plan-work-nodes'
+import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
 
 export function getSchedulerExecuteResult(state: WorkTree): SchedulerResult {
-  for (const node of iterateWorkNodes(state)) {
-    if (node.state.current.type !== 'completed') {
+  for (const task of iterateWorkTasks(state)) {
+    if (task.state.current.type !== 'completed') {
       return {
         state,
         success: false,

@@ -35,10 +35,10 @@ describe('store/restore', () => {
     const execAfterRestore = await cli.runExec()
     await expectSuccessfulResult(execAfterRestore, environment)
 
-    const nodeState = execAfterRestore.state.nodes['example']
-    expect(nodeState.state.current.type).toBe('completed')
-    if (nodeState.state.current.type === 'completed') {
-      expect(nodeState.state.current.cached).toBeTruthy()
+    const taskState = execAfterRestore.state.tasks['example']
+    expect(taskState.state.current.type).toBe('completed')
+    if (taskState.state.current.type === 'completed') {
+      expect(taskState.state.current.cached).toBeTruthy()
     }
   })
 
@@ -59,10 +59,10 @@ describe('store/restore', () => {
     const execAfterRestore = await cli.runExec()
     await expectSuccessfulResult(execAfterRestore, environment)
 
-    const nodeState = execAfterRestore.state.nodes['example:docker']
-    expect(nodeState.state.current.type).toBe('completed')
-    if (nodeState.state.current.type === 'completed') {
-      expect(nodeState.state.current.cached).toBeTruthy()
+    const taskState = execAfterRestore.state.tasks['example:docker']
+    expect(taskState.state.current.type).toBe('completed')
+    if (taskState.state.current.type === 'completed') {
+      expect(taskState.state.current.cached).toBeTruthy()
     }
   }, 90000)
 })

@@ -1,7 +1,7 @@
 import { exec } from 'child_process'
 import { getErrorMessage, getLogs } from '../log'
 import { listenOnAbort } from '../utils/abort-event'
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 import { sleep } from '../utils/sleep'
 import { WorkItemState } from '../planner/work-item'
 import { KubernetesWorkService } from '../planner/work-service'

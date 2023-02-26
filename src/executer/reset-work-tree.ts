@@ -1,21 +1,21 @@
 import { WorkTree } from '../planner/work-tree'
 import { WorkItemState } from '../planner/work-item'
-import { WorkNode } from '../planner/work-node'
-import { NodeState } from './scheduler/node-state'
+import { WorkTask } from '../planner/work-task'
+import { TaskState } from './scheduler/task-state'
 import { State } from './state'
 import { WorkService } from '../planner/work-service'
 import { ServiceState } from './scheduler/service-state'
 
 export function resetWorkTree(workTree: WorkTree): WorkTree {
   return {
-    nodes: Object.entries(workTree.nodes).reduce<{ [key: string]: WorkItemState<WorkNode, NodeState> }>(
-      (nodes, [key, node]) => {
-        node.state = new State<NodeState>({
+    tasks: Object.entries(workTree.tasks).reduce<{ [key: string]: WorkItemState<WorkTask, TaskState> }>(
+      (tasks, [key, task]) => {
+        task.state = new State<TaskState>({
           type: 'pending',
           stateKey: null,
         })
-        nodes[key] = node
-        return nodes
+        tasks[key] = task
+        return tasks
       },
       {}
     ),

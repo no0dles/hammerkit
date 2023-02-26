@@ -3,21 +3,21 @@ import { isContextTaskFilter, WorkScope } from '../executer/work-scope'
 import { WorkTree } from '../planner/work-tree'
 import { appliesToLabels } from '../executer/label-values'
 import { appendWorkService } from '../planner/utils/append-work-service'
-import { appendWorkNode } from '../planner/utils/append-work-node'
+import { appendWorkTask } from '../planner/utils/append-work-task'
 import { Environment } from '../executer/environment'
 import { WorkService } from '../planner/work-service'
-import { WorkNode } from '../planner/work-node'
+import { WorkTask } from '../planner/work-task'
 import { WorkItem, WorkItemState } from '../planner/work-item'
 import { appendWorkEnvironment } from '../planner/utils/append-work-environment'
-import { NodeState } from '../executer/scheduler/node-state'
+import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
 
 export function getWorkContext(context: ReferencedContext, scope: WorkScope, environment: Environment): WorkTree {
-  const workTree: WorkTree = { services: {}, environments: {}, nodes: {} }
-  const filteredWorkTree: WorkTree = { services: {}, environments: {}, nodes: {} }
+  const workTree: WorkTree = { services: {}, environments: {}, tasks: {} }
+  const filteredWorkTree: WorkTree = { services: {}, environments: {}, tasks: {} }
 
   for (const task of Object.values(context.tasks)) {
-    const item = appendWorkNode(workTree, task.cwd, task, environment)
+    const item = appendWorkTask(workTree, task.cwd, task, environment)
     if (matchesTaskWorkScope(item, scope)) {
       applyTask(filteredWorkTree, item)
     }
@@ -37,11 +37,11 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
   return filteredWorkTree
 }
 
-function applyTask(workTree: WorkTree, item: WorkItemState<WorkNode, NodeState>) {
-  if (workTree.nodes[item.name]) {
+function applyTask(workTree: WorkTree, item: WorkItemState<WorkTask, TaskState>) {
+  if (workTree.tasks[item.name]) {
     return
   }
-  workTree.nodes[item.name] = item
+  workTree.tasks[item.name] = item
   applyNeedsAndDeps(workTree, item)
 }
 function applyService(workTree: WorkTree, item: WorkItemState<WorkService, ServiceState>) {
@@ -52,7 +52,7 @@ function applyService(workTree: WorkTree, item: WorkItemState<WorkService, Servi
   applyNeedsAndDeps(workTree, item)
 }
 
-function applyNeedsAndDeps(workTree: WorkTree, item: WorkItem<WorkNode | WorkService>) {
+function applyNeedsAndDeps(workTree: WorkTree, item: WorkItem<WorkTask | WorkService>) {
   for (const dep of item.deps) {
     applyTask(workTree, dep)
   }
@@ -61,7 +61,7 @@ function applyNeedsAndDeps(workTree: WorkTree, item: WorkItem<WorkNode | WorkSer
   }
 }
 
-function matchesTaskWorkScope(task: WorkItem<WorkNode>, scope: WorkScope): boolean {
+function matchesTaskWorkScope(task: WorkItem<WorkTask>, scope: WorkScope): boolean {
   if (isContextTaskFilter(scope)) {
     return task.name === scope.taskName
   }

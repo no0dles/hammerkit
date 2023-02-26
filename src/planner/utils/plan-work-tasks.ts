@@ -1,9 +1,9 @@
 import { WorkItemState } from '../work-item'
-import { WorkNode } from '../work-node'
+import { WorkTask } from '../work-task'
 import { WorkService } from '../work-service'
 import { WorkTree } from '../work-tree'
 import { ServiceState } from '../../executer/scheduler/service-state'
-import { NodeState } from '../../executer/scheduler/node-state'
+import { TaskState } from '../../executer/scheduler/task-state'
 
 export function* iterateWorkServices(workTree: WorkTree): Generator<WorkItemState<WorkService, ServiceState>> {
   for (const service of Object.values(workTree.services)) {
@@ -11,15 +11,15 @@ export function* iterateWorkServices(workTree: WorkTree): Generator<WorkItemStat
   }
 }
 
-export function* iterateWorkNodes(workTree: WorkTree): Generator<WorkItemState<WorkNode, NodeState>> {
-  for (const node of Object.values(workTree.nodes)) {
-    yield node
+export function* iterateWorkTasks(workTree: WorkTree): Generator<WorkItemState<WorkTask, TaskState>> {
+  for (const task of Object.values(workTree.tasks)) {
+    yield task
   }
 }
 
 export function hasErrorTask(workTree: WorkTree): boolean {
-  for (const node of iterateWorkNodes(workTree)) {
-    if (node.state.current.type === 'error') {
+  for (const task of iterateWorkTasks(workTree)) {
+    if (task.state.current.type === 'error') {
       return true
     }
   }
@@ -27,8 +27,8 @@ export function hasErrorTask(workTree: WorkTree): boolean {
 }
 
 export function hasErrorService(workTree: WorkTree): boolean {
-  for (const node of iterateWorkServices(workTree)) {
-    if (node.state.current.type === 'error') {
+  for (const task of iterateWorkServices(workTree)) {
+    if (task.state.current.type === 'error') {
       return true
     }
   }

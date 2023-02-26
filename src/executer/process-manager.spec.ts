@@ -1,12 +1,12 @@
 import { ProcessManager } from './process-manager'
 import { WorkItem } from '../planner/work-item'
-import { logContext, statusConsole } from '../planner/work-node-status'
+import { logContext, statusConsole } from '../planner/work-item-status'
 import { emptyWritable } from '../utils/empty-writable'
 
 describe('process-manager', () => {
   function fakeWorkItem(id: string) {
     return {
-      id: () => '',
+      cacheId: () => '',
       status: statusConsole(emptyWritable()).context(logContext('task', { name: id } as any)),
       deps: [],
       aliases: [id],

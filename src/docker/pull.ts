@@ -1,4 +1,4 @@
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 import { Environment } from '../executer/environment'
 
 export async function pull(status: StatusScopedConsole, environment: Environment, imageName: string): Promise<void> {

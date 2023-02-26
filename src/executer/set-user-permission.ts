@@ -1,6 +1,6 @@
 import { Container } from 'dockerode'
 import { execCommand } from './execute-docker'
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 import { Environment } from './environment'
 
 export async function setUserPermission(

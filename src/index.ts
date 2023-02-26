@@ -2,7 +2,7 @@
 
 import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
-import { statusConsole } from './planner/work-node-status'
+import { statusConsole } from './planner/work-item-status'
 import { getContainerCli } from './executer/execute-docker'
 import { emptyWritable } from './utils/empty-writable'
 import { runProgram } from './run-program'

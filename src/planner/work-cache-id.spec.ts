@@ -4,24 +4,24 @@ import { createCli } from '../program'
 import { join } from 'path'
 
 async function compareTasks(first: BuildFileSchema, second: BuildFileSchema, taskName: string, expectEqual: boolean) {
-  const testCase = createTestCase('work-node-id', {
+  const testCase = createTestCase('work-task-id', {
     'first.yaml': first,
     'second.yaml': second,
   })
   await testCase.setup(async (cwd, environment) => {
     const firstCli = await createCli(join(cwd, 'first.yaml'), environment, { taskName })
     const secondCli = await createCli(join(cwd, 'second.yaml'), environment, { taskName })
-    const firstTask = firstCli.node(taskName)
-    const secondTask = secondCli.node(taskName)
+    const firstTask = firstCli.task(taskName)
+    const secondTask = secondCli.task(taskName)
     if (expectEqual) {
-      expect(firstTask.id()).toEqual(secondTask.id())
+      expect(firstTask.cacheId()).toEqual(secondTask.cacheId())
     } else {
-      expect(firstTask.id()).not.toEqual(secondTask.id())
+      expect(firstTask.cacheId()).not.toEqual(secondTask.cacheId())
     }
   })
 }
 
-describe('work-node-id', () => {
+describe('work-cache-id', () => {
   it('should be the same for different mount order', async () => {
     await compareTasks(
       {

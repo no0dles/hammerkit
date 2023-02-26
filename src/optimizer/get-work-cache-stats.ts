@@ -1,7 +1,7 @@
 import { calculateChecksum } from './calculate-checksum'
 import { join, relative } from 'path'
-import { WorkCacheFileStats } from './work-node-cache-stats'
-import { WorkNode } from '../planner/work-node'
+import { WorkCacheFileStats } from './work-cache-stats'
+import { WorkTask } from '../planner/work-task'
 import { Environment } from '../executer/environment'
 import { WorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
@@ -37,7 +37,7 @@ async function addWorkCacheStats(
 }
 
 export async function getWorkCacheStats(
-  work: WorkNode | WorkService,
+  work: WorkTask | WorkService,
   environment: Environment
 ): Promise<WorkCacheFileStats> {
   const result: WorkCacheFileStats = {

@@ -1,20 +1,20 @@
 import { isContainerWorkTaskItem, isLocalWorkTaskItem, WorkItemState } from '../planner/work-item'
-import { WorkNode } from '../planner/work-node'
+import { WorkTask } from '../planner/work-task'
 import { Environment } from './environment'
 import { CliExecOptions } from '../cli'
 import { getDuration } from './states'
-import { NodeState } from './scheduler/node-state'
-import { writeWorkNodeCache } from '../optimizer/write-work-node-cache'
+import { TaskState } from './scheduler/task-state'
+import { writeWorkTaskCache } from '../optimizer/write-work-task-cache'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { awaitCompletedDependencies, awaitRunningNeeds } from './await-completed-dependencies'
-import { dockerNode } from './docker-node'
+import { dockerTask } from './docker-task'
 import { getServiceContainers } from './get-service-containers'
-import { localNode } from './local-node'
+import { localTask } from './local-task'
 import { watchLoop } from './watch-loop'
 
 export async function executeWorkTask(
-  work: WorkItemState<WorkNode, NodeState>,
+  work: WorkItemState<WorkTask, TaskState>,
   environment: Environment,
   options: CliExecOptions
 ) {
@@ -61,14 +61,14 @@ export async function executeWorkTask(
 
         if (isContainerWorkTaskItem(work)) {
           const serviceContainers = getServiceContainers(work.needs)
-          await dockerNode(work, cacheState.stateKey, serviceContainers, environment, abort)
+          await dockerTask(work, cacheState.stateKey, serviceContainers, environment, abort)
         } else if (isLocalWorkTaskItem(work)) {
-          await localNode(work, cacheState.stateKey, environment, abort)
+          await localTask(work, cacheState.stateKey, environment, abort)
         }
         checkForAbort(abort)
 
         if (work.state.current.type === 'running') {
-          await writeWorkNodeCache(work, environment)
+          await writeWorkTaskCache(work, environment)
 
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
           work.state.set({

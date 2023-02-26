@@ -9,7 +9,7 @@ import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
-import { getNeedsNetwork } from './docker-node'
+import { getNeedsNetwork } from './docker-task'
 import { ServiceDns } from './service-dns'
 import { WorkItemState } from '../planner/work-item'
 import { CliExecOptions } from '../cli'
@@ -45,7 +45,7 @@ export async function dockerService(
       Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
+        'hammerkit-id': item.cacheId(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'service',
         'hammerkit-state': stateKey,

@@ -1,6 +1,6 @@
 import { WorkPort } from './work-port'
 import { WorkMount } from './work-mount'
-import { WorkNode } from './work-node'
+import { WorkTask } from './work-task'
 import { WorkVolume } from './work-volume'
 import { LabelValues } from '../executer/label-values'
 import { ParseScope } from '../schema/parse-context'
@@ -23,7 +23,7 @@ export interface BaseWorkService {
 export type WorkService = ContainerWorkService | KubernetesWorkService
 
 export const isContainerWorkService = (
-  svc: WorkService | WorkNode | KubernetesWorkService
+  svc: WorkService | WorkTask | KubernetesWorkService
 ): svc is ContainerWorkService => 'image' in svc && svc.type === 'container-service'
 
 export interface ContainerWorkService extends BaseWorkService {

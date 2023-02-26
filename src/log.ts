@@ -1,9 +1,9 @@
 import { clearScreenDown, moveCursor } from 'readline'
-import { iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
-import { Message, WorkNodeConsoleLogLevel } from './planner/work-node-status'
+import { iterateWorkTasks, iterateWorkServices } from './planner/utils/plan-work-tasks'
+import { Message, WorkItemLogLevel } from './planner/work-item-status'
 import colors from 'colors'
 import { ConsoleContext } from './console/console-context'
-import { NodeState } from './executer/scheduler/node-state'
+import { TaskState } from './executer/scheduler/task-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { Environment } from './executer/environment'
 import { failNever } from './utils/fail-never'
@@ -17,7 +17,7 @@ export function getLogs(chunk: Buffer | string): string[] {
     .filter((s) => !!s)
 }
 
-export function getLogLevel(level: WorkNodeConsoleLogLevel): string {
+export function getLogLevel(level: WorkItemLogLevel): string {
   switch (level) {
     case 'debug':
       return colors.bgMagenta(level)
@@ -67,7 +67,7 @@ export function getType(type: 'service' | 'task' | 'cli'): string {
 }
 
 export async function printWorkTreeResult(schedulerState: WorkTree, env: Environment): Promise<void> {
-  const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
+  const maxNodeNameLength = getWorkItemMaxLength(schedulerState)
 
   for (const log of env.status.read()) {
     if (isVerbose || (log.type === 'status' && log.level === 'error')) {
@@ -96,10 +96,10 @@ export async function printWorkTreeResult(schedulerState: WorkTree, env: Environ
     }
   }
 
-  for (const node of iterateWorkNodes(schedulerState)) {
-    if (node.state.current.type === 'error' || node.state.current.type === 'crash') {
-      const message = `${getType('task')} ${getNodeName(node.name, maxNodeNameLength)}`
-      for (const log of node.status.logs()) {
+  for (const task of iterateWorkTasks(schedulerState)) {
+    if (task.state.current.type === 'error' || task.state.current.type === 'crash') {
+      const message = `${getType('task')} ${getNodeName(task.name, maxNodeNameLength)}`
+      for (const log of task.status.logs()) {
         env.stdout.write(`${formatDate(log.date)} ${message} - ${log.console}: ${log.message}\n`)
       }
     }
@@ -118,22 +118,22 @@ export async function printWorkTreeResult(schedulerState: WorkTree, env: Environ
     }
   }
 
-  for (const node of iterateWorkNodes(schedulerState)) {
+  for (const task of iterateWorkTasks(schedulerState)) {
     let message = `${formatDate(new Date())} ${getType('task')} ${getNodeName(
-      node.name,
+      task.name,
       maxNodeNameLength
-    )} - ${getStateText(node.state.current)}`
-    if (node.state.current.type === 'completed') {
-      message += ` in ${node.state.current.duration}ms`
-      if (node.state.current.cached) {
+    )} - ${getStateText(task.state.current)}`
+    if (task.state.current.type === 'completed') {
+      message += ` in ${task.state.current.duration}ms`
+      if (task.state.current.cached) {
         message += ' [CACHED]'
       }
     }
-    if (node.state.current.type === 'crash') {
-      message += ` exited with ${node.state.current.exitCode}`
+    if (task.state.current.type === 'crash') {
+      message += ` exited with ${task.state.current.exitCode}`
     }
-    if (node.state.current.type === 'error') {
-      message += ` with message ${node.state.current.errorMessage}`
+    if (task.state.current.type === 'error') {
+      message += ` with message ${task.state.current.errorMessage}`
     }
     env.stdout.write(`${message}\n`)
   }
@@ -141,7 +141,7 @@ export async function printWorkTreeResult(schedulerState: WorkTree, env: Environ
 
 const spinner = '⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈'
 
-function getStateText(state: NodeState | ServiceState): string {
+function getStateText(state: TaskState | ServiceState): string {
   if (state.type === 'running') {
     return colors.blue(state.type)
   } else if (state.type === 'pending' || state.type === 'starting') {
@@ -159,21 +159,21 @@ function getStateText(state: NodeState | ServiceState): string {
   } else if (state.type === 'ready') {
     return colors.blue(state.type)
   } else {
-    failNever(state, 'unknown node state')
+    failNever(state, 'unknown task state')
   }
 }
 
-export function getNodeNameLengthForSchedulerState(schedulerState: WorkTree): number {
+export function getWorkItemMaxLength(schedulerState: WorkTree): number {
   function* Names(): Generator<string> {
-    for (const node of iterateWorkNodes(schedulerState)) {
-      yield node.name
+    for (const task of iterateWorkTasks(schedulerState)) {
+      yield task.name
     }
     for (const service of iterateWorkServices(schedulerState)) {
       yield service.name
     }
   }
 
-  return getNodeNameLength(Names)
+  return getMaxNameLength(Names)
 }
 
 export function printProperty(env: Environment, name: string, value: string) {
@@ -187,7 +187,7 @@ export function printTitle(env: Environment, name: string) {
   env.stdout.write(`${colors.bgWhite(name + ':\n')}`)
 }
 
-export function getNodeNameLength(names: () => Generator<string> | Array<string>): number {
+export function getMaxNameLength(names: () => Generator<string> | Array<string>): number {
   let maxNodeNameLength = 0
   for (const name of names()) {
     if (name.length > maxNodeNameLength) {
@@ -201,7 +201,7 @@ export function getNodeName(name: string, maxNodeNameLength: number): string {
   return colors.white(name) + ' '.repeat(Math.max(0, maxNodeNameLength - name.length))
 }
 
-export function writeNodeLogToConsole(env: Environment, log: Message, maxNodeNameLength: number): void {
+export function writeWorkItemLogToConsole(env: Environment, log: Message, maxNodeNameLength: number): void {
   if (log.type === 'status') {
     if (log.level === 'debug' && !isVerbose) {
       return
@@ -240,7 +240,7 @@ export function formatDate(date: Date): string {
 export function writeWorkTreeStatus(schedulerState: WorkTree, env: Environment, ticker: number): void {
   clearScreenDown(env.stdout)
 
-  const maxNodeNameLength = getNodeNameLengthForSchedulerState(schedulerState)
+  const maxNodeNameLength = getWorkItemMaxLength(schedulerState)
 
   let count = 0
 
@@ -261,16 +261,16 @@ export function writeWorkTreeStatus(schedulerState: WorkTree, env: Environment, 
     count += printWithTruncate(env, message)
   }
 
-  for (const node of iterateWorkNodes(schedulerState)) {
-    let message = `${getType('task')} ${getNodeName(node.name, maxNodeNameLength)} - ${getStateText(
-      node.state.current
+  for (const task of iterateWorkTasks(schedulerState)) {
+    let message = `${getType('task')} ${getNodeName(task.name, maxNodeNameLength)} - ${getStateText(
+      task.state.current
     )}`
 
-    if (node.state.current.type === 'pending') {
-      const totalDepCount = node.deps.length
-      const totalServiceCount = node.needs.length
-      const completedDepCount = node.deps.filter((d) => d.state.current.type === 'completed').length
-      const runningServiceCount = node.needs.filter((n) => n.service.state.current.type === 'ready').length
+    if (task.state.current.type === 'pending') {
+      const totalDepCount = task.deps.length
+      const totalServiceCount = task.needs.length
+      const completedDepCount = task.deps.filter((d) => d.state.current.type === 'completed').length
+      const runningServiceCount = task.needs.filter((n) => n.service.state.current.type === 'ready').length
       if (totalDepCount > 0 && completedDepCount !== totalDepCount) {
         message += ` | ${colors.grey(` awaiting dependencies (${completedDepCount}/${totalDepCount})`)}`
       }
@@ -278,25 +278,25 @@ export function writeWorkTreeStatus(schedulerState: WorkTree, env: Environment, 
         message += ` | ${colors.grey(` awaiting service (${runningServiceCount}/${totalServiceCount})`)}`
       }
     }
-    if (node.state.current.type === 'starting' || node.state.current.type === 'ready') {
+    if (task.state.current.type === 'starting' || task.state.current.type === 'ready') {
       message += ` | ${spinner[ticker % spinner.length]}`
-      const currentMessage = node.status.current()
+      const currentMessage = task.status.current()
       if (currentMessage) {
         message += ` ${currentMessage.message}`
       }
-    } else if (node.state.current.type === 'running') {
+    } else if (task.state.current.type === 'running') {
       message += ` | ${spinner[ticker % spinner.length]}`
-      const currentMessage = node.status.currentLog()
+      const currentMessage = task.status.currentLog()
       if (currentMessage) {
         message += ` ${currentMessage.message}`
       }
-    } else if (node.state.current.type === 'completed') {
-      message += ` in ${node.state.current.duration}ms`
-      if (node.state.current.cached) {
+    } else if (task.state.current.type === 'completed') {
+      message += ` in ${task.state.current.duration}ms`
+      if (task.state.current.cached) {
         message += ' [CACHED]'
       }
-    } else if (node.state.current.type === 'error') {
-      message += ` ${node.state.current.errorMessage}`
+    } else if (task.state.current.type === 'error') {
+      message += ` ${task.state.current.errorMessage}`
     }
 
     count += printWithTruncate(env, message)

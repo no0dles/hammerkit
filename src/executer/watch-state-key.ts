@@ -1,5 +1,5 @@
 import { WorkItem } from '../planner/work-item'
-import { WorkNode } from '../planner/work-node'
+import { WorkTask } from '../planner/work-task'
 import { WorkService } from '../planner/work-service'
 import { Environment } from './environment'
 import { Debouncer } from '../utils/debouncer'
@@ -10,23 +10,21 @@ import { State } from './state'
 import { CacheState, checkCacheState } from './scheduler/enqueue-next'
 
 export function watchStateKey(
-  item: WorkItem<WorkNode | WorkService>,
+  item: WorkItem<WorkTask | WorkService>,
   cacheStats: CacheState,
   environment: Environment,
   options: CliExecOptions
 ): State<CacheState> {
   const fileWatchers: FileWatcher[] = []
-  const state = new State<CacheState>(
-    cacheStats,
-    () => {
+  const state = new State<CacheState>(cacheStats, {
+    onDestroy: () => {
       for (const fileWatcher of fileWatchers) {
         fileWatcher.close()
       }
 
       debouncer.clear()
     },
-    []
-  )
+  })
   const debouncer = new Debouncer(async () => {
     if (environment.abortCtrl.signal.aborted) {
       return

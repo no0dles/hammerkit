@@ -1,9 +1,9 @@
 import { SchedulerResult } from './executer/scheduler/scheduler-result'
-import { WorkNodeValidation } from './planner/work-node-validation'
-import { WorkNode } from './planner/work-node'
+import { WorkItemValidation } from './planner/work-item-validation'
+import { WorkTask } from './planner/work-task'
 import { LogMode } from './logging/log-mode'
 import { CacheMethod } from './parser/cache-method'
-import { hasError, iterateWorkNodes, iterateWorkServices } from './planner/utils/plan-work-nodes'
+import { hasError, iterateWorkTasks, iterateWorkServices } from './planner/utils/plan-work-tasks'
 import { isCI } from './utils/ci'
 import { getLogger } from './console/get-logger'
 import { cleanCache, restoreCache, storeCache } from './executer/event-cache'
@@ -45,7 +45,7 @@ export interface CliExecResult {
 
 export interface CliTaskItem {
   type: 'task'
-  item: WorkItem<WorkNode>
+  item: WorkItem<WorkTask>
 }
 
 export interface CliServiceItem {
@@ -65,10 +65,12 @@ export class Cli {
     const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
 
     const workTree = resetWorkTree(this.workTree)
-    const processWorkTree = new State<WorkTree>(workTree, () => {}, [
-      ...Object.values(workTree.services).map((s) => s.state),
-      ...Object.values(workTree.nodes).map((s) => s.state),
-    ])
+    const processWorkTree = new State<WorkTree>(workTree, {
+      subStates: [
+        ...Object.values(workTree.services).map((s) => s.state),
+        ...Object.values(workTree.tasks).map((s) => s.state),
+      ],
+    })
 
     const logger = getLogger(logMode, processWorkTree, this.environment)
 
@@ -100,11 +102,11 @@ export class Cli {
   }
 
   async shutdown(): Promise<void> {
-    for (const node of iterateWorkNodes(this.workTree)) {
+    for (const task of iterateWorkTasks(this.workTree)) {
       const containers = await this.environment.docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${node.id()}`],
+          label: [`hammerkit-id=${task.cacheId()}`],
         },
       })
       for (const container of containers) {
@@ -116,7 +118,7 @@ export class Cli {
       const containers = await this.environment.docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${service.id()}`],
+          label: [`hammerkit-id=${service.cacheId()}`],
         },
       })
       for (const container of containers) {
@@ -179,23 +181,23 @@ export class Cli {
   }
 
   tasks(): CliTaskItem[] {
-    return Array.from(iterateWorkNodes(this.workTree)).map<CliTaskItem>((item) => ({ item, type: 'task' }))
+    return Array.from(iterateWorkTasks(this.workTree)).map<CliTaskItem>((item) => ({ item, type: 'task' }))
   }
 
   ls(): CliItem[] {
     return [...this.services(), ...this.tasks()]
   }
 
-  validate(): AsyncGenerator<WorkNodeValidation> {
+  validate(): AsyncGenerator<WorkItemValidation> {
     return validate(this.workTree, this.environment)
   }
 
-  node(name: string): WorkItem<WorkNode> {
-    const node = this.workTree.nodes[name]
-    if (!node) {
+  task(name: string): WorkItem<WorkTask> {
+    const task = this.workTree.tasks[name]
+    if (!task) {
       throw new Error(`unable to find task ${name}`)
     }
-    return node
+    return task
   }
 
   service(name: string): WorkItem<WorkService> {

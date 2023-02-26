@@ -12,7 +12,7 @@ import { createParseContext } from './schema/schema-parser'
 import { getWorkContext } from './schema/work-scope-parser'
 import { parseReferences } from './schema/reference-parser'
 import colors from 'colors'
-import { WorkNodeValidation } from './planner/work-node-validation'
+import { WorkItemValidation } from './planner/work-item-validation'
 import { getVersion } from './version'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
@@ -72,18 +72,22 @@ export async function getProgram(
 
         if (services.length > 0) {
           printTitle(environment, 'Services')
-          for (const node of services) {
-            printItem(environment, node.item.data)
+          for (const service of services) {
+            printItem(environment, service.item.data)
             printProperty(
               environment,
               'ports',
-              node.item.data.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
+              service.item.data.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
             )
-            if (node.item.data.type === 'kubernetes-service') {
-              printProperty(environment, 'context', node.item.data.context)
-              printProperty(environment, 'selector', `${node.item.data.selector.type}/${node.item.data.selector.name}`)
+            if (service.item.data.type === 'kubernetes-service') {
+              printProperty(environment, 'context', service.item.data.context)
+              printProperty(
+                environment,
+                'selector',
+                `${service.item.data.selector.type}/${service.item.data.selector.name}`
+              )
             } else {
-              printProperty(environment, 'image', node.item.data.image)
+              printProperty(environment, 'image', service.item.data.image)
             }
           }
         }
@@ -94,41 +98,41 @@ export async function getProgram(
 
         if (tasks.length > 0) {
           printTitle(environment, 'Tasks')
-          for (const node of tasks) {
-            printItem(environment, node.item.data)
-            if (node.item.needs.length > 0) {
-              printProperty(environment, 'needs', node.item.needs.map((d) => d.name).join(', '))
+          for (const task of tasks) {
+            printItem(environment, task.item.data)
+            if (task.item.needs.length > 0) {
+              printProperty(environment, 'needs', task.item.needs.map((d) => d.name).join(', '))
             }
-            if (node.item.deps.length > 0) {
-              printProperty(environment, 'deps', node.item.deps.map((d) => d.name).join(', '))
+            if (task.item.deps.length > 0) {
+              printProperty(environment, 'deps', task.item.deps.map((d) => d.name).join(', '))
             }
-            if (node.item.data.type === 'container-task') {
-              printProperty(environment, 'image', node.item.data.image)
+            if (task.item.data.type === 'container-task') {
+              printProperty(environment, 'image', task.item.data.image)
             }
-            if (node.item.data.caching) {
-              printProperty(environment, 'caching', node.item.data.caching)
+            if (task.item.data.caching) {
+              printProperty(environment, 'caching', task.item.data.caching)
             }
-            if (hasLabels(node.item.data.labels)) {
+            if (hasLabels(task.item.data.labels)) {
               printProperty(
                 environment,
                 'labels',
-                `${Object.keys(node.item.data.labels)
-                  .map((key) => `${key}=${node.item.data.labels[key].join(',')}`)
+                `${Object.keys(task.item.data.labels)
+                  .map((key) => `${key}=${task.item.data.labels[key].join(',')}`)
                   .join(' ')}`
               )
             }
-            if (node.item.data.src.length > 0) {
+            if (task.item.data.src.length > 0) {
               printProperty(
                 environment,
                 'src',
-                node.item.data.src.map((d) => relative(node.item.data.cwd, d.absolutePath)).join(' ')
+                task.item.data.src.map((d) => relative(task.item.data.cwd, d.absolutePath)).join(' ')
               )
             }
-            if (node.item.data.generates.length > 0) {
+            if (task.item.data.generates.length > 0) {
               printProperty(
                 environment,
                 'generates',
-                node.item.data.generates.map((d) => relative(node.item.data.cwd, d.path)).join(' ')
+                task.item.data.generates.map((d) => relative(task.item.data.cwd, d.path)).join(' ')
               )
             }
           }
@@ -179,13 +183,13 @@ export async function getProgram(
 
         const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
 
-        const fileErrors: { [buildFileName: string]: WorkNodeValidation[] } = {}
+        const fileErrors: { [buildFileName: string]: WorkItemValidation[] } = {}
 
         for await (const validation of cli.validate()) {
-          if (!fileErrors[validation.node.scope.fileName]) {
-            fileErrors[validation.node.scope.fileName] = [validation]
+          if (!fileErrors[validation.item.scope.fileName]) {
+            fileErrors[validation.item.scope.fileName] = [validation]
           } else {
-            fileErrors[validation.node.scope.fileName].push(validation)
+            fileErrors[validation.item.scope.fileName].push(validation)
           }
 
           if (validation.type === 'error') {
@@ -196,7 +200,7 @@ export async function getProgram(
             environment.stdout.write(`${colors.underline(colors.gray(buildFilename))}\n`)
             for (const error of errors) {
               environment.stdout.write(
-                ` ${colors.underline(colors.blue(error.type))} at ${colors.gray(error.node.name)} ${error.message}\n`
+                ` ${colors.underline(colors.blue(error.type))} at ${colors.gray(error.item.name)} ${error.message}\n`
               )
             }
             environment.stdout.write('\n')

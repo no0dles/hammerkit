@@ -1,5 +1,5 @@
 import 'jest-extended'
-import { writeWorkNodeCache } from '../../optimizer/write-work-node-cache'
+import { writeWorkTaskCache } from '../../optimizer/write-work-task-cache'
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'
@@ -14,16 +14,16 @@ describe('cache', () => {
 
   async function testCache(action: (environment: Environment) => Promise<void>, expectInvalidate: boolean) {
     const setupBefore = await suite.setup({ taskName: 'example' })
-    const nodeBefore = setupBefore.cli.node('example')
+    const taskBefore = setupBefore.cli.task('example')
 
-    await writeWorkNodeCache(nodeBefore, setupBefore.environment)
+    await writeWorkTaskCache(taskBefore, setupBefore.environment)
     await action(setupBefore.environment)
 
     const setupAfter = await suite.setup({ taskName: 'example' })
-    const node = setupAfter.cli.node('example')
+    const task = setupAfter.cli.task('example')
 
-    const checksumUpToDate = await checkCacheState(node, 'checksum', setupAfter.environment)
-    const modifyDateUpToDate = await checkCacheState(node, 'modify-date', setupAfter.environment)
+    const checksumUpToDate = await checkCacheState(task, 'checksum', setupAfter.environment)
+    const modifyDateUpToDate = await checkCacheState(task, 'modify-date', setupAfter.environment)
 
     if (expectInvalidate) {
       expect(checksumUpToDate.cached).toBeFalsy()

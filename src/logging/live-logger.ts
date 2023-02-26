@@ -1,4 +1,4 @@
-import { getNodeNameLengthForSchedulerState, printWorkTreeResult, writeNodeLogToConsole } from '../log'
+import { getWorkItemMaxLength, printWorkTreeResult, writeWorkItemLogToConsole } from '../log'
 import { Logger } from './log-mode'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 import { Environment } from '../executer/environment'
@@ -6,10 +6,10 @@ import { WorkTree } from '../planner/work-tree'
 import { State } from '../executer/state'
 
 export function liveLogger(state: State<WorkTree>, env: Environment): Logger {
-  const maxNodeNameLength = getNodeNameLengthForSchedulerState(state.current)
+  const maxNodeNameLength = getWorkItemMaxLength(state.current)
 
   env.status.on((log) => {
-    writeNodeLogToConsole(env, log, maxNodeNameLength)
+    writeWorkItemLogToConsole(env, log, maxNodeNameLength)
   })
 
   return {
