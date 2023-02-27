@@ -50,6 +50,7 @@ export async function watchLoop(
 
   const abortListener = listenOnAbort(environment.abortCtrl.signal, () => {
     currentRun.abortController.abort()
+    watchState.close()
   })
 
   do {
