@@ -8,5 +8,5 @@ import { ServiceState } from '../executer/scheduler/service-state'
 export interface WorkTree {
   tasks: { [key: string]: WorkItemState<WorkTask, TaskState> }
   services: { [key: string]: WorkItemState<WorkService, ServiceState> }
-  environments: { [key: string]: WorkEnvironment }
+  environment: WorkEnvironment
 }

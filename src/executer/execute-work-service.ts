@@ -1,4 +1,4 @@
-import { isContainerWorkServiceItem, isKubernetesWorkServiceItem, WorkItemState } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
 import { WorkService } from '../planner/work-service'
 import { ServiceState } from './scheduler/service-state'
 import { Environment } from './environment'
@@ -10,16 +10,12 @@ import {
   awaitRunningNeeds,
 } from './await-completed-dependencies'
 import { AbortError } from './abort'
-import { getServiceContainers } from './get-service-containers'
-import { dockerService } from './docker-service'
-import { kubernetesService } from './kubernetes-service'
 import { getErrorMessage } from '../log'
-import { removeContainer } from '../docker/remove-container'
 import { watchLoop } from './watch-loop'
 
-export async function stopService(work: WorkItemState<WorkService, ServiceState>, environment: Environment) {
-  if (work.state.current.type === 'running' && !!work.state.current.remote) {
-    await removeContainer(environment.docker.getContainer(work.state.current.remote.containerId))
+export async function stopService(work: WorkItemState<WorkService, ServiceState>) {
+  if (work.state.current.type === 'running') {
+    await work.runtime.stop()
   }
 }
 
@@ -58,12 +54,13 @@ export async function executeWorkService(
         })
       }
 
-      const serviceContainers = getServiceContainers(work.needs)
-      if (isContainerWorkServiceItem(work)) {
-        await dockerService(work, cacheState.stateKey, serviceContainers, environment, options, abort)
-      } else if (isKubernetesWorkServiceItem(work)) {
-        await kubernetesService(work, cacheState.stateKey, abort)
-      }
+      await work.runtime.execute(environment, {
+        cache: cacheState,
+        abort,
+        state: work.state,
+        stateKey: cacheState.stateKey,
+        daemon: options.daemon,
+      })
     })
   } catch (e) {
     if (e instanceof AbortError) {

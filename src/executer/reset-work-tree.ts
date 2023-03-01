@@ -29,6 +29,6 @@ export function resetWorkTree(workTree: WorkTree): WorkTree {
       services[key] = service
       return services
     }, {}),
-    environments: workTree.environments,
+    environment: workTree.environment,
   }
 }

@@ -1,4 +1,4 @@
-import { WorkEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { KubernetesServiceVolume } from './volumes'
@@ -14,7 +14,7 @@ import { getErrorMessage } from '../log'
 
 export async function ensurePersistentData(
   instance: KubernetesInstance,
-  env: WorkEnvironment,
+  env: WorkKubernetesEnvironment,
   service: WorkItem<ContainerWorkService>,
   volumes: KubernetesServiceVolume[]
 ) {

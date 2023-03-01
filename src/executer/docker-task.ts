@@ -1,6 +1,6 @@
 import { Environment } from './environment'
 import { isHostServiceDns, ServiceDns } from './service-dns'
-import { ContainerCreateOptions } from 'dockerode'
+import Dockerode, { ContainerCreateOptions } from 'dockerode'
 import { convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
@@ -9,10 +9,12 @@ import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
 import { ContainerWorkTask } from '../planner/work-task'
-import { WorkItem, WorkItemNeed, WorkItemState } from '../planner/work-item'
+import { WorkItem, WorkItemNeed } from '../planner/work-item'
 import { TaskState } from './scheduler/task-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { getContainerBinds } from './get-container-binds'
+import { ExecuteOptions } from '../runtime/runtime'
+import { getServiceContainers } from './get-service-containers'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -66,32 +68,32 @@ function buildCreateOptions(
 }
 
 export async function dockerTask(
-  item: WorkItemState<ContainerWorkTask, TaskState>,
-  stateKey: string,
-  serviceContainers: { [key: string]: ServiceDns },
+  docker: Dockerode,
+  item: WorkItem<ContainerWorkTask>,
   environment: Environment,
-  abort: AbortSignal
+  options: ExecuteOptions<TaskState>
 ): Promise<void> {
   item.status.write('info', `execute ${item.name} in container`)
 
   try {
     await prepareMounts(item, environment)
-    checkForAbort(abort)
+    checkForAbort(options.abort)
 
-    await pullImage(item, environment)
-    checkForAbort(abort)
+    await pullImage(item, docker)
+    checkForAbort(options.abort)
 
-    await prepareVolume(item, environment)
-    checkForAbort(abort)
+    await prepareVolume(item, docker)
+    checkForAbort(options.abort)
 
-    const containerOptions = buildCreateOptions(item, stateKey, serviceContainers)
+    const serviceContainers = getServiceContainers(item.needs)
+    const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers)
     printContainerOptions(item.status, containerOptions)
 
-    await usingContainer(environment, item, containerOptions, async (container) => {
+    await usingContainer(docker, item, containerOptions, async (container) => {
       await setUserPermissions(item, container, environment)
 
       for (const cmd of item.data.cmds) {
-        checkForAbort(abort)
+        checkForAbort(options.abort)
 
         item.status.write('info', `execute cmd "${cmd.cmd}" in container`)
 
@@ -103,7 +105,7 @@ export async function dockerTask(
           [item.data.shell, '-c', cmd.cmd],
           item.data.user,
           undefined,
-          abort
+          options.abort
         )
 
         if (result.type === 'timeout') {
@@ -115,8 +117,8 @@ export async function dockerTask(
         }
 
         if (result.result.ExitCode !== 0) {
-          item.state.set({
-            stateKey,
+          options.state.set({
+            stateKey: options.stateKey,
             type: 'crash',
             exitCode: result.result.ExitCode ?? 1,
           })
@@ -151,13 +153,13 @@ export async function dockerTask(
     })
   } catch (e) {
     if (e instanceof AbortError) {
-      item.state.set({
-        stateKey,
+      options.state.set({
+        stateKey: options.stateKey,
         type: 'canceled',
       })
     } else {
-      item.state.set({
-        stateKey,
+      options.state.set({
+        stateKey: options.stateKey,
         type: 'error',
         errorMessage: getErrorMessage(e),
       })

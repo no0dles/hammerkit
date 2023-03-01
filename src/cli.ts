@@ -11,12 +11,9 @@ import { validate } from './planner/validate'
 import { WorkTree } from './planner/work-tree'
 import { Environment } from './executer/environment'
 import { ProcessManager } from './executer/process-manager'
-import { removeContainer } from './docker/remove-container'
 import { updateServiceStatus } from './service/update-service-status'
 import { WorkItem } from './planner/work-item'
 import { WorkService } from './planner/work-service'
-import { deployKubernetes } from './kubernetes/schedule-kubernetes'
-import { createKubernetesInstances } from './kubernetes/kubernetes-instance'
 import { checkForLoop } from './executer/scheduler/check-for-loop'
 import { State } from './executer/state'
 import { getSchedulerExecuteResult } from './executer/get-scheduler-execute-result'
@@ -32,10 +29,6 @@ export interface CliExecOptions {
   logMode: LogMode
   cacheDefault: CacheMethod
   processManager: ProcessManager
-}
-
-export interface CliCleanOptions {
-  service: boolean
 }
 
 export interface CliExecResult {
@@ -80,7 +73,7 @@ export class Cli {
         checkForLoop(workTree)
 
         if (!hasError(workTree)) {
-          await updateServiceStatus(workTree, this.environment)
+          await updateServiceStatus(workTree)
 
           await executeWorkTree(workTree, this.environment, {
             daemon: options?.daemon ?? false,
@@ -100,40 +93,8 @@ export class Cli {
       },
     }
   }
-
-  async shutdown(): Promise<void> {
-    for (const task of iterateWorkTasks(this.workTree)) {
-      const containers = await this.environment.docker.listContainers({
-        all: true,
-        filters: {
-          label: [`hammerkit-id=${task.cacheId()}`],
-        },
-      })
-      for (const container of containers) {
-        await removeContainer(this.environment.docker.getContainer(container.Id))
-      }
-    }
-
-    for (const service of iterateWorkServices(this.workTree)) {
-      const containers = await this.environment.docker.listContainers({
-        all: true,
-        filters: {
-          label: [`hammerkit-id=${service.cacheId()}`],
-        },
-      })
-      for (const container of containers) {
-        await removeContainer(this.environment.docker.getContainer(container.Id))
-      }
-    }
-  }
-
   up(options?: Partial<CliExecOptions>): CliExecResult {
     return this.setup('up', options)
-  }
-
-  async deploy(envName: string) {
-    const env = this.workTree.environments[envName]
-    return await deployKubernetes(createKubernetesInstances(), this.workTree, env)
   }
 
   async runUp(options?: Partial<CliExecOptions>): Promise<SchedulerResult> {
@@ -159,18 +120,16 @@ export class Cli {
     return await run.start()
   }
 
-  async clean(options?: Partial<CliCleanOptions>): Promise<void> {
-    await cleanCache(this.workTree, this.environment, {
-      service: options?.service ?? false,
-    })
+  async clean(): Promise<void> {
+    await cleanCache(this.workTree, this.environment)
   }
 
   async restore(path: string): Promise<void> {
-    await restoreCache(path, this.workTree, this.environment)
+    await restoreCache(this.environment, path, this.workTree)
   }
 
   async store(path: string): Promise<void> {
-    await storeCache(path, this.workTree, this.environment)
+    await storeCache(this.environment, path, this.workTree)
   }
 
   services(): CliServiceItem[] {

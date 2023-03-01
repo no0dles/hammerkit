@@ -2,7 +2,7 @@ export interface TaskPendingState {
   type: 'pending'
   stateKey: string | null
 }
-
+// TODO add dep stateKeys
 export interface TaskStartingState {
   type: 'starting'
   started: Date

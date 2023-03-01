@@ -1,32 +1,26 @@
 import { exec } from 'child_process'
 import { getErrorMessage, getLogs } from '../log'
 import { listenOnAbort } from '../utils/abort-event'
-import { StatusScopedConsole } from '../planner/work-item-status'
 import { sleep } from '../utils/sleep'
-import { WorkItemState } from '../planner/work-item'
+import { WorkItem } from '../planner/work-item'
 import { KubernetesWorkService } from '../planner/work-service'
 import { ServiceState } from './scheduler/service-state'
+import { ExecuteOptions } from '../runtime/runtime'
 
 // TODO change ServiceState => ServiceReadyState
 export async function kubernetesService(
-  service: WorkItemState<KubernetesWorkService, ServiceState>,
-  stateKey: string,
-  abort: AbortSignal
+  service: WorkItem<KubernetesWorkService>,
+  options: ExecuteOptions<ServiceState>
 ): Promise<void> {
   do {
-    await startForward(service, stateKey, service.status, abort)
-    if (!abort.aborted) {
+    await startForward(service, options)
+    if (!options.abort.aborted) {
       await sleep(1000)
     }
-  } while (!abort.aborted)
+  } while (!options.abort.aborted)
 }
 
-function startForward(
-  item: WorkItemState<KubernetesWorkService, ServiceState>,
-  stateKey: string,
-  status: StatusScopedConsole,
-  abort: AbortSignal
-) {
+function startForward(item: WorkItem<KubernetesWorkService>, options: ExecuteOptions<ServiceState>) {
   const service = item.data
   const cmd = `kubectl port-forward ${service.selector.type}/${service.selector.name} --kubeconfig ${
     service.kubeconfig
@@ -37,41 +31,41 @@ function startForward(
   return new Promise<void>((resolve) => {
     ps.stdout?.on('data', async (data) => {
       for (const log of getLogs(data)) {
-        status.console('stdout', log)
+        item.status.console('stdout', log)
       }
-      item.state.set({
+      options.state.set({
         type: 'running',
         dns: { host: 'host-gateway' },
-        stateKey,
+        stateKey: options.stateKey,
         remote: null,
       })
     })
     ps.stderr?.on('data', async (data) => {
       for (const log of getLogs(data)) {
-        status.console('stderr', log)
+        item.status.console('stderr', log)
       }
     })
     ps.on('error', (err) => {
-      status.write('error', getErrorMessage(err))
-      item.state.set({
+      item.status.write('error', getErrorMessage(err))
+      options.state.set({
         type: 'end',
         reason: 'crash',
-        stateKey,
+        stateKey: options.stateKey,
       })
     })
     ps.on('close', (code) => {
-      status.write('info', `exit with ${code}`)
-      item.state.set({
+      item.status.write('info', `exit with ${code}`)
+      options.state.set({
         type: 'end',
         reason: 'crash',
-        stateKey,
+        stateKey: options.stateKey,
       })
       abortListener.close()
       resolve()
     })
   })
 
-  const abortListener = listenOnAbort(abort, () => {
+  const abortListener = listenOnAbort(options.abort, () => {
     ps.kill()
   })
 }

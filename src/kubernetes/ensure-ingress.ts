@@ -1,4 +1,4 @@
-import { WorkEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { BuildFileEnvironmentSchemaIngress } from '../schema/build-file-environment-schema-ingress'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
@@ -9,7 +9,7 @@ import { getResourceName } from './resources'
 
 export async function ensureIngress(
   instance: KubernetesInstance,
-  env: WorkEnvironment,
+  env: WorkKubernetesEnvironment,
   ingress: BuildFileEnvironmentSchemaIngress,
   service: WorkItem<ContainerWorkService>
 ) {

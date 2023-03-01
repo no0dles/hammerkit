@@ -5,7 +5,6 @@ import { Environment } from '../executer/environment'
 import { consoleContext } from '../log'
 import { createWriteStream } from 'fs'
 import { statusConsole } from '../planner/work-item-status'
-import { getContainerCli } from '../executer/execute-docker'
 import { createCli } from '../program'
 import { stringify as yamlSerialize } from 'yaml'
 import { runProgram } from '../run-program'
@@ -44,7 +43,6 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
           file,
           console: consoleContext(createWriteStream(consoleFile)),
           status: statusConsole(createWriteStream(statusFile)),
-          docker: getContainerCli(),
           stdout: createWriteStream(stdoutFile),
           stderr: createWriteStream(stderrFile),
           stdoutColumns: 80,
@@ -72,7 +70,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
         environment.processEnvs = { ...environment.processEnvs, ...(scope.envs ?? {}) }
 
         const cli = await createCli(fileName, environment, scope)
-        await cli.clean({ service: true }) // TODO as argument
+        await cli.clean()
 
         if (fn) {
           await fn(cli, environment)

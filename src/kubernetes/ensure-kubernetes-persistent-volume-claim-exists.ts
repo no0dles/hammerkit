@@ -1,4 +1,4 @@
-import { WorkEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkService } from '../planner/work-service'
 import { V1PersistentVolumeClaim } from '@kubernetes/client-node'
 import { apply } from './apply'
@@ -7,7 +7,7 @@ import { getVersion } from '../version'
 
 export async function ensureKubernetesPersistentVolumeClaimExists(
   instance: KubernetesInstance,
-  env: WorkEnvironment,
+  env: WorkKubernetesEnvironment,
   service: WorkService,
   name: string
 ): Promise<V1PersistentVolumeClaim> {

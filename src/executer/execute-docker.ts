@@ -10,7 +10,7 @@ let dockerInstance: Dockerode | null = null
 
 export function getContainerCli(): Dockerode {
   if (!dockerInstance) {
-    dockerInstance = new Dockerode()
+    dockerInstance = new Dockerode({})
   }
   return dockerInstance
 }

@@ -3,7 +3,7 @@ import { Environment } from './environment'
 import { ensureVolumeExists, recreateVolume } from './get-docker-executor'
 import { extname } from 'path'
 import { setUserPermission } from './set-user-permission'
-import { Container } from 'dockerode'
+import Dockerode, { Container } from 'dockerode'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkTask, isContainerWorkTask } from '../planner/work-task'
 import { ContainerWorkService } from '../planner/work-service'
@@ -11,22 +11,22 @@ import { getContainerBinds } from './get-container-binds'
 
 export async function pullImage(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  environment: Environment
+  docker: Dockerode
 ): Promise<void> {
-  await pull(item.status, environment, item.data.image)
+  await pull(item.status, docker, item.data.image)
 }
 
 export async function prepareVolume(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  environment: Environment
+  docker: Dockerode
 ): Promise<void> {
   for (const volume of item.data.volumes) {
     if (volume.resetOnChange && !volume.inherited) {
       item.status.write('debug', 'recreate volume')
-      await recreateVolume(environment, item.status, volume.name)
+      await recreateVolume(docker, item.status, volume.name)
     } else {
       item.status.write('debug', 'ensure volume exists')
-      await ensureVolumeExists(environment, item.status, volume.name)
+      await ensureVolumeExists(docker, item.status, volume.name)
     }
   }
   if (isContainerWorkTask(item.data)) {
@@ -36,10 +36,10 @@ export async function prepareVolume(
       }
       if (generate.resetOnChange && !generate.inherited) {
         item.status.write('debug', 'recreate volume')
-        await recreateVolume(environment, item.status, generate.volumeName)
+        await recreateVolume(docker, item.status, generate.volumeName)
       } else {
         item.status.write('debug', 'ensure volume exists')
-        await ensureVolumeExists(environment, item.status, generate.volumeName)
+        await ensureVolumeExists(docker, item.status, generate.volumeName)
       }
     }
   }

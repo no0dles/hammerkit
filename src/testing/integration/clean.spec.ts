@@ -4,6 +4,7 @@ import { expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 import { existsVolume } from '../../executer/get-docker-executor'
 import { getVolumeName } from '../../planner/utils/plan-work-volume'
+import { getContainerCli } from '../../executer/execute-docker'
 
 describe('clean', () => {
   const suite = getTestSuite('clean', ['.hammerkit.yaml', 'package.json'])
@@ -27,12 +28,13 @@ describe('clean', () => {
     const result = await cli.runExec({ cacheDefault: 'none' })
     await expectSuccessfulResult(result, environment)
 
+    const docker = getContainerCli()
     const outputPath = join(suite.path, 'node_modules')
     const volumeName = getVolumeName(outputPath)
-    expect(await existsVolume(environment, volumeName)).toBeTruthy()
+    expect(await existsVolume(docker, volumeName)).toBeTruthy()
 
     await cli.clean()
-    expect(await existsVolume(environment, volumeName)).toBeFalsy()
+    expect(await existsVolume(docker, volumeName)).toBeFalsy()
   })
 
   it('should clean and restore created data in volumes', async () => {
@@ -41,7 +43,7 @@ describe('clean', () => {
     const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
 
-    await cli.clean({ service: true })
+    await cli.clean()
     const resultAfterClean = await cli.runExec()
     await expectSuccessfulResult(resultAfterClean, environment)
   })

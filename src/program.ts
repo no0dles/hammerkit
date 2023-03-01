@@ -23,7 +23,9 @@ export async function createCli(fileName: string, environment: Environment, work
 }
 
 function parseWorkLabelScope(options: unknown): WorkLabelScope {
-  const scope: WorkLabelScope = {}
+  const scope: WorkLabelScope = {
+    environmentName: null,
+  }
   if (typeof options !== 'object') {
     return scope
   }
@@ -36,6 +38,8 @@ function parseWorkLabelScope(options: unknown): WorkLabelScope {
       scope.filterLabels = parseLabelArguments(value)
     } else if (key === 'exclude' && value instanceof Array) {
       scope.excludeLabels = parseLabelArguments(value)
+    } else if (key === 'env') {
+      scope.environmentName = `${value}`
     }
   }
 
@@ -142,15 +146,12 @@ export async function getProgram(
 
     program
       .command('clean')
-      .description('clear task cache')
-      .addOption(new Option('--service', 'clean data volumes of services'))
+      .description('clear cache and generated')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (options) => {
         const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
-        await cli.clean({
-          service: options.service,
-        })
+        await cli.clean()
       })
 
     program
@@ -212,34 +213,6 @@ export async function getProgram(
       })
 
     program
-      .command('shutdown')
-      .description('end all container tasks/services')
-      .arguments('[task]')
-      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
-      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
-      .action(async (task, options) => {
-        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkLabelScope(options))
-        await cli.shutdown()
-      })
-
-    program
-      .command('deploy <env>')
-      .description('deploy services(s)')
-      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
-      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
-      .action(async (env, options) => {
-        const scope = parseWorkLabelScope(options)
-        const cli = await createCli(fileName, environment, scope)
-        const result = await cli.deploy(env)
-
-        if (!result.success) {
-          program.error('Execution was not successful', { exitCode: 1 })
-        } else {
-          process.exit()
-        }
-      })
-
-    program
       .command('up')
       .description('start services(s)')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
@@ -247,6 +220,7 @@ export async function getProgram(
       .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
       .addOption(new Option('-w, --watch', 'watch tasks').default(false))
       .addOption(new Option('-d, --daemon', 'run services in background').default(false))
+      .addOption(new Option('--env <name>', 'environment'))
       .addOption(
         new Option('-l, --log <mode>', 'log mode')
           .default(isCI ? 'live' : 'interactive')
@@ -280,6 +254,7 @@ export async function getProgram(
       .description('stop services(s)')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('--env <name>', 'environment'))
       .action(async (options) => {
         const scope = parseWorkLabelScope(options)
         const cli = await createCli(fileName, environment, scope)
@@ -297,6 +272,7 @@ export async function getProgram(
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
       .addOption(new Option('-w, --watch', 'watch tasks').default(false))
+      .addOption(new Option('--env <name>', 'environment'))
       .addOption(
         new Option('-l, --log <mode>', 'log mode')
           .default(isCI ? 'live' : 'interactive')
@@ -308,7 +284,11 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (task, options) => {
-        const cli = await createCli(fileName, environment, task ? { taskName: task } : parseWorkLabelScope(options))
+        const cli = await createCli(
+          fileName,
+          environment,
+          task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options)
+        )
         if (cli.tasks().length === 0) {
           program.error('No tasks found', { exitCode: 127 })
           return

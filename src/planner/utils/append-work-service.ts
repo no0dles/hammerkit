@@ -13,11 +13,12 @@ import { createSource, parseWorkSource } from './parse-work-source'
 import { appendWorkDependencies } from './append-work-dependencies'
 import { appendWorkNeeds } from './append-work-needs'
 import { Environment } from '../../executer/environment'
-import { WorkItemState } from '../work-item'
+import { WorkItem, WorkItemState } from '../work-item'
 import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
 import { ServiceState } from '../../executer/scheduler/service-state'
 import { State } from '../../executer/state'
 import { lazyResolver } from '../../executer/lazy-resolver'
+import { getWorkServiceRuntime } from './get-work-runtime'
 
 export function appendWorkService(
   workTree: WorkTree,
@@ -26,7 +27,7 @@ export function appendWorkService(
 ): WorkItemState<WorkService, ServiceState> {
   const workService = parseService(service, environment)
   if (!workTree.services[workService.name]) {
-    const workTreeService: WorkItemState<WorkService, ServiceState> = {
+    const workItem: WorkItem<WorkService> = {
       cacheId: lazyResolver(() => getWorkServiceId(workService)),
       name: workService.name,
       data: workService,
@@ -34,15 +35,19 @@ export function appendWorkService(
       deps: [],
       needs: [],
       requiredBy: [],
+    }
+    const workStateItem: WorkItemState<WorkService, ServiceState> = {
+      ...workItem,
       state: new State<ServiceState>({
         type: 'pending',
         stateKey: null,
       }),
+      runtime: getWorkServiceRuntime(workTree, workItem),
     }
-    workTree.services[workTreeService.name] = workTreeService
-    appendWorkDependencies(workTree, service, workTreeService, environment)
-    appendWorkNeeds(workTree, service, workTreeService, environment)
-    return workTreeService
+    workTree.services[workItem.name] = workStateItem
+    appendWorkDependencies(workTree, service, workStateItem, environment)
+    appendWorkNeeds(workTree, service, workStateItem, environment)
+    return workStateItem
   } else {
     return workTree.services[workService.name]
   }

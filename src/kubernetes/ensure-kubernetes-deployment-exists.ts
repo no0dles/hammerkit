@@ -1,4 +1,4 @@
-import { WorkEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { getContainer, KubernetesServiceVolume } from './volumes'
@@ -11,7 +11,7 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
-  env: WorkEnvironment,
+  env: WorkKubernetesEnvironment,
   service: WorkItem<ContainerWorkService>,
   volumes: KubernetesServiceVolume[]
 ) {

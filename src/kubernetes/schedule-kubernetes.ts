@@ -9,13 +9,13 @@ import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 import { iterateWorkServices } from '../planner/utils/plan-work-tasks'
 import { isContainerWorkService } from '../planner/work-service'
 import { isContainerWorkServiceItem } from '../planner/work-item'
-import { WorkEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 
 export async function deployKubernetes(
   instance: KubernetesInstance,
   workTree: WorkTree,
-  env: WorkEnvironment
+  env: WorkKubernetesEnvironment
 ): Promise<SchedulerResult> {
   for (const item of iterateWorkServices(workTree)) {
     if (isContainerWorkServiceItem(item)) {

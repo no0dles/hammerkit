@@ -4,12 +4,14 @@ import { ContainerWorkTask, LocalWorkTask, WorkTask } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
+import { WorkRuntime } from '../runtime/runtime'
 
-export interface WorkItemState<T, S> extends WorkItem<T> {
+export interface WorkItemState<T extends WorkService | WorkTask, S> extends WorkItem<T> {
   state: State<S>
+  runtime: WorkRuntime<S>
 }
 
-export interface WorkItem<T> {
+export interface WorkItem<T extends WorkService | WorkTask> {
   cacheId: () => string
   name: string
   status: StatusScopedConsole

@@ -1,4 +1,4 @@
-import { WorkEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { WorkService } from '../planner/work-service'
 import { V1Service } from '@kubernetes/client-node'
@@ -9,7 +9,7 @@ import { getVersion } from '../version'
 
 export async function ensureKubernetesServiceExists(
   instance: KubernetesInstance,
-  env: WorkEnvironment,
+  env: WorkKubernetesEnvironment,
   service: WorkItem<WorkService>
 ) {
   const name = getResourceName(service)

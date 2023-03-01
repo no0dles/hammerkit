@@ -3,11 +3,17 @@ import { ReferenceEnvironment } from '../../schema/reference-parser'
 import { WorkEnvironment } from '../work-environment'
 
 export function appendWorkEnvironment(workTree: WorkTree, referenced: ReferenceEnvironment): WorkEnvironment {
-  const env: WorkEnvironment = {
-    namespace: referenced.schema.namespace,
-    context: referenced.schema.context,
-    ingresses: referenced.schema.ingresses ?? [],
+  if ('docker' in referenced.schema) {
+    return {
+      type: 'docker',
+      host: referenced.schema.docker.host,
+    }
+  } else {
+    return {
+      type: 'kubernetes',
+      context: referenced.schema.kubernetes.context,
+      ingresses: referenced.schema.kubernetes.ingresses || [],
+      namespace: referenced.schema.kubernetes.namespace,
+    }
   }
-  workTree.environments[referenced.name] = env
-  return env
 }

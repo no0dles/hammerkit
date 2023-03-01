@@ -4,7 +4,7 @@ import { isVerbose } from '../log'
 import { Writable } from 'stream'
 import { WorkService } from './work-service'
 import { WorkTask } from './work-task'
-import { BufferContext } from './buffer-context'
+import { BufferContext } from '../utils/buffer-context'
 
 export type WorkItemLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
@@ -47,7 +47,7 @@ export function logContext(type: 'task' | 'service', item: WorkService | WorkTas
     name: item.name,
   }
 }
-
+// TODO cleanup
 export interface StatusConsole extends Emitter<Message> {
   from(item: WorkService | WorkTask): StatusScopedConsole
   context(ctx: LogContext): StatusScopedConsole
@@ -55,6 +55,7 @@ export interface StatusConsole extends Emitter<Message> {
   read(): Generator<StatusMessage>
 }
 
+// TODO cleanup
 export interface StatusScopedConsole {
   write(level: WorkItemLogLevel, message: string): void
 

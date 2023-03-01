@@ -1,4 +1,4 @@
-import { isContainerWorkTaskItem, isLocalWorkTaskItem, WorkItemState } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { Environment } from './environment'
 import { CliExecOptions } from '../cli'
@@ -8,9 +8,6 @@ import { writeWorkTaskCache } from '../optimizer/write-work-task-cache'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { awaitCompletedDependencies, awaitRunningNeeds } from './await-completed-dependencies'
-import { dockerTask } from './docker-task'
-import { getServiceContainers } from './get-service-containers'
-import { localTask } from './local-task'
 import { watchLoop } from './watch-loop'
 
 export async function executeWorkTask(
@@ -59,12 +56,14 @@ export async function executeWorkTask(
           started,
         })
 
-        if (isContainerWorkTaskItem(work)) {
-          const serviceContainers = getServiceContainers(work.needs)
-          await dockerTask(work, cacheState.stateKey, serviceContainers, environment, abort)
-        } else if (isLocalWorkTaskItem(work)) {
-          await localTask(work, cacheState.stateKey, environment, abort)
-        }
+        await work.runtime.execute(environment, {
+          cache: cacheState,
+          abort,
+          stateKey: cacheState.stateKey,
+          state: work.state,
+          daemon: options.daemon,
+        })
+
         checkForAbort(abort)
 
         if (work.state.current.type === 'running') {

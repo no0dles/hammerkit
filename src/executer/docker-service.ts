@@ -1,5 +1,5 @@
 import { ContainerWorkService } from '../planner/work-service'
-import { Container } from 'dockerode'
+import Dockerode, { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
 import { logStream } from '../docker/stream'
@@ -10,37 +10,36 @@ import { checkReadiness } from './check-readiness'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
 import { getNeedsNetwork } from './docker-task'
-import { ServiceDns } from './service-dns'
-import { WorkItemState } from '../planner/work-item'
-import { CliExecOptions } from '../cli'
+import { WorkItem } from '../planner/work-item'
 import { ServiceState } from './scheduler/service-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
+import { ExecuteOptions } from '../runtime/runtime'
+import { getServiceContainers } from './get-service-containers'
 
 export async function dockerService(
-  item: WorkItemState<ContainerWorkService, ServiceState>,
-  stateKey: string,
-  serviceContainers: { [key: string]: ServiceDns },
-  environment: Environment,
-  options: CliExecOptions,
-  abort: AbortSignal
+  docker: Dockerode,
+  item: WorkItem<ContainerWorkService>,
+  options: ExecuteOptions<ServiceState>,
+  environment: Environment
 ): Promise<void> {
   let container: Container | null = null
 
   try {
     await prepareMounts(item, environment)
-    checkForAbort(abort)
+    checkForAbort(options.abort)
 
-    await pullImage(item, environment)
-    checkForAbort(abort)
+    await pullImage(item, docker)
+    checkForAbort(options.abort)
 
-    await prepareVolume(item, environment)
-    checkForAbort(abort)
+    await prepareVolume(item, docker)
+    checkForAbort(options.abort)
 
+    const serviceContainers = getServiceContainers(item.needs)
     const network = getNeedsNetwork(serviceContainers, item.needs)
 
     item.status.write('debug', `create container with image ${item.data.image}`)
     const envs = getEnvironmentVariables(item.data.envs)
-    container = await environment.docker.createContainer({
+    container = await docker.createContainer({
       Image: item.data.image,
       Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
       Labels: {
@@ -48,7 +47,7 @@ export async function dockerService(
         'hammerkit-id': item.cacheId(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'service',
-        'hammerkit-state': stateKey,
+        'hammerkit-state': options.stateKey,
       },
       ExposedPorts: item.data.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
         map[`${port.containerPort}/tcp`] = {}
@@ -79,26 +78,26 @@ export async function dockerService(
     await container.start()
 
     if (!item.data.healthcheck) {
-      item.state.set({
+      options.state.set({
         type: 'running',
         dns: { containerId: container.id },
-        stateKey,
+        stateKey: options.stateKey,
         remote: null,
       })
     } else {
       let ready = false
       do {
-        ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, abort)
+        ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, options.abort)
         if (!ready) {
           await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
         }
-      } while (!ready && !abort.aborted)
+      } while (!ready && !options.abort.aborted)
 
       if (ready) {
-        item.state.set({
+        options.state.set({
           type: 'running',
           dns: { containerId: container.id },
-          stateKey,
+          stateKey: options.stateKey,
           remote: null,
         })
       }
@@ -106,26 +105,26 @@ export async function dockerService(
 
     // TODO check if container crashes
     if (!options.daemon) {
-      await waitOnAbort(abort)
+      await waitOnAbort(options.abort)
 
-      item.state.set({
+      options.state.set({
         type: 'end',
-        stateKey,
+        stateKey: options.stateKey,
         reason: 'terminated',
       })
     }
   } catch (e) {
     if (e instanceof AbortError) {
-      item.state.set({
+      options.state.set({
         type: 'canceled',
-        stateKey,
+        stateKey: options.stateKey,
       })
     } else {
       item.status.write('error', getErrorMessage(e))
-      item.state.set({
+      options.state.set({
         type: 'end',
         reason: 'crash',
-        stateKey,
+        stateKey: options.stateKey,
       })
     }
   } finally {

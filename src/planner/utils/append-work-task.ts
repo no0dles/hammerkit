@@ -13,11 +13,12 @@ import { getWorkCacheId } from '../work-cache-id'
 import { appendWorkDependencies } from './append-work-dependencies'
 import { appendWorkNeeds } from './append-work-needs'
 import { Environment } from '../../executer/environment'
-import { WorkItemState } from '../work-item'
+import { WorkItem, WorkItemState } from '../work-item'
 import { TaskState } from '../../executer/scheduler/task-state'
 import { State } from '../../executer/state'
 import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
 import { lazyResolver } from '../../executer/lazy-resolver'
+import { getWorkTaskRuntime } from './get-work-runtime'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -27,7 +28,7 @@ export function appendWorkTask(
 ): WorkItemState<WorkTask, TaskState> {
   const task = parseTask(cwd, referenceTask, environment)
   if (!workTree.tasks[task.name]) {
-    const workTreeNode: WorkItemState<WorkTask, TaskState> = {
+    const workItem: WorkItem<WorkTask> = {
       cacheId: lazyResolver(() => getWorkCacheId(task)),
       name: task.name,
       data: task,
@@ -35,15 +36,19 @@ export function appendWorkTask(
       needs: [],
       deps: [],
       requiredBy: [],
+    }
+    const workItemState: WorkItemState<WorkTask, TaskState> = {
+      ...workItem,
       state: new State<TaskState>({
         type: 'pending',
         stateKey: null,
       }),
+      runtime: getWorkTaskRuntime(workTree, workItem),
     }
-    workTree.tasks[task.name] = workTreeNode
-    appendWorkDependencies(workTree, referenceTask, workTreeNode, environment)
-    appendWorkNeeds(workTree, referenceTask, workTreeNode, environment)
-    return workTreeNode
+    workTree.tasks[task.name] = workItemState
+    appendWorkDependencies(workTree, referenceTask, workItemState, environment)
+    appendWorkNeeds(workTree, referenceTask, workItemState, environment)
+    return workItemState
   } else {
     return workTree.tasks[task.name]
   }

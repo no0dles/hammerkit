@@ -1,7 +1,7 @@
-import { WorkEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 
-export function awaitRunningState(instance: KubernetesInstance, env: WorkEnvironment, name: string) {
+export function awaitRunningState(instance: KubernetesInstance, env: WorkKubernetesEnvironment, name: string) {
   return new Promise<void>((resolve, reject) => {
     const req = instance.watch.watch(
       `/api/v1/pods`,

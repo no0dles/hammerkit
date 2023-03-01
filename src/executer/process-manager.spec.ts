@@ -15,6 +15,7 @@ describe('process-manager', () => {
       name: id,
       data: null,
       state: null,
+      runtime: null as any,
     } as WorkItem<any>
   }
 

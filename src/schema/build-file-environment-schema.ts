@@ -1,9 +1,22 @@
-import { array, object, string, z } from 'zod'
+import { array, object, string, union, z } from 'zod'
 import { buildFileEnvironmentSchemaIngress } from './build-file-environment-schema-ingress'
 
-export const buildFileEnvironmentSchema = object({
+export const buildFileKubernetesEnvironmentSchema = object({
   namespace: string(),
   context: string(),
   ingresses: array(buildFileEnvironmentSchemaIngress).optional(),
 }).strict()
+
+export const buildFileDockerEnvironmentSchema = object({
+  host: string().optional(),
+}).strict()
+
+export const buildFileEnvironmentSchema = union([
+  object({
+    kubernetes: buildFileKubernetesEnvironmentSchema,
+  }).strict(),
+  object({
+    docker: buildFileDockerEnvironmentSchema,
+  }).strict(),
+])
 export type BuildFileEnvironmentSchema = z.infer<typeof buildFileEnvironmentSchema>

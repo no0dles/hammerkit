@@ -6,7 +6,6 @@ import { statusConsole } from '../planner/work-item-status'
 import { Environment } from '../executer/environment'
 import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
-import { getContainerCli } from '../executer/execute-docker'
 import { createWriteStream } from 'fs'
 import { consoleContext } from '../log'
 
@@ -57,7 +56,6 @@ export class ExampleTestSuite implements TestSuite {
       file: this.file,
       console: consoleContext(createWriteStream(consoleFile)),
       status: statusConsole(createWriteStream(statusFile)),
-      docker: getContainerCli(),
       stdout: createWriteStream(stdoutFile),
       stderr: createWriteStream(stderrFile),
       stdoutColumns: 80,
@@ -77,8 +75,7 @@ export class ExampleTestSuite implements TestSuite {
     })
 
     const cli = await createCli(fileName, environment, scope)
-    await cli.shutdown()
-    await cli.clean({ service: true })
+    await cli.clean()
 
     // reset cli clean stats
     environment.status = statusConsole(createWriteStream(statusFile, { flags: 'a' }))

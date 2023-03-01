@@ -17,7 +17,7 @@ export async function executeWorkTree(work: WorkTree, environment: Environment, 
   for (const service of iterateWorkServices(work)) {
     if (options.type === 'down') {
       if (service.state.current.type === 'running') {
-        itemPromises.push(stopService(service, environment))
+        itemPromises.push(stopService(service))
       }
     } else if (service.state.current.type === 'pending') {
       itemPromises.push(executeWorkService(service, environment, options))

@@ -3,7 +3,6 @@
 import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
 import { statusConsole } from './planner/work-item-status'
-import { getContainerCli } from './executer/execute-docker'
 import { emptyWritable } from './utils/empty-writable'
 import { runProgram } from './run-program'
 
@@ -21,7 +20,6 @@ runProgram(
     file: getFileContext(process.cwd()),
     console: consoleContext(process.stdout),
     status: statusConsole(emptyWritable()),
-    docker: getContainerCli(),
     stdout: process.stdout,
     stderr: process.stderr,
     stdoutColumns: process.stdout.columns,
