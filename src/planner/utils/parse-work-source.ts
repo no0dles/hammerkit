@@ -1,5 +1,5 @@
 import { Minimatch } from 'minimatch'
-import { join, relative } from 'path'
+import { extname, join, relative } from 'path'
 import { WorkSource } from '../work-source'
 import { templateValue } from './template-value'
 import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
@@ -28,9 +28,10 @@ export function parseWorkSource(
           inherited: false,
           source,
           absolutePath,
+          isFile: false,
         })
       } else {
-        const prefixSource = source.substr(0, wildcardIndex)
+        const prefixSource = source.substring(0, wildcardIndex)
         const absolutePath = join(cwd, templateValue(prefixSource, envs))
         result.push({
           matcher: (file, cwd) => {
@@ -40,6 +41,7 @@ export function parseWorkSource(
           inherited: false,
           source,
           absolutePath,
+          isFile: false,
         })
       }
     } else {
@@ -49,6 +51,7 @@ export function parseWorkSource(
         absolutePath,
         source,
         inherited: false,
+        isFile: extname(absolutePath).length > 1,
       })
     }
   }
@@ -62,5 +65,6 @@ export function createSource(absolutePath: string): WorkSource {
     absolutePath,
     source: absolutePath,
     inherited: false,
+    isFile: extname(absolutePath).length > 1,
   }
 }

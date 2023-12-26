@@ -5,10 +5,11 @@ import { platform } from 'os'
 import { Environment } from './environment'
 import { listenOnAbort } from '../utils/abort-event'
 import { StatusScopedConsole } from '../planner/work-item-status'
+import { WorkDockerEnvironment } from '../planner/work-environment'
 
 let dockerInstance: Dockerode | null = null
 
-export function getContainerCli(): Dockerode {
+export function getContainerCli(workEnvironment: WorkDockerEnvironment): Dockerode {
   if (!dockerInstance) {
     dockerInstance = new Dockerode({})
   }

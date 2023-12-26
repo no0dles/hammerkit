@@ -3,4 +3,5 @@ export interface WorkSource {
   source: string
   matcher: (fileName: string, cwd: string) => boolean
   inherited: boolean
+  isFile: boolean
 }

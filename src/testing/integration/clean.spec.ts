@@ -28,7 +28,7 @@ describe('clean', () => {
     const result = await cli.runExec({ cacheDefault: 'none' })
     await expectSuccessfulResult(result, environment)
 
-    const docker = getContainerCli()
+    const docker = getContainerCli({ type: 'docker' })
     const outputPath = join(suite.path, 'node_modules')
     const volumeName = getVolumeName(outputPath)
     expect(await existsVolume(docker, volumeName)).toBeTruthy()

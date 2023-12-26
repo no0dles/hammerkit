@@ -57,7 +57,7 @@ export class Cli {
     const processManager = new ProcessManager(options?.workers ?? 0)
     const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
 
-    const workTree = resetWorkTree(this.workTree)
+    const workTree = resetWorkTree(this.workTree, type)
     const processWorkTree = new State<WorkTree>(workTree, {
       subStates: [
         ...Object.values(workTree.services).map((s) => s.state),

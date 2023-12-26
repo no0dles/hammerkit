@@ -5,8 +5,9 @@ import { TaskState } from './scheduler/task-state'
 import { State } from './state'
 import { WorkService } from '../planner/work-service'
 import { ServiceState } from './scheduler/service-state'
+import { ExecuteKind } from '../cli'
 
-export function resetWorkTree(workTree: WorkTree): WorkTree {
+export function resetWorkTree(workTree: WorkTree, type: ExecuteKind): WorkTree {
   return {
     tasks: Object.entries(workTree.tasks).reduce<{ [key: string]: WorkItemState<WorkTask, TaskState> }>(
       (tasks, [key, task]) => {
@@ -22,6 +23,10 @@ export function resetWorkTree(workTree: WorkTree): WorkTree {
     services: Object.entries(workTree.services).reduce<{
       [key: string]: WorkItemState<WorkService, ServiceState>
     }>((services, [key, service]) => {
+      if (type === 'execute' && service.requiredBy.length === 0) {
+        return services
+      }
+
       service.state = new State<ServiceState>({
         type: 'pending',
         stateKey: null,

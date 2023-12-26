@@ -18,9 +18,9 @@ import {
 export function getWorkServiceRuntime(workTree: WorkTree, service: WorkItem<WorkService>): WorkRuntime<ServiceState> {
   if (isContainerWorkServiceItem(service)) {
     if (workTree.environment.type === 'kubernetes') {
-      return kubernetesServiceRuntime(service)
+      return kubernetesServiceRuntime(service, workTree.environment)
     } else {
-      return dockerServiceRuntime(service)
+      return dockerServiceRuntime(service, workTree.environment)
     }
   } else if (isKubernetesWorkServiceItem(service)) {
     return kubernetesForwardRuntime(service)
@@ -34,9 +34,9 @@ export function getWorkTaskRuntime(workTree: WorkTree, task: WorkItem<WorkTask>)
     return getLocalWorkRuntime(task)
   } else if (isContainerWorkTaskItem(task)) {
     if (workTree.environment.type === 'kubernetes') {
-      return kubernetesTaskRuntime(task)
+      return kubernetesTaskRuntime(task, workTree.environment)
     } else {
-      return dockerTaskRuntime(task)
+      return dockerTaskRuntime(task, workTree.environment)
     }
   } else {
     // TODO ensure else case is type safe

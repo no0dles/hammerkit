@@ -1,27 +1,55 @@
 import { ContainerWorkService, WorkService } from '../planner/work-service'
-import { dirname } from 'path'
+import { basename, dirname, relative } from 'path'
 import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
 import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMount'
-import { isContainerWorkTask, WorkTask } from '../planner/work-task'
-import { V1Container } from '@kubernetes/client-node'
+import { ContainerWorkTask, isContainerWorkTask, WorkTask } from '../planner/work-task'
+import { V1ConfigMap, V1Container } from '@kubernetes/client-node'
 import { WorkItem } from '../planner/work-item'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
+import { getResourceName, removeInvalidCharacters } from './resources'
 
 export interface KubernetesServiceVolume {
   volume: V1Volume
-  volumeMount: V1VolumeMount
+  volumeMount: V1VolumeMount[]
   localPaths: string[]
   containerPath: string
   name: string
 }
 
-export function getVolumeName(service: WorkService, containerPath: string) {
-  const mountPath = dirname(containerPath)
-  const name = mountPath.replace(/\//g, '-').toLowerCase()
+export interface KubernetesPersistence {
+  configMaps: KubernetesConfigMapPersistence[]
+  volumes: KubernetesVolumePersistence[]
+}
+
+export interface KubernetesVolumePersistence {
+  claimName: string
+  cwd: string
+  volume: V1Volume
+  volumeMounts: V1VolumeMount[]
+  sources: KubernetesPersistenceSource[]
+}
+
+export interface KubernetesPersistenceSource {
+  localPath: string
+  localCwd: string
+  containerPath: string
+  stateKey: string
+  matcher: (fileName: string, cwd: string) => boolean
+}
+
+export interface KubernetesConfigMapPersistence {
+  name: string
+  volume: V1Volume
+  volumeMounts: V1VolumeMount[]
+  sources: { localPath: string; subPath: string }[]
+}
+
+export function getVolumeName(service: WorkService | ContainerWorkTask, containerPath: string) {
+  const name = removeInvalidCharacters(containerPath.replace(/\//g, '-')).toLowerCase()
   if (name.length > 1) {
-    return service.name.replace(/:/, '-') + name
+    return 'hammerkit' + name
   } else {
-    return service.name.replace(/:/, '-') + '-root'
+    return 'hammerkit-root'
   }
 }
 
@@ -41,64 +69,113 @@ export function getContainer(task: WorkTask, volumes: KubernetesServiceVolume[])
     command: [cmd.parsed.command],
     args: cmd.parsed.args,
     workingDir: cmd.cwd,
-    volumeMounts: volumes.map((v) => v.volumeMount),
+    volumeMounts: volumes.reduce<V1VolumeMount[]>((mounts, volume) => [...mounts, ...volume.volumeMount], []),
   }))
 }
 
-function appendVolume(
-  service: ContainerWorkService,
-  volumes: { [key: string]: KubernetesServiceVolume },
-  containerPath: string
-): KubernetesServiceVolume {
-  const name = getVolumeName(service, containerPath)
-  const containerDirectory = dirname(containerPath)
-  if (!volumes[name]) {
-    volumes[name] = {
-      name,
-      localPaths: [],
-      containerPath: containerDirectory,
-      volumeMount: {
-        name,
-        mountPath: containerDirectory,
-      },
-      volume: {
-        name,
-        persistentVolumeClaim: {
-          claimName: name,
-        },
-      },
-    }
-  }
-  return volumes[name]
+export function getVolumeMounts(persistence: KubernetesPersistence): V1VolumeMount[] {
+  return [
+    ...persistence.volumes.reduce<V1VolumeMount[]>((mounts, volume) => [...mounts, ...volume.volumeMounts], []),
+    ...persistence.configMaps.reduce<V1VolumeMount[]>((mounts, volume) => [...mounts, ...volume.volumeMounts], []),
+  ]
 }
 
-export function getServiceVolumes(service: WorkItem<ContainerWorkService>): KubernetesServiceVolume[] {
-  const volumes: { [key: string]: KubernetesServiceVolume } = {}
-  for (const mount of service.data.mounts) {
-    const volume = appendVolume(service.data, volumes, mount.containerPath)
-    if (volume.localPaths.indexOf(mount.localPath) === -1) {
-      volume.localPaths.push(mount.localPath)
+export function getVolumes(persistence: KubernetesPersistence): V1Volume[] {
+  return [...persistence.volumes.map((v) => v.volume), ...persistence.configMaps.map((c) => c.volume)]
+}
+
+export async function getKubernetesPersistence(
+  work: WorkItem<ContainerWorkTask | ContainerWorkService>
+): Promise<KubernetesPersistence> {
+  const persistence: KubernetesPersistence = { configMaps: [], volumes: [] }
+
+  for (const mount of work.data.mounts) {
+    appendVolume(work.data, persistence, mount.containerPath, mount.localPath, mount.isFile)
+  }
+
+  for (const src of work.data.src) {
+    appendVolume(work.data, persistence, src.absolutePath, src.absolutePath, src.isFile) // TODO matcher
+  }
+
+  if (work.data.type === 'container-task') {
+    for (const generate of work.data.generates) {
+      appendVolume(work.data, persistence, generate.path, generate.path, generate.isFile)
     }
   }
 
-  // for (const src of service.src) {
-  //   appendVolume(service, volumes, src.relativePath)
-  // }
-
-  for (const volume of service.data.volumes) {
-    appendVolume(service.data, volumes, volume.containerPath)
+  for (const volume of work.data.volumes) {
+    appendVolume(work.data, persistence, volume.containerPath, null, false)
   }
 
-  // TODO check if needed, dep mounts should be inherited
-  for (const dep of service.deps) {
-    if (isContainerWorkTask(dep.data)) {
-      for (const mount of dep.data.mounts) {
-        const volume = appendVolume(service.data, volumes, mount.containerPath)
-        if (volume.localPaths.indexOf(mount.localPath) === -1) {
-          volume.localPaths.push(mount.localPath)
-        }
-      }
+  return persistence
+}
+
+export function appendVolume(
+  work: ContainerWorkService | ContainerWorkTask,
+  persistence: KubernetesPersistence,
+  containerPath: string,
+  localPath: string | null,
+  isFile: boolean
+): void {
+  const workResourceName = getResourceName(work)
+
+  // if (isFile) {
+  //   if (!localPath) {
+  //     return
+  //   }
+  //   const configMapName = `${workResourceName}-files`
+  //   let configMap = persistence.configMaps[0]
+  //
+  //   if (!configMap) {
+  //     configMap = {
+  //       name: configMapName,
+  //       volume: { name: configMapName, configMap: { name: configMapName } },
+  //       volumeMounts: [],
+  //       sources: [],
+  //     }
+  //     persistence.configMaps.push(configMap)
+  //   }
+  //   const subPath = relative(work.cwd, containerPath)
+  //   configMap.sources.push({ subPath, localPath })
+  //   configMap.volumeMounts.push({
+  //     name: configMapName,
+  //     mountPath: dirname(containerPath),
+  //     subPath,
+  //   })
+  // } else {
+  const sourceDir = isFile ? dirname(containerPath) : containerPath
+  const cwd = relative(work.cwd, sourceDir).startsWith('..') ? sourceDir : work.cwd
+
+  const volumeName = getVolumeName(work, cwd)
+  let volume = persistence.volumes.find((v) => v.cwd === cwd)
+  if (!volume) {
+    volume = {
+      claimName: volumeName,
+      volume: {
+        name: volumeName,
+        persistentVolumeClaim: {
+          claimName: volumeName,
+        },
+      },
+      cwd,
+      volumeMounts: [
+        {
+          name: volumeName,
+          mountPath: cwd,
+        },
+      ],
+      sources: [],
     }
+    persistence.volumes.push(volume)
   }
-  return Object.values(volumes)
+  if (localPath) {
+    volume.sources.push({
+      localCwd: dirname(localPath),
+      localPath: localPath,
+      matcher: () => true, // TODO
+      containerPath,
+      stateKey: '', // TODO
+    })
+  }
+  //}
 }

@@ -12,4 +12,5 @@ export interface WorkKubernetesEnvironment {
   namespace: string
   context: string
   ingresses: BuildFileEnvironmentSchemaIngress[]
+  storageClass?: string
 }

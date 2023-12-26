@@ -31,13 +31,13 @@ export async function ensureIngress(
           http: {
             paths: [
               {
-                path: ingress.path,
+                path: ingress.path ?? '/',
                 pathType: 'Prefix',
                 backend: {
                   service: {
                     name: getResourceName(service),
                     port: {
-                      number: ingress.servicePort,
+                      number: ingress.servicePort ?? service.data.ports[0].containerPort,
                     },
                   },
                 },

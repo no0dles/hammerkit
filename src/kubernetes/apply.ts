@@ -1,14 +1,16 @@
 import { KubernetesObject } from '@kubernetes/client-node/dist/types'
 import { KubernetesInstance } from './kubernetes-instance'
 
+export type KubernetesObjectHeader = {
+  metadata: {
+    name: string
+    namespace: string
+  }
+} & Pick<KubernetesObject, 'apiVersion' | 'kind'>
+
 export async function apply<T extends KubernetesObject>(
   instance: KubernetesInstance,
-  selector: {
-    metadata: {
-      name: string
-      namespace: string
-    }
-  } & Pick<KubernetesObject, 'apiVersion' | 'kind'>,
+  selector: KubernetesObjectHeader,
   spec: T
 ) {
   try {

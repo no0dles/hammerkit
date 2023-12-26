@@ -16,9 +16,13 @@ import { getArchivePaths } from '../executer/event-cache'
 import { existsVolume, removeVolume } from '../executer/get-docker-executor'
 import { dirname } from 'path'
 import { getVolumeName } from './utils/plan-work-volume'
+import { WorkDockerEnvironment } from './work-environment'
 
-export function dockerTaskRuntime(task: WorkItem<ContainerWorkTask>): WorkRuntime<TaskState> {
-  const docker = getContainerCli()
+export function dockerTaskRuntime(
+  task: WorkItem<ContainerWorkTask>,
+  workEnvironment: WorkDockerEnvironment
+): WorkRuntime<TaskState> {
+  const docker = getContainerCli(workEnvironment)
   return {
     async initialize(item: State<TaskState>): Promise<void> {
       // TODO check if running
@@ -101,8 +105,11 @@ async function restoreContainer(
     }
   )
 }
-export function dockerServiceRuntime(service: WorkItem<ContainerWorkService>): WorkRuntime<ServiceState> {
-  const docker = getContainerCli()
+export function dockerServiceRuntime(
+  service: WorkItem<ContainerWorkService>,
+  workEnvironment: WorkDockerEnvironment
+): WorkRuntime<ServiceState> {
+  const docker = getContainerCli(workEnvironment)
   return {
     async initialize(state: State<ServiceState>): Promise<void> {
       const currentServices = await docker.listContainers({

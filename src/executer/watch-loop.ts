@@ -26,7 +26,8 @@ export async function watchLoop(
   const currentStats = await checkCacheState(work, work.data.caching ?? options.cacheDefault, environment)
   checkForAbort(environment.abortCtrl.signal)
 
-  const watchMode = options.watch && !options.daemon
+  const continuous = work.data.type === 'container-service' ? work.data.continuous : false
+  const watchMode = options.watch && !options.daemon && !continuous
 
   const watchState = watchMode
     ? watchStateKey(work, currentStats, environment, options)

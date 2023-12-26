@@ -1,19 +1,21 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { getContainer, KubernetesServiceVolume } from './volumes'
+import { getContainer, getVolumeMounts, getVolumes, KubernetesPersistence, KubernetesServiceVolume } from './volumes'
 import { V1Container, V1Deployment, V1HostAlias } from '@kubernetes/client-node'
 import { apply } from './apply'
 import { getServiceIp } from './get-service-ip'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
+import { awaitDeployRunningState } from './await-running-state'
+import { getResourceName } from './resources'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   service: WorkItem<ContainerWorkService>,
-  volumes: KubernetesServiceVolume[]
+  persistence: KubernetesPersistence
 ) {
   const hostAliases: V1HostAlias[] = []
   for (const need of service.needs) {
@@ -30,12 +32,13 @@ export async function ensureKubernetesDeploymentExists(
     })
   }
   const envs = getEnvironmentVariables(service.data.envs)
+  const name = getResourceName(service)
   const deployment: V1Deployment = {
     kind: 'Deployment',
     apiVersion: 'apps/v1',
     metadata: {
       namespace: env.namespace,
-      name: service.name.replace(/:/, '-'),
+      name: name,
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
@@ -54,10 +57,6 @@ export async function ensureKubernetesDeploymentExists(
           },
         },
         spec: {
-          initContainers: service.deps.reduce<V1Container[]>(
-            (containers, d) => [...containers, ...getContainer(d.data, volumes)],
-            []
-          ),
           hostAliases: hostAliases,
           containers: [
             {
@@ -73,31 +72,38 @@ export async function ensureKubernetesDeploymentExists(
               ports: service.data.ports.map((p) => ({
                 containerPort: p.containerPort,
               })),
-              volumeMounts: volumes.map((v) => v.volumeMount),
+              // TODO healthcheck
+              volumeMounts: getVolumeMounts(persistence),
             },
             {
               name: 'debug',
               image: 'alpine',
               command: ['sleep'],
               args: ['3600'],
-              volumeMounts: volumes.map((v) => v.volumeMount),
+              volumeMounts: getVolumeMounts(persistence),
             },
           ],
-          volumes: volumes.map((v) => v.volume),
+          volumes: getVolumes(persistence),
         },
       },
     },
   }
-  return await apply(
+  const deploy = await apply(
     instance,
     {
       kind: 'Deployment',
       apiVersion: 'apps/v1',
       metadata: {
         namespace: env.namespace,
-        name: service.name.replace(/:/, '-'),
+        name: name,
       },
     },
     deployment
   )
+
+  if (deploy.status?.readyReplicas ?? 0 > 0) {
+    return
+  }
+
+  await awaitDeployRunningState(instance, env, name)
 }
