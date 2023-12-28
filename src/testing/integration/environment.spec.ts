@@ -44,8 +44,7 @@ describe('environment', () => {
           staging: {
             kubernetes: {
               namespace: 'default',
-              context: 'docker-desktop',
-              //storageClass:  'local-path'
+              context: process.env.CLUSTER_NAME || 'docker-desktop',
               ingresses: [
                 {
                   host: 'demo.bertschi.io',

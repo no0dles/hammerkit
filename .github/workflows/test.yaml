@@ -32,6 +32,7 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+          CLUSTER_NAME: kind-chart-testing
       - name: Archive test artifacts
         if: failure()
         uses: actions/upload-artifact@v3
