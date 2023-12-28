@@ -38,13 +38,13 @@ export function awaitJobState(instance: KubernetesInstance, env: WorkKubernetesE
       `/apis/batch/v1/namespaces/${env.namespace}/jobs/${name}`,
       {},
       (type, obj: V1Job) => {
-        if (obj.metadata?.name === name && obj.metadata?.namespace === env.namespace && obj.status?.succeeded) {
+        if (obj && obj.metadata?.name === name && obj.metadata?.namespace === env.namespace && obj.status?.succeeded) {
           req.then((r) => r.abort())
           resolve()
         }
       },
       (err) => {
-        if (err.message === 'aborted') {
+        if (err && err.message === 'aborted') {
           return
         }
         if (err) {
@@ -64,7 +64,10 @@ export function awaitDeployRunningState(instance: KubernetesInstance, env: WorkK
       {},
       (type, obj: V1Deployment) => {
         if (
-          (obj.metadata?.name === name && obj.metadata?.namespace === env.namespace && obj.status?.readyReplicas) ??
+          (obj &&
+            obj.metadata?.name === name &&
+            obj.metadata?.namespace === env.namespace &&
+            obj.status?.readyReplicas) ??
           0 > 0
         ) {
           req.then((r) => r.abort())
@@ -72,7 +75,7 @@ export function awaitDeployRunningState(instance: KubernetesInstance, env: WorkK
         }
       },
       (err) => {
-        if (err.message === 'aborted') {
+        if (err && err.message === 'aborted') {
           return
         }
         if (err) {

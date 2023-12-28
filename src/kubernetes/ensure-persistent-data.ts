@@ -33,12 +33,12 @@ export async function ensurePersistentData(
     await ensureKubernetesConfigMap(instance, env, environment, configMap)
   }
 
-  if (!persistence.volumes.some((v) => v.sources.length > 0)) {
-    return
-  }
-
   for (const volume of persistence.volumes) {
     await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume)
+  }
+
+  if (!persistence.volumes.some((v) => v.sources.length > 0)) {
+    return
   }
 
   // TODO check if state is already uploaded

@@ -44,7 +44,7 @@ describe('environment', () => {
           staging: {
             kubernetes: {
               namespace: 'default',
-              context: 'gke_crios-333820_europe-west1-c_crios', // 'popos', //'gke_crios-333820_europe-west1-c_crios',
+              context: 'docker-desktop',
               //storageClass:  'local-path'
               ingresses: [
                 {
