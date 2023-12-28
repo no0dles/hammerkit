@@ -14,8 +14,7 @@ export async function ensureKubernetesConfigMap(
 ) {
   const data: { [key: string]: string } = {}
   for (const source of config.sources) {
-    const content = await environment.file.read(source.localPath)
-    data[source.subPath] = content
+    data[source.subPath] = await environment.file.read(source.localPath)
   }
   const configMap: V1ConfigMap = {
     metadata: {
@@ -26,22 +25,18 @@ export async function ensureKubernetesConfigMap(
     data,
   }
 
-  try {
-    await apply(
-      instance,
-      {
-        kind: 'ConfigMap',
-        apiVersion: 'v1',
-        metadata: {
-          namespace: env.namespace,
-          name: config.name,
-        },
+  await apply(
+    instance,
+    {
+      kind: 'ConfigMap',
+      apiVersion: 'v1',
+      metadata: {
+        namespace: env.namespace,
+        name: config.name,
       },
-      configMap
-    )
-  } catch (e) {
-    throw e
-  }
+    },
+    configMap
+  )
 }
 
 export async function ensureKubernetesPersistentVolumeClaimExists(

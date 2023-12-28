@@ -11,7 +11,7 @@ let dockerInstance: Dockerode | null = null
 
 export function getContainerCli(workEnvironment: WorkDockerEnvironment): Dockerode {
   if (!dockerInstance) {
-    dockerInstance = new Dockerode({})
+    dockerInstance = new Dockerode({ host: workEnvironment.host })
   }
   return dockerInstance
 }

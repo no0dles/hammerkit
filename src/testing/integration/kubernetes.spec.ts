@@ -1,5 +1,6 @@
 import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
+import { requiresKubernetesTest } from '../requires-kubernetes-test'
 
 describe('kubernetes', () => {
   const suite = getTestSuite('kubernetes', ['index.js', 'package.json', 'package-lock.json', '.hammerkit.yaml'])
@@ -10,10 +11,12 @@ describe('kubernetes', () => {
     expect(true).toBeTrue()
   })
 
-  // CI setup missing
-  xit('should forward deployment', async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'api' })
-    const result = await cli.runExec()
-    expectSuccessfulResult(result, environment)
-  })
+  it(
+    'should forward deployment',
+    requiresKubernetesTest(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'api' })
+      const result = await cli.runExec()
+      expectSuccessfulResult(result, environment)
+    })
+  )
 })

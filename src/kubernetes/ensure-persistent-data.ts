@@ -1,7 +1,7 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { appendVolume, getVolumeMounts, getVolumes, KubernetesPersistence, KubernetesServiceVolume } from './volumes'
+import { getVolumeMounts, getVolumes, KubernetesPersistence } from './volumes'
 import { V1Pod } from '@kubernetes/client-node'
 import { apply } from './apply'
 import { dirname, relative } from 'path'
@@ -73,25 +73,21 @@ export async function ensurePersistentData(
 
   // TODO check if file exists
 
-  try {
-    const pod = await apply(
-      instance,
-      {
-        kind: 'Pod',
-        apiVersion: 'v1',
-        metadata: {
-          namespace: env.namespace,
-          name,
-        },
+  const pod = await apply(
+    instance,
+    {
+      kind: 'Pod',
+      apiVersion: 'v1',
+      metadata: {
+        namespace: env.namespace,
+        name,
       },
-      podSpec
-    )
+    },
+    podSpec
+  )
 
-    if (pod.status?.phase !== 'Running') {
-      await awaitRunningState(instance, env, name, 'Running')
-    }
-  } catch (e) {
-    throw e
+  if (pod.status?.phase !== 'Running') {
+    await awaitRunningState(instance, env, name, 'Running')
   }
 
   for (const volume of persistence.volumes) {
@@ -105,7 +101,7 @@ export async function ensurePersistentData(
         {
           cwd: source.localCwd,
           //gzip: true,
-          filter(path: string, stat: FileStat): boolean {
+          filter(path: string): boolean {
             return source.matcher(path, source.localPath)
           },
         },

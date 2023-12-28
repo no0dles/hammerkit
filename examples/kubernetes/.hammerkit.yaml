@@ -7,6 +7,18 @@ services:
       type: deployment
       name: postgres
 
+  api:
+    image: node:16.6.0-alpine
+    deps: [ install ]
+    needs: [ postgres ]
+    ports:
+      - 3000
+    labels:
+      app: example
+    src:
+      - index.js
+    cmd: node index.js
+
 tasks:
   install:
     image: node:16.6.0-alpine
@@ -20,16 +32,3 @@ tasks:
       - node_modules
     cmds:
       - npm install
-
-  api:
-    image: node:16.6.0-alpine
-    deps: [install]
-    needs: [postgres]
-    ports:
-      - 3000
-    labels:
-      app: example
-    src:
-      - index.js
-    cmds:
-      - node index.js
