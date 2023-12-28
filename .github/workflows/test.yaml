@@ -61,10 +61,6 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Install npm packages
         run: npm ci
-      - name: Pull postgres test image
-        run: docker pull postgres:12-alpine
-      - name: Pull node image
-        run: docker pull node:16.6.0-alpine
       - name: Run tests
         run: node_modules/.bin/jest --runInBand
         timeout-minutes: 15
