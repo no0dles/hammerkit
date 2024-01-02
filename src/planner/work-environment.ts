@@ -10,6 +10,7 @@ export interface WorkDockerEnvironment {
 export interface WorkKubernetesEnvironment {
   type: 'kubernetes'
   namespace: string
+  kubeConfig?: string
   context: string
   ingresses: BuildFileEnvironmentSchemaIngress[]
   storageClass?: string

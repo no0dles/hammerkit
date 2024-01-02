@@ -4,9 +4,9 @@ import { WorkService } from './work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { LabelValues } from '../executer/label-values'
 import { WorkMount } from './work-mount'
-import { WorkVolume } from './work-volume'
 import { ParseScope } from '../schema/parse-context'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
+import { WorkItem } from './work-item'
 
 export type WorkTask = LocalWorkTask | ContainerWorkTask
 
@@ -27,7 +27,7 @@ export interface BaseWorkTask {
 export interface WorkTaskGenerate {
   path: string
   volumeName: string
-  inherited: boolean
+  inherited: WorkItem<WorkTask> | null
   resetOnChange: boolean
   export: boolean
   isFile: boolean
@@ -42,7 +42,6 @@ export interface ContainerWorkTask extends BaseWorkTask {
   image: string
   user: string | null
   mounts: WorkMount[]
-  volumes: WorkVolume[]
 }
 
 export const isContainerWorkTask = (val: WorkTask | WorkService): val is ContainerWorkTask =>

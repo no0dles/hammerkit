@@ -8,8 +8,7 @@ import { isBuildFileContainerTaskSchema } from '../../schema/build-file-task-sch
 import { parseWorkCommands } from './parse-work-command'
 import { parseWorkSource } from './parse-work-source'
 import { WorkTree } from '../work-tree'
-import { parseWorkVolumes } from './parse-work-volume'
-import { getWorkCacheId } from '../work-cache-id'
+import { getWorkTaskId } from '../work-cache-id'
 import { appendWorkDependencies } from './append-work-dependencies'
 import { appendWorkNeeds } from './append-work-needs'
 import { Environment } from '../../executer/environment'
@@ -29,7 +28,7 @@ export function appendWorkTask(
   const task = parseTask(cwd, referenceTask, environment)
   if (!workTree.tasks[task.name]) {
     const workItem: WorkItem<WorkTask> = {
-      cacheId: lazyResolver(() => getWorkCacheId(task)),
+      id: lazyResolver(() => getWorkTaskId(task)),
       name: task.name,
       data: task,
       status: environment.status.from(task),
@@ -77,7 +76,6 @@ function parseTask(cwd: string, task: ReferenceTask, environment: Environment): 
       user: getContainerUser(),
       image: templateValue(task.schema.image, envs),
       mounts: parseWorkMounts(cwd, task.schema, envs),
-      volumes: parseWorkVolumes(cwd, task.schema.volumes, envs),
     }
   } else {
     return <LocalWorkTask>{

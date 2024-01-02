@@ -22,7 +22,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
       const file = getFileContext(path)
 
       const logPath = join(process.cwd(), 'logs')
-      const stdoutFile = join(logPath, name + '-stout.log')
+      const stdoutFile = join(logPath, name + '-stdout.log')
       const stderrFile = join(logPath, name + '-stderr.log')
       const statusFile = join(logPath, name + '-status.log')
       const consoleFile = join(logPath, name + '-console.log')

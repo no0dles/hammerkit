@@ -1,57 +1,30 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { V1ConfigMap, V1PersistentVolumeClaim } from '@kubernetes/client-node'
-import { apply } from './apply'
+import { V1PersistentVolumeClaim } from '@kubernetes/client-node'
+import { apply, KubernetesObjectHeader } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
-import { KubernetesConfigMapPersistence, KubernetesVolumePersistence } from './volumes'
-import { Environment } from '../executer/environment'
-
-export async function ensureKubernetesConfigMap(
-  instance: KubernetesInstance,
-  env: WorkKubernetesEnvironment,
-  environment: Environment,
-  config: KubernetesConfigMapPersistence
-) {
-  const data: { [key: string]: string } = {}
-  for (const source of config.sources) {
-    data[source.subPath] = await environment.file.read(source.localPath)
-  }
-  const configMap: V1ConfigMap = {
-    metadata: {
-      name: config.name,
-    },
-    kind: 'ConfigMap',
-    apiVersion: 'v1',
-    data,
-  }
-
-  await apply(
-    instance,
-    {
-      kind: 'ConfigMap',
-      apiVersion: 'v1',
-      metadata: {
-        namespace: env.namespace,
-        name: config.name,
-      },
-    },
-    configMap
-  )
-}
+import { WorkItem } from '../planner/work-item'
+import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkTask } from '../planner/work-task'
+import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
 
 export async function ensureKubernetesPersistentVolumeClaimExists(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
-  volume: KubernetesVolumePersistence
+  volume: V1Volume,
+  service: WorkItem<ContainerWorkService | ContainerWorkTask>
 ): Promise<V1PersistentVolumeClaim> {
-  const pvc: V1PersistentVolumeClaim = {
+  const pvc: V1PersistentVolumeClaim & KubernetesObjectHeader = {
     kind: 'PersistentVolumeClaim',
     apiVersion: 'v1',
     metadata: {
       namespace: env.namespace,
-      name: volume.volume.name,
+      name: volume.name,
       annotations: {
         'hammerkit.dev/version': getVersion(),
+      },
+      labels: {
+        'hammerkit.dev/id': service.id(),
       },
     },
     spec: {
@@ -64,16 +37,5 @@ export async function ensureKubernetesPersistentVolumeClaimExists(
       },
     },
   }
-  return await apply(
-    instance,
-    {
-      kind: 'PersistentVolumeClaim',
-      apiVersion: 'v1',
-      metadata: {
-        namespace: env.namespace,
-        name: volume.volume.name,
-      },
-    },
-    pvc
-  )
+  return await apply(instance, pvc)
 }

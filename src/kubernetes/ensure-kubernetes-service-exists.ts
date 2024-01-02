@@ -2,7 +2,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { WorkService } from '../planner/work-service'
 import { V1Service } from '@kubernetes/client-node'
-import { apply } from './apply'
+import { apply, KubernetesObjectHeader } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
 import { getVersion } from '../version'
@@ -14,7 +14,7 @@ export async function ensureKubernetesServiceExists(
 ) {
   const name = getResourceName(service)
 
-  const svc: V1Service = {
+  const svc: V1Service & KubernetesObjectHeader = {
     kind: 'Service',
     apiVersion: 'v1',
     metadata: {
@@ -23,11 +23,14 @@ export async function ensureKubernetesServiceExists(
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
+      labels: {
+        'hammerkit.dev/id': service.id(),
+      },
     },
     spec: {
       type: 'ClusterIP',
       selector: {
-        'hammerkit.dev/id': service.cacheId(),
+        'hammerkit.dev/id': service.id(),
       },
       ports: service.data.ports.map((port) => ({
         port: port.hostPort ?? port.containerPort,
@@ -36,16 +39,5 @@ export async function ensureKubernetesServiceExists(
     },
   }
 
-  return await apply(
-    instance,
-    {
-      kind: 'Service',
-      apiVersion: 'v1',
-      metadata: {
-        namespace: env.namespace,
-        name,
-      },
-    },
-    svc
-  )
+  return await apply(instance, svc)
 }

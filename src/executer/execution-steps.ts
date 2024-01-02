@@ -6,7 +6,7 @@ import { setUserPermission } from './set-user-permission'
 import Dockerode, { Container } from 'dockerode'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkTask, isContainerWorkTask } from '../planner/work-task'
-import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
 import { getContainerBinds } from './get-container-binds'
 
 export async function pullImage(
@@ -20,13 +20,15 @@ export async function prepareVolume(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   docker: Dockerode
 ): Promise<void> {
-  for (const volume of item.data.volumes) {
-    if (volume.resetOnChange && !volume.inherited) {
-      item.status.write('debug', 'recreate volume')
-      await recreateVolume(docker, item.status, volume.name)
-    } else {
-      item.status.write('debug', 'ensure volume exists')
-      await ensureVolumeExists(docker, item.status, volume.name)
+  if (isContainerWorkService(item.data)) {
+    for (const volume of item.data.volumes) {
+      if (volume.resetOnChange && !volume.inherited) {
+        item.status.write('debug', 'recreate volume')
+        await recreateVolume(docker, item.status, volume.name)
+      } else {
+        item.status.write('debug', 'ensure volume exists')
+        await ensureVolumeExists(docker, item.status, volume.name)
+      }
     }
   }
   if (isContainerWorkTask(item.data)) {

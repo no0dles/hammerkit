@@ -12,7 +12,7 @@ export interface WorkItemState<T extends WorkService | WorkTask, S> extends Work
 }
 
 export interface WorkItem<T extends WorkService | WorkTask> {
-  cacheId: () => string
+  id: () => string
   name: string
   status: StatusScopedConsole
   data: T
@@ -33,9 +33,8 @@ export const isContainerWorkTaskItem = (val: WorkItem<WorkTask>): val is WorkIte
   val.data.type === 'container-task'
 export const isLocalWorkTaskItem = (val: WorkItem<WorkTask>): val is WorkItem<LocalWorkTask> =>
   val.data.type === 'local-task'
-export const isContainerWorkServiceItem = (
-  val: WorkItem<WorkService>
-): val is WorkItemState<ContainerWorkService, ServiceState> => val.data.type === 'container-service'
+export const isContainerWorkServiceItem = (val: WorkItem<WorkService>): val is WorkItem<ContainerWorkService> =>
+  val.data.type === 'container-service'
 export const isKubernetesWorkServiceItem = (val: WorkItem<WorkService>): val is WorkItem<KubernetesWorkService> =>
   val.data.type === 'kubernetes-service'
 

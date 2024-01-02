@@ -3,7 +3,7 @@ import { BuildFileEnvironmentSchemaIngress } from '../schema/build-file-environm
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { V1Ingress } from '@kubernetes/client-node'
-import { apply } from './apply'
+import { apply, KubernetesObjectHeader } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
 
@@ -13,7 +13,7 @@ export async function ensureIngress(
   ingress: BuildFileEnvironmentSchemaIngress,
   service: WorkItem<ContainerWorkService>
 ) {
-  const resource: V1Ingress = {
+  const resource: V1Ingress & KubernetesObjectHeader = {
     kind: 'Ingress',
     apiVersion: 'networking.k8s.io/v1',
     metadata: {
@@ -21,6 +21,9 @@ export async function ensureIngress(
       namespace: env.namespace,
       annotations: {
         'cert-manager.io/cluster-issuer': 'hammerkit-issuer',
+      },
+      labels: {
+        'hammerkit.dev/id': service.id(),
       },
     },
     spec: {
@@ -54,16 +57,5 @@ export async function ensureIngress(
       ],
     },
   }
-  return await apply(
-    instance,
-    {
-      kind: 'Ingress',
-      apiVersion: 'networking.k8s.io/v1',
-      metadata: {
-        namespace: env.namespace,
-        name: ingress.host,
-      },
-    },
-    resource
-  )
+  return await apply(instance, resource)
 }

@@ -4,7 +4,6 @@ import { Environment } from './environment'
 import { CliExecOptions } from '../cli'
 import { getDuration } from './states'
 import { TaskState } from './scheduler/task-state'
-import { writeWorkTaskCache } from '../optimizer/write-work-task-cache'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { awaitCompletedDependencies, awaitRunningNeeds } from './await-completed-dependencies'
@@ -67,8 +66,6 @@ export async function executeWorkTask(
         checkForAbort(abort)
 
         if (work.state.current.type === 'running') {
-          await writeWorkTaskCache(work, environment)
-
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
           work.state.set({
             stateKey: cacheState.stateKey,

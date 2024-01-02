@@ -10,15 +10,21 @@ import { kubernetesService } from '../executer/kubernetes-service'
 import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { V1EnvVar, V1Job, V1Pod } from '@kubernetes/client-node'
+import { V1EnvVar, V1Job } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
-import { awaitJobState, awaitRunningState } from '../kubernetes/await-running-state'
-import { getKubernetesPersistence, getVolumeMounts, getVolumes } from '../kubernetes/volumes'
+import { awaitJobState } from '../kubernetes/await-running-state'
+import { getKubernetesPersistence } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureIngress } from '../kubernetes/ensure-ingress'
+import findProcess from 'find-process'
+import { getErrorMessage } from '../log'
+import { getVersion } from '../version'
+import { removePersistentData } from './remove-persistent-data'
+import { storeKubernetesData } from './store-kubernetes-data'
+import { restoreKubernetesData } from './restore-kubernetes-data'
 
 export function kubernetesTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -26,14 +32,14 @@ export function kubernetesTaskRuntime(
 ): WorkRuntime<TaskState> {
   const instance = createKubernetesInstances(kubernetes)
   return {
-    initialize(item: State<TaskState>): Promise<void> {
+    initialize(): Promise<void> {
       return Promise.resolve()
     },
-    restore(environment: Environment, path: string): Promise<void> {
-      throw new Error('not implemented')
+    async restore(environment: Environment, path: string): Promise<void> {
+      await restoreKubernetesData(task, kubernetes, instance, environment, path)
     },
-    archive(environment: Environment, path: string): Promise<void> {
-      throw new Error('not implemented')
+    async archive(environment: Environment, path: string): Promise<void> {
+      await storeKubernetesData(task, kubernetes, instance, environment, path)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const envs = getEnvironmentVariables(task.data.envs)
@@ -44,17 +50,23 @@ export function kubernetesTaskRuntime(
       const podName = `${task.name}-${options.stateKey}`
       let i = 0
       for (const cmd of task.data.cmds) {
-        const spec: V1Job = {
+        const spec: V1Job & KubernetesObjectHeader = {
           kind: 'Job',
           apiVersion: 'batch/v1',
           metadata: {
             namespace: kubernetes.namespace,
             name: podName,
+            annotations: {
+              'hammerkit.dev/version': getVersion(),
+            },
+            labels: {
+              'hammerkit.dev/id': task.id(),
+              'hammerkit.dev/state': options.stateKey,
+            },
           },
           spec: {
             template: {
               spec: {
-                restartPolicy: 'Never',
                 containers: [
                   {
                     image: task.data.image,
@@ -63,65 +75,89 @@ export function kubernetesTaskRuntime(
                     workingDir: cmd.cwd,
                     env: Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
                     name: `cmd-${++i}`,
-                    volumeMounts: getVolumeMounts(persistence),
+                    volumeMounts: persistence.mounts.map((m) => m.mount),
                   },
                 ],
-                volumes: getVolumes(persistence),
+                volumes: persistence.volumes,
+                restartPolicy: 'Never',
               },
             },
             backoffLimit: 1,
+            parallelism: 1,
           },
         }
         try {
-          const pod = await apply(
-            instance,
-            {
-              kind: 'Job',
-              apiVersion: 'batch/v1',
-              metadata: {
-                namespace: kubernetes.namespace,
-                name: podName,
-              },
-            },
-            spec
-          )
+          const pod = await apply(instance, spec)
+
           if (!pod.status?.succeeded) {
-            await awaitJobState(instance, kubernetes, pod.metadata?.name!)
+            await awaitJobState(instance, kubernetes, spec.metadata.name)
           }
           task.status.write('debug', 'pod completed')
           await instance.batchApi.deleteNamespacedJob(podName, kubernetes.namespace)
         } catch (e) {
-          throw e
+          options.state.set({
+            stateKey: options.stateKey,
+            type: 'error',
+            errorMessage: getErrorMessage(e),
+          })
+          return
         }
       }
     },
-    stop(): Promise<void> {
-      throw new Error('not implemented')
+    async stop(): Promise<void> {
+      const pods = await instance.coreApi.listNamespacedPod(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${task.id()}`
+      )
+      for (const pod of pods.body.items) {
+        if (pod.metadata?.name) {
+          await instance.coreApi.deleteNamespacedPod(pod.metadata.name, kubernetes.namespace)
+        }
+      }
     },
-    remove(): Promise<void> {
-      //throw new Error('not implemented')
-      return Promise.resolve()
+    async remove(): Promise<void> {
+      await this.stop()
+      await removePersistentData(instance, kubernetes, task)
+    },
+    currentStateKey(): Promise<string | null> {
+      return Promise.resolve(null) // TODO implement
     },
   }
 }
+
 export function kubernetesServiceRuntime(
   service: WorkItem<ContainerWorkService>,
   kubernetes: WorkKubernetesEnvironment
 ): WorkRuntime<ServiceState> {
   const instance = createKubernetesInstances(kubernetes)
   return {
-    initialize(item: State<ServiceState>): Promise<void> {
-      //throw new Error('not implemented')
+    initialize(): Promise<void> {
       return Promise.resolve()
     },
-    restore(environment: Environment, path: string): Promise<void> {
-      throw new Error('not implemented')
+    async restore(environment: Environment, path: string): Promise<void> {
+      await restoreKubernetesData(service, kubernetes, instance, environment, path)
     },
-    archive(environment: Environment, path: string): Promise<void> {
-      throw new Error('not implemented')
+    async archive(environment: Environment, path: string): Promise<void> {
+      await storeKubernetesData(service, kubernetes, instance, environment, path)
     },
-    stop(): Promise<void> {
-      throw new Error('not implemented')
+    async stop(): Promise<void> {
+      const deployments = await instance.appsApi.listNamespacedDeployment(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${service.id()}`
+      )
+      for (const deployment of deployments.body.items) {
+        if (deployment.metadata?.name) {
+          await instance.appsApi.deleteNamespacedDeployment(deployment.metadata.name, kubernetes.namespace)
+        }
+      }
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const persistence = await getKubernetesPersistence(service)
@@ -143,38 +179,74 @@ export function kubernetesServiceRuntime(
       }
     },
     async remove(): Promise<void> {
-      try {
-        const spec: KubernetesObjectHeader = {
-          kind: 'Deployment',
-          apiVersion: 'apps/v1',
-          metadata: {
-            namespace: kubernetes.namespace,
-            name: service.name.replace(/:/, '-'),
-          },
+      const ingresses = await instance.networkingApi.listNamespacedIngress(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${service.id()}`
+      )
+      for (const ingress of ingresses.body.items) {
+        if (ingress.metadata?.name) {
+          await instance.networkingApi.deleteNamespacedIngress(ingress.metadata.name, kubernetes.namespace)
         }
-        const status = await instance.objectApi.delete(spec)
-      } catch (e) {
-        // TODO
       }
-      // TODO volumes
+
+      const services = await instance.coreApi.listNamespacedService(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${service.id()}`
+      )
+      for (const service of services.body.items) {
+        if (service.metadata?.name) {
+          await instance.coreApi.deleteNamespacedService(service.metadata.name, kubernetes.namespace)
+        }
+      }
+
+      await this.stop()
+
+      await removePersistentData(instance, kubernetes, service)
+    },
+    currentStateKey(): Promise<string | null> {
+      return Promise.resolve(null) // TODO implement
     },
   }
 }
 
 export function kubernetesForwardRuntime(service: WorkItem<KubernetesWorkService>): WorkRuntime<ServiceState> {
   return {
-    initialize(item: State<ServiceState>): Promise<void> {
-      throw new Error('not implemented')
+    async initialize(item: State<ServiceState>): Promise<void> {
+      for (const port of service.data.ports) {
+        if (port.hostPort === null) {
+          continue
+        }
+
+        const processes = await findProcess('port', port.hostPort)
+        if (!processes || processes.length === 0) {
+          continue
+        }
+
+        item.set({
+          type: 'error',
+          errorMessage: `Host port ${port.hostPort} already in use`,
+          stateKey: null,
+        })
+      }
     },
-    async restore(environment: Environment, path: string): Promise<void> {},
-    async archive(environment: Environment, path: string): Promise<void> {},
+    async restore(): Promise<void> {},
+    async archive(): Promise<void> {},
     async remove(): Promise<void> {},
-    async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
+    async execute(_environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       // TODO migrate away from kubectl
       await kubernetesService(service, options)
     },
-    stop(): Promise<void> {
-      throw new Error('not implemented')
+    currentStateKey(): Promise<string | null> {
+      return Promise.resolve(null)
     },
+    async stop(): Promise<void> {},
   }
 }

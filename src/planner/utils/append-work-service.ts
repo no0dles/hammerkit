@@ -28,7 +28,7 @@ export function appendWorkService(
   const workService = parseService(service, environment)
   if (!workTree.services[workService.name]) {
     const workItem: WorkItem<WorkService> = {
-      cacheId: lazyResolver(() => getWorkServiceId(workService)),
+      id: lazyResolver(() => getWorkServiceId(workService)),
       name: workService.name,
       data: workService,
       status: environment.status.from(workService),

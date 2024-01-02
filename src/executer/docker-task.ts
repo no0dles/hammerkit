@@ -53,7 +53,7 @@ function buildCreateOptions(
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
-      'hammerkit-id': item.cacheId(),
+      'hammerkit-id': item.id(),
       'hammerkit-pid': process.pid.toString(),
       'hammerkit-type': 'task',
       'hammerkit-state': stateKey,

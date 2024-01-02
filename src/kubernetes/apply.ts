@@ -10,13 +10,12 @@ export type KubernetesObjectHeader = {
 
 export async function apply<T extends KubernetesObject>(
   instance: KubernetesInstance,
-  selector: KubernetesObjectHeader,
-  spec: T
+  spec: T & KubernetesObjectHeader
 ) {
   try {
     // try to get the resource, if it does not exist an error will be thrown and we will end up in the catch
     // block.
-    await instance.objectApi.read(selector)
+    await instance.objectApi.read(spec)
     // we got the resource, so it exists, so patch it
     //
     // Note that this could fail if the spec refers to a custom resource. For custom resources you may need

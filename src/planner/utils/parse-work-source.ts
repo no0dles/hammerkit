@@ -25,7 +25,7 @@ export function parseWorkSource(
             const matcher = new Minimatch(source, { dot: true })
             return matcher.match(relative(cwd, file))
           },
-          inherited: false,
+          inherited: null,
           source,
           absolutePath,
           isFile: false,
@@ -38,7 +38,7 @@ export function parseWorkSource(
             const matcher = new Minimatch(join(cwd, source), { dot: true })
             return matcher.match(file)
           },
-          inherited: false,
+          inherited: null,
           source,
           absolutePath,
           isFile: false,
@@ -50,7 +50,7 @@ export function parseWorkSource(
         matcher: (file) => file.startsWith(absolutePath),
         absolutePath,
         source,
-        inherited: false,
+        inherited: null,
         isFile: extname(absolutePath).length > 1,
       })
     }
@@ -64,7 +64,7 @@ export function createSource(absolutePath: string): WorkSource {
     matcher: (file) => file.startsWith(absolutePath),
     absolutePath,
     source: absolutePath,
-    inherited: false,
+    inherited: null,
     isFile: extname(absolutePath).length > 1,
   }
 }

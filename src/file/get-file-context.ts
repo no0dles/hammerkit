@@ -10,6 +10,7 @@ import {
   rm,
   stat,
   writeFile,
+  WriteStream,
 } from 'fs'
 import { dirname, join, isAbsolute } from 'path'
 import { watch } from 'chokidar'
@@ -71,6 +72,9 @@ export function getFileContext(cwd: string): FileContext {
           .on('error', (err) => reject(err))
           .on('close', () => resolve())
       })
+    },
+    createWriteStream(path: string): WriteStream {
+      return createWriteStream(path)
     },
     listFiles(path: string): Promise<string[]> {
       return handleCallback((cb) => readdir(getAbsolutePath(cwd, path), cb))

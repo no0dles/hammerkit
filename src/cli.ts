@@ -12,13 +12,14 @@ import { WorkTree } from './planner/work-tree'
 import { Environment } from './executer/environment'
 import { ProcessManager } from './executer/process-manager'
 import { updateServiceStatus } from './service/update-service-status'
-import { WorkItem } from './planner/work-item'
+import { WorkItem, WorkItemState } from './planner/work-item'
 import { WorkService } from './planner/work-service'
 import { checkForLoop } from './executer/scheduler/check-for-loop'
 import { State } from './executer/state'
 import { getSchedulerExecuteResult } from './executer/get-scheduler-execute-result'
 import { resetWorkTree } from './executer/reset-work-tree'
 import { executeWorkTree } from './executer/execute-work-tree'
+import { TaskState } from './executer/scheduler/task-state'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -51,7 +52,10 @@ export const isCliService = (val: CliItem): val is CliServiceItem => val.type ==
 export type CliItem = CliTaskItem | CliServiceItem
 
 export class Cli {
-  constructor(private workTree: WorkTree, private environment: Environment) {}
+  constructor(
+    private workTree: WorkTree,
+    private environment: Environment
+  ) {}
 
   setup(type: ExecuteKind, options?: Partial<CliExecOptions>): CliExecResult {
     const processManager = new ProcessManager(options?.workers ?? 0)
@@ -151,7 +155,7 @@ export class Cli {
     return validate(this.workTree, this.environment)
   }
 
-  task(name: string): WorkItem<WorkTask> {
+  task(name: string): WorkItemState<WorkTask, TaskState> {
     const task = this.workTree.tasks[name]
     if (!task) {
       throw new Error(`unable to find task ${name}`)

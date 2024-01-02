@@ -1,8 +1,7 @@
-import { WorkTree } from '../work-tree'
 import { ReferenceEnvironment } from '../../schema/reference-parser'
 import { WorkEnvironment } from '../work-environment'
 
-export function appendWorkEnvironment(workTree: WorkTree, referenced: ReferenceEnvironment): WorkEnvironment {
+export function appendWorkEnvironment(referenced: ReferenceEnvironment): WorkEnvironment {
   if ('docker' in referenced.schema) {
     return {
       type: 'docker',
@@ -13,7 +12,7 @@ export function appendWorkEnvironment(workTree: WorkTree, referenced: ReferenceE
       type: 'kubernetes',
       context: referenced.schema.kubernetes.context,
       ingresses: referenced.schema.kubernetes.ingresses || [],
-      namespace: referenced.schema.kubernetes.namespace,
+      namespace: referenced.schema.kubernetes.namespace ?? 'default',
     }
   }
 }

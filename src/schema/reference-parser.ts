@@ -181,7 +181,6 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     const taskSchema = task.schema as BuildFileContainerTaskSchema
     taskSchema.image = taskSchema.image ?? extend.schema.image
     taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
-    taskSchema.volumes = extendArray(taskSchema.volumes, extend.schema.volumes)
   }
 
   resolveNeeds(reference, task, extend.scope, extend.schema)

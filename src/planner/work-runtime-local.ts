@@ -3,7 +3,6 @@ import { LocalWorkTask } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
-import { State } from '../executer/state'
 import { create, extract } from 'tar'
 import { relative } from 'path'
 import { localTask } from '../executer/local-task'
@@ -11,7 +10,7 @@ import { getArchivePaths } from '../executer/event-cache'
 
 export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<TaskState> {
   return {
-    async initialize(item: State<TaskState>): Promise<void> {
+    async initialize(): Promise<void> {
       // TODO check for running tasks
     },
     async restore(environment: Environment, path: string): Promise<void> {
@@ -25,6 +24,9 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
     },
     async stop(): Promise<void> {
       // TODO check for running tasks
+    },
+    currentStateKey(): Promise<string | null> {
+      return Promise.resolve(null) // TODO document changes, local no caching or implement new file cache
     },
     async remove(environment: Environment): Promise<void> {
       for (const generate of task.data.generates) {

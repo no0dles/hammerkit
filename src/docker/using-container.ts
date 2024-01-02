@@ -22,6 +22,7 @@ export async function usingContainer<T>(
     if (container) {
       try {
         await removeContainer(container)
+        // TODO do not remove last one, to allow caching
       } catch (e) {
         item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
       }

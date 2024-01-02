@@ -2,10 +2,10 @@ import { array, object, string, union, z } from 'zod'
 import { buildFileEnvironmentSchemaIngress } from './build-file-environment-schema-ingress'
 
 export const buildFileKubernetesEnvironmentSchema = object({
-  namespace: string(),
+  namespace: string().optional(),
   context: string(),
   ingresses: array(buildFileEnvironmentSchemaIngress).optional(),
-}).strict()
+})
 
 export const buildFileDockerEnvironmentSchema = object({
   host: string().optional(),

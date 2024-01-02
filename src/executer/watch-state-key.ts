@@ -1,4 +1,4 @@
-import { WorkItem } from '../planner/work-item'
+import { WorkItemState } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { WorkService } from '../planner/work-service'
 import { Environment } from './environment'
@@ -10,7 +10,7 @@ import { State } from './state'
 import { CacheState, checkCacheState } from './scheduler/enqueue-next'
 
 export function watchStateKey(
-  item: WorkItem<WorkTask | WorkService>,
+  item: WorkItemState<WorkTask | WorkService, any>,
   cacheStats: CacheState,
   environment: Environment,
   options: CliExecOptions

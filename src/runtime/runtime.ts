@@ -17,4 +17,5 @@ export interface WorkRuntime<S> {
   stop(): Promise<void>
   archive(environment: Environment, path: string): Promise<void>
   restore(environment: Environment, path: string): Promise<void>
+  currentStateKey(): Promise<string | null>
 }

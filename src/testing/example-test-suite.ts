@@ -39,7 +39,7 @@ export class ExampleTestSuite implements TestSuite {
     await this.file.createDirectory(this.path)
 
     const logPath = join(process.cwd(), 'logs')
-    const stdoutFile = join(logPath, this.exampleName + '-stout.log')
+    const stdoutFile = join(logPath, this.exampleName + '-stdout.log')
     const stderrFile = join(logPath, this.exampleName + '-stderr.log')
     const statusFile = join(logPath, this.exampleName + '-status.log')
     const consoleFile = join(logPath, this.exampleName + '-console.log')

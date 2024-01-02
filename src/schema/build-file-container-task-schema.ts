@@ -5,7 +5,6 @@ export const buildFileContainerTaskSchema = buildFileBaseTaskSchema
   .extend({
     image: string(),
     mounts: array(string()).optional(),
-    volumes: array(string()).optional(),
   })
   .strict()
   .describe('container task')

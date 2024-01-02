@@ -24,8 +24,24 @@ export function dockerTaskRuntime(
 ): WorkRuntime<TaskState> {
   const docker = getContainerCli(workEnvironment)
   return {
-    async initialize(item: State<TaskState>): Promise<void> {
-      // TODO check if running
+    async initialize(state: State<TaskState>): Promise<void> {
+      const currentTasks = await docker.listContainers({
+        filters: {
+          label: [`hammerkit-id=${task.id()}`],
+        },
+      })
+      const currentTask = currentTasks[0]
+      if (!currentTask) {
+        return
+      }
+
+      const taskState = 'hammerkit-state' in currentTask.Labels ? currentTask.Labels['hammerkit-state'] : ''
+
+      state.set({
+        type: 'error',
+        stateKey: taskState,
+        errorMessage: `Container ${currentTask.Id} already running`,
+      })
     },
     async restore(environment: Environment, path: string): Promise<void> {
       await restoreContainer(docker, environment, task, path)
@@ -37,7 +53,7 @@ export function dockerTaskRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${task.cacheId()}`],
+          label: [`hammerkit-id=${task.id()}`],
         },
       })
       for (const container of containers) {
@@ -63,7 +79,24 @@ export function dockerTaskRuntime(
           task.status.write('info', `generate ${generate} has no volume ${volumeName}`)
         }
       }
-      // TODO check volumes
+    },
+    async currentStateKey(): Promise<string | null> {
+      const containers = await docker.listContainers({
+        all: true,
+        filters: {
+          label: [`hammerkit-id=${task.id()}`],
+        },
+      })
+      const container = containers[0]
+      if (!container) {
+        return null
+      }
+
+      if (!container.Labels['hammerkit-state']) {
+        return null
+      }
+
+      return container.Labels['hammerkit-state']
     },
   }
 }
@@ -71,7 +104,7 @@ export function dockerTaskRuntime(
 async function restoreContainer(
   docker: Dockerode,
   environment: Environment,
-  item: WorkItem<ContainerWorkTask>,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   path: string
 ) {
   await usingContainer(
@@ -85,13 +118,16 @@ async function restoreContainer(
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.cacheId(),
+        'hammerkit-id': item.id(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
         AutoRemove: true,
-        Binds: [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+        Binds:
+          item.data.type === 'container-task'
+            ? []
+            : [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
       },
     },
     async (container) => {
@@ -105,6 +141,7 @@ async function restoreContainer(
     }
   )
 }
+
 export function dockerServiceRuntime(
   service: WorkItem<ContainerWorkService>,
   workEnvironment: WorkDockerEnvironment
@@ -114,7 +151,7 @@ export function dockerServiceRuntime(
     async initialize(state: State<ServiceState>): Promise<void> {
       const currentServices = await docker.listContainers({
         filters: {
-          label: [`hammerkit-id=${service.cacheId()}`],
+          label: [`hammerkit-id=${service.id()}`],
         },
       })
       const currentService = currentServices[0]
@@ -139,7 +176,7 @@ export function dockerServiceRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${service.cacheId()}`],
+          label: [`hammerkit-id=${service.id()}`],
         },
       })
       for (const container of containers) {
@@ -161,15 +198,37 @@ export function dockerServiceRuntime(
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       await dockerService(docker, service, options, environment)
     },
-    async archive(environment: Environment, path: string): Promise<void> {},
-    async restore(environment: Environment, path: string): Promise<void> {},
+    async restore(environment: Environment, path: string): Promise<void> {
+      await restoreContainer(docker, environment, service, path)
+    },
+    async archive(environment: Environment, path: string): Promise<void> {
+      await archiveContainer(docker, environment, service, path)
+    },
+    async currentStateKey(): Promise<string | null> {
+      const containers = await docker.listContainers({
+        all: true,
+        filters: {
+          label: [`hammerkit-id=${service.id()}`],
+        },
+      })
+      const container = containers[0]
+      if (!container) {
+        return null
+      }
+
+      if (!container.Labels['hammerkit-state']) {
+        return null
+      }
+
+      return container.Labels['hammerkit-state']
+    },
   }
 }
 
 async function archiveContainer(
   docker: Dockerode,
   environment: Environment,
-  item: WorkItem<ContainerWorkTask>,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   path: string
 ) {
   await usingContainer(
@@ -183,20 +242,20 @@ async function archiveContainer(
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.cacheId(),
+        'hammerkit-id': item.id(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
         AutoRemove: true,
-        Binds: [
-          ...item.data.volumes
-            .filter((v) => !v.inherited)
-            .map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
-          ...item.data.generates
-            .filter((v) => !v.inherited && !v.isFile)
-            .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
-        ],
+        Binds:
+          item.data.type === 'container-service'
+            ? item.data.volumes
+                .filter((v) => !v.inherited)
+                .map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)
+            : item.data.generates
+                .filter((v) => !v.inherited && !v.isFile)
+                .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
       },
     },
     async (container) => {

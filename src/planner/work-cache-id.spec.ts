@@ -14,9 +14,9 @@ async function compareTasks(first: BuildFileSchema, second: BuildFileSchema, tas
     const firstTask = firstCli.task(taskName)
     const secondTask = secondCli.task(taskName)
     if (expectEqual) {
-      expect(firstTask.cacheId()).toEqual(secondTask.cacheId())
+      expect(firstTask.id()).toEqual(secondTask.id())
     } else {
-      expect(firstTask.cacheId()).not.toEqual(secondTask.cacheId())
+      expect(firstTask.id()).not.toEqual(secondTask.id())
     }
   })
 }

@@ -50,8 +50,6 @@ describe('store/restore', () => {
     const firstExecResult = await cli.runExec()
     await expectSuccessfulResult(firstExecResult, environment)
 
-    // TODO test store if path does not exists
-
     await cli.store(cacheStoragePath)
     await cli.clean()
     await cli.restore(cacheStoragePath)

@@ -1,9 +1,9 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { getVolumeMounts, getVolumes, KubernetesPersistence } from './volumes'
+import { KubernetesPersistence } from './volumes'
 import { V1Deployment, V1HostAlias } from '@kubernetes/client-node'
-import { apply } from './apply'
+import { apply, KubernetesObjectHeader } from './apply'
 import { getServiceIp } from './get-service-ip'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
@@ -33,7 +33,7 @@ export async function ensureKubernetesDeploymentExists(
   }
   const envs = getEnvironmentVariables(service.data.envs)
   const name = getResourceName(service)
-  const deployment: V1Deployment = {
+  const deployment: V1Deployment & KubernetesObjectHeader = {
     kind: 'Deployment',
     apiVersion: 'apps/v1',
     metadata: {
@@ -42,18 +42,21 @@ export async function ensureKubernetesDeploymentExists(
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
+      labels: {
+        'hammerkit.dev/id': service.id(),
+      },
     },
     spec: {
       selector: {
         matchLabels: {
-          'hammerkit.dev/id': service.cacheId(),
+          'hammerkit.dev/id': service.id(),
         },
       },
       replicas: 1,
       template: {
         metadata: {
           labels: {
-            'hammerkit.dev/id': service.cacheId(),
+            'hammerkit.dev/id': service.id(),
           },
         },
         spec: {
@@ -73,33 +76,22 @@ export async function ensureKubernetesDeploymentExists(
                 containerPort: p.containerPort,
               })),
               // TODO healthcheck
-              volumeMounts: getVolumeMounts(persistence),
+              volumeMounts: persistence.mounts.map((m) => m.mount),
             },
             {
               name: 'debug',
-              image: 'alpine',
+              image: service.data.image,
               command: ['sleep'],
               args: ['3600'],
-              volumeMounts: getVolumeMounts(persistence),
+              volumeMounts: persistence.mounts.map((m) => m.mount),
             },
           ],
-          volumes: getVolumes(persistence),
+          volumes: persistence.volumes,
         },
       },
     },
   }
-  const deploy = await apply(
-    instance,
-    {
-      kind: 'Deployment',
-      apiVersion: 'apps/v1',
-      metadata: {
-        namespace: env.namespace,
-        name: name,
-      },
-    },
-    deployment
-  )
+  const deploy = await apply(instance, deployment)
 
   if (deploy.status?.readyReplicas ?? 0 > 0) {
     return

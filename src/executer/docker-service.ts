@@ -44,7 +44,7 @@ export async function dockerService(
       Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.cacheId(),
+        'hammerkit-id': item.id(),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'service',
         'hammerkit-state': options.stateKey,

@@ -24,7 +24,7 @@ export function parseWorkGenerate(
       resetOnChange: generate.resetOnChange,
       export: generate.export,
       isFile: extname(generate.path).length > 1,
-      inherited: false,
+      inherited: null,
     }
   })
 }

@@ -13,20 +13,24 @@ import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { WorkEnvironment } from '../planner/work-environment'
 
-export function defaultEnvironment(): WorkEnvironment {
-  // TODO use default env if existing in build file
+export function defaultEnvironment(context: ReferencedContext): WorkEnvironment {
+  if ('default' in context.environments) {
+    const defaultEnv = context.environments['default']
+    return appendWorkEnvironment(defaultEnv)
+  }
+
   return {
     type: 'docker',
   }
 }
 
 export function getWorkContext(context: ReferencedContext, scope: WorkScope, environment: Environment): WorkTree {
-  const workTree: WorkTree = { services: {}, environment: defaultEnvironment(), tasks: {} }
-  const filteredWorkTree: WorkTree = { services: {}, environment: defaultEnvironment(), tasks: {} }
+  const workTree: WorkTree = { services: {}, environment: defaultEnvironment(context), tasks: {} }
+  const filteredWorkTree: WorkTree = { services: {}, environment: defaultEnvironment(context), tasks: {} }
 
   for (const [envName, env] of Object.entries(context.environments)) {
     if (envName === scope.environmentName) {
-      filteredWorkTree.environment = appendWorkEnvironment(filteredWorkTree, env)
+      filteredWorkTree.environment = appendWorkEnvironment(env)
       workTree.environment = filteredWorkTree.environment
     }
   }

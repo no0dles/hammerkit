@@ -24,7 +24,7 @@ export function appendWorkDependencies(
     if (isWorkTask(item.data) || isContainerWorkService(item.data)) {
       for (const src of depNode.data.src) {
         if (!item.data.src.some((s) => s.absolutePath === src.absolutePath)) {
-          item.data.src.push({ ...src, inherited: true })
+          item.data.src.push({ ...src, inherited: depNode })
         }
       }
     }
@@ -35,24 +35,30 @@ export function appendWorkDependencies(
     ) {
       for (const generate of depNode.data.generates) {
         if (generate.isFile) {
+          // TODO check if thats correct
           continue
         }
-        if (!item.data.volumes.some((v) => v.name === generate.volumeName)) {
-          item.data.volumes.push({
-            name: generate.volumeName,
-            export: false,
-            resetOnChange: false,
-            containerPath: generate.path,
-            inherited: true,
-          })
-        }
-      }
-      for (const volume of depNode.data.volumes) {
-        if (!item.data.volumes.some((v) => v.name === volume.name)) {
-          item.data.volumes.push({
-            ...volume,
-            inherited: true,
-          })
+        if (item.data.type === 'container-service') {
+          if (!item.data.volumes.some((v) => v.name === generate.volumeName)) {
+            item.data.volumes.push({
+              name: generate.volumeName,
+              export: false,
+              resetOnChange: false,
+              containerPath: generate.path,
+              inherited: depNode,
+            })
+          }
+        } else {
+          if (!item.data.generates.some((v) => v.volumeName === generate.volumeName)) {
+            item.data.generates.push({
+              volumeName: generate.volumeName,
+              export: false,
+              resetOnChange: false,
+              path: generate.path,
+              inherited: depNode,
+              isFile: false,
+            })
+          }
         }
       }
     }

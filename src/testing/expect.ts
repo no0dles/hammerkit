@@ -41,7 +41,7 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
     for (const task of iterateWorkTasks(result.state)) {
       if (task.state.current.type !== 'completed') {
         expect({
-          cacheId: task.cacheId(),
+          cacheId: task.id(),
           status: task.state.current.type,
           updates: Array.from(task.status.read()).map((s) => `${s.level}: ${s.message}`),
           logs: Array.from(task.status.logs()).map((l) => `${l.console}: ${l.message}`),
@@ -52,7 +52,7 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
             logs: Array.from(need.service.status.logs()).map((l) => `${l.console}: ${l.message}`),
           })),
         }).toEqual({
-          cacheId: task.cacheId(),
+          cacheId: task.id(),
           status: 'completed',
         })
       }

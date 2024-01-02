@@ -6,7 +6,7 @@ import { emptyWritable } from '../utils/empty-writable'
 describe('process-manager', () => {
   function fakeWorkItem(id: string) {
     return {
-      cacheId: () => '',
+      id: () => '',
       status: statusConsole(emptyWritable()).context(logContext('task', { name: id } as any)),
       deps: [],
       aliases: [id],

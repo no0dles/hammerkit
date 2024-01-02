@@ -23,7 +23,7 @@ export function parseWorkVolume(
       containerPath: path,
       export: volume.export ?? false,
       name: volume.name ? templateValue(volume.name, envs) : getVolumeName(path),
-      inherited: false,
+      inherited: null,
       resetOnChange: volume.resetOnChange ?? false,
     }
   }
@@ -45,7 +45,7 @@ function parseVolume(cwd: string, name: string, containerPath: string): WorkVolu
     name,
     resetOnChange: false,
     containerPath: normalizePath(cwd, cwd, containerPath),
-    inherited: false,
+    inherited: null,
     export: false,
   }
 }

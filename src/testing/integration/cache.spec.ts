@@ -1,5 +1,4 @@
 import 'jest-extended'
-import { writeWorkTaskCache } from '../../optimizer/write-work-task-cache'
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'
@@ -14,9 +13,10 @@ describe('cache', () => {
 
   async function testCache(action: (environment: Environment) => Promise<void>, expectInvalidate: boolean) {
     const setupBefore = await suite.setup({ taskName: 'example' })
-    const taskBefore = setupBefore.cli.task('example')
 
-    await writeWorkTaskCache(taskBefore, setupBefore.environment)
+    const result = await setupBefore.cli.exec().start()
+    await expectSuccessfulResult(result, setupBefore.environment)
+
     await action(setupBefore.environment)
 
     const setupAfter = await suite.setup({ taskName: 'example' })
