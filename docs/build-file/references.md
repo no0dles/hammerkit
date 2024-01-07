@@ -8,7 +8,7 @@ description: >-
 
 Each build file can have a reference map. 
 The reference points to other build file containing more tasks. 
-References can be used directly from the [cli](../cli/) or in [task dependencies](../task/dependencies.md).
+References can be used directly from the [cli](../cli) or in [task dependencies](../task/dependencies.md).
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

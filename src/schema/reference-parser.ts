@@ -91,7 +91,7 @@ export async function parseReferences(
       reference.envFiles[file.cwd] = await readEnvFile(file.cwd, environment)
     }
 
-    const buildFileEnvs = mergeEnvironmentVariables(file.schema.envs, reference.envFiles[file.cwd])
+    const buildFileEnvs = file.schema.envs
 
     if (file.schema.tasks) {
       for (const [taskName, task] of Object.entries(file.schema.tasks)) {

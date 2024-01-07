@@ -16,7 +16,7 @@ describe('kubernetes', () => {
     requiresKubernetesTest(async () => {
       const { cli, environment } = await suite.setup({ taskName: 'api' })
       const result = await cli.runExec()
-      expectSuccessfulResult(result, environment)
+      await expectSuccessfulResult(result, environment)
     })
   )
 })

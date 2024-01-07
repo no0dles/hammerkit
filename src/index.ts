@@ -26,4 +26,6 @@ runProgram(
   },
   process.argv,
   false
-)
+).catch(() => {
+  process.exit(1)
+})

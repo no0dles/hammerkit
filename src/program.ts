@@ -18,7 +18,7 @@ import { getVersion } from './version'
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
   const referencedScope = await parseReferences(ctx, scope, environment)
-  const workTree = await getWorkContext(referencedScope, workScope, environment)
+  const workTree = getWorkContext(referencedScope, workScope, environment)
   return getCli(workTree, environment)
 }
 
@@ -155,8 +155,8 @@ export async function getProgram(
       })
 
     program
-      .command('store <path>')
-      .description('save task outputs into <path>')
+      .command('store <directory>')
+      .description('save task outputs into <directory>')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
@@ -165,13 +165,25 @@ export async function getProgram(
       })
 
     program
-      .command('restore <path>')
-      .description('restore task outputs from <path>')
+      .command('restore <directory>')
+      .description('restore task outputs from <directory>')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
         const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
         await cli.restore(resolve(path))
+      })
+
+    program
+      .command('package <registry>')
+      .description('package services into a docker image')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('-p, --push', 'push image to registry').default(false))
+      .addOption(new Option('--override-user', 'set a dedicated user (uid/gid)').default(false))
+      .action(async (registry, options) => {
+        const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
+        await cli.package({ registry, push: options.push, overrideUser: !!options.overrideUser })
       })
 
     program

@@ -42,9 +42,9 @@ tasks:
 
 ### Separate by platform
 Labels can be used to separate your tasks in your CI.
-In a CI environment where there are two runners, one that runs macos and the other linux.
-With the goal to use the macos host only for the ios related code and the rest should run on linux.
-Add a `platform=ios` label to the task that require macos and configure your ci to run `task -f platform=ios` on the mac host and `task -e platform=ios` on the linux host. 
+In a CI environment where there are two runners, one that runs macOS and the other linux.
+With the goal to use the macOS host only for the ios related code and the rest should run on linux.
+Add a `platform=ios` label to the task that require macOS and configure your ci to run `task -f platform=ios` on the mac host and `task -e platform=ios` on the linux host. 
 
 If there are tasks dependencies between the platform tasks, take a look at [store / restore](../cli/store-restore.md). 
 These can be used to store and restore generated outputs from tasks, work as well with the label arguments `task store -e platform=ios` and help to move data/cache between hosts.

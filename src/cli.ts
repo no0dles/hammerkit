@@ -20,6 +20,7 @@ import { getSchedulerExecuteResult } from './executer/get-scheduler-execute-resu
 import { resetWorkTree } from './executer/reset-work-tree'
 import { executeWorkTree } from './executer/execute-work-tree'
 import { TaskState } from './executer/scheduler/task-state'
+import { packageWorkTree } from './docker/package'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -30,6 +31,12 @@ export interface CliExecOptions {
   logMode: LogMode
   cacheDefault: CacheMethod
   processManager: ProcessManager
+}
+
+export interface CliPackageOptions {
+  registry: string
+  push: boolean
+  overrideUser: boolean
 }
 
 export interface CliExecResult {
@@ -130,6 +137,10 @@ export class Cli {
 
   async restore(path: string): Promise<void> {
     await restoreCache(this.environment, path, this.workTree)
+  }
+
+  async package(options: CliPackageOptions): Promise<void> {
+    await packageWorkTree(this.workTree, this.environment, options)
   }
 
   async store(path: string): Promise<void> {

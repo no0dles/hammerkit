@@ -39,8 +39,5 @@ export function hasError(workTree: WorkTree): boolean {
   if (hasErrorService(workTree)) {
     return true
   }
-  if (hasErrorTask(workTree)) {
-    return true
-  }
-  return false
+  return hasErrorTask(workTree)
 }

@@ -50,7 +50,7 @@ export function convertToPosixPath(path: string): string {
   if (platform() === 'win32') {
     return path
       .split(sep)
-      .map((value, index) => (index === 0 && value.endsWith(':') ? '/' + value.substr(0, value.length - 1) : value))
+      .map((value, index) => (index === 0 && value.endsWith(':') ? '/' + value.substring(0, value.length - 1) : value))
       .join('/')
   }
   return path

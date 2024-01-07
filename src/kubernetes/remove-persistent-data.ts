@@ -1,8 +1,8 @@
-import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
-import { WorkKubernetesEnvironment } from './work-environment'
-import { WorkItem } from './work-item'
-import { ContainerWorkService } from './work-service'
-import { ContainerWorkTask } from './work-task'
+import { KubernetesInstance } from './kubernetes-instance'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { WorkItem } from '../planner/work-item'
+import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkTask } from '../planner/work-task'
 
 export async function removePersistentData(
   instance: KubernetesInstance,

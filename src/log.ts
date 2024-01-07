@@ -320,7 +320,7 @@ function printWithTruncate(env: Environment, message: string): number {
   let index = 0
   do {
     const newLineCount = countChar(message, '\n')
-    env.stdout.write(`${message.substr(index, env.stdoutColumns)}\n`)
+    env.stdout.write(`${message.substring(index, index + env.stdoutColumns)}\n`)
     index += env.stdoutColumns
     lineCount++
     lineCount += newLineCount

@@ -23,8 +23,8 @@ export async function readEnvFile(
   for (const envVar of envFile) {
     const index = envVar.indexOf('=')
     if (index > 0) {
-      const key = envVar.substr(0, index)
-      const value = envVar.substr(index + 1)
+      const key = envVar.substring(0, index)
+      const value = envVar.substring(index + 1)
       if (!envs[key]) {
         envs[key] = value
       }

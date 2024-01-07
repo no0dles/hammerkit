@@ -28,7 +28,7 @@ function startForward(item: WorkItem<KubernetesWorkService>, options: ExecuteOpt
 
   const ps = exec(cmd, {})
 
-  return new Promise<void>((resolve) => {
+  const execution = new Promise<void>((resolve) => {
     ps.stdout?.on('data', async (data) => {
       for (const log of getLogs(data)) {
         item.status.console('stdout', log)
@@ -68,4 +68,6 @@ function startForward(item: WorkItem<KubernetesWorkService>, options: ExecuteOpt
   const abortListener = listenOnAbort(options.abort, () => {
     ps.kill()
   })
+
+  return execution
 }

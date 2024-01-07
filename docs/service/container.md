@@ -1,6 +1,6 @@
 # Container service
 Container services run in the same network as the other container tasks.
-By default they are started when needed from by a task and stopped when no longer needed by future tasks.
+By default, they are started when needed from by a task and stopped when no longer needed by future tasks.
 
 ## Differences to docker-compose
 Services are similar to a `docker compose`, but are better integrated with your tasks.
@@ -20,7 +20,7 @@ This makes it possible to reuse services and their state for multiple hammerkit 
 Making it possible to run just one database for multiple projects and reducing required cpu/memory. 
 
 ### Store/Restore
-The [store/restore](./cli/store-restore.md) command from the hammerkit cli can be used for services as well.
+The [store/restore](../cli/store-restore.md) command from the hammerkit cli can be used for services as well.
 Enabling the functionality to export / import volume data of services.
 
 This can be used to seed database data or backup and restore project data states.
@@ -47,7 +47,7 @@ Healthcheck do check if the service is ready to be used.
 Tasks will only start if a needed service's is running and healthcheck passed if present.
 
 A healthcheck requires a command that can be used to test the readiness of a service.
-The command is executed inside of the service container. 
+The command is executed inside the service container. 
 To pass the healtcheck the command needs to return with an exit code of `0`.
 
 The following example contains a postgres service. 

@@ -27,7 +27,7 @@ export function buildEnvironmentVariables(
   const variables: { [key: string]: string } = {}
   for (const [key, value] of Object.entries(envs)) {
     if (value.startsWith('$')) {
-      const name = value.substr(1)
+      const name = value.substring(1)
       const nameValue = environment.processEnvs[name] ?? null
       if (nameValue) {
         replacements.push({
