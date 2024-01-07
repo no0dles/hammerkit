@@ -1,6 +1,7 @@
 import { getTestSuite } from '../get-test-suite'
 import { createTestCase } from '../test-case'
 import { requiresKubernetesTest } from '../requires-kubernetes-test'
+import { testingTimeout } from '../testing-timeout'
 
 describe('environment', () => {
   const suite = getTestSuite('error', ['.hammerkit.yaml'])
@@ -87,7 +88,11 @@ main().catch((err) => {
 `,
       })
       await testCase.cli({ environmentName: 'staging' }, async (cli) => {
-        await cli.runUp({ daemon: true })
+        try {
+          await testingTimeout(cli.up({ daemon: true }))
+        } finally {
+          await cli.runDown()
+        }
       })
     })
   )

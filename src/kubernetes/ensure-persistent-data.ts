@@ -28,10 +28,6 @@ export async function getPodForPersistence(
     return
   }
 
-  for (const volume of persistence.volumes) {
-    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service)
-  }
-
   // TODO remove old upload pods
 
   const mounts: V1VolumeMount[] =
@@ -76,15 +72,18 @@ export async function getPodForPersistence(
     },
   }
 
+  service.status.console('stdout', `create pod ${name}`)
   const pod = await apply(instance, podSpec)
 
   if (pod.status?.phase !== 'Running') {
+    service.status.console('stdout', `await running state ${name}`)
     await awaitRunningState(instance, env, name, 'Running')
   }
 
   try {
     await fn(name)
   } finally {
+    service.status.console('stdout', `delete pod ${name}`)
     await instance.coreApi.deleteNamespacedPod(name, env.namespace)
   }
 }
@@ -98,10 +97,15 @@ export async function ensurePersistentData(
 ) {
   // TODO check if state is already uploaded
 
+  for (const volume of persistence.volumes) {
+    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service)
+  }
+
   if (persistence.sources.length === 0) {
     return
   }
 
+  service.status.console('stdout', 'start upload container')
   // TODO check if file exists
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
     for (const source of persistence.sources) {
@@ -120,6 +124,7 @@ export async function ensurePersistentData(
         [fileItem]
       )
 
+      service.status.console('stdout', `upload ${source.localPath}`)
       const targetPath = `/dev/hammerkit/${service.id()}`
       const res = await instance.exec.exec(
         env.namespace,

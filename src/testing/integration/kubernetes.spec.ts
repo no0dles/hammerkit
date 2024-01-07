@@ -1,6 +1,7 @@
 import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
 import { requiresKubernetesTest } from '../requires-kubernetes-test'
+import { testingTimeout } from '../testing-timeout'
 
 describe('kubernetes', () => {
   const suite = getTestSuite('kubernetes', ['index.js', 'package.json', 'package-lock.json', '.hammerkit.yaml'])
@@ -15,7 +16,7 @@ describe('kubernetes', () => {
     'should forward deployment',
     requiresKubernetesTest(async () => {
       const { cli, environment } = await suite.setup({ taskName: 'api' })
-      const result = await cli.runExec()
+      const result = await testingTimeout(cli.exec())
       await expectSuccessfulResult(result, environment)
     })
   )

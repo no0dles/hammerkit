@@ -1,5 +1,6 @@
 import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
+import { testingTimeout } from '../testing-timeout'
 
 describe('services', () => {
   const suite = getTestSuite('services', [
@@ -15,13 +16,13 @@ describe('services', () => {
 
   it('should run with needed service', async () => {
     const { cli, environment } = await suite.setup({})
-    const result = await cli.runUp({ daemon: true })
+    const result = await testingTimeout(cli.up({ daemon: true }), 120000)
     await expectSuccessfulResult(result, environment)
   }, 120000)
 
   it('should start needs of service', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'test' })
-    const result = await cli.runExec()
+    const result = await testingTimeout(cli.exec(), 120000)
     await expectSuccessfulResult(result, environment)
   }, 120000)
 
@@ -30,7 +31,7 @@ describe('services', () => {
       filterLabels: { task: ['dev'] },
       excludeLabels: {},
     })
-    const upResult = await cli.runUp({ daemon: true })
+    const upResult = await testingTimeout(cli.up({ daemon: true }))
     expect(upResult.success).toBeTrue()
     const downResult = await cli.runDown()
     expect(downResult.success).toBeTrue()

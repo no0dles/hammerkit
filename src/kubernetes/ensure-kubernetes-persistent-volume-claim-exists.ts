@@ -7,6 +7,7 @@ import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
 import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
+import { awaitPvcBound } from './await-running-state'
 
 export async function ensureKubernetesPersistentVolumeClaimExists(
   instance: KubernetesInstance,
@@ -37,5 +38,10 @@ export async function ensureKubernetesPersistentVolumeClaimExists(
       },
     },
   }
-  return await apply(instance, pvc)
+  service.status.console('stdout', `ensure volume ${volume.name}`)
+  const result = await apply(instance, pvc)
+  if (result.status?.phase === 'Bound') {
+    return result
+  }
+  return await awaitPvcBound(instance, env, volume.name)
 }

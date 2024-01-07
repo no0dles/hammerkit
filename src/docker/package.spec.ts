@@ -73,7 +73,7 @@ main().catch((err) => {
 `,
     })
     await testCase.cli({ filterLabels: { app: ['registry'] } }, async (cli) => {
-      await cli.up({ daemon: true }).start()
+      await cli.runUp({ daemon: true })
       try {
         await testCase.cli({ filterLabels: { app: ['api'] } }, async (cli) => {
           await cli.package({
@@ -85,7 +85,7 @@ main().catch((err) => {
           })
         })
       } finally {
-        await cli.down().start()
+        await cli.runDown()
       }
     })
   })

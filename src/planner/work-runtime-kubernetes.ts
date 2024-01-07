@@ -45,6 +45,7 @@ export function kubernetesTaskRuntime(
       const envs = getEnvironmentVariables(task.data.envs)
 
       const persistence = await getKubernetesPersistence(task)
+
       await ensurePersistentData(instance, kubernetes, environment, task, persistence)
 
       const podName = `${task.name}-${options.stateKey}`
@@ -66,6 +67,15 @@ export function kubernetesTaskRuntime(
           },
           spec: {
             template: {
+              metadata: {
+                annotations: {
+                  'hammerkit.dev/version': getVersion(),
+                },
+                labels: {
+                  'hammerkit.dev/id': task.id(),
+                  'hammerkit.dev/state': options.stateKey,
+                },
+              },
               spec: {
                 containers: [
                   {
@@ -105,6 +115,34 @@ export function kubernetesTaskRuntime(
       }
     },
     async stop(): Promise<void> {
+      const jobs = await instance.batchApi.listNamespacedJob(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${task.id()}`
+      )
+      for (const pod of jobs.body.items) {
+        if (pod.metadata?.name) {
+          await instance.batchApi.deleteNamespacedJob(pod.metadata.name, kubernetes.namespace)
+        }
+      }
+
+      const deployments = await instance.appsApi.listNamespacedDeployment(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${task.id()}`
+      )
+      for (const deploy of deployments.body.items) {
+        if (deploy.metadata?.name) {
+          await instance.appsApi.deleteNamespacedDeployment(deploy.metadata.name, kubernetes.namespace)
+        }
+      }
+
       const pods = await instance.coreApi.listNamespacedPod(
         kubernetes.namespace,
         undefined,
@@ -121,6 +159,7 @@ export function kubernetesTaskRuntime(
     },
     async remove(): Promise<void> {
       await this.stop()
+
       await removePersistentData(instance, kubernetes, task)
     },
     currentStateKey(): Promise<string | null> {

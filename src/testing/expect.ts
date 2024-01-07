@@ -7,6 +7,7 @@ import { WorkItemState } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { CliExecResult } from '../cli'
 import { getSchedulerExecuteResult } from '../executer/get-scheduler-execute-result'
+import { testingTimeout } from './testing-timeout'
 
 export async function expectSuccessfulExecution(exec: CliExecResult, env: Environment): Promise<void> {
   const badResult = new Promise<SchedulerResult>((resolve) => {
@@ -32,7 +33,7 @@ export async function expectSuccessfulExecution(exec: CliExecResult, env: Enviro
       }
     })
   })
-  const result = await Promise.race([badResult, exec.start()])
+  const result = await Promise.race([badResult, testingTimeout(exec)])
   await expectSuccessfulResult(result, env)
 }
 
