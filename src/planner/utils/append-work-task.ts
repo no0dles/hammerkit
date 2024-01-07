@@ -3,7 +3,7 @@ import { parseWorkGenerate } from './parse-work-generate'
 import { templateValue } from './template-value'
 import { parseWorkMounts } from './parse-work-mounts'
 import { getContainerUser } from './get-container-user'
-import { ReferenceTask } from '../../schema/reference-parser'
+import { ReferencedContext, ReferenceTask } from '../../schema/reference-parser'
 import { isBuildFileContainerTaskSchema } from '../../schema/build-file-task-schema'
 import { parseWorkCommands } from './parse-work-command'
 import { parseWorkSource } from './parse-work-source'
@@ -23,9 +23,10 @@ export function appendWorkTask(
   workTree: WorkTree,
   cwd: string,
   referenceTask: ReferenceTask,
-  environment: Environment
+  environment: Environment,
+  context: ReferencedContext
 ): WorkItemState<WorkTask, TaskState> {
-  const task = parseTask(cwd, referenceTask, environment)
+  const task = parseTask(cwd, referenceTask, environment, context)
   if (!workTree.tasks[task.name]) {
     const workItem: WorkItem<WorkTask> = {
       id: lazyResolver(() => getWorkTaskId(task)),
@@ -45,16 +46,21 @@ export function appendWorkTask(
       runtime: getWorkTaskRuntime(workTree, workItem),
     }
     workTree.tasks[task.name] = workItemState
-    appendWorkDependencies(workTree, referenceTask, workItemState, environment)
-    appendWorkNeeds(workTree, referenceTask, workItemState, environment)
+    appendWorkDependencies(workTree, referenceTask, workItemState, environment, context)
+    appendWorkNeeds(workTree, referenceTask, workItemState, environment, context)
     return workItemState
   } else {
     return workTree.tasks[task.name]
   }
 }
 
-function parseTask(cwd: string, task: ReferenceTask, environment: Environment): ContainerWorkTask | LocalWorkTask {
-  const envs = buildEnvironmentVariables(task.envs, environment)
+function parseTask(
+  cwd: string,
+  task: ReferenceTask,
+  environment: Environment,
+  context: ReferencedContext
+): ContainerWorkTask | LocalWorkTask {
+  const envs = buildEnvironmentVariables(task.envs, environment, context)
   const baseWorkNode: BaseWorkTask = {
     envs,
     description: templateValue(task.schema.description || '', envs).trim(),

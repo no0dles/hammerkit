@@ -1,4 +1,5 @@
 import { Environment } from '../executer/environment'
+import { ReferencedContext } from '../schema/reference-parser'
 
 export interface WorkEnvironmentVariables {
   variables: { [key: string]: string }
@@ -21,14 +22,25 @@ export type EnvironmentVariableReplacement =
 
 export function buildEnvironmentVariables(
   envs: { [key: string]: string },
-  environment: Environment
+  environment: Environment,
+  context: ReferencedContext
 ): WorkEnvironmentVariables {
   const replacements: EnvironmentVariableReplacement[] = []
   const variables: { [key: string]: string } = {}
   for (const [key, value] of Object.entries(envs)) {
     if (value.startsWith('$')) {
       const name = value.substring(1)
-      const nameValue = environment.processEnvs[name] ?? null
+
+      let nameValue = environment.processEnvs[name] ?? null
+      if (!nameValue) {
+        for (const envFile of Object.values(context.envFiles)) {
+          nameValue = envFile[name] ?? null
+          if (nameValue) {
+            break
+          }
+        }
+      }
+
       if (nameValue) {
         replacements.push({
           key,

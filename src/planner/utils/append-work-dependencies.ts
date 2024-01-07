@@ -1,6 +1,6 @@
 import { isContainerWorkTask, isWorkTask, WorkTask } from '../work-task'
 import { isContainerWorkService, WorkService } from '../work-service'
-import { ReferenceService, ReferenceTask } from '../../schema/reference-parser'
+import { ReferencedContext, ReferenceService, ReferenceTask } from '../../schema/reference-parser'
 import { appendWorkTask } from './append-work-task'
 import { WorkTree } from '../work-tree'
 import { Environment } from '../../executer/environment'
@@ -13,10 +13,11 @@ export function appendWorkDependencies(
   workTree: WorkTree,
   referenced: ReferenceService | ReferenceTask,
   item: WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>,
-  environment: Environment
+  environment: Environment,
+  context: ReferencedContext
 ): void {
   for (const dep of referenced.deps) {
-    const depNode = appendWorkTask(workTree, dep.cwd, dep.task, environment)
+    const depNode = appendWorkTask(workTree, dep.cwd, dep.task, environment, context)
     item.deps.push(depNode)
 
     item.data.labels = mergeLabels(item.data.labels, depNode.data.labels)

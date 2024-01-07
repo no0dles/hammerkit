@@ -1,5 +1,5 @@
 import { WorkTree } from '../work-tree'
-import { ReferenceService } from '../../schema/reference-parser'
+import { ReferencedContext, ReferenceService } from '../../schema/reference-parser'
 import { getWorkServiceId } from '../work-service-id'
 import { BaseWorkService, ContainerWorkService, KubernetesWorkService, WorkService } from '../work-service'
 import { parseWorkPorts } from './parse-work-ports'
@@ -23,9 +23,10 @@ import { getWorkServiceRuntime } from './get-work-runtime'
 export function appendWorkService(
   workTree: WorkTree,
   service: ReferenceService,
-  environment: Environment
+  environment: Environment,
+  context: ReferencedContext
 ): WorkItemState<WorkService, ServiceState> {
-  const workService = parseService(service, environment)
+  const workService = parseService(service, environment, context)
   if (!workTree.services[workService.name]) {
     const workItem: WorkItem<WorkService> = {
       id: lazyResolver(() => getWorkServiceId(workService)),
@@ -45,16 +46,16 @@ export function appendWorkService(
       runtime: getWorkServiceRuntime(workTree, workItem),
     }
     workTree.services[workItem.name] = workStateItem
-    appendWorkDependencies(workTree, service, workStateItem, environment)
-    appendWorkNeeds(workTree, service, workStateItem, environment)
+    appendWorkDependencies(workTree, service, workStateItem, environment, context)
+    appendWorkNeeds(workTree, service, workStateItem, environment, context)
     return workStateItem
   } else {
     return workTree.services[workService.name]
   }
 }
 
-function parseService(service: ReferenceService, environment: Environment): WorkService {
-  const envs = buildEnvironmentVariables(service.envs, environment)
+function parseService(service: ReferenceService, environment: Environment, context: ReferencedContext): WorkService {
+  const envs = buildEnvironmentVariables(service.envs, environment, context)
   const workService: BaseWorkService = {
     cwd: service.cwd,
     name: service.relativeName,
@@ -86,7 +87,7 @@ function parseService(service: ReferenceService, environment: Environment): Work
             cmd: parseWorkCommand(service.cwd, service.schema.healthcheck, envs),
           }
         : null,
-      envs: buildEnvironmentVariables(service.envs, environment),
+      envs: buildEnvironmentVariables(service.envs, environment, context),
       image: service.schema.image,
       cwd: service.cwd,
       cmd: service.schema.cmd ? parseWorkCommand(service.cwd, service.schema.cmd, envs) : null,

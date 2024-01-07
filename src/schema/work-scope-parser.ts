@@ -36,14 +36,14 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
   }
 
   for (const task of Object.values(context.tasks)) {
-    const item = appendWorkTask(workTree, task.cwd, task, environment)
+    const item = appendWorkTask(workTree, task.cwd, task, environment, context)
     if (matchesTaskWorkScope(item, scope)) {
       applyTask(filteredWorkTree, item)
     }
   }
 
   for (const service of Object.values(context.services)) {
-    const item = appendWorkService(workTree, service, environment)
+    const item = appendWorkService(workTree, service, environment, context)
     if (matchesServiceWorkScope(item.data, scope)) {
       applyService(filteredWorkTree, item)
     }
