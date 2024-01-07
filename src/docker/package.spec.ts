@@ -1,7 +1,7 @@
 import { createTestCase } from '../testing/test-case'
 
 describe('docker/package', () => {
-  it('should package', async () => {
+  it('should package and push', async () => {
     const testCase = createTestCase('package', {
       '.hammerkit.yaml': {
         tasks: {
@@ -23,10 +23,16 @@ describe('docker/package', () => {
             ports: ['5432'],
             volumes: ['postgres-db:/var/lib/postgresql/data'],
           },
+          registry: {
+            image: 'registry:2',
+            labels: { app: 'registry' },
+            ports: ['5000'],
+          },
           api: {
             deps: ['install'],
             needs: ['postgres'],
             image: 'node:20-alpine',
+            labels: { app: 'api' },
             envs: {
               DATABASE_URL: '$DATABASE_URL',
             },
@@ -66,8 +72,21 @@ main().catch((err) => {
 })
 `,
     })
-    await testCase.cli({ environmentName: 'staging' }, async (cli) => {
-      await cli.package({ registry: 'registry', push: false, overrideUser: true })
+    await testCase.cli({ filterLabels: { app: ['registry'] } }, async (cli) => {
+      await cli.up({ daemon: true }).start()
+      try {
+        await testCase.cli({ filterLabels: { app: ['api'] } }, async (cli) => {
+          await cli.package({
+            registry: 'localhost:5000',
+            push: true,
+            overrideUser: true,
+            username: null,
+            password: null,
+          })
+        })
+      } finally {
+        await cli.down().start()
+      }
     })
   })
 })

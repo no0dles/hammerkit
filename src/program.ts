@@ -5,7 +5,7 @@ import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
 import { Cli, getCli, isCliService, isCliTask } from './cli'
 import { WorkLabelScope, WorkScope } from './executer/work-scope'
-import { printItem, printProperty, printTitle } from './log'
+import { getErrorMessage, printItem, printProperty, printTitle } from './log'
 import { hasLabels } from './executer/label-values'
 import { getBuildFilename } from './parser/default-build-file'
 import { createParseContext } from './schema/schema-parser'
@@ -150,8 +150,13 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (options) => {
-        const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
-        await cli.clean()
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
+          await cli.clean()
+        } catch (e) {
+          environment.console.error(getErrorMessage(e))
+          program.error('Clean was not successful', { exitCode: 1 })
+        }
       })
 
     program
@@ -160,8 +165,13 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
-        const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
-        await cli.store(resolve(path))
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
+          await cli.store(resolve(path))
+        } catch (e) {
+          environment.console.error(getErrorMessage(e))
+          program.error('Store was not successful', { exitCode: 1 })
+        }
       })
 
     program
@@ -170,8 +180,13 @@ export async function getProgram(
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .action(async (path, options) => {
-        const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
-        await cli.restore(resolve(path))
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
+          await cli.restore(resolve(path))
+        } catch (e) {
+          environment.console.error(getErrorMessage(e))
+          program.error('Restore was not successful', { exitCode: 1 })
+        }
       })
 
     program
@@ -179,11 +194,24 @@ export async function getProgram(
       .description('package services into a docker image')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
-      .addOption(new Option('-p, --push', 'push image to registry').default(false))
-      .addOption(new Option('--override-user', 'set a dedicated user (uid/gid)').default(false))
+      .addOption(new Option('--push', 'push image to registry').default(false))
+      .addOption(new Option('--build-override-user', 'set a dedicated user (uid/gid)').default(false))
+      .addOption(new Option('-u, --user, --username', 'registry username'))
+      .addOption(new Option('-p, --password', 'registry password'))
       .action(async (registry, options) => {
-        const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
-        await cli.package({ registry, push: options.push, overrideUser: !!options.overrideUser })
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
+          await cli.package({
+            registry,
+            push: options.push,
+            overrideUser: !!options.overrideUser,
+            username: options.username,
+            password: options.password,
+          })
+        } catch (e) {
+          environment.console.error(getErrorMessage(e))
+          program.error('Package was not successful', { exitCode: 1 })
+        }
       })
 
     program
@@ -244,20 +272,25 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (options) => {
-        const scope = parseWorkLabelScope(options)
-        const cli = await createCli(fileName, environment, scope)
-        const result = await cli.runUp({
-          cacheDefault: options.cache,
-          watch: options.watch,
-          workers: options.concurrency,
-          logMode: options.log,
-          daemon: options.daemon,
-        })
+        try {
+          const scope = parseWorkLabelScope(options)
+          const cli = await createCli(fileName, environment, scope)
+          const result = await cli.runUp({
+            cacheDefault: options.cache,
+            watch: options.watch,
+            workers: options.concurrency,
+            logMode: options.log,
+            daemon: options.daemon,
+          })
 
-        if (!result.success) {
-          program.error('Execution was not successful', { exitCode: 1 })
-        } else {
-          process.exit()
+          if (!result.success) {
+            program.error('Up was not successful', { exitCode: 1 })
+          } else {
+            process.exit()
+          }
+        } catch (e) {
+          environment.console.error(getErrorMessage(e))
+          program.error('Up was not successful', { exitCode: 1 })
         }
       })
 
@@ -268,12 +301,17 @@ export async function getProgram(
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(new Option('--env <name>', 'environment'))
       .action(async (options) => {
-        const scope = parseWorkLabelScope(options)
-        const cli = await createCli(fileName, environment, scope)
-        const result = await cli.runDown()
+        try {
+          const scope = parseWorkLabelScope(options)
+          const cli = await createCli(fileName, environment, scope)
+          const result = await cli.runDown()
 
-        if (!result.success) {
-          program.error('Execution was not successful', { exitCode: 1 })
+          if (!result.success) {
+            program.error('Shutdown was not successful', { exitCode: 1 })
+          }
+        } catch (e) {
+          environment.console.error(getErrorMessage(e))
+          program.error('Shutdown was not successful', { exitCode: 1 })
         }
       })
 
@@ -296,24 +334,29 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (task, options) => {
-        const cli = await createCli(
-          fileName,
-          environment,
-          task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options)
-        )
-        if (cli.tasks().length === 0) {
-          program.error('No tasks found', { exitCode: 127 })
-          return
-        }
+        try {
+          const cli = await createCli(
+            fileName,
+            environment,
+            task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options)
+          )
+          if (cli.tasks().length === 0) {
+            program.error('No tasks found', { exitCode: 127 })
+            return
+          }
 
-        const result = await cli.runExec({
-          cacheDefault: options.cache,
-          watch: options.watch,
-          workers: options.concurrency,
-          logMode: options.log,
-        })
+          const result = await cli.runExec({
+            cacheDefault: options.cache,
+            watch: options.watch,
+            workers: options.concurrency,
+            logMode: options.log,
+          })
 
-        if (!result.success) {
+          if (!result.success) {
+            program.error('Execution was not successful', { exitCode: 1 })
+          }
+        } catch (e) {
+          environment.console.error(getErrorMessage(e))
           program.error('Execution was not successful', { exitCode: 1 })
         }
       })

@@ -27,6 +27,7 @@ export async function packageWorkTree(
 
   for (const service of iterateWorkServices(workTree)) {
     if (isContainerWorkServiceItem(service)) {
+      environment.console.info(`preparing files for ${service.name}`)
       const definition = getServiceInstructions(service.data.cwd, service, options)
       const buildDir = join(tmpdir(), service.id())
       const dockerFileName = join(buildDir, 'Dockerfile')
@@ -41,6 +42,7 @@ export async function packageWorkTree(
       }
 
       const imageName = `${options.registry}/${service.name}`
+      environment.console.info(`building image ${imageName} for ${service.name}`)
       const buildStream = await docker.buildImage(
         {
           src,
@@ -54,10 +56,24 @@ export async function packageWorkTree(
       await new Promise((resolve, reject) => {
         docker.modem.followProgress(buildStream, (err, res) => (err ? reject(err) : resolve(res)))
       })
+      environment.console.info(`generated image ${imageName} for ${service.name}`)
 
-      await docker.getImage(imageName).push({
-        abortSignal: environment.abortCtrl.signal,
-      })
+      if (options.push) {
+        environment.console.info(`pushing image ${imageName} to ${options.registry}`)
+        const img = docker.getImage(imageName)
+        const pushStream = await img.push({
+          abortSignal: environment.abortCtrl.signal,
+          authconfig: {
+            username: options.username || '',
+            password: options.password || '',
+            serveraddress: options.registry,
+          },
+        })
+        await new Promise((resolve, reject) => {
+          docker.modem.followProgress(pushStream, (err, res) => (err ? reject(err) : resolve(res)))
+        })
+        environment.console.info(`pushed image ${imageName} to ${options.registry}`)
+      }
     }
   }
 }

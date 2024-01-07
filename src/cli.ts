@@ -35,6 +35,8 @@ export interface CliExecOptions {
 
 export interface CliPackageOptions {
   registry: string
+  username: string | null
+  password: string | null
   push: boolean
   overrideUser: boolean
 }
