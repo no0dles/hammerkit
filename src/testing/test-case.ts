@@ -49,8 +49,6 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
       } catch (e) {
         process.stdout.write(statusStream.read())
         throw e
-      } finally {
-        await file.remove(path)
       }
     },
     async cli(
