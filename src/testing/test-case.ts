@@ -3,12 +3,12 @@ import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
 import { Environment } from '../executer/environment'
 import { consoleContext } from '../log'
-import { createWriteStream } from 'fs'
 import { statusConsole } from '../planner/work-item-status'
 import { createCli } from '../program'
 import { stringify as yamlSerialize } from 'yaml'
 import { runProgram } from '../run-program'
 import { Cli } from '../cli'
+import { emptyStream, memoryStream } from './test-streams'
 
 export function createTestCase(name: string, files: { [key: string]: any }) {
   return {
@@ -21,17 +21,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
       const path = join(process.cwd(), 'temp', name)
       const file = getFileContext(path)
 
-      const logPath = join(process.cwd(), 'logs')
-      const stdoutFile = join(logPath, name + '-stdout.log')
-      const stderrFile = join(logPath, name + '-stderr.log')
-      const statusFile = join(logPath, name + '-status.log')
-      const consoleFile = join(logPath, name + '-console.log')
-
-      await file.createDirectory(logPath)
-      await file.remove(stdoutFile)
-      await file.remove(statusFile)
-      await file.remove(consoleFile)
-
+      const statusStream= memoryStream()
       try {
         await file.remove(path)
         await file.createDirectory(path)
@@ -41,10 +31,10 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
           abortCtrl: new AbortController(),
           cwd: path,
           file,
-          console: consoleContext(createWriteStream(consoleFile)),
-          status: statusConsole(createWriteStream(statusFile)),
-          stdout: createWriteStream(stdoutFile),
-          stderr: createWriteStream(stderrFile),
+          console: consoleContext(emptyStream()),
+          status: statusConsole(statusStream.stream),
+          stdout: emptyStream(),
+          stderr: emptyStream(),
           stdoutColumns: 80,
         }
 
@@ -57,7 +47,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
 
         await fn(path, environment)
       } catch (e) {
-        process.stdout.write(await file.read(statusFile))
+        process.stdout.write(statusStream.read())
         throw e
       } finally {
         await file.remove(path)
