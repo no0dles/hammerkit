@@ -29,5 +29,5 @@ function printWorkItem(task: WorkItemState<any, any>) {
   for (const log of task.status.read()) {
     messages.push(` status ${log.level}: ${log.message}`)
   }
-  console.log(messages.join('\n'))
+  process.stdout.write(messages.join('\n'))
 }

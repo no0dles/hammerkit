@@ -44,8 +44,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Set up Docker
-        uses: crazy-max/ghaction-setup-docker@v3
       - name: Install npm packages
         run: npm ci
       - name: Run tests
@@ -62,8 +60,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Set up Docker
-        uses: crazy-max/ghaction-setup-docker@v3
+      - run: brew install docker colima
+      - run: colima start
       - name: Install npm packages
         run: npm ci
       - name: Run tests

@@ -1,7 +1,13 @@
 import { Writable } from 'stream'
 
 export function emptyStream(): Writable {
-  return new Writable()
+  const stream = new Writable()
+
+  stream._write = function (_chunk, _encoding, done) {
+    done();
+  };
+
+  return stream
 }
 
 export function memoryStream(): { read(): string, stream: Writable } {
