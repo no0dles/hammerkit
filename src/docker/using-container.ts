@@ -10,6 +10,7 @@ export async function usingContainer<T>(
   docker: Dockerode,
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   createOptions: ContainerCreateOptions,
+  stateKey: string | null,
   callback: (container: Container) => Promise<T>
 ) {
   let container: Container | null = null
@@ -19,13 +20,26 @@ export async function usingContainer<T>(
     await startContainer(item.status, container)
     return await callback(container)
   } finally {
-    if (container) {
-      try {
-        await removeContainer(container)
-        // TODO do not remove last one, to allow caching
-      } catch (e) {
-        item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
+    try {
+      if (stateKey) {
+        if (container) {
+          await container.pause()
+        }
+        const containers = await docker.listContainers({ all: true, filters: { label: [`hammerkit-id=${item.id()}`] } })
+        for (const container of containers) {
+          item.status.write('debug', `found container ${container.Id}`)
+          if (container.Labels['hammerkit-state'] != stateKey) {
+            const oldContainer = docker.getContainer(container.Id)
+            await removeContainer(oldContainer)
+          }
+        }
+      } else {
+        if (container) {
+          await removeContainer(container)
+        }
       }
+    } catch (e) {
+      item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
     }
   }
 }

@@ -26,7 +26,7 @@ export async function checkCacheState(
   }
 
   if (isWorkTaskItem(item)) {
-    const runtimeStateKey = await item.runtime.currentStateKey()
+    const runtimeStateKey = await item.runtime.currentStateKey(environment)
     if (stateKey === null) {
       item.status.write('debug', `no cache found for ${item.id()}`)
       return { cached: false, stateKey }

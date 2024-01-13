@@ -4,9 +4,13 @@ import { TaskState } from '../executer/scheduler/task-state'
 import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
 import { create, extract } from 'tar'
-import { relative } from 'path'
+import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
+
+function getStateFilename(task: WorkItem<LocalWorkTask>) {
+  return join(task.data.cwd, '.hammerkit', `${task.id()}`);
+}
 
 export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<TaskState> {
   return {
@@ -21,12 +25,18 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       await localTask(task, environment, options)
+      await environment.file.createDirectory(join(task.data.cwd, '.hammerkit'))
+      await environment.file.writeFile(getStateFilename(task), options.stateKey)
     },
     async stop(): Promise<void> {
       // TODO check for running tasks
     },
-    currentStateKey(): Promise<string | null> {
-      return Promise.resolve(null) // TODO document changes, local no caching or implement new file cache
+    async currentStateKey(environment: Environment): Promise<string | null> {
+      const stateFileName = getStateFilename(task)
+      if (await environment.file.exists(stateFileName)) {
+        return await environment.file.read(stateFileName)
+      }
+      return Promise.resolve(null)
     },
     async remove(environment: Environment): Promise<void> {
       for (const generate of task.data.generates) {

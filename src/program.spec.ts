@@ -3,14 +3,13 @@ import { createTestCase } from './testing/test-case'
 describe('program', () => {
   it('should run when cache is up to date and --no-cache arg is passed', async () => {
     const testCase = createTestCase('no-cache', {
+      'package.json': '{ "dependencies": { "hammerkit": "^1.5.0" } }',
       '.hammerkit.yaml': {
         tasks: {
-          'package.json': '{ "dependencies": { "hammerkit": "latest" } }',
           example: {
             description: 'install npm packages',
             image: 'node:16.6.0-alpine',
-            mounts: ['npm:/.npm'],
-            src: ['package.json', 'package-lock.json'],
+            src: ['package.json'],
             generates: ['node_modules'],
             cmds: ['npm install'],
           },

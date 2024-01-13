@@ -38,13 +38,15 @@ export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }
 function buildCreateOptions(
   item: WorkItem<ContainerWorkTask>,
   stateKey: string,
-  serviceContainers: { [key: string]: ServiceDns }
+  serviceContainers: { [key: string]: ServiceDns },
+  environment: Environment
 ): ContainerCreateOptions {
   const network = getNeedsNetwork(serviceContainers, item.needs)
   const binds = getContainerBinds(item)
   const envs = getEnvironmentVariables(item.data.envs)
 
   return {
+    abortSignal: environment.abortCtrl.signal,
     Image: item.data.image,
     Tty: true,
     Entrypoint: item.data.shell,
@@ -86,10 +88,10 @@ export async function dockerTask(
     checkForAbort(options.abort)
 
     const serviceContainers = getServiceContainers(item.needs)
-    const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers)
+    const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers, environment)
     printContainerOptions(item.status, containerOptions)
 
-    await usingContainer(docker, item, containerOptions, async (container) => {
+    await usingContainer(docker, item, containerOptions, options.stateKey, async(container) => {
       await setUserPermissions(item, container, environment)
 
       for (const cmd of item.data.cmds) {

@@ -56,6 +56,9 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
         }
 
         await fn(path, environment)
+      } catch (e) {
+        process.stdout.write(await file.read(statusFile))
+        throw e
       } finally {
         await file.remove(path)
       }
