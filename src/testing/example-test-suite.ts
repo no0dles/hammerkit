@@ -6,8 +6,8 @@ import { statusConsole } from '../planner/work-item-status'
 import { Environment } from '../executer/environment'
 import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
-import { createWriteStream } from 'fs'
 import { consoleContext } from '../log'
+import { emptyStream, memoryStream } from './test-streams'
 
 interface Test {
   cwd: string
@@ -21,7 +21,7 @@ export class ExampleTestSuite implements TestSuite {
 
   readonly path: string
 
-  constructor(private exampleName: string, private files: string[]) {
+  constructor(exampleName: string, private files: string[]) {
     this.exampleDirectory = join(__dirname, '../../examples/', exampleName)
     this.path = join(process.cwd(), 'temp', exampleName)
     this.file = getFileContext(this.path)
@@ -38,26 +38,16 @@ export class ExampleTestSuite implements TestSuite {
     await this.file.remove(this.path)
     await this.file.createDirectory(this.path)
 
-    const logPath = join(process.cwd(), 'logs')
-    const stdoutFile = join(logPath, this.exampleName + '-stdout.log')
-    const stderrFile = join(logPath, this.exampleName + '-stderr.log')
-    const statusFile = join(logPath, this.exampleName + '-status.log')
-    const consoleFile = join(logPath, this.exampleName + '-console.log')
-
-    await this.file.createDirectory(logPath)
-    await this.file.remove(stdoutFile)
-    await this.file.remove(statusFile)
-    await this.file.remove(consoleFile)
-
+    const statusStream= memoryStream()
     const environment: Environment = {
       processEnvs: { ...process.env, ...(scope.envs ?? {}) },
       abortCtrl: new AbortController(),
       cwd: this.path,
       file: this.file,
-      console: consoleContext(createWriteStream(consoleFile)),
-      status: statusConsole(createWriteStream(statusFile)),
-      stdout: createWriteStream(stdoutFile),
-      stderr: createWriteStream(stderrFile),
+      console: consoleContext(emptyStream()),
+      status: statusConsole(statusStream.stream),
+      stdout: emptyStream(),
+      stderr: emptyStream(),
       stdoutColumns: 80,
     }
 
@@ -78,7 +68,7 @@ export class ExampleTestSuite implements TestSuite {
     await cli.clean()
 
     // reset cli clean stats
-    environment.status = statusConsole(createWriteStream(statusFile, { flags: 'a' }))
+    environment.status = statusConsole(statusStream.stream)
 
     return {
       cli,

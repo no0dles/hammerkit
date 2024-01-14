@@ -9,6 +9,7 @@ import {
   Watch,
 } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { getErrorMessage } from '../log'
 
 export interface KubernetesInstance {
   watch: Watch
@@ -22,30 +23,41 @@ export interface KubernetesInstance {
 
 export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment): KubernetesInstance {
   const kc = new KubeConfig()
+  try {
+    if (kubernetes.kubeConfig) {
+      kc.loadFromFile(kubernetes.kubeConfig)
+    } else {
+      kc.loadFromDefault()
+    }
 
-  if (kubernetes.kubeConfig) {
-    kc.loadFromFile(kubernetes.kubeConfig)
-  } else {
-    kc.loadFromDefault()
-  }
+    kc.setCurrentContext(kubernetes.context)
 
-  kc.setCurrentContext(kubernetes.context)
+    const coreApi = kc.makeApiClient(CoreV1Api)
+    const batchApi = kc.makeApiClient(BatchV1Api)
+    const appsApi = kc.makeApiClient(AppsV1Api)
+    const networkingApi = kc.makeApiClient(NetworkingV1Api)
+    const objectApi = kc.makeApiClient(KubernetesObjectApi)
+    const exec = new Exec(kc)
+    const watch = new Watch(kc)
 
-  const coreApi = kc.makeApiClient(CoreV1Api)
-  const batchApi = kc.makeApiClient(BatchV1Api)
-  const appsApi = kc.makeApiClient(AppsV1Api)
-  const networkingApi = kc.makeApiClient(NetworkingV1Api)
-  const objectApi = kc.makeApiClient(KubernetesObjectApi)
-  const exec = new Exec(kc)
-  const watch = new Watch(kc)
-
-  return {
-    objectApi,
-    networkingApi,
-    watch,
-    exec,
-    appsApi,
-    coreApi,
-    batchApi,
+    return {
+      objectApi,
+      networkingApi,
+      watch,
+      exec,
+      appsApi,
+      coreApi,
+      batchApi,
+    }
+  } catch (e) {
+    if (getErrorMessage(e) === 'No active cluster') {
+      if (kubernetes.kubeConfig) {
+        throw new Error(`No cluster found for context ${kubernetes.context} in ${kubernetes.kubeConfig}`)
+      } else {
+        throw new Error(`No cluster found for context ${kubernetes.context}`)
+      }
+    } else {
+      throw e;
+    }
   }
 }
