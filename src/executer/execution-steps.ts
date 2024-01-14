@@ -1,41 +1,57 @@
-import { ContainerWorkNode, isContainerWorkNode, WorkNode } from '../planner/work-node'
 import { pull } from '../docker/pull'
 import { Environment } from './environment'
 import { ensureVolumeExists, recreateVolume } from './get-docker-executor'
-import { ContainerWorkService, isContainerWorkService, WorkService } from '../planner/work-service'
 import { extname } from 'path'
 import { setUserPermission } from './set-user-permission'
-import { Container } from 'dockerode'
+import Dockerode, { Container } from 'dockerode'
+import { WorkItem } from '../planner/work-item'
+import { ContainerWorkTask, isContainerWorkTask } from '../planner/work-task'
+import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
+import { getContainerBinds } from './get-container-binds'
 
-export async function pullImage(node: WorkNode | WorkService, environment: Environment): Promise<void> {
-  if (isContainerWorkNode(node)) {
-    await pull(environment.status.task(node), environment, node.image)
-  } else if (isContainerWorkService(node)) {
-    await pull(environment.status.service(node), environment, node.image)
-  }
+export async function pullImage(
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
+  docker: Dockerode
+): Promise<void> {
+  await pull(item.status, docker, item.data.image)
 }
 
-export async function prepareVolume(node: WorkNode | WorkService, environment: Environment): Promise<void> {
-  if (isContainerWorkNode(node) || isContainerWorkService(node)) {
-    for (const volume of node.volumes) {
+export async function prepareVolume(
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
+  docker: Dockerode
+): Promise<void> {
+  if (isContainerWorkService(item.data)) {
+    for (const volume of item.data.volumes) {
       if (volume.resetOnChange && !volume.inherited) {
-        const scopedConsole = environment.status.from(node)
-        scopedConsole.write('debug', 'recreate volume')
-        await recreateVolume(environment, scopedConsole, volume.name)
+        item.status.write('debug', 'recreate volume')
+        await recreateVolume(docker, item.status, volume.name)
       } else {
-        const scopedConsole = environment.status.from(node)
-        scopedConsole.write('debug', 'ensure volume exists')
-        await ensureVolumeExists(environment, scopedConsole, volume.name)
+        item.status.write('debug', 'ensure volume exists')
+        await ensureVolumeExists(docker, item.status, volume.name)
+      }
+    }
+  }
+  if (isContainerWorkTask(item.data)) {
+    for (const generate of item.data.generates) {
+      if (generate.isFile) {
+        continue
+      }
+      if (generate.resetOnChange && !generate.inherited) {
+        item.status.write('debug', 'recreate volume')
+        await recreateVolume(docker, item.status, generate.volumeName)
+      } else {
+        item.status.write('debug', 'ensure volume exists')
+        await ensureVolumeExists(docker, item.status, generate.volumeName)
       }
     }
   }
 }
 
 export async function prepareMounts(
-  node: ContainerWorkNode | ContainerWorkService,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   environment: Environment
 ): Promise<void> {
-  for (const mount of node.mounts) {
+  for (const mount of item.data.mounts) {
     const exists = await environment.file.exists(mount.localPath)
 
     if (exists) {
@@ -48,25 +64,33 @@ export async function prepareMounts(
       await environment.file.createDirectory(mount.localPath)
     }
   }
+  if (isContainerWorkTask(item.data)) {
+    for (const gen of item.data.generates) {
+      if (!gen.isFile) {
+        continue
+      }
+      const exists = await environment.file.exists(gen.path)
+      if (exists) {
+        continue
+      }
+
+      await environment.file.writeFile(gen.path, '')
+    }
+  }
 }
 
 export async function setUserPermissions(
-  node: ContainerWorkNode,
+  item: WorkItem<ContainerWorkTask>,
   container: Container,
   environment: Environment
 ): Promise<void> {
-  const status = environment.status.from(node)
+  if (item.data.user) {
+    const binds = getContainerBinds(item)
 
-  if (node.user) {
-    if (isContainerWorkNode(node)) {
-      await setUserPermission(node.cwd, status, environment, container, node.user)
-    }
+    await setUserPermission(item.data.cwd, item.status, environment, container, item.data.user)
 
-    for (const volume of node.volumes) {
-      await setUserPermission(volume.containerPath, status, environment, container, node.user)
-    }
-    for (const mount of node.mounts) {
-      await setUserPermission(mount.containerPath, status, environment, container, node.user)
+    for (const bind of binds) {
+      await setUserPermission(bind.containerPath, item.status, environment, container, item.data.user)
     }
   }
 }

@@ -9,9 +9,9 @@ describe('concurrency', () => {
   it('should run with concurrency lower than total tasks', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
 
-    const exec = cli.execWatch({ workers: 1 })
-    exec.state.on((state) => {
-      const runningNodes = Object.values(state.node).filter((n) => n.type === 'running')
+    const exec = await cli.exec({ workers: 1 })
+    exec.state.on('check-status', (state) => {
+      const runningNodes = Object.values(state.tasks).filter((n) => n.state.current.type === 'running')
       expect(runningNodes.length).toBeLessThanOrEqual(1)
     })
 

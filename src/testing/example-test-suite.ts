@@ -2,16 +2,16 @@ import { TestSuite, TestSuiteOptions } from './test-suite'
 import { FileContext } from '../file/file-context'
 import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
-import { statusConsole } from '../planner/work-node-status'
+import { statusConsole } from '../planner/work-item-status'
 import { Environment } from '../executer/environment'
 import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
-import { getContainerCli } from '../executer/execute-docker'
-import { createWriteStream } from 'fs'
 import { consoleContext } from '../log'
+import { emptyStream, memoryStream } from './test-streams'
 
 interface Test {
   cwd: string
+  close(): void
 }
 
 export class ExampleTestSuite implements TestSuite {
@@ -21,7 +21,7 @@ export class ExampleTestSuite implements TestSuite {
 
   readonly path: string
 
-  constructor(private exampleName: string, private files: string[]) {
+  constructor(exampleName: string, private files: string[]) {
     this.exampleDirectory = join(__dirname, '../../examples/', exampleName)
     this.path = join(process.cwd(), 'temp', exampleName)
     this.file = getFileContext(this.path)
@@ -29,6 +29,7 @@ export class ExampleTestSuite implements TestSuite {
 
   async close(): Promise<void> {
     for (const test of this.tests) {
+      test.close()
       await this.file.remove(test.cwd)
     }
   }
@@ -37,25 +38,16 @@ export class ExampleTestSuite implements TestSuite {
     await this.file.remove(this.path)
     await this.file.createDirectory(this.path)
 
-    const logPath = join(process.cwd(), 'logs')
-    const stdoutFile = join(logPath, this.exampleName + '-stout.log')
-    const statusFile = join(logPath, this.exampleName + '-status.log')
-    const consoleFile = join(logPath, this.exampleName + '-console.log')
-
-    await this.file.createDirectory(logPath)
-    await this.file.remove(stdoutFile)
-    await this.file.remove(statusFile)
-    await this.file.remove(consoleFile)
-
+    const statusStream= memoryStream()
     const environment: Environment = {
       processEnvs: { ...process.env, ...(scope.envs ?? {}) },
       abortCtrl: new AbortController(),
       cwd: this.path,
       file: this.file,
-      console: consoleContext(createWriteStream(consoleFile)),
-      status: statusConsole(createWriteStream(statusFile)),
-      docker: getContainerCli(),
-      stdout: createWriteStream(stdoutFile),
+      console: consoleContext(emptyStream()),
+      status: statusConsole(statusStream.stream),
+      stdout: emptyStream(),
+      stderr: emptyStream(),
       stdoutColumns: 80,
     }
 
@@ -67,13 +59,16 @@ export class ExampleTestSuite implements TestSuite {
 
     this.tests.push({
       cwd: this.path,
+      close() {
+        environment.abortCtrl.abort()
+      },
     })
 
     const cli = await createCli(fileName, environment, scope)
-    await cli.clean({ service: true })
+    await cli.clean()
 
     // reset cli clean stats
-    environment.status = statusConsole(createWriteStream(statusFile, { flags: 'a' }))
+    environment.status = statusConsole(statusStream.stream)
 
     return {
       cli,

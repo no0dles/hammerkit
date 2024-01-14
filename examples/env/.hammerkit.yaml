@@ -21,6 +21,8 @@ tasks:
       - echo $NODE_VERSION
 
   example_with_dotenv:
+    envs:
+      TOKEN: $TOKEN
     description: read .env file
     cmds:
       - echo $TOKEN

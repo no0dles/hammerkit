@@ -1,15 +1,17 @@
 import { ProcessItem } from './process-item'
-import { LogContext } from '../planner/work-node-status'
+import { WorkItem } from '../planner/work-item'
+import { WorkTask } from '../planner/work-task'
+import { WorkService } from '../planner/work-service'
 
 export type ProcessListenerEventType = 'ended' | 'started' | 'cancel'
 
 export interface ProcessListenerEvent {
   type: ProcessListenerEventType
-  context: LogContext
+  item: WorkItem<WorkTask | WorkService>
 }
 
 export interface PendingItem {
-  context: LogContext
+  item: WorkItem<WorkTask | WorkService>
 }
 
 export type ProcessListener = (evt: ProcessListenerEvent, processes: ProcessItem[], pending: PendingItem[]) => void

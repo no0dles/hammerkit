@@ -1,8 +1,8 @@
-import { WorkNode } from '../planner/work-node'
 import { Environment } from '../executer/environment'
+import { WorkItem } from '../planner/work-item'
 
 export async function moveFiles(
-  node: WorkNode,
+  item: WorkItem<any>,
   context: Environment,
   folder: () => Generator<{ from: string; to: string }>
 ): Promise<void> {
@@ -29,7 +29,7 @@ export async function moveFiles(
       await context.file.remove(folder.to)
     }
 
-    context.status.task(node).write('debug', `copy ${folder.from} to ${folder.to}`)
+    item.status.write('debug', `copy ${folder.from} to ${folder.to}`)
     await context.file.copy(folder.from, folder.to)
   }
 }

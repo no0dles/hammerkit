@@ -100,8 +100,8 @@ Removing the need for special treatments.
 ## Automated test runner for macOS and Linux
 
 To fully test hammerkit, a running docker daemon is required. 
-For macOS and Linux there is now Github Action, that tests all `examples` in the repository for every merge request. 
-Windows is hopefully coming soon as well, but even tough there are windows runners available on Github, the docker setup requires still some work.
+For macOS and Linux there is now GitHub Action, that tests all `examples` in the repository for every merge request. 
+Windows is hopefully coming soon as well, but even tough there are windows runners available on GitHub, the docker setup requires still some work.
 
 ## Update node to v16 and make use of the AbortController
 
@@ -109,10 +109,10 @@ During testing hammerkit on Linux, some examples ended in an `unhandledPromise` 
 After some investigation, the reason could be pinned down to the usage of the `Defer` class, that was used a lot in hammerkit. 
 The Defer class was a wrapper, to reduce repeating code handling callback results. 
 The issue was that the `Defer` class created a promise with the default constructor without adding a catch handler. 
-Since the `Defer` pattern is not a recommended approach anymore (very well explained [here](https://stackoverflow.com/questions/34971078/how-to-replace-promise-defer-with-new-promise)) and in newer versions of node `unhandledPromise` result in process failures, the removable was a no brainer.
+Since the `Defer` pattern is not a recommended approach anymore (very well explained [here](https://stackoverflow.com/questions/34971078/how-to-replace-promise-defer-with-new-promise)) and in newer versions of node `unhandledPromise` result in process failures, the removable was a no-brainer.
 
 The `Defer` class was mainly used for callback functions and the cancellation logic of tasks. 
-The defer got resolved when the user pressed Ctrl-C and the task execution handler ended the task early when that promise got resolved.
+A Defer got resolved when the user pressed Ctrl-C and the task execution handler ended the task early when that promise got resolved.
 
 The `AbortController` was the perfect replacement and has just made it into the [Web Spec](https://dom.spec.whatwg.org/#interface-abortcontroller) and is available in node environments since [v15](https://nodejs.org/api/all.html#globals\_class\_abortcontroller).
 
@@ -124,7 +124,7 @@ The build files are intent to be project independent and showcase how popular bu
 ## Next release
 
 The next release will focus on adding a service concept. 
-Services will be a solution to allow long running tasks like databases to be connected with the existing tasks.
+Services will be a solution to allow long-running tasks like databases to be connected with the existing tasks.
 
 The goal will be to find an efficient way of spinning up and shutting them down, so they only run, when they are needed by a task actively. 
 That will require also a concept of how to deal with readiness detection of services.

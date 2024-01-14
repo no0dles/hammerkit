@@ -7,7 +7,7 @@ description: >-
 
 # Container
 
-Every task can run inside a container. Everything thats needed is to set an `image` property on your task.
+Every task can run inside a container. Everything that's needed is to set an `image` property on your task.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -84,7 +84,7 @@ Each source and generate of all dependencies get mounted into container automati
 
 ### Execution shell
 
-Each command will be executed per default within a `sh` shell. The shell can also be override by adding a `shell` property to the task.
+Each command will be executed per default within a `sh` shell. The shell can also be overridden by adding a `shell` property to the task.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

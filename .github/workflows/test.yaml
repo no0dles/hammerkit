@@ -8,17 +8,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-20.04 ]
-        node: [ 16 ]
+        os: [ ubuntu-22.04 ]
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Setup node ${{ matrix.node }}
-        uses: actions/setup-node@v2
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Setup docker
-        uses: docker-practice/actions-setup-docker@master
+      - name: start minikube
+        id: minikube
+        uses: medyagh/setup-minikube@latest
+      - run: kubectl config get-contexts
       - name: Install npm packages
         run: npm ci
       - name: Run tests
@@ -26,6 +23,8 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+          LINUX_CONTAINERS: true
+          CLUSTER_NAME: minikube
       - name: Archive test artifacts
         if: failure()
         uses: actions/upload-artifact@v3
@@ -39,53 +38,43 @@ jobs:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/lcov.info
 
-#  win:
-#    runs-on: ${{ matrix.os }}
-#    strategy:
-#      matrix:
-#        os: [ windows-2016 ]
-#        node: [ 14 ]
-#    steps:
-#      - name: Checkout
-#        uses: actions/checkout@v2
-#      - name: Setup node ${{ matrix.node }}
-#        uses: actions/setup-node@v2
-#        with:
-#          node-version: ${{ matrix.node }}
-#      - name: Install npm packages
-#        run: npm ci
-#      - name: Run tests
-#        run: node_modules/.bin/jest --runInBand
-#        env:
-#          SKIP_DOCKER: true
-#        timeout-minutes: 10
-
-  macos:
+  windows:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ macos-10.15 ]
-        node: [ 16 ]
+        os: [ windows-2022 ]
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Setup node ${{ matrix.node }}
-        uses: actions/setup-node@v2
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Setup docker
-        uses: docker-practice/actions-setup-docker@master
       - name: Install npm packages
         run: npm ci
-      - name: Pull postgres test image
-        run: docker pull postgres:12-alpine
-      - name: Pull node image
-        run: docker pull node:16.6.0-alpine
       - name: Run tests
         run: node_modules/.bin/jest --runInBand
         timeout-minutes: 15
         env:
           VERBOSE: true
+          WINDOWS_CONTAINERS: true
+
+  macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ macos-12 ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - run: |
+          brew install docker colima
+          colima start
+          sudo ln -sf $HOME/.colima/default/docker.sock /var/run/docker.sock
+      - name: Install npm packages
+        run: npm ci
+      - name: Run tests
+        run: node_modules/.bin/jest --runInBand
+        timeout-minutes: 15
+        env:
+          VERBOSE: true
+          LINUX_CONTAINERS: true
       - name: Archive test artifacts
         uses: actions/upload-artifact@v3
         if: failure()

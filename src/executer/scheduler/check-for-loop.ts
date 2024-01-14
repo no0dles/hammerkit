@@ -1,18 +1,28 @@
-import { SchedulerState } from './scheduler-state'
-import { iterateWorkNodes } from '../../planner/utils/plan-work-nodes'
-import { hasCycle } from '../../planner/validate'
+import { iterateWorkTasks, iterateWorkServices } from '../../planner/utils/plan-work-tasks'
+import { hasDependencyCycle, hasNeedCycle } from '../../planner/validate'
+import { WorkTree } from '../../planner/work-tree'
 
-export function checkForLoop(state: SchedulerState): void {
-  for (const nodeState of iterateWorkNodes(state.node)) {
-    const cyclePath = hasCycle(nodeState.node, [])
+export function checkForLoop(workTree: WorkTree): void {
+  for (const task of iterateWorkTasks(workTree)) {
+    const cyclePath = hasDependencyCycle(task, [])
     if (cyclePath && cyclePath.length > 0) {
       const errorMessage = `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`
-      state.node[nodeState.node.id] = {
+      task.state.set({
         type: 'error',
-        node: nodeState.node,
         stateKey: null,
         errorMessage,
-      }
+      })
+    }
+  }
+  for (const service of iterateWorkServices(workTree)) {
+    const cyclePath = hasNeedCycle(service, [])
+    if (cyclePath && cyclePath.length > 0) {
+      const errorMessage = `service cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`
+      service.state.set({
+        type: 'error',
+        stateKey: null,
+        errorMessage,
+      })
     }
   }
 }

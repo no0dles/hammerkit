@@ -3,15 +3,15 @@ import { Environment } from '../executer/environment'
 
 export async function readEnvFile(
   path: string,
-  baseEnv: { [key: string]: string },
-  environment: Environment
+  environment: Environment,
+  baseEnv: { [key: string]: string } = {}
 ): Promise<{ [key: string]: string }> {
   const directory = join(path, '.env')
 
   let envs: { [key: string]: string } = { ...baseEnv }
 
   if (basename(path) !== path) {
-    envs = { ...(await readEnvFile(basename(path), envs, environment)) }
+    envs = { ...(await readEnvFile(basename(path), environment, envs)) }
   }
 
   const exists = await environment.file.exists(directory)
@@ -23,10 +23,9 @@ export async function readEnvFile(
   for (const envVar of envFile) {
     const index = envVar.indexOf('=')
     if (index > 0) {
-      const key = envVar.substr(0, index)
-      const value = envVar.substr(index + 1)
+      const key = envVar.substring(0, index)
+      const value = envVar.substring(index + 1)
       if (!envs[key]) {
-        environment.console.debug(`load env variable ${key} from ${directory} file`)
         envs[key] = value
       }
     }

@@ -1,6 +1,6 @@
 import { Container } from 'dockerode'
 import { execCommand } from './execute-docker'
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 import { Environment } from './environment'
 
 export async function setUserPermission(
@@ -19,7 +19,7 @@ export async function setUserPermission(
     ['chown', user, directory],
     null,
     undefined,
-    undefined
+    new AbortController().signal
   )
   if (result.type === 'canceled') {
     return

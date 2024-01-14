@@ -25,7 +25,7 @@
   * [Store / Restore](docs/cli/store-restore.md)
   * [Clean](docs/cli/clean.md)
   * [Validate](docs/cli/validate.md)
-  * [Help](docs/cli/help.md)
+  * [Help](docs/cli/README.md)
 
 ## External Links
 

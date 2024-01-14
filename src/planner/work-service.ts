@@ -1,40 +1,50 @@
-import { WorkNodePort } from './work-node-port'
-import {
-  ExecutionBuildService,
-  ExecutionBuildServiceHealthCheck,
-  ExecutionBuildServiceSelector,
-} from '../parser/build-file-service'
+import { WorkPort } from './work-port'
 import { WorkMount } from './work-mount'
-import { WorkNode } from './work-node'
+import { WorkTask } from './work-task'
 import { WorkVolume } from './work-volume'
+import { LabelValues } from '../executer/label-values'
+import { ParseScope } from '../schema/parse-context'
+import { WorkSource } from './work-source'
+import { WorkHealthcheck } from './work-healthcheck'
+import { WorkKubernetesSelector } from './work-kubernetes-selector'
+import { WorkCommand } from './work-command'
+import { CacheMethod } from '../parser/cache-method'
+import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 
 export interface BaseWorkService {
-  id: string
   name: string
+  cwd: string
   description: string | null
-  ports: WorkNodePort[]
-  buildService: ExecutionBuildService
+  ports: WorkPort[]
+  labels: LabelValues
+  scope: ParseScope
 }
 
 export type WorkService = ContainerWorkService | KubernetesWorkService
 
-export const isContainerWorkService = (svc: WorkService | WorkNode): svc is ContainerWorkService =>
-  'image' in svc && svc.type === 'container-service'
+export const isContainerWorkService = (
+  svc: WorkService | WorkTask | KubernetesWorkService
+): svc is ContainerWorkService => 'image' in svc && svc.type === 'container-service'
 
 export interface ContainerWorkService extends BaseWorkService {
   type: 'container-service'
-  envs: { [key: string]: string }
+  envs: WorkEnvironmentVariables
   image: string
-  cmd: string | null
+  cmd: WorkCommand | null
   //user: string | null
+  src: WorkSource[]
+  continuous: boolean
+  caching: CacheMethod | null
   mounts: WorkMount[]
   volumes: WorkVolume[]
-  healthcheck: ExecutionBuildServiceHealthCheck | null
+  healthcheck: WorkHealthcheck | null
 }
 
 export interface KubernetesWorkService extends BaseWorkService {
   type: 'kubernetes-service'
   context: string
   kubeconfig: string
-  selector: ExecutionBuildServiceSelector
+  caching: CacheMethod | null
+  selector: WorkKubernetesSelector
+  src: WorkSource[]
 }

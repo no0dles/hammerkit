@@ -1,26 +1,59 @@
-import { iterateWorkNodes } from '../planner/utils/plan-work-nodes'
-import { SchedulerState } from '../executer/scheduler/scheduler-state'
-import { NodeState } from '../executer/scheduler/node-state'
+import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
+import { TaskState } from '../executer/scheduler/task-state'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 import { Environment } from '../executer/environment'
+import { WorkTree } from '../planner/work-tree'
+import { WorkItemState } from '../planner/work-item'
+import { WorkTask } from '../planner/work-task'
+import { CliExecResult } from '../cli'
+import { getSchedulerExecuteResult } from '../executer/get-scheduler-execute-result'
+import { testingTimeout } from './testing-timeout'
+
+export async function expectSuccessfulExecution(exec: CliExecResult, env: Environment): Promise<void> {
+  const badResult = new Promise<SchedulerResult>((resolve) => {
+    exec.state.on('expected-status', (workTree) => {
+      if (env.abortCtrl.signal.aborted) {
+        return
+      }
+
+      const hasErrorTask = Object.values(workTree.tasks).some(
+        (n) => n.state.current.type === 'error' || n.state.current.type === 'crash'
+      )
+      const hasErrorService = Object.values(workTree.services).some(
+        (n) => n.state.current.type === 'error' || n.state.current.type === 'end'
+      )
+      if (!hasErrorTask && !hasErrorService) {
+        return
+      }
+
+      const stateResult = getSchedulerExecuteResult(workTree)
+      if (!stateResult.success) {
+        resolve(stateResult)
+        env.abortCtrl.abort()
+      }
+    })
+  })
+  const result = await Promise.race([badResult, testingTimeout(exec)])
+  await expectSuccessfulResult(result, env)
+}
 
 export async function expectSuccessfulResult(result: SchedulerResult, env: Environment): Promise<void> {
   if (!result.success) {
-    for (const state of iterateWorkNodes(result.state.node)) {
-      if (state.type !== 'completed') {
+    for (const task of iterateWorkTasks(result.state)) {
+      if (task.state.current.type !== 'completed') {
         expect({
-          nodeId: state.node.id,
-          status: state.type,
-          updates: Array.from(env.status.task(state.node).read()).map((s) => `${s.level}: ${s.message}`),
-          logs: Array.from(env.status.task(state.node).logs()).map((l) => `${l.console}: ${l.message}`),
-          errorMessage: state.type === 'error' ? state.errorMessage : undefined,
-          needs: state.node.needs.map((need) => ({
+          cacheId: task.id(),
+          status: task.state.current.type,
+          updates: Array.from(task.status.read()).map((s) => `${s.level}: ${s.message}`),
+          logs: Array.from(task.status.logs()).map((l) => `${l.console}: ${l.message}`),
+          errorMessage: task.state.current.type === 'error' ? task.state.current.errorMessage : undefined,
+          needs: task.needs.map((need) => ({
             name: need.name,
-            updates: Array.from(env.status.service(need).read()).map((s) => `${s.level}: ${s.message}`),
-            logs: Array.from(env.status.service(need).logs()).map((l) => `${l.console}: ${l.message}`),
+            updates: Array.from(need.service.status.read()).map((s) => `${s.level}: ${s.message}`),
+            logs: Array.from(need.service.status.logs()).map((l) => `${l.console}: ${l.message}`),
           })),
         }).toEqual({
-          nodeId: state.node.id,
+          cacheId: task.id(),
           status: 'completed',
         })
       }
@@ -33,12 +66,12 @@ export async function expectSuccessfulResult(result: SchedulerResult, env: Envir
   expect(errorStatus).toEqual([])
 }
 
-function getNodeState(state: SchedulerState, name: string): NodeState {
-  const node = Object.values(state.node).find((n) => n.node.name === name)
-  if (!node) {
-    throw new Error(`could not find node ${name}`)
+function getTaskState(state: WorkTree, name: string): WorkItemState<WorkTask, TaskState> {
+  const tasks = Object.values(state.tasks).find((n) => n.name === name)
+  if (!tasks) {
+    throw new Error(`could not find task ${name}`)
   }
-  return node
+  return tasks
 }
 
 export async function expectLog(
@@ -47,8 +80,8 @@ export async function expectLog(
   name: string,
   message: string
 ): Promise<void> {
-  const state = getNodeState(result.state, name)
-  const logs = Array.from(env.status.task(state.node).logs()).map((n) => n.message)
+  const state = getTaskState(result.state, name)
+  const logs = Array.from(state.status.logs()).map((n) => n.message)
   expect(logs).toContain(message)
 }
 export async function expectContainsLog(
@@ -57,8 +90,8 @@ export async function expectContainsLog(
   name: string,
   message: string
 ): Promise<void> {
-  const state = getNodeState(result.state, name)
-  const logs = env.status.task(state.node).logs()
+  const state = getTaskState(result.state, name)
+  const logs = state.status.logs()
   for (const log of logs) {
     if (log.message.indexOf(message) >= 0) {
       return

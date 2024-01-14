@@ -1,5 +1,6 @@
 import { join } from 'path'
 import { getTestSuite } from '../get-test-suite'
+import { requiresLinuxContainers } from '../requires-linux-containers'
 
 describe('cancellation', () => {
   const suite = getTestSuite('cancellation', ['.hammerkit.yaml'])
@@ -8,17 +9,18 @@ describe('cancellation', () => {
 
   async function testAbort(taskName: string, expectedState: string) {
     const { cli, environment } = await suite.setup({ taskName })
-    const exec = await cli.execWatch({ logMode: 'live' })
-    const abortNode = Object.values(exec.state.current.node).find((n) => n.node.name.startsWith('long_'))
-    exec.processManager.on((evt) => {
-      if (evt.type === 'started' && evt.context.id === abortNode?.node.id) {
+    const exec = await cli.exec({ logMode: 'live' })
+    const abortNode = Object.values(exec.state.current.tasks).find((n) => n.data.name.startsWith('long_'))
+    expect_toBeDefined(abortNode)
+    exec.state.on('check-status', (evt) => {
+      if (evt.tasks[abortNode.name].state.current.type === 'running') {
         environment.abortCtrl.abort()
       }
     })
     const result = await exec.start()
     expect(result.success).toBeFalsy()
     if (abortNode) {
-      expect(result.state.node[abortNode.node.id].type).toEqual(expectedState)
+      expect(abortNode.state.current.type).toEqual(expectedState)
     } else {
       expect(abortNode).toBeDefined()
     }
@@ -33,11 +35,15 @@ describe('cancellation', () => {
     await testAbort('long_running_local', 'canceled')
   })
 
-  it('should cancel docker task', async () => {
+  it('should cancel docker task',  requiresLinuxContainers (async () => {
     await testAbort('long_running_docker', 'canceled')
-  })
+  }))
 
-  it('should cancel docker task with dependencies', async () => {
+  it('should cancel docker task with dependencies',  requiresLinuxContainers (async () => {
     await testAbort('docker_cancel', 'canceled')
-  })
+  }))
 })
+
+function expect_toBeDefined<T>(arg: T): asserts arg is NonNullable<T> {
+  expect(arg).toBeDefined()
+}

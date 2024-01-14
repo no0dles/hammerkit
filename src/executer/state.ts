@@ -1,55 +1,61 @@
 import { StateListener } from './state-listener'
-import { SchedulerState } from './scheduler/scheduler-state'
-import { NodeState } from './scheduler/node-state'
-import { ServiceState } from './scheduler/service-state'
 
-export class State {
-  private listeners: StateListener<SchedulerState>[] = []
+export interface StateHandle {
+  close(): void
+}
 
-  constructor(public current: SchedulerState) {}
+export class State<T> {
+  private listeners: { key: string; listener: StateListener<T> }[] = []
+  private handles: StateHandle[] = []
 
-  private assignState(state: any, newValue: any) {
-    const currentKeys = Object.keys(state)
-    const newKeys = Object.keys(newValue)
-    const keysToRemove = currentKeys.filter((k) => newKeys.indexOf(k) === -1)
-
-    for (const key of keysToRemove) {
-      delete state[key]
-    }
-    for (const key of newKeys) {
-      state[key] = newValue[key]
+  constructor(public current: Readonly<T>, private options?: { onDestroy?: () => void; subStates?: State<any>[] }) {
+    if (this.options?.subStates) {
+      this.attachToStores(this.options.subStates)
     }
   }
 
-  resetNode<T extends NodeState>(newState: T): T {
-    const state = this.current.node[newState.node.id]
-    this.assignState(state, newState)
-    this.notifyListeners(this.current)
-    return state as T
-  }
-
-  patchNode<T extends NodeState>(newState: T, stateKey: string | null): T {
-    const state = this.current.node[newState.node.id]
-    if (state.stateKey === stateKey) {
-      this.assignState(state, newState)
-      this.notifyListeners(this.current)
+  private attachToStores(subStates: State<any>[]) {
+    for (const state of subStates) {
+      this.handles.push(
+        state.on('sub-state-forward', () => {
+          this.notifyListeners(this.current)
+        })
+      )
     }
-    return state as T
   }
 
-  patchService(newState: ServiceState) {
-    this.assignState(this.current.service[newState.service.id], newState)
-    this.notifyListeners(this.current)
+  set(newState: T): Readonly<T> {
+    this.current = newState
+    this.notifyListeners(newState)
+    return this.current
   }
 
-  on(listener: (evt: SchedulerState) => void): void {
-    this.listeners.push(listener)
-    listener(this.current)
+  on(key: string, listener: (evt: T) => void): StateHandle {
+    this.listeners.push({ key, listener })
+    return {
+      close: () => {
+        const index = this.listeners.findIndex((l) => l.key === key && l.listener === listener)
+        if (index >= 0) {
+          this.listeners.splice(index, 1)
+        } else {
+          // TODO warn
+        }
+      },
+    }
   }
 
-  private notifyListeners(evt: SchedulerState): void {
-    for (const listener of this.listeners) {
-      listener(evt)
+  private notifyListeners(evt: T): void {
+    for (const listener of [...this.listeners]) {
+      listener.listener(evt)
+    }
+  }
+
+  close() {
+    for (const handle of this.handles) {
+      handle.close()
+    }
+    if (this.options?.onDestroy) {
+      this.options?.onDestroy()
     }
   }
 }

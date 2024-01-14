@@ -1,34 +1,47 @@
-import { WorkNode } from '../../planner/work-node'
-import { readCache } from '../../optimizer/read-work-node-cache'
-import { getWorkNodeCacheStats, getStateKey } from '../../optimizer/get-work-node-cache-stats'
+import { getStateKey, getWorkCacheStats } from '../../optimizer/get-work-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
+import { isWorkTaskItem, WorkItemState } from '../../planner/work-item'
+import { WorkTask } from '../../planner/work-task'
+import { WorkService } from '../../planner/work-service'
+
+export interface CacheState {
+  cached: boolean
+  stateKey: string
+}
 
 export async function checkCacheState(
-  node: WorkNode,
+  item: WorkItemState<WorkTask | WorkService, any>,
   defaultCacheMethod: CacheMethod,
   environment: Environment
-): Promise<{ cached: boolean; stateKey: string }> {
-  const status = environment.status.task(node)
-  const caching = node.caching ?? defaultCacheMethod
+): Promise<CacheState> {
+  const caching = item.data.caching ?? defaultCacheMethod
 
-  const currentStats = await getWorkNodeCacheStats(node, environment)
+  const currentStats = await getWorkCacheStats(item.data, environment)
   const stateKey = getStateKey(currentStats, caching)
 
   if (caching === 'none') {
-    status.write('debug', `${node.name} is skipping cache check, because caching is disabled`)
+    item.status.write('debug', `${item.name} is skipping cache check, because caching is disabled`)
     return { cached: false, stateKey }
   }
 
-  const cache = await readCache(node, environment)
-  if (cache === null) {
-    status.write('debug', `${node.name} is skipping cache check, because there was none found`)
-    return { cached: false, stateKey }
+  if (isWorkTaskItem(item)) {
+    const runtimeStateKey = await item.runtime.currentStateKey(environment)
+    if (stateKey === null) {
+      item.status.write('debug', `no cache found for ${item.id()}`)
+      return { cached: false, stateKey }
+    }
+
+    if (runtimeStateKey === stateKey) {
+      return {
+        cached: true,
+        stateKey,
+      }
+    }
   }
 
-  const cacheKey = getStateKey(cache, caching)
   return {
-    cached: cacheKey === stateKey,
+    cached: false,
     stateKey,
   }
 }

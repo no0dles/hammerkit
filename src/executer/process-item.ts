@@ -1,8 +1,4 @@
-import { LogContext } from '../planner/work-node-status'
-
 export interface ProcessItem {
-  context: LogContext
-  started: Date
+  id: string
   promise: Promise<any>
-  abortController: AbortController
 }

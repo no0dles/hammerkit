@@ -2,6 +2,7 @@ tasks:
   example:
     description: example with dep
     deps: [foo:bar]
+    needs: [foo:bardb]
     cmds:
       - echo hammertime
 

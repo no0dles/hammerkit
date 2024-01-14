@@ -1,4 +1,4 @@
-FROM node:18-alpine as build
+FROM node:20-alpine as build
 
 ARG TARGETPLATFORM
 
@@ -14,10 +14,10 @@ COPY tsconfig.json .
 COPY src src
 RUN node_modules/.bin/tsc -b
 RUN export ARCH=$(echo $TARGETPLATFORM | cut -c7-11)
-RUN node_modules/.bin/pkg . --targets "node16-alpine-$ARCH" --no-bytecode
+RUN node_modules/.bin/pkg . --targets "node18-alpine-$ARCH" --compress Brotli
 
 ######################################
-FROM docker:20.10.6-dind
+FROM docker:24.0.7-cli-alpine3.19
 
 WORKDIR /app
 COPY --from=build /app/hammerkit /usr/local/bin/hammerkit
