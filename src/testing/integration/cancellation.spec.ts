@@ -1,5 +1,6 @@
 import { join } from 'path'
 import { getTestSuite } from '../get-test-suite'
+import { requiresLinuxContainers } from '../requires-linux-containers'
 
 describe('cancellation', () => {
   const suite = getTestSuite('cancellation', ['.hammerkit.yaml'])
@@ -34,13 +35,13 @@ describe('cancellation', () => {
     await testAbort('long_running_local', 'canceled')
   })
 
-  it('should cancel docker task', async () => {
+  it('should cancel docker task',  requiresLinuxContainers (async () => {
     await testAbort('long_running_docker', 'canceled')
-  })
+  }))
 
-  it('should cancel docker task with dependencies', async () => {
+  it('should cancel docker task with dependencies',  requiresLinuxContainers (async () => {
     await testAbort('docker_cancel', 'canceled')
-  })
+  }))
 })
 
 function expect_toBeDefined<T>(arg: T): asserts arg is NonNullable<T> {

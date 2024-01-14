@@ -1,5 +1,6 @@
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
+import { requiresLinuxContainers } from '../requires-linux-containers'
 
 describe('env', () => {
   const suite = getTestSuite('env', ['.hammerkit.yaml', '.env'])
@@ -13,12 +14,12 @@ describe('env', () => {
     await expectLog(result, environment, `example`, '16.6.0')
   })
 
-  it('should pass env to docker', async () => {
+  it('should pass env to docker',  requiresLinuxContainers (async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example_docker' })
     const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
     await expectLog(result, environment, `example_docker`, '16.6.0')
-  })
+  }))
 
   it('should use env from task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example_override' })

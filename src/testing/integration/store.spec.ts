@@ -2,6 +2,7 @@ import { join } from 'path'
 import { getTestSuite } from '../get-test-suite'
 import { existsSync } from 'fs'
 import { expectSuccessfulResult } from '../expect'
+import { requiresLinuxContainers } from '../requires-linux-containers'
 
 describe('store/restore', () => {
   const suite = getTestSuite('store-restore', ['.hammerkit.yaml', 'package.json'])
@@ -42,7 +43,7 @@ describe('store/restore', () => {
     }
   })
 
-  it('should clean and restore created outputs in container', async () => {
+  it('should clean and restore created outputs in container',  requiresLinuxContainers (async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example:docker' })
 
     const cacheStoragePath = join(environment.cwd, 'storage')
@@ -62,5 +63,5 @@ describe('store/restore', () => {
     if (taskState.state.current.type === 'completed') {
       expect(taskState.state.current.cached).toBeTruthy()
     }
-  }, 90000)
+  }), 90000)
 })

@@ -1,12 +1,13 @@
 import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'
+import { requiresLinuxContainers } from '../requires-linux-containers'
 
 describe('watch', () => {
   const suite = getTestSuite('watch', ['.hammerkit.yaml', 'src', 'package.json', 'package-lock.json', 'tsconfig.json'])
 
   afterAll(() => suite.close())
 
-  it('should run watch task and cancel', async () => {
+  it('should run watch task and cancel',  requiresLinuxContainers (async () => {
     const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
     const exec = await cli.up({ watch: true })
     exec.state.on('test-status', (evt) => {
@@ -17,9 +18,9 @@ describe('watch', () => {
     const result = await exec.start()
     expect(result.success).toBeFalsy()
     expect(result.state.services['api'].state.current.type).toEqual('canceled')
-  })
+  }))
 
-  it('should restart task if dependency updates', async () => {
+  it('should restart task if dependency updates',  requiresLinuxContainers (async () => {
     const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
     const exec = await cli.up({ watch: true })
 
@@ -43,5 +44,5 @@ describe('watch', () => {
     expect(restarted).toBeTruthy()
     expect(result.success).toBeFalsy()
     expect(result.state.services['api'].state.current.type).toEqual('canceled')
-  })
+  }))
 })

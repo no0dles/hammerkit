@@ -1,6 +1,6 @@
 import { getTestSuite } from '../get-test-suite'
 import { expectSuccessfulResult } from '../expect'
-import { requiresKubernetesTest } from '../requires-kubernetes-test'
+import { requiresKubernetes } from '../requires-kubernetes'
 import { testingTimeout } from '../testing-timeout'
 
 describe('kubernetes', () => {
@@ -14,7 +14,7 @@ describe('kubernetes', () => {
 
   it(
     'should forward deployment',
-    requiresKubernetesTest(async () => {
+    requiresKubernetes(async () => {
       const { cli, environment } = await suite.setup({ taskName: 'api' })
       const result = await testingTimeout(cli.exec())
       await expectSuccessfulResult(result, environment)

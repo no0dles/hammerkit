@@ -5,6 +5,7 @@ import { join } from 'path'
 import { Environment } from '../../executer/environment'
 import { checkCacheState } from '../../executer/scheduler/enqueue-next'
 import { read, write } from '../../parser/read-build-file'
+import { requiresLinuxContainers } from '../requires-linux-containers'
 
 describe('cache', () => {
   const suite = getTestSuite('cache', ['.hammerkit.yaml', 'package.json', 'package-lock.json'])
@@ -34,24 +35,24 @@ describe('cache', () => {
     }
   }
 
-  it('should run invalid cache on src file change', async () => {
+  it('should run invalid cache on src file change',  requiresLinuxContainers (async () => {
     await testCache(async (environment) => {
       await environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
     }, true)
-  })
+  }))
 
-  it('should mount generations of dependant tasks', async () => {
+  it('should mount generations of dependant tasks',  requiresLinuxContainers (async () => {
     const { cli, environment } = await suite.setup({ taskName: 'dependant' })
     const result = await cli.runExec()
     await expectSuccessfulResult(result, environment)
     await expectLog(result, environment, `dependant`, 'node_modules')
-  })
+  }))
 
-  it('should invalid cache on image change', async () => {
+  it('should invalid cache on image change',  requiresLinuxContainers (async () => {
     await testCache(async (environment) => {
       const buildFile = await read('.hammerkit.yaml', environment)
       buildFile.tasks['example'].image = '15.0.0'
       await write('.hammerkit.yaml', buildFile, environment)
     }, true)
-  })
+  }))
 })

@@ -50,7 +50,7 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
       batchApi,
     }
   } catch (e) {
-    if (getErrorMessage(e) === 'No active cluster') {
+    if (getErrorMessage(e) === 'No active cluster!') {
       if (kubernetes.kubeConfig) {
         throw new Error(`No cluster found for context ${kubernetes.context} in ${kubernetes.kubeConfig}`)
       } else {

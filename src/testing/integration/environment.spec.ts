@@ -1,6 +1,6 @@
 import { getTestSuite } from '../get-test-suite'
 import { createTestCase } from '../test-case'
-import { requiresKubernetesTest } from '../requires-kubernetes-test'
+import { requiresKubernetes } from '../requires-kubernetes'
 import { testingTimeout } from '../testing-timeout'
 
 describe('environment', () => {
@@ -10,7 +10,7 @@ describe('environment', () => {
 
   it(
     'should run on environment (kubernetes)',
-    requiresKubernetesTest(async () => {
+    requiresKubernetes(async () => {
       const testCase = createTestCase('environment', {
         '.hammerkit.yaml': {
           tasks: {

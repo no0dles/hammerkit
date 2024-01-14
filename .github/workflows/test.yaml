@@ -23,6 +23,7 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+          LINUX_CONTAINERS: true
           CLUSTER_NAME: minikube
       - name: Archive test artifacts
         if: failure()
@@ -52,6 +53,7 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+          WINDOWS_CONTAINERS: true
 
   macos:
     runs-on: ${{ matrix.os }}
@@ -72,6 +74,7 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+          LINUX_CONTAINERS: true
       - name: Archive test artifacts
         uses: actions/upload-artifact@v3
         if: failure()
