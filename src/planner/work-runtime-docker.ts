@@ -114,7 +114,7 @@ async function restoreContainer(
       abortSignal: environment.abortCtrl.signal,
       Image: item.data.image,
       Tty: true,
-      Entrypoint: 'sh',
+      Entrypoint: ['sh'],
       Cmd: ['-c', 'sleep 3600'],
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
@@ -239,7 +239,7 @@ async function archiveContainer(
       abortSignal: environment.abortCtrl.signal,
       Image: item.data.image,
       Tty: true,
-      Entrypoint: 'sh',
+      Entrypoint: ['sh'],
       Cmd: ['-c', 'sleep 3600'],
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {

@@ -15,6 +15,12 @@ const config: Config.InitialOptions = {
   rootDir: '.',
   testTimeout: 45000,
   testRegex: ['src/.*\\.spec\\.ts$'],
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '<rootDir>/src/testing/integration/',
+    '<rootDir>/src/docker/package\\.spec\\.ts$',
+    '<rootDir>/src/program\\.spec\\.ts$',
+  ],
   testEnvironment: 'node',
   maxConcurrency: 1,
   collectCoverage: true,

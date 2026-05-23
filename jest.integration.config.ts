@@ -5,6 +5,7 @@ const config: Config.InitialOptions = {
   ...base,
   testTimeout: 300000,
   testRegex: ['src/testing/integration/.*\\.spec\\.ts$', 'src/docker/package\\.spec\\.ts$'],
+  testPathIgnorePatterns: ['/node_modules/'],
   collectCoverage: false,
   maxConcurrency: 1,
   reporters: ['github-actions', 'default'],

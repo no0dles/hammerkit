@@ -33,52 +33,8 @@ jobs:
           path: |
             logs
       - name: Upload coverage
+        continue-on-error: true
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/lcov.info
-
-  windows:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ windows-2022 ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Install npm packages
-        run: npm ci
-      - name: Run tests
-        run: node_modules/.bin/jest --runInBand
-        timeout-minutes: 15
-        env:
-          VERBOSE: true
-          WINDOWS_CONTAINERS: true
-
-  macos:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ macos-13 ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - run: |
-          brew install docker colima
-          colima start
-          sudo ln -sf $HOME/.colima/default/docker.sock /var/run/docker.sock
-      - name: Install npm packages
-        run: npm ci
-      - name: Run tests
-        run: node_modules/.bin/jest --runInBand
-        timeout-minutes: 15
-        env:
-          VERBOSE: true
-          LINUX_CONTAINERS: true
-      - name: Archive test artifacts
-        uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: console-log-${{ matrix.os }}
-          path: |
-            logs

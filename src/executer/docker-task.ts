@@ -49,7 +49,7 @@ function buildCreateOptions(
     abortSignal: environment.abortCtrl.signal,
     Image: item.data.image,
     Tty: true,
-    Entrypoint: item.data.shell,
+    Entrypoint: [item.data.shell],
     Cmd: ['-c', 'sleep 3600'],
     Env: Object.entries(envs).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
