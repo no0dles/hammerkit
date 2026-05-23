@@ -1,0 +1,76 @@
+name: integration
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: [self-hosted, linux, hammerkit]
+    timeout-minutes: 45
+    env:
+      LINUX_CONTAINERS: 'true'
+      CLUSTER_NAME: hammerkit-ci
+      KUBECONFIG: /home/runner/.kube/config
+      REGISTRY: localhost:5000
+      HAMMERKIT_FULL_INTEGRATION: 'true'
+      HAMMERKIT_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      VERBOSE: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify host prerequisites
+        run: |
+          docker info >/dev/null
+          kubectl --context "$CLUSTER_NAME" cluster-info
+          kubectl create namespace "hammerkit-${HAMMERKIT_TEST_RUN_ID}" --dry-run=client -o yaml >/dev/null
+          curl -fsS "http://${REGISTRY}/v2/" >/dev/null
+
+      - name: Create per-job namespace
+        run: |
+          kubectl --context "$CLUSTER_NAME" create namespace "hammerkit-${HAMMERKIT_TEST_RUN_ID}" || true
+          kubectl --context "$CLUSTER_NAME" label namespace "hammerkit-${HAMMERKIT_TEST_RUN_ID}" \
+            "hammerkit.dev/run-id=${HAMMERKIT_TEST_RUN_ID}" --overwrite
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          # specs that key off the k8s namespace pick this up via build-file templating
+          KUBE_NAMESPACE: hammerkit-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Archive logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            logs
+            temp
+
+      - name: Cleanup docker resources
+        if: always()
+        run: |
+          docker ps -aq --filter "label=hammerkit-id" \
+            | xargs -r docker rm -f
+          docker volume ls -q --filter "label=hammerkit-id" \
+            | xargs -r docker volume rm -f
+          docker network ls -q --filter "label=hammerkit-id" \
+            | xargs -r docker network rm
+
+      - name: Cleanup kubernetes namespace
+        if: always()
+        run: |
+          kubectl --context "$CLUSTER_NAME" delete namespace \
+            -l "hammerkit.dev/run-id=${HAMMERKIT_TEST_RUN_ID}" \
+            --ignore-not-found --wait=false
