@@ -10,8 +10,15 @@ import { runProgram } from '../run-program'
 import { Cli } from '../cli'
 import { emptyStream, memoryStream } from './test-streams'
 
+export function getTestRunId(name: string): string {
+  const base = process.env.HAMMERKIT_TEST_RUN_ID ?? `local-${process.pid}`
+  return `${base}-${name}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63)
+}
+
 export function createTestCase(name: string, files: { [key: string]: any }) {
+  const runId = getTestRunId(name)
   return {
+    runId,
     async shell(args: string[]): Promise<void> {
       await this.setup(async (cwd, env) => {
         await runProgram(env, args, true)
@@ -27,7 +34,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
         await file.createDirectory(path)
 
         const environment: Environment = {
-          processEnvs: { ...process.env },
+          processEnvs: { ...process.env, HAMMERKIT_TEST_RUN_ID: runId },
           abortCtrl: new AbortController(),
           cwd: path,
           file,

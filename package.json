@@ -19,6 +19,7 @@
     "prepack": "tsc -b tsconfig.json",
     "build": "tsc -b tsconfig.json",
     "test": "jest",
+    "test:integration": "jest --config jest.integration.config.ts --runInBand",
     "format": "prettier -w src/** && eslint . --fix --ext .ts",
     "lint": "eslint . --ext .ts"
   },

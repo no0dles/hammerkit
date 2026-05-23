@@ -20,6 +20,7 @@ import { getSchedulerExecuteResult } from './executer/get-scheduler-execute-resu
 import { resetWorkTree } from './executer/reset-work-tree'
 import { executeWorkTree } from './executer/execute-work-tree'
 import { TaskState } from './executer/scheduler/task-state'
+import { ServiceState } from './executer/scheduler/service-state'
 import { packageWorkTree } from './docker/package'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
@@ -176,7 +177,7 @@ export class Cli {
     return task
   }
 
-  service(name: string): WorkItem<WorkService> {
+  service(name: string): WorkItemState<WorkService, ServiceState> {
     const service = this.workTree.services[name]
     if (!service) {
       throw new Error(`unable to find service ${name}`)
