@@ -2,7 +2,10 @@ import { WorkItemNeed } from '../planner/work-item'
 import { isHostServiceDns } from './service-dns'
 
 function toEnvKey(name: string): string {
-  return name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  return name
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
 }
 
 export function getServiceEnvHints(needs: WorkItemNeed[]): { [key: string]: string } {

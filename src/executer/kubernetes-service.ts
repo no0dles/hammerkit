@@ -97,7 +97,14 @@ export async function kubernetesService(
       if (port.hostPort === null) {
         continue
       }
-      const fs = await startForwardServer(forward, service.data.namespace, podName, port.hostPort, port.containerPort, service)
+      const fs = await startForwardServer(
+        forward,
+        service.data.namespace,
+        podName,
+        port.hostPort,
+        port.containerPort,
+        service
+      )
       servers.push(fs)
       service.status.write('info', `forwarding 127.0.0.1:${port.hostPort} -> ${podName}:${port.containerPort}`)
     }

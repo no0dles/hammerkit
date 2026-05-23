@@ -48,7 +48,7 @@ function parseWorkLabelScope(options: unknown): WorkLabelScope {
 
 export async function getProgram(
   environment: Environment,
-  argv: string[],
+  argv: string[]
 ): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
 
@@ -81,14 +81,14 @@ export async function getProgram(
             printProperty(
               environment,
               'ports',
-              service.item.data.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', '),
+              service.item.data.ports.map((p) => `127.0.0.1:${p.hostPort} -> ${p.containerPort}`).join(', ')
             )
             if (service.item.data.type === 'kubernetes-service') {
               printProperty(environment, 'context', service.item.data.context)
               printProperty(
                 environment,
                 'selector',
-                `${service.item.data.selector.type}/${service.item.data.selector.name}`,
+                `${service.item.data.selector.type}/${service.item.data.selector.name}`
               )
             } else {
               printProperty(environment, 'image', service.item.data.image)
@@ -123,21 +123,21 @@ export async function getProgram(
                 'labels',
                 `${Object.keys(task.item.data.labels)
                   .map((key) => `${key}=${task.item.data.labels[key].join(',')}`)
-                  .join(' ')}`,
+                  .join(' ')}`
               )
             }
             if (task.item.data.src.length > 0) {
               printProperty(
                 environment,
                 'src',
-                task.item.data.src.map((d) => relative(task.item.data.cwd, d.absolutePath)).join(' '),
+                task.item.data.src.map((d) => relative(task.item.data.cwd, d.absolutePath)).join(' ')
               )
             }
             if (task.item.data.generates.length > 0) {
               printProperty(
                 environment,
                 'generates',
-                task.item.data.generates.map((d) => relative(task.item.data.cwd, d.path)).join(' '),
+                task.item.data.generates.map((d) => relative(task.item.data.cwd, d.path)).join(' ')
               )
             }
           }
@@ -258,7 +258,7 @@ export async function getProgram(
             environment.stdout.write(`${colors.underline(colors.gray(buildFilename))}\n`)
             for (const error of errors) {
               environment.stdout.write(
-                ` ${colors.underline(colors.blue(error.type))} at ${colors.gray(error.item.name)} ${error.message}\n`,
+                ` ${colors.underline(colors.blue(error.type))} at ${colors.gray(error.item.name)} ${error.message}\n`
               )
             }
             environment.stdout.write('\n')
@@ -281,12 +281,12 @@ export async function getProgram(
       .addOption(
         new Option('-l, --log <mode>', 'log mode')
           .default(isCI ? 'live' : 'interactive')
-          .choices(['interactive', 'live', 'grouped']),
+          .choices(['interactive', 'live', 'grouped'])
       )
       .addOption(
         new Option('--cache <method>', 'caching method to compare')
           .default(isCI ? 'checksum' : 'modify-date')
-          .choices(['checksum', 'modify-date', 'none']),
+          .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (options) => {
         try {
@@ -351,19 +351,19 @@ export async function getProgram(
       .addOption(
         new Option('-l, --log <mode>', 'log mode')
           .default(isCI ? 'live' : 'interactive')
-          .choices(['interactive', 'live', 'grouped']),
+          .choices(['interactive', 'live', 'grouped'])
       )
       .addOption(
         new Option('--cache <method>', 'caching method to compare')
           .default(isCI ? 'checksum' : 'modify-date')
-          .choices(['checksum', 'modify-date', 'none']),
+          .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (task, options) => {
         try {
           const cli = await createCli(
             fileName,
             environment,
-            task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options),
+            task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options)
           )
           if (cli.tasks().length === 0) {
             program.error('No tasks found', { exitCode: 127 })

@@ -22,10 +22,7 @@ describe('removeContainer', () => {
 
   it('retries on 409 (conflict)', async () => {
     const conflict = Object.assign(new Error('conflict'), { statusCode: 409 })
-    const remove = jest
-      .fn()
-      .mockRejectedValueOnce(conflict)
-      .mockResolvedValueOnce(undefined)
+    const remove = jest.fn().mockRejectedValueOnce(conflict).mockResolvedValueOnce(undefined)
     await removeContainer(makeContainer(remove))
     expect(remove).toHaveBeenCalledTimes(2)
   }, 5000)

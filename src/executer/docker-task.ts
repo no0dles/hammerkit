@@ -91,7 +91,7 @@ export async function dockerTask(
     const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers, environment)
     printContainerOptions(item.status, containerOptions)
 
-    await usingContainer(docker, item, containerOptions, options.stateKey, async(container) => {
+    await usingContainer(docker, item, containerOptions, options.stateKey, async (container) => {
       await setUserPermissions(item, container, environment)
 
       for (const cmd of item.data.cmds) {

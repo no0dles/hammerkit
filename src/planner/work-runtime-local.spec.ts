@@ -33,7 +33,12 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       envs: { variables: {}, processEnvs: {} } as any,
       labels: {},
       shell: '/bin/sh',
-      caching: { name: 'none', method: 'none', backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} }, implicit: true },
+      caching: {
+        name: 'none',
+        method: 'none',
+        backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+        implicit: true,
+      },
       description: null,
       scope: {} as any,
     },
@@ -63,7 +68,16 @@ describe('local task pidfile', () => {
       stateKey: 'state-1',
       abort: new AbortController().signal,
       state,
-      cache: { cached: false, stateKey: 'state-x', resolved: { name: 'none', method: 'none', backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} }, implicit: true } },
+      cache: {
+        cached: false,
+        stateKey: 'state-x',
+        resolved: {
+          name: 'none',
+          method: 'none',
+          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          implicit: true,
+        },
+      },
       daemon: false,
     })
 
@@ -85,7 +99,16 @@ describe('local task pidfile', () => {
       stateKey: 'state-2',
       abort: new AbortController().signal,
       state,
-      cache: { cached: false, stateKey: 'state-x', resolved: { name: 'none', method: 'none', backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} }, implicit: true } },
+      cache: {
+        cached: false,
+        stateKey: 'state-x',
+        resolved: {
+          name: 'none',
+          method: 'none',
+          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          implicit: true,
+        },
+      },
       daemon: false,
     })
 
@@ -107,7 +130,16 @@ describe('local task pidfile', () => {
       stateKey: 'state-3',
       abort: new AbortController().signal,
       state,
-      cache: { cached: false, stateKey: 'state-x', resolved: { name: 'none', method: 'none', backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} }, implicit: true } },
+      cache: {
+        cached: false,
+        stateKey: 'state-x',
+        resolved: {
+          name: 'none',
+          method: 'none',
+          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          implicit: true,
+        },
+      },
       daemon: false,
     })
 
@@ -130,7 +162,16 @@ describe('local task pidfile', () => {
       stateKey: 'state-4',
       abort: new AbortController().signal,
       state,
-      cache: { cached: false, stateKey: 'state-x', resolved: { name: 'none', method: 'none', backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} }, implicit: true } },
+      cache: {
+        cached: false,
+        stateKey: 'state-x',
+        resolved: {
+          name: 'none',
+          method: 'none',
+          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          implicit: true,
+        },
+      },
       daemon: false,
     })
 

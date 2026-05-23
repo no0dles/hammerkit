@@ -18,7 +18,7 @@ import { getErrorMessage } from '../log'
 export async function packageWorkTree(
   workTree: WorkTree,
   environment: Environment,
-  options: CliPackageOptions,
+  options: CliPackageOptions
 ): Promise<void> {
   if (workTree.environment.type !== 'docker') {
     throw new Error('only docker environments are supported')
@@ -57,32 +57,35 @@ export async function packageWorkTree(
           t: imageName,
 
           abortSignal: environment.abortCtrl.signal,
-        },
+        }
       )
       await new Promise<void>((resolve, reject) => {
-        docker.modem.followProgress(buildStream, (err, res) => {
-          if (err) {
-            environment.console.error(getErrorMessage(err))
-            reject(err)
-          } else if (res.length > 0) {
-            environment.console.error(res.map(i => 'stream' in i ? i.stream : i.error).join(''))
-            reject(new Error('build failed'))
-          } else {
-            resolve()
-          }
-        }, (res) => {
-          if (res.stream) {
-            if (res.stream === '\n') {
-              return
-            }
-            if (res.stream.endsWith('\n')) {
-              environment.console.info(res.stream.substr(0, res.stream.length - 1))
+        docker.modem.followProgress(
+          buildStream,
+          (err, res) => {
+            if (err) {
+              environment.console.error(getErrorMessage(err))
+              reject(err)
+            } else if (res.length > 0) {
+              environment.console.error(res.map((i) => ('stream' in i ? i.stream : i.error)).join(''))
+              reject(new Error('build failed'))
             } else {
-              environment.console.info(res.stream)
+              resolve()
             }
-
+          },
+          (res) => {
+            if (res.stream) {
+              if (res.stream === '\n') {
+                return
+              }
+              if (res.stream.endsWith('\n')) {
+                environment.console.info(res.stream.substr(0, res.stream.length - 1))
+              } else {
+                environment.console.info(res.stream)
+              }
+            }
           }
-        })
+        )
       })
       environment.console.info(`generated image ${imageName} for ${service.name}`)
 
@@ -98,11 +101,15 @@ export async function packageWorkTree(
           },
         })
         await new Promise((resolve, reject) => {
-          docker.modem.followProgress(pushStream, (err, res) => (err ? reject(err) : resolve(res)), (res) => {
-            if (res.stream) {
-              environment.console.info(res.stream)
+          docker.modem.followProgress(
+            pushStream,
+            (err, res) => (err ? reject(err) : resolve(res)),
+            (res) => {
+              if (res.stream) {
+                environment.console.info(res.stream)
+              }
             }
-          })
+          )
         })
         environment.console.info(`pushed image ${imageName} to ${options.registry}`)
       }
@@ -125,7 +132,10 @@ export interface ContainerSource {
   matcher: (fileName: string, cwd: string) => boolean
 }
 
-function getDependencySources(service: WorkItem<ContainerWorkTask | ContainerWorkService>, taskIds: string[]): ContainerSource[] {
+function getDependencySources(
+  service: WorkItem<ContainerWorkTask | ContainerWorkService>,
+  taskIds: string[]
+): ContainerSource[] {
   const result: ContainerSource[] = [...service.data.src.filter((s) => !s.inherited)]
 
   taskIds.push(service.id())
@@ -168,10 +178,7 @@ function longestCommonPrefix(strs: string[]) {
   return prefix
 }
 
-function getServiceInstructions(
-  service: WorkItem<ContainerWorkService>,
-  options: CliPackageOptions,
-): TaskInstructions {
+function getServiceInstructions(service: WorkItem<ContainerWorkService>, options: CliPackageOptions): TaskInstructions {
   const dependencyCwd = getDependencyCwd(service.data.cwd, service)
   const tasks: { [task: string]: TaskInstructions } = {}
   const deps = getDependencyInstructions(dependencyCwd, service, tasks)
@@ -179,7 +186,7 @@ function getServiceInstructions(
   // const orderedDeps = Object.entries(tasks).sort(([, a], [, b]) => a.order - b.order)
 
   const instructions: string[] = [
-    ...Object.values(tasks).flatMap(t => t.instructions),
+    ...Object.values(tasks).flatMap((t) => t.instructions),
 
     `FROM ${service.data.image} as service-${service.id()}`,
     `LABEL hammerkit.dev/id=${service.id()}`,
@@ -192,24 +199,31 @@ function getServiceInstructions(
 
     options.overrideUser ? 'RUN (addgroup -g 1000 hammerkit && adduser -u 1000 -G hammerkit -s /bin/sh) || true' : '',
 
-    ...service.data.src
-      .map((s) => `COPY ${relative(dependencyCwd, s.absolutePath)} /${relative(dependencyCwd, s.absolutePath)}`),
+    ...service.data.src.map(
+      (s) => `COPY ${relative(dependencyCwd, s.absolutePath)} /${relative(dependencyCwd, s.absolutePath)}`
+    ),
 
     ...deps.flatMap((d) => d.exports),
 
     ...(options.overrideUser
-      ? service.data.src.filter((s) => !s.inherited).map((v) => `RUN chown -R 1000:1000 /${relative(dependencyCwd, v.absolutePath)}`)
+      ? service.data.src
+          .filter((s) => !s.inherited)
+          .map((v) => `RUN chown -R 1000:1000 /${relative(dependencyCwd, v.absolutePath)}`)
       : []),
 
-    ...service.data.volumes.filter(v => !v.inherited).map((v) => `VOLUME ${relative(dependencyCwd, v.containerPath)}`),
-    ...(options.overrideUser ? service.data.volumes.map((v) => `RUN chown -R 1000:1000 /${relative(dependencyCwd, v.containerPath)}`) : []),
+    ...service.data.volumes
+      .filter((v) => !v.inherited)
+      .map((v) => `VOLUME ${relative(dependencyCwd, v.containerPath)}`),
+    ...(options.overrideUser
+      ? service.data.volumes.map((v) => `RUN chown -R 1000:1000 /${relative(dependencyCwd, v.containerPath)}`)
+      : []),
 
     options.overrideUser ? 'USER 1000:1000' : '',
   ]
 
   if (service.data.cmd) {
     instructions.push(
-      `CMD [${[service.data.cmd.parsed.command, ...service.data.cmd.parsed.args].map((p) => `"${p}"`).join(', ')}]`,
+      `CMD [${[service.data.cmd.parsed.command, ...service.data.cmd.parsed.args].map((p) => `"${p}"`).join(', ')}]`
     )
   }
 
@@ -235,9 +249,9 @@ function getServiceInstructions(
 function getDependencyInstructions(
   cwd: string,
   task: WorkItem<ContainerWorkTask | ContainerWorkService | LocalWorkTask>,
-  taskIds: { [task: string]: TaskInstructions },
+  taskIds: { [task: string]: TaskInstructions }
 ): TaskInstructions[] {
-  return task.deps.map(dep => {
+  return task.deps.map((dep) => {
     if (taskIds[dep.id()]) {
       return taskIds[dep.id()]
     } else {
@@ -251,9 +265,12 @@ function getDependencyInstructions(
   })
 }
 
-function resolveRecursiveDependencies(deps: TaskInstructions[], result: {
-  [task: string]: TaskInstructions
-}): TaskInstructions[] {
+function resolveRecursiveDependencies(
+  deps: TaskInstructions[],
+  result: {
+    [task: string]: TaskInstructions
+  }
+): TaskInstructions[] {
   for (const dep of deps) {
     if (result[dep.id]) {
       continue
@@ -265,9 +282,13 @@ function resolveRecursiveDependencies(deps: TaskInstructions[], result: {
   return Object.values(result)
 }
 
-function getTaskInstructions(cwd: string, task: WorkItem<ContainerWorkTask>, taskIds: {
-  [task: string]: TaskInstructions
-}): TaskInstructions {
+function getTaskInstructions(
+  cwd: string,
+  task: WorkItem<ContainerWorkTask>,
+  taskIds: {
+    [task: string]: TaskInstructions
+  }
+): TaskInstructions {
   const deps = getDependencyInstructions(cwd, task, taskIds)
   const deepDeps = resolveRecursiveDependencies(deps, {})
 
@@ -278,7 +299,11 @@ function getTaskInstructions(cwd: string, task: WorkItem<ContainerWorkTask>, tas
       ...Object.entries(task.data.envs.variables).map(([key, value]) => `ENV ${key}=${value}`),
       `WORKDIR /${relative(cwd, task.data.cwd)}`,
       ...task.data.mounts.map((m) => `COPY ${relative(cwd, m.localPath)} /${relative(cwd, m.containerPath)}`),
-      ...deepDeps.flatMap((t) => t.sources.map(s => `COPY --from=task-${t.id} /${relative(cwd, s.absolutePath)} /${relative(cwd, s.absolutePath)}`)),
+      ...deepDeps.flatMap((t) =>
+        t.sources.map(
+          (s) => `COPY --from=task-${t.id} /${relative(cwd, s.absolutePath)} /${relative(cwd, s.absolutePath)}`
+        )
+      ),
       ...deepDeps.flatMap((d) => d.exports),
       ...task.data.src
         .filter((s) => !s.inherited)
@@ -288,14 +313,14 @@ function getTaskInstructions(cwd: string, task: WorkItem<ContainerWorkTask>, tas
     ],
     cwd,
     sources: [
-      ...task.data.src
-        .filter((s) => !s.inherited)
-        .map((s) => ({ absolutePath: s.absolutePath, matcher: s.matcher })),
+      ...task.data.src.filter((s) => !s.inherited).map((s) => ({ absolutePath: s.absolutePath, matcher: s.matcher })),
     ],
     exports: [
       ...task.data.generates
-        .filter(g => !g.inherited)
-        .map(generate => `COPY --from=task-${task.id()} ${relative(cwd, generate.path)} /${relative(cwd, generate.path)}`),
+        .filter((g) => !g.inherited)
+        .map(
+          (generate) => `COPY --from=task-${task.id()} ${relative(cwd, generate.path)} /${relative(cwd, generate.path)}`
+        ),
     ],
     deps,
     order: deps.reduce((acc, dep) => Math.max(acc, dep.order), 0) + 1,

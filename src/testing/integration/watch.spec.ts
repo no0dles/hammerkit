@@ -7,42 +7,48 @@ describe('watch', () => {
 
   afterAll(() => suite.close())
 
-  it('should run watch task and cancel',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
-    const exec = await cli.up({ watch: true })
-    exec.state.on('test-status', (evt) => {
-      if (evt.services['api'].state.current.type === 'running') {
-        environment.abortCtrl.abort()
-      }
-    })
-    const result = await exec.start()
-    expect(result.success).toBeFalsy()
-    expect(result.state.services['api'].state.current.type).toEqual('canceled')
-  }))
-
-  it('should restart task if dependency updates',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
-    const exec = await cli.up({ watch: true })
-
-    let appendedFile = false
-    let restarted = false
-
-    exec.state.on('test-status', (evt) => {
-      if (evt.services['api'].state.current.type === 'running') {
-        if (!appendedFile) {
-          appendedFile = true
-          environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
-        } else {
-          restarted = true
+  it(
+    'should run watch task and cancel',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
+      const exec = await cli.up({ watch: true })
+      exec.state.on('test-status', (evt) => {
+        if (evt.services['api'].state.current.type === 'running') {
           environment.abortCtrl.abort()
         }
-      }
+      })
+      const result = await exec.start()
+      expect(result.success).toBeFalsy()
+      expect(result.state.services['api'].state.current.type).toEqual('canceled')
     })
+  )
 
-    const result = await exec.start()
-    expect(appendedFile).toBeTruthy()
-    expect(restarted).toBeTruthy()
-    expect(result.success).toBeFalsy()
-    expect(result.state.services['api'].state.current.type).toEqual('canceled')
-  }))
+  it(
+    'should restart task if dependency updates',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ filterLabels: { task: ['dev'] } })
+      const exec = await cli.up({ watch: true })
+
+      let appendedFile = false
+      let restarted = false
+
+      exec.state.on('test-status', (evt) => {
+        if (evt.services['api'].state.current.type === 'running') {
+          if (!appendedFile) {
+            appendedFile = true
+            environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
+          } else {
+            restarted = true
+            environment.abortCtrl.abort()
+          }
+        }
+      })
+
+      const result = await exec.start()
+      expect(appendedFile).toBeTruthy()
+      expect(restarted).toBeTruthy()
+      expect(result.success).toBeFalsy()
+      expect(result.state.services['api'].state.current.type).toEqual('canceled')
+    })
+  )
 })

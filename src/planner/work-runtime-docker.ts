@@ -130,7 +130,8 @@ async function restoreContainer(
             ? []
             : [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
       },
-    },null,
+    },
+    null,
     async (container) => {
       for (const generate of getArchivePaths(item.data, path)) {
         if (await environment.file.exists(generate.filename)) {
@@ -259,7 +260,8 @@ async function archiveContainer(
                 .filter((v) => !v.inherited && !v.isFile)
                 .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
       },
-    }, null,
+    },
+    null,
     async (container) => {
       for (const generatedArchive of getArchivePaths(item.data, path)) {
         const readable = await container.getArchive({

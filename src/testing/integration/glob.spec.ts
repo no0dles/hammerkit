@@ -22,7 +22,7 @@ describe('glob', () => {
     const cacheAfter = await checkCacheState(exampleAfter, 'checksum', environment)
     expect(cacheAfter.stateKey).not.toBeNull()
 
-    if(expectInvalidate) {
+    if (expectInvalidate) {
       expect(cacheAfter.stateKey).not.toEqual(cacheBefore.stateKey)
     } else {
       expect(cacheAfter.stateKey).toEqual(cacheBefore.stateKey)

@@ -20,4 +20,15 @@ export function createCacheBackend(spec: CacheBackendSchema): CacheBackend {
 
 registerCacheBackend('local', (spec) => createLocalCacheBackend(spec as { type: 'local'; path?: string }))
 registerCacheBackend('noop', () => createNoopCacheBackend())
-registerCacheBackend('s3', (spec) => createS3CacheBackend(spec as { type: 's3'; bucket: string; region?: string; endpoint?: string; prefix?: string; forcePathStyle?: boolean }))
+registerCacheBackend('s3', (spec) =>
+  createS3CacheBackend(
+    spec as {
+      type: 's3'
+      bucket: string
+      region?: string
+      endpoint?: string
+      prefix?: string
+      forcePathStyle?: boolean
+    }
+  )
+)

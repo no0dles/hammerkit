@@ -24,28 +24,34 @@ describe('clean', () => {
     expect(existsSync(outputPath)).toBeFalsy()
   })
 
-  it('should clean generated outputs in containers',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'docker:example' })
-    const result = await cli.runExec({ cacheDefault: 'none' })
-    await expectSuccessfulResult(result, environment)
+  it(
+    'should clean generated outputs in containers',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'docker:example' })
+      const result = await cli.runExec({ cacheDefault: 'none' })
+      await expectSuccessfulResult(result, environment)
 
-    const docker = getContainerCli({ type: 'docker' })
-    const outputPath = join(suite.path, 'node_modules')
-    const volumeName = getVolumeName(outputPath)
-    expect(await existsVolume(docker, volumeName)).toBeTruthy()
+      const docker = getContainerCli({ type: 'docker' })
+      const outputPath = join(suite.path, 'node_modules')
+      const volumeName = getVolumeName(outputPath)
+      expect(await existsVolume(docker, volumeName)).toBeTruthy()
 
-    await cli.clean()
-    expect(await existsVolume(docker, volumeName)).toBeFalsy()
-  }))
+      await cli.clean()
+      expect(await existsVolume(docker, volumeName)).toBeFalsy()
+    })
+  )
 
-  it('should clean and restore created data in volumes',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'example:service' })
+  it(
+    'should clean and restore created data in volumes',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'example:service' })
 
-    const result = await cli.runExec()
-    await expectSuccessfulResult(result, environment)
+      const result = await cli.runExec()
+      await expectSuccessfulResult(result, environment)
 
-    await cli.clean()
-    const resultAfterClean = await cli.runExec()
-    await expectSuccessfulResult(resultAfterClean, environment)
-  }))
+      await cli.clean()
+      const resultAfterClean = await cli.runExec()
+      await expectSuccessfulResult(resultAfterClean, environment)
+    })
+  )
 })

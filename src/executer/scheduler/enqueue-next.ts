@@ -16,7 +16,10 @@ export interface CacheState {
   resolved: ResolvedCache
 }
 
-function resolveEffective(item: WorkItemState<WorkTask | WorkService, any>, fallbackMethod: CacheMethod): ResolvedCache {
+function resolveEffective(
+  item: WorkItemState<WorkTask | WorkService, any>,
+  fallbackMethod: CacheMethod
+): ResolvedCache {
   const declared = item.data.caching
   if (declared.implicit) {
     return { ...declared, method: fallbackMethod }
@@ -59,7 +62,9 @@ export async function checkCacheState(
       } catch (e) {
         item.status.write(
           'warn',
-          `${item.name} failed to pull from cache "${resolved.name}": ${getErrorMessage(e)} — continuing with local execution`
+          `${item.name} failed to pull from cache "${resolved.name}": ${getErrorMessage(
+            e
+          )} — continuing with local execution`
         )
       }
     }

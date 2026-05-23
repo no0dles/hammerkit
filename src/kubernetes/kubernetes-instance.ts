@@ -57,7 +57,7 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
         throw new Error(`No cluster found for context ${kubernetes.context}`)
       }
     } else {
-      throw e;
+      throw e
     }
   }
 }

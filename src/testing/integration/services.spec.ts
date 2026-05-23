@@ -15,26 +15,38 @@ describe('services', () => {
 
   afterAll(() => suite.close())
 
-  it('should run with needed service',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({})
-    const result = await testingTimeout(cli.up({ daemon: true }), 120000)
-    await expectSuccessfulResult(result, environment)
-  }), 120000)
+  it(
+    'should run with needed service',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({})
+      const result = await testingTimeout(cli.up({ daemon: true }), 120000)
+      await expectSuccessfulResult(result, environment)
+    }),
+    120000
+  )
 
-  it('should start needs of service',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'test' })
-    const result = await testingTimeout(cli.exec(), 120000)
-    await expectSuccessfulResult(result, environment)
-  }), 120000)
+  it(
+    'should start needs of service',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'test' })
+      const result = await testingTimeout(cli.exec(), 120000)
+      await expectSuccessfulResult(result, environment)
+    }),
+    120000
+  )
 
-  it('should start services up',  requiresLinuxContainers (async () => {
-    const { cli } = await suite.setup({
-      filterLabels: { task: ['dev'] },
-      excludeLabels: {},
-    })
-    const upResult = await testingTimeout(cli.up({ daemon: true }))
-    expect(upResult.success).toBeTrue()
-    const downResult = await cli.runDown()
-    expect(downResult.success).toBeTrue()
-  }), 120000)
+  it(
+    'should start services up',
+    requiresLinuxContainers(async () => {
+      const { cli } = await suite.setup({
+        filterLabels: { task: ['dev'] },
+        excludeLabels: {},
+      })
+      const upResult = await testingTimeout(cli.up({ daemon: true }))
+      expect(upResult.success).toBeTrue()
+      const downResult = await cli.runDown()
+      expect(downResult.success).toBeTrue()
+    }),
+    120000
+  )
 })

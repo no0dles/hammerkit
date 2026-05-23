@@ -43,25 +43,29 @@ describe('store/restore', () => {
     }
   })
 
-  it('should clean and restore created outputs in container',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'example:docker' })
+  it(
+    'should clean and restore created outputs in container',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'example:docker' })
 
-    const cacheStoragePath = join(environment.cwd, 'storage')
+      const cacheStoragePath = join(environment.cwd, 'storage')
 
-    const firstExecResult = await cli.runExec()
-    await expectSuccessfulResult(firstExecResult, environment)
+      const firstExecResult = await cli.runExec()
+      await expectSuccessfulResult(firstExecResult, environment)
 
-    await cli.store(cacheStoragePath)
-    await cli.clean()
-    await cli.restore(cacheStoragePath)
+      await cli.store(cacheStoragePath)
+      await cli.clean()
+      await cli.restore(cacheStoragePath)
 
-    const execAfterRestore = await cli.runExec()
-    await expectSuccessfulResult(execAfterRestore, environment)
+      const execAfterRestore = await cli.runExec()
+      await expectSuccessfulResult(execAfterRestore, environment)
 
-    const taskState = execAfterRestore.state.tasks['example:docker']
-    expect(taskState.state.current.type).toBe('completed')
-    if (taskState.state.current.type === 'completed') {
-      expect(taskState.state.current.cached).toBeTruthy()
-    }
-  }), 90000)
+      const taskState = execAfterRestore.state.tasks['example:docker']
+      expect(taskState.state.current.type).toBe('completed')
+      if (taskState.state.current.type === 'completed') {
+        expect(taskState.state.current.cached).toBeTruthy()
+      }
+    }),
+    90000
+  )
 })

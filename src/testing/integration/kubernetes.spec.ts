@@ -2,7 +2,7 @@ import { requiresKubernetes } from '../requires-kubernetes'
 import { createTestCase } from '../test-case'
 
 describe('kubernetes', () => {
-  const suite =  createTestCase('kubernetes', {
+  const suite = createTestCase('kubernetes', {
     '.hammerkit.yaml': {
       services: {
         postgres: {
@@ -13,7 +13,7 @@ describe('kubernetes', () => {
             POSTGRES_PASSWORD: '123456',
           },
           volumes: ['data:/var/lib/postgresql/data'],
-          ports: ['5432:5432']
+          ports: ['5432:5432'],
         },
         api: {
           image: 'node:16.6.0-alpine',
@@ -21,10 +21,10 @@ describe('kubernetes', () => {
           needs: ['postgres'],
           ports: [3000],
           labels: {
-            app: 'example'
+            app: 'example',
           },
           src: ['index.js'],
-          cmd: 'node index.js'
+          cmd: 'node index.js',
         },
       },
       tasks: {
@@ -33,7 +33,7 @@ describe('kubernetes', () => {
           src: ['package.json'],
           generates: ['node_modules'],
           cmds: ['npm install'],
-        }
+        },
       },
       environments: {
         default: {
@@ -87,14 +87,14 @@ server.listen(3000, () => {
     "pg": "^8.7.1"
   }
 }
-`
+`,
   })
 
   it(
     'should create deployment',
     requiresKubernetes(async () => {
-      await suite.cli({ }, async (cli) => {
-        await cli.runUp({daemon: true})
+      await suite.cli({}, async (cli) => {
+        await cli.runUp({ daemon: true })
       })
     })
   )

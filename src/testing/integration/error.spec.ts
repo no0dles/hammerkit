@@ -12,9 +12,12 @@ describe('error', () => {
     expect(result.success).toBeFalsy()
   })
 
-  it('should return error when docker task failed',  requiresLinuxContainers (async () => {
-    const { cli } = await suite.setup({ taskName: 'docker_error' })
-    const result = await cli.runExec()
-    expect(result.success).toBeFalsy()
-  }))
+  it(
+    'should return error when docker task failed',
+    requiresLinuxContainers(async () => {
+      const { cli } = await suite.setup({ taskName: 'docker_error' })
+      const result = await cli.runExec()
+      expect(result.success).toBeFalsy()
+    })
+  )
 })

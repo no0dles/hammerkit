@@ -21,7 +21,10 @@ export class ExampleTestSuite implements TestSuite {
 
   readonly path: string
 
-  constructor(exampleName: string, private files: string[]) {
+  constructor(
+    exampleName: string,
+    private files: string[]
+  ) {
     this.exampleDirectory = join(__dirname, '../../examples/', exampleName)
     this.path = join(process.cwd(), 'temp', exampleName)
     this.file = getFileContext(this.path)
@@ -38,7 +41,7 @@ export class ExampleTestSuite implements TestSuite {
     await this.file.remove(this.path)
     await this.file.createDirectory(this.path)
 
-    const statusStream= memoryStream()
+    const statusStream = memoryStream()
     const environment: Environment = {
       processEnvs: { ...process.env, ...(scope.envs ?? {}) },
       abortCtrl: new AbortController(),

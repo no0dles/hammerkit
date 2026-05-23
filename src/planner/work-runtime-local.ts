@@ -10,7 +10,7 @@ import { getArchivePaths } from '../executer/event-cache'
 import findProcess from 'find-process'
 
 function getStateFilename(task: WorkItem<LocalWorkTask>) {
-  return join(task.data.cwd, '.hammerkit', `${task.id()}`);
+  return join(task.data.cwd, '.hammerkit', `${task.id()}`)
 }
 
 function getPidFilename(task: WorkItem<LocalWorkTask>) {

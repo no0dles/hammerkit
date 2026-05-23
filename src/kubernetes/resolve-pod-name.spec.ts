@@ -14,10 +14,12 @@ function podBody(items: Array<{ name: string; ready?: boolean }>) {
   } as any
 }
 
-function makeCoreApi(opts: {
-  service?: { selector?: { [k: string]: string } }
-  pods?: Array<{ name: string; ready?: boolean }>
-} = {}): CoreV1Api {
+function makeCoreApi(
+  opts: {
+    service?: { selector?: { [k: string]: string } }
+    pods?: Array<{ name: string; ready?: boolean }>
+  } = {}
+): CoreV1Api {
   return {
     readNamespacedService: jest.fn().mockResolvedValue({ body: { spec: { selector: opts.service?.selector } } }),
     listNamespacedPod: jest.fn().mockResolvedValue(podBody(opts.pods ?? [])),
@@ -88,9 +90,7 @@ describe('resolvePodName', () => {
   it('throws when no pods match', async () => {
     const core = makeCoreApi({ service: { selector: { app: 'api' } }, pods: [] })
     const apps = makeAppsApi()
-    await expect(resolvePodName(core, apps, 'ns', { type: 'service', name: 'api' })).rejects.toThrow(
-      /no pod found/
-    )
+    await expect(resolvePodName(core, apps, 'ns', { type: 'service', name: 'api' })).rejects.toThrow(/no pod found/)
   })
 
   it('rejects unsupported selector types', async () => {

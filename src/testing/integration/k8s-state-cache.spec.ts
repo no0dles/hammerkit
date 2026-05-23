@@ -33,15 +33,11 @@ describe('k8s deployment caches via hammerkit.dev/state label', () => {
     requiresKubernetes(async () => {
       await suite.cli({}, async (cli, env) => {
         await cli.runUp({ daemon: true })
-        const firstKey = await cli
-          .service('redis')
-          .runtime.currentStateKey(env)
+        const firstKey = await cli.service('redis').runtime.currentStateKey(env)
         expect(firstKey).not.toBeNull()
 
         await cli.runUp({ daemon: true })
-        const secondKey = await cli
-          .service('redis')
-          .runtime.currentStateKey(env)
+        const secondKey = await cli.service('redis').runtime.currentStateKey(env)
         expect(secondKey).toBe(firstKey)
       })
     }),

@@ -8,16 +8,9 @@ function formatSelector(matchLabels: { [key: string]: string }): string {
 }
 
 async function findReadyPod(coreApi: CoreV1Api, namespace: string, labelSelector: string): Promise<string> {
-  const pods = await coreApi.listNamespacedPod(
-    namespace,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    labelSelector
-  )
-  const ready = pods.body.items.find((p) =>
-    p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True')
+  const pods = await coreApi.listNamespacedPod(namespace, undefined, undefined, undefined, undefined, labelSelector)
+  const ready = pods.body.items.find(
+    (p) => p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True')
   )
   const pod = ready ?? pods.body.items[0]
   if (!pod?.metadata?.name) {

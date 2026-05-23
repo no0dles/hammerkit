@@ -14,12 +14,15 @@ describe('env', () => {
     await expectLog(result, environment, `example`, '16.6.0')
   })
 
-  it('should pass env to docker',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'example_docker' })
-    const result = await cli.runExec()
-    await expectSuccessfulResult(result, environment)
-    await expectLog(result, environment, `example_docker`, '16.6.0')
-  }))
+  it(
+    'should pass env to docker',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'example_docker' })
+      const result = await cli.runExec()
+      await expectSuccessfulResult(result, environment)
+      await expectLog(result, environment, `example_docker`, '16.6.0')
+    })
+  )
 
   it('should use env from task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'example_override' })

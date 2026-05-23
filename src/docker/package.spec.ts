@@ -26,7 +26,7 @@ describe('docker/package', () => {
           },
         },
         references: {
-          sub: '..'
+          sub: '..',
         },
         services: {
           api: {

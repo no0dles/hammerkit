@@ -4,25 +4,25 @@ export function emptyStream(): Writable {
   const stream = new Writable()
 
   stream._write = function (_chunk, _encoding, done) {
-    done();
-  };
+    done()
+  }
 
   return stream
 }
 
-export function memoryStream(): { read(): string, stream: Writable } {
+export function memoryStream(): { read(): string; stream: Writable } {
   const stream = new Writable()
   const chunks: string[] = []
 
   stream._write = function (chunk, encoding, done) {
     chunks.push(chunk.toString())
-    done();
-  };
+    done()
+  }
 
   return {
     stream,
     read(): string {
       return chunks.join('')
-    }
+    },
   }
 }

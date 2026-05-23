@@ -12,7 +12,11 @@ import { emptyStream, memoryStream } from './test-streams'
 
 export function getTestRunId(name: string): string {
   const base = process.env.HAMMERKIT_TEST_RUN_ID ?? `local-${process.pid}`
-  return `${base}-${name}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63)
+  return `${base}-${name}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63)
 }
 
 export function createTestCase(name: string, files: { [key: string]: any }) {
@@ -28,7 +32,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
       const path = join(process.cwd(), 'temp', name)
       const file = getFileContext(path)
 
-      const statusStream= memoryStream()
+      const statusStream = memoryStream()
       try {
         await file.remove(path)
         await file.createDirectory(path)

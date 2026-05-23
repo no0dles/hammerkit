@@ -35,13 +35,19 @@ describe('cancellation', () => {
     await testAbort('long_running_local', 'canceled')
   })
 
-  it('should cancel docker task',  requiresLinuxContainers (async () => {
-    await testAbort('long_running_docker', 'canceled')
-  }))
+  it(
+    'should cancel docker task',
+    requiresLinuxContainers(async () => {
+      await testAbort('long_running_docker', 'canceled')
+    })
+  )
 
-  it('should cancel docker task with dependencies',  requiresLinuxContainers (async () => {
-    await testAbort('docker_cancel', 'canceled')
-  }))
+  it(
+    'should cancel docker task with dependencies',
+    requiresLinuxContainers(async () => {
+      await testAbort('docker_cancel', 'canceled')
+    })
+  )
 })
 
 function expect_toBeDefined<T>(arg: T): asserts arg is NonNullable<T> {

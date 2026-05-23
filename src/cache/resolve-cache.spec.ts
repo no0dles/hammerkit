@@ -39,7 +39,9 @@ describe('resolveCache', () => {
   })
 
   it('throws when an unknown name is referenced', () => {
-    expect(() => resolveCache({ name: 'missing' }, catalog, 'taskA')).toThrow(/cache "missing" referenced by task "taskA"/)
+    expect(() => resolveCache({ name: 'missing' }, catalog, 'taskA')).toThrow(
+      /cache "missing" referenced by task "taskA"/
+    )
   })
 
   it('seeds default and none even when nothing is declared', () => {

@@ -8,7 +8,10 @@ export class State<T> {
   private listeners: { key: string; listener: StateListener<T> }[] = []
   private handles: StateHandle[] = []
 
-  constructor(public current: Readonly<T>, private options?: { onDestroy?: () => void; subStates?: State<any>[] }) {
+  constructor(
+    public current: Readonly<T>,
+    private options?: { onDestroy?: () => void; subStates?: State<any>[] }
+  ) {
     if (this.options?.subStates) {
       this.attachToStores(this.options.subStates)
     }

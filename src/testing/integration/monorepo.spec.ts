@@ -7,9 +7,13 @@ describe('monorepo', () => {
 
   afterAll(() => suite.close())
 
-  it('should build and clean monorepo',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'build' })
-    await expectSuccessfulExecution(cli.exec(), environment)
-    await cli.clean()
-  }), 120000)
+  it(
+    'should build and clean monorepo',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'build' })
+      await expectSuccessfulExecution(cli.exec(), environment)
+      await cli.clean()
+    }),
+    120000
+  )
 })

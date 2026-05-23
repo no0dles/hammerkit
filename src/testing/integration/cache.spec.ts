@@ -35,24 +35,33 @@ describe('cache', () => {
     }
   }
 
-  it('should run invalid cache on src file change',  requiresLinuxContainers (async () => {
-    await testCache(async (environment) => {
-      await environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
-    }, true)
-  }))
+  it(
+    'should run invalid cache on src file change',
+    requiresLinuxContainers(async () => {
+      await testCache(async (environment) => {
+        await environment.file.appendFile(join(environment.cwd, 'package.json'), '\n')
+      }, true)
+    })
+  )
 
-  it('should mount generations of dependant tasks',  requiresLinuxContainers (async () => {
-    const { cli, environment } = await suite.setup({ taskName: 'dependant' })
-    const result = await cli.runExec()
-    await expectSuccessfulResult(result, environment)
-    await expectLog(result, environment, `dependant`, 'node_modules')
-  }))
+  it(
+    'should mount generations of dependant tasks',
+    requiresLinuxContainers(async () => {
+      const { cli, environment } = await suite.setup({ taskName: 'dependant' })
+      const result = await cli.runExec()
+      await expectSuccessfulResult(result, environment)
+      await expectLog(result, environment, `dependant`, 'node_modules')
+    })
+  )
 
-  it('should invalid cache on image change',  requiresLinuxContainers (async () => {
-    await testCache(async (environment) => {
-      const buildFile = await read('.hammerkit.yaml', environment)
-      buildFile.tasks['example'].image = '15.0.0'
-      await write('.hammerkit.yaml', buildFile, environment)
-    }, true)
-  }))
+  it(
+    'should invalid cache on image change',
+    requiresLinuxContainers(async () => {
+      await testCache(async (environment) => {
+        const buildFile = await read('.hammerkit.yaml', environment)
+        buildFile.tasks['example'].image = '15.0.0'
+        await write('.hammerkit.yaml', buildFile, environment)
+      }, true)
+    })
+  )
 })

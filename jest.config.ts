@@ -22,7 +22,6 @@ const config: Config.InitialOptions = {
     '<rootDir>/src/program\\.spec\\.ts$',
   ],
   testEnvironment: 'node',
-  maxConcurrency: 1,
   collectCoverage: true,
   coverageDirectory: '<rootDir>/coverage',
   collectCoverageFrom: ['<rootDir>/src/**'],
