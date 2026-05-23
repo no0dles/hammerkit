@@ -34,20 +34,14 @@ jobs:
           kubectl create namespace "hammerkit-${HAMMERKIT_TEST_RUN_ID}" --dry-run=client -o yaml >/dev/null
           curl -fsS "http://${REGISTRY}/v2/" >/dev/null
 
-      - name: Create per-job namespace
-        run: |
-          kubectl --context "$CLUSTER_NAME" create namespace "hammerkit-${HAMMERKIT_TEST_RUN_ID}" || true
-          kubectl --context "$CLUSTER_NAME" label namespace "hammerkit-${HAMMERKIT_TEST_RUN_ID}" \
-            "hammerkit.dev/run-id=${HAMMERKIT_TEST_RUN_ID}" --overwrite
-
       - name: Install npm packages
         run: npm ci
 
+      # Each k8s spec deploys into its own namespace named with the run id
+      # (hammerkit creates it on demand via ensureNamespace), so suites can run
+      # in parallel without colliding. Cleanup below matches those by name.
       - name: Run integration tests
         run: npm run test:integration
-        env:
-          # specs that key off the k8s namespace pick this up via build-file templating
-          KUBE_NAMESPACE: hammerkit-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Archive logs on failure
         if: failure()
@@ -68,9 +62,10 @@ jobs:
           docker network ls -q --filter "label=hammerkit-id" \
             | xargs -r docker network rm
 
-      - name: Cleanup kubernetes namespace
+      - name: Cleanup kubernetes namespaces
         if: always()
         run: |
-          kubectl --context "$CLUSTER_NAME" delete namespace \
-            -l "hammerkit.dev/run-id=${HAMMERKIT_TEST_RUN_ID}" \
-            --ignore-not-found --wait=false
+          for ns in $(kubectl --context "$CLUSTER_NAME" get ns -o name \
+            | grep "${HAMMERKIT_TEST_RUN_ID}" || true); do
+            kubectl --context "$CLUSTER_NAME" delete "$ns" --ignore-not-found --wait=false
+          done

@@ -14,7 +14,7 @@ describe('docker service crash detection', () => {
           image: 'alpine:3.19',
           // command exits with non-zero after a short delay
           cmd: 'sh -c "sleep 1 && exit 17"',
-          ports: ['9000'],
+          ports: [':9000'],
         },
       },
     },

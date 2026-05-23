@@ -29,7 +29,7 @@ describe('environment', () => {
                 POSTGRES_DB: 'demo',
                 POSTGRES_PASSWORD: '123456',
               },
-              ports: ['5432'],
+              ports: [':5432'],
               volumes: ['postgres-db:/var/lib/postgresql/data'],
             },
             api: {
@@ -41,13 +41,13 @@ describe('environment', () => {
               },
               cmd: 'node index.js',
               src: ['index.js'],
-              ports: ['3000'],
+              ports: [':3000'],
             },
           },
           environments: {
             staging: {
               kubernetes: {
-                namespace: 'default',
+                namespace: `hammerkit-env-${(process.env.HAMMERKIT_TEST_RUN_ID ?? 'local').slice(0, 40)}`,
                 context: process.env.CLUSTER_NAME || 'docker-desktop',
                 ingresses: [
                   {

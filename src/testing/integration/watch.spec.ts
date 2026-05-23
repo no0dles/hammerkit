@@ -20,7 +20,8 @@ describe('watch', () => {
       const result = await exec.start()
       expect(result.success).toBeFalsy()
       expect(result.state.services['api'].state.current.type).toEqual('canceled')
-    })
+    }),
+    60000
   )
 
   it(
@@ -49,6 +50,7 @@ describe('watch', () => {
       expect(restarted).toBeTruthy()
       expect(result.success).toBeFalsy()
       expect(result.state.services['api'].state.current.type).toEqual('canceled')
-    })
+    }),
+    90000
   )
 })

@@ -14,7 +14,7 @@ describe('k8s deployment caches via hammerkit.dev/state label', () => {
       services: {
         redis: {
           image: 'redis:7-alpine',
-          ports: ['6379:6379'],
+          ports: [':6379'],
         },
       },
       environments: {

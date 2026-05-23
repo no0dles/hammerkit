@@ -13,13 +13,13 @@ describe('kubernetes', () => {
             POSTGRES_PASSWORD: '123456',
           },
           volumes: ['data:/var/lib/postgresql/data'],
-          ports: ['5432:5432'],
+          ports: [':5432'],
         },
         api: {
           image: 'node:16.6.0-alpine',
           deps: ['install'],
           needs: ['postgres'],
-          ports: [3000],
+          ports: [':3000'],
           labels: {
             app: 'example',
           },
@@ -38,7 +38,7 @@ describe('kubernetes', () => {
       environments: {
         default: {
           kubernetes: {
-            namespace: 'default',
+            namespace: `hammerkit-k8s-${(process.env.HAMMERKIT_TEST_RUN_ID ?? 'local').slice(0, 40)}`,
             context: process.env.CLUSTER_NAME || 'docker-desktop',
           },
         },

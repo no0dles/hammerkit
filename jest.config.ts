@@ -17,6 +17,7 @@ const config: Config.InitialOptions = {
   testRegex: ['src/.*\\.spec\\.ts$'],
   testPathIgnorePatterns: [
     '/node_modules/',
+    '/\\.claude/',
     '<rootDir>/src/testing/integration/',
     '<rootDir>/src/docker/package\\.spec\\.ts$',
     '<rootDir>/src/program\\.spec\\.ts$',

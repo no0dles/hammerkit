@@ -5,7 +5,7 @@ services:
     labels:
       task: dev
     ports:
-      - 8080
+      - :8080
     src:
       - src/*.js
     cmd: node src/index.js

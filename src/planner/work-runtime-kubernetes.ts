@@ -14,6 +14,7 @@ import { V1EnvVar, V1Job } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
+import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { awaitJobState } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence } from '../kubernetes/volumes'
@@ -46,6 +47,7 @@ export function kubernetesTaskRuntime(
 
       const persistence = await getKubernetesPersistence(task)
 
+      await ensureNamespace(instance, kubernetes.namespace)
       await ensurePersistentData(instance, kubernetes, environment, task, persistence)
 
       const podName = `${task.name}-${options.stateKey}`
@@ -211,6 +213,7 @@ export function kubernetesServiceRuntime(
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const persistence = await getKubernetesPersistence(service)
+      await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)
       await ensureKubernetesDeploymentExists(instance, kubernetes, service, persistence, options.stateKey)

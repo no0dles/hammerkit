@@ -19,7 +19,7 @@ services:
     labels:
       app: example
     ports:
-      - 5432
+      - :5432
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
