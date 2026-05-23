@@ -300,7 +300,6 @@ export function kubernetesForwardRuntime(service: WorkItem<KubernetesWorkService
     async archive(): Promise<void> {},
     async remove(): Promise<void> {},
     async execute(_environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
-      // TODO migrate away from kubectl
       await kubernetesService(service, options)
     },
     currentStateKey(): Promise<string | null> {

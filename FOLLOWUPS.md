@@ -9,18 +9,9 @@ Tracking what's done on `feature/runtime-followups` and what remains. The integr
 - [x] **Docker service crash detection** — [docker-service.ts](src/executer/docker-service.ts) now races `container.wait()` against `abort`. A container that exits before abort is reported as `{ type: 'end', reason: 'crash' }` instead of `terminated`.
 - [x] **Service env hints for local tasks** — [get-service-env-hints.ts](src/executer/get-service-env-hints.ts) emits `HAMMERKIT_<NAME>_HOST` / `_PORT` / `_PORT_<containerPort>` for each running need. Merged into the local task's command env in [local-task.ts](src/executer/local-task.ts). Tests in [get-service-env-hints.spec.ts](src/executer/get-service-env-hints.spec.ts).
 - [x] **K8s deployment healthcheck** — `service.data.healthcheck.cmd` is translated to an `exec` `readinessProbe`/`livenessProbe` in [ensure-kubernetes-deployment-exists.ts](src/kubernetes/ensure-kubernetes-deployment-exists.ts). No more silently-ignored healthchecks on k8s.
+- [x] **Kubernetes port-forward without `kubectl`** — [kubernetes-service.ts](src/executer/kubernetes-service.ts) now uses `@kubernetes/client-node`'s `PortForward` class with a local `net.createServer` listener per port. Selector → pod resolution lives in [resolve-pod-name.ts](src/kubernetes/resolve-pod-name.ts) and supports `service`, `deployment`, and `pod` selectors. A new optional `namespace` field on the `kubernetes-service` schema (defaults to `'default'`) makes per-job namespace isolation possible from a build file.
 
 ## Open
-
-### Kubernetes port-forward without `kubectl`
-
-[src/executer/kubernetes-service.ts](src/executer/kubernetes-service.ts) still shells out to `kubectl port-forward`. To replace:
-1. Use `@kubernetes/client-node`'s `PortForward` class.
-2. Resolve `service.selector` (type `service|deployment`) to a pod name via the core/apps APIs and the selector's `matchLabels`.
-3. Open a `net.createServer` listener on each `port.hostPort` and call `PortForward.portForward(namespace, podName, [containerPort], stdout, stderr, conn)` per accepted connection.
-4. Drop the retry loop in favour of reconnecting on socket close.
-
-Risky because: needs real-cluster validation, and `dns: { host: 'host-gateway' }` (the current value) only works on docker's host-gateway alias — different from a localhost bind. Sequence with the integration-test plan ([INTEGRATION-TESTS.md](INTEGRATION-TESTS.md) §P2).
 
 ### Smaller TODOs (lower priority)
 

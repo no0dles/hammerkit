@@ -71,6 +71,7 @@ function parseService(service: ReferenceService, environment: Environment, conte
       type: 'kubernetes-service',
       ...workService,
       kubeconfig,
+      namespace: service.schema.namespace ? templateValue(service.schema.namespace, envs) : 'default',
       selector: {
         name: templateValue(service.schema.selector.name, envs),
         type: templateValue(service.schema.selector.type, envs),

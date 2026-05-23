@@ -44,6 +44,7 @@ export interface KubernetesWorkService extends BaseWorkService {
   type: 'kubernetes-service'
   context: string
   kubeconfig: string
+  namespace: string
   caching: CacheMethod | null
   selector: WorkKubernetesSelector
   src: WorkSource[]
