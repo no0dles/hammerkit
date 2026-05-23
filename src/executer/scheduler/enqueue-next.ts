@@ -49,24 +49,22 @@ export async function checkCacheState(
       return { cached: true, stateKey, resolved }
     }
 
-    if (resolved.backend.type !== 'noop') {
-      try {
-        const cacheDir = getCacheDirectory(item.id())
-        const pulled = await resolved.backend.pull(item.id(), stateKey, cacheDir, environment)
-        if (pulled) {
-          item.status.write('info', `${item.name} pulled from cache "${resolved.name}" (${resolved.backend.type})`)
-          await item.runtime.restore(environment, cacheDir)
-          await writeCacheMetadata(environment, item.id(), currentStats, getWorkTaskCacheDescription(item.data))
-          return { cached: true, stateKey, resolved }
-        }
-      } catch (e) {
-        item.status.write(
-          'warn',
-          `${item.name} failed to pull from cache "${resolved.name}": ${getErrorMessage(
-            e
-          )} — continuing with local execution`
-        )
+    try {
+      const cacheDir = getCacheDirectory(item.id())
+      const pulled = await resolved.backend.pull(item.id(), stateKey, cacheDir, environment)
+      if (pulled) {
+        item.status.write('info', `${item.name} pulled from cache "${resolved.name}" (${resolved.backend.type})`)
+        await item.runtime.restore(environment, cacheDir)
+        await writeCacheMetadata(environment, item.id(), currentStats, getWorkTaskCacheDescription(item.data))
+        return { cached: true, stateKey, resolved }
       }
+    } catch (e) {
+      item.status.write(
+        'warn',
+        `${item.name} failed to pull from cache "${resolved.name}": ${getErrorMessage(
+          e
+        )} — continuing with local execution`
+      )
     }
   }
 

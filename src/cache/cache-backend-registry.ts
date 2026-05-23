@@ -1,7 +1,6 @@
 import { CacheBackendSchema } from '../schema/cache-schema'
 import { CacheBackend, CacheBackendFactory } from './cache-backend'
 import { createLocalCacheBackend } from './backends/local-cache-backend'
-import { createNoopCacheBackend } from './backends/noop-cache-backend'
 import { createS3CacheBackend } from './backends/s3-cache-backend'
 
 const factories = new Map<string, CacheBackendFactory>()
@@ -19,7 +18,6 @@ export function createCacheBackend(spec: CacheBackendSchema): CacheBackend {
 }
 
 registerCacheBackend('local', (spec) => createLocalCacheBackend(spec as { type: 'local'; path?: string }))
-registerCacheBackend('noop', () => createNoopCacheBackend())
 registerCacheBackend('s3', (spec) =>
   createS3CacheBackend(
     spec as {

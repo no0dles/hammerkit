@@ -4,7 +4,7 @@ A detailed summary about the release and the reasons behind the changes can be f
 in the [release blog](../release-blog/release-1.6.0.md).
 
 ## Added
-- Pluggable cache backends with automatic pull/push. A new top-level `caches:` block declares a cache with a `method` and a `backend` (`local`, `s3` or `noop`). Tasks reference a cache through the `cache` field.
+- Pluggable cache backends with automatic pull/push. A new top-level `caches:` block declares a cache with a `method` and a `backend` (`local` or `s3`). Tasks reference a cache through the `cache` field.
 - Run tasks and services on a Kubernetes cluster through a new `environments:` block, selected with the `--env` argument. Tasks run as jobs, container services as deployments.
 - Store and restore now work against a Kubernetes environment via `--env`.
 - Service healthchecks are translated into Kubernetes readiness and liveness probes.

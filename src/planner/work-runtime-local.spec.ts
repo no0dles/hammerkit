@@ -36,7 +36,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       caching: {
         name: 'none',
         method: 'none',
-        backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+        backend: { type: 'local', has: async () => false, pull: async () => false, push: async () => {} },
         implicit: true,
       },
       description: null,
@@ -74,7 +74,7 @@ describe('local task pidfile', () => {
         resolved: {
           name: 'none',
           method: 'none',
-          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          backend: { type: 'local', has: async () => false, pull: async () => false, push: async () => {} },
           implicit: true,
         },
       },
@@ -105,7 +105,7 @@ describe('local task pidfile', () => {
         resolved: {
           name: 'none',
           method: 'none',
-          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          backend: { type: 'local', has: async () => false, pull: async () => false, push: async () => {} },
           implicit: true,
         },
       },
@@ -136,7 +136,7 @@ describe('local task pidfile', () => {
         resolved: {
           name: 'none',
           method: 'none',
-          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          backend: { type: 'local', has: async () => false, pull: async () => false, push: async () => {} },
           implicit: true,
         },
       },
@@ -168,7 +168,7 @@ describe('local task pidfile', () => {
         resolved: {
           name: 'none',
           method: 'none',
-          backend: { type: 'noop', has: async () => false, pull: async () => false, push: async () => {} },
+          backend: { type: 'local', has: async () => false, pull: async () => false, push: async () => {} },
           implicit: true,
         },
       },

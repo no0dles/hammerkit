@@ -10,10 +10,11 @@ description: >-
 A cache combines two things: a **method** that decides if a task changed and a
 **backend** that stores the task result so it can be reused later.
 
-By default hammerkit keeps cache state locally per project. Since `1.6.0` you can
-declare named caches with a remote **backend** (for example an S3 bucket) so a
-task built on one machine can be restored on another - ideal for sharing results
-between developers and CI runs.
+By default hammerkit caches task results on the local filesystem under
+`~/.hammerkit/remote-cache`, so a result built in one checkout can be reused in
+another on the same machine. Since `1.6.0` you can also declare named caches with
+a remote **backend** (for example an S3 bucket) so a task built on one machine can
+be restored on another - ideal for sharing results between developers and CI runs.
 
 ## Declaring caches
 
@@ -56,14 +57,15 @@ The method decides whether the source files of a task changed since the last run
 
 ## Backends
 
-The backend decides where task results are stored. Three backend types are built
+The backend decides where task results are stored. Two backend types are built
 in. Hammerkit pulls from the backend when the result is missing locally and pushes
 to it after a task ran successfully.
 
 ### local
 
 Stores cache entries on the local filesystem. Useful to share a cache between
-projects on the same machine.
+projects on the same machine. This is the backend used by the built-in `default`
+cache.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -113,25 +115,13 @@ Credentials are read from the standard AWS SDK credential chain, for example the
 shared `~/.aws/config` file. They are never stored in the build file.
 {% endhint %}
 
-### noop
-
-Does not store anything remotely and only keeps the local state. This is the
-behavior of the built-in `default` cache.
-
-```yaml
-caches:
-  local-only:
-    method: checksum
-    backend:
-      type: noop
-```
-
 ## Built-in caches
 
 Two caches are always available without declaring them:
 
-* `default` - uses the `noop` backend with the `checksum` method. This is what a
-  task uses when it does not specify a cache.
+* `default` - uses the `local` backend with the `checksum` method. This is what a
+  task uses when it does not specify a cache, so results are cached under
+  `~/.hammerkit/remote-cache` by default.
 * `none` - uses the `none` method, disabling skipping entirely.
 
 ## Pull / push behavior

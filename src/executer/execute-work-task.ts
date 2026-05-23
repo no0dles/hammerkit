@@ -20,7 +20,7 @@ async function pushToBackend(
   cacheState: CacheState
 ) {
   const { resolved, stateKey } = cacheState
-  if (resolved.method === 'none' || resolved.backend.type === 'noop') {
+  if (resolved.method === 'none') {
     return
   }
   try {

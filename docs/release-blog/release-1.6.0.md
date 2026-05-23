@@ -10,8 +10,9 @@ cache can be backed by a remote **backend**, so a task built on one machine can 
 restored on another - perfect for sharing results between developers and CI.
 
 Caches are declared in a top-level `caches:` block with a method and a backend.
-Three backends are built in: `local` (a shared filesystem directory), `s3` (AWS S3
-and any S3-compatible service like MinIO, R2 or Wasabi) and `noop` (local only).
+Two backends are built in: `local` (a shared filesystem directory, used by the
+built-in `default` cache) and `s3` (AWS S3 and any S3-compatible service like
+MinIO, R2 or Wasabi).
 
 ```yaml
 caches:

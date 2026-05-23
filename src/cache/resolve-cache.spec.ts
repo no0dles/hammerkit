@@ -9,7 +9,7 @@ describe('resolveCache', () => {
     const r = resolveCache(undefined, catalog, 'taskA')
     expect(r.name).toBe('default')
     expect(r.method).toBe('checksum')
-    expect(r.backend.type).toBe('noop')
+    expect(r.backend.type).toBe('local')
     expect(r.implicit).toBe(true)
   })
 
@@ -17,7 +17,7 @@ describe('resolveCache', () => {
     const r = resolveCache('modify-date', catalog, 'taskA')
     expect(r.name).toBe('default')
     expect(r.method).toBe('modify-date')
-    expect(r.backend.type).toBe('noop')
+    expect(r.backend.type).toBe('local')
     expect(r.implicit).toBe(false)
   })
 
@@ -46,8 +46,8 @@ describe('resolveCache', () => {
 
   it('seeds default and none even when nothing is declared', () => {
     const empty = withBuiltinCaches(undefined)
-    expect(empty.default.backend.type).toBe('noop')
-    expect(empty.none.backend.type).toBe('noop')
+    expect(empty.default.backend.type).toBe('local')
+    expect(empty.none.backend.type).toBe('local')
   })
 
   it('lets the user override the built-in default', () => {

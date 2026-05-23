@@ -14,13 +14,14 @@ export interface ResolvedCache {
 export const DEFAULT_CACHE_NAME = 'default'
 export const NONE_CACHE_NAME = 'none'
 
-// `default` keeps today's behaviour: state lives per-cwd via the runtime (e.g.
-// `.hammerkit/<task-id>` files or container labels) and nothing is pushed/pulled
-// across machines. To opt into a shared cache, redeclare `caches.default` or
-// add a named cache backed by `local`/`s3`/etc and reference it from the task.
+// `default` caches to the local backend at its default path
+// (`~/.hammerkit/remote-cache`), so results are shared across checkouts on the
+// same machine. To use a different location or a shared/remote cache, redeclare
+// `caches.default` or add a named cache backed by `local`/`s3`/etc and reference
+// it from the task. `none` disables skipping entirely (its backend is inert).
 export const builtinCaches: { [name: string]: BuildFileCacheSchema } = {
-  [DEFAULT_CACHE_NAME]: { method: 'checksum', backend: { type: 'noop' } },
-  [NONE_CACHE_NAME]: { method: 'none', backend: { type: 'noop' } },
+  [DEFAULT_CACHE_NAME]: { method: 'checksum', backend: { type: 'local' } },
+  [NONE_CACHE_NAME]: { method: 'none', backend: { type: 'local' } },
 }
 
 export interface CacheCatalog {

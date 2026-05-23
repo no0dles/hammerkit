@@ -19,12 +19,7 @@ export const cacheBackendS3Schema = object({
 }).strict()
 export type CacheBackendS3Schema = z.infer<typeof cacheBackendS3Schema>
 
-export const cacheBackendNoopSchema = object({
-  type: literal('noop'),
-}).strict()
-export type CacheBackendNoopSchema = z.infer<typeof cacheBackendNoopSchema>
-
-export const cacheBackendSchema = union([cacheBackendLocalSchema, cacheBackendS3Schema, cacheBackendNoopSchema])
+export const cacheBackendSchema = union([cacheBackendLocalSchema, cacheBackendS3Schema])
 export type CacheBackendSchema = z.infer<typeof cacheBackendSchema>
 
 export const buildFileCacheSchema = object({
