@@ -48,7 +48,7 @@ describe('checkCacheState auto-pull', () => {
   }
 
   function makeWorkItem(cwd: string, resolved: ResolvedCache): WorkItemState<LocalWorkTask, TaskState> {
-    let storedStateKey: string | null = null
+    const storedStateKey: string | null = null
     return {
       id: () => 'demo-task',
       name: 'demo-task',

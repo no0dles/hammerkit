@@ -1,7 +1,6 @@
 import { join } from 'path'
 import { homedir } from 'os'
 import { CacheBackend } from '../cache-backend'
-import { Environment } from '../../executer/environment'
 
 export interface LocalCacheBackendSpec {
   type: 'local'
