@@ -73,3 +73,56 @@ There are multiple patterns supported. Hammerkit uses the node-glob package. For
 * `*(a|b|c)` Matches zero or more occurrences of the patterns provided
 * `@(pattern|pat*|pat?erN)` Matches exactly one of the patterns provided
 * `**` If a "globstar" is alone in a path portion, then it matches zero or more directories and subdirectories searching for matches. It does not crawl symlinked directories.
+
+### Selecting a cache method
+
+By default a task is skipped based on the content checksum of its source files.
+The `cache` field can change the method per task. The shorthand form takes one of
+`checksum`, `modify-date` or `none`.
+
+{% code title=".hammerkit.yaml" %}
+```yaml
+tasks:
+  build:
+    cache: modify-date
+    src:
+      - src
+    cmds:
+      - tsc -b
+```
+{% endcode %}
+
+### Remote caches & backends
+
+A task can reference a named [cache](../build-file/caches.md) with a remote
+backend, so its result can be shared between machines and CI runs. Reference a
+cache by name and optionally override its method.
+
+{% code title=".hammerkit.yaml" %}
+```yaml
+caches:
+  remote:
+    method: checksum
+    backend:
+      type: s3
+      bucket: my-build-cache
+      region: eu-central-1
+
+tasks:
+  build:
+    cache:
+      name: remote        # use the "remote" cache declared above
+      method: checksum    # optional, overrides the cache method
+    src:
+      - src
+    generates:
+      - dist
+    cmds:
+      - tsc -b
+```
+{% endcode %}
+
+When the cache has a remote backend, hammerkit pulls the result before the task
+runs if it is missing locally, and pushes the result after a successful run. See
+[caches](../build-file/caches.md) for the available backends and the full
+pull/push behavior.

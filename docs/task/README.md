@@ -46,3 +46,20 @@ tasks:
     cmds:
       - tsc
 ```
+
+### Exporting generated files
+By default generated files of a container task stay inside the container volume.
+Mark a generate with `export: true` to copy it back into your workspace after the
+task ran. This is useful when another tool outside hammerkit needs the produced
+files, for example a build artifact you want to inspect or publish.
+
+```yaml
+tasks:
+  build:
+    image: node:alpine
+    generates:
+      - path: dist
+        export: true
+    cmds:
+      - tsc -b
+```

@@ -7,11 +7,13 @@
   * [Environment Variables](docs/build-file/environment-variables.md)
   * [References](docs/build-file/references.md)
   * [Includes](docs/build-file/includes.md)
+  * [Caches](docs/build-file/caches.md)
 * [Task](docs/task/README.md)
   * [Dependencies](docs/task/dependencies.md)
   * [Needs](docs/task/needs.md)
   * [Caching](docs/task/caching.md)
   * [Container](docs/task/container.md)
+  * [Kubernetes](docs/task/kubernetes.md)
   * [Watching](docs/task/watching.md)
   * [Extending](docs/task/extending.md)
 * [Service](docs/service/README.md)
@@ -36,6 +38,12 @@
 
 * [Release 1.4.0](docs/release-blog/release-1.4.0.md)
 * [Release 1.5.0](docs/release-blog/release-1.5.0.md)
+* [Release 1.6.0](docs/release-blog/release-1.6.0.md)
+
+## Change Log
+
+* [Changelog 1.4.0](docs/change-log/change-log-1.4.0.md)
+* [Changelog 1.6.0](docs/change-log/change-log-1.6.0.md)
 
 ## Contribution
 
