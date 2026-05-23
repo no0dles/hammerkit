@@ -114,7 +114,8 @@ export async function getProgram(
               printProperty(environment, 'image', task.item.data.image)
             }
             if (task.item.data.caching) {
-              printProperty(environment, 'caching', task.item.data.caching)
+              const c = task.item.data.caching
+              printProperty(environment, 'caching', `${c.name} (${c.method}, ${c.backend.type})`)
             }
             if (hasLabels(task.item.data.labels)) {
               printProperty(

@@ -9,6 +9,8 @@ import { LabelValues, mergeLabels } from '../executer/label-values'
 import { mergeEnvironmentVariables } from '../environment/merge-environment-variables'
 import { BuildFileEnvironmentSchema } from './build-file-environment-schema'
 import { BuildFileContainerTaskSchema } from './build-file-container-task-schema'
+import { BuildFileCacheSchema } from './cache-schema'
+import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
 
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
@@ -16,6 +18,7 @@ export interface ReferencedContext {
   services: { [key: string]: ReferenceService }
   environments: { [key: string]: ReferenceEnvironment }
   envFiles: { [key: string]: { [key: string]: string } }
+  caches: CacheCatalog
 }
 
 export interface ReferencedFileContext {
@@ -78,12 +81,14 @@ export async function parseReferences(
   mainScope: ParseScope,
   environment: Environment
 ): Promise<ReferencedContext> {
+  const declaredCaches: { [name: string]: BuildFileCacheSchema } = {}
   const reference: ReferencedContext = {
     files: {},
     tasks: {},
     services: {},
     envFiles: {},
     environments: {},
+    caches: {},
   }
 
   for (const file of Object.values(ctx.files)) {
@@ -123,6 +128,12 @@ export async function parseReferences(
       }
     }
 
+    if (file.schema.caches) {
+      for (const [cacheName, cache] of Object.entries(file.schema.caches)) {
+        declaredCaches[cacheName] = cache
+      }
+    }
+
     if (file.schema.services) {
       for (const [serviceName, service] of Object.entries(file.schema.services)) {
         const relativeName = combinePath(file.namePrefix, serviceName)
@@ -155,6 +166,8 @@ export async function parseReferences(
     resolveDeps(reference, service, service.scope, service.schema)
     resolveNeeds(reference, service, service.scope, service.schema)
   }
+
+  reference.caches = withBuiltinCaches(declaredCaches)
 
   return reference
 }

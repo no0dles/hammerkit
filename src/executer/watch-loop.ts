@@ -23,7 +23,7 @@ export async function watchLoop(
   options: CliExecOptions,
   factory: (cacheState: CacheState, abortSignal: AbortSignal, stop: () => void) => Promise<void>
 ) {
-  const currentStats = await checkCacheState(work, work.data.caching ?? options.cacheDefault, environment)
+  const currentStats = await checkCacheState(work, options.cacheDefault, environment)
   checkForAbort(environment.abortCtrl.signal)
 
   const continuous = work.data.type === 'container-service' ? work.data.continuous : false
