@@ -8,7 +8,7 @@ import { WorkSource } from './work-source'
 import { WorkHealthcheck } from './work-healthcheck'
 import { WorkKubernetesSelector } from './work-kubernetes-selector'
 import { WorkCommand } from './work-command'
-import { CacheMethod } from '../parser/cache-method'
+import { ResolvedCache } from '../cache/resolve-cache'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 
 export interface BaseWorkService {
@@ -34,7 +34,7 @@ export interface ContainerWorkService extends BaseWorkService {
   //user: string | null
   src: WorkSource[]
   continuous: boolean
-  caching: CacheMethod | null
+  caching: ResolvedCache
   mounts: WorkMount[]
   volumes: WorkVolume[]
   healthcheck: WorkHealthcheck | null
@@ -45,7 +45,7 @@ export interface KubernetesWorkService extends BaseWorkService {
   context: string
   kubeconfig: string
   namespace: string
-  caching: CacheMethod | null
+  caching: ResolvedCache
   selector: WorkKubernetesSelector
   src: WorkSource[]
 }

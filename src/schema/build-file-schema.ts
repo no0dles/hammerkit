@@ -4,6 +4,7 @@ import { buildFileServiceSchema } from './build-file-service-schema'
 import { buildFileEnvironmentSchema } from './build-file-environment-schema'
 import { buildFileTaskSchema } from './build-file-task-schema'
 import { labelsSchema } from './labels-schema'
+import { buildFileCacheSchema } from './cache-schema'
 
 export const buildFileSchema = object({
   envs: envsSchema.optional(),
@@ -12,6 +13,7 @@ export const buildFileSchema = object({
   references: record(string()).optional(),
   includes: record(string()).optional(),
   environments: record(buildFileEnvironmentSchema).optional(),
+  caches: record(buildFileCacheSchema).optional(),
   labels: labelsSchema.optional(),
 })
   .strict()

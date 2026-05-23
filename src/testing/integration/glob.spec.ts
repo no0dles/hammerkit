@@ -11,7 +11,7 @@ describe('glob', () => {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
 
     const task = cli.task('example')
-    const cacheBefore = await checkCacheState(task, task.data.caching ?? 'checksum', environment)
+    const cacheBefore = await checkCacheState(task, 'checksum', environment)
     expect(cacheBefore.stateKey).not.toBeNull()
 
     if (action) {
@@ -19,7 +19,7 @@ describe('glob', () => {
     }
 
     const exampleAfter = cli.task('example')
-    const cacheAfter = await checkCacheState(exampleAfter, task.data.caching ?? 'checksum', environment)
+    const cacheAfter = await checkCacheState(exampleAfter, 'checksum', environment)
     expect(cacheAfter.stateKey).not.toBeNull()
 
     if(expectInvalidate) {

@@ -30,7 +30,7 @@ export function watchStateKey(
       return
     }
 
-    const cacheState = await checkCacheState(item, item.data.caching ?? options.cacheDefault, environment)
+    const cacheState = await checkCacheState(item, options.cacheDefault, environment)
     if (state.current.stateKey !== cacheState.stateKey) {
       state.set(cacheState)
     }
