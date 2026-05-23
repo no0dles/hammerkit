@@ -7,15 +7,37 @@ import { create, extract } from 'tar'
 import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
+import findProcess from 'find-process'
 
 function getStateFilename(task: WorkItem<LocalWorkTask>) {
   return join(task.data.cwd, '.hammerkit', `${task.id()}`);
 }
 
+function getPidFilename(task: WorkItem<LocalWorkTask>) {
+  return join(task.data.cwd, '.hammerkit', `${task.id()}.pid`)
+}
+
+async function readActivePid(task: WorkItem<LocalWorkTask>, environment: Environment): Promise<number | null> {
+  const pidFile = getPidFilename(task)
+  if (!(await environment.file.exists(pidFile))) {
+    return null
+  }
+  const pid = parseInt((await environment.file.read(pidFile)).trim(), 10)
+  if (!pid || pid === process.pid) {
+    return null
+  }
+  const processes = await findProcess('pid', pid)
+  if (processes.length === 0) {
+    await environment.file.remove(pidFile)
+    return null
+  }
+  return pid
+}
+
 export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<TaskState> {
   return {
     async initialize(): Promise<void> {
-      // TODO check for running tasks
+      // pidfile check happens in execute (initialize has no Environment in scope)
     },
     async restore(environment: Environment, path: string): Promise<void> {
       await restoreLocal(environment, task.data, path)
@@ -24,12 +46,30 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
       await archiveLocal(environment, task, path)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
-      await localTask(task, environment, options)
+      const activePid = await readActivePid(task, environment)
+      if (activePid !== null) {
+        options.state.set({
+          type: 'error',
+          stateKey: options.stateKey,
+          errorMessage: `task ${task.name} is already running (pid ${activePid})`,
+        })
+        return
+      }
       await environment.file.createDirectory(join(task.data.cwd, '.hammerkit'))
-      await environment.file.writeFile(getStateFilename(task), options.stateKey)
+      const pidFile = getPidFilename(task)
+      await environment.file.writeFile(pidFile, `${process.pid}`)
+      try {
+        await localTask(task, environment, options)
+        await environment.file.writeFile(getStateFilename(task), options.stateKey)
+      } finally {
+        if (await environment.file.exists(pidFile)) {
+          await environment.file.remove(pidFile)
+        }
+      }
     },
     async stop(): Promise<void> {
-      // TODO check for running tasks
+      // pidfile is cleaned up by execute()'s finally block; stale entries are
+      // detected by readActivePid() on the next run.
     },
     async currentStateKey(environment: Environment): Promise<string | null> {
       const stateFileName = getStateFilename(task)

@@ -2,7 +2,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
-import { V1Deployment, V1HostAlias } from '@kubernetes/client-node'
+import { V1Deployment, V1HostAlias, V1Probe } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader } from './apply'
 import { getServiceIp } from './get-service-ip'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -34,6 +34,15 @@ export async function ensureKubernetesDeploymentExists(
   }
   const envs = getEnvironmentVariables(service.data.envs)
   const name = getResourceName(service)
+  const probe: V1Probe | undefined = service.data.healthcheck
+    ? {
+        exec: {
+          command: [service.data.healthcheck.cmd.parsed.command, ...service.data.healthcheck.cmd.parsed.args],
+        },
+        periodSeconds: 5,
+        failureThreshold: 3,
+      }
+    : undefined
   const deployment: V1Deployment & KubernetesObjectHeader = {
     kind: 'Deployment',
     apiVersion: 'apps/v1',
@@ -78,7 +87,8 @@ export async function ensureKubernetesDeploymentExists(
               ports: service.data.ports.map((p) => ({
                 containerPort: p.containerPort,
               })),
-              // TODO healthcheck
+              readinessProbe: probe,
+              livenessProbe: probe,
               volumeMounts: persistence.mounts.map((m) => m.mount),
             },
             {

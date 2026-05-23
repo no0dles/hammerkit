@@ -1,4 +1,4 @@
-import { hasDependencyCycle, hasNeedCycle } from './validate'
+import { hasDependencyCycle, hasMixedCycle, hasNeedCycle } from './validate'
 import { WorkItemNeed, WorkItemState } from './work-item'
 import { WorkService } from './work-service'
 import { WorkTask } from './work-task'
@@ -107,6 +107,41 @@ describe('validate', () => {
       const cycle = hasNeedCycle(a, [])
       expect(cycle).not.toBeNull()
       expect(cycle!.map((i) => i.name)).toEqual(['a', 'a'])
+    })
+  })
+
+  describe('hasMixedCycle', () => {
+    it('returns null for an acyclic task → service → task chain', () => {
+      const t1 = makeTask('build')
+      const s = makeService('db')
+      const t2 = makeTask('migrate')
+      t1.needs.push({ name: 'db', service: s })
+      s.deps.push(t2)
+      expect(hasMixedCycle(t1, [])).toBeNull()
+    })
+
+    it('detects a cycle that alternates deps and needs', () => {
+      const t = makeTask('api-build')
+      const s = makeService('api')
+      t.needs.push({ name: 'api', service: s })
+      s.deps.push(t)
+      const cycle = hasMixedCycle(t, [])
+      expect(cycle).not.toBeNull()
+      expect(cycle!.map((i) => i.name)).toEqual(['api-build', 'api', 'api-build'])
+    })
+
+    it('detects a long mixed cycle', () => {
+      const a = makeTask('a')
+      const b = makeService('b')
+      const c = makeTask('c')
+      const d = makeService('d')
+      a.needs.push({ name: 'b', service: b })
+      b.deps.push(c)
+      c.needs.push({ name: 'd', service: d })
+      d.deps.push(a)
+      const cycle = hasMixedCycle(a, [])
+      expect(cycle).not.toBeNull()
+      expect(cycle!.map((i) => i.name)).toEqual(['a', 'b', 'c', 'd', 'a'])
     })
   })
 })

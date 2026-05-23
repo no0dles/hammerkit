@@ -1,46 +1,28 @@
 # Runtime follow-ups
 
-Open items surfaced while finishing `feature/shared-services` (PR #6). Each is independent — pick in any order.
+Tracking what's done on `feature/runtime-followups` and what remains. The integration-test work is tracked separately in [INTEGRATION-TESTS.md](INTEGRATION-TESTS.md).
 
-## 1. Cross-cycle validation (`task → dep → service → need → task`)
+## Done on this branch
 
-**Where:** [src/planner/validate.ts:77](src/planner/validate.ts) TODO comment.
+- [x] **Cross-cycle validation** — new `hasMixedCycle` walks deps and needs together; wired into both [validate.ts](src/planner/validate.ts) and [check-for-loop.ts](src/executer/scheduler/check-for-loop.ts). Tests in [validate.spec.ts](src/planner/validate.spec.ts).
+- [x] **Local task pidfile** — [work-runtime-local.ts](src/planner/work-runtime-local.ts) writes `.hammerkit/<id>.pid` for the duration of `execute()`. A live PID (`find-process`) blocks re-entry with an `error` state; a stale PID is silently swept. Tests in [work-runtime-local.spec.ts](src/planner/work-runtime-local.spec.ts).
+- [x] **Docker service crash detection** — [docker-service.ts](src/executer/docker-service.ts) now races `container.wait()` against `abort`. A container that exits before abort is reported as `{ type: 'end', reason: 'crash' }` instead of `terminated`.
+- [x] **Service env hints for local tasks** — [get-service-env-hints.ts](src/executer/get-service-env-hints.ts) emits `HAMMERKIT_<NAME>_HOST` / `_PORT` / `_PORT_<containerPort>` for each running need. Merged into the local task's command env in [local-task.ts](src/executer/local-task.ts). Tests in [get-service-env-hints.spec.ts](src/executer/get-service-env-hints.spec.ts).
+- [x] **K8s deployment healthcheck** — `service.data.healthcheck.cmd` is translated to an `exec` `readinessProbe`/`livenessProbe` in [ensure-kubernetes-deployment-exists.ts](src/kubernetes/ensure-kubernetes-deployment-exists.ts). No more silently-ignored healthchecks on k8s.
 
-`hasDependencyCycle` walks `deps`, `hasNeedCycle` walks `needs`. A chain that alternates the two (e.g. task A `deps` service B which `needs` service C which has a task `dep` back to A) is not detected. Write a unified walker that follows both edge types and update [src/executer/scheduler/check-for-loop.ts](src/executer/scheduler/check-for-loop.ts) to use it. Coverage: add cases to [src/planner/validate.spec.ts](src/planner/validate.spec.ts) with mixed dep/need chains.
+## Open
 
-## 2. Migrate `kubernetesForwardRuntime` away from `kubectl`
+### Kubernetes port-forward without `kubectl`
 
-**Where:** [src/planner/work-runtime-kubernetes.ts:283](src/planner/work-runtime-kubernetes.ts) (`TODO migrate away from kubectl`).
+[src/executer/kubernetes-service.ts](src/executer/kubernetes-service.ts) still shells out to `kubectl port-forward`. To replace:
+1. Use `@kubernetes/client-node`'s `PortForward` class.
+2. Resolve `service.selector` (type `service|deployment`) to a pod name via the core/apps APIs and the selector's `matchLabels`.
+3. Open a `net.createServer` listener on each `port.hostPort` and call `PortForward.portForward(namespace, podName, [containerPort], stdout, stderr, conn)` per accepted connection.
+4. Drop the retry loop in favour of reconnecting on socket close.
 
-`kubernetesForwardRuntime.execute` calls `kubernetesService(...)` which shells out to `kubectl port-forward`. Replace with the in-process `@kubernetes/client-node` port-forward API so hammerkit doesn't require `kubectl` on PATH. The implementation lives in [src/executer/kubernetes-service.ts](src/executer/kubernetes-service.ts).
+Risky because: needs real-cluster validation, and `dns: { host: 'host-gateway' }` (the current value) only works on docker's host-gateway alias — different from a localhost bind. Sequence with the integration-test plan ([INTEGRATION-TESTS.md](INTEGRATION-TESTS.md) §P2).
 
-## 3. Local task runtime: detect concurrent runs
-
-**Where:** [src/planner/work-runtime-local.ts:18](src/planner/work-runtime-local.ts) and [:32](src/planner/work-runtime-local.ts) (both `TODO check for running tasks`).
-
-`initialize()` and `stop()` are no-ops. If a previous hammerkit invocation crashed mid-task, there's no PID/lockfile tracking and a re-run can race. Suggestion: write a pidfile next to the state file under `.hammerkit/<id>.pid`, and on `initialize` use `find-process` (already a dependency) to detect a live PID.
-
-## 4. Service crash detection while running
-
-**Where:** [src/executer/docker-service.ts:106](src/executer/docker-service.ts) (`TODO check if container crashes`).
-
-After `dockerService` marks the service `running`, it `waitOnAbort` — but a container that crashes mid-run isn't surfaced. Attach a watcher on `container.wait()` and flip state to `{ type: 'end', reason: 'crash' }` if it exits before abort.
-
-## 5. Kubernetes deployment healthcheck
-
-**Where:** [src/kubernetes/ensure-kubernetes-deployment-exists.ts:78](src/kubernetes/ensure-kubernetes-deployment-exists.ts) (`TODO healthcheck`).
-
-`service.data.healthcheck` is ignored when building the Deployment spec. Translate it into a `readinessProbe`/`livenessProbe` (exec or http) — see how [src/executer/check-readiness.ts](src/executer/check-readiness.ts) interprets the same data for docker.
-
-## 6. Service env-var hints for local tasks
-
-**Where:** [src/executer/local-task.ts](src/executer/local-task.ts).
-
-A local task that has `needs: [postgres]` has no way to know that the postgres service is reachable on `127.0.0.1:<hostPort>`. The docker-task path injects `Links`/`ExtraHosts`; the local path injects nothing. Suggestion: inject env vars like `HAMMERKIT_<UPPER_NAME>_HOST=127.0.0.1` and `_PORT=<hostPort>` for each running need, derived from `item.needs` + the service's `ports`.
-
-## 7. Other small TODOs
-
-Lower priority, listed for completeness:
+### Smaller TODOs (lower priority)
 
 - [src/planner/utils/append-work-dependencies.ts:39](src/planner/utils/append-work-dependencies.ts) — `// TODO check if thats correct` (skipping `isFile` generates when inheriting).
 - [src/kubernetes/ensure-persistent-data.ts:31](src/kubernetes/ensure-persistent-data.ts) `:98` `:109` — pending cleanup of old upload pods, dedupe of already-uploaded state, file-exists guard.

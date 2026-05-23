@@ -73,8 +73,46 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
         yield { type: 'error', message: `task cycle detected ${cyclePath.map((n) => n.name).join(' -> ')}`, item: task }
       }
     }
+
+    if (cycleItems.indexOf(item) === -1) {
+      const cyclePath = hasMixedCycle(item, [])
+      if (cyclePath) {
+        cycleItems.push(...cyclePath)
+        yield {
+          type: 'error',
+          message: `cycle detected across deps/needs ${cyclePath.map((n) => n.name).join(' -> ')}`,
+          item: task,
+        }
+      }
+    }
   }
-  // TODO check for deps of needs and needs of deps
+}
+
+export function hasMixedCycle(
+  item: WorkItem<WorkTask | WorkService>,
+  currentPath: WorkItem<WorkTask | WorkService>[]
+): WorkItem<WorkTask | WorkService>[] | null {
+  if (currentPath.indexOf(item) >= 0) {
+    return [...currentPath, item]
+  }
+
+  const nextPath = [...currentPath, item]
+
+  for (const dep of item.deps) {
+    const cycle = hasMixedCycle(dep, nextPath)
+    if (cycle) {
+      return cycle
+    }
+  }
+
+  for (const need of item.needs) {
+    const cycle = hasMixedCycle(need.service, nextPath)
+    if (cycle) {
+      return cycle
+    }
+  }
+
+  return null
 }
 
 export function hasNeedCycle(
