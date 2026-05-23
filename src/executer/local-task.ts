@@ -7,6 +7,7 @@ import { LocalWorkTask } from '../planner/work-task'
 import { TaskState } from './scheduler/task-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
+import { getServiceEnvHints } from './get-service-env-hints'
 
 export async function localTask(
   item: WorkItem<LocalWorkTask>,
@@ -15,7 +16,7 @@ export async function localTask(
 ): Promise<void> {
   item.status.write('info', `execute ${item.name} locally`)
 
-  const envs = getEnvironmentVariables(item.data.envs)
+  const envs = { ...getEnvironmentVariables(item.data.envs), ...getServiceEnvHints(item.needs) }
   try {
     for (const cmd of item.data.cmds) {
       checkForAbort(options.abort)

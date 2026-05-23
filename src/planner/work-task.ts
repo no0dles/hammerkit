@@ -1,7 +1,7 @@
 import { WorkSource } from './work-source'
 import { WorkCommand } from './work-command'
 import { WorkService } from './work-service'
-import { CacheMethod } from '../parser/cache-method'
+import { ResolvedCache } from '../cache/resolve-cache'
 import { LabelValues } from '../executer/label-values'
 import { WorkMount } from './work-mount'
 import { ParseScope } from '../schema/parse-context'
@@ -21,7 +21,7 @@ export interface BaseWorkTask {
   scope: ParseScope
   labels: LabelValues
   shell: string
-  caching: CacheMethod | null
+  caching: ResolvedCache
 }
 
 export interface WorkTaskGenerate {

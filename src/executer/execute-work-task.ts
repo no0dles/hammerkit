@@ -8,6 +8,32 @@ import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { awaitCompletedDependencies, awaitRunningNeeds } from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
+import { getCacheDirectory } from '../optimizer/get-cache-directory'
+import { writeCacheMetadata } from './cache-metadata'
+import { getWorkCacheStats } from '../optimizer/get-work-cache-stats'
+import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
+import { CacheState } from './scheduler/enqueue-next'
+
+async function pushToBackend(
+  work: WorkItemState<WorkTask, TaskState>,
+  environment: Environment,
+  cacheState: CacheState
+) {
+  const { resolved, stateKey } = cacheState
+  if (resolved.method === 'none' || resolved.backend.type === 'noop') {
+    return
+  }
+  try {
+    const cacheDir = getCacheDirectory(work.id())
+    const stats = await getWorkCacheStats(work.data, environment)
+    await writeCacheMetadata(environment, work.id(), stats, getWorkTaskCacheDescription(work.data))
+    await work.runtime.archive(environment, cacheDir)
+    await resolved.backend.push(work.id(), stateKey, cacheDir, environment)
+    work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)
+  } catch (e) {
+    work.status.write('warn', `${work.name} failed to push to cache "${resolved.name}": ${getErrorMessage(e)}`)
+  }
+}
 
 export async function executeWorkTask(
   work: WorkItemState<WorkTask, TaskState>,
@@ -67,6 +93,7 @@ export async function executeWorkTask(
 
         if (work.state.current.type === 'running') {
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
+          await pushToBackend(work, environment, cacheState)
           work.state.set({
             stateKey: cacheState.stateKey,
             type: 'completed',

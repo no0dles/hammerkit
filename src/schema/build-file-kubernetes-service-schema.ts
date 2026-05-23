@@ -7,6 +7,7 @@ export const buildFileKubernetesServiceSchema = object({
   deps: array(string()).optional(),
   description: string().optional(),
   context: string(),
+  namespace: string().optional(),
   selector: buildFileKubernetesServiceSelectorSchema,
   labels: labelsSchema.optional(),
   ports: array(union([string(), number()])),

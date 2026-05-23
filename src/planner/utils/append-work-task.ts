@@ -18,6 +18,7 @@ import { State } from '../../executer/state'
 import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
 import { lazyResolver } from '../../executer/lazy-resolver'
 import { getWorkTaskRuntime } from './get-work-runtime'
+import { resolveCache } from '../../cache/resolve-cache'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -71,7 +72,7 @@ function parseTask(
     generates: parseWorkGenerate(cwd, task.schema, envs),
     scope: task.scope,
     labels: task.labels,
-    caching: task.schema.cache ?? null,
+    caching: resolveCache(task.schema.cache ?? null, context.caches, task.relativeName),
     shell: task.schema.shell ? templateValue(task.schema.shell, envs) : '/bin/sh',
   }
 

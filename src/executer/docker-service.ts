@@ -3,7 +3,7 @@ import Dockerode, { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
 import { logStream } from '../docker/stream'
-import { waitOnAbort } from '../utils/abort-event'
+import { listenOnAbort } from '../utils/abort-event'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
@@ -103,14 +103,25 @@ export async function dockerService(
       }
     }
 
-    // TODO check if container crashes
     if (!options.daemon) {
-      await waitOnAbort(options.abort)
+      const reason = await new Promise<'terminated' | 'crash'>((resolve) => {
+        const abortHandle = listenOnAbort(options.abort, () => resolve('terminated'))
+        container!
+          .wait()
+          .then(() => {
+            abortHandle.close()
+            resolve('crash')
+          })
+          .catch(() => {
+            abortHandle.close()
+            resolve('crash')
+          })
+      })
 
       options.state.set({
         type: 'end',
         stateKey: options.stateKey,
-        reason: 'terminated',
+        reason,
       })
     }
   } catch (e) {

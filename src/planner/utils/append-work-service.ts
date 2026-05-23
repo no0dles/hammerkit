@@ -19,6 +19,7 @@ import { ServiceState } from '../../executer/scheduler/service-state'
 import { State } from '../../executer/state'
 import { lazyResolver } from '../../executer/lazy-resolver'
 import { getWorkServiceRuntime } from './get-work-runtime'
+import { resolveCache } from '../../cache/resolve-cache'
 
 export function appendWorkService(
   workTree: WorkTree,
@@ -65,18 +66,22 @@ function parseService(service: ReferenceService, environment: Environment, conte
     description: templateValue(service.schema.description || '', envs),
   }
 
+  const caching = resolveCache(null, context.caches, service.relativeName)
+
   if (isBuildFileKubernetesServiceSchema(service.schema)) {
     const kubeconfig = service.schema.kubeconfig ?? getDefaultKubeConfig()
     return <KubernetesWorkService>{
       type: 'kubernetes-service',
       ...workService,
       kubeconfig,
+      namespace: service.schema.namespace ? templateValue(service.schema.namespace, envs) : 'default',
       selector: {
         name: templateValue(service.schema.selector.name, envs),
         type: templateValue(service.schema.selector.type, envs),
       },
       context: templateValue(service.schema.context, envs),
       src: [createSource(kubeconfig)],
+      caching,
     }
   } else {
     return <ContainerWorkService>{
@@ -94,6 +99,7 @@ function parseService(service: ReferenceService, environment: Environment, conte
       volumes: parseWorkVolumes(service.cwd, service.schema.volumes, envs),
       mounts: parseWorkMounts(service.cwd, service.schema, envs),
       src: parseWorkSource(service.cwd, service.schema.src, envs),
+      caching,
     }
   }
 }
