@@ -1,6 +1,6 @@
 import { Duplex } from 'stream'
 import { getLogs } from '../log'
-import { ConsoleType, StatusScopedConsole } from '../planner/work-node-status'
+import { ConsoleType, StatusScopedConsole } from '../planner/work-item-status'
 
 export async function awaitStream(status: StatusScopedConsole, stream: Duplex): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -22,7 +22,7 @@ export function logStream(
 function writeLog(status: StatusScopedConsole, level: ConsoleType) {
   return async (buffer: Buffer) => {
     for (const log of getLogs(buffer)) {
-      status.console(level, log.endsWith('\n') ? log.substr(0, log.length - 1) : log)
+      status.console(level, log.endsWith('\n') ? log.substring(0, log.length - 1) : log)
     }
   }
 }
@@ -62,8 +62,8 @@ function demuxStream(stream: any, stdoutFn: (buffer: Buffer) => void, stderrFn: 
   }
 
   function bufferSlice(end: number) {
-    const out = buffer.slice(0, end)
-    buffer = Buffer.from(buffer.slice(end, buffer.length))
+    const out = buffer.subarray(0, end)
+    buffer = buffer.subarray(end, buffer.length)
     return out
   }
 

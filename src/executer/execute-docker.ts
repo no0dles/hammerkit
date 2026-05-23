@@ -4,13 +4,14 @@ import { sep } from 'path'
 import { platform } from 'os'
 import { Environment } from './environment'
 import { listenOnAbort } from '../utils/abort-event'
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
+import { WorkDockerEnvironment } from '../planner/work-environment'
 
 let dockerInstance: Dockerode | null = null
 
-export function getContainerCli(): Dockerode {
+export function getContainerCli(workEnvironment: WorkDockerEnvironment): Dockerode {
   if (!dockerInstance) {
-    dockerInstance = new Dockerode()
+    dockerInstance = new Dockerode({ host: workEnvironment.host })
   }
   return dockerInstance
 }
@@ -49,7 +50,7 @@ export function convertToPosixPath(path: string): string {
   if (platform() === 'win32') {
     return path
       .split(sep)
-      .map((value, index) => (index === 0 && value.endsWith(':') ? '/' + value.substr(0, value.length - 1) : value))
+      .map((value, index) => (index === 0 && value.endsWith(':') ? '/' + value.substring(0, value.length - 1) : value))
       .join('/')
   }
   return path
@@ -65,8 +66,9 @@ export async function execCommand(
   cmd: string[],
   user: string | null,
   timeout: number | undefined,
-  abort: AbortSignal | undefined
+  abort: AbortSignal
 ): Promise<ExecResult> {
+  const abortController = new AbortController()
   const exec = await container.exec({
     Cmd: cmd,
     WorkingDir: cwd,
@@ -75,24 +77,34 @@ export async function execCommand(
     AttachStdin: true,
     AttachStderr: true,
     User: user ?? undefined,
+    abortSignal: abortController.signal,
   })
 
   status.write('debug', `received exec id ${exec.id}`)
-  const stream = await exec.start({ stdin: true, hijack: true, Detach: false, Tty: false })
+  const stream = await exec.start({
+    stdin: true,
+    hijack: true,
+    Detach: false,
+    Tty: false,
+    abortSignal: abortController.signal,
+  })
 
+  let timeoutHandle: NodeJS.Timer | undefined = undefined
   return new Promise<ExecResult>((resolve, reject) => {
     let resolved = false
 
-    if (abort) {
-      listenOnAbort(abort, () => {
-        if (resolved) {
-          return
-        }
+    const abortListener = listenOnAbort(abort, () => {
+      if (resolved) {
+        return
+      }
 
-        resolved = true
-        resolve({ type: 'canceled' })
-      })
-    }
+      resolved = true
+      resolve({ type: 'canceled' })
+      abortController.abort()
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle)
+      }
+    })
 
     awaitStream(status, stream)
       .then(() => {
@@ -105,20 +117,27 @@ export async function execCommand(
             return
           }
 
+          abortListener.close()
           resolve({ type: 'result', result })
           resolved = true
+          abortController.abort()
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle)
+          }
         })
       })
       .catch(reject)
 
     if (timeout) {
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         if (resolved) {
           return
         }
 
+        abortListener.close()
         resolve({ type: 'timeout' })
         resolved = true
+        abortController.abort()
       }, timeout)
     }
   })

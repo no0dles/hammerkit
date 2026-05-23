@@ -1,6 +1,6 @@
 import { getTestSuite } from '../get-test-suite'
-import { expectSuccessfulResult } from '../expect'
 import { Environment } from '../../executer/environment'
+import { checkCacheState } from '../../executer/scheduler/enqueue-next'
 
 describe('glob', () => {
   const suite = getTestSuite('glob', ['.hammerkit.yaml', 'test.md', 'test.txt'])
@@ -10,33 +10,22 @@ describe('glob', () => {
   async function testCache(expectInvalidate: boolean, action?: (env: Environment) => Promise<void>) {
     const { cli, environment } = await suite.setup({ taskName: 'example' })
 
-    const result1 = await cli.exec()
-    await expectSuccessfulResult(result1, environment)
-
-    const node = cli.node('example')
-    const nodeState1 = result1.state.node[node.id]
-
-    expect(nodeState1.type).toEqual('completed')
-    if (nodeState1.type === 'completed') {
-      expect(nodeState1.duration).toBeGreaterThanOrEqual(100)
-    }
+    const task = cli.task('example')
+    const cacheBefore = await checkCacheState(task, task.data.caching ?? 'checksum', environment)
+    expect(cacheBefore.stateKey).not.toBeNull()
 
     if (action) {
       await action(environment)
     }
 
-    const result2 = await cli.exec()
-    await expectSuccessfulResult(result2, environment)
+    const exampleAfter = cli.task('example')
+    const cacheAfter = await checkCacheState(exampleAfter, task.data.caching ?? 'checksum', environment)
+    expect(cacheAfter.stateKey).not.toBeNull()
 
-    const nodeState2 = result2.state.node[node.id]
-
-    expect(nodeState2.type).toEqual('completed')
-    if (nodeState2.type === 'completed') {
-      if (expectInvalidate) {
-        expect(nodeState2.cached).toBeFalsy()
-      } else {
-        expect(nodeState2.cached).toBeTruthy()
-      }
+    if(expectInvalidate) {
+      expect(cacheAfter.stateKey).not.toEqual(cacheBefore.stateKey)
+    } else {
+      expect(cacheAfter.stateKey).toEqual(cacheBefore.stateKey)
     }
   }
 

@@ -1,14 +1,31 @@
 services:
+  api:
+    image: node:16.6.0-alpine
+    deps: [install]
+    needs: [postgres]
+    ports:
+      - :3000
+    labels:
+      task: dev
+    mounts:
+      - server.js
+      - config.json
+    cmd: node server.js
+    healthcheck:
+      cmd: "wget -qO- http://localhost:3000"
+
   postgres:
     image: postgres:12-alpine
     labels:
       app: example
+    ports:
+      - 5432
     envs:
       POSTGRES_USER: api
       POSTGRES_DB: api
       POSTGRES_PASSWORD: 123456
     healthcheck:
-      cmd: "pg_isready -U postgres"
+      cmd: "pg_isready -U api"
 
 tasks:
   install:
@@ -26,6 +43,12 @@ tasks:
       - package-lock.json
     cmds:
       - npm install
+
+  test:
+    image: node:16.6.0-alpine
+    needs: [api]
+    cmds:
+      - wget -qO- http://api:3000
 
   api:
     image: node:16.6.0-alpine

@@ -7,19 +7,24 @@ describe('watch-dependency', () => {
 
   it('should run watch task', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'third' })
-    const thirdNode = cli.node('third')
-    const exec = cli.execWatch({ watch: true })
+    const thirdNode = cli.task('third')
+    const exec = await cli.exec({ watch: true })
 
     let content = ''
-    let changed = false
-    exec.processManager.on(async (evt) => {
-      if (evt.type === 'ended' && evt.context.id === thirdNode.id) {
-        if (changed) {
+    let changedStateKey = ''
+    exec.state.on('test-status', async (evt) => {
+      const currentState = evt.tasks[thirdNode.name].state.current
+      if (currentState.type === 'completed') {
+        if (
+          changedStateKey != '' &&
+          currentState.stateKey !== changedStateKey &&
+          !environment.abortCtrl.signal.aborted
+        ) {
           content = await environment.file.read('third.txt')
           environment.abortCtrl.abort()
-        } else {
+        } else if (changedStateKey === '') {
           await environment.file.appendFile('source.txt', 'world\n')
-          changed = true
+          changedStateKey = currentState.stateKey
         }
       }
     })

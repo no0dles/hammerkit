@@ -7,8 +7,8 @@ describe('extend', () => {
 
   it('should merge env variables', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_env' })
-    const node = await cli.node('extend_env')
-    expect(node.envs).toContainEntries([
+    const task = await cli.task('extend_env')
+    expect(task.data.envs.variables).toContainEntries([
       ['NAME', 'base'],
       ['KEEP', 'value'],
     ])
@@ -16,19 +16,19 @@ describe('extend', () => {
 
   it('should extend and override', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_container_task' })
-    const node = await cli.node('extend_container_task')
-    expect(node.envs).toEqual({
+    const task = await cli.task('extend_container_task')
+    expect(task.data.envs.variables).toEqual({
       NAME: 'override',
     })
-    expect(node.type).toBe('container')
-    if (node.type === 'container') {
-      expect(node.image).toBe('alpine:latest')
+    expect(task.data.type).toBe('container-task')
+    if (task.data.type === 'container-task') {
+      expect(task.data.image).toBe('alpine:latest')
     }
   })
 
   it('should merge deps', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_dep' })
-    const node = await cli.node('extend_dep')
-    expect(node.deps.map((d) => d.name)).toIncludeSameMembers(['base_env', 'extend_env'])
+    const task = await cli.task('extend_dep')
+    expect(task.deps.map((d) => d.name)).toIncludeSameMembers(['base_env', 'extend_env'])
   })
 })

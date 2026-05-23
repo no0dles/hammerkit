@@ -28,5 +28,5 @@ tasks:
 {% endcode %}
 
 {% hint style="info" %}
-Make sure to setup correct [caching](caching.md) to speed up your execution and prevent unnecessary work.
+Make sure to set up correct [caching](caching.md) to speed up your execution and prevent unnecessary work.
 {% endhint %}

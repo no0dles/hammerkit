@@ -1,0 +1,24 @@
+services:
+  api:
+    image: node:16.6.0-alpine
+    deps: [npm:install]
+    needs:
+      - service: base:postgres
+        name: postgres
+    ports:
+      - 3010:3000
+    labels:
+      task: dev
+      project: a
+    mounts:
+      - server.js
+      - config.json
+    cmd: node server.js
+    healthcheck:
+      cmd: "wget -qO- http://localhost:3000"
+
+includes:
+  npm: ../../.npm.hammerkit.yaml
+
+references:
+  base: ../..

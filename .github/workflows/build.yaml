@@ -5,7 +5,7 @@ on:
       - '**'
 jobs:
   npm-package:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -22,7 +22,7 @@ jobs:
       - name: Build source code
         run: node_modules/.bin/tsc
   docker:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v2

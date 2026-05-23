@@ -1,17 +1,20 @@
-export function listenOnAbort(abort: AbortSignal, callback: () => void): void {
+export function listenOnAbort(abort: AbortSignal, callback: () => void): { close(): void } {
   if (abort.aborted) {
     callback()
-    return
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    return { close() {} }
   }
 
-  const listener = abort as any
-  listener.addEventListener(
-    'abort',
-    () => {
-      callback()
+  const eventListener = () => {
+    callback()
+  }
+  abort.addEventListener('abort', eventListener, { once: true })
+
+  return {
+    close: () => {
+      abort.removeEventListener('abort', eventListener)
     },
-    { once: true }
-  )
+  }
 }
 
 export function waitOnAbort(abort: AbortSignal): Promise<void> {

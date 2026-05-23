@@ -1,83 +1,130 @@
+import { createServer, Server, Socket } from 'net'
+import { AppsV1Api, CoreV1Api, KubeConfig, PortForward } from '@kubernetes/client-node'
+import { Writable, Readable } from 'stream'
+import { getErrorMessage } from '../log'
+import { WorkItem } from '../planner/work-item'
 import { KubernetesWorkService } from '../planner/work-service'
-import { exec } from 'child_process'
-import { getErrorMessage, getLogs } from '../log'
-import { listenOnAbort } from '../utils/abort-event'
-import { Environment } from './environment'
-import { State } from './state'
-import { Process } from './process'
-import { StatusScopedConsole } from '../planner/work-node-status'
-import { sleep } from '../utils/sleep'
+import { ServiceState } from './scheduler/service-state'
+import { ExecuteOptions } from '../runtime/runtime'
+import { resolvePodName } from '../kubernetes/resolve-pod-name'
 
-export function kubernetesService(
-  service: KubernetesWorkService,
-  stateKey: string,
-  state: State,
-  env: Environment
-): Process {
-  return async (abort) => {
-    const status = env.status.service(service)
-
-    do {
-      await startForward(service, stateKey, state, status, abort)
-      if (!abort.signal.aborted) {
-        await sleep(1000)
-      }
-    } while (!abort.signal.aborted)
+function loadKubeConfig(service: KubernetesWorkService): KubeConfig {
+  const kc = new KubeConfig()
+  if (service.kubeconfig) {
+    kc.loadFromFile(service.kubeconfig)
+  } else {
+    kc.loadFromDefault()
   }
+  kc.setCurrentContext(service.context)
+  return kc
 }
 
-function startForward(
-  service: KubernetesWorkService,
-  stateKey: string,
-  state: State,
-  status: StatusScopedConsole,
-  abort: AbortController
-) {
-  const cmd = `kubectl port-forward ${service.selector.type}/${service.selector.name} --kubeconfig ${
-    service.kubeconfig
-  } --context ${service.context} ${service.ports.map((p) => `${p.hostPort}:${p.containerPort}`).join(' ')}`
+interface ForwardServer {
+  hostPort: number
+  containerPort: number
+  server: Server
+  sockets: Set<Socket>
+}
 
-  const ps = exec(cmd, {})
+async function startForwardServer(
+  forward: PortForward,
+  namespace: string,
+  podName: string,
+  hostPort: number,
+  containerPort: number,
+  item: WorkItem<KubernetesWorkService>
+): Promise<ForwardServer> {
+  const sockets = new Set<Socket>()
+  const server = createServer((socket) => {
+    sockets.add(socket)
+    socket.on('close', () => sockets.delete(socket))
+    socket.on('error', (err) => {
+      item.status.write('debug', `port-forward socket error: ${getErrorMessage(err)}`)
+    })
+    forward
+      .portForward(namespace, podName, [containerPort], socket as Writable, null, socket as Readable, 1)
+      .catch((err) => {
+        item.status.write('error', `port-forward failed: ${getErrorMessage(err)}`)
+        socket.destroy()
+      })
+  })
 
-  return new Promise<void>((resolve) => {
-    ps.stdout?.on('data', async (data) => {
-      for (const log of getLogs(data)) {
-        status.console('stdout', log)
-      }
-      state.patchService({
-        service,
-        type: 'running',
-        dns: { host: 'host-gateway' },
-        stateKey,
-      })
-    })
-    ps.stderr?.on('data', async (data) => {
-      for (const log of getLogs(data)) {
-        status.console('stderr', log)
-      }
-    })
-    ps.on('error', (err) => {
-      status.write('error', getErrorMessage(err))
-      state.patchService({
-        service,
-        type: 'end',
-        reason: 'crash',
-        stateKey,
-      })
-    })
-    ps.on('close', (code) => {
-      status.write('info', `exit with ${code}`)
-      state.patchService({
-        service,
-        type: 'end',
-        reason: 'crash',
-        stateKey,
-      })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(hostPort, '127.0.0.1', () => {
+      server.off('error', reject)
       resolve()
     })
   })
 
-  listenOnAbort(abort.signal, () => {
-    ps.kill()
+  return { hostPort, containerPort, server, sockets }
+}
+
+function closeForwardServer(fs: ForwardServer): Promise<void> {
+  for (const socket of fs.sockets) {
+    socket.destroy()
+  }
+  return new Promise((resolve) => {
+    fs.server.close(() => resolve())
   })
+}
+
+export async function kubernetesService(
+  service: WorkItem<KubernetesWorkService>,
+  options: ExecuteOptions<ServiceState>
+): Promise<void> {
+  const kc = loadKubeConfig(service.data)
+  const forward = new PortForward(kc)
+  const coreApi = kc.makeApiClient(CoreV1Api)
+  const appsApi = kc.makeApiClient(AppsV1Api)
+
+  let podName: string
+  try {
+    podName = await resolvePodName(coreApi, appsApi, service.data.namespace, service.data.selector)
+  } catch (e) {
+    service.status.write('error', getErrorMessage(e))
+    options.state.set({
+      type: 'error',
+      stateKey: options.stateKey,
+      errorMessage: getErrorMessage(e),
+    })
+    return
+  }
+
+  const servers: ForwardServer[] = []
+  try {
+    for (const port of service.data.ports) {
+      if (port.hostPort === null) {
+        continue
+      }
+      const fs = await startForwardServer(forward, service.data.namespace, podName, port.hostPort, port.containerPort, service)
+      servers.push(fs)
+      service.status.write('info', `forwarding 127.0.0.1:${port.hostPort} -> ${podName}:${port.containerPort}`)
+    }
+  } catch (e) {
+    service.status.write('error', `failed to start port-forward: ${getErrorMessage(e)}`)
+    await Promise.all(servers.map(closeForwardServer))
+    options.state.set({ type: 'error', stateKey: options.stateKey, errorMessage: getErrorMessage(e) })
+    return
+  }
+
+  options.state.set({
+    type: 'running',
+    dns: { host: '127.0.0.1' },
+    stateKey: options.stateKey,
+    remote: null,
+  })
+
+  try {
+    await new Promise<void>((resolve) => {
+      if (options.abort.aborted) {
+        resolve()
+        return
+      }
+      options.abort.addEventListener('abort', () => resolve(), { once: true })
+    })
+  } finally {
+    await Promise.all(servers.map(closeForwardServer))
+    options.state.set({ type: 'end', reason: 'terminated', stateKey: options.stateKey })
+  }
 }

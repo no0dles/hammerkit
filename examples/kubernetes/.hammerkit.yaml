@@ -1,35 +1,42 @@
+environments:
+  default:
+    kubernetes:
+      context: docker-desktop
+
 services:
   postgres:
-    context: docker-desktop
+    image: postgres:12-alpine
+    envs:
+      POSTGRES_USER: 'postgres'
+      POSTGRES_DB: 'demo'
+      POSTGRES_PASSWORD: '123456'
+    volumes:
+    - data:/var/lib/postgresql/data
     ports:
       - 5432:5432
-    selector:
-      type: deployment
-      name: postgres
-
-tasks:
-  install:
-    image: node:16.6.0-alpine
-    mounts:
-      - $PWD/.npm:/.npm
-      - $PWD/.config:/.config
-    src:
-      - package.json
-      - package-lock.json
-    generates:
-      - node_modules
-    cmds:
-      - npm install
 
   api:
     image: node:16.6.0-alpine
-    deps: [install]
-    needs: [postgres]
+    deps: [ install ]
+    needs: [ postgres ]
     ports:
       - 3000
     labels:
       app: example
     src:
       - index.js
+    cmd: node index.js
+
+tasks:
+  install:
+    image: node:16.6.0-alpine
+    #mounts:
+      #- $PWD/.npm:/.npm
+      #- $PWD/.config:/.config
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
     cmds:
-      - node index.js
+      - npm ci

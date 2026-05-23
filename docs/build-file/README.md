@@ -4,7 +4,7 @@ description: A summary of all build file configuration options
 
 # Build file
 
-The build file is a yaml file with the filename `build.yaml` inside your project directory. It contains a list of [tasks](../task/) which can be executed over the [cli](../cli/).&#x20;
+The build file is a yaml file with the filename `build.yaml` inside your project directory. It contains a list of [tasks](../task) which can be executed over the [cli](../cli).&#x20;
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

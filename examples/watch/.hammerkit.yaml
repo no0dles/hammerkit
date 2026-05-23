@@ -1,3 +1,15 @@
+services:
+  api:
+    image: node:16.6.0-alpine
+    deps: [install]
+    labels:
+      task: dev
+    ports:
+      - 8080
+    src:
+      - src/*.js
+    cmd: node src/index.js
+
 tasks:
   install:
     image: node:16.6.0-alpine
@@ -8,9 +20,9 @@ tasks:
       - npm install
     generates:
       - node_modules
+      - package-lock.json
     src:
       - package.json
-      - package-lock.json
 
   work:
     image: node:16.6.0-alpine
@@ -19,13 +31,3 @@ tasks:
       - src/work.js
     cmds:
       - node src/work.js
-
-  api:
-    image: node:16.6.0-alpine
-    deps: [install]
-    ports:
-      - 8080:8080
-    src:
-      - src
-    cmds:
-      - node src/index.js

@@ -48,7 +48,7 @@ tasks:
 
 ## Defined values in the build file
 
-Environment variables can be defined in the build file itself. They are can be defined for the entire build file or only for specific tasks.
+Environment variables can be defined in the build file itself. They can be defined for the entire build file or only for specific tasks.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

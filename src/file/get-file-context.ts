@@ -10,15 +10,18 @@ import {
   rm,
   stat,
   writeFile,
+  WriteStream,
 } from 'fs'
 import { dirname, join, isAbsolute } from 'path'
 import { watch } from 'chokidar'
 import { FileContext, Stats } from './file-context'
 import { Stream } from 'stream'
 
-function handleCallback<T>(callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void): Promise<T>
-function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
-function handleCallback(callback: (cb: (err: Error | null, value?: any) => void) => void): Promise<any> {
+function handleCallback<T>(
+  callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void
+): Promise<T> {
+  //function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
+  //function handleCallback(callback: (cb: (err: Error | null, value?: any) => void) => void): Promise<any> {
   return new Promise<any>((resolve, reject) => {
     callback((err: Error | null, value: any) => {
       if (err) {
@@ -71,6 +74,9 @@ export function getFileContext(cwd: string): FileContext {
           .on('error', (err) => reject(err))
           .on('close', () => resolve())
       })
+    },
+    createWriteStream(path: string): WriteStream {
+      return createWriteStream(path)
     },
     listFiles(path: string): Promise<string[]> {
       return handleCallback((cb) => readdir(getAbsolutePath(cwd, path), cb))
@@ -148,7 +154,7 @@ export function getFileContext(cwd: string): FileContext {
 
       return {
         close() {
-          watcher.close()
+          return watcher.close()
         },
       }
     },

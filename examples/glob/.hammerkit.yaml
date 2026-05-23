@@ -1,7 +1,6 @@
 tasks:
   example:
     description: glob example
-    image: alpine:latest
     src:
       - "*.md"
       - "**/*.md2"

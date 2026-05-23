@@ -1,1 +1,1 @@
-export type StateListener<T> = (state: T) => void
+export type StateListener<T> = (state: Readonly<T>) => void

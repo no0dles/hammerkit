@@ -1,15 +1,15 @@
 import { join } from 'path'
 
-export function getCacheDirectory(nodeId: string): string {
-  return join(getHammerkitDirectory(), 'cache', nodeId)
+export function getCacheDirectory(cacheId: string): string {
+  return join(getHammerkitDirectory(), 'cache', cacheId)
 }
 
-export function getCacheDescriptionFile(nodeId: string): string {
-  return join(getCacheDirectory(nodeId), 'description.json')
+export function getCacheDescriptionFile(cacheId: string): string {
+  return join(getCacheDirectory(cacheId), 'description.json')
 }
 
-export function getCacheStatsFile(nodeId: string): string {
-  return join(getCacheDirectory(nodeId), 'stats.json')
+export function getCacheStatsFile(cacheId: string): string {
+  return join(getCacheDirectory(cacheId), 'stats.json')
 }
 
 export function getHammerkitDirectory(): string {

@@ -1,29 +1,28 @@
 import 'jest-extended'
-import { getTestSuite } from '../get-test-suite'
+import { createTestCase } from '../test-case'
+import { ParseError } from '../../schema/parse-error'
 
 describe('unknown', () => {
-  const suite = getTestSuite('unknown', ['.hammerkit.yaml'])
-
-  afterAll(() => suite.close())
-
-  async function validateTask(name: string, expectedErrors: string[]) {
-    const { cli } = await suite.setup({ taskName: name })
-    let i = 0
-    for await (const message of cli.validate()) {
-      expect(expectedErrors[i++]).toEqual(message.message)
-    }
-    expect(i).toEqual(expectedErrors.length)
-  }
-
   it('should validate unknown props', async () => {
-    await validateTask('example', ['cmd is an unknown configuration'])
+    const testCase = createTestCase('wrong-cmd', {
+      '.hammerkit.yaml': {
+        example: {
+          cmd: ['echo wrong cmd'],
+        },
+      },
+    })
+    await expect(testCase.cli({ taskName: 'example' })).rejects.toThrow(ParseError)
   })
 
-  it('should validate unknown props for local tasks with docker keys', async () => {
-    await validateTask('invalid:local:example', ['mounts is an unknown configuration'])
-  })
-
-  it('should validate unknown props for docker tasks', async () => {
-    await validateTask('docker:example', ['mount is an unknown configuration'])
+  it('should validate unknown container props for local tasks', async () => {
+    const testCase = createTestCase('wrong-cmd', {
+      '.hammerkit.yaml': {
+        example: {
+          cmds: ['echo hello'],
+          mounts: ['/.npm:/.npm'],
+        },
+      },
+    })
+    await expect(testCase.cli({ taskName: 'example' })).rejects.toThrow(ParseError)
   })
 })

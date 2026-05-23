@@ -1,0 +1,24 @@
+services:
+  web:
+    image: node:16.13.0-alpine
+    deps: [ install ]
+    cmd: node_modules/.bin/ng serve --host 0.0.0.0 --disable-host-check
+    ports: [ 4200 ]
+    mounts:
+      - angular.json
+      - tsconfig.app.json
+      - tsconfig.json
+      - src
+    healthcheck:
+      cmd: "wget -qO- http://localhost:4200"
+
+tasks:
+  install:
+    image: node:16.6.0-alpine
+    src:
+      - package.json
+    generates:
+      - node_modules
+      - package-lock.json
+    cmds:
+      - npm install

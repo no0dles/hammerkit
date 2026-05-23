@@ -2,6 +2,7 @@ tasks:
   example:
     description: run ref task
     deps: [foo:bar]
+    needs: [foo:bardb]
     cmds:
       - echo foo
 

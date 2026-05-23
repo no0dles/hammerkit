@@ -11,7 +11,7 @@ Includes are ideal to define repetitive tasks and reuse them in multiple places.
 Reference files can be used to split up tasks, but they keep the current work directory fixed to the directory they are placed. 
 For includes the current work directory is dynamically adjusted to where it got included from.
 
-The following example is a typescript monorepo with two projects `a` and `b`. Project `b` is dependant on `a` and both require to keep the dependencies up-to-date before compiling the source code.
+The following example is a typescript monorepo with two projects `a` and `b`. Project `b` is dependent on `a` and both require to keep the dependencies up-to-date before compiling the source code.
 
 {% code title="build.npm.yaml" %}
 ```yaml
@@ -42,7 +42,7 @@ includes:
 ```
 {% endcode %}
 
-The include is used for the [task dependency](../task/dependencies.md) of the build task and ensures that the node\_modules is installed before.
+Includes are used for the [task dependency](../task/dependencies.md) of the build task and ensures that the node\_modules is installed before.
 
 {% code title="project/b/.hammerkit.yaml" %}
 ```yaml
