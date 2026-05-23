@@ -7,7 +7,6 @@ import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
 import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
-import { awaitPvcBound } from './await-running-state'
 
 export async function ensureKubernetesPersistentVolumeClaimExists(
   instance: KubernetesInstance,
@@ -39,9 +38,11 @@ export async function ensureKubernetesPersistentVolumeClaimExists(
     },
   }
   service.status.console('stdout', `ensure volume ${volume.name}`)
-  const result = await apply(instance, pvc)
-  if (result.status?.phase === 'Bound') {
-    return result
-  }
-  return await awaitPvcBound(instance, env, volume.name)
+  // Don't block on the PVC reaching "Bound". Storage classes with
+  // volumeBindingMode WaitForFirstConsumer (docker-desktop's "standard",
+  // k3d/k3s local-path, most cloud defaults) keep the claim Pending until a pod
+  // mounts it — and hammerkit creates that pod (upload pod / deployment) only
+  // after this call. Waiting here deadlocks until the test times out. k8s binds
+  // the claim when the consuming pod is scheduled, so applying it is enough.
+  return await apply(instance, pvc)
 }

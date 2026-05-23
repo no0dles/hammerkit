@@ -23,7 +23,7 @@ describe('environment', () => {
           },
           services: {
             postgres: {
-              image: 'postgres',
+              image: 'postgres:16-alpine',
               envs: {
                 POSTGRES_USER: 'postgres',
                 POSTGRES_DB: 'demo',
