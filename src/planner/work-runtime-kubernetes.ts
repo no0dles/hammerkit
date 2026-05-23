@@ -162,8 +162,19 @@ export function kubernetesTaskRuntime(
 
       await removePersistentData(instance, kubernetes, task)
     },
-    currentStateKey(): Promise<string | null> {
-      return Promise.resolve(null) // TODO implement
+    async currentStateKey(): Promise<string | null> {
+      const jobs = await instance.batchApi.listNamespacedJob(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${task.id()}`
+      )
+      const completedStates = jobs.body.items
+        .filter((j) => j.status?.succeeded && j.metadata?.labels?.['hammerkit.dev/state'])
+        .map((j) => j.metadata!.labels!['hammerkit.dev/state'])
+      return completedStates[completedStates.length - 1] ?? null
     },
   }
 }
@@ -202,7 +213,7 @@ export function kubernetesServiceRuntime(
       const persistence = await getKubernetesPersistence(service)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)
-      await ensureKubernetesDeploymentExists(instance, kubernetes, service, persistence)
+      await ensureKubernetesDeploymentExists(instance, kubernetes, service, persistence, options.stateKey)
 
       const name = getResourceName(service)
       options.state.set({
@@ -250,8 +261,17 @@ export function kubernetesServiceRuntime(
 
       await removePersistentData(instance, kubernetes, service)
     },
-    currentStateKey(): Promise<string | null> {
-      return Promise.resolve(null) // TODO implement
+    async currentStateKey(): Promise<string | null> {
+      const deployments = await instance.appsApi.listNamespacedDeployment(
+        kubernetes.namespace,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        `hammerkit.dev/id=${service.id()}`
+      )
+      const deployment = deployments.body.items[0]
+      return deployment?.metadata?.labels?.['hammerkit.dev/state'] ?? null
     },
   }
 }

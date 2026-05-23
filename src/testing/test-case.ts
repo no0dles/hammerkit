@@ -1,5 +1,5 @@
 import { TestSuiteOptions } from './test-suite'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { getFileContext } from '../file/get-file-context'
 import { Environment } from '../executer/environment'
 import { consoleContext } from '../log'
@@ -39,6 +39,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
         }
 
         for (const [fileName, fileContent] of Object.entries(files)) {
+          await file.createDirectory(dirname(join(path, fileName)))
           await file.writeFile(
             join(path, fileName),
             typeof fileContent === 'string' ? fileContent : yamlSerialize(fileContent)

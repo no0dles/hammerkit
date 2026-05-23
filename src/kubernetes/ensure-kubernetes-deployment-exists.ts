@@ -15,7 +15,8 @@ export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   service: WorkItem<ContainerWorkService>,
-  persistence: KubernetesPersistence
+  persistence: KubernetesPersistence,
+  stateKey: string
 ) {
   const hostAliases: V1HostAlias[] = []
   for (const need of service.needs) {
@@ -44,6 +45,7 @@ export async function ensureKubernetesDeploymentExists(
       },
       labels: {
         'hammerkit.dev/id': service.id(),
+        'hammerkit.dev/state': stateKey,
       },
     },
     spec: {
@@ -57,6 +59,7 @@ export async function ensureKubernetesDeploymentExists(
         metadata: {
           labels: {
             'hammerkit.dev/id': service.id(),
+            'hammerkit.dev/state': stateKey,
           },
         },
         spec: {

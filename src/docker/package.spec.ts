@@ -1,6 +1,57 @@
 import { createTestCase } from '../testing/test-case'
 
 describe('docker/package', () => {
+  it('should allow sub paths', async () => {
+    const testCase = createTestCase('package', {
+      'package.json': '{ "dependencies": { "pg": "^8.7.1" } }',
+      'sub/package.json': '{ "dependencies": { "sub": "file://.." } }',
+      '.hammerkit.yaml': {
+        tasks: {
+          install: {
+            image: 'node:20-alpine',
+            cmds: ['npm install'],
+            src: ['package.json'],
+            generates: ['node_modules'],
+          },
+        },
+      },
+      'sub/.hammerkit.yaml': {
+        tasks: {
+          install: {
+            deps: ['sub:install'],
+            image: 'node:20-alpine',
+            cmds: ['npm install'],
+            src: ['package.json'],
+            generates: ['node_modules'],
+          },
+        },
+        references: {
+          sub: '..'
+        },
+        services: {
+          api: {
+            deps: ['install'],
+            image: 'node:20-alpine',
+            labels: { app: 'api' },
+            cmd: 'node index.js',
+            src: ['index.js'],
+            ports: ['3000'],
+          },
+        },
+      },
+      'sub/index.js': `console.log('hi')`,
+    })
+    await testCase.cli({ filterLabels: { app: ['api'] } }, async (cli) => {
+      await cli.package({
+        registry: 'localhost:5000',
+        push: false,
+        overrideUser: false,
+        username: null,
+        password: null,
+      })
+    })
+  })
+
   it('should package and push', async () => {
     const testCase = createTestCase('package', {
       '.hammerkit.yaml': {

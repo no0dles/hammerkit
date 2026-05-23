@@ -12,16 +12,20 @@ export async function usingContainer<T>(
   createOptions: ContainerCreateOptions,
   stateKey: string | null,
   callback: (container: Container) => Promise<T>
-) {
+): Promise<T> {
   let container: Container | null = null
+  let succeeded = false
+  let result: T
   try {
     container = await docker.createContainer(createOptions)
     item.status.write('debug', `starting container with image ${item.data.image}`)
     await startContainer(item.status, container)
-    return await callback(container)
+    result = await callback(container)
+    succeeded = result !== false
+    return result
   } finally {
     try {
-      if (stateKey) {
+      if (stateKey && succeeded) {
         if (container) {
           await container.pause()
         }
