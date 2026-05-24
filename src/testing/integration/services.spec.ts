@@ -22,7 +22,7 @@ describe('services', () => {
       const result = await testingTimeout(cli.up({ daemon: true }), 120000)
       await expectSuccessfulResult(result, environment)
     }),
-    120000
+    900000
   )
 
   it(
@@ -32,7 +32,7 @@ describe('services', () => {
       const result = await testingTimeout(cli.exec(), 120000)
       await expectSuccessfulResult(result, environment)
     }),
-    120000
+    900000
   )
 
   it(
@@ -47,6 +47,6 @@ describe('services', () => {
       const downResult = await cli.runDown()
       expect(downResult.success).toBeTrue()
     }),
-    120000
+    900000
   )
 })

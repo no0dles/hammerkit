@@ -48,7 +48,7 @@ jobs:
   # docker (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
   macos-containers:
     runs-on: macos-15-intel
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       LINUX_CONTAINERS: 'true'
       VERBOSE: 'true'
@@ -70,8 +70,11 @@ jobs:
         run: sudo ln -sf "$HOME/.colima/default/docker.sock" /var/run/docker.sock
       - name: Install npm packages
         run: npm ci
+      # Serialize: the x86-emulated colima daemon is slow and shares one host;
+      # running suites one at a time avoids volume/container races and gives each
+      # spec the full daemon, keeping it within the (generous) timeouts.
       - name: Run container integration tests
-        run: npm run test:integration
+        run: npm run test:integration -- --runInBand
       - name: Archive logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

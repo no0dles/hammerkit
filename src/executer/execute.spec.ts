@@ -26,7 +26,9 @@ describe('execute', () => {
     const result = await exec.start()
 
     await expectSuccessfulResult(result, environment)
-  })
+    // Windows hosted runners are slow to spawn node + detect file changes; two
+    // full watch cycles can exceed the 45s default. Give it headroom.
+  }, 120000)
 
   it('should restart watching task if once failed', async () => {
     const { cli, environment } = await suite.setup({ taskName: 'api_crashing' })
@@ -47,5 +49,5 @@ describe('execute', () => {
 
     const result = await exec.start()
     expect(result.success).toBeFalsy()
-  })
+  }, 120000)
 })

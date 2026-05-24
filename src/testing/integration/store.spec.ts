@@ -66,6 +66,6 @@ describe('store/restore', () => {
         expect(taskState.state.current.cached).toBeTruthy()
       }
     }),
-    90000
+    900000
   )
 })

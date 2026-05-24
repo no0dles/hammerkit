@@ -3,7 +3,10 @@ import base from './jest.config'
 
 const config: Config.InitialOptions = {
   ...base,
-  testTimeout: 300000,
+  // Generous ceiling so the suite can also run on slow/emulated daemons (e.g.
+  // the x86-emulated colima on hosted Intel macOS). Native runners finish each
+  // spec far below this; it only bites on a genuine hang.
+  testTimeout: 900000,
   testRegex: ['src/testing/integration/.*\\.spec\\.ts$', 'src/docker/package\\.spec\\.ts$'],
   testPathIgnorePatterns: ['/node_modules/', '/\\.claude/'],
   // Collect coverage from the integration run so the docker/kubernetes/service

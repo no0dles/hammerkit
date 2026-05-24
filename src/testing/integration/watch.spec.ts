@@ -21,7 +21,7 @@ describe('watch', () => {
       expect(result.success).toBeFalsy()
       expect(result.state.services['api'].state.current.type).toEqual('canceled')
     }),
-    60000
+    900000
   )
 
   it(
@@ -51,6 +51,6 @@ describe('watch', () => {
       expect(result.success).toBeFalsy()
       expect(result.state.services['api'].state.current.type).toEqual('canceled')
     }),
-    90000
+    900000
   )
 })

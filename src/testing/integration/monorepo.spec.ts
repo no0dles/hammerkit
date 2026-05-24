@@ -14,6 +14,6 @@ describe('monorepo', () => {
       await expectSuccessfulExecution(cli.exec(), environment)
       await cli.clean()
     }),
-    120000
+    900000
   )
 })
