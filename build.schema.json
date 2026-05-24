@@ -73,11 +73,30 @@
                     }
                   },
                   "cache": {
-                    "type": "string",
-                    "enum": [
-                      "checksum",
-                      "modify-date",
-                      "none"
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "checksum",
+                          "modify-date",
+                          "none"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "method": {
+                            "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cache/anyOf/0"
+                          }
+                        },
+                        "required": [
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
                     ]
                   },
                   "cmds": {
@@ -404,6 +423,13 @@
                         "items": {
                           "type": "object",
                           "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "ingress",
+                                "httproute"
+                              ]
+                            },
                             "host": {
                               "type": "string"
                             },
@@ -414,6 +440,12 @@
                               "type": "number"
                             },
                             "path": {
+                              "type": "string"
+                            },
+                            "gateway": {
+                              "type": "string"
+                            },
+                            "gatewayNamespace": {
                               "type": "string"
                             }
                           },
@@ -455,6 +487,71 @@
                 "additionalProperties": false
               }
             ]
+          }
+        },
+        "caches": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cache/anyOf/0"
+              },
+              "backend": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "local"
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "s3"
+                      },
+                      "bucket": {
+                        "type": "string"
+                      },
+                      "region": {
+                        "type": "string"
+                      },
+                      "endpoint": {
+                        "type": "string"
+                      },
+                      "prefix": {
+                        "type": "string"
+                      },
+                      "forcePathStyle": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "bucket"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "method",
+              "backend"
+            ],
+            "additionalProperties": false
           }
         },
         "labels": {

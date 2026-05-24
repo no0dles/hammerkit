@@ -41,3 +41,62 @@ services:
 ```
 
 Possible selector types could be `deployment`, `service` or `pod`.
+
+## Cluster providers
+
+Hammerkit talks to a cluster through your kubeconfig, so every provider works the
+same way - the only difference is the `context` name (and optionally a dedicated
+`kubeconfig` file). The context is whatever the provider's auth tooling writes into
+your kubeconfig.
+
+### GKE (Google Kubernetes Engine)
+
+`gcloud container clusters get-credentials <cluster>` writes a context named
+`gke_<project>_<location>_<cluster>`:
+
+```yaml
+services:
+  postgres:
+    context: gke_my-project_europe-west1_my-cluster
+    namespace: databases
+    ports:
+      - 5432:5432
+    selector:
+      type: deployment
+      name: postgres
+```
+
+### EKS (Amazon)
+
+`aws eks update-kubeconfig --name <cluster>` writes an ARN-style context:
+
+```yaml
+services:
+  postgres:
+    context: arn:aws:eks:eu-central-1:123456789012:cluster/my-cluster
+    namespace: databases
+    ports:
+      - 5432:5432
+    selector:
+      type: service
+      name: postgres
+```
+
+### AKS (Azure)
+
+`az aks get-credentials --name <cluster>` writes a context named after the cluster.
+Point `kubeconfig` at a dedicated file when you don't want to use the default one
+(for example a kubeconfig provided by CI):
+
+```yaml
+services:
+  postgres:
+    context: my-cluster
+    kubeconfig: ./aks-config.yaml
+    namespace: databases
+    ports:
+      - 5432:5432
+    selector:
+      type: deployment
+      name: postgres
+```

@@ -215,6 +215,8 @@ export async function getProgram(
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(new Option('--push', 'push image to registry').default(false))
       .addOption(new Option('--build-override-user', 'set a dedicated user (uid/gid)').default(false))
+      .addOption(new Option('-t, --tag <tag>', 'image tag').default('latest'))
+      .addOption(new Option('--platform <platform>', 'target build platform, e.g. linux/amd64'))
       .addOption(new Option('-u, --user, --username', 'registry username'))
       .addOption(new Option('-p, --password', 'registry password'))
       .action(async (registry, options) => {
@@ -226,6 +228,8 @@ export async function getProgram(
             overrideUser: !!options.overrideUser,
             username: options.username,
             password: options.password,
+            tag: options.tag,
+            platform: options.platform,
           })
         } catch (e) {
           if (e instanceof CommanderError) {

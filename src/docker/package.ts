@@ -15,6 +15,19 @@ import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'path'
 import { getErrorMessage } from '../log'
 
+// Default the build platform to the host architecture so a packaged image runs
+// where it was built unless the caller overrides it with `--platform`. Maps
+// node's `process.arch` to docker's platform arch naming.
+export function getDefaultPlatform(): string {
+  const archByNodeArch: { [arch: string]: string } = {
+    x64: 'amd64',
+    arm64: 'arm64',
+    arm: 'arm',
+  }
+  const arch = archByNodeArch[process.arch] ?? 'amd64'
+  return `linux/${arch}`
+}
+
 export async function packageWorkTree(
   workTree: WorkTree,
   environment: Environment,
@@ -25,6 +38,8 @@ export async function packageWorkTree(
   }
 
   const docker = getContainerCli(workTree.environment)
+  const platform = options.platform ?? getDefaultPlatform()
+  const tag = options.tag ?? 'latest'
 
   for (const service of iterateWorkServices(workTree)) {
     if (isContainerWorkServiceItem(service)) {
@@ -46,8 +61,8 @@ export async function packageWorkTree(
         src.push(path)
       }
 
-      const imageName = `${options.registry}/${service.name}`
-      environment.console.info(`building image ${imageName} for ${service.name}`)
+      const imageName = `${options.registry}/${service.name}:${tag}`
+      environment.console.info(`building image ${imageName} for ${service.name} (${platform})`)
       const buildStream = await docker.buildImage(
         {
           src,
@@ -55,7 +70,7 @@ export async function packageWorkTree(
         },
         {
           t: imageName,
-
+          platform,
           abortSignal: environment.abortCtrl.signal,
         }
       )

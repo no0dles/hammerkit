@@ -123,6 +123,8 @@ tasks:
 {% endcode %}
 
 When the cache has a remote backend, hammerkit pulls the result before the task
-runs if it is missing locally, and pushes the result after a successful run. See
-[caches](../build-file/caches.md) for the available backends and the full
-pull/push behavior.
+runs if it is missing locally, and pushes the result after a successful run. The
+built-in backends are `local` and `s3`; the `s3` backend also covers any
+S3-compatible store such as MinIO, Cloudflare R2 and Google Cloud Storage. See
+[caches](../build-file/caches.md) for the full backend reference, the R2/GCS
+examples and the pull/push behavior.

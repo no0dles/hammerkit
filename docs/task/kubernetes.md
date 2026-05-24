@@ -56,7 +56,7 @@ tasks:
 |-------------|----------|--------------------------------------------------------------------------|
 | `context`   | yes      | The kube context (cluster + user) the tasks run in.                       |
 | `namespace` | no       | Namespace the jobs and deployments are created in.                        |
-| `ingresses` | no       | Ingress definitions to expose services, see [ingresses](#ingresses).      |
+| `ingresses` | no       | Ingress / Gateway API route definitions to expose services, see [ingresses](#ingresses). |
 
 ### Docker target
 
@@ -100,9 +100,41 @@ environments:
           path: /
 ```
 
-| Field         | Required | Description                                          |
-|---------------|----------|------------------------------------------------------|
-| `host`        | yes      | Hostname the ingress responds to.                    |
-| `service`     | yes      | Name of the service to route to.                     |
-| `servicePort` | no       | Port of the service to route to.                     |
-| `path`        | no       | Path prefix that is routed to the service.           |
+| Field              | Required        | Description                                                   |
+|--------------------|-----------------|---------------------------------------------------------------|
+| `kind`             | no              | `ingress` (default) or `httproute` for the Gateway API.       |
+| `host`             | yes             | Hostname the route responds to.                               |
+| `service`          | yes             | Name of the service to route to.                              |
+| `servicePort`      | no              | Port of the service to route to.                              |
+| `path`             | no              | Path prefix that is routed to the service.                    |
+| `gateway`          | for `httproute` | Name of the parent `Gateway` (Gateway API only).              |
+| `gatewayNamespace` | no              | Namespace of the parent `Gateway`, if not the route's own.    |
+
+### Gateway API
+
+Set `kind: httproute` on an entry to create a Gateway API
+[`HTTPRoute`](https://gateway-api.sigs.k8s.io/) instead of an Ingress. The Gateway
+API is the modern replacement for Ingress: rather than relying on an ingress
+controller, an `httproute` attaches to a parent `gateway`. Both `ingress` and
+`httproute` entries can be mixed in the same `ingresses` list.
+
+```yaml
+environments:
+  staging:
+    kubernetes:
+      context: staging-cluster
+      namespace: my-app
+      ingresses:
+        - kind: httproute
+          host: api.example.com
+          service: api
+          servicePort: 3000
+          path: /
+          gateway: web                 # parent Gateway in this namespace
+          # gatewayNamespace: gateways # set if the Gateway lives elsewhere
+```
+
+{% hint style="info" %}
+This requires the [Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/) and a
+`Gateway` resource to be installed in the cluster.
+{% endhint %}

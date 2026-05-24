@@ -30,9 +30,9 @@ services:
 tasks:
   install:
     image: node:16.6.0-alpine
-    #mounts:
-      #- $PWD/.npm:/.npm
-      #- $PWD/.config:/.config
+    mounts:
+      # cache npm downloads between runs (/root/.npm is npm's default cache dir)
+      - .npm-cache:/root/.npm
     src:
       - package.json
       - package-lock.json

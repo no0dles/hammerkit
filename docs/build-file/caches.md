@@ -85,7 +85,7 @@ caches:
 ### s3
 
 Stores cache entries in an S3-compatible bucket. Works with AWS S3 and any
-S3-compatible service such as MinIO, Cloudflare R2 or Wasabi.
+S3-compatible service such as MinIO, Cloudflare R2, Google Cloud Storage or Wasabi.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -113,6 +113,47 @@ caches:
 Credentials are read from the standard AWS SDK credential chain, for example the
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables or the
 shared `~/.aws/config` file. They are never stored in the build file.
+{% endhint %}
+
+#### Cloudflare R2
+
+R2 exposes an S3 API, so point `endpoint` at your account endpoint and use an `auto`
+region:
+
+```yaml
+caches:
+  remote:
+    method: checksum
+    backend:
+      type: s3
+      bucket: my-build-cache
+      region: auto
+      endpoint: https://<account-id>.r2.cloudflarestorage.com
+```
+
+#### Google Cloud Storage (GCS)
+
+GCS offers an S3-compatible XML API, so it works through the `s3` backend. Point
+`endpoint` at `storage.googleapis.com`, use path-style addressing, and provide
+[HMAC interoperability keys](https://cloud.google.com/storage/docs/authentication/hmackeys)
+through the AWS credential chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`):
+
+```yaml
+caches:
+  remote:
+    method: checksum
+    backend:
+      type: s3
+      bucket: my-build-cache
+      region: europe-west1
+      endpoint: https://storage.googleapis.com
+      forcePathStyle: true
+```
+
+{% hint style="info" %}
+Azure Blob Storage is **not** S3-compatible, so it is not supported through the `s3`
+backend. The backend registry is pluggable, so an Azure backend could be added as a
+custom backend in the future.
 {% endhint %}
 
 ## Built-in caches

@@ -76,7 +76,9 @@ uppercased service name:
 
 * `HAMMERKIT_<NAME>_HOST` - host the service is reachable on.
 * `HAMMERKIT_<NAME>_PORT` - the primary published port.
-* `HAMMERKIT_<NAME>_PORT_<containerPort>` - the published port for a specific container port.
+* `HAMMERKIT_<NAME>_PORT_<containerPort>` - the published port for a specific
+  container port. The suffix is always the numeric container port (ports cannot be
+  named), so this is mainly useful for services that expose more than one port.
 
 For a service named `postgres` exposing port `5432` a local task receives
 `HAMMERKIT_POSTGRES_HOST`, `HAMMERKIT_POSTGRES_PORT` and `HAMMERKIT_POSTGRES_PORT_5432`.

@@ -40,6 +40,8 @@ export interface CliPackageOptions {
   password: string | null
   push: boolean
   overrideUser: boolean
+  tag?: string
+  platform?: string
 }
 
 export interface CliExecResult {
