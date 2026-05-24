@@ -44,6 +44,14 @@ export async function getPodForPersistence(
           return array
         }, [])
 
+  // Guarantee the claims exist right before scheduling the pod that mounts
+  // them. ensurePersistentData also creates them, but store/restore reach this
+  // function directly, and a claim shared with another work item can be removed
+  // concurrently — without this the pod would hang Pending on "pvc not found".
+  for (const volume of persistence.volumes) {
+    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service)
+  }
+
   const name = getResourceName(service, type === 'write' ? '-upload' : '-download')
   const podSpec: V1Pod & KubernetesObjectHeader = {
     kind: 'Pod',
