@@ -14,6 +14,12 @@ To get started with hammerkit, you will need to create your first build file. Bu
 hammerkit init
 ```
 {% endtab %}
+
+{% tab title="npx" %}
+```bash
+npx hammerkit init
+```
+{% endtab %}
 {% endtabs %}
 
 If you created your build file with the init command, the build file will look like the example below.
@@ -44,6 +50,12 @@ To run your first command, make sure your in the same directory as the build fil
 {% tab title="shell" %}
 ```bash
 hammerkit example
+```
+{% endtab %}
+
+{% tab title="npx" %}
+```bash
+npx hammerkit example
 ```
 {% endtab %}
 {% endtabs %}

@@ -21,6 +21,16 @@ yarn add -g hammerkit
 {% endtab %}
 {% endtabs %}
 
+## Npx
+
+If node is installed, hammerkit can be run directly without a global install using `npx`.
+This always uses the latest published version.
+
+```bash
+npx hammerkit init
+npx hammerkit build
+```
+
 ## Homebrew
 
 With homebrew hammerkit can be installed on macOS and linux (including windows with WSL).
