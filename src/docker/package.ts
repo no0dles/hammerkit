@@ -12,7 +12,7 @@ import {
 import { ContainerWorkService } from '../planner/work-service'
 import { getContainerCli } from '../executer/execute-docker'
 import { tmpdir } from 'node:os'
-import { join, relative } from 'path'
+import { join, relative, sep } from 'path'
 import { getErrorMessage } from '../log'
 
 export async function packageWorkTree(
@@ -66,9 +66,16 @@ export async function packageWorkTree(
             if (err) {
               environment.console.error(getErrorMessage(err))
               reject(err)
-            } else if (res.length > 0) {
-              environment.console.error(res.map((i) => ('stream' in i ? i.stream : i.error)).join(''))
-              reject(new Error('build failed'))
+              return
+            }
+            // followProgress returns every build message in `res`, so a
+            // non-empty array is normal on success. Only fail when an entry
+            // actually carries an error.
+            const failure = (res ?? []).find((i) => 'error' in i && !!i.error)
+            if (failure && 'error' in failure) {
+              const detail = failure.errorDetail?.message ?? failure.error ?? 'unknown error'
+              environment.console.error(detail)
+              reject(new Error(`build failed: ${detail}`))
             } else {
               resolve()
             }
@@ -162,20 +169,43 @@ function getDependencyCwd(cwd: string, service: WorkItem<ContainerWorkService>):
   return longestCommonPrefix(sources.map((s) => s.absolutePath))
 }
 
-function longestCommonPrefix(strs: string[]) {
+// Longest common *directory* of the given (absolute file) paths. Compared per
+// path segment, not per character, so `/a/foo` and `/a/foobar` share `/a`, not
+// `/a/foo`. When every path is identical (e.g. a single source) the shared
+// prefix would be the file itself, so the final segment is dropped to land on
+// its directory — otherwise the build context copy targets a directory and
+// fails with EISDIR.
+export function longestCommonPrefix(strs: string[]) {
   if (strs.length === 0) {
     return ''
   }
-  let prefix = strs[0]
-  for (let i = 1; i < strs.length; i++) {
-    while (strs[i].indexOf(prefix) !== 0) {
-      prefix = prefix.substring(0, prefix.length - 1)
-      if (prefix === '') {
-        return ''
-      }
+  const segments = strs.map((s) => s.split(sep))
+  const minLength = Math.min(...segments.map((s) => s.length))
+  const common: string[] = []
+  for (let i = 0; i < minLength; i++) {
+    const segment = segments[0][i]
+    if (segments.every((s) => s[i] === segment)) {
+      common.push(segment)
+    } else {
+      break
     }
   }
-  return prefix
+  if (common.length > 0 && segments.every((s) => s.length === common.length)) {
+    common.pop()
+  }
+  return common.join(sep)
+}
+
+// Root the packaged files under a real directory instead of the image's `/`.
+// Building at `/` breaks tooling that walks up for config and treats the root
+// specially — e.g. `npm install` fails with `Tracker "idealTree" already
+// exists` when WORKDIR is `/` (which happens whenever a task's cwd is the build
+// context root). Paths inside the image become `${CONTAINER_ROOT}/<relative>`.
+const CONTAINER_ROOT = '/hammerkit'
+
+function toContainerPath(relativePath: string): string {
+  const normalized = relativePath.split(sep).join('/')
+  return normalized === '' ? CONTAINER_ROOT : `${CONTAINER_ROOT}/${normalized}`
 }
 
 function getServiceInstructions(service: WorkItem<ContainerWorkService>, options: CliPackageOptions): TaskInstructions {
@@ -195,12 +225,13 @@ function getServiceInstructions(service: WorkItem<ContainerWorkService>, options
     ...Object.entries(service.data.envs.variables).map(([key, value]) => `ENV ${key}=${value}`),
 
     ...service.data.ports.map((p) => `EXPOSE ${p.containerPort}`),
-    `WORKDIR /${relative(dependencyCwd, service.data.cwd)}`,
+    `WORKDIR ${toContainerPath(relative(dependencyCwd, service.data.cwd))}`,
 
     options.overrideUser ? 'RUN (addgroup -g 1000 hammerkit && adduser -u 1000 -G hammerkit -s /bin/sh) || true' : '',
 
     ...service.data.src.map(
-      (s) => `COPY ${relative(dependencyCwd, s.absolutePath)} /${relative(dependencyCwd, s.absolutePath)}`
+      (s) =>
+        `COPY ${relative(dependencyCwd, s.absolutePath)} ${toContainerPath(relative(dependencyCwd, s.absolutePath))}`
     ),
 
     ...deps.flatMap((d) => d.exports),
@@ -208,14 +239,16 @@ function getServiceInstructions(service: WorkItem<ContainerWorkService>, options
     ...(options.overrideUser
       ? service.data.src
           .filter((s) => !s.inherited)
-          .map((v) => `RUN chown -R 1000:1000 /${relative(dependencyCwd, v.absolutePath)}`)
+          .map((v) => `RUN chown -R 1000:1000 ${toContainerPath(relative(dependencyCwd, v.absolutePath))}`)
       : []),
 
     ...service.data.volumes
       .filter((v) => !v.inherited)
-      .map((v) => `VOLUME ${relative(dependencyCwd, v.containerPath)}`),
+      .map((v) => `VOLUME ${toContainerPath(relative(dependencyCwd, v.containerPath))}`),
     ...(options.overrideUser
-      ? service.data.volumes.map((v) => `RUN chown -R 1000:1000 /${relative(dependencyCwd, v.containerPath)}`)
+      ? service.data.volumes.map(
+          (v) => `RUN chown -R 1000:1000 ${toContainerPath(relative(dependencyCwd, v.containerPath))}`
+        )
       : []),
 
     options.overrideUser ? 'USER 1000:1000' : '',
@@ -297,17 +330,22 @@ function getTaskInstructions(
     instructions: [
       `FROM ${task.data.image} as task-${task.id()}`,
       ...Object.entries(task.data.envs.variables).map(([key, value]) => `ENV ${key}=${value}`),
-      `WORKDIR /${relative(cwd, task.data.cwd)}`,
-      ...task.data.mounts.map((m) => `COPY ${relative(cwd, m.localPath)} /${relative(cwd, m.containerPath)}`),
+      `WORKDIR ${toContainerPath(relative(cwd, task.data.cwd))}`,
+      ...task.data.mounts.map(
+        (m) => `COPY ${relative(cwd, m.localPath)} ${toContainerPath(relative(cwd, m.containerPath))}`
+      ),
       ...deepDeps.flatMap((t) =>
         t.sources.map(
-          (s) => `COPY --from=task-${t.id} /${relative(cwd, s.absolutePath)} /${relative(cwd, s.absolutePath)}`
+          (s) =>
+            `COPY --from=task-${t.id} ${toContainerPath(relative(cwd, s.absolutePath))} ${toContainerPath(
+              relative(cwd, s.absolutePath)
+            )}`
         )
       ),
       ...deepDeps.flatMap((d) => d.exports),
       ...task.data.src
         .filter((s) => !s.inherited)
-        .map((s) => `COPY ${relative(cwd, s.absolutePath)} /${relative(cwd, s.absolutePath)}`),
+        .map((s) => `COPY ${relative(cwd, s.absolutePath)} ${toContainerPath(relative(cwd, s.absolutePath))}`),
       ...task.data.cmds.map((command) => `RUN ${command.cmd}`),
       '####################',
     ],
@@ -319,7 +357,10 @@ function getTaskInstructions(
       ...task.data.generates
         .filter((g) => !g.inherited)
         .map(
-          (generate) => `COPY --from=task-${task.id()} ${relative(cwd, generate.path)} /${relative(cwd, generate.path)}`
+          (generate) =>
+            `COPY --from=task-${task.id()} ${toContainerPath(relative(cwd, generate.path))} ${toContainerPath(
+              relative(cwd, generate.path)
+            )}`
         ),
     ],
     deps,

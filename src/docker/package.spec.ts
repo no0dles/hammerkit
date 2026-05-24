@@ -65,19 +65,19 @@ describe('docker/package', () => {
         },
         services: {
           postgres: {
-            image: 'postgres',
+            image: 'postgres:16-alpine',
             envs: {
               POSTGRES_USER: 'postgres',
               POSTGRES_DB: 'demo',
               POSTGRES_PASSWORD: '$POSTGRES_PASSWORD',
             },
-            ports: ['5432'],
+            ports: [':5432'],
             volumes: ['postgres-db:/var/lib/postgresql/data'],
           },
           registry: {
             image: 'registry:2',
             labels: { app: 'registry' },
-            ports: ['5000'],
+            ports: ['5500:5000'],
           },
           api: {
             deps: ['install'],
@@ -128,7 +128,7 @@ main().catch((err) => {
       try {
         await testCase.cli({ filterLabels: { app: ['api'] } }, async (cli) => {
           await cli.package({
-            registry: 'localhost:5000',
+            registry: 'localhost:5500',
             push: true,
             overrideUser: true,
             username: null,
