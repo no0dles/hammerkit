@@ -49,5 +49,8 @@ export function createLocalCacheBackend(spec: LocalCacheBackendSpec): CacheBacke
         await environment.file.copy(join(from, file), join(remoteDir, file))
       }
     },
+    async clear(taskId, environment): Promise<void> {
+      await environment.file.remove(join(root, taskId))
+    },
   }
 }

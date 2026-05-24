@@ -58,4 +58,29 @@ describe('local cache backend', () => {
     await backend.push('taskA', 'key1', sourceDir, env)
     expect(await backend.has('taskA', 'key2', env)).toBe(false)
   })
+
+  it('clear removes every state key of a task without touching others', async () => {
+    const env = environmentMock(scratch)
+    const backend = createLocalCacheBackend({ type: 'local', path: root })
+
+    const sourceDir = join(scratch, 'src')
+    await env.file.createDirectory(sourceDir)
+    await env.file.writeFile(join(sourceDir, 'stats.json'), '{}')
+
+    await backend.push('taskA', 'key1', sourceDir, env)
+    await backend.push('taskA', 'key2', sourceDir, env)
+    await backend.push('taskB', 'key1', sourceDir, env)
+
+    await backend.clear('taskA', env)
+
+    expect(await backend.has('taskA', 'key1', env)).toBe(false)
+    expect(await backend.has('taskA', 'key2', env)).toBe(false)
+    expect(await backend.has('taskB', 'key1', env)).toBe(true)
+  })
+
+  it('clear is a no-op when the task has nothing cached', async () => {
+    const env = environmentMock(scratch)
+    const backend = createLocalCacheBackend({ type: 'local', path: root })
+    await expect(backend.clear('missing', env)).resolves.toBeUndefined()
+  })
 })

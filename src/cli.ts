@@ -134,8 +134,8 @@ export class Cli {
     return await run.start()
   }
 
-  async clean(): Promise<void> {
-    await cleanCache(this.workTree, this.environment)
+  async clean(options?: { cache?: boolean }): Promise<void> {
+    await cleanCache(this.workTree, this.environment, options)
   }
 
   async restore(path: string): Promise<void> {

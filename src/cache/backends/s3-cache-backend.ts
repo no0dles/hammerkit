@@ -1,4 +1,5 @@
 import {
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
@@ -33,6 +34,10 @@ export function createS3CacheBackend(spec: S3CacheBackendSpec): CacheBackend {
 
   function dirPrefix(taskId: string, stateKey: string): string {
     return [prefix, taskId, stateKey].filter((p) => p.length > 0).join('/') + '/'
+  }
+
+  function taskPrefix(taskId: string): string {
+    return [prefix, taskId].filter((p) => p.length > 0).join('/') + '/'
   }
 
   return {
@@ -106,6 +111,28 @@ export function createS3CacheBackend(spec: S3CacheBackendSpec): CacheBackend {
           })
         )
       }
+    },
+    async clear(taskId): Promise<void> {
+      let token: string | undefined
+      do {
+        const listed = await client.send(
+          new ListObjectsV2Command({
+            Bucket: spec.bucket,
+            Prefix: taskPrefix(taskId),
+            ContinuationToken: token,
+          })
+        )
+        const objects = (listed.Contents ?? []).filter((o) => o.Key).map((o) => ({ Key: o.Key as string }))
+        if (objects.length > 0) {
+          await client.send(
+            new DeleteObjectsCommand({
+              Bucket: spec.bucket,
+              Delete: { Objects: objects },
+            })
+          )
+        }
+        token = listed.IsTruncated ? listed.NextContinuationToken : undefined
+      } while (token)
     },
   }
 }

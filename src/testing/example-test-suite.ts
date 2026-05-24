@@ -68,7 +68,10 @@ export class ExampleTestSuite implements TestSuite {
     })
 
     const cli = await createCli(fileName, environment, scope)
-    await cli.clean()
+    // clear the backend cache too: the default `local` backend persists under
+    // ~/.hammerkit/remote-cache outside the test's temp dir, so without this a
+    // prior run's result would leak in and make cache assertions flaky.
+    await cli.clean({ cache: true })
 
     // reset cli clean stats
     environment.status = statusConsole(statusStream.stream)

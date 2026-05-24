@@ -9,6 +9,9 @@ export interface CacheBackend {
   pull(taskId: string, stateKey: string, into: string, environment: Environment): Promise<boolean>
 
   push(taskId: string, stateKey: string, from: string, environment: Environment): Promise<void>
+
+  /** Remove every cached entry for a task (all state keys). */
+  clear(taskId: string, environment: Environment): Promise<void>
 }
 
 export type CacheBackendFactory = (spec: CacheBackendSchema) => CacheBackend

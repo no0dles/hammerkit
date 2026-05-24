@@ -150,10 +150,16 @@ export async function getProgram(
       .description('clear cache and generated')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(
+        new Option(
+          '--cache',
+          'also clear stored cache results from the backend (e.g. the local ~/.hammerkit/remote-cache or a configured remote bucket)'
+        )
+      )
       .action(async (options) => {
         try {
           const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
-          await cli.clean()
+          await cli.clean({ cache: !!options.cache })
         } catch (e) {
           if (e instanceof CommanderError) {
             throw e

@@ -82,9 +82,17 @@ export async function storeCache(environment: Environment, path: string, workTre
   }
 }
 
-export async function cleanCache(workTree: WorkTree, environment: Environment): Promise<void> {
+export async function cleanCache(
+  workTree: WorkTree,
+  environment: Environment,
+  options?: { cache?: boolean }
+): Promise<void> {
   for (const task of iterateWorkTasks(workTree)) {
     await task.runtime.remove(environment)
+
+    if (options?.cache) {
+      await task.data.caching.backend.clear(task.id(), environment)
+    }
 
     const cachePath = getCacheDirectory(task.id())
     if (await environment.file.exists(cachePath)) {
@@ -95,5 +103,9 @@ export async function cleanCache(workTree: WorkTree, environment: Environment): 
 
   for (const service of iterateWorkServices(workTree)) {
     await service.runtime.remove(environment)
+
+    if (options?.cache) {
+      await service.data.caching.backend.clear(service.id(), environment)
+    }
   }
 }

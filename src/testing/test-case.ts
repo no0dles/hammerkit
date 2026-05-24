@@ -73,7 +73,9 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
         environment.processEnvs = { ...environment.processEnvs, ...(scope.envs ?? {}) }
 
         const cli = await createCli(fileName, environment, scope)
-        await cli.clean()
+        // also clear the persistent backend cache (~/.hammerkit/remote-cache)
+        // so results don't leak between test runs on the same machine.
+        await cli.clean({ cache: true })
 
         if (fn) {
           await fn(cli, environment)
