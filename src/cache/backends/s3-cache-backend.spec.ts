@@ -95,4 +95,27 @@ describe('s3 cache backend', () => {
     expect(await env.file.exists(join(into, 'stats.json'))).toBe(true)
     expect(await env.file.exists(join(into, 'dist.tgz'))).toBe(true)
   })
+
+  it('does not write objects whose key escapes the restore dir on pull', async () => {
+    const backend = createS3CacheBackend({ type: 's3', bucket: 'b', region: 'us-east-1' })
+    const env = environmentMock(scratch)
+
+    sendMock.mockResolvedValueOnce({}) // head
+    sendMock.mockResolvedValueOnce({
+      // a poisoned bucket can list a key whose suffix traverses out of the dir
+      Contents: [{ Key: 'task/state/../escape.txt' }, { Key: 'task/state/safe.txt' }],
+    })
+    // only the safe object should be fetched; the traversal entry is skipped before Get
+    sendMock.mockResolvedValueOnce({ Body: Readable.from(['ok']) })
+
+    const into = join(scratch, 'pulled')
+    const ok = await backend.pull('task', 'state', into, env)
+
+    expect(ok).toBe(true)
+    expect(await env.file.exists(join(into, 'safe.txt'))).toBe(true)
+    // ../escape.txt would resolve to scratch/escape.txt, outside `into`
+    expect(await env.file.exists(join(scratch, 'escape.txt'))).toBe(false)
+    // the traversal entry must not trigger a GetObject (head + list + 1 get = 3)
+    expect(sendMock).toHaveBeenCalledTimes(3)
+  })
 })

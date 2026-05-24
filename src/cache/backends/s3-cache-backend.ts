@@ -8,8 +8,18 @@ import {
 } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
 import { readFile } from 'fs/promises'
-import { join } from 'path'
+import { join, resolve, sep } from 'path'
 import { CacheBackend } from '../cache-backend'
+
+// S3 object keys are arbitrary strings (unlike filesystem listings), so a
+// poisoned/shared bucket can return a key whose suffix contains `../` and escape
+// the restore directory once joined. Resolve the target and confirm it stays
+// within `into`; anything outside is dropped rather than written.
+function isWithin(into: string, filename: string): boolean {
+  const base = resolve(into)
+  const target = resolve(base, filename)
+  return target === base || target.startsWith(base + sep)
+}
 
 export interface S3CacheBackendSpec {
   type: 's3'
@@ -79,6 +89,10 @@ export function createS3CacheBackend(spec: S3CacheBackendSpec): CacheBackend {
           if (!obj.Key) continue
           const filename = obj.Key.substring(dirPrefix(taskId, stateKey).length)
           if (!filename) continue
+          if (!isWithin(into, filename)) {
+            environment.console.warn(`skipping cache object outside restore dir: ${obj.Key}`)
+            continue
+          }
           const body = await client.send(
             new GetObjectCommand({
               Bucket: spec.bucket,
