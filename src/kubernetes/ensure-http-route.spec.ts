@@ -9,7 +9,9 @@ function httpError(statusCode: number): Error & { statusCode: number } {
   return Object.assign(new Error(`http ${statusCode}`), { statusCode })
 }
 
-function makeInstance(objectApi: Partial<{ read: jest.Mock; patch: jest.Mock; create: jest.Mock }>): KubernetesInstance {
+function makeInstance(
+  objectApi: Partial<{ read: jest.Mock; patch: jest.Mock; create: jest.Mock }>
+): KubernetesInstance {
   return { objectApi } as any
 }
 

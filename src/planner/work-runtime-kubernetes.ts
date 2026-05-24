@@ -20,11 +20,7 @@ import { awaitJobState } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureIngress } from '../kubernetes/ensure-ingress'
-import {
-  ensureHttpRoute,
-  HTTP_ROUTE_API_VERSION,
-  HTTP_ROUTE_KIND,
-} from '../kubernetes/ensure-http-route'
+import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
 import { getErrorMessage } from '../log'
 import { getVersion } from '../version'
