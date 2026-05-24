@@ -137,11 +137,19 @@ export function getFileContext(cwd: string): FileContext {
     async remove(path: string): Promise<void> {
       const absolutePath = getAbsolutePath(cwd, path)
       if (await this.exists(absolutePath)) {
-        return handleCallback((cb) => rm(absolutePath, { recursive: true }, cb))
+        // On Windows a file/dir can briefly stay locked after a watcher or
+        // process releases it, making rmdir fail with EBUSY/EPERM. Node's
+        // built-in retry handles exactly those transient errors.
+        return handleCallback((cb) =>
+          rm(absolutePath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }, cb)
+        )
       }
     },
     watch(path: string, callback: (fileName: string) => void): { close(): void } {
-      const watcher = watch(getAbsolutePath(cwd, path))
+      // Native fs events are unreliable on Windows CI/virtual filesystems and
+      // frequently miss single-file changes; poll there so source edits are
+      // detected deterministically. Other platforms keep native events.
+      const watcher = watch(getAbsolutePath(cwd, path), { usePolling: process.platform === 'win32' })
       watcher.on('add', (fileName) => {
         callback(fileName)
       })

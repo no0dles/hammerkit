@@ -41,11 +41,13 @@ jobs:
           coverage-reports: coverage/lcov.info
 
   # Linux-container coverage on macOS via colima. Kept separate from the fast
-  # unit matrix so colima flakiness can't gate the portable suites. k8s specs
-  # no-op (CLUSTER_NAME unset) and the registry self-provisions via docker
-  # (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
+  # unit matrix so colima flakiness can't gate the portable suites. Must run on
+  # an Intel runner: Apple-Silicon GitHub runners lack the nested virtualization
+  # colima needs. macos-15-intel is the last hosted Intel image (until ~2027).
+  # k8s specs no-op (CLUSTER_NAME unset) and the registry self-provisions via
+  # docker (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
   macos-containers:
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 60
     env:
       LINUX_CONTAINERS: 'true'
@@ -58,12 +60,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-      - name: Start docker via colima
-        run: |
-          brew install docker colima
-          colima start --vm-type=vz
-          sudo ln -sf $HOME/.colima/default/docker.sock /var/run/docker.sock
-          docker info
+      - name: Setup Docker on macOS
+        uses: douglascamata/setup-docker-macos-action@v1.1.0
+        with:
+          lima: latest
+          colima: latest
+          colima-additional-options: '--cpu 3 --memory 6 --disk 20'
+      - name: Point default docker socket at colima (for dockerode)
+        run: sudo ln -sf "$HOME/.colima/default/docker.sock" /var/run/docker.sock
       - name: Install npm packages
         run: npm ci
       - name: Run container integration tests
