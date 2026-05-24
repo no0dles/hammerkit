@@ -63,3 +63,20 @@ tasks:
     cmds:
       - tsc -b
 ```
+
+### Resetting generated files on change
+By default a generated directory keeps its contents between runs, so a re-run can
+reuse previous output. Mark a generate with `resetOnChange: true` to wipe it
+before the task runs again, guaranteeing the task starts from an empty output
+directory and no stale files from a previous run remain.
+
+```yaml
+tasks:
+  bundle:
+    image: node:alpine
+    generates:
+      - path: dist
+        resetOnChange: true
+    cmds:
+      - node bundle.js
+```

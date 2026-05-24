@@ -1,16 +1,30 @@
 {
   "name": "hammerkit",
-  "description": "build stuff and things",
+  "description": "Containerized build tool with incremental caching that runs the same build file locally, in Docker and on Kubernetes.",
   "version": "1.6.0",
+  "keywords": [
+    "build",
+    "build-tool",
+    "ci",
+    "docker",
+    "kubernetes",
+    "cache",
+    "monorepo",
+    "task-runner"
+  ],
+  "homepage": "https://no0dles.gitbook.io/hammerkit/",
   "bin": "dist/index.js",
   "bugs": {
-    "url": "https://github.com/no0dles/hammerkit"
+    "url": "https://github.com/no0dles/hammerkit/issues"
   },
   "author": {
     "name": "no0dles",
     "url": "https://github.com/no0dles"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "repository": {
     "url": "https://github.com/no0dles/hammerkit",
     "type": "git"

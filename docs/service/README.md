@@ -67,7 +67,7 @@ tasks:
 
 ## Environment hints for local tasks
 A container task reaches a needed service through the container network using the
-service name. A local task (a task without an `image`, or any task run with `--no-container`) is
+service name. A local task (a task without an `image`) is
 not part of that network, so hammerkit instead injects the connection details as
 environment variables.
 

@@ -13,6 +13,13 @@ Tracking what's done on `feature/runtime-followups` and what remains. The integr
 
 ## Open
 
+**Release triage (1.6.0):** none of the items below block the 1.6.0 release — they
+are tracked as post-1.6.0 cleanup. Two are worth prioritizing next because they
+affect correctness rather than polish: the `task-state` transitive dep state-keys
+(cache can fail to invalidate transitively) and the `ensure-persistent-data`
+cleanup/dedupe (leaks old upload pods / re-uploads existing state). The rest are
+error-message and code-placement improvements.
+
 ### Smaller TODOs (lower priority)
 
 - [src/planner/utils/append-work-dependencies.ts:39](src/planner/utils/append-work-dependencies.ts) — `// TODO check if thats correct` (skipping `isFile` generates when inheriting).

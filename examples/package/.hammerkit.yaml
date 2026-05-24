@@ -1,0 +1,23 @@
+# Demonstrates `hammerkit package <registry>`: the `api` service is baked into a
+# docker image named `<registry>/api`, with the `node_modules` produced by the
+# `install` dependency copied in. Build it with e.g.:
+#
+#   hammerkit package localhost:5000 --push
+#
+services:
+  api:
+    image: node:alpine
+    deps: [install]
+    cmd: node server.js
+    ports: [3000]
+    mounts: [server.js]
+
+tasks:
+  install:
+    image: node:alpine
+    src:
+      - package.json
+    generates:
+      - node_modules
+    cmds:
+      - npm install --omit=dev

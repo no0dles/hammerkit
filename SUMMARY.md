@@ -24,7 +24,10 @@
   * [Init](docs/cli/init.md)
   * [ls](docs/cli/ls.md)
   * [Execute](docs/cli/execute.md)
+  * [Up](docs/cli/up.md)
+  * [Down](docs/cli/down.md)
   * [Store / Restore](docs/cli/store-restore.md)
+  * [Package](docs/cli/package.md)
   * [Clean](docs/cli/clean.md)
   * [Validate](docs/cli/validate.md)
   * [Help](docs/cli/README.md)
@@ -49,3 +52,4 @@
 
 * [Roadmap](docs/contribution/roadmap.md)
 * [Publishing](docs/contribution/publish.md)
+* [Self-hosted runner](docs/contribution/self-hosted-runner.md)

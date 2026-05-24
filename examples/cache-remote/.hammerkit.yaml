@@ -1,0 +1,33 @@
+# Demonstrates a named cache with a remote backend. The `build` task references
+# the `shared` cache, so its result is stored in the backend and can be restored
+# on another checkout or machine instead of rebuilding.
+#
+# This example uses the `local` backend (a shared filesystem directory) so it runs
+# without any cloud credentials. Swap it for the commented `s3` backend to share
+# results across machines and CI.
+caches:
+  shared:
+    method: checksum
+    backend:
+      type: local
+      path: .hammerkit-cache
+
+  # remote:
+  #   method: checksum
+  #   backend:
+  #     type: s3
+  #     bucket: my-build-cache
+  #     region: eu-central-1
+  #     # endpoint: https://minio.example.com   # for S3-compatible services
+
+tasks:
+  build:
+    image: node:alpine
+    cache:
+      name: shared
+    src:
+      - src
+    generates:
+      - dist
+    cmds:
+      - mkdir -p dist && cp -r src/. dist/

@@ -43,6 +43,27 @@ jobs:
       - name: Run integration tests
         run: npm run test:integration
 
+      - name: Archive integration coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage-integration/lcov.info
+          if-no-files-found: ignore
+
+      # Reports coverage of the docker/kubernetes/service runtime, which the unit
+      # run in test.yaml cannot reach. Uploaded for the same commit as the unit
+      # report so Codacy combines them; for files covered by both reports use a
+      # partial upload (the Codacy CLI `report --partial` + `final`) if precise
+      # line-level merging is needed.
+      - name: Upload coverage
+        if: github.ref == 'refs/heads/master'
+        continue-on-error: true
+        uses: codacy/codacy-coverage-reporter-action@master
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: coverage-integration/lcov.info
+
       - name: Archive logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
