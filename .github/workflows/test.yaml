@@ -5,7 +5,11 @@ on:
       - '**'
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,20 +22,57 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           VERBOSE: true
       - name: Archive test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: console-log
+          name: console-log-${{ matrix.os }}
           path: |
             logs
       - name: Upload coverage
-        if: github.ref == 'refs/heads/master'
+        if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/master'
         continue-on-error: true
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/lcov.info
+
+  # Linux-container coverage on macOS via colima. Kept separate from the fast
+  # unit matrix so colima flakiness can't gate the portable suites. k8s specs
+  # no-op (CLUSTER_NAME unset) and the registry self-provisions via docker
+  # (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
+  macos-containers:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      LINUX_CONTAINERS: 'true'
+      VERBOSE: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Start docker via colima
+        run: |
+          brew install docker colima
+          colima start --vm-type=vz
+          sudo ln -sf $HOME/.colima/default/docker.sock /var/run/docker.sock
+          docker info
+      - name: Install npm packages
+        run: npm ci
+      - name: Run container integration tests
+        run: npm run test:integration
+      - name: Archive logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-container-logs
+          path: |
+            logs
+            temp
