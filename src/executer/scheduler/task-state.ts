@@ -2,7 +2,8 @@ export interface TaskPendingState {
   type: 'pending'
   stateKey: string | null
 }
-// TODO add dep stateKeys
+// stateKey here is the effective key (own sources folded with dependency keys),
+// computed in checkCacheState; see combineStateKeys/resolveEffectiveStateKey.
 export interface TaskStartingState {
   type: 'starting'
   started: Date
