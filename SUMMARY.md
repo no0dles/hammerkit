@@ -51,5 +51,6 @@
 ## Contribution
 
 * [Roadmap](docs/contribution/roadmap.md)
+  * [Secret managers (planned)](docs/contribution/secret-managers.md)
 * [Publishing](docs/contribution/publish.md)
 * [Self-hosted runner](docs/contribution/self-hosted-runner.md)

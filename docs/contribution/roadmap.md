@@ -9,6 +9,13 @@ The goal will be general performance improvements on CI and local development.
 Offload complex and compute intense tasks to remote hardware.
 The goal will be use the power of cloud computing, with very less configuration.
 
+## Secret managers
+Source environment variables from external secret managers (Vault, AWS/GCP, 1Password, …)
+instead of plain `.env` files, and redact secret values from log output.
+The goal will be a pluggable secret-provider mechanism (starting with a `command` provider)
+referenced inline via `secret://<provider>/<name>`. Planned for 1.7.0 — see the
+[detailed plan](secret-managers.md).
+
 # Past topics on the roadmap
 
 ## Services
