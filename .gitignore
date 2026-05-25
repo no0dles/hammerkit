@@ -10,3 +10,4 @@ temp
 .DS_Store
 logs
 .claude/worktrees
+coverage-merged

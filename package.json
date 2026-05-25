@@ -35,7 +35,8 @@
     "test": "jest",
     "test:integration": "jest --config jest.integration.config.ts",
     "format": "prettier -w src/** && eslint . --fix --ext .ts",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "coverage:merged": "node scripts/coverage-merge.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.470.0",
