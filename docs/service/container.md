@@ -14,7 +14,7 @@ Depending on your setup, this can result in less cpu/memory usage in general.
 It ensures simplicity and reduces the need for another tool that needs to be started and awaited, before you can run your task.
 
 ### Reusage
-Services can be included or references similar to tasks.
+Services can be included or referenced similar to tasks.
 This makes it possible to reuse services and their state for multiple hammerkit files/projects.
 
 Making it possible to run just one database for multiple projects and reducing required cpu/memory. 
