@@ -76,6 +76,10 @@ Or poll `gh run list --branch <branch>` / `gh pr checks` until the run finishes.
 
 ## Guardrails
 
+- **Fix the failure; never skip it.** Getting CI green means fixing what's broken —
+  not skipping, disabling, excluding, `.skip`/`xfail`, weakening an assertion, or
+  deleting the failing test. That defeats the whole point of this skill. See the
+  `do-the-work` skill and `.agents/FEEDBACK.md`.
 - Cap attempts (~3–5). If the **same** failure recurs across iterations, stop and surface it.
 - Treat infra/flake as not-your-bug: the `integration` workflow runs on a self-hosted runner,
   and the `macos-containers` job uses colima (flaky, slow). If a failure looks like infra,

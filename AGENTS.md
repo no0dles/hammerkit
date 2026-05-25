@@ -8,6 +8,22 @@ Hammerkit is a containerized build tool (CLI distributed as `dist/index.js`). It
 
 User-facing docs live at https://no0dles.gitbook.io/hammerkit/ (see [SUMMARY.md](SUMMARY.md) for the structure).
 
+## Working agreement
+
+How to work in this repo (see the `do-the-work` skill for detail):
+
+- **Do the work; don't avoid it.** When the task is to fix something — CI, a test,
+  the build, a check — fixing the root cause *is* the deliverable. Never resolve a
+  failure by skipping, disabling, excluding, `.skip`/`xfail`, weakening an
+  assertion, or stopping early (unless the user explicitly asks).
+- **Ask implementation questions, not permission to avoid work.** Design and
+  ambiguity questions are welcome; "can I skip/disable/leave this?" is not — that's
+  the work, do it. Escalate only when genuinely blocked (access, a product
+  decision, contradictory requirements), and propose the fix path.
+- **Don't make the user repeat himself.** Read [.agents/FEEDBACK.md](.agents/FEEDBACK.md)
+  before working and apply it; when corrected, append the correction there so it's
+  not re-litigated.
+
 ## Commands
 
 - `npm run build` — `tsc -b tsconfig.json`, outputs to `dist/`

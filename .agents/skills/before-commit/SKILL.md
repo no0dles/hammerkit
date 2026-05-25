@@ -9,6 +9,10 @@ Run these locally before `git commit`/`git push`. Each maps to a GitHub Actions
 gate; passing them locally is the difference between a green push and a red one.
 Run from the repo root.
 
+Making a gate pass means **fixing the cause**, not disabling the check (no skipped
+tests, no relaxed lint/prettier config to dodge an error) — see the `do-the-work`
+skill.
+
 ## 1. Prettier — the most common CI break
 
 The `build` workflow runs `prettier --check 'src/**'`, and it is **strict**: a
