@@ -26,6 +26,9 @@ const config: Config.InitialOptions = {
   collectCoverage: true,
   coverageDirectory: '<rootDir>/coverage',
   collectCoverageFrom: ['<rootDir>/src/**'],
+  // Exclude test-related code from coverage: the integration test harness and
+  // the spec/declaration files are not product code.
+  coveragePathIgnorePatterns: ['/node_modules/', '<rootDir>/src/testing/', '\\.spec\\.ts$', '\\.d\\.ts$'],
   coverageReporters: ['json', 'html', 'lcov'],
   reporters: ['github-actions', 'default', 'summary'],
 }

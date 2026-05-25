@@ -36,6 +36,7 @@
     "test:integration": "jest --config jest.integration.config.ts",
     "format": "prettier -w src/** && eslint . --fix --ext .ts",
     "lint": "eslint . --ext .ts",
+    "coverage": "jest --coverage --coverageReporters=html --coverageReporters=text-summary",
     "coverage:merged": "node scripts/coverage-merge.js"
   },
   "dependencies": {
