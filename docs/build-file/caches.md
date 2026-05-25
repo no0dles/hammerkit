@@ -165,6 +165,32 @@ Two caches are always available without declaring them:
   `~/.hammerkit/remote-cache` by default.
 * `none` - uses the `none` method, disabling skipping entirely.
 
+### Changing the default for all tasks
+
+Declaring a `caches.default` entry overrides the built-in `default` cache, so the
+new backend applies to **every task that does not reference a cache explicitly**.
+This is the way to point all tasks at a shared local path or a remote bucket
+without touching each task.
+
+{% code title=".hammerkit.yaml" %}
+```yaml
+caches:
+  default:
+    method: checksum
+    backend:
+      type: s3
+      bucket: my-build-cache
+      region: eu-central-1
+```
+{% endcode %}
+
+{% hint style="info" %}
+The `--cache` flag still overrides the *method* for these implicit tasks at
+runtime (it defaults to `modify-date` locally and `checksum` in CI), so
+redeclaring `caches.default` is primarily how you change the default *backend*.
+See [task caching](../task/caching.md#changing-the-default-for-all-tasks).
+{% endhint %}
+
 ## Pull / push behavior
 
 When a cache has a remote backend (`local` or `s3`):

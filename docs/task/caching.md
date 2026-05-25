@@ -92,6 +92,35 @@ tasks:
 ```
 {% endcode %}
 
+### Changing the default for all tasks
+
+A task without a `cache` field uses the built-in `default` cache, and its method
+is the global default rather than something declared on the task. There are two
+ways to change that default for every such task.
+
+**Per run - the `--cache` flag.** Pass `--cache <method>` to set the method for
+all tasks that did not declare their own `cache`. The choices are `checksum`,
+`modify-date` and `none`. The default is environment dependent: `modify-date`
+locally and `checksum` in CI. See [execute](../cli/execute.md) for the full
+option reference.
+
+{% code title="terminal" %}
+```bash
+hammerkit build --cache checksum
+```
+{% endcode %}
+
+**Persistently - redeclare `caches.default`.** To change the default cache
+*backend* for every task (for example to share results through a remote bucket),
+redeclare the built-in `default` cache in the build file. See
+[caches](../build-file/caches.md#built-in-caches).
+
+{% hint style="info" %}
+An explicit `cache` on a task always wins. Both the shorthand
+(`cache: modify-date`) and the object form are left untouched by `--cache`, so
+only tasks that did not opt in follow the global default.
+{% endhint %}
+
 ### Remote caches & backends
 
 A task can reference a named [cache](../build-file/caches.md) with a remote
