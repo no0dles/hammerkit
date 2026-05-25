@@ -3,18 +3,47 @@ import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
 import { V1Pod } from '@kubernetes/client-node'
-import { apply, KubernetesObjectHeader } from './apply'
+import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
 import { create } from 'tar'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
 import { awaitRunningState } from './await-running-state'
+import { sleep } from '../utils/sleep'
 import { getVersion } from '../version'
 import { getErrorMessage } from '../log'
 import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
 import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMount'
+
+// A previous run that crashed between creating an upload/download pod and its
+// `finally` cleanup leaves a pod behind under the same deterministic name. apply()
+// would then patch that stale pod in place — and if it is stuck in a terminal
+// phase the subsequent awaitRunningState never resolves. Force-delete any leftover
+// and wait for it to disappear before scheduling a fresh one.
+async function removeStalePod(instance: KubernetesInstance, namespace: string, name: string): Promise<void> {
+  try {
+    await instance.coreApi.deleteNamespacedPod(name, namespace, undefined, undefined, 0)
+  } catch (e) {
+    if (statusCodeOf(e) === 404) {
+      return
+    }
+    throw e
+  }
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try {
+      await instance.coreApi.readNamespacedPod(name, namespace)
+    } catch (e) {
+      if (statusCodeOf(e) === 404) {
+        return
+      }
+      throw e
+    }
+    await sleep(500)
+  }
+}
 
 export async function getPodForPersistence(
   instance: KubernetesInstance,
@@ -27,8 +56,6 @@ export async function getPodForPersistence(
   if (persistence.volumes.length === 0) {
     return
   }
-
-  // TODO remove old upload pods
 
   const mounts: V1VolumeMount[] =
     type === 'read'
@@ -81,6 +108,7 @@ export async function getPodForPersistence(
   }
 
   service.status.console('stdout', `create pod ${name}`)
+  await removeStalePod(instance, env.namespace, name)
   const pod = await apply(instance, podSpec)
 
   if (pod.status?.phase !== 'Running') {
@@ -103,7 +131,9 @@ export async function ensurePersistentData(
   service: WorkItem<ContainerWorkService | ContainerWorkTask>,
   persistence: KubernetesPersistence
 ) {
-  // TODO check if state is already uploaded
+  // Dedupe of already-uploaded state (skip the upload when the persisted state
+  // key still matches) needs an in-cluster state marker per volume — deferred
+  // post-1.6.0, tracked in FOLLOWUPS.md alongside the volumes.ts stateKey/matcher.
 
   for (const volume of persistence.volumes) {
     await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service)
@@ -114,9 +144,9 @@ export async function ensurePersistentData(
   }
 
   service.status.console('stdout', 'start upload container')
-  // TODO check if file exists
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
     for (const source of persistence.sources) {
+      // skip sources that don't exist on disk — nothing to upload
       if (!(await environment.file.exists(source.localPath))) {
         continue
       }

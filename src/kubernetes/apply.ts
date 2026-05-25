@@ -8,7 +8,7 @@ export type KubernetesObjectHeader = {
   }
 } & Pick<KubernetesObject, 'apiVersion' | 'kind'>
 
-function statusCodeOf(e: unknown): number | undefined {
+export function statusCodeOf(e: unknown): number | undefined {
   const err = e as { statusCode?: number; response?: { statusCode?: number }; body?: { code?: number } }
   return err?.statusCode ?? err?.response?.statusCode ?? err?.body?.code
 }
