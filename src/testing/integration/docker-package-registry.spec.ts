@@ -1,7 +1,6 @@
 import { createTestCase } from '../test-case'
 import { ensureLocalRegistry, LocalRegistry } from '../ensure-local-registry'
 import { requiresLinuxContainers } from '../requires-linux-containers'
-import { httpGet } from '../http-get'
 
 describe('docker/package against a local registry', () => {
   let registry: LocalRegistry
@@ -47,11 +46,7 @@ describe('docker/package against a local registry', () => {
         })
       })
 
-      const res = await httpGet(registry.host, registry.hostPort, `/v2/${repository}/tags/list`)
-      expect(res.status).toBe(200)
-      const body = JSON.parse(res.body) as { name: string; tags: string[] | null }
-      expect(body.name).toBe(repository)
-      expect(body.tags?.length ?? 0).toBeGreaterThan(0)
+      expect(await registry.listsTag(repository, 'latest')).toBe(true)
     }),
     180000
   )
