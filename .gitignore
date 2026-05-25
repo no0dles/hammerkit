@@ -9,3 +9,4 @@ examples/*/npm
 temp
 .DS_Store
 logs
+.claude/worktrees
