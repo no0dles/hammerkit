@@ -1,9 +1,12 @@
-import { hasDependencyCycle, hasMixedCycle, hasNeedCycle } from './validate'
+import { checkIfContextExists, hasDependencyCycle, hasMixedCycle, hasNeedCycle, validate } from './validate'
 import { WorkItemNeed, WorkItemState } from './work-item'
-import { WorkService } from './work-service'
+import { KubernetesWorkService, WorkService } from './work-service'
 import { WorkTask } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
+import { WorkTree } from './work-tree'
+import { WorkItemValidation } from './work-item-validation'
+import { Environment } from '../executer/environment'
 
 type AnyItem = WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>
 
@@ -143,5 +146,149 @@ describe('validate', () => {
       expect(cycle).not.toBeNull()
       expect(cycle!.map((i) => i.name)).toEqual(['a', 'b', 'c', 'd', 'a'])
     })
+  })
+})
+
+function taskItem(name: string, data: Partial<WorkTask>): WorkItemState<WorkTask, TaskState> {
+  const item = {
+    id: () => name,
+    name,
+    status: {} as any,
+    data: { type: 'local-task', name, description: 'a task', cmds: [{} as any], src: [], ...data } as any,
+    needs: [] as WorkItemNeed[],
+    deps: [] as WorkItemState<WorkTask, TaskState>[],
+    requiredBy: [] as any[],
+    state: {} as any,
+    runtime: {} as any,
+  }
+  return item as WorkItemState<WorkTask, TaskState>
+}
+
+function serviceItem(name: string, data: Partial<WorkService>): WorkItemState<WorkService, ServiceState> {
+  const item = {
+    id: () => name,
+    name,
+    status: {} as any,
+    data: { type: 'container-service', name, description: 'a service', healthcheck: {}, mounts: [], ...data } as any,
+    needs: [] as WorkItemNeed[],
+    deps: [] as WorkItemState<WorkTask, TaskState>[],
+    requiredBy: [] as any[],
+    state: {} as any,
+    runtime: {} as any,
+  }
+  return item as WorkItemState<WorkService, ServiceState>
+}
+
+function workTree(items: {
+  tasks?: WorkItemState<WorkTask, TaskState>[]
+  services?: WorkItemState<WorkService, ServiceState>[]
+}): WorkTree {
+  return {
+    tasks: Object.fromEntries((items.tasks ?? []).map((t) => [t.name, t])),
+    services: Object.fromEntries((items.services ?? []).map((s) => [s.name, s])),
+    environment: {} as any,
+  }
+}
+
+// Environment whose file.exists only returns true for the listed paths.
+function fakeEnv(existing: string[] = []): Environment {
+  return { file: { exists: jest.fn(async (p: string) => existing.includes(p)) } } as unknown as Environment
+}
+
+async function collect(gen: AsyncGenerator<WorkItemValidation>): Promise<WorkItemValidation[]> {
+  const out: WorkItemValidation[] = []
+  for await (const v of gen) {
+    out.push(v)
+  }
+  return out
+}
+
+describe('validate (generator)', () => {
+  it('warns about a task without a description', async () => {
+    const tree = workTree({ tasks: [taskItem('build', { description: null })] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result).toContainEqual(expect.objectContaining({ type: 'warn', message: 'missing description' }))
+  })
+
+  it('warns about an empty task (no cmds and no deps)', async () => {
+    const tree = workTree({ tasks: [taskItem('noop', { cmds: [] })] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result).toContainEqual(expect.objectContaining({ type: 'warn', message: 'task is empty' }))
+  })
+
+  it('warns about a missing src path', async () => {
+    const tree = workTree({ tasks: [taskItem('build', { src: [{ absolutePath: '/nope' } as any] })] })
+    const result = await collect(validate(tree, fakeEnv([])))
+    expect(result).toContainEqual(expect.objectContaining({ type: 'warn', message: 'src /nope does not exist' }))
+  })
+
+  it('does not warn when the src path exists', async () => {
+    const tree = workTree({ tasks: [taskItem('build', { src: [{ absolutePath: '/yes' } as any] })] })
+    const result = await collect(validate(tree, fakeEnv(['/yes'])))
+    expect(result.map((r) => r.message)).not.toContain('src /yes does not exist')
+  })
+
+  it('emits a cycle error through the generator', async () => {
+    const a = taskItem('a', {})
+    a.deps.push(a)
+    const tree = workTree({ tasks: [a] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result).toContainEqual(expect.objectContaining({ type: 'error', message: 'task cycle detected a -> a' }))
+  })
+
+  it('warns about a container service missing a healthcheck', async () => {
+    const tree = workTree({ services: [serviceItem('db', { healthcheck: null })] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result).toContainEqual(expect.objectContaining({ type: 'warn', message: 'missing healthcheck' }))
+  })
+
+  it('warns about a container service mount that does not exist', async () => {
+    const tree = workTree({
+      services: [serviceItem('db', { mounts: [{ localPath: '/data' } as any] })],
+    })
+    const result = await collect(validate(tree, fakeEnv([])))
+    expect(result).toContainEqual(expect.objectContaining({ type: 'warn', message: 'mount /data does not exist' }))
+  })
+
+  it('warns when a kubernetes service kubeconfig is missing', async () => {
+    const tree = workTree({
+      services: [
+        serviceItem('cluster', {
+          type: 'kubernetes-service',
+          kubeconfig: '/missing/kubeconfig',
+          context: 'prod',
+        } as any),
+      ],
+    })
+    const result = await collect(validate(tree, fakeEnv([])))
+    expect(result).toContainEqual(
+      expect.objectContaining({ type: 'warn', message: 'kubeconfig /missing/kubeconfig does not exist' })
+    )
+  })
+})
+
+describe('checkIfContextExists', () => {
+  function kubeconfigEnv(yaml: string): Environment {
+    return {
+      file: { read: jest.fn(async () => yaml) },
+      status: { context: () => ({ write: jest.fn() }) },
+    } as unknown as Environment
+  }
+
+  const service = { kubeconfig: '/kube/config', context: 'prod' } as KubernetesWorkService
+
+  it('is true when the context is present', async () => {
+    const env = kubeconfigEnv('contexts:\n  - name: prod\n  - name: dev\n')
+    expect(await checkIfContextExists(service, env)).toBe(true)
+  })
+
+  it('is false when the context is absent', async () => {
+    const env = kubeconfigEnv('contexts:\n  - name: dev\n')
+    expect(await checkIfContextExists(service, env)).toBe(false)
+  })
+
+  it('is false when there are no contexts', async () => {
+    const env = kubeconfigEnv('clusters:\n  - name: c1\n')
+    expect(await checkIfContextExists(service, env)).toBe(false)
   })
 })
