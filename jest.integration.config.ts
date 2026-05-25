@@ -9,6 +9,10 @@ const config: Config.InitialOptions = {
   testTimeout: 900000,
   testRegex: ['src/testing/integration/.*\\.spec\\.ts$', 'src/docker/package\\.spec\\.ts$'],
   testPathIgnorePatterns: ['/node_modules/', '/\\.claude/'],
+  // Remove debris from a previous (possibly interrupted) run before starting, so
+  // reused deterministic namespace/container names do not wedge this run. See the
+  // header of scripts/integration-clean.js for the failure modes this prevents.
+  globalSetup: '<rootDir>/scripts/integration-clean.js',
   // Collect coverage from the integration run so the docker/kubernetes/service
   // runtime — which the env-gated unit run (jest.config.ts) cannot exercise — is
   // actually reported. Written to its own directory so it does not clobber the
