@@ -380,7 +380,6 @@
                   }
                 },
                 "required": [
-                  "context",
                   "selector",
                   "ports"
                 ],
@@ -416,6 +415,9 @@
                         "type": "string"
                       },
                       "context": {
+                        "type": "string"
+                      },
+                      "kubeconfig": {
                         "type": "string"
                       },
                       "ingresses": {

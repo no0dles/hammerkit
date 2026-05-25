@@ -16,7 +16,7 @@ export type BuildFileServiceSchema = z.infer<typeof buildFileServiceSchema>
 
 export const isBuildFileKubernetesServiceSchema = (
   val: BuildFileServiceSchema | BuildFileTaskSchema
-): val is BuildFileKubernetesServiceSchema => 'context' in val
+): val is BuildFileKubernetesServiceSchema => 'selector' in val
 
 export const isBuildFileContainerSchema = (
   val: BuildFileServiceSchema | BuildFileTaskSchema

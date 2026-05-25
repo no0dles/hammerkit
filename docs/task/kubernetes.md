@@ -52,11 +52,18 @@ tasks:
 
 ### Kubernetes target
 
-| Field       | Required | Description                                                              |
-|-------------|----------|--------------------------------------------------------------------------|
-| `context`   | yes      | The kube context (cluster + user) the tasks run in.                       |
-| `namespace` | no       | Namespace the jobs and deployments are created in.                        |
-| `ingresses` | no       | Ingress / Gateway API route definitions to expose services, see [ingresses](#ingresses). |
+| Field        | Required | Description                                                              |
+|--------------|----------|--------------------------------------------------------------------------|
+| `context`    | yes      | The kube context (cluster + user) the tasks run in.                       |
+| `namespace`  | no       | Namespace the jobs and deployments are created in.                        |
+| `kubeconfig` | no       | Path to a kubeconfig file. Defaults to `$HOME/.kube/config`.              |
+| `ingresses`  | no       | Ingress / Gateway API route definitions to expose services, see [ingresses](#ingresses). |
+
+{% hint style="info" %}
+The same `context`, `kubeconfig` and `namespace` also supply the cluster connection
+for port-forward [Kubernetes services](../service/kubernetes.md): declare the cluster
+once here and select it with `--env`, rather than repeating it on each service.
+{% endhint %}
 
 ### Docker target
 

@@ -27,7 +27,7 @@ export function appendWorkService(
   environment: Environment,
   context: ReferencedContext
 ): WorkItemState<WorkService, ServiceState> {
-  const workService = parseService(service, environment, context)
+  const workService = parseService(workTree, service, environment, context)
   if (!workTree.services[workService.name]) {
     const workItem: WorkItem<WorkService> = {
       id: lazyResolver(() => getWorkServiceId(workService)),
@@ -55,7 +55,12 @@ export function appendWorkService(
   }
 }
 
-function parseService(service: ReferenceService, environment: Environment, context: ReferencedContext): WorkService {
+function parseService(
+  workTree: WorkTree,
+  service: ReferenceService,
+  environment: Environment,
+  context: ReferencedContext
+): WorkService {
   const envs = buildEnvironmentVariables(service.envs, environment, context)
   const workService: BaseWorkService = {
     cwd: service.cwd,
@@ -69,17 +74,28 @@ function parseService(service: ReferenceService, environment: Environment, conte
   const caching = resolveCache(null, context.caches, service.relativeName)
 
   if (isBuildFileKubernetesServiceSchema(service.schema)) {
-    const kubeconfig = service.schema.kubeconfig ?? getDefaultKubeConfig()
+    const k8sEnv = workTree.environment.type === 'kubernetes' ? workTree.environment : undefined
+    const kubeconfig = service.schema.kubeconfig ?? k8sEnv?.kubeConfig ?? getDefaultKubeConfig()
+    const serviceContext = service.schema.context ? templateValue(service.schema.context, envs) : k8sEnv?.context
+    if (!serviceContext) {
+      throw new Error(
+        `kubernetes service ${service.relativeName} has no context: set "context" on the service or select a ` +
+          `kubernetes environment (environments.<name>.kubernetes.context) with --env`
+      )
+    }
+    const namespace = service.schema.namespace
+      ? templateValue(service.schema.namespace, envs)
+      : k8sEnv?.namespace ?? 'default'
     return <KubernetesWorkService>{
       type: 'kubernetes-service',
       ...workService,
       kubeconfig,
-      namespace: service.schema.namespace ? templateValue(service.schema.namespace, envs) : 'default',
+      namespace,
       selector: {
         name: templateValue(service.schema.selector.name, envs),
         type: templateValue(service.schema.selector.type, envs),
       },
-      context: templateValue(service.schema.context, envs),
+      context: serviceContext,
       src: [createSource(kubeconfig)],
       caching,
     }

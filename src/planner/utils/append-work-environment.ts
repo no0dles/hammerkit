@@ -11,6 +11,7 @@ export function appendWorkEnvironment(referenced: ReferenceEnvironment): WorkEnv
     return {
       type: 'kubernetes',
       context: referenced.schema.kubernetes.context,
+      kubeConfig: referenced.schema.kubernetes.kubeconfig,
       ingresses: referenced.schema.kubernetes.ingresses || [],
       namespace: referenced.schema.kubernetes.namespace ?? 'default',
     }

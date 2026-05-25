@@ -4,6 +4,7 @@ import { buildFileEnvironmentSchemaIngress } from './build-file-environment-sche
 export const buildFileKubernetesEnvironmentSchema = object({
   namespace: string().optional(),
   context: string(),
+  kubeconfig: string().optional(),
   ingresses: array(buildFileEnvironmentSchemaIngress).optional(),
 })
 

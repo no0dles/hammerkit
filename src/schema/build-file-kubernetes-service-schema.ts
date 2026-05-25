@@ -6,7 +6,7 @@ export const buildFileKubernetesServiceSchema = object({
   kubeconfig: string().optional(),
   deps: array(string()).optional(),
   description: string().optional(),
-  context: string(),
+  context: string().optional(),
   namespace: string().optional(),
   selector: buildFileKubernetesServiceSelectorSchema,
   labels: labelsSchema.optional(),
