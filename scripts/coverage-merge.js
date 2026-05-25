@@ -6,10 +6,10 @@
  * The unit run (jest.config.ts) cannot exercise the docker/kubernetes/service
  * runtime, so on its own it badly understates coverage for those modules. This
  * script runs the unit suite for lcov, then merges it with the integration
- * lcov, and renders one istanbul HTML report under coverage-merged/.
+ * lcov, and renders one istanbul HTML report under coverage/.
  *
  * Usage:
- *   npm run coverage:merged
+ *   npm run coverage
  *
  * Inputs (lcov):
  *   coverage/lcov.info               generated here by the unit run
@@ -21,7 +21,7 @@
  *   If the integration lcov is missing the report is still produced from the
  *   unit run alone (with a warning), so docker/kubernetes will read low.
  *
- * Output: coverage-merged/index.html plus a per-module line-coverage summary.
+ * Output: coverage/index.html plus a per-module line-coverage summary.
  */
 const fs = require('fs')
 const path = require('path')
@@ -33,7 +33,7 @@ const reports = require('istanbul-reports')
 const repoRoot = path.resolve(__dirname, '..')
 const unitLcov = path.join(repoRoot, 'coverage', 'lcov.info')
 const integrationLcov = path.join(repoRoot, 'coverage-integration', 'lcov.info')
-const outDir = path.join(repoRoot, 'coverage-merged')
+const outDir = path.join(repoRoot, 'coverage')
 
 const isTestFile = (p) => p.includes('src/testing/') || p.endsWith('.spec.ts') || p.endsWith('.d.ts')
 
@@ -44,7 +44,7 @@ function runUnitCoverage() {
     [
       require.resolve('jest/bin/jest'),
       '--coverage',
-      '--coverageReporters=lcov',
+      '--coverageReporters=lcovonly',
       '--collectCoverageFrom=src/**/*.ts',
       '--collectCoverageFrom=!src/testing/**',
       '--collectCoverageFrom=!**/*.spec.ts',
