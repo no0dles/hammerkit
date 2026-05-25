@@ -30,7 +30,6 @@
   * [Package](docs/cli/package.md)
   * [Clean](docs/cli/clean.md)
   * [Validate](docs/cli/validate.md)
-  * [Help](docs/cli/README.md)
 
 ## External Links
 
