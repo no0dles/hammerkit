@@ -16,6 +16,9 @@ jobs:
       REGISTRY: localhost:5000
       HAMMERKIT_FULL_INTEGRATION: 'true'
       HAMMERKIT_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      # self-hosted runner can be slow on first pulls; keep a generous per-spec
+      # ceiling (local defaults to 120s for fast hang detection)
+      HAMMERKIT_TEST_TIMEOUT: '900000'
       VERBOSE: 'true'
 
     steps:

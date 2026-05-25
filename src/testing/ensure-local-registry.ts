@@ -3,7 +3,6 @@ import { request } from 'http'
 
 const REGISTRY_NAME = 'hammerkit-test-registry'
 const REGISTRY_IMAGE = 'registry:2'
-const DEFAULT_HOST_PORT = 5000
 
 export interface LocalRegistry {
   host: string
@@ -40,12 +39,24 @@ async function isReachable(host: string, hostPort: number): Promise<boolean> {
   })
 }
 
+// Read the host port docker actually bound to the registry's 5000/tcp. With an
+// ephemeral binding this is assigned at start, so it must be read back from the
+// running container rather than assumed.
+async function discoverHostPort(container: Dockerode.Container): Promise<number | null> {
+  const info = await container.inspect()
+  const hostPort = info.NetworkSettings?.Ports?.['5000/tcp']?.[0]?.HostPort
+  return hostPort ? parseInt(hostPort, 10) : null
+}
+
 /**
  * Returns a docker registry suitable for `cli.package({ registry, push: true, ... })`.
  *
  * Resolution order:
  * 1. `REGISTRY=host:port` env var (used by CI; just probed for liveness, never managed).
- * 2. A managed `registry:2` container started on 127.0.0.1:5000 (used locally).
+ * 2. A managed `registry:2` container on 127.0.0.1. Its host port is ephemeral by
+ *    default (discovered after start) so it never collides with a fixed port the
+ *    host already owns — notably macOS ControlCenter/AirPlay, which listens on
+ *    5000. Set HAMMERKIT_TEST_REGISTRY_PORT to pin a specific port.
  *
  * Callers must invoke `cleanup()`. For the env-var case it is a no-op.
  */
@@ -60,6 +71,7 @@ export async function ensureLocalRegistry(docker?: Dockerode): Promise<LocalRegi
 
   const d = docker ?? new Dockerode()
   const existing = await d.listContainers({ all: true, filters: { name: [REGISTRY_NAME] } })
+  let container: Dockerode.Container
   if (existing.length === 0) {
     try {
       await new Promise<void>((resolve, reject) => {
@@ -74,39 +86,47 @@ export async function ensureLocalRegistry(docker?: Dockerode): Promise<LocalRegi
     } catch {
       // image may already exist locally
     }
-    const container = await d.createContainer({
+    // '' lets docker pick a free host port (ephemeral); pin via env if needed.
+    const requestedPort = process.env.HAMMERKIT_TEST_REGISTRY_PORT ?? ''
+    container = await d.createContainer({
       Image: REGISTRY_IMAGE,
       name: REGISTRY_NAME,
       HostConfig: {
         AutoRemove: true,
-        PortBindings: { '5000/tcp': [{ HostPort: `${DEFAULT_HOST_PORT}` }] },
+        PortBindings: { '5000/tcp': [{ HostPort: requestedPort }] },
       },
       ExposedPorts: { '5000/tcp': {} },
     })
     await container.start()
-  } else if (existing[0].State !== 'running') {
-    await d.getContainer(existing[0].Id).start()
+  } else {
+    container = d.getContainer(existing[0].Id)
+    if (existing[0].State !== 'running') {
+      await container.start()
+    }
+  }
+
+  const hostPort = await discoverHostPort(container)
+  if (!hostPort) {
+    throw new Error('could not determine the host port of the local docker registry')
+  }
+
+  const cleanup = async () => {
+    const c = (await d.listContainers({ all: true, filters: { name: [REGISTRY_NAME] } }))[0]
+    if (c) {
+      try {
+        await d.getContainer(c.Id).remove({ force: true })
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
-    if (await isReachable('127.0.0.1', DEFAULT_HOST_PORT)) {
-      return {
-        host: '127.0.0.1',
-        hostPort: DEFAULT_HOST_PORT,
-        async cleanup() {
-          const c = (await d.listContainers({ all: true, filters: { name: [REGISTRY_NAME] } }))[0]
-          if (c) {
-            try {
-              await d.getContainer(c.Id).remove({ force: true })
-            } catch {
-              /* ignore */
-            }
-          }
-        },
-      }
+    if (await isReachable('127.0.0.1', hostPort)) {
+      return { host: '127.0.0.1', hostPort, cleanup }
     }
     await new Promise((r) => setTimeout(r, 500))
   }
-  throw new Error(`local docker registry on port ${DEFAULT_HOST_PORT} did not become reachable in time`)
+  throw new Error(`local docker registry on port ${hostPort} did not become reachable in time`)
 }

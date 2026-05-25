@@ -3,10 +3,11 @@ import base from './jest.config'
 
 const config: Config.InitialOptions = {
   ...base,
-  // Generous ceiling so the suite can also run on slow/emulated daemons (e.g.
-  // the x86-emulated colima on hosted Intel macOS). Native runners finish each
-  // spec far below this; it only bites on a genuine hang.
-  testTimeout: 900000,
+  // Per-spec timeout. Native runners finish each spec in well under a minute, so
+  // a short default surfaces a genuine hang quickly during local development.
+  // Slow/emulated environments (the x86 colima on hosted Intel macOS, the
+  // self-hosted cluster) raise it via HAMMERKIT_TEST_TIMEOUT in their CI jobs.
+  testTimeout: Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000,
   testRegex: ['src/testing/integration/.*\\.spec\\.ts$', 'src/docker/package\\.spec\\.ts$'],
   testPathIgnorePatterns: ['/node_modules/', '/\\.claude/'],
   // Remove debris from a previous (possibly interrupted) run before starting, so

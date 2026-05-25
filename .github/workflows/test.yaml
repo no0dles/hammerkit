@@ -52,6 +52,9 @@ jobs:
     env:
       LINUX_CONTAINERS: 'true'
       VERBOSE: 'true'
+      # the x86-emulated colima daemon is slow; keep a generous per-spec ceiling
+      # (local defaults to 120s for fast hang detection)
+      HAMMERKIT_TEST_TIMEOUT: '900000'
     steps:
       - name: Checkout
         uses: actions/checkout@v4

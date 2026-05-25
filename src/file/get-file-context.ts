@@ -146,10 +146,21 @@ export function getFileContext(cwd: string): FileContext {
       }
     },
     watch(path: string, callback: (fileName: string) => void): { close(): void } {
-      // Native fs events are unreliable on Windows CI/virtual filesystems and
-      // frequently miss single-file changes; poll there so source edits are
-      // detected deterministically. Other platforms keep native events.
-      const watcher = watch(getAbsolutePath(cwd, path), { usePolling: process.platform === 'win32' })
+      // Native fs events are unreliable on virtual filesystems and frequently
+      // miss single-file changes. This bites two platforms:
+      //   - Windows CI, and
+      //   - macOS + Docker Desktop, whose gRPC-FUSE/virtiofs share does not emit
+      //     host FSEvents for files a *container* writes through a bind mount.
+      // The latter silently breaks --watch cascades between container tasks (a
+      // dependency regenerates an output but the dependent's watcher never
+      // fires). Poll on both so changes are detected deterministically regardless
+      // of who wrote the file. HAMMERKIT_WATCH_POLLING=true|false overrides the
+      // default (e.g. to force native events on a fast local FS).
+      const usePolling =
+        process.env.HAMMERKIT_WATCH_POLLING !== undefined
+          ? process.env.HAMMERKIT_WATCH_POLLING === 'true'
+          : process.platform === 'win32' || process.platform === 'darwin'
+      const watcher = watch(getAbsolutePath(cwd, path), { usePolling })
       watcher.on('add', (fileName) => {
         callback(fileName)
       })
