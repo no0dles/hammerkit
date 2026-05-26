@@ -1,4 +1,4 @@
-import { array, object, string } from 'zod'
+import { array, boolean, object, string } from 'zod'
 import { buildFileNeedSchema } from './build-file-need-schema'
 import { envsSchema } from './envs-schema'
 import { labelsSchema } from './labels-schema'
@@ -18,4 +18,7 @@ export const buildFileBaseTaskSchema = object({
   src: array(string()).optional(),
   generates: array(buildFileVolumeSchema).optional(),
   shell: string().optional(),
+  // A task that watches its own sources and restarts itself (e.g. `ng serve`,
+  // `tsc -w`). In watch mode hammerkit then does not watch/restart it itself.
+  continuous: boolean().optional(),
 })

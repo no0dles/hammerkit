@@ -7,7 +7,9 @@ import { buildFileServiceContainerHealthcheck } from './build-file-service-conta
 export const buildFileContainerServiceSchema = object({
   image: string(),
   description: string().optional(),
-  ports: array(union([string(), number()])),
+  // Optional: a service reached only via `needs`/service-DNS (e.g. postgres:5432
+  // from another container) does not need a published host port.
+  ports: array(union([string(), number()])).optional(),
   envs: envsSchema.optional(),
   mounts: array(string()).optional(),
   deps: array(string()).optional(),

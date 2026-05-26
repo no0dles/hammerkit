@@ -5,5 +5,5 @@ import { BuildFileServiceSchema } from '../../schema/build-file-service-schema'
 import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
 
 export function parseWorkPorts(schema: BuildFileServiceSchema, envs: WorkEnvironmentVariables): WorkPort[] {
-  return schema.ports.map((m) => templateValue(`${m}`, envs)).map((m) => parseWorkPort(m))
+  return (schema.ports ?? []).map((m) => templateValue(`${m}`, envs)).map((m) => parseWorkPort(m))
 }
