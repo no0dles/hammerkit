@@ -8,7 +8,7 @@ const config: Config.InitialOptions = {
   // Slow/emulated environments (the x86 colima on hosted Intel macOS, the
   // self-hosted cluster) raise it via HAMMERKIT_TEST_TIMEOUT in their CI jobs.
   testTimeout: Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000,
-  testRegex: ['src/testing/integration/.*\\.spec\\.ts$', 'src/docker/package\\.spec\\.ts$'],
+  testRegex: ['src/testing/integration/.*\\.spec\\.ts$', 'src/docker/package\\.spec\\.ts$', 'src/program\\.spec\\.ts$'],
   testPathIgnorePatterns: ['/node_modules/', '/\\.claude/'],
   // Remove debris from a previous (possibly interrupted) run before starting, so
   // reused deterministic namespace/container names do not wedge this run. See the
