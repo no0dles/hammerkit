@@ -4,6 +4,8 @@
 
 ## What is hammerkit?
 
+See [VALUES.md](./VALUES.md) for the principles that guide hammerkit's design.
+
 Hammerkit is a build tool intended to build software projects in **containers** locally and in a CI. The advantage of containerized builds are:
 
 * the build tools used from the container image are the same across all machines.

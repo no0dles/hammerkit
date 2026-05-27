@@ -10,6 +10,8 @@ User-facing docs live at https://no0dles.gitbook.io/hammerkit/ (see [SUMMARY.md]
 
 ## Working agreement
 
+Read [VALUES.md](./VALUES.md) first. That file covers what hammerkit optimizes for; this file covers agent-specific operating rules.
+
 How to work in this repo (see the `do-the-work` skill for detail):
 
 - **Do the work; don't avoid it.** When the task is to fix something — CI, a test,
