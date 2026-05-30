@@ -8,11 +8,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is intentionally absent: it is posix like ubuntu-latest, so a
-        # macOS unit run only duplicates it. The matrix exists to catch the
-        # separator-sensitive platform, which is windows-latest. macOS-specific
-        # runtime behaviour is still exercised by the macos-containers job below.
-        os: [ubuntu-latest, windows-latest]
+        # Only windows-latest: it is the one platform with no container runtime,
+        # so the portable unit suite is the only thing we can run here — and it
+        # is the separator-sensitive platform we most need to cover. ubuntu and
+        # macOS instead run the full container integration suite (the
+        # integration jobs below), which exercises their posix runtime end to
+        # end and is the source of the coverage report uploaded to Codacy.
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -36,13 +38,6 @@ jobs:
           name: console-log-${{ matrix.os }}
           path: |
             logs
-      - name: Upload coverage
-        if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/master'
-        continue-on-error: true
-        uses: codacy/codacy-coverage-reporter-action@master
-        with:
-          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage/lcov.info
 
   # Linux-container coverage on macOS via colima. Kept separate from the fast
   # unit matrix so colima flakiness can't gate the portable suites. Must run on
@@ -51,6 +46,7 @@ jobs:
   # k8s specs no-op (CLUSTER_NAME unset) and the registry self-provisions via
   # docker (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
   macos-containers:
+    name: integration (macos-latest)
     runs-on: macos-15-intel
     timeout-minutes: 90
     env:
@@ -101,6 +97,7 @@ jobs:
   # gates assert rather than no-op; requiresWindowsContainers is unused, so leaving
   # WINDOWS_CONTAINERS unset does not fail anything (see src/testing/requires-*).
   linux-integration:
+    name: integration (ubuntu-latest)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -141,6 +138,17 @@ jobs:
       # races (the self-hosted runner parallelizes against a beefier cluster).
       - name: Run integration tests
         run: npm run test:integration -- --no-file-parallelism
+      # Single coverage source for Codacy. This hosted job runs on every push
+      # (PRs included), unlike the self-hosted integration workflow, so coverage
+      # shows up on PRs. No master-only gate. It reports the integration suite's
+      # coverage; files exercised only by the unit suite (windows job) report
+      # lower coverage here, which is expected.
+      - name: Upload coverage
+        continue-on-error: true
+        uses: codacy/codacy-coverage-reporter-action@master
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: coverage/lcov.info
       - name: Archive logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
