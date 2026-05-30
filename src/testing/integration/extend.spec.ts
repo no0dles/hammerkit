@@ -8,10 +8,7 @@ describe('extend', () => {
   it('should merge env variables', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_env' })
     const task = await cli.task('extend_env')
-    expect(task.data.envs.variables).toContainEntries([
-      ['NAME', 'base'],
-      ['KEEP', 'value'],
-    ])
+    expect(task.data.envs.variables).toMatchObject({ NAME: 'base', KEEP: 'value' })
   })
 
   it('should extend and override', async () => {
@@ -29,6 +26,6 @@ describe('extend', () => {
   it('should merge deps', async () => {
     const { cli } = await suite.setup({ taskName: 'extend_dep' })
     const task = await cli.task('extend_dep')
-    expect(task.deps.map((d) => d.name)).toIncludeSameMembers(['base_env', 'extend_env'])
+    expect(task.deps.map((d) => d.name).sort()).toEqual(['base_env', 'extend_env'].sort())
   })
 })

@@ -1,3 +1,4 @@
+import type { Mock } from 'vitest'
 import { ensureHttpRoute } from './ensure-http-route'
 import { KubernetesInstance } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -9,9 +10,7 @@ function httpError(statusCode: number): Error & { statusCode: number } {
   return Object.assign(new Error(`http ${statusCode}`), { statusCode })
 }
 
-function makeInstance(
-  objectApi: Partial<{ read: jest.Mock; patch: jest.Mock; create: jest.Mock }>
-): KubernetesInstance {
+function makeInstance(objectApi: Partial<{ read: Mock; patch: Mock; create: Mock }>): KubernetesInstance {
   return { objectApi } as any
 }
 
@@ -35,8 +34,8 @@ function ingress(overrides: Partial<BuildFileEnvironmentSchemaIngress> = {}): Bu
 
 describe('ensureHttpRoute', () => {
   it('creates an HTTPRoute with the expected shape', async () => {
-    const read = jest.fn().mockRejectedValue(httpError(404))
-    const create = jest.fn().mockResolvedValue({ body: {} })
+    const read = vi.fn().mockRejectedValue(httpError(404))
+    const create = vi.fn().mockResolvedValue({ body: {} })
     await ensureHttpRoute(makeInstance({ read, create }), env, ingress(), service)
 
     expect(create).toHaveBeenCalledTimes(1)
@@ -58,8 +57,8 @@ describe('ensureHttpRoute', () => {
   })
 
   it('uses servicePort, path and gatewayNamespace when provided', async () => {
-    const read = jest.fn().mockRejectedValue(httpError(404))
-    const create = jest.fn().mockResolvedValue({ body: {} })
+    const read = vi.fn().mockRejectedValue(httpError(404))
+    const create = vi.fn().mockResolvedValue({ body: {} })
     await ensureHttpRoute(
       makeInstance({ read, create }),
       env,
@@ -81,8 +80,8 @@ describe('ensureHttpRoute', () => {
   })
 
   it('throws when no gateway is set', async () => {
-    const read = jest.fn()
-    const create = jest.fn()
+    const read = vi.fn()
+    const create = vi.fn()
     await expect(
       ensureHttpRoute(makeInstance({ read, create }), env, ingress({ gateway: undefined }), service)
     ).rejects.toThrow(/requires a "gateway"/)

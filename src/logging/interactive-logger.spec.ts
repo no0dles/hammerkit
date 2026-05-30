@@ -1,29 +1,30 @@
 // interactiveLogger hides the cursor, polls writeWorkTreeStatus on a 100ms
 // ticker, and writes on every state change until complete() stops it.
 
-jest.mock('../log', () => ({
-  writeWorkTreeStatus: jest.fn(),
-  printWorkTreeResult: jest.fn().mockResolvedValue(undefined),
-  hideCursor: jest.fn(),
-  showCursor: jest.fn(),
+vi.mock('../log', () => ({
+  writeWorkTreeStatus: vi.fn(),
+  printWorkTreeResult: vi.fn().mockResolvedValue(undefined),
+  hideCursor: vi.fn(),
+  showCursor: vi.fn(),
 }))
-jest.mock('readline', () => ({ clearScreenDown: jest.fn() }))
+vi.mock('readline', () => ({ clearScreenDown: vi.fn() }))
 
+import type { MockedFunction } from 'vitest'
 import { interactiveLogger } from './interactive-logger'
 import { State } from '../executer/state'
 import { WorkTree } from '../planner/work-tree'
 import { hideCursor, printWorkTreeResult, showCursor, writeWorkTreeStatus } from '../log'
 import { clearScreenDown } from 'readline'
 
-const mockedWriteStatus = writeWorkTreeStatus as jest.MockedFunction<typeof writeWorkTreeStatus>
-const mockedHide = hideCursor as jest.MockedFunction<typeof hideCursor>
-const mockedShow = showCursor as jest.MockedFunction<typeof showCursor>
-const mockedClear = clearScreenDown as jest.MockedFunction<typeof clearScreenDown>
-const mockedPrint = printWorkTreeResult as jest.MockedFunction<typeof printWorkTreeResult>
+const mockedWriteStatus = writeWorkTreeStatus as MockedFunction<typeof writeWorkTreeStatus>
+const mockedHide = hideCursor as MockedFunction<typeof hideCursor>
+const mockedShow = showCursor as MockedFunction<typeof showCursor>
+const mockedClear = clearScreenDown as MockedFunction<typeof clearScreenDown>
+const mockedPrint = printWorkTreeResult as MockedFunction<typeof printWorkTreeResult>
 
 describe('interactiveLogger', () => {
   beforeEach(() => {
-    jest.useFakeTimers()
+    vi.useFakeTimers()
     mockedWriteStatus.mockClear()
     mockedHide.mockClear()
     mockedShow.mockClear()
@@ -31,12 +32,12 @@ describe('interactiveLogger', () => {
     mockedPrint.mockClear()
   })
   afterEach(() => {
-    jest.useRealTimers()
+    vi.useRealTimers()
   })
 
   it('hides the cursor, ticks every 100ms, and writes on state changes', async () => {
     const state = new State<WorkTree>({ services: {}, tasks: {} } as any)
-    const env = { stdout: { write: jest.fn() } } as any
+    const env = { stdout: { write: vi.fn() } } as any
     const logger = interactiveLogger(state, env)
 
     // hideCursor on construction; initial tick fired immediately
@@ -44,7 +45,7 @@ describe('interactiveLogger', () => {
     expect(mockedWriteStatus).toHaveBeenCalledTimes(1)
 
     // advance one tick window → one additional writeWorkTreeStatus
-    jest.advanceTimersByTime(100)
+    vi.advanceTimersByTime(100)
     expect(mockedWriteStatus).toHaveBeenCalledTimes(2)
 
     // a state change writes status synchronously
@@ -59,7 +60,7 @@ describe('interactiveLogger', () => {
 
     // after complete, advancing time must NOT schedule further writes
     const after = mockedWriteStatus.mock.calls.length
-    jest.advanceTimersByTime(1000)
+    vi.advanceTimersByTime(1000)
     expect(mockedWriteStatus.mock.calls.length).toBe(after)
   })
 })

@@ -5,7 +5,7 @@ describe('abort-event', () => {
     it('fires immediately when the signal is already aborted', () => {
       const ctrl = new AbortController()
       ctrl.abort()
-      const cb = jest.fn()
+      const cb = vi.fn()
       const handle = listenOnAbort(ctrl.signal, cb)
       expect(cb).toHaveBeenCalledTimes(1)
       // close on a pre-aborted listener is a no-op; calling it must not throw.
@@ -14,7 +14,7 @@ describe('abort-event', () => {
 
     it('fires when the signal is aborted later', () => {
       const ctrl = new AbortController()
-      const cb = jest.fn()
+      const cb = vi.fn()
       listenOnAbort(ctrl.signal, cb)
       expect(cb).not.toHaveBeenCalled()
       ctrl.abort()
@@ -23,7 +23,7 @@ describe('abort-event', () => {
 
     it('does not fire after close()', () => {
       const ctrl = new AbortController()
-      const cb = jest.fn()
+      const cb = vi.fn()
       const handle = listenOnAbort(ctrl.signal, cb)
       handle.close()
       ctrl.abort()

@@ -1,26 +1,27 @@
 // Verifies that the grouped logger only flushes a task/service once it reaches
 // a terminal state, by mocking the underlying log helpers and iterators.
 
-jest.mock('../log', () => ({
-  writeWorkItemLogToConsole: jest.fn(),
-  printWorkTreeResult: jest.fn().mockResolvedValue(undefined),
-  getWorkItemMaxLength: jest.fn(() => 10),
+vi.mock('../log', () => ({
+  writeWorkItemLogToConsole: vi.fn(),
+  printWorkTreeResult: vi.fn().mockResolvedValue(undefined),
+  getWorkItemMaxLength: vi.fn(() => 10),
 }))
-jest.mock('../planner/utils/plan-work-tasks', () => ({
-  iterateWorkTasks: jest.fn(),
-  iterateWorkServices: jest.fn(),
+vi.mock('../planner/utils/plan-work-tasks', () => ({
+  iterateWorkTasks: vi.fn(),
+  iterateWorkServices: vi.fn(),
 }))
 
+import type { MockedFunction } from 'vitest'
 import { groupedLogger } from './grouped-logger'
 import { State } from '../executer/state'
 import { WorkTree } from '../planner/work-tree'
 import { iterateWorkServices, iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { printWorkTreeResult, writeWorkItemLogToConsole } from '../log'
 
-const mockedIterTasks = iterateWorkTasks as jest.MockedFunction<typeof iterateWorkTasks>
-const mockedIterServices = iterateWorkServices as jest.MockedFunction<typeof iterateWorkServices>
-const mockedWrite = writeWorkItemLogToConsole as jest.MockedFunction<typeof writeWorkItemLogToConsole>
-const mockedPrint = printWorkTreeResult as jest.MockedFunction<typeof printWorkTreeResult>
+const mockedIterTasks = iterateWorkTasks as MockedFunction<typeof iterateWorkTasks>
+const mockedIterServices = iterateWorkServices as MockedFunction<typeof iterateWorkServices>
+const mockedWrite = writeWorkItemLogToConsole as MockedFunction<typeof writeWorkItemLogToConsole>
+const mockedPrint = printWorkTreeResult as MockedFunction<typeof printWorkTreeResult>
 
 function fakeTask(name: string, type: string, logs: any[] = []) {
   return { name, state: { current: { type } }, status: { read: () => logs } } as any

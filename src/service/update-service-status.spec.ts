@@ -1,7 +1,8 @@
+import type { Mock } from 'vitest'
 import { updateServiceStatus } from './update-service-status'
 import { WorkTree } from '../planner/work-tree'
 
-function fakeService(initialize: jest.Mock) {
+function fakeService(initialize: Mock) {
   return {
     state: { current: { type: 'pending' } } as any,
     runtime: { initialize },
@@ -10,8 +11,8 @@ function fakeService(initialize: jest.Mock) {
 
 describe('updateServiceStatus', () => {
   it('calls initialize(state) on every service runtime', async () => {
-    const a = jest.fn().mockResolvedValue(undefined)
-    const b = jest.fn().mockResolvedValue(undefined)
+    const a = vi.fn().mockResolvedValue(undefined)
+    const b = vi.fn().mockResolvedValue(undefined)
     const workTree: WorkTree = {
       services: { svcA: fakeService(a), svcB: fakeService(b) } as any,
       tasks: {},

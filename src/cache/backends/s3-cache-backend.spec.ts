@@ -1,8 +1,10 @@
 import { Readable } from 'stream'
 
-const sendMock = jest.fn()
+// vi.hoisted: vi.mock is hoisted above this file's top-level code, so the factory
+// below can only reference variables that are themselves hoisted.
+const { sendMock } = vi.hoisted(() => ({ sendMock: vi.fn() }))
 
-jest.mock('@aws-sdk/client-s3', () => {
+vi.mock('@aws-sdk/client-s3', () => {
   class S3ClientMock {
     send = sendMock
   }

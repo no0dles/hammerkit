@@ -192,7 +192,7 @@ function workTree(items: {
 
 // Environment whose file.exists only returns true for the listed paths.
 function fakeEnv(existing: string[] = []): Environment {
-  return { file: { exists: jest.fn(async (p: string) => existing.includes(p)) } } as unknown as Environment
+  return { file: { exists: vi.fn(async (p: string) => existing.includes(p)) } } as unknown as Environment
 }
 
 async function collect(gen: AsyncGenerator<WorkItemValidation>): Promise<WorkItemValidation[]> {
@@ -270,8 +270,8 @@ describe('validate (generator)', () => {
 describe('checkIfContextExists', () => {
   function kubeconfigEnv(yaml: string): Environment {
     return {
-      file: { read: jest.fn(async () => yaml) },
-      status: { context: () => ({ write: jest.fn() }) },
+      file: { read: vi.fn(async () => yaml) },
+      status: { context: () => ({ write: vi.fn() }) },
     } as unknown as Environment
   }
 

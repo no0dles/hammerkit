@@ -1,7 +1,6 @@
 dist
 .idea
 coverage
-coverage-integration
 node_modules
 examples/*/npm
 *.tgz

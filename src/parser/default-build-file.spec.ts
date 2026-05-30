@@ -33,7 +33,7 @@ describe('getBuildFilename', () => {
     writeFileSync(join(dir, 'build.yaml'), 'tasks: {}\n')
 
     const env = environmentMock(dir)
-    const warn = jest.spyOn(env.console, 'warn').mockImplementation(() => undefined)
+    const warn = vi.spyOn(env.console, 'warn').mockImplementation(() => undefined)
     const result = await getBuildFilename(dir, env)
     expect(result).toBe(join(dir, '.hammerkit.yaml'))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('multiple hammerkit files'))

@@ -1,4 +1,3 @@
-import 'jest-extended'
 import { createTestCase, TestCase } from '../test-case'
 
 describe('validate', () => {

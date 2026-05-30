@@ -44,5 +44,5 @@ describe('local', () => {
 
 function expectNodes(items: CliItem[], expectedNames: string[]) {
   const itemNames = items.map((n) => n.item.name)
-  expect(itemNames).toIncludeSameMembers(expectedNames)
+  expect([...itemNames].sort()).toEqual([...expectedNames].sort())
 }

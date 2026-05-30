@@ -1,4 +1,3 @@
-import 'jest-extended'
 import { createTestCase } from '../test-case'
 import { ParseError } from '../../schema/parse-error'
 

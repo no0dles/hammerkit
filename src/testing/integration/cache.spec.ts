@@ -1,4 +1,3 @@
-import 'jest-extended'
 import { expectLog, expectSuccessfulResult } from '../expect'
 import { getTestSuite } from '../get-test-suite'
 import { join } from 'path'

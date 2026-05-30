@@ -1,13 +1,14 @@
+import type { Mock } from 'vitest'
 import { moveFiles } from './move-files'
 import { Environment } from '../executer/environment'
 import { WorkItem } from '../planner/work-item'
 
-function context(existing: string[]): { env: Environment; remove: jest.Mock; copy: jest.Mock } {
-  const remove = jest.fn(async () => undefined)
-  const copy = jest.fn(async () => undefined)
+function context(existing: string[]): { env: Environment; remove: Mock; copy: Mock } {
+  const remove = vi.fn(async () => undefined)
+  const copy = vi.fn(async () => undefined)
   const env = {
     file: {
-      exists: jest.fn(async (p: string) => existing.includes(p)),
+      exists: vi.fn(async (p: string) => existing.includes(p)),
       remove,
       copy,
     },
@@ -15,7 +16,7 @@ function context(existing: string[]): { env: Environment; remove: jest.Mock; cop
   return { env, remove, copy }
 }
 
-const item = { status: { write: jest.fn() } } as unknown as WorkItem<any>
+const item = { status: { write: vi.fn() } } as unknown as WorkItem<any>
 
 function* once(from: string, to: string) {
   yield { from, to }

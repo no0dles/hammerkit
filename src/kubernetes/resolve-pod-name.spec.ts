@@ -21,14 +21,14 @@ function makeCoreApi(
   } = {}
 ): CoreV1Api {
   return {
-    readNamespacedService: jest.fn().mockResolvedValue({ body: { spec: { selector: opts.service?.selector } } }),
-    listNamespacedPod: jest.fn().mockResolvedValue(podBody(opts.pods ?? [])),
+    readNamespacedService: vi.fn().mockResolvedValue({ body: { spec: { selector: opts.service?.selector } } }),
+    listNamespacedPod: vi.fn().mockResolvedValue(podBody(opts.pods ?? [])),
   } as any
 }
 
 function makeAppsApi(opts: { deployment?: { matchLabels?: { [k: string]: string } } } = {}): AppsV1Api {
   return {
-    readNamespacedDeployment: jest
+    readNamespacedDeployment: vi
       .fn()
       .mockResolvedValue({ body: { spec: { selector: { matchLabels: opts.deployment?.matchLabels } } } }),
   } as any

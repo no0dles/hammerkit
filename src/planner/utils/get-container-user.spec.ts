@@ -1,9 +1,10 @@
-jest.mock('os', () => ({ ...jest.requireActual('os'), platform: jest.fn() }))
+vi.mock('os', async () => ({ ...(await vi.importActual<typeof import('os')>('os')), platform: vi.fn() }))
 
+import type { MockedFunction } from 'vitest'
 import { platform } from 'os'
 import { getContainerUser } from './get-container-user'
 
-const mockedPlatform = platform as jest.MockedFunction<typeof platform>
+const mockedPlatform = platform as MockedFunction<typeof platform>
 
 describe('getContainerUser', () => {
   const originalGetuid = process.getuid

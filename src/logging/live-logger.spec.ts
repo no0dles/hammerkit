@@ -1,19 +1,20 @@
 // liveLogger forwards every status message verbatim to writeWorkItemLogToConsole.
 
-jest.mock('../log', () => ({
-  writeWorkItemLogToConsole: jest.fn(),
-  printWorkTreeResult: jest.fn().mockResolvedValue(undefined),
-  getWorkItemMaxLength: jest.fn(() => 10),
+vi.mock('../log', () => ({
+  writeWorkItemLogToConsole: vi.fn(),
+  printWorkTreeResult: vi.fn().mockResolvedValue(undefined),
+  getWorkItemMaxLength: vi.fn(() => 10),
 }))
 
+import type { MockedFunction } from 'vitest'
 import { liveLogger } from './live-logger'
 import { State } from '../executer/state'
 import { WorkTree } from '../planner/work-tree'
 import { printWorkTreeResult, writeWorkItemLogToConsole } from '../log'
 import { emitter } from '../utils/emitter'
 
-const mockedWrite = writeWorkItemLogToConsole as jest.MockedFunction<typeof writeWorkItemLogToConsole>
-const mockedPrint = printWorkTreeResult as jest.MockedFunction<typeof printWorkTreeResult>
+const mockedWrite = writeWorkItemLogToConsole as MockedFunction<typeof writeWorkItemLogToConsole>
+const mockedPrint = printWorkTreeResult as MockedFunction<typeof printWorkTreeResult>
 
 describe('liveLogger', () => {
   beforeEach(() => {

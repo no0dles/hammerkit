@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Pre-integration cleanup (jest globalSetup for jest.integration.config.ts).
+ * Pre-integration cleanup (vitest globalSetup for the `--mode integration` run).
  *
  * Why this exists: local integration runs address resources by deterministic
  * names — namespaces are `hammerkit-{cache,env,k8s}-${HAMMERKIT_TEST_RUN_ID ??
@@ -132,6 +132,9 @@ async function cleanupNamespaces() {
   console.warn('[integration clean] timed out waiting for namespaces to terminate; continuing anyway')
 }
 
+// Vitest globalSetup runs the module's default export once before the suite.
+// Under CJS interop the default export is module.exports itself, so it must be
+// the function directly (a { setup } object is rejected as "default must be a function").
 module.exports = async function globalSetup() {
   await cleanupContainers()
   await cleanupNamespaces()

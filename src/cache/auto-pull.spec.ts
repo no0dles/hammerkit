@@ -52,7 +52,7 @@ describe('checkCacheState auto-pull', () => {
     return {
       id: () => 'demo-task',
       name: 'demo-task',
-      status: { write: jest.fn() } as any,
+      status: { write: vi.fn() } as any,
       data: {
         type: 'local-task',
         name: 'demo-task',

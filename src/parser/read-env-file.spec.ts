@@ -6,8 +6,8 @@ import { Environment } from '../executer/environment'
 function envWithFiles(files: { [path: string]: string }): Environment {
   return {
     file: {
-      exists: jest.fn(async (p: string) => p in files),
-      read: jest.fn(async (p: string) => files[p]),
+      exists: vi.fn(async (p: string) => p in files),
+      read: vi.fn(async (p: string) => files[p]),
     },
   } as unknown as Environment
 }

@@ -63,7 +63,7 @@ describe('checkCacheState', () => {
     return {
       id: () => id,
       name: id,
-      status: { write: jest.fn() } as any,
+      status: { write: vi.fn() } as any,
       data: {
         type: 'local-task',
         name: id,

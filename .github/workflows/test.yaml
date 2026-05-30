@@ -77,7 +77,7 @@ jobs:
       # running suites one at a time avoids volume/container races and gives each
       # spec the full daemon, keeping it within the (generous) timeouts.
       - name: Run container integration tests
-        run: npm run test:integration -- --runInBand
+        run: npm run test:integration -- --no-file-parallelism
       - name: Archive logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

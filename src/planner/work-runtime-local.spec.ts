@@ -8,21 +8,21 @@ import { environmentMock } from '../executer/environment-mock'
 import { State } from '../executer/state'
 import { TaskState } from '../executer/scheduler/task-state'
 
-const mockFindProcess = jest.fn()
-jest.mock('find-process', () => ({
+const mockFindProcess = vi.hoisted(() => vi.fn())
+vi.mock('find-process', () => ({
   __esModule: true,
   default: (...args: unknown[]) => mockFindProcess(...args),
 }))
 
-jest.mock('../executer/local-task', () => ({
-  localTask: jest.fn().mockResolvedValue(undefined),
+vi.mock('../executer/local-task', () => ({
+  localTask: vi.fn().mockResolvedValue(undefined),
 }))
 
 function makeTask(cwd: string): WorkItem<LocalWorkTask> {
   return {
     id: () => 'task-1',
     name: 'task-1',
-    status: { write: jest.fn() } as any,
+    status: { write: vi.fn() } as any,
     data: {
       type: 'local-task',
       name: 'task-1',

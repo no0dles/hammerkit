@@ -51,7 +51,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-coverage-${{ github.run_id }}-${{ github.run_attempt }}
-          path: coverage-integration/lcov.info
+          path: coverage/lcov.info
           if-no-files-found: ignore
 
       # Reports coverage of the docker/kubernetes/service runtime, which the unit
@@ -65,7 +65,7 @@ jobs:
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage-integration/lcov.info
+          coverage-reports: coverage/lcov.info
 
       - name: Archive logs on failure
         if: failure()

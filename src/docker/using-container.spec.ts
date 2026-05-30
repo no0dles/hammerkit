@@ -1,27 +1,28 @@
+import type { Mock } from 'vitest'
 import { usingContainer } from './using-container'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkTask } from '../planner/work-task'
 
 interface FakeContainer {
   id: string
-  start: jest.Mock
-  pause: jest.Mock
-  remove: jest.Mock
+  start: Mock
+  pause: Mock
+  remove: Mock
 }
 
 function makeContainer(id: string): FakeContainer {
   return {
     id,
-    start: jest.fn().mockResolvedValue(undefined),
-    pause: jest.fn().mockResolvedValue(undefined),
-    remove: jest.fn().mockResolvedValue(undefined),
+    start: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
   }
 }
 
 interface FakeDocker {
-  createContainer: jest.Mock
-  listContainers: jest.Mock
-  getContainer: jest.Mock
+  createContainer: Mock
+  listContainers: Mock
+  getContainer: Mock
 }
 
 function makeDocker(newContainer: FakeContainer, listed: { Id: string; Labels: Record<string, string> }[] = []) {
@@ -31,9 +32,9 @@ function makeDocker(newContainer: FakeContainer, listed: { Id: string; Labels: R
   }
   return {
     docker: {
-      createContainer: jest.fn().mockResolvedValue(newContainer),
-      listContainers: jest.fn().mockResolvedValue(listed),
-      getContainer: jest.fn((id: string) => containersById[id] ?? makeContainer(id)),
+      createContainer: vi.fn().mockResolvedValue(newContainer),
+      listContainers: vi.fn().mockResolvedValue(listed),
+      getContainer: vi.fn((id: string) => containersById[id] ?? makeContainer(id)),
     } as FakeDocker,
     containersById,
   }
@@ -43,7 +44,7 @@ function makeItem(id: string): WorkItem<ContainerWorkTask> {
   return {
     id: () => id,
     name: id,
-    status: { write: jest.fn() } as any,
+    status: { write: vi.fn() } as any,
     data: { type: 'container-task', image: 'alpine' } as any,
     needs: [],
     deps: [],

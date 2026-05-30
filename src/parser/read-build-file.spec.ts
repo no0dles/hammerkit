@@ -1,8 +1,14 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import * as yaml from 'yaml'
 import { environmentMock } from '../executer/environment-mock'
 import { read, write } from './read-build-file'
+
+// Re-export the real module through a plain (mutable) object so a single test can
+// spyOn parse. A true ESM namespace has non-configurable exports that vi.spyOn
+// cannot redefine; the spread keeps the real parse/stringify for every other test.
+vi.mock('yaml', async () => ({ ...(await vi.importActual<typeof import('yaml')>('yaml')) }))
 
 describe('read-build-file', () => {
   let scratch: string
@@ -41,20 +47,17 @@ describe('read-build-file', () => {
     it('rethrows non-Error throws from the yaml parser unchanged', async () => {
       // Stub yaml.parse to throw a non-Error value so the `else throw e` branch
       // in read() is exercised (the wrap-with-message branch only handles Error).
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const yaml = require('yaml')
-      const original = yaml.parse
-      yaml.parse = () => {
+      const spy = vi.spyOn(yaml, 'parse').mockImplementation(() => {
         // eslint-disable-next-line @typescript-eslint/no-throw-literal
         throw 'a plain string'
-      }
+      })
       try {
         const env = environmentMock(scratch)
         const file = join(scratch, '.hammerkit.yaml')
         writeFileSync(file, 'x: 1\n')
         await expect(read(file, env)).rejects.toBe('a plain string')
       } finally {
-        yaml.parse = original
+        spy.mockRestore()
       }
     })
   })

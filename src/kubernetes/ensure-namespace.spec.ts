@@ -1,3 +1,4 @@
+import type { Mock } from 'vitest'
 import { ensureNamespace } from './ensure-namespace'
 import { KubernetesInstance } from './kubernetes-instance'
 
@@ -5,14 +6,14 @@ function httpError(statusCode: number): Error & { statusCode: number } {
   return Object.assign(new Error(`http ${statusCode}`), { statusCode })
 }
 
-function makeInstance(coreApi: Partial<{ readNamespace: jest.Mock; createNamespace: jest.Mock }>): KubernetesInstance {
+function makeInstance(coreApi: Partial<{ readNamespace: Mock; createNamespace: Mock }>): KubernetesInstance {
   return { coreApi } as any
 }
 
 describe('ensureNamespace', () => {
   it('does nothing when the namespace already exists', async () => {
-    const readNamespace = jest.fn().mockResolvedValue({ body: {} })
-    const createNamespace = jest.fn()
+    const readNamespace = vi.fn().mockResolvedValue({ body: {} })
+    const createNamespace = vi.fn()
     await ensureNamespace(makeInstance({ readNamespace, createNamespace }), 'demo')
 
     expect(readNamespace).toHaveBeenCalledWith('demo')
@@ -20,8 +21,8 @@ describe('ensureNamespace', () => {
   })
 
   it('creates the namespace (labeled managed) when missing', async () => {
-    const readNamespace = jest.fn().mockRejectedValue(httpError(404))
-    const createNamespace = jest.fn().mockResolvedValue({ body: {} })
+    const readNamespace = vi.fn().mockRejectedValue(httpError(404))
+    const createNamespace = vi.fn().mockResolvedValue({ body: {} })
     await ensureNamespace(makeInstance({ readNamespace, createNamespace }), 'demo')
 
     expect(createNamespace).toHaveBeenCalledTimes(1)
@@ -31,14 +32,14 @@ describe('ensureNamespace', () => {
   })
 
   it('swallows a 409 from a racing create', async () => {
-    const readNamespace = jest.fn().mockRejectedValue(httpError(404))
-    const createNamespace = jest.fn().mockRejectedValue(httpError(409))
+    const readNamespace = vi.fn().mockRejectedValue(httpError(404))
+    const createNamespace = vi.fn().mockRejectedValue(httpError(409))
     await expect(ensureNamespace(makeInstance({ readNamespace, createNamespace }), 'demo')).resolves.toBeUndefined()
   })
 
   it('rethrows unexpected read errors', async () => {
-    const readNamespace = jest.fn().mockRejectedValue(httpError(500))
-    const createNamespace = jest.fn()
+    const readNamespace = vi.fn().mockRejectedValue(httpError(500))
+    const createNamespace = vi.fn()
     await expect(ensureNamespace(makeInstance({ readNamespace, createNamespace }), 'demo')).rejects.toThrow()
     expect(createNamespace).not.toHaveBeenCalled()
   })

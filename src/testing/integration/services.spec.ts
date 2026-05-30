@@ -43,9 +43,9 @@ describe('services', () => {
         excludeLabels: {},
       })
       const upResult = await testingTimeout(cli.up({ daemon: true }))
-      expect(upResult.success).toBeTrue()
+      expect(upResult.success).toBe(true)
       const downResult = await cli.runDown()
-      expect(downResult.success).toBeTrue()
+      expect(downResult.success).toBe(true)
     }),
     900000
   )

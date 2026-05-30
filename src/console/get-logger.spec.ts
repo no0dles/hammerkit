@@ -1,9 +1,9 @@
 // Verifies getLogger dispatches to the right logger by name and rejects an
 // unknown mode via failNever — the actual loggers are tested elsewhere.
 
-jest.mock('../logging/grouped-logger', () => ({ groupedLogger: jest.fn(() => 'grouped-instance') }))
-jest.mock('../logging/live-logger', () => ({ liveLogger: jest.fn(() => 'live-instance') }))
-jest.mock('../logging/interactive-logger', () => ({ interactiveLogger: jest.fn(() => 'interactive-instance') }))
+vi.mock('../logging/grouped-logger', () => ({ groupedLogger: vi.fn(() => 'grouped-instance') }))
+vi.mock('../logging/live-logger', () => ({ liveLogger: vi.fn(() => 'live-instance') }))
+vi.mock('../logging/interactive-logger', () => ({ interactiveLogger: vi.fn(() => 'interactive-instance') }))
 
 import { getLogger } from './get-logger'
 

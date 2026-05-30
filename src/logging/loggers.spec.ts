@@ -35,7 +35,7 @@ function makeEnv(stdout: Writable = noopStream()): Environment {
     file: {} as any,
     processEnvs: {},
     abortCtrl: new AbortController(),
-    console: { info: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn(), log: jest.fn() } as any,
+    console: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), log: vi.fn() } as any,
     status: statusConsole(noopStream()),
     stdout,
     stderr: noopStream(),
@@ -162,8 +162,8 @@ describe('loggers', () => {
   })
 
   describe('interactiveLogger', () => {
-    beforeEach(() => jest.useFakeTimers())
-    afterEach(() => jest.useRealTimers())
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
 
     it('hides the cursor, ticks, redraws on log-status, then cleans up on complete', async () => {
       const out = memStream()
@@ -179,12 +179,12 @@ describe('loggers', () => {
       state.set(tree)
 
       // let one fake tick fire while running===true (covers the recursive branch)
-      jest.advanceTimersByTime(150)
+      vi.advanceTimersByTime(150)
 
       await logger.complete({ state: tree, success: true }, env)
 
       // and one more after complete — covers the `if (!running) return` early exit
-      jest.advanceTimersByTime(150)
+      vi.advanceTimersByTime(150)
 
       expect(out.read().length).toBeGreaterThan(0)
     })
