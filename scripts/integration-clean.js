@@ -32,6 +32,7 @@ const namespaceTargets = [
   `hammerkit-cache-${runId.slice(0, 30)}`,
   `hammerkit-env-${runId.slice(0, 40)}`,
   `hammerkit-k8s-${runId.slice(0, 40)}`,
+  `hammerkit-k8s-svc-${runId.slice(0, 30)}`,
 ]
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))

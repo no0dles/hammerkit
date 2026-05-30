@@ -27,8 +27,16 @@ const config: Config.InitialOptions = {
   coverageDirectory: '<rootDir>/coverage',
   collectCoverageFrom: ['<rootDir>/src/**'],
   // Exclude test-related code from coverage: the integration test harness and
-  // the spec/declaration files are not product code.
-  coveragePathIgnorePatterns: ['/node_modules/', '<rootDir>/src/testing/', '\\.spec\\.ts$', '\\.d\\.ts$'],
+  // the spec/declaration files are not product code. src/index.ts is the bin
+  // entry — just wires runProgram(process.argv) and isn't meaningfully unit
+  // testable, so excluding it keeps it from inflating the denominator.
+  coveragePathIgnorePatterns: [
+    '/node_modules/',
+    '<rootDir>/src/testing/',
+    '<rootDir>/src/index\\.ts$',
+    '\\.spec\\.ts$',
+    '\\.d\\.ts$',
+  ],
   coverageReporters: ['json', 'html', 'lcov'],
   reporters: ['github-actions', 'default', 'summary'],
 }
