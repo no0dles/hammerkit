@@ -10,7 +10,10 @@ describe('getFileContext', () => {
     cwd = mkdtempSync(join(tmpdir(), 'hammerkit-fc-'))
   })
   afterEach(() => {
-    rmSync(cwd, { recursive: true, force: true })
+    // maxRetries handles Windows' transient ENOTEMPTY/EBUSY when a handle is
+    // released a beat after the test ends (mirrors getFileContext.remove). The
+    // stream tests below also await 'close' so this is only a safety net.
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
 
   describe('stats', () => {
@@ -141,7 +144,14 @@ describe('getFileContext', () => {
       const fc = getFileContext(cwd)
       const target = join(cwd, 'wstream.txt')
       const ws = fc.createWriteStream(target)
-      await new Promise<void>((resolve) => ws.end('payload', resolve))
+      // Wait for 'close' (fd released), not just the end/'finish' callback (data
+      // flushed): on Windows an open write handle locks the file, so the afterEach
+      // rmSync would race it and fail with ENOTEMPTY.
+      await new Promise<void>((resolve, reject) => {
+        ws.on('error', reject)
+        ws.on('close', () => resolve())
+        ws.end('payload')
+      })
       expect(readFileSync(target, 'utf8')).toBe('payload')
     })
 
@@ -153,8 +163,10 @@ describe('getFileContext', () => {
       await new Promise<void>((resolve, reject) => {
         const rs = fc.readStream(target)
         rs.on('data', (c: Buffer) => chunks.push(c))
-        rs.on('end', resolve)
         rs.on('error', reject)
+        // 'close' (fd released) fires after 'end'; wait for it so an open read
+        // handle can't block the afterEach cleanup on Windows.
+        rs.on('close', resolve)
       })
       expect(Buffer.concat(chunks).toString()).toBe('abc')
     })
