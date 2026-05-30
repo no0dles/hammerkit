@@ -1,7 +1,13 @@
+import { posix, sep } from 'path'
 import { createSource, parseWorkSource } from './parse-work-source'
 import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
 
 const noEnvs: WorkEnvironmentVariables = { variables: {}, replacements: [] }
+
+// parseWorkSource builds absolutePath via path.join and the no-wildcard matcher
+// compares with String.startsWith, so both are native-separated. Author the
+// expectations in posix and convert to the host separator. No-op on posix.
+const toNative = (value: string): string => value.split(posix.sep).join(sep)
 
 describe('parse-work-source', () => {
   it('returns an empty list for null/undefined sources', () => {
@@ -12,17 +18,17 @@ describe('parse-work-source', () => {
   describe('without a wildcard', () => {
     it('treats a path with an extension as a file', () => {
       const [src] = parseWorkSource('/proj', ['dist/app.js'], noEnvs)
-      expect(src.absolutePath).toBe('/proj/dist/app.js')
+      expect(src.absolutePath).toBe(toNative('/proj/dist/app.js'))
       expect(src.isFile).toBe(true)
-      expect(src.matcher('/proj/dist/app.js', '/proj')).toBe(true)
-      expect(src.matcher('/proj/dist/other.js', '/proj')).toBe(false)
+      expect(src.matcher(toNative('/proj/dist/app.js'), '/proj')).toBe(true)
+      expect(src.matcher(toNative('/proj/dist/other.js'), '/proj')).toBe(false)
     })
 
     it('treats a path without an extension as a directory', () => {
       const [src] = parseWorkSource('/proj', ['src'], noEnvs)
-      expect(src.absolutePath).toBe('/proj/src')
+      expect(src.absolutePath).toBe(toNative('/proj/src'))
       expect(src.isFile).toBe(false)
-      expect(src.matcher('/proj/src/index.ts', '/proj')).toBe(true)
+      expect(src.matcher(toNative('/proj/src/index.ts'), '/proj')).toBe(true)
     })
   })
 
@@ -39,7 +45,7 @@ describe('parse-work-source', () => {
   describe('with a mid-string wildcard', () => {
     it('uses the prefix for the absolute path and globs against the full path', () => {
       const [src] = parseWorkSource('/proj', ['src/*.ts'], noEnvs)
-      expect(src.absolutePath).toBe('/proj/src/')
+      expect(src.absolutePath).toBe(toNative('/proj/src/'))
       expect(src.isFile).toBe(false)
       expect(src.matcher('/proj/src/a.ts', '/proj')).toBe(true)
       expect(src.matcher('/proj/src/sub/a.ts', '/proj')).toBe(false)

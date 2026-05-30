@@ -1,8 +1,14 @@
 import { Minimatch } from 'minimatch'
-import { extname, join, relative } from 'path'
+import { extname, join, posix, relative, sep } from 'path'
 import { WorkSource } from '../work-source'
 import { templateValue } from './template-value'
 import { WorkEnvironmentVariables } from '../../environment/replace-env-variables'
+
+// minimatch globs are always '/'-separated; on Windows path.join/relative yield
+// '\\', which minimatch treats as escape chars (so a native pattern never
+// matches). Normalize both the pattern and the candidate to posix before
+// matching. No-op on posix, where sep === posix.sep.
+const toPosix = (value: string): string => (sep === posix.sep ? value : value.split(sep).join(posix.sep))
 
 export function parseWorkSource(
   cwd: string,
@@ -23,7 +29,7 @@ export function parseWorkSource(
         result.push({
           matcher: (file, cwd) => {
             const matcher = new Minimatch(source, { dot: true })
-            return matcher.match(relative(cwd, file))
+            return matcher.match(toPosix(relative(cwd, file)))
           },
           inherited: null,
           source,
@@ -35,8 +41,8 @@ export function parseWorkSource(
         const absolutePath = join(cwd, templateValue(prefixSource, envs))
         result.push({
           matcher: (file, cwd) => {
-            const matcher = new Minimatch(join(cwd, source), { dot: true })
-            return matcher.match(file)
+            const matcher = new Minimatch(toPosix(join(cwd, source)), { dot: true })
+            return matcher.match(toPosix(file))
           },
           inherited: null,
           source,
