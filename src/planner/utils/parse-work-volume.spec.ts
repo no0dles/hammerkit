@@ -10,4 +10,10 @@ describe('parse-work-volume', () => {
       inherited: null,
     })
   })
+
+  it('throws for a volume string that is not name:path', () => {
+    expect(() => parseWorkVolume('/home/user/proj', 'a:b:c', { replacements: [], variables: {} })).toThrow(
+      'invalid volume a:b:c'
+    )
+  })
 })

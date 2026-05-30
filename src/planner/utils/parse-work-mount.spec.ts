@@ -62,4 +62,8 @@ describe('parse-work-mount', () => {
       containerPath: '/otherdir',
     })
   })
+
+  it('throws for a mount string with more than two parts', () => {
+    expect(() => parseWorkMount('/home/test', 'a:b:c')).toThrow('invalid mount a:b:c')
+  })
 })

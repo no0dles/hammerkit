@@ -14,4 +14,12 @@ describe('parse-work-port', () => {
       containerPort: 5433,
     })
   })
+
+  it('throws for a port with more than two parts', () => {
+    expect(() => parseWorkPort('1:2:3')).toThrow('invalid port 1:2:3')
+  })
+
+  it('throws for a non-numeric port', () => {
+    expect(() => parseWorkPort('http')).toThrow('invalid port http')
+  })
 })
