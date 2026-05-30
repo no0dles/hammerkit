@@ -37,12 +37,36 @@ async function startForwardServer(
   const sockets = new Set<Socket>()
   const server = createServer((socket) => {
     sockets.add(socket)
-    socket.on('close', () => sockets.delete(socket))
+    // retryCount=0 selects PortForward's non-restartable input path: a simple
+    // synchronous ws.send per chunk. The retryCount=1 path uses
+    // restartableHandleStandardInput, whose internal `queue.then(...)` chain has
+    // NO `.catch` (see web-socket-handler.js processData TODO) so a closed WS
+    // becomes an unhandled rejection ("can't send data to ws") that crashes the
+    // whole process. We catch ws errors/close ourselves and close both sides
+    // together so the event loop drains on teardown.
+    let ws: { close?: () => void } | null = null
+    socket.on('close', () => {
+      sockets.delete(socket)
+      try {
+        ws?.close?.()
+      } catch {
+        /* already closing */
+      }
+    })
     socket.on('error', (err) => {
       item.status.write('debug', `port-forward socket error: ${getErrorMessage(err)}`)
     })
     forward
-      .portForward(namespace, podName, [containerPort], socket as Writable, null, socket as Readable, 1)
+      .portForward(namespace, podName, [containerPort], socket as Writable, null, socket as Readable, 0)
+      .then((opened) => {
+        ws = opened as unknown as { close?: () => void }
+        const w = ws as { on?: (evt: string, cb: (err?: unknown) => void) => void }
+        w?.on?.('error', (err) => {
+          item.status.write('debug', `port-forward ws error: ${getErrorMessage(err)}`)
+          socket.destroy()
+        })
+        w?.on?.('close', () => socket.destroy())
+      })
       .catch((err) => {
         item.status.write('error', `port-forward failed: ${getErrorMessage(err)}`)
         socket.destroy()
