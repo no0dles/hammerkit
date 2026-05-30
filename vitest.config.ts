@@ -1,13 +1,16 @@
 import { defineConfig } from 'vitest/config'
 
 // One config, two modes selected by `--mode`:
-//   vitest run                    -> fast unit suite, no Docker/k8s required
-//   vitest run --mode integration -> the slow container/k8s/service suites plus
-//                                     the three heavy specs (docker/package, program)
+//   vitest run                    -> fast unit suite only, no Docker/k8s required
+//   vitest run --mode integration -> the ENTIRE suite: the fast unit specs PLUS the
+//                                     slow container/k8s/service suites and the heavy
+//                                     specs (docker/package, program).
 // These used to be two files. The only real differences are include/exclude, the
 // timeout, and the forks pool + pre-run cleanup — small enough to express as a
-// `mode` branch, which keeps CI's split unit/integration jobs intact. Both jobs
-// upload their coverage/lcov.info for the commit and Codacy combines the two.
+// `mode` branch, which keeps CI's split unit/integration jobs intact. Integration
+// mode is a superset of unit mode: its single coverage/lcov.info is the only report
+// uploaded to Codacy, so it must run everything to report a complete figure. The
+// unit-mode run (windows job) is platform coverage only and is not uploaded.
 export default defineConfig(({ mode }) => {
   const integration = mode === 'integration'
   return {
@@ -18,11 +21,10 @@ export default defineConfig(({ mode }) => {
       // default surfaces a genuine hang quickly. The integration run is slower and
       // raises this on emulated/self-hosted CI via HAMMERKIT_TEST_TIMEOUT.
       testTimeout: integration ? Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000 : 45000,
-      // Every spec belongs to exactly one mode: the unit run excludes precisely
-      // what the integration run includes, and vice versa.
-      include: integration
-        ? ['src/testing/integration/**/*.spec.ts', 'src/docker/package.spec.ts', 'src/program.spec.ts']
-        : ['src/**/*.spec.ts'],
+      // Integration mode runs every spec (unit + container/k8s + heavy specs) so its
+      // lcov is a complete coverage report. Unit mode runs only the fast specs: it
+      // excludes precisely the docker/k8s/heavy specs the integration-only path adds.
+      include: ['src/**/*.spec.ts'],
       exclude: integration
         ? ['**/node_modules/**']
         : ['**/node_modules/**', 'src/testing/integration/**', 'src/docker/package.spec.ts', 'src/program.spec.ts'],
@@ -48,10 +50,10 @@ export default defineConfig(({ mode }) => {
         // and src/index.ts (the bin entry just wires runProgram(process.argv)).
         exclude: ['src/testing/**', 'src/index.ts', '**/*.spec.ts', '**/*.d.ts'],
         reporter: integration ? ['lcov'] : ['json', 'html', 'lcov'],
-        // Both modes write here. In CI the unit (test.yaml) and integration
-        // (integration.yaml) jobs run on separate runners, so the shared name
-        // never clobbers; each uploads its coverage/lcov.info for the commit and
-        // Codacy combines the two reports into one figure.
+        // Integration mode runs the full suite, so its lcov is the single, complete
+        // report uploaded to Codacy (see the ubuntu job in test.yaml). The unit-mode
+        // run (windows job) writes here too but is platform coverage only — not
+        // uploaded — so the shared name never clobbers across the separate runners.
         reportsDirectory: 'coverage',
       },
     },

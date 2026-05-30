@@ -11,9 +11,9 @@ jobs:
         # Only windows-latest: it is the one platform with no container runtime,
         # so the portable unit suite is the only thing we can run here — and it
         # is the separator-sensitive platform we most need to cover. ubuntu and
-        # macOS instead run the full container integration suite (the
-        # integration jobs below), which exercises their posix runtime end to
-        # end and is the source of the coverage report uploaded to Codacy.
+        # macOS instead run the integration suite (the integration jobs below),
+        # which is a superset of the unit suite plus the full container/k8s path;
+        # the ubuntu run is the single coverage report uploaded to Codacy.
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -140,9 +140,9 @@ jobs:
         run: npm run test:integration -- --no-file-parallelism
       # Single coverage source for Codacy. This hosted job runs on every push
       # (PRs included), unlike the self-hosted integration workflow, so coverage
-      # shows up on PRs. No master-only gate. It reports the integration suite's
-      # coverage; files exercised only by the unit suite (windows job) report
-      # lower coverage here, which is expected.
+      # shows up on PRs. No master-only gate. Integration mode is a superset of the
+      # unit suite (see vitest.config.ts), so this one lcov is a complete report —
+      # the fast unit/error-path specs and the container/k8s path are both included.
       - name: Upload coverage
         continue-on-error: true
         uses: codacy/codacy-coverage-reporter-action@master
