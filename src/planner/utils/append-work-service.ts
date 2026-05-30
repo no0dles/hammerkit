@@ -103,6 +103,7 @@ function parseService(
     return <ContainerWorkService>{
       ...workService,
       type: 'container-service',
+      continuous: service.schema.continuous ?? false,
       healthcheck: service.schema.healthcheck
         ? {
             cmd: parseWorkCommand(service.cwd, service.schema.healthcheck, envs),

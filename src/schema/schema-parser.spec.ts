@@ -58,4 +58,38 @@ describe('createParseContext', () => {
     expect(scope.references['lib']).toBeDefined()
     expect(scope.references['lib'].scope.schema.tasks?.['lib-build']).toBeDefined()
   })
+
+  it('resolves an include (sibling build file merged under a name)', async () => {
+    const env = environmentMock(scratch)
+    writeFileSync(join(scratch, 'common.yaml'), 'tasks:\n  shared:\n    cmds:\n      - echo s\n')
+    writeFileSync(join(scratch, '.hammerkit.yaml'), 'includes:\n  npm: common.yaml\n')
+    const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), env)
+    expect(scope.references['npm']).toBeDefined()
+    expect(scope.references['npm'].type).toBe('include')
+    expect(scope.references['npm'].scope.schema.tasks?.['shared']).toBeDefined()
+  })
+
+  it('throws when an include and a reference share the same name', async () => {
+    const env = environmentMock(scratch)
+    const sub = join(scratch, 'sub')
+    mkdirSync(sub)
+    writeFileSync(join(sub, '.hammerkit.yaml'), 'tasks:\n  x:\n    cmds:\n      - echo x\n')
+    writeFileSync(join(scratch, 'inc.yaml'), 'tasks:\n  y:\n    cmds:\n      - echo y\n')
+    writeFileSync(join(scratch, '.hammerkit.yaml'), 'references:\n  lib: sub\nincludes:\n  lib: inc.yaml\n')
+    await expect(createParseContext(join(scratch, '.hammerkit.yaml'), env)).rejects.toThrow(/lib already exists/)
+  })
+
+  it('reuses an already-parsed build file when reached again (cache hit)', async () => {
+    const env = environmentMock(scratch)
+    const sub = join(scratch, 'sub')
+    mkdirSync(sub)
+    writeFileSync(join(sub, '.hammerkit.yaml'), 'tasks:\n  s:\n    cmds:\n      - echo s\n')
+    writeFileSync(join(scratch, '.hammerkit.yaml'), 'references:\n  a: sub\n  b: sub\n')
+
+    const { ctx, scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), env)
+    // Both references point at sub/.hammerkit.yaml and must end up at the same
+    // parsed ParseScope (the second appendBuildFile hits the ctx.files cache).
+    expect(scope.references['a'].scope).toBe(scope.references['b'].scope)
+    expect(Object.keys(ctx.files)).toHaveLength(2) // root + sub (sub cached on second visit)
+  })
 })

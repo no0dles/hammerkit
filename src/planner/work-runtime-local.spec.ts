@@ -33,6 +33,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       envs: { variables: {}, processEnvs: {} } as any,
       labels: {},
       shell: '/bin/sh',
+      continuous: false,
       caching: {
         name: 'none',
         method: 'none',

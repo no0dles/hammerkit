@@ -26,7 +26,9 @@ export async function watchLoop(
   const currentStats = await checkCacheState(work, options.cacheDefault, environment)
   checkForAbort(environment.abortCtrl.signal)
 
-  const continuous = work.data.type === 'container-service' ? work.data.continuous : false
+  // continuous lives on container-services and on tasks (both task types); a
+  // kubernetes-service has no such field. Read it wherever it exists.
+  const continuous = 'continuous' in work.data ? work.data.continuous : false
   const watchMode = options.watch && !options.daemon && !continuous
 
   const watchState = watchMode

@@ -63,6 +63,7 @@ describe('checkCacheState auto-pull', () => {
         envs: { variables: {}, replacements: [] } as any,
         labels: {},
         shell: '/bin/sh',
+        continuous: false,
         caching: resolved,
         description: null,
         scope: {} as any,

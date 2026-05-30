@@ -22,6 +22,7 @@ export interface BaseWorkTask {
   labels: LabelValues
   shell: string
   caching: ResolvedCache
+  continuous: boolean
 }
 
 export interface WorkTaskGenerate {
