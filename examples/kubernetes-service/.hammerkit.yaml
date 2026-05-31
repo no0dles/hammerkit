@@ -1,0 +1,35 @@
+# Forward a postgres running in a cluster into a local task.
+#
+# The cluster connection (context / kubeconfig / namespace) is declared once per
+# environment. The service only names what to forward (selector + ports) and is
+# pointed at a cluster by selecting an environment with `--env`. The `default`
+# environment is used when no `--env` is given.
+#
+#   hammerkit psql --env prod
+#   hammerkit psql            # uses the default environment
+environments:
+  default:
+    kubernetes:
+      context: docker-desktop
+  prod:
+    kubernetes:
+      context: gke_my-project_europe-west1_my-cluster
+      kubeconfig: ./prod-kube.yaml
+      namespace: databases
+
+services:
+  postgres:
+    description: postgres forwarded from the selected cluster
+    ports:
+      - 5432:5432
+    selector:
+      type: deployment
+      name: postgres
+
+tasks:
+  psql:
+    description: list databases on the forwarded postgres
+    image: postgres:12-alpine
+    needs: [postgres]
+    cmds:
+      - psql -h postgres -U postgres -c '\l'

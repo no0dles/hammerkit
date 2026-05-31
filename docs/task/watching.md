@@ -6,8 +6,8 @@ description: >-
 
 # Watching
 
-Task with source folders and files can be watched and on changed get restarted. 
-This can be used for example to run api servers and restarted if the server code changes.
+Tasks with source folders and files can be watched and, on change, get restarted. 
+This can be used for example to run api servers that restart when the server code changes.
 
 ```yaml
 tasks:
@@ -22,6 +22,14 @@ tasks:
 hammerkit api --watch
 ```
 
+In watch mode hammerkit watches the `src` of every task in the run. When a file
+changes it re-runs the affected task — and, because it knows the dependency graph,
+any tasks downstream of it — reusing cached results for everything unchanged. A
+short debounce coalesces bursts of saves into a single restart. Combine `--watch`
+with services (via `needs`, or [`hammerkit up --watch`](../cli/up.md)) to keep a
+database running while your api restarts on every edit; the
+[development workflow guide](../guides/development-workflow.md) puts these together.
+
 
 # Continuous tasks
 
@@ -33,7 +41,7 @@ Hammerkit will then not watch for files change in the source directory of such t
 ```yaml
 tasks:
   serve:
-    image: node:16
+    image: node:24
     continuous: true
     src: 
       - src

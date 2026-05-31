@@ -1,12 +1,12 @@
 tasks:
   build:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [ npm:install ]
     src:
       - tsconfig.json
       - src
     cmds:
-      - node_modules/.bin/tsc
+      - node_modules/.bin/tsc -b
     generates:
       - dist
 

@@ -1,0 +1,87 @@
+name: integration
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: [self-hosted, linux, hammerkit]
+    timeout-minutes: 45
+    env:
+      LINUX_CONTAINERS: 'true'
+      CLUSTER_NAME: hammerkit-ci
+      KUBECONFIG: /home/runner/.kube/config
+      REGISTRY: localhost:5000
+      HAMMERKIT_FULL_INTEGRATION: 'true'
+      HAMMERKIT_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      # self-hosted runner can be slow on first pulls; keep a generous per-spec
+      # ceiling (local defaults to 120s for fast hang detection)
+      HAMMERKIT_TEST_TIMEOUT: '900000'
+      VERBOSE: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify host prerequisites
+        run: |
+          docker info >/dev/null
+          kubectl --context "$CLUSTER_NAME" cluster-info
+          kubectl create namespace "hammerkit-${HAMMERKIT_TEST_RUN_ID}" --dry-run=client -o yaml >/dev/null
+          curl -fsS "http://${REGISTRY}/v2/" >/dev/null
+
+      - name: Install npm packages
+        run: npm ci
+
+      # Each k8s spec deploys into its own namespace named with the run id
+      # (hammerkit creates it on demand via ensureNamespace), so suites can run
+      # in parallel without colliding. Cleanup below matches those by name.
+      - name: Run integration tests
+        run: npm run test:integration
+
+      # Coverage is uploaded to Codacy from the hosted `integration
+      # (ubuntu-latest)` job in test.yaml (the single source: it runs the
+      # identical full suite on every push, PRs included). This self-hosted job
+      # only archives its lcov as an artifact for debugging, to avoid a
+      # duplicate upload for the same commit.
+      - name: Archive integration coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage/lcov.info
+          if-no-files-found: ignore
+
+      - name: Archive logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            logs
+            temp
+
+      - name: Cleanup docker resources
+        if: always()
+        run: |
+          docker ps -aq --filter "label=hammerkit-id" \
+            | xargs -r docker rm -f
+          docker volume ls -q --filter "label=hammerkit-id" \
+            | xargs -r docker volume rm -f
+          docker network ls -q --filter "label=hammerkit-id" \
+            | xargs -r docker network rm
+
+      - name: Cleanup kubernetes namespaces
+        if: always()
+        run: |
+          for ns in $(kubectl --context "$CLUSTER_NAME" get ns -o name \
+            | grep "${HAMMERKIT_TEST_RUN_ID}" || true); do
+            kubectl --context "$CLUSTER_NAME" delete "$ns" --ignore-not-found --wait=false
+          done

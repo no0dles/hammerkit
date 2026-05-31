@@ -1,0 +1,58 @@
+services:
+  api:
+    image: node:24-alpine
+    deps: [install]
+    needs: [postgres]
+    cmd: node server.js
+    envs:
+      DATABASE_URL: postgres://api:123456@postgres:5432/api
+    ports: [3000]
+    mounts: [server.js]
+    healthcheck:
+      cmd: "wget -qO- http://localhost:3000"
+
+  postgres:
+    image: postgres:12-alpine
+    ports:
+      - 5432
+    envs:
+      POSTGRES_USER: api
+      POSTGRES_DB: api
+      POSTGRES_PASSWORD: 123456
+    healthcheck:
+      cmd: "pg_isready -U postgres"
+
+tasks:
+  install:
+    image: node:24-alpine
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+      - package-lock.json
+    cmds:
+      - npm install
+
+references:
+  spa: ./spa
+
+environments:
+  development:
+    kubernetes:
+      namespace: default
+      context: popos
+      ingresses:
+        # classic Ingress (default kind), routed by the nginx ingress controller
+        - host: web.hammerkit.dev
+          service: spa:web
+          servicePort: 4200
+          path: /
+        # Gateway API HTTPRoute - requires the Gateway API CRDs and a Gateway
+        # named "web" in the cluster
+        - kind: httproute
+          host: api.hammerkit.dev
+          service: api
+          servicePort: 3000
+          path: /
+          gateway: web

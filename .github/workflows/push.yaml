@@ -4,133 +4,124 @@ on:
     tags:
       - v*
 jobs:
-  docker:
-    runs-on: ubuntu-20.04
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      npm_tag: ${{ steps.version.outputs.npm_tag }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Set Version
+      - name: Resolve version from tag
         id: version
         run: |
-          echo ::set-output name=VERSION::${GITHUB_REF:11}
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then
+            PREID=${VERSION#*-}   # e.g. alpha.0
+            PREID=${PREID%%.*}    # e.g. alpha
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=$PREID" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+  docker:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v1
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
-      - run: echo $DOCKER_TOKEN | docker login --username no0dles --password-stdin
-        env:
-          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: no0dles
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Compute image tags
+        id: tags
+        run: |
+          TAGS="no0dles/hammerkit:${{ needs.version.outputs.version }}"
+          if [[ "${{ needs.version.outputs.prerelease }}" == "false" ]]; then
+            TAGS="$TAGS,no0dles/hammerkit:latest"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
       - name: Build and push image
-        run: docker buildx build . --platform linux/arm64,linux/amd64 -t no0dles/hammerkit -t no0dles/hammerkit:$IMAGE_TAG --push
-        env:
-          IMAGE_TAG: ${{ steps.version.outputs.VERSION }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64,linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
 
   binaries:
-    runs-on: ubuntu-20.04
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Setup node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: '16'
-      - name: Set Version
-        id: version
-        run: |
-          echo ::set-output name=VERSION::${GITHUB_REF:11}
+          node-version: '24'
       - name: Install npm packages
         run: npm ci
-      - run: node_modules/.bin/tsc
+      - run: node_modules/.bin/tsc -b tsconfig.json
       - name: Build binaries
-        run: node_modules/.bin/pkg --no-bytecode -t "node16-linux-x64,node16-linux-arm64,node16-macos-x64,node16-macos-arm64,node16-win-x64,node16-win-arm64" .
+        # --public --public-packages "*" embeds plain sources for every package;
+        # without it --no-bytecode aborts ("no source breaks final executable", e.g. tslib).
+        run: node_modules/.bin/pkg --no-bytecode --public --public-packages "*" --compress Brotli -t "node24-linux-x64,node24-linux-arm64,node24-macos-x64,node24-macos-arm64,node24-win-x64,node24-win-arm64" .
+      - name: Ad-hoc sign macOS binaries
+        # macOS targets are cross-built on this Linux runner and ship unsigned;
+        # Apple Silicon SIGKILLs unsigned Mach-O. rcodesign adds an ad-hoc signature.
+        # NB: keep this a plain shell var, not an env: entry — rcodesign reads
+        # RCODESIGN_* env vars as config and rejects RCODESIGN_VERSION.
+        run: |
+          RC_VERSION=0.29.0
+          curl -sSL "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${RC_VERSION}/apple-codesign-${RC_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          RCODESIGN="apple-codesign-${RC_VERSION}-x86_64-unknown-linux-musl/rcodesign"
+          chmod +x "$RCODESIGN"
+          "$RCODESIGN" sign hammerkit-macos-arm64
+          "$RCODESIGN" sign hammerkit-macos-x64
       - name: Create release
-        uses: actions/create-release@v1
-        id: create_release
-        with:
-          draft: false
-          prerelease: false
-          release_name: ${{ steps.version.outputs.version }}
-          tag_name: ${{ github.ref }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-      - name: upload linux arm64 artifact
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hammerkit-linux-arm64
-          asset_name: hammerkit-linux-arm64
-          asset_content_type: application/octet-stream
-      - name: upload linux x64 artifact
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hammerkit-linux-x64
-          asset_name: hammerkit-linux-x64
-          asset_content_type: application/octet-stream
-      - name: upload macos arm64 artifact
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hammerkit-macos-arm64
-          asset_name: hammerkit-macos-arm64
-          asset_content_type: application/octet-stream
-      - name: upload macos x64 artifact
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hammerkit-macos-x64
-          asset_name: hammerkit-macos-x64
-          asset_content_type: application/octet-stream
-      - name: upload win arm64 artifact
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hammerkit-win-arm64.exe
-          asset_name: hammerkit-win-arm64.exe
-          asset_content_type: application/octet-stream
-      - name: upload win x64 artifact
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hammerkit-win-x64.exe
-          asset_name: hammerkit-win-x64.exe
-          asset_content_type: application/octet-stream
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ needs.version.outputs.version }}" \
+            ${{ needs.version.outputs.prerelease == 'true' && '--prerelease' || '--latest' }} \
+            hammerkit-linux-arm64 \
+            hammerkit-linux-x64 \
+            hammerkit-macos-arm64 \
+            hammerkit-macos-x64 \
+            hammerkit-win-arm64.exe \
+            hammerkit-win-x64.exe
 
   npm:
-    runs-on: ubuntu-20.04
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm trusted publishing (OIDC)
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Setup node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: '16'
+          node-version: '24'
           registry-url: https://registry.npmjs.org/
-      - name: Set Version
-        id: version
-        run: |
-          echo ::set-output name=VERSION::${GITHUB_REF:11}
+      - name: Upgrade npm for trusted publishing
+        # trusted publishing (OIDC) needs npm >= 11.5.1; pin to latest to be sure
+        run: npm install -g npm@latest
       - name: Install npm packages
         run: npm ci
-      - name: Build .npmrc
-        run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish package
-        run: npm publish --tag beta
-        if: contains(steps.version.outputs.version, 'beta')
-      - name: Publish package
-        run: npm publish
-        if: "!contains(steps.version.outputs.version, 'beta')"
+        # auth comes from the OIDC trusted publisher configured on npmjs.com;
+        # no NPM_TOKEN needed, and provenance is attached automatically
+        run: npm publish --tag "${{ needs.version.outputs.npm_tag }}"

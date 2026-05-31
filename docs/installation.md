@@ -1,6 +1,13 @@
 # Installation
 
-The different ways to install and use hammerkit
+The different ways to install and use hammerkit.
+
+{% hint style="info" %}
+Tasks that declare an `image` run in a container, so you also need a running
+container engine ([Docker](https://docs.docker.com/get-docker/) or compatible).
+Check it with `docker info`. Tasks without an `image` run on the host and need only
+the tools they call.
+{% endhint %}
 
 ## Npm / Yarn
 
@@ -21,9 +28,25 @@ yarn add -g hammerkit
 {% endtab %}
 {% endtabs %}
 
+## Npx
+
+If node is installed, hammerkit can be run directly without a global install using `npx`.
+This always uses the latest published version.
+
+```bash
+npx hammerkit init
+npx hammerkit example
+```
+
+{% hint style="info" %}
+`example` here is the task name that [`init`](cli/init.md) writes — it is not a
+built-in command. The commands in these docs like `hammerkit build` likewise refer
+to a `build` *task* you define, not a hammerkit subcommand.
+{% endhint %}
+
 ## Homebrew
 
-With homebrew hammerkit can be installed on mac and linux (including windows with WSL).
+With homebrew hammerkit can be installed on macOS and linux (including windows with WSL).
 
 ```
 brew tap no0dles/hammerkit
@@ -32,13 +55,13 @@ brew install hammerkit
 
 ## Binary
 
-Each release of hammerkit has a [release](https://github.com/no0dles/hammerkit/releases) on github with binaries for windows, macos and linux. 
+Each release of hammerkit has a [release](https://github.com/no0dles/hammerkit/releases) on GitHub with binaries for windows, macOS and linux. 
 Those do not require to have node installed and support `arm` and `x86`.
 
 ## Container
 
 The container image on [docker hub](https://hub.docker.com/r/no0dles/hammerkit) contains hammerkit and can be used for dind. 
-For container builds on CI systems its the recommended approach.
+For container builds on CI systems it's the recommended approach.
 
 ## Gitlab CI
 
@@ -48,7 +71,7 @@ variables:
   DOCKER_DRIVER: overlay2
 
 services:
-  - docker:19.03.0-dind
+  - docker:dind
 
 build:
   image: no0dles/hammerkit
@@ -57,20 +80,20 @@ build:
 ```
 {% endcode %}
 
-## Github Action
+## GitHub Action
 
-For github action there is the `no0dles/hammerkit-github-action` action to install hammerkit. 
+For GitHub action there is the `no0dles/hammerkit-github-action` action to install hammerkit. 
 The action requires the `setup-node` to run correctly.
 
 ```yaml
 jobs:
   build:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '16'
+          node-version: '24'
       - uses: no0dles/hammerkit-github-action@v1.3
 ```

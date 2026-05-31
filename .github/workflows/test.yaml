@@ -4,92 +4,156 @@ on:
     branches:
       - '**'
 jobs:
-  linux:
-    runs-on: ${{ matrix.os }}
+  unit:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ ubuntu-20.04 ]
-        node: [ 16 ]
+        # Only windows-latest: it is the one platform with no container runtime,
+        # so the portable unit suite is the only thing we can run here — and it
+        # is the separator-sensitive platform we most need to cover. ubuntu and
+        # macOS instead run the integration suite (the integration jobs below),
+        # which is a superset of the unit suite plus the full container/k8s path;
+        # the ubuntu run is the single coverage report uploaded to Codacy.
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup node ${{ matrix.node }}
-        uses: actions/setup-node@v2
+        uses: actions/checkout@v4
+      - name: Setup node
+        uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
-      - name: Setup docker
-        uses: docker-practice/actions-setup-docker@master
+          node-version: '24'
+          cache: 'npm'
       - name: Install npm packages
         run: npm ci
       - name: Run tests
-        run: node_modules/.bin/jest --runInBand
+        run: npm test
         timeout-minutes: 15
         env:
           VERBOSE: true
       - name: Archive test artifacts
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: console-log
+          name: console-log-${{ matrix.os }}
           path: |
             logs
+
+  # Linux-container coverage on macOS via colima. Kept separate from the fast
+  # unit matrix so colima flakiness can't gate the portable suites. Must run on
+  # an Intel runner: Apple-Silicon GitHub runners lack the nested virtualization
+  # colima needs. macos-15-intel is the last hosted Intel image (until ~2027).
+  # k8s specs no-op (CLUSTER_NAME unset) and the registry self-provisions via
+  # docker (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
+  macos-containers:
+    name: integration (macos-latest)
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      LINUX_CONTAINERS: 'true'
+      VERBOSE: 'true'
+      # the x86-emulated colima daemon is slow; keep a generous per-spec ceiling
+      # (local defaults to 120s for fast hang detection)
+      HAMMERKIT_TEST_TIMEOUT: '900000'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - name: Setup Docker on macOS
+        uses: douglascamata/setup-docker-macos-action@v1.1.0
+        with:
+          lima: latest
+          colima: latest
+          colima-additional-options: '--cpu 3 --memory 6 --disk 20'
+      - name: Point default docker socket at colima (for dockerode)
+        run: sudo ln -sf "$HOME/.colima/default/docker.sock" /var/run/docker.sock
+      - name: Install npm packages
+        run: npm ci
+      # Serialize: the x86-emulated colima daemon is slow and shares one host;
+      # running suites one at a time avoids volume/container races and gives each
+      # spec the full daemon, keeping it within the (generous) timeouts.
+      - name: Run container integration tests
+        run: npm run test:integration -- --no-file-parallelism
+      - name: Archive logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-container-logs
+          path: |
+            logs
+            temp
+
+  # Full container + Kubernetes integration on a hosted Linux runner. ubuntu-latest
+  # ships a native, running Docker daemon, so this is a self-hosted-independent path
+  # to the whole integration suite (integration.yaml needs a pre-provisioned cluster
+  # and registry). A throwaway kind cluster supplies Kubernetes and a registry:2
+  # container satisfies REGISTRY for the docker package-push spec. The k8s specs pull
+  # public images (node/postgres) straight from Docker Hub, so no containerd registry
+  # mirror is needed. HAMMERKIT_FULL_INTEGRATION makes the linux-container and k8s
+  # gates assert rather than no-op; requiresWindowsContainers is unused, so leaving
+  # WINDOWS_CONTAINERS unset does not fail anything (see src/testing/requires-*).
+  linux-integration:
+    name: integration (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      LINUX_CONTAINERS: 'true'
+      CLUSTER_NAME: hammerkit-ci
+      REGISTRY: localhost:5000
+      HAMMERKIT_FULL_INTEGRATION: 'true'
+      HAMMERKIT_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      # native docker is fast, but the first pull of the node/postgres images into
+      # the cluster still costs time; keep a generous per-spec ceiling
+      HAMMERKIT_TEST_TIMEOUT: '600000'
+      VERBOSE: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: hammerkit-ci
+      # hammerkit's k8s specs use process.env.CLUSTER_NAME directly as the kube
+      # context (`context: process.env.CLUSTER_NAME`). kind names the context
+      # `kind-<cluster>`, so rename it to match what the specs ask for.
+      - name: Name the kube context after CLUSTER_NAME
+        run: kubectl config rename-context "kind-${CLUSTER_NAME}" "${CLUSTER_NAME}"
+      # docker-package-registry.spec.ts only probes an externally provided REGISTRY
+      # for liveness (it never manages one), so stand up a registry on localhost:5000.
+      - name: Start local registry
+        run: docker run -d --restart=always -p 5000:5000 --name registry registry:2
+      - name: Install npm packages
+        run: npm ci
+      # Serialize on this first hosted-kind setup: one single-node cluster on a
+      # 4-vCPU runner, so running suites one at a time avoids scheduling/volume
+      # races (the self-hosted runner parallelizes against a beefier cluster).
+      - name: Run integration tests
+        run: npm run test:integration -- --no-file-parallelism
+      # Single coverage source for Codacy. This hosted job runs on every push
+      # (PRs included), unlike the self-hosted integration workflow, so coverage
+      # shows up on PRs. No master-only gate. Integration mode is a superset of the
+      # unit suite (see vitest.config.ts), so this one lcov is a complete report —
+      # the fast unit/error-path specs and the container/k8s path are both included.
       - name: Upload coverage
+        continue-on-error: true
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: coverage/lcov.info
-
-#  win:
-#    runs-on: ${{ matrix.os }}
-#    strategy:
-#      matrix:
-#        os: [ windows-2016 ]
-#        node: [ 14 ]
-#    steps:
-#      - name: Checkout
-#        uses: actions/checkout@v2
-#      - name: Setup node ${{ matrix.node }}
-#        uses: actions/setup-node@v2
-#        with:
-#          node-version: ${{ matrix.node }}
-#      - name: Install npm packages
-#        run: npm ci
-#      - name: Run tests
-#        run: node_modules/.bin/jest --runInBand
-#        env:
-#          SKIP_DOCKER: true
-#        timeout-minutes: 10
-
-  macos:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ macos-10.15 ]
-        node: [ 16 ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup node ${{ matrix.node }}
-        uses: actions/setup-node@v2
-        with:
-          node-version: ${{ matrix.node }}
-      - name: Setup docker
-        uses: docker-practice/actions-setup-docker@master
-      - name: Install npm packages
-        run: npm ci
-      - name: Pull postgres test image
-        run: docker pull postgres:12-alpine
-      - name: Pull node image
-        run: docker pull node:16.6.0-alpine
-      - name: Run tests
-        run: node_modules/.bin/jest --runInBand
-        timeout-minutes: 15
-        env:
-          VERBOSE: true
-      - name: Archive test artifacts
-        uses: actions/upload-artifact@v3
+      - name: Archive logs on failure
         if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          name: console-log
+          name: linux-integration-logs
           path: |
             logs
+            temp

@@ -12,13 +12,15 @@
     "noImplicitThis": true,
     "downlevelIteration": true,
     "resolveJsonModule": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "skipLibCheck": true,
+    "types": ["node", "vitest/globals"]
   },
   "exclude": [
     "node_modules",
     "dist",
     "temp",
     "examples",
-    "jest.config.ts"
+    "vitest.config.ts"
   ]
 }

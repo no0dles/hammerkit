@@ -1,7 +1,7 @@
 tasks:
   install:
     description: npm module install
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     mounts:
       - $PWD/.npm:/.npm
       - $PWD/.config:/.config
@@ -11,4 +11,4 @@ tasks:
     generates:
       - node_modules
     cmds:
-      - npm install
+      - npm ci

@@ -1,4 +1,4 @@
-import { StatusScopedConsole } from '../planner/work-node-status'
+import { StatusScopedConsole } from '../planner/work-item-status'
 import { ContainerCreateOptions } from 'dockerode'
 
 export function printContainerOptions(status: StatusScopedConsole, containerOptions: ContainerCreateOptions) {

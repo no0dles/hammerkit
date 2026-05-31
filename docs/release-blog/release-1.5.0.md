@@ -1,4 +1,4 @@
-# Release 1.5.0 (comming soon)
+# Release 1.5.0
 
 A short retro about the made changes and findings
 
@@ -68,10 +68,10 @@ Allowing to group or divide tasks from each other.
 The cli commands [exec](../cli/execute.md), [store/restore](../cli/store-restore.md), [clean](../cli/clean.md), [validate](../cli/validate.md) and [ls](../cli/ls.md) support label arguments to limit the scope.
 
 The new `--filter, -f` option allows to reduce to scope to tasks/services only matching the specified label.
-For example `task clean --filter project=a` will only run the clean command on tasks that have the label `project=a` or are a dependency of such a task.
+For example `hammerkit clean --filter project=a` will only run the clean command on tasks that have the label `project=a` or are a dependency of such a task.
 
 The other new `--exclude, -e` option works the opposite way and reduces the scope to task/services that do not have a matching label.
-For example `task -e project=a` will execute all tasks that do not have a label `project=a`.
+For example `hammerkit -e project=a` will execute all tasks that do not have a label `project=a`.
 
 Further examples and uses cases can be found [here](../labels/README.md).
 

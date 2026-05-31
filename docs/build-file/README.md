@@ -4,12 +4,20 @@ description: A summary of all build file configuration options
 
 # Build file
 
-The build file is a yaml file with the filename `build.yaml` inside your project directory. It contains a list of [tasks](../task/) which can be executed over the [cli](../cli/).&#x20;
+The build file is a yaml file in the root of your project. It contains a list of [tasks](../task/README.md) which can be executed over the [cli](../cli/README.md).&#x20;
+
+Hammerkit looks for the build file by name, in this order:
+
+1. `.hammerkit.yaml`
+2. `.hammerkit.yml`
+3. `build.yaml`
+
+All three are valid; the first one found is used. If more than one exists hammerkit warns about the ambiguity. These docs use `.hammerkit.yaml` as the canonical name in every example. To point hammerkit at a different file, pass [`--file <path>`](../cli/README.md).
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
 envs:
-  NODE_VERSION: 14.16.0
+  NODE_VERSION: '22'
 
 tasks:
   build:

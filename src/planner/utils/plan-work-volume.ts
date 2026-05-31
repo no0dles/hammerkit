@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { BaseWorkNode } from '../work-node'
+import { BaseWorkTask } from '../work-task'
 import { WorkVolume } from '../work-volume'
 import { WorkMount } from '../work-mount'
 
@@ -11,7 +11,7 @@ export function getVolumeName(generate: string): string {
   return `hammerkit-${generateId(generate)}`
 }
 
-export function getContainerVolumes(task: BaseWorkNode, mounts: WorkMount[]): WorkVolume[] {
+export function getContainerVolumes(task: BaseWorkTask, mounts: WorkMount[]): WorkVolume[] {
   const volumes: WorkVolume[] = []
 
   for (const generate of task.generates) {
@@ -26,6 +26,7 @@ export function getContainerVolumes(task: BaseWorkNode, mounts: WorkMount[]): Wo
       name,
       containerPath: generate.path,
       inherited: generate.inherited,
+      export: generate.export,
     })
   }
 

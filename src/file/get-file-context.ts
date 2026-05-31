@@ -10,15 +10,18 @@ import {
   rm,
   stat,
   writeFile,
+  WriteStream,
 } from 'fs'
 import { dirname, join, isAbsolute } from 'path'
 import { watch } from 'chokidar'
 import { FileContext, Stats } from './file-context'
-import { Stream } from 'stream'
+import { Readable } from 'stream'
 
-function handleCallback<T>(callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void): Promise<T>
-function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
-function handleCallback(callback: (cb: (err: Error | null, value?: any) => void) => void): Promise<any> {
+function handleCallback<T>(
+  callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void
+): Promise<T> {
+  //function handleCallback(callback: (cb: (err: Error | null) => void) => void): Promise<void>
+  //function handleCallback(callback: (cb: (err: Error | null, value?: any) => void) => void): Promise<any> {
   return new Promise<any>((resolve, reject) => {
     callback((err: Error | null, value: any) => {
       if (err) {
@@ -63,7 +66,7 @@ export function getFileContext(cwd: string): FileContext {
     writeFile(path: string, content: string): Promise<void> {
       return handleCallback((cb) => writeFile(getAbsolutePath(cwd, path), content, cb))
     },
-    async writeStream(path: string, stream: Stream): Promise<void> {
+    async writeStream(path: string, stream: Readable | NodeJS.ReadableStream): Promise<void> {
       const writeStream = createWriteStream(path)
       await new Promise<void>((resolve, reject) => {
         stream
@@ -71,6 +74,9 @@ export function getFileContext(cwd: string): FileContext {
           .on('error', (err) => reject(err))
           .on('close', () => resolve())
       })
+    },
+    createWriteStream(path: string): WriteStream {
+      return createWriteStream(path)
     },
     listFiles(path: string): Promise<string[]> {
       return handleCallback((cb) => readdir(getAbsolutePath(cwd, path), cb))
@@ -131,11 +137,30 @@ export function getFileContext(cwd: string): FileContext {
     async remove(path: string): Promise<void> {
       const absolutePath = getAbsolutePath(cwd, path)
       if (await this.exists(absolutePath)) {
-        return handleCallback((cb) => rm(absolutePath, { recursive: true }, cb))
+        // On Windows a file/dir can briefly stay locked after a watcher or
+        // process releases it, making rmdir fail with EBUSY/EPERM. Node's
+        // built-in retry handles exactly those transient errors.
+        return handleCallback((cb) =>
+          rm(absolutePath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }, cb)
+        )
       }
     },
     watch(path: string, callback: (fileName: string) => void): { close(): void } {
-      const watcher = watch(getAbsolutePath(cwd, path))
+      // Native fs events are unreliable on virtual filesystems and frequently
+      // miss single-file changes. This bites two platforms:
+      //   - Windows CI, and
+      //   - macOS + Docker Desktop, whose gRPC-FUSE/virtiofs share does not emit
+      //     host FSEvents for files a *container* writes through a bind mount.
+      // The latter silently breaks --watch cascades between container tasks (a
+      // dependency regenerates an output but the dependent's watcher never
+      // fires). Poll on both so changes are detected deterministically regardless
+      // of who wrote the file. HAMMERKIT_WATCH_POLLING=true|false overrides the
+      // default (e.g. to force native events on a fast local FS).
+      const usePolling =
+        process.env.HAMMERKIT_WATCH_POLLING !== undefined
+          ? process.env.HAMMERKIT_WATCH_POLLING === 'true'
+          : process.platform === 'win32' || process.platform === 'darwin'
+      const watcher = watch(getAbsolutePath(cwd, path), { usePolling })
       watcher.on('add', (fileName) => {
         callback(fileName)
       })
@@ -148,7 +173,7 @@ export function getFileContext(cwd: string): FileContext {
 
       return {
         close() {
-          watcher.close()
+          return watcher.close()
         },
       }
     },
