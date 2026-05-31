@@ -78,6 +78,17 @@ jobs:
         # --public --public-packages "*" embeds plain sources for every package;
         # without it --no-bytecode aborts ("no source breaks final executable", e.g. tslib).
         run: node_modules/.bin/pkg --no-bytecode --public --public-packages "*" -t "node16-linux-x64,node16-linux-arm64,node16-macos-x64,node16-macos-arm64,node16-win-x64,node16-win-arm64" .
+      - name: Ad-hoc sign macOS binaries
+        # macOS targets are cross-built on this Linux runner and ship unsigned;
+        # Apple Silicon SIGKILLs unsigned Mach-O. rcodesign adds an ad-hoc signature.
+        env:
+          RCODESIGN_VERSION: '0.29.0'
+        run: |
+          curl -sSL "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${RCODESIGN_VERSION}/apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz" | tar xz
+          RCODESIGN="apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl/rcodesign"
+          chmod +x "$RCODESIGN"
+          "$RCODESIGN" sign hammerkit-macos-arm64
+          "$RCODESIGN" sign hammerkit-macos-x64
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
