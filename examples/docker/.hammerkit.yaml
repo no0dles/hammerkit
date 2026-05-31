@@ -1,7 +1,8 @@
 tasks:
   example:
     description: docker example
-    image: node:24-alpine
+    # pinned patch: docker.spec.ts asserts the exact npm/node versions this image prints
+    image: node:24.16.0-alpine
     cmds:
       - npm -v
       - node -v

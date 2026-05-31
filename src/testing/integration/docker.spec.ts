@@ -13,8 +13,9 @@ describe('docker', () => {
       const { cli, environment } = await suite.setup({ taskName: 'example' })
       const result = await cli.runExec()
       await expectSuccessfulResult(result, environment)
-      await expectLog(result, environment, `example`, '7.19.1')
-      await expectLog(result, environment, `example`, 'v16.6.0')
+      // versions printed by the pinned node:24.16.0-alpine fixture image
+      await expectLog(result, environment, `example`, '11.13.0')
+      await expectLog(result, environment, `example`, 'v24.16.0')
     })
   )
 })
