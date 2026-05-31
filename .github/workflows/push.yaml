@@ -75,7 +75,9 @@ jobs:
         run: npm ci
       - run: node_modules/.bin/tsc -b tsconfig.json
       - name: Build binaries
-        run: node_modules/.bin/pkg --no-bytecode -t "node16-linux-x64,node16-linux-arm64,node16-macos-x64,node16-macos-arm64,node16-win-x64,node16-win-arm64" .
+        # --public --public-packages "*" embeds plain sources for every package;
+        # without it --no-bytecode aborts ("no source breaks final executable", e.g. tslib).
+        run: node_modules/.bin/pkg --no-bytecode --public --public-packages "*" -t "node16-linux-x64,node16-linux-arm64,node16-macos-x64,node16-macos-arm64,node16-win-x64,node16-win-arm64" .
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
