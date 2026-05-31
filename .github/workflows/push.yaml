@@ -75,7 +75,7 @@ jobs:
       - name: Build binaries
         # --public --public-packages "*" embeds plain sources for every package;
         # without it --no-bytecode aborts ("no source breaks final executable", e.g. tslib).
-        run: node_modules/.bin/pkg --no-bytecode --public --public-packages "*" -t "node24-linux-x64,node24-linux-arm64,node24-macos-x64,node24-macos-arm64,node24-win-x64,node24-win-arm64" .
+        run: node_modules/.bin/pkg --no-bytecode --public --public-packages "*" --compress Brotli -t "node24-linux-x64,node24-linux-arm64,node24-macos-x64,node24-macos-arm64,node24-win-x64,node24-win-arm64" .
       - name: Ad-hoc sign macOS binaries
         # macOS targets are cross-built on this Linux runner and ship unsigned;
         # Apple Silicon SIGKILLs unsigned Mach-O. rcodesign adds an ad-hoc signature.
