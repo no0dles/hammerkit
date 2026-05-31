@@ -14,7 +14,7 @@ Mark a generate with `export: true` to copy it back out:
 ```yaml
 tasks:
   build:
-    image: node:22-alpine
+    image: node:24-alpine
     generates:
       - path: dist
         export: true

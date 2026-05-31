@@ -1,13 +1,13 @@
 tasks:
   base:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     labels:
       app: base
     cmds:
       - node --eval "console.log('base')"
 
   foo:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [base]
     cmds:
       - node --eval "console.log('foo')"
@@ -15,7 +15,7 @@ tasks:
       app: foo
 
   bar:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [base]
     cmds:
       - node --eval "console.log('bar')"

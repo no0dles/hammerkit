@@ -1,6 +1,6 @@
 tasks:
   install:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     labels:
       stage: build
     mounts:

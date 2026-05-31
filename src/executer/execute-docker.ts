@@ -89,7 +89,7 @@ export async function execCommand(
     abortSignal: abortController.signal,
   })
 
-  let timeoutHandle: NodeJS.Timer | undefined = undefined
+  let timeoutHandle: NodeJS.Timeout | undefined = undefined
   return new Promise<ExecResult>((resolve, reject) => {
     let resolved = false
 

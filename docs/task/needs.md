@@ -23,7 +23,7 @@ services:
 tasks:
   api:
     description: "start api"
-    image: node:22-alpine
+    image: node:24-alpine
     needs: [postgres]
     cmds:
       - node index.js
@@ -78,7 +78,7 @@ services:
 
 tasks:
   migrate:
-    image: node:22-alpine
+    image: node:24-alpine
     needs: [postgres]
     envs:
       DATABASE_URL: $DATABASE_URL
@@ -96,7 +96,7 @@ exposes it under a prefix — use the object form:
 ```yaml
 tasks:
   api:
-    image: node:22-alpine
+    image: node:24-alpine
     needs:
       - service: db:postgres   # the service to depend on
         name: postgres         # the hostname/alias the task uses

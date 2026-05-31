@@ -95,7 +95,7 @@ services:
 
 tasks:
   migrate:
-    image: node:22-alpine
+    image: node:24-alpine
     needs: [postgres]
     envs:
       DATABASE_URL: $DATABASE_URL

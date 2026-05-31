@@ -1,6 +1,6 @@
 services:
   api:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [npm:install]
     needs:
       - service: base:postgres

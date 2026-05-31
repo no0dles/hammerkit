@@ -31,7 +31,7 @@ tasks:
 
   docker:example:
     description: clean example
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     mounts:
       - $PWD/.npm:/.npm
       - $PWD/.config:/.config

@@ -26,7 +26,7 @@ Containers are the recommended default, and the reason hammerkit exists:
 ```yaml
 tasks:
   build:
-    image: node:22-alpine   # tools come from here
+    image: node:24-alpine   # tools come from here
     src:
       - src
     cmds:

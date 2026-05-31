@@ -23,14 +23,14 @@ Services:
 
 Tasks:
 • install
-   image: node:22-alpine
+   image: node:24-alpine
    labels: stage=build
    src: package.json package-lock.json
    generates: node_modules
 • api
    needs: postgres
    deps: install
-   image: node:22-alpine
+   image: node:24-alpine
    labels: stage=run app=example
    src: index.js config.json package.json package-lock.json
    generates: node_modules

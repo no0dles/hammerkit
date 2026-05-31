@@ -1,7 +1,7 @@
 tasks:
   example:
     description: docker example
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     cmds:
       - npm -v
       - node -v

@@ -162,7 +162,7 @@ describe('getFileContext', () => {
       const chunks: Buffer[] = []
       await new Promise<void>((resolve, reject) => {
         const rs = fc.readStream(target)
-        rs.on('data', (c: Buffer) => chunks.push(c))
+        rs.on('data', (c) => chunks.push(c as Buffer))
         rs.on('error', reject)
         // 'close' (fd released) fires after 'end'; wait for it so an open read
         // handle can't block the afterEach cleanup on Windows.

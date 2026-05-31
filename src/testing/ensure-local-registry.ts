@@ -1,4 +1,5 @@
 import Dockerode from 'dockerode'
+import { Stream } from 'stream'
 
 const REGISTRY_NAME = 'hammerkit-test-registry'
 const REGISTRY_IMAGE = 'registry:2'
@@ -41,7 +42,7 @@ async function ensureImage(docker: Dockerode, image: string): Promise<void> {
         reject(err ?? new Error('no pull stream'))
         return
       }
-      docker.modem.followProgress(stream, (e: unknown) => (e ? reject(e) : resolve()))
+      docker.modem.followProgress(stream as unknown as Stream, (e: unknown) => (e ? reject(e) : resolve()))
     })
   })
 }

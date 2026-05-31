@@ -31,7 +31,7 @@ knows how to compile and itself includes the npm install:
 ```yaml
 tasks:
   install:
-    image: node:22-alpine
+    image: node:24-alpine
     src:
       - package.json
       - package-lock.json
@@ -46,7 +46,7 @@ tasks:
 ```yaml
 tasks:
   build:
-    image: node:22-alpine
+    image: node:24-alpine
     deps: [npm:install]
     src:
       - tsconfig.json

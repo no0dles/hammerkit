@@ -1,7 +1,7 @@
 tasks:
   example:
     description: install npm packages
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     mounts:
       - $PWD/.npm:/.npm
       - $PWD/.config:/.config
@@ -15,7 +15,7 @@ tasks:
 
   dependant:
     description: check node_modules path
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [example]
     cmds:
       - ls

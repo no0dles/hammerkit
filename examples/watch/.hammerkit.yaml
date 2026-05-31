@@ -1,6 +1,6 @@
 services:
   api:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [install]
     labels:
       task: dev
@@ -12,7 +12,7 @@ services:
 
 tasks:
   install:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     mounts:
       - $PWD/.npm:/.npm
       - $PWD/.config:/.config
@@ -25,7 +25,7 @@ tasks:
       - package.json
 
   work:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [install]
     src:
       - src/work.js

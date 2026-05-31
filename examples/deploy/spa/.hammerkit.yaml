@@ -1,6 +1,6 @@
 services:
   web:
-    image: node:16.13.0-alpine
+    image: node:24-alpine
     deps: [ install ]
     cmd: node_modules/.bin/ng serve --host 0.0.0.0 --disable-host-check
     ports: [ 4200 ]
@@ -14,7 +14,7 @@ services:
 
 tasks:
   install:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     src:
       - package.json
     generates:

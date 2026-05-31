@@ -13,13 +13,13 @@ Every task can run inside a container. Everything that's needed is to set an `im
 ```yaml
 tasks:
   install:
-    image: node:22-alpine
+    image: node:24-alpine
     cmds:
       - npm install
 ```
 {% endcode %}
 
-This example will run an `npm install` command inside a container with the image `node:22-alpine`. But the container has no access to the local files, nothing will get installed. In order to access your project files sources, generates and mounts can be used.
+This example will run an `npm install` command inside a container with the image `node:24-alpine`. But the container has no access to the local files, nothing will get installed. In order to access your project files sources, generates and mounts can be used.
 
 ### Adding source files/folders
 
@@ -29,7 +29,7 @@ All source files and folders will be mounted on container start and can be acces
 ```yaml
 tasks:
   install:
-    image: node:22-alpine
+    image: node:24-alpine
     src:
       - package.json
       - package-lock.json
@@ -45,7 +45,7 @@ The installed node\_modules will be saved inside the container file system, if t
 ```yaml
 tasks:
   install:
-    image: node:22-alpine
+    image: node:24-alpine
     src:
       - package.json
       - package-lock.json
@@ -63,7 +63,7 @@ For other files and folders that do not belong into sources/generates mounts can
 ```yaml
 tasks:
   install:
-    image: node:22-alpine
+    image: node:24-alpine
     src:
       - package.json
       - package-lock.json

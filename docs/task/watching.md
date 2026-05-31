@@ -41,7 +41,7 @@ Hammerkit will then not watch for files change in the source directory of such t
 ```yaml
 tasks:
   serve:
-    image: node:22
+    image: node:24
     continuous: true
     src: 
       - src

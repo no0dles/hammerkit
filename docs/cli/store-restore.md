@@ -64,7 +64,7 @@ before_script:
   - npm i -g hammerkit
 
 build:
-  image: node:22
+  image: node:24
   cache:
     key: ${CI_COMMIT_REF_SLUG}
     paths:

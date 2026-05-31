@@ -43,7 +43,7 @@ services:
 
 tasks:
   api:
-    image: node:22-alpine
+    image: node:24-alpine
     needs: [postgres]
     cmds:
       - node index.js

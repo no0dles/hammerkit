@@ -33,7 +33,7 @@ caches:
 
 tasks:
   build:
-    image: node:22-alpine
+    image: node:24-alpine
     src:
       - src
     generates:
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - run: npm i -g hammerkit
       - uses: actions/cache@v4
         with:

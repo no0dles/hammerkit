@@ -18,7 +18,7 @@ unchanged. A short debounce coalesces a burst of saves into one restart.
 ```yaml
 tasks:
   api:
-    image: node:22-alpine
+    image: node:24-alpine
     src:
       - src
     cmds:
@@ -41,7 +41,7 @@ mode:
 ```yaml
 tasks:
   serve:
-    image: node:22-alpine
+    image: node:24-alpine
     continuous: true
     src:
       - src
@@ -84,7 +84,7 @@ services:
 
 tasks:
   api:
-    image: node:22-alpine
+    image: node:24-alpine
     needs: [postgres]
     labels:
       stage: dev
@@ -94,7 +94,7 @@ tasks:
       - npm run dev
 
   web:
-    image: node:22-alpine
+    image: node:24-alpine
     continuous: true
     labels:
       stage: dev

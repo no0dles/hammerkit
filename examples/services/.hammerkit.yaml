@@ -1,6 +1,6 @@
 services:
   api:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [install]
     needs: [postgres]
     ports:
@@ -29,7 +29,7 @@ services:
 
 tasks:
   install:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     labels:
       stage: build
     mounts:
@@ -45,13 +45,13 @@ tasks:
       - npm install
 
   test:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     needs: [api]
     cmds:
       - wget -qO- http://api:3000
 
   api:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [install]
     needs: [postgres]
     labels:

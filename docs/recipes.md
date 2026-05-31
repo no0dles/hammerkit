@@ -45,8 +45,8 @@ The npm-based recipes (`tsc`, `eslint`, `prettier`, `jest`) already
 `install` runs (and caches) before each of them.
 
 {% hint style="info" %}
-The templates pin older image versions (for example `node:16.6.0-alpine`) — copy
-them into your project and bump the image to the version you actually build with.
+The recipes pin a specific image (for example `node:24-alpine`) — copy them into
+your project and set the image to the version you actually build with.
 The recipes are a starting point, not a dependency.
 {% endhint %}
 

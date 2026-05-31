@@ -111,7 +111,7 @@ envs:
 
 tasks:
   build:
-    image: node:$NODE_VERSION-alpine   # -> node:22-alpine
+    image: node:$NODE_VERSION-alpine   # -> node:24-alpine
     src:
       - src
     cmds:

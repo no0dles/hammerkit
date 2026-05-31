@@ -15,7 +15,7 @@ import {
 import { dirname, join, isAbsolute } from 'path'
 import { watch } from 'chokidar'
 import { FileContext, Stats } from './file-context'
-import { Stream } from 'stream'
+import { Readable } from 'stream'
 
 function handleCallback<T>(
   callback: (cb: (err: Error | null, value: T | null | undefined) => void) => void
@@ -66,7 +66,7 @@ export function getFileContext(cwd: string): FileContext {
     writeFile(path: string, content: string): Promise<void> {
       return handleCallback((cb) => writeFile(getAbsolutePath(cwd, path), content, cb))
     },
-    async writeStream(path: string, stream: Stream): Promise<void> {
+    async writeStream(path: string, stream: Readable | NodeJS.ReadableStream): Promise<void> {
       const writeStream = createWriteStream(path)
       await new Promise<void>((resolve, reject) => {
         stream

@@ -1,3 +1,4 @@
+import { Stream } from 'stream'
 import { CliPackageOptions } from '../cli'
 import { WorkTree } from '../planner/work-tree'
 import { Environment } from '../executer/environment'
@@ -76,7 +77,7 @@ export async function packageWorkTree(
       )
       await new Promise<void>((resolve, reject) => {
         docker.modem.followProgress(
-          buildStream,
+          buildStream as unknown as Stream,
           (err, res) => {
             if (err) {
               environment.console.error(getErrorMessage(err))
@@ -124,7 +125,7 @@ export async function packageWorkTree(
         })
         await new Promise((resolve, reject) => {
           docker.modem.followProgress(
-            pushStream,
+            pushStream as unknown as Stream,
             (err, res) => (err ? reject(err) : resolve(res)),
             (res) => {
               if (res.stream) {

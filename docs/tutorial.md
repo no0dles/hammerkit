@@ -60,7 +60,7 @@ tasks:
 hammerkit install
 ```
 
-The first run pulls `node:22-alpine` and runs `npm ci` inside it. Run it again and
+The first run pulls `node:24-alpine` and runs `npm ci` inside it. Run it again and
 hammerkit reports it cached — `package.json`/`package-lock.json` are unchanged, so
 there's nothing to do.
 
@@ -116,7 +116,7 @@ in parallel:
 ```yaml
 tasks:
   test:
-    image: node:22-alpine
+    image: node:24-alpine
     deps: [install]
     src:
       - src
@@ -154,7 +154,7 @@ services:
 
 tasks:
   integration:
-    image: node:22-alpine
+    image: node:24-alpine
     deps: [install]
     needs: [postgres]
     envs:

@@ -16,7 +16,7 @@ services:
       - 5432:5432
 
   api:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     deps: [ install ]
     needs: [ postgres ]
     ports:
@@ -29,7 +29,7 @@ services:
 
 tasks:
   install:
-    image: node:16.6.0-alpine
+    image: node:24-alpine
     mounts:
       # cache npm downloads between runs (/root/.npm is npm's default cache dir)
       - .npm-cache:/root/.npm
