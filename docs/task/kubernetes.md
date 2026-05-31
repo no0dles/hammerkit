@@ -31,7 +31,7 @@ environments:
 
 services:
   postgres:
-    image: postgres:12-alpine
+    image: postgres:16-alpine
     envs:
       POSTGRES_USER: postgres
       POSTGRES_DB: demo
@@ -43,7 +43,7 @@ services:
 
 tasks:
   api:
-    image: node:16.6.0-alpine
+    image: node:22-alpine
     needs: [postgres]
     cmds:
       - node index.js

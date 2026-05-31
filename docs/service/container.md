@@ -37,7 +37,7 @@ Task are in the same network as services and have access to all ports.
 ```yaml
 services:
   postgres:
-    image: postgres:12-alpine
+    image: postgres:16-alpine
     ports:
       - 5432:5432
 ```
@@ -48,7 +48,7 @@ Tasks will only start if a needed service's is running and healthcheck passed if
 
 A healthcheck requires a command that can be used to test the readiness of a service.
 The command is executed inside the service container. 
-To pass the healtcheck the command needs to return with an exit code of `0`.
+To pass the healthcheck the command needs to return with an exit code of `0`.
 
 The following example contains a postgres service. 
 It uses the `pg_isready` executable in a healthcheck.
@@ -57,7 +57,7 @@ This ensures the postgres server is ready to accept connections.
 ```yaml
 services:
   postgres:
-    image: postgres:12-alpine
+    image: postgres:16-alpine
     healthcheck:
       cmd: "pg_isready -U postgres"
 ```
@@ -66,6 +66,24 @@ services:
 Without a healthcheck a task may get started before the service is ready. 
 {% endhint %}
 
+### Timing and failure
+
+The healthcheck has a single field, `cmd`. There are intentionally no
+`interval`, `timeout` or `retries` knobs:
+
+* hammerkit runs `cmd` inside the service container roughly **once a second** and
+  treats the service as ready the first time it exits `0`;
+* each individual check has a short execution timeout (a couple of seconds), so a
+  hanging check doesn't block forever — it just counts as "not ready yet" and is
+  retried;
+* a check that **never** passes keeps the dependent task waiting until you cancel
+  the run. There is no readiness deadline, so the `cmd` must be something that
+  genuinely turns green once the service is usable (like `pg_isready`), not a
+  command that can hang or always fail.
+
+On [Kubernetes](../task/kubernetes.md), the same `cmd` is translated into readiness
+and liveness probes on the deployment.
+
 ## Volumes
 Services start and stop depending on needs of tasks. 
 In order to persist data over restarts volumes are needed to keep state.
@@ -73,7 +91,7 @@ In order to persist data over restarts volumes are needed to keep state.
 ```yaml
 services:
   postgres:
-    image: postgres:12-alpine
+    image: postgres:16-alpine
     volumes:
       - "postgres-db:/var/lib/postgresql/data"
 ```
@@ -91,7 +109,7 @@ Syncing large directories on macOS/Windows requires a lot of CPU usage.
 ```yaml
 services:
   postgres:
-    image: postgres:12-alpine
+    image: postgres:16-alpine
     mounts:
       - "./postgres.conf:/etc/postgresql/postgresql.conf"
 ```

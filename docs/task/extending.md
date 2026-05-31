@@ -8,7 +8,8 @@ description: >-
 
 Extending tasks can save a lot of duplicated tasks in bigger projects and monorepos. With the task `extend` property a base configuration can be used as a template.&#x20;
 
-The following sections and examples use the two predefined tasks in the`build.tsc.yaml` file.
+The following sections and examples use the two predefined tasks in the `build.tsc.yaml` file — one of the ready-made templates shipped under
+[`best-practices/`](../recipes.md). Copy it into your project (or include it directly) to follow along.
 
 {% code title="build.tsc.yaml" %}
 ```yaml
@@ -64,3 +65,13 @@ includes:
   tsc: ./build.tsc.yaml
 ```
 {% endcode %}
+
+### Naming the base task
+
+`extend` uses the same `<prefix>:<task>` addressing as [dependencies](dependencies.md):
+the part before the colon is the [include](../build-file/includes.md) (or
+[reference](../build-file/references.md)) prefix, and the part after it is the task
+name in that file. `extend: tsc:build` means "the `build` task from the file
+included as `tsc`". To extend a task in the *same* file, use its bare name
+(`extend: build-base`).
+

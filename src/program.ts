@@ -295,7 +295,7 @@ export async function getProgram(
       )
       .addOption(
         new Option('--cache <method>', 'caching method to compare')
-          .default(isCI ? 'checksum' : 'modify-date')
+          .default('checksum')
           .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (options) => {
@@ -365,7 +365,7 @@ export async function getProgram(
       )
       .addOption(
         new Option('--cache <method>', 'caching method to compare')
-          .default(isCI ? 'checksum' : 'modify-date')
+          .default('checksum')
           .choices(['checksum', 'modify-date', 'none'])
       )
       .action(async (task, options) => {

@@ -37,6 +37,26 @@ Hammerkit pulls a result from the backend before a task runs if it is missing
 locally, and pushes it after a successful run. Backend errors never fail the build,
 they only produce a warning. More details in [caches](../build-file/caches.md).
 
+## Checksum is now the default everywhere
+
+Until now the cache method defaulted to `modify-date` locally and only `checksum`
+in CI. With remote backends that split no longer makes sense: a result is shared
+between machines, and `modify-date` compares file modification times, which a
+`git clone` resets on every fresh checkout — so a developer's `modify-date` result
+would never line up with a CI runner's. The whole point of an S3 backend is to
+reuse work *across* machines, and only `checksum` (which compares file content) is
+stable across them.
+
+So `checksum` is now the default in **all** environments. The same comparison runs
+locally and in CI, so a result cached on one is correctly reused on the other.
+
+{% hint style="warning" %}
+This is a behavior change, almost a breaking one: if you relied on the local
+`modify-date` default (for example to avoid hashing very large source folders), set
+it explicitly with `cache: modify-date` on the task or `--cache modify-date` on the
+command. See [caching](../task/caching.md#checksum-vs-modify-date).
+{% endhint %}
+
 ## Run on Kubernetes
 A new runtime abstraction lets the same build file run on the local docker daemon or
 on a Kubernetes cluster. Declare an `environments:` block and select it with

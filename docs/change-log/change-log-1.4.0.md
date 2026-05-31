@@ -1,6 +1,6 @@
 # Changelog 1.4.0
 
-A detailed summary about the release and reason behind the made changes can be found [here](https://app.gitbook.com/@no0dles/s/hammerkit/release-blog/release-1.4.0).
+A detailed summary about the release and reason behind the made changes can be found in the [release blog](../release-blog/release-1.4.0.md).
 
 ## Added
 - Added a missing license file to the repo (MIT)

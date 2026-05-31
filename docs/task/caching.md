@@ -12,6 +12,29 @@ Every task should define source files it requires. Based on those files, hammerk
 If a dependency task has changed or has no source files defined, the task gets executed every run. The task can only get skipped, if all dependencies before can be skipped as well, otherwise the result could be inconsistent.
 {% endhint %}
 
+### What gets cached, and what invalidates it
+
+The cached **result** is the task's `generates` output (plus the per-task state
+hammerkit keeps under `.hammerkit`). That is what gets reused — and what
+[`store` / `restore`](../cli/store-restore.md) and remote
+[backends](../build-file/caches.md) move between machines.
+
+A task's cache key is computed from:
+
+* the declared **`src`** files (their content checksum by default, or their
+  modification dates with `modify-date`), and
+* the cache keys of its **dependencies**, recursively.
+
+So a task is re-run when its `src` changes or when anything it depends on changes.
+
+{% hint style="warning" %}
+The key is **not** derived from the `image`, the `cmds`, or `envs`. If you edit a
+command or bump an image but leave the `src` untouched, hammerkit still considers
+the task up to date and skips it. While iterating on the commands themselves,
+re-run with `--cache none` or run [`hammerkit clean`](../cli/clean.md) to force
+execution.
+{% endhint %}
+
 ### Define source files
 
 The following example defines the `package.json` and `package-lock.json` as a source file. Before each run the checksum of those two files are compared with the checksum of the last successful run and if equal the task will get skipped.
@@ -74,6 +97,20 @@ There are multiple patterns supported. Hammerkit uses the node-glob package. For
 * `@(pattern|pat*|pat?erN)` Matches exactly one of the patterns provided
 * `**` If a "globstar" is alone in a path portion, then it matches zero or more directories and subdirectories searching for matches. It does not crawl symlinked directories.
 
+### checksum vs. modify-date
+
+`checksum` is the default method, both locally and in CI. It compares the
+**content** of the `src` files, so a result built on one machine is correctly
+reused on another — including a fresh CI runner.
+
+{% hint style="warning" %}
+Prefer `checksum` for anything shared with CI. `modify-date` compares file
+**modification times**, which a `git clone` resets to "now" on every fresh
+checkout — so on a clean CI runner a `modify-date` task looks changed every time
+and never hits the cache. `modify-date` is only a local optimization for very large
+source folders where hashing is expensive; it is not portable across machines.
+{% endhint %}
+
 ### Selecting a cache method
 
 By default a task is skipped based on the content checksum of its source files.
@@ -100,9 +137,9 @@ ways to change that default for every such task.
 
 **Per run - the `--cache` flag.** Pass `--cache <method>` to set the method for
 all tasks that did not declare their own `cache`. The choices are `checksum`,
-`modify-date` and `none`. The default is environment dependent: `modify-date`
-locally and `checksum` in CI. See [execute](../cli/execute.md) for the full
-option reference.
+`modify-date` and `none`. The default is `checksum` both locally and in CI, so a
+result cached on one machine is reused on the other. See
+[execute](../cli/execute.md) for the full option reference.
 
 {% code title="terminal" %}
 ```bash

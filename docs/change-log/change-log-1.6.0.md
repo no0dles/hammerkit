@@ -15,6 +15,7 @@ in the [release blog](../release-blog/release-1.6.0.md).
 - Optional `namespace` for Kubernetes services.
 
 ## Changed
+- The default cache method is now `checksum` in **all** environments (previously `modify-date` locally, `checksum` only in CI). This pairs with remote backends — only content checksums are stable across machines — and removes the local/CI cache mismatch. Behavior change: set `cache: modify-date` (or `--cache modify-date`) explicitly to keep the old local behavior.
 - Introduced a runtime abstraction so the same build file runs on the local docker daemon or on Kubernetes.
 - Kubernetes port-forwarding no longer requires the `kubectl` binary; ports are forwarded through the kubernetes client.
 - Internal rename of the "node" concept to "task".

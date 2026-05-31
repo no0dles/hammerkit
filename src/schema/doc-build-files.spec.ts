@@ -64,6 +64,11 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'GitLab CI (gitlab-ci.yml) caching example, not a hammerkit build file',
   },
   {
+    file: join('guides', 'ci-caching.md'),
+    snippet: 'actions/cache@v4',
+    reason: 'GitHub Actions workflow example, not a hammerkit build file',
+  },
+  {
     file: join('contribution', 'secret-managers.md'),
     snippet: 'secret://vault',
     reason: 'design-doc proposal for an unimplemented secrets: provider; not valid against the current schema',

@@ -12,9 +12,15 @@ Labeling your tasks will allow you to run multiple task groups or exclude specif
 The following use cases are just some examples to showcase some of the potential usage for labels.
 
 ### Separating tasks by area
-Labels can be useful to seperate tasks. 
+Labels can be useful to separate tasks. 
 For example if you share one build file for different parts of your application or in case of a bigger project/monorepo.
-Add a `project` label to your tasks and be able to build projects independant with a single command `task -f project=a` or `task -f project=b`
+Add a `project` label to your tasks and be able to build projects independently with a single command `hammerkit -f project=a` or `hammerkit -f project=b`.
+
+{% hint style="info" %}
+Label filters are always given as `key=value`. A bare `-f project` (key only) is
+rejected. Use `-f` (`--filter`) to keep only matching tasks and `-e` (`--exclude`)
+to drop them; both can be repeated or take multiple values.
+{% endhint %}
 
 ```yaml
 tasks:
@@ -44,10 +50,10 @@ tasks:
 Labels can be used to separate your tasks in your CI.
 In a CI environment where there are two runners, one that runs macOS and the other linux.
 With the goal to use the macOS host only for the ios related code and the rest should run on linux.
-Add a `platform=ios` label to the task that require macOS and configure your ci to run `task -f platform=ios` on the mac host and `task -e platform=ios` on the linux host. 
+Add a `platform=ios` label to the task that require macOS and configure your ci to run `hammerkit -f platform=ios` on the mac host and `hammerkit -e platform=ios` on the linux host. 
 
 If there are tasks dependencies between the platform tasks, take a look at [store / restore](../cli/store-restore.md). 
-These can be used to store and restore generated outputs from tasks, work as well with the label arguments `task store -e platform=ios` and help to move data/cache between hosts.
+These can be used to store and restore generated outputs from tasks, work as well with the label arguments `hammerkit store cache -e platform=ios` and help to move data/cache between hosts.
 
 ```yaml
 tasks:
@@ -75,8 +81,8 @@ tasks:
 Simplify your workflow by grouping task together.
 Run one command for multiple tasks that have no dependency otherwise.
 For example a `task` label for either developing or publishing. 
-`task -f dev` will start your api server with the frontend development watch build. 
-`task -f publish` will upload your container image to docker hub and build and upload to the staging environment.
+`hammerkit -f task=dev` will start your api server with the frontend development watch build. 
+`hammerkit -f task=release` will upload your container image to docker hub and build and upload to the staging environment.
 
 ```yaml
 tasks:

@@ -16,6 +16,24 @@ another on the same machine. Since `1.6.0` you can also declare named caches wit
 a remote **backend** (for example an S3 bucket) so a task built on one machine can
 be restored on another - ideal for sharing results between developers and CI runs.
 
+## Which caching mechanism?
+
+Hammerkit has three related features that all "save work". Pick by where the result
+needs to go:
+
+| Mechanism | What it does | Reach for it when |
+|---|---|---|
+| **Cache method** (`checksum`/`modify-date`) | Decides whether a task can be **skipped** locally. | Always on — it's how a task knows it's up to date. |
+| **Cache backend** (`local`/`s3`, this page) | **Shares** the skip-or-restore result across machines automatically. | Developers and CI should reuse each other's results without scripting. |
+| **[`export: true`](../task/README.md#exporting-generated-files)** | Copies a container task's output **back into your workspace**. | Another tool outside hammerkit needs the produced files. |
+| **[`store` / `restore`](../cli/store-restore.md)** | Manually moves outputs + cache state to a directory. | Wiring hammerkit into a CI provider's own cache step (no remote backend). |
+
+A remote **backend** and **store/restore** solve the same "share across CI runs"
+problem two ways: with a backend, pull/push is automatic and you don't script the
+cache step; with store/restore, you hand the directory to your CI's cache. If a
+remote backend is configured, you usually don't need store/restore at all. See the
+[CI caching guide](../guides/ci-caching.md).
+
 ## Declaring caches
 
 Caches are declared in a top-level `caches:` block. Each entry has a `method` and
@@ -186,9 +204,9 @@ caches:
 
 {% hint style="info" %}
 The `--cache` flag still overrides the *method* for these implicit tasks at
-runtime (it defaults to `modify-date` locally and `checksum` in CI), so
-redeclaring `caches.default` is primarily how you change the default *backend*.
-See [task caching](../task/caching.md#changing-the-default-for-all-tasks).
+runtime (it defaults to `checksum`), so redeclaring `caches.default` is primarily
+how you change the default *backend*. See
+[task caching](../task/caching.md#changing-the-default-for-all-tasks).
 {% endhint %}
 
 ## Pull / push behavior

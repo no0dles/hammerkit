@@ -37,7 +37,7 @@ When executing the task, the source files were watched for changes and the task 
 
 With the new release the `watch` flag can be removed from the build file and instead be passed to the cli. 
 Every task with source files can be watchable and therefore the flag is not needed anymore. 
-The new implementation also detects changes on dependant tasks and restarts them if needed. 
+The new implementation also detects changes on dependent tasks and restarts them if needed. 
 This change allows to watch over multiple build steps and reduces the need of manual interaction.
 
 As a simple showcase, let's take a quick look at a node server application. 

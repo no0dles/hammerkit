@@ -5,7 +5,7 @@ description: >-
 ---
 
 # Task
-Tasks are pieces of work that you need to build or development your project.
+Tasks are pieces of work that you need to build or develop your project.
 
 The minimal task just contains a list of commands.
 ```yaml
@@ -15,9 +15,35 @@ tasks:
       - echo "minimal example"
 ```
 
-## Source
-Tasks that depend on input files should specify them as a `source`.
-Hammerkit will detect if the task sources have changed compared to previous runs and skip execution if they are unchanged.
+{% hint style="info" %}
+**Local vs. container — the one rule to remember.** If a task declares an `image`,
+its commands run **inside that container**. If it has no `image`, they run
+**directly on your host** using the tools installed there. Everything else (sources,
+outputs, caching, dependencies) works the same in both cases. Containers are the
+recommended default: they remove the need to install build tools on every machine
+and make a build behave identically on your laptop and in CI. See
+[run a task in a container](container.md).
+{% endhint %}
+
+## Anatomy of a task
+A task is built from a small, fixed set of fields:
+
+| Field | Purpose |
+|-------|---------|
+| `cmds` | The commands to run, in order. |
+| `image` | Run the commands inside this container image. Omit to run on the host. |
+| `src` | Input files/folders. Used for [caching](caching.md) — unchanged sources let the task be skipped. |
+| `generates` | Output files/folders the task produces. These are what gets cached, stored and restored. |
+| `deps` | Other tasks that must run first (see [dependencies](dependencies.md)). |
+| `needs` | Services that must be running first (see [needs](needs.md)). |
+| `mounts` | Extra paths to make available to a container task (see [container](container.md)). |
+| `envs` | [Environment variables](../build-file/environment-variables.md) for the commands. |
+| `labels` | Group/filter tasks (see [labels](../labels/README.md)). |
+| `cache` | The [caching](caching.md) method/backend for this task. |
+
+## Source files (`src`)
+Tasks that depend on input files should declare them under `src`.
+Hammerkit detects if the `src` files have changed compared to previous runs and skips execution if they are unchanged.
 
 ```yaml
 tasks:
@@ -30,8 +56,8 @@ tasks:
       - tsc
 ```
 
-## Generate
-Tasks that generate output files should specify them as a `generate`.
+## Generated files (`generates`)
+Tasks that produce output files should declare them under `generates`.
 Hammerkit can store generated files into archives, which can be used to save and restore build outputs.  
 
 ```yaml

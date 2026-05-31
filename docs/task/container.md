@@ -13,13 +13,13 @@ Every task can run inside a container. Everything that's needed is to set an `im
 ```yaml
 tasks:
   install:
-    image: node:14.16.0
+    image: node:22-alpine
     cmds:
       - npm install
 ```
 {% endcode %}
 
-This example will run an `npm install` command inside a container with the image `node:14.16.0`. But the container has no access to the local files, nothing will get installed. In order to access your project files sources, generates and mounts can be used.
+This example will run an `npm install` command inside a container with the image `node:22-alpine`. But the container has no access to the local files, nothing will get installed. In order to access your project files sources, generates and mounts can be used.
 
 ### Adding source files/folders
 
@@ -29,7 +29,7 @@ All source files and folders will be mounted on container start and can be acces
 ```yaml
 tasks:
   install:
-    image: node:14.16.0
+    image: node:22-alpine
     src:
       - package.json
       - package-lock.json
@@ -45,7 +45,7 @@ The installed node\_modules will be saved inside the container file system, if t
 ```yaml
 tasks:
   install:
-    image: node:14.16.0
+    image: node:22-alpine
     src:
       - package.json
       - package-lock.json
@@ -61,25 +61,43 @@ For other files and folders that do not belong into sources/generates mounts can
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
-    tasks:
-      install:
-        image: node:14.16.0
-        src:
-          - package.json
-          - package-lock.json
-        generates:
-          - node_modules
-        mounts:
-          - relative/path
-          - /some/absolute/path
-          - $PWD/.npm:/.npm
-        cmds:
-          - npm install
+tasks:
+  install:
+    image: node:22-alpine
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    mounts:
+      - relative/path
+      - /some/absolute/path
+      - .npm:/root/.npm
+    cmds:
+      - npm install
 ```
 {% endcode %}
 
+A mount is written `host[:container]`:
+
+* `path` — a single path mounts the host path to the **same** path inside the
+  container.
+* `host:container` — mounts the host path on the left to the container path on the
+  right. More than one `:` is an error.
+
+Host paths can be relative (resolved against the build file's directory), absolute,
+or `~`-relative to your home directory. Relative container paths resolve against the
+task's working directory.
+
+### Working directory
+
+A container task runs with its working directory set to the build file's directory
+(mirrored inside the container), and your sources are mounted there. So relative
+paths in `cmds` (`node_modules/.bin/tsc`, `./script.sh`) behave just like they would
+when running on the host.
+
 {% hint style="info" %}
-Each source and generate of all dependencies get mounted into container automatically. This behavior should reduce long list of mounts and should help with the consistency of tasks.&#x20;
+Each source and generate of all dependencies get mounted into the container automatically. This behavior should reduce long lists of mounts and should help with the consistency of tasks.&#x20;
 {% endhint %}
 
 ### Execution shell
@@ -101,5 +119,13 @@ tasks:
 {% hint style="info" %}
 ### File permission
 
-Each command in a container will be executed with the same pid/gid as on the local system. This ensures that all generated files and folders that are mounted to the container will end up with the same pid/gid. To ensure that there is no permission conflict, hammerkit will set the owner of the current work directory including all mounts to the current pid/gid before each task execution.
+On Linux hosts a container task runs as your `uid:gid`, so files it generates on
+mounted paths come back owned by you rather than by `root`. To avoid permission
+conflicts on the mount points themselves, hammerkit `chown`s the working directory
+and each mount to your `uid:gid` before the task runs.
+
+The blast radius is small and deliberate: the `chown` is **not** recursive, so it
+only re-owns those top-level directories — files already inside an image (for
+example pre-baked, root-owned content) are left untouched. On macOS and Windows the
+Docker Desktop VM handles the uid mapping, so this step is skipped entirely.
 {% endhint %}

@@ -62,3 +62,19 @@ includes:
 
 In the build file of project `b`, the include for the npm install task is used as well. 
 An additional [reference](references.md) to `a` and a [task dependency](../task/dependencies.md) to a:build ensures that project `a` will be built first, before project `b` get compiled.
+
+## references vs. includes vs. extend — when to use which
+
+All three reuse definitions, but they differ in *what* they reuse and *where it
+runs*:
+
+| | What it pulls in | Working directory | Use it when |
+|---|---|---|---|
+| **[references](references.md)** | A whole other build file (its tasks + services) | The **referenced** file's own directory | The other file is its own project (a sub-package you also want to build in place). |
+| **includes** | A whole other build file | The **including** file's directory | You want to reuse a task *definition* and run it here — the same `install`/`build` template across every package. |
+| **[extend](../task/extending.md)** | A single task, as a base template | The current task's file | One task is almost another, with a tweak or two. |
+
+A common monorepo setup combines them: an `includes` brings in a shared
+`build.npm.yaml` so each package runs `install` in its own directory, while
+`references` wire up cross-package build order. See the
+[monorepo guide](../guides/monorepo.md).

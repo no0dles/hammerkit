@@ -1,6 +1,13 @@
 # Installation
 
-The different ways to install and use hammerkit
+The different ways to install and use hammerkit.
+
+{% hint style="info" %}
+Tasks that declare an `image` run in a container, so you also need a running
+container engine ([Docker](https://docs.docker.com/get-docker/) or compatible).
+Check it with `docker info`. Tasks without an `image` run on the host and need only
+the tools they call.
+{% endhint %}
 
 ## Npm / Yarn
 
@@ -28,8 +35,14 @@ This always uses the latest published version.
 
 ```bash
 npx hammerkit init
-npx hammerkit build
+npx hammerkit example
 ```
+
+{% hint style="info" %}
+`example` here is the task name that [`init`](cli/init.md) writes — it is not a
+built-in command. The commands in these docs like `hammerkit build` likewise refer
+to a `build` *task* you define, not a hammerkit subcommand.
+{% endhint %}
 
 ## Homebrew
 
@@ -58,7 +71,7 @@ variables:
   DOCKER_DRIVER: overlay2
 
 services:
-  - docker:19.03.0-dind
+  - docker:dind
 
 build:
   image: no0dles/hammerkit
@@ -75,12 +88,12 @@ The action requires the `setup-node` to run correctly.
 ```yaml
 jobs:
   build:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '16'
+          node-version: '22'
       - uses: no0dles/hammerkit-github-action@v1.3
 ```

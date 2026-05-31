@@ -20,7 +20,7 @@ Tasks can be executed by matching labels or filtered by label values.
 
 ### By matching labels
 The `-f type=build` will only execute tasks that have the given label value.
-Dependant tasks do not need to fullfill the label requirement.
+Dependent tasks do not need to fulfill the label requirement.
 ```bash
 hammerkit -f type=build
 ```
@@ -46,6 +46,8 @@ Options:
 ```
 
 {% hint style="info" %}
-The defaults for `--log` and `--cache` depend on the environment: outside CI they
-are `interactive` and `modify-date`, in CI they are `live` and `checksum`.
+`--cache` defaults to `checksum` everywhere — the same comparison runs locally and
+in CI, so a result cached on one is reused on the other. `--log` defaults to
+`interactive` outside CI and `live` in CI (hammerkit auto-detects CI from the `CI`,
+`CONTINUOUS_INTEGRATION`, `BUILD_NUMBER` or `RUN_ID` environment variables).
 {% endhint %}

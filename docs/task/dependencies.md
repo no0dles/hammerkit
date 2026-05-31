@@ -1,6 +1,6 @@
 ---
 description: >-
-  A task can require dependant tasks that will get executed first (if not
+  A task can require dependent tasks that will get executed first (if not
   cached).
 ---
 
@@ -26,6 +26,18 @@ tasks:
       - npm publish
 ```
 {% endcode %}
+
+## Dependencies run in parallel
+
+Dependencies that don't depend on each other run **concurrently**, up to the
+`--concurrency` worker count (default `4`). In the example above `install` must
+finish before `build`, but if two branches of the graph are independent they
+execute at the same time. A dependency that fails stops the whole run; see
+[parallelism and exit codes](../cli/README.md#parallelism) in the CLI reference.
+
+Referenced and included tasks are addressed with the `prefix:task` syntax in
+`deps`, for example `deps: [npm:install]`. See
+[references](../build-file/references.md) and [includes](../build-file/includes.md).
 
 {% hint style="info" %}
 Make sure to set up correct [caching](caching.md) to speed up your execution and prevent unnecessary work.

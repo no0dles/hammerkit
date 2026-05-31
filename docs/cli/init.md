@@ -1,10 +1,12 @@
 ---
-description: >-
-  Create a empty build file and adds the hammerkit cache directory to the
-  .gitignore.
+description: Create a starter build file in the current directory.
 ---
 
 # Init
+
+`init` is available only when no build file exists yet. It writes a minimal
+`.hammerkit.yaml` with a single `example` task so you have something to run
+immediately.
 
 ### Command
 
@@ -14,19 +16,24 @@ description: >-
 hammerkit init
 ```
 {% endtab %}
+
+{% tab title="npx" %}
+```bash
+npx hammerkit init
+```
+{% endtab %}
 {% endtabs %}
 
 ### Console output
 
 ```
-✔ created /home/user/build.yaml                                                                                                           12:36:50
-✔ created /home/user/.gitignore with hammerkit cache directory 
+created .hammerkit.yaml
 ```
 
 ### Result
 
 {% code title=".hammerkit.yaml" %}
-```
+```yaml
 envs: {}
 
 tasks:
@@ -34,12 +41,16 @@ tasks:
     image: alpine
     cmds:
       - echo "it's Hammer Time!"
-      
 ```
 {% endcode %}
 
-{% code title=".gitignore" %}
+Run it with `hammerkit example` (the task is called `example`, not `build`).
+
+{% hint style="info" %}
+Hammerkit keeps its local cache state in a `.hammerkit` directory. Add it to your
+`.gitignore` so it is not committed:
+
 ```
 .hammerkit
 ```
-{% endcode %}
+{% endhint %}

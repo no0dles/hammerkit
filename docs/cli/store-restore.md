@@ -6,7 +6,7 @@ description: >-
 
 # Store / Restore
 
-The store/restore commands are intended to be used in a CI system. The store command requires a destination folder, where the all generated folders and files are moved for later recovery. Restoring previous state can give a performance boost to your CI workflows, because it can leverage caching from your tasks over different pipelines.
+The store/restore commands are intended to be used in a CI system. The store command requires a destination folder, where all generated folders and files are moved for later recovery. Restoring previous state can give a performance boost to your CI workflows, because it can leverage caching from your tasks over different pipelines.
 
 ### Example workflow
 
@@ -64,7 +64,7 @@ before_script:
   - npm i -g hammerkit
 
 build:
-  image: node:14.16.0
+  image: node:22
   cache:
     key: ${CI_COMMIT_REF_SLUG}
     paths:
