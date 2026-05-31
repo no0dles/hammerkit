@@ -1,2 +1,6 @@
 exclude_paths:
   - "**.md"
+  - "scripts/**"
+  - ".specify/**"
+  - ".agents/**"
+  - ".claude/**"
