@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => {
       // default surfaces a genuine hang quickly. The integration run is slower and
       // raises this on emulated/self-hosted CI via HAMMERKIT_TEST_TIMEOUT.
       testTimeout: integration ? Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000 : 45000,
+      // Integration beforeAll/afterAll hooks provision real infra (e.g. a docker
+      // registry container in docker-package-registry.spec.ts) — just as slow as the
+      // tests themselves. Vitest's 10s hook default is far too tight for an emulated
+      // colima daemon, so give hooks the same generous budget as integration tests.
+      hookTimeout: integration ? Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000 : 10000,
       // Integration mode runs every spec (unit + container/k8s + heavy specs) so its
       // lcov is a complete coverage report. Unit mode runs only the fast specs: it
       // excludes precisely the docker/k8s/heavy specs the integration-only path adds.
