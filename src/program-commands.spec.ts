@@ -66,6 +66,18 @@ describe('program commands (fast)', () => {
     await t.shell([HK, 'clean', '--cache'])
   })
 
+  it('graph serializes the build graph without running it', async () => {
+    const t = createTestCase('cmd-graph', {
+      '.hammerkit.yaml': {
+        tasks: {
+          a: { cmds: ['true'] },
+          b: { cmds: ['true'], deps: ['a'] },
+        },
+      },
+    })
+    await t.shell([HK, 'graph'])
+  })
+
   it('explain reports tasks without running them', async () => {
     const t = createTestCase('cmd-explain', {
       '.hammerkit.yaml': {

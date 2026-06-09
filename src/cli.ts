@@ -23,6 +23,7 @@ import { TaskState } from './executer/scheduler/task-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { packageWorkTree } from './docker/package'
 import { explainWorkTree, TaskExplanation } from './cache/explain'
+import { GraphFormat, serializeWorkGraph, WorkGraphSerialization } from './planner/work-graph-serializer'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -176,6 +177,12 @@ export class Cli {
   // starts no container/service, performs no cache push/pull.
   async explain(options?: { cacheDefault?: CacheMethod }): Promise<TaskExplanation[]> {
     return explainWorkTree(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
+  }
+
+  // Serialize the in-scope work graph for rendering (mermaid/dot). Pure read of
+  // the planner's graph — nothing executes.
+  graph(format: GraphFormat): WorkGraphSerialization {
+    return serializeWorkGraph(this.workTree, format)
   }
 
   task(name: string): WorkItemState<WorkTask, TaskState> {

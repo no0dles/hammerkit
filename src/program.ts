@@ -282,6 +282,35 @@ export async function getProgram(
       })
 
     program
+      .command('graph [task]')
+      .description('serialize the build graph (tasks, services, deps/needs edges) as mermaid or dot')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('--env <name>', 'environment'))
+      .addOption(new Option('--format <format>', 'output format').default('mermaid').choices(['mermaid', 'dot']))
+      .action(async (task, options) => {
+        try {
+          const cli = await createCli(
+            fileName,
+            environment,
+            task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
+          )
+          const serialization = cli.graph(options.format)
+          environment.stdout.write(`${serialization.output}\n`)
+          if (serialization.cycle) {
+            environment.console.warn(`cycle detected: ${serialization.cycle.join(' -> ')}`)
+          }
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+
+          environment.console.error(getErrorMessage(e))
+          program.error('Graph was not successful', { exitCode: 1 })
+        }
+      })
+
+    program
       .command('explain [task]')
       .description('explain whether tasks would be a cache hit or miss, without running them')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
