@@ -6,6 +6,7 @@ import { parseLabelArguments } from './parser/parse-label-arguments'
 import { Cli, getCli, isCliService, isCliTask } from './cli'
 import { WorkLabelScope, WorkScope } from './executer/work-scope'
 import { getErrorMessage, printItem, printProperty, printTitle } from './log'
+import { describeCause } from './cache/explain'
 import { hasLabels } from './executer/label-values'
 import { getBuildFilename } from './parser/default-build-file'
 import { createParseContext } from './schema/schema-parser'
@@ -276,6 +277,47 @@ export async function getProgram(
         }
         if (errors !== 0) {
           program.error('Detected errors in the hammerkit configuration', { exitCode: 1 })
+        }
+      })
+
+    program
+      .command('explain [task]')
+      .description('explain whether tasks would be a cache hit or miss, without running them')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('--env <name>', 'environment'))
+      .addOption(
+        new Option('--cache <method>', 'caching method to compare')
+          .default('checksum')
+          .choices(['checksum', 'modify-date', 'none'])
+      )
+      .action(async (task, options) => {
+        try {
+          const cli = await createCli(
+            fileName,
+            environment,
+            task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
+          )
+          const explanations = await cli.explain({ cacheDefault: options.cache })
+          for (const explanation of explanations) {
+            const label =
+              explanation.status === 'hit'
+                ? colors.green('cache hit')
+                : explanation.status === 'uncacheable'
+                  ? colors.grey('uncacheable')
+                  : colors.yellow('cache miss')
+            environment.stdout.write(`• ${explanation.taskName}: ${label}\n`)
+            for (const cause of explanation.causes) {
+              printProperty(environment, 'cause', describeCause(cause))
+            }
+          }
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+
+          environment.console.error(getErrorMessage(e))
+          program.error('Explain was not successful', { exitCode: 1 })
         }
       })
 

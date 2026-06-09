@@ -22,6 +22,7 @@ import { executeWorkTree } from './executer/execute-work-tree'
 import { TaskState } from './executer/scheduler/task-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { packageWorkTree } from './docker/package'
+import { explainWorkTree, TaskExplanation } from './cache/explain'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -169,6 +170,12 @@ export class Cli {
 
   validate(): AsyncGenerator<WorkItemValidation> {
     return validate(this.workTree, this.environment)
+  }
+
+  // Read-only cache prediction for every task in scope: executes no command,
+  // starts no container/service, performs no cache push/pull.
+  async explain(options?: { cacheDefault?: CacheMethod }): Promise<TaskExplanation[]> {
+    return explainWorkTree(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
   }
 
   task(name: string): WorkItemState<WorkTask, TaskState> {

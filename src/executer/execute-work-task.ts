@@ -26,7 +26,7 @@ async function pushToBackend(
   try {
     const cacheDir = getCacheDirectory(work.id())
     const stats = await getWorkCacheStats(work.data, environment)
-    await writeCacheMetadata(environment, work.id(), stats, getWorkTaskCacheDescription(work.data))
+    await writeCacheMetadata(environment, work, stats, getWorkTaskCacheDescription(work.data))
     await work.runtime.archive(environment, cacheDir)
     await resolved.backend.push(work.id(), stateKey, cacheDir, environment)
     work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)

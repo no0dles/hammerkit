@@ -66,6 +66,16 @@ describe('program commands (fast)', () => {
     await t.shell([HK, 'clean', '--cache'])
   })
 
+  it('explain reports tasks without running them', async () => {
+    const t = createTestCase('cmd-explain', {
+      '.hammerkit.yaml': {
+        tasks: { build: { cmds: ['true'], src: ['input.txt'] } },
+      },
+      'input.txt': 'x\n',
+    })
+    await t.shell([HK, 'explain'])
+  })
+
   it('init writes a default .hammerkit.yaml when none exists', async () => {
     // empty fixture so getBuildFilename finds nothing; only the `init` command is registered then
     const t = createTestCase('cmd-init', {})
