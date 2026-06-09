@@ -16,6 +16,22 @@
 - **Refresh on demand** — a dedicated pull command (and `hammerkit clean --cache`) re-fetches the latest for mutable refs.
 - **Reproducibility opt-in** — a commit SHA pins exact content; a branch/tag is frozen only in the per-machine cache, so the included file can drift across machines (documented trade-off).
 
+### Resolved naming & syntax (#20)
+
+- **Refresh command**: `hammerkit includes pull` — namespaced under `includes` so it does not overload `cache pull` (which syncs cache *artifacts*, a different operation).
+- **Git-source syntax**: a `references`/`includes` value is either a **string** (a local path, exactly as today) or an **object** describing a git source:
+
+  ```yaml
+  references:
+    local-lib: ../shared            # string → local path (unchanged)
+    best-practices:                 # object → git source
+      git: https://github.com/no0dles/hammerkit.git
+      ref: main                     # optional: branch, tag, or commit SHA (default: repo HEAD)
+      path: best-practices          # optional: subpath within the repo
+  ```
+
+  The `git` field is the only required object field; `ref` and `path` are optional. The string form and the object form are a discriminated union — the value's type (string vs object) selects the resolver, keeping the local-path form byte-for-byte unchanged (FR-002).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Reference a best-practice file from git (Priority: P1)
@@ -113,6 +129,6 @@ A developer references a commit SHA to guarantee identical content on every mach
 
 - Best-practice build files define tasks/services/caches/env (the kind of content in `best-practices/`), not the consumer's local `src` globs.
 - Cross-machine reproducibility of the included file is **not** guaranteed for mutable refs; a commit SHA is the documented opt-in (ADR-0004).
-- **Naming (open)**: the refresh command's verb collides with `cache pull` (ADR-0001, which syncs cache *artifacts*). Proposed `hammerkit includes pull` to disambiguate; final name TBD.
+- **Naming (settled, #20)**: the refresh command is `hammerkit includes pull` — namespaced under `includes` so it does not overload `cache pull` (ADR-0001, which syncs cache *artifacts*). The git-source syntax is the string-or-object discriminated union recorded under "Resolved naming & syntax" above.
 - Integration tests exercise a real git repo per the "real integrations over mocks" heuristic.
 - This feature is opt-in: a project incurs remote-resolution behavior only when it declares a git source.

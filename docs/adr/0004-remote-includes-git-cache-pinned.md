@@ -14,4 +14,5 @@ Remote `references`/`includes` resolve a build file from a **git repository only
 - A remote file's relative `references`/`includes` and paths resolve within the same repo at the same commit.
 - Credentials reuse standard git credential helpers — no new secret surface.
 - Resolution executes nothing; a remote file contributes task/service/cache/env definitions only, and commands run only when a task is invoked.
-- **Naming**: the refresh command's verb collides with `cache pull` (ADR-0001, which syncs cache *artifacts*). These are different operations; the include-refresh command needs a distinct name (proposed `hammerkit includes pull`).
+- **Naming (settled, #20)**: the refresh command is `hammerkit includes pull`. Its verb would collide with `cache pull` (ADR-0001, which syncs cache *artifacts*), so it is namespaced under the `includes` command group to disambiguate the two operations.
+- **Syntax (settled, #20)**: a `references`/`includes` value is a string-or-object discriminated union. A **string** is a local path (unchanged). An **object** `{ git, ref?, path? }` is a git source — `git` (repo URL) required, `ref` (branch/tag/commit SHA, default repo HEAD) and `path` (subpath) optional. The value's type selects the resolver, so the local-path form is unchanged.
