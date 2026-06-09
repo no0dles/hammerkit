@@ -7,6 +7,7 @@ import { Cli, getCli, isCliService, isCliTask } from './cli'
 import { WorkLabelScope, WorkScope } from './executer/work-scope'
 import { getErrorMessage, printItem, printProperty, printTitle } from './log'
 import { describeCause } from './cache/explain'
+import { printRunSummary, summarizeRun } from './executer/run-summary'
 import { hasLabels } from './executer/label-values'
 import { getBuildFilename } from './parser/default-build-file'
 import { createParseContext } from './schema/schema-parser'
@@ -410,6 +411,7 @@ export async function getProgram(
           .default('checksum')
           .choices(['checksum', 'modify-date', 'none'])
       )
+      .addOption(new Option('--no-summary', 'do not print the end-of-run summary'))
       .action(async (task, options) => {
         try {
           const cli = await createCli(
@@ -422,12 +424,18 @@ export async function getProgram(
             return
           }
 
+          const runStart = Date.now()
           const result = await cli.runExec({
             cacheDefault: options.cache,
             watch: options.watch,
             workers: options.concurrency,
             logMode: options.log,
           })
+
+          // Reporting only: the summary never changes the exit code or behavior.
+          if (options.summary !== false && !options.watch) {
+            printRunSummary(environment, summarizeRun(result.state, Date.now() - runStart))
+          }
 
           if (!result.success) {
             program.error('Execution was not successful', { exitCode: 1 })
