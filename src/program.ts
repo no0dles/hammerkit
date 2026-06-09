@@ -5,7 +5,8 @@ import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
 import { Cli, getCli, isCliService, isCliTask } from './cli'
 import { WorkLabelScope, WorkScope } from './executer/work-scope'
-import { getErrorMessage, printItem, printProperty, printTitle } from './log'
+import { consoleContext, getErrorMessage, printItem, printProperty, printTitle } from './log'
+import { emptyWritable } from './utils/empty-writable'
 import { describeCause } from './cache/explain'
 import { printRunSummary, summarizeRun } from './executer/run-summary'
 import { printDryRun } from './executer/dry-run'
@@ -447,6 +448,7 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .addOption(new Option('--no-summary', 'do not print the end-of-run summary'))
+      .addOption(new Option('--summary-json', 'emit the end-of-run summary as JSON').default(false))
       .addOption(new Option('--explain', 'print the cache-miss cause when a task rebuilds').default(false))
       .addOption(
         new Option('--dry-run', 'print the execution plan with predicted cache hits/misses without running').default(
@@ -455,9 +457,14 @@ export async function getProgram(
       )
       .action(async (task, options) => {
         try {
+          // For machine-readable JSON, suppress the human progress logger (which
+          // also writes to stdout) so the only thing on stdout is the JSON.
+          const runEnvironment: Environment = options.summaryJson
+            ? { ...environment, stdout: emptyWritable(), console: consoleContext(emptyWritable()) }
+            : environment
           const cli = await createCli(
             fileName,
-            environment,
+            runEnvironment,
             task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options)
           )
           if (cli.tasks().length === 0) {
@@ -485,8 +492,13 @@ export async function getProgram(
           })
 
           // Reporting only: the summary never changes the exit code or behavior.
-          if (options.summary !== false && !options.watch) {
-            printRunSummary(environment, summarizeRun(result.state, Date.now() - runStart))
+          if (!options.watch) {
+            const summary = summarizeRun(result.state, Date.now() - runStart)
+            if (options.summaryJson) {
+              environment.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
+            } else if (options.summary !== false) {
+              printRunSummary(environment, summary)
+            }
           }
 
           if (!result.success) {

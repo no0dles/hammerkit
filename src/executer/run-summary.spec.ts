@@ -1,9 +1,11 @@
+import { join } from 'path'
 import { WorkTree } from '../planner/work-tree'
 import { TaskState } from './scheduler/task-state'
 import { printRunSummary, summarizeRun } from './run-summary'
 import { memoryStream } from '../testing/test-streams'
 import { Environment } from './environment'
 import { createTestCase } from '../testing/test-case'
+import { createCli } from '../program'
 import { runProgram } from '../run-program'
 
 function fakeTask(name: string, current: TaskState) {
@@ -82,6 +84,39 @@ describe('run summary (fast)', () => {
     expect(out.read()).toContain('nothing ran')
   })
 
+  it('surfaces the captured cache-miss cause on a rebuilt task and is JSON-serializable (#22)', () => {
+    const summary = summarizeRun(
+      fakeTree({
+        x: fakeTask('x', {
+          type: 'completed',
+          cached: false,
+          duration: 5,
+          stateKey: 'k',
+          missCauses: ['source changed: a.txt'],
+        }),
+      }),
+      10
+    )
+    expect(summary.tasks[0].cause).toBe('source changed: a.txt')
+
+    // valid, complete JSON form: per-task fields + aggregates
+    const parsed = JSON.parse(JSON.stringify(summary))
+    expect(parsed.tasks[0]).toMatchObject({
+      taskId: 'id-x',
+      status: 'executed',
+      duration: 5,
+      cause: 'source changed: a.txt',
+    })
+    expect(parsed).toHaveProperty('executed')
+    expect(parsed).toHaveProperty('cached')
+    expect(parsed).toHaveProperty('cacheHitRatio')
+    expect(parsed).toHaveProperty('totalDuration')
+
+    const out = memoryStream()
+    printRunSummary({ stdout: out.stream } as Environment, summary)
+    expect(out.read()).toContain('source changed: a.txt')
+  })
+
   // Real-run wiring through the CLI. Local task execution is not reliable on the
   // Windows hosted runner (see execute.spec.ts), so gate it off win32.
   const itExceptWindows = process.platform === 'win32' ? it.skip : it
@@ -103,5 +138,42 @@ describe('run summary (fast)', () => {
 
     expect(await runAndCapture(['hammerkit', 'run'])).toContain('Summary')
     expect(await runAndCapture(['hammerkit', 'run', '--no-summary'])).not.toContain('Summary')
+  })
+
+  itExceptWindows('run --summary-json emits clean, valid JSON with per-task + aggregate fields (#22)', async () => {
+    let captured = ''
+    const t = createTestCase('summary-json', {
+      '.hammerkit.yaml': { tasks: { greet: { cmds: ['node --version'] } } },
+    })
+    await t.setup(async (cwd, environment) => {
+      const out = memoryStream()
+      environment.stdout = out.stream
+      await runProgram(environment, ['hammerkit', 'run', '--summary-json'], true)
+      captured = out.read()
+    })
+    // the human progress logger is suppressed under --summary-json, so stdout is
+    // pure JSON
+    const parsed = JSON.parse(captured)
+    expect(Array.isArray(parsed.tasks)).toBe(true)
+    expect(parsed.tasks.find((task: { taskName: string }) => task.taskName === 'greet').status).toBe('executed')
+    expect(parsed).toHaveProperty('cacheHitRatio')
+  })
+
+  itExceptWindows('run --explain adds the miss-cause column to the human summary (#22)', async () => {
+    let captured = ''
+    const t = createTestCase('summary-cause', {
+      '.hammerkit.yaml': { tasks: { greet: { cmds: ['node --version'], src: ['input.txt'] } } },
+      'input.txt': 'x\n',
+    })
+    await t.setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
+      await cli.clean({ cache: true })
+      const out = memoryStream()
+      environment.stdout = out.stream
+      // first run: never cached → the summary shows the cause column
+      await runProgram(environment, ['hammerkit', 'run', '--explain'], true)
+      captured = out.read()
+    })
+    expect(captured).toContain('never cached')
   })
 })

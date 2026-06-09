@@ -69,11 +69,15 @@ export async function executeWorkTask(
       }
 
       // Cache miss: under the explain flag, report why this task is rebuilding,
-      // reusing the cache-explain engine. Reporting only — the decision is made.
+      // reusing the cache-explain engine. Captured BEFORE execution overwrites
+      // the last-resolved record, then carried onto the completed state so the
+      // build summary can show the cause column. Reporting only.
+      let missCauses: string[] | undefined
       if (options.explain) {
         const explanation = await explainTask(work, options.cacheDefault, environment)
-        for (const cause of explanation.causes) {
-          work.status.write('info', `cache miss: ${describeCause(cause)}`)
+        missCauses = explanation.causes.map(describeCause)
+        for (const cause of missCauses) {
+          work.status.write('info', `cache miss: ${cause}`)
         }
       }
 
@@ -109,6 +113,7 @@ export async function executeWorkTask(
             type: 'completed',
             cached: false,
             duration: getDuration(started),
+            missCauses,
           })
         } else {
           if (!options.watch) {

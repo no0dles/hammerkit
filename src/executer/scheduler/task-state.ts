@@ -27,6 +27,9 @@ export interface TaskCompletedState {
   duration: number
   cached: boolean
   stateKey: string
+  // Rendered cache-miss causes for a rebuilt task, populated only under the
+  // explain flag — additive reporting metadata carried on the event stream.
+  missCauses?: string[]
 }
 
 export interface TaskErrorState {

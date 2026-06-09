@@ -14,6 +14,9 @@ export interface TaskSummary {
   // Wall-clock duration in ms; 0 for a task that did not complete (cached tasks
   // complete near-instantly).
   duration: number
+  // Why a rebuilt task missed the cache, sourced from the cache-explain engine
+  // during the run — present only when the run was invoked with --explain.
+  cause?: string
 }
 
 export interface RunSummary {
@@ -48,11 +51,13 @@ export function summarizeRun(workTree: WorkTree, totalDuration: number): RunSumm
   const tasks: TaskSummary[] = []
   for (const task of iterateWorkTasks(workTree)) {
     const state = task.state.current
+    const cause = state.type === 'completed' && state.missCauses?.length ? state.missCauses.join(', ') : undefined
     tasks.push({
       taskId: task.id(),
       taskName: task.name,
       status: statusOf(state),
       duration: state.type === 'completed' ? state.duration : 0,
+      cause,
     })
   }
   tasks.sort((a, b) => a.taskName.localeCompare(b.taskName))
@@ -113,7 +118,10 @@ export function printRunSummary(environment: Environment, summary: RunSummary): 
   for (const task of summary.tasks) {
     const name =
       task.taskName.length > nameWidth ? `${task.taskName.slice(0, nameWidth - 1)}…` : task.taskName.padEnd(nameWidth)
-    environment.stdout.write(`  ${name}  ${colorStatus(task.status)}  ${colors.grey(formatDuration(task.duration))}\n`)
+    const cause = task.cause ? `  ${colors.grey(task.cause)}` : ''
+    environment.stdout.write(
+      `  ${name}  ${colorStatus(task.status)}  ${colors.grey(formatDuration(task.duration))}${cause}\n`
+    )
   }
 
   const ratio = Math.round(summary.cacheHitRatio * 100)
