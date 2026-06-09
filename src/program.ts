@@ -8,6 +8,7 @@ import { WorkLabelScope, WorkScope } from './executer/work-scope'
 import { getErrorMessage, printItem, printProperty, printTitle } from './log'
 import { describeCause } from './cache/explain'
 import { printRunSummary, summarizeRun } from './executer/run-summary'
+import { printDryRun } from './executer/dry-run'
 import { hasLabels } from './executer/label-values'
 import { getBuildFilename } from './parser/default-build-file'
 import { createParseContext } from './schema/schema-parser'
@@ -447,6 +448,11 @@ export async function getProgram(
       )
       .addOption(new Option('--no-summary', 'do not print the end-of-run summary'))
       .addOption(new Option('--explain', 'print the cache-miss cause when a task rebuilds').default(false))
+      .addOption(
+        new Option('--dry-run', 'print the execution plan with predicted cache hits/misses without running').default(
+          false
+        )
+      )
       .action(async (task, options) => {
         try {
           const cli = await createCli(
@@ -456,6 +462,16 @@ export async function getProgram(
           )
           if (cli.tasks().length === 0) {
             program.error('No tasks found', { exitCode: 127 })
+            return
+          }
+
+          if (options.dryRun) {
+            const plan = await cli.dryRun({ cacheDefault: options.cache })
+            if (plan.cycle) {
+              program.error(`task cycle detected ${plan.cycle.join(' -> ')}`, { exitCode: 1 })
+              return
+            }
+            printDryRun(environment, plan)
             return
           }
 

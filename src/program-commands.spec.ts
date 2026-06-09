@@ -78,6 +78,16 @@ describe('program commands (fast)', () => {
     await t.shell([HK, 'graph'])
   })
 
+  it('run --dry-run prints the plan without running', async () => {
+    const t = createTestCase('cmd-dry-run', {
+      '.hammerkit.yaml': {
+        tasks: { build: { cmds: ['true'], src: ['input.txt'] } },
+      },
+      'input.txt': 'x\n',
+    })
+    await t.shell([HK, 'run', '--dry-run'])
+  })
+
   it('explain reports tasks without running them', async () => {
     const t = createTestCase('cmd-explain', {
       '.hammerkit.yaml': {

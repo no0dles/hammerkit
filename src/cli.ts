@@ -24,6 +24,7 @@ import { ServiceState } from './executer/scheduler/service-state'
 import { packageWorkTree } from './docker/package'
 import { explainWorkTree, TaskExplanation } from './cache/explain'
 import { GraphFormat, serializeWorkGraph, WorkGraphSerialization } from './planner/work-graph-serializer'
+import { DryRunPlan, planDryRun } from './executer/dry-run'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -187,6 +188,12 @@ export class Cli {
   // the planner's graph — nothing executes.
   graph(format: GraphFormat): WorkGraphSerialization {
     return serializeWorkGraph(this.workTree, format)
+  }
+
+  // Ordered execution plan with predicted cache decisions, reusing the explain
+  // engine — executes nothing, starts nothing, performs no cache push/pull.
+  async dryRun(options?: { cacheDefault?: CacheMethod }): Promise<DryRunPlan> {
+    return planDryRun(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
   }
 
   task(name: string): WorkItemState<WorkTask, TaskState> {
