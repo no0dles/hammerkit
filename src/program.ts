@@ -321,6 +321,7 @@ export async function getProgram(
           .default('checksum')
           .choices(['checksum', 'modify-date', 'none'])
       )
+      .addOption(new Option('--json', 'emit the explanation as JSON').default(false))
       .action(async (task, options) => {
         try {
           const cli = await createCli(
@@ -329,6 +330,10 @@ export async function getProgram(
             task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
           )
           const explanations = await cli.explain({ cacheDefault: options.cache })
+          if (options.json) {
+            environment.stdout.write(`${JSON.stringify(explanations, null, 2)}\n`)
+            return
+          }
           for (const explanation of explanations) {
             const label =
               explanation.status === 'hit'
@@ -441,6 +446,7 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .addOption(new Option('--no-summary', 'do not print the end-of-run summary'))
+      .addOption(new Option('--explain', 'print the cache-miss cause when a task rebuilds').default(false))
       .action(async (task, options) => {
         try {
           const cli = await createCli(
@@ -459,6 +465,7 @@ export async function getProgram(
             watch: options.watch,
             workers: options.concurrency,
             logMode: options.log,
+            explain: options.explain,
           })
 
           // Reporting only: the summary never changes the exit code or behavior.

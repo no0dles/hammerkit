@@ -7,6 +7,9 @@ import { computeStateKey } from '../executer/scheduler/state-key'
 import { writeLastResolvedRecord, getLastResolvedFile } from './last-resolved'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { ExplainCause, TaskExplanation } from './explain'
+import { memoryStream } from '../testing/test-streams'
+import { statusConsole } from '../planner/work-item-status'
+import { runProgram } from '../run-program'
 
 // Exercises the cache-explain engine end-to-end against a real parsed work tree.
 // Rather than spawning a process (local-task execution is mocked elsewhere and is
@@ -172,6 +175,50 @@ describe('cache explain (fast)', () => {
       const build = explanationFor(await cli2.explain(), 'build')
       expect(build.status).toBe('miss')
       expect(hasCause(build, { kind: 'env-changed', identifier: 'TOKEN' })).toBe(true)
+    })
+  })
+
+  it('explain --json emits valid JSON with each task status (US3 FR-006)', async () => {
+    const t = createTestCase('explain-json', {
+      '.hammerkit.yaml': { tasks: { build: { cmds: ['true'], src: ['input.txt'] } } },
+      'input.txt': 'x\n',
+    })
+    await t.setup(async (cwd, environment) => {
+      const out = memoryStream()
+      environment.stdout = out.stream
+      await runProgram(environment, ['hammerkit', 'explain', '--json'], true)
+      const parsed = JSON.parse(out.read())
+      expect(Array.isArray(parsed)).toBe(true)
+      const build = parsed.find((e: TaskExplanation) => e.taskName === 'build')
+      expect(build.status).toBe('miss')
+      expect(build.causes.some((c: ExplainCause) => c.kind === 'never-cached')).toBe(true)
+    })
+  })
+
+  // Inline miss-reason needs a real run; local execution is gated off win32.
+  const itExceptWindows = process.platform === 'win32' ? it.skip : it
+
+  itExceptWindows('run --explain prints the miss cause for a rebuild and nothing for a hit (US2 FR-005)', async () => {
+    const t = createTestCase('explain-inline', {
+      '.hammerkit.yaml': { tasks: { greet: { cmds: ['node --version'], src: ['input.txt'] } } },
+      'input.txt': 'x\n',
+    })
+    await t.setup(async (cwd, environment) => {
+      const fileName = join(cwd, '.hammerkit.yaml')
+      const cli = await createCli(fileName, environment, {})
+      await cli.clean({ cache: true })
+
+      // first run: never cached → the miss cause is reported inline
+      const status1 = memoryStream()
+      environment.status = statusConsole(status1.stream)
+      await runProgram(environment, ['hammerkit', 'run', '--explain'], true)
+      expect(status1.read()).toContain('cache miss')
+
+      // second run: now a cache hit → no miss reason
+      const status2 = memoryStream()
+      environment.status = statusConsole(status2.stream)
+      await runProgram(environment, ['hammerkit', 'run', '--explain'], true)
+      expect(status2.read()).not.toContain('cache miss')
     })
   })
 })

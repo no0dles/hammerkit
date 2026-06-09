@@ -13,6 +13,7 @@ import { writeCacheMetadata } from './cache-metadata'
 import { getWorkCacheStats } from '../optimizer/get-work-cache-stats'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { CacheState } from './scheduler/enqueue-next'
+import { describeCause, explainTask } from '../cache/explain'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -65,6 +66,15 @@ export async function executeWorkTask(
           duration: getDuration(started),
         })
         return
+      }
+
+      // Cache miss: under the explain flag, report why this task is rebuilding,
+      // reusing the cache-explain engine. Reporting only — the decision is made.
+      if (options.explain) {
+        const explanation = await explainTask(work, options.cacheDefault, environment)
+        for (const cause of explanation.causes) {
+          work.status.write('info', `cache miss: ${describeCause(cause)}`)
+        }
       }
 
       await awaitCompletedDependencies(work, work.deps, abort)

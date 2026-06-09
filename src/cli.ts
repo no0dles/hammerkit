@@ -34,6 +34,9 @@ export interface CliExecOptions {
   logMode: LogMode
   cacheDefault: CacheMethod
   processManager: ProcessManager
+  // When set, a task that executes due to a cache miss prints its miss cause
+  // inline (reusing the cache-explain engine). Reporting only.
+  explain: boolean
 }
 
 export interface CliPackageOptions {
@@ -101,6 +104,7 @@ export class Cli {
             workers: options?.workers ?? 0,
             processManager,
             type,
+            explain: options?.explain ?? false,
           })
         }
 
