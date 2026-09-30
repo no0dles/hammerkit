@@ -1,6 +1,6 @@
 # Self-hosted integration-test runner
 
-The integration test job ([.github/workflows/integration.yaml](../../.github/workflows/integration.yaml)) targets a self-hosted Linux runner labeled `[self-hosted, linux, hammerkit]`. It expects a single host, one long-lived k3d cluster, and namespace-per-job isolation.
+The integration test job ([.github/workflows/integration.yaml](workflows/integration.yaml)) targets a self-hosted Linux runner labeled `[self-hosted, linux, hammerkit]`. It expects a single host, one long-lived k3d cluster, and namespace-per-job isolation.
 
 ## Host requirements
 
@@ -30,7 +30,7 @@ The workflow expects `CLUSTER_NAME=hammerkit-ci` and reads `KUBECONFIG=/home/run
 Every job exports `HAMMERKIT_TEST_RUN_ID=<run_id>-<run_attempt>`. The workflow:
 
 1. Creates a fresh namespace `hammerkit-<run-id>` labeled `hammerkit.dev/run-id=<run-id>`.
-2. Threads the same id into hammerkit's container labels via `createTestCase` in [src/testing/test-case.ts](../../src/testing/test-case.ts) (the test process picks it up from `process.env.HAMMERKIT_TEST_RUN_ID`).
+2. Threads the same id into hammerkit's container labels via `createTestCase` in [src/testing/test-case.ts](../src/testing/test-case.ts) (the test process picks it up from `process.env.HAMMERKIT_TEST_RUN_ID`).
 3. After the run (success or failure):
    - Removes every docker resource carrying a `hammerkit-id` label.
    - Deletes the namespace by label selector.
@@ -56,7 +56,7 @@ docker run -d --restart=always --name hammerkit-registry \
   -p 5000:5000 registry:2
 ```
 
-Tests pick it up via `REGISTRY=localhost:5000` (see [src/testing/ensure-local-registry.ts](../../src/testing/ensure-local-registry.ts)). If `REGISTRY` is unset, the helper falls back to managing its own ephemeral registry container — useful locally, but slower.
+Tests pick it up via `REGISTRY=localhost:5000` (see [src/testing/ensure-local-registry.ts](../src/testing/ensure-local-registry.ts)). If `REGISTRY` is unset, the helper falls back to managing its own ephemeral registry container — useful locally, but slower.
 
 ## Failure mode
 

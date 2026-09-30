@@ -57,6 +57,7 @@
 * [Release 1.4.0](docs/release-blog/release-1.4.0.md)
 * [Release 1.5.0](docs/release-blog/release-1.5.0.md)
 * [Release 1.6.0](docs/release-blog/release-1.6.0.md)
+* [Release 1.7.0](docs/release-blog/release-1.7.0.md)
 
 ## Change Log
 
@@ -70,4 +71,3 @@
 * [Roadmap](docs/contribution/roadmap.md)
   * [Secret managers (planned)](docs/contribution/secret-managers.md)
 * [Publishing](docs/contribution/publish.md)
-* [Self-hosted runner](docs/contribution/self-hosted-runner.md)
