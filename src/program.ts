@@ -18,6 +18,7 @@ import { parseReferences } from './schema/reference-parser'
 import colors from 'colors'
 import { WorkItemValidation } from './planner/work-item-validation'
 import { getVersion } from './version'
+import { CACHE_READ_ONLY_ENV, isCacheReadOnly } from './cache/read-only'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
@@ -377,6 +378,12 @@ export async function getProgram(
           .default('checksum')
           .choices(['checksum', 'modify-date', 'none'])
       )
+      .addOption(
+        new Option(
+          '--cache-read-only',
+          `restore from cache backends but never push to them (or set ${CACHE_READ_ONLY_ENV}=1)`
+        ).default(false)
+      )
       .action(async (options) => {
         try {
           const scope = parseWorkLabelScope(options)
@@ -387,6 +394,7 @@ export async function getProgram(
             workers: options.concurrency,
             logMode: options.log,
             daemon: options.daemon,
+            cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
           })
 
           if (!result.success) {
@@ -455,6 +463,12 @@ export async function getProgram(
           false
         )
       )
+      .addOption(
+        new Option(
+          '--cache-read-only',
+          `restore from cache backends but never push to them (or set ${CACHE_READ_ONLY_ENV}=1)`
+        ).default(false)
+      )
       .action(async (task, options) => {
         try {
           // For machine-readable JSON, suppress the human progress logger (which
@@ -489,6 +503,7 @@ export async function getProgram(
             workers: options.concurrency,
             logMode: options.log,
             explain: options.explain,
+            cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
           })
 
           // Reporting only: the summary never changes the exit code or behavior.

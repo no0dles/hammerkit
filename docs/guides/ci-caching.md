@@ -50,6 +50,29 @@ works for developers locally, so a result built on a laptop is reused in CI and
 vice versa. See [caches](../build-file/caches.md) for the full backend reference
 (MinIO, R2, GCS).
 
+### Sharing across checkouts, runners and agent sandboxes
+
+Cache ids are computed from paths relative to the project root (the git root), so
+the same commit produces the same ids wherever it is checked out — a CI runner at
+`/home/runner/work/app/app`, an agent sandbox at `/workspace/app` and a laptop all
+hit the same entries. Use **container tasks** for anything you want to share
+between macOS and Linux machines: a local task includes the host OS in its identity.
+
+### Read-only runners
+
+Only trusted runners should write to the shared cache. Give untrusted runners —
+coding-agent sandboxes, pull requests from forks — read-only credentials and run
+them in read-only mode, so they restore results but never push:
+
+```bash
+export HAMMERKIT_CACHE_READ_ONLY=1   # or pass --cache-read-only to run / up
+hammerkit run test
+```
+
+Read-only mode skips every backend push, including the built-in local `default`
+cache. Results a read-only run builds are still reused by later runs in the same
+checkout.
+
 ## Option B — store / restore with the CI's own cache
 
 If you'd rather use your CI provider's built-in caching, wrap the run with

@@ -42,6 +42,11 @@ Options:
   --env <name>                environment
   -l, --log <mode>            log mode (choices: "interactive", "live", "grouped")
   --cache <method>            caching method to compare (choices: "checksum", "modify-date", "none")
+  --no-summary                do not print the end-of-run summary
+  --summary-json              emit the end-of-run summary as JSON (default: false)
+  --explain                   print the cache-miss cause when a task rebuilds (default: false)
+  --dry-run                   print the execution plan with predicted cache hits/misses without running (default: false)
+  --cache-read-only           restore from cache backends but never push to them (or set HAMMERKIT_CACHE_READ_ONLY=1)
   -h, --help                  display help for command
 ```
 

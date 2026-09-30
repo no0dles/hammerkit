@@ -4,6 +4,7 @@
 - `hammerkit explain [task]` (and `--json`) reports why a task is a cache hit or miss; `run --explain` prints the miss cause inline.
 - `hammerkit graph [task]` serializes the build graph as mermaid or dot.
 - End-of-run build summary with hit ratio (`--no-summary`, `--summary-json`).
+- `--cache-read-only` (or `HAMMERKIT_CACHE_READ_ONLY=1`) on `run`/`up`: restore from cache backends but never push — for agent sandboxes and other untrusted runners.
 - `run --dry-run` previews the execution plan with predicted cache hits/misses.
 
 ## Changed

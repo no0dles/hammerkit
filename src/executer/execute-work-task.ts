@@ -19,10 +19,15 @@ import { getWorkInstanceId } from '../planner/work-instance-id'
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
   environment: Environment,
-  cacheState: CacheState
+  cacheState: CacheState,
+  options: CliExecOptions
 ) {
   const { resolved, stateKey } = cacheState
   if (resolved.method === 'none') {
+    return
+  }
+  if (options.cacheReadOnly) {
+    work.status.write('debug', `${work.name} not pushed to cache "${resolved.name}" (read-only)`)
     return
   }
   try {
@@ -108,7 +113,7 @@ export async function executeWorkTask(
 
         if (work.state.current.type === 'running') {
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
-          await pushToBackend(work, environment, cacheState)
+          await pushToBackend(work, environment, cacheState, options)
           work.state.set({
             stateKey: cacheState.stateKey,
             type: 'completed',

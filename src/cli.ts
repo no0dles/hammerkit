@@ -38,6 +38,9 @@ export interface CliExecOptions {
   // When set, a task that executes due to a cache miss prints its miss cause
   // inline (reusing the cache-explain engine). Reporting only.
   explain: boolean
+  // Restore from cache backends but never push to them — for untrusted runners
+  // (e.g. agent sandboxes) that may read the shared cache but must not write it.
+  cacheReadOnly: boolean
 }
 
 export interface CliPackageOptions {
@@ -106,6 +109,7 @@ export class Cli {
             processManager,
             type,
             explain: options?.explain ?? false,
+            cacheReadOnly: options?.cacheReadOnly ?? false,
           })
         }
 
