@@ -21,7 +21,10 @@ results. The goal was general performance improvements on CI and local developme
 {% hint style="success" %}
 Shipped in 1.6.0 as [pluggable cache backends](../build-file/caches.md): declare a
 `local` or `s3` cache backend and hammerkit pulls/pushes task results automatically,
-sharing them between developers and CI runs.
+sharing them between developers and CI runs. 1.7.0 made cache keys independent of
+the checkout location and added the `registry` backend and
+[`cache pull` / `cache push`](../cli/cache.md) — see
+[agents, workspaces and CI](../guides/agents-and-ci.md).
 {% endhint %}
 
 ## Services

@@ -19,20 +19,27 @@ hammerkit keeps under `.hammerkit`). That is what gets reused — and what
 [`store` / `restore`](../cli/store-restore.md) and remote
 [backends](../build-file/caches.md) move between machines.
 
-A task's cache key is computed from:
+A task's cache key has two parts:
 
-* the declared **`src`** files (their content checksum by default, or their
-  modification dates with `modify-date`), and
-* the cache keys of its **dependencies**, recursively.
+* the task's **definition**: `cmds`, `image` (or the host OS for a local task),
+  `envs`, `mounts`, `shell`, `src` and `generates` paths and the working
+  directory, and
+* its **state**: the declared **`src`** files (their content checksum by default,
+  or their modification dates with `modify-date`) combined with the state of its
+  **dependencies**, recursively.
 
-So a task is re-run when its `src` changes or when anything it depends on changes.
+So a task is re-run when its definition changes, when its `src` changes, or when
+anything it depends on changes. Use [`hammerkit explain`](../cli/explain.md) to see
+which of these caused a rebuild.
+
+All paths in the key are relative to the project root (the git root, or the
+directory of the main build file), so the same commit has the same keys in every
+checkout — on a laptop, a CI runner or an agent sandbox. That is what lets a
+[remote cache](../build-file/caches.md) be shared between machines.
 
 {% hint style="warning" %}
-The key is **not** derived from the `image`, the `cmds`, or `envs`. If you edit a
-command or bump an image but leave the `src` untouched, hammerkit still considers
-the task up to date and skips it. While iterating on the commands themselves,
-re-run with `--cache none` or run [`hammerkit clean`](../cli/clean.md) to force
-execution.
+A task **without `src`** can't be proven up to date, so it runs every time — and so
+does every task that depends on it. Declare `src` on everything you want cached.
 {% endhint %}
 
 ### Define source files
@@ -190,7 +197,12 @@ tasks:
 
 When the cache has a remote backend, hammerkit pulls the result before the task
 runs if it is missing locally, and pushes the result after a successful run. The
-built-in backends are `local` and `s3`; the `s3` backend also covers any
-S3-compatible store such as MinIO, Cloudflare R2 and Google Cloud Storage. See
+built-in backends are `local`, `s3` and `registry`; the `s3` backend also covers
+any S3-compatible store such as MinIO, Cloudflare R2 and Google Cloud Storage, and
+the `registry` backend any OCI container registry (GHCR, Docker Hub, ECR, …). See
 [caches](../build-file/caches.md) for the full backend reference, the R2/GCS
 examples and the pull/push behavior.
+
+To keep the network out of the build, leave tasks on the machine-local `default`
+cache and move entries explicitly with [`cache pull` / `cache push`](../cli/cache.md);
+see [agents, workspaces and CI](../guides/agents-and-ci.md).

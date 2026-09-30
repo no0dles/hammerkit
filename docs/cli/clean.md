@@ -17,7 +17,8 @@ hammerkit clean
 By default `clean` removes the generated outputs and the per-task cache state of
 the current checkout. Add `--cache` to also drop the **stored results** kept by
 the cache backend - the local result store under `~/.hammerkit/remote-cache` or a
-configured remote backend (for example an S3 bucket).
+configured remote backend (for example an S3 bucket or a registry — which must
+allow deleting manifests).
 
 ```
 hammerkit clean --cache

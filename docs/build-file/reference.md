@@ -98,10 +98,12 @@ Each named cache has a `method` and a `backend` (see [caches](caches.md)):
 | Field | Type | Description |
 |-------|------|-------------|
 | `method` | `checksum` \| `modify-date` \| `none` | How changes are detected. |
-| `backend.type` | `local` \| `s3` | Where results are stored. |
+| `backend.type` | `local` \| `s3` \| `registry` | Where results are stored. |
 | `backend.path` | string (`local`) | Directory; defaults to `~/.hammerkit/remote-cache`. |
 | `backend.bucket` | string (`s3`, required) | Target bucket. |
 | `backend.region` / `endpoint` / `prefix` / `forcePathStyle` | – (`s3`) | S3 connection options. |
+| `backend.repository` | string (`registry`, required) | OCI repository without a tag, e.g. `ghcr.io/org/cache`. |
+| `backend.insecure` | boolean (`registry`) | Use plain http; defaults to `true` only for localhost. |
 
 A task's `cache` field is either the method shorthand (`cache: checksum`) or a
 reference `{name, method}` to a declared cache.

@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.7.0)
 
 **Input**: 1.7 brainstorm — print an end-of-run summary (per-task status + duration, aggregate cache-hit ratio) fed by the existing event stream and the cache-explain engine.
 

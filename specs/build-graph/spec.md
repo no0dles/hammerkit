@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.7.0)
 
 **Input**: 1.7 brainstorm — `hammerkit graph` serializes the task/service dependency graph; `--dry-run` reports the execution plan (with predicted cache hits) without executing. Both reuse the planner's already-built work graph and the [cache-explain](../cache-explain/spec.md) engine.
 

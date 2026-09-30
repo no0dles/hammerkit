@@ -56,3 +56,45 @@ in CI, so a result cached on one is reused on the other. `--log` defaults to
 `interactive` outside CI and `live` in CI (hammerkit auto-detects CI from the `CI`,
 `CONTINUOUS_INTEGRATION`, `BUILD_NUMBER` or `RUN_ID` environment variables).
 {% endhint %}
+
+## Build summary
+
+After a run, hammerkit prints one line per task — executed or cached, and how long
+it took — followed by the totals and the cache hit ratio:
+
+```
+Summary:
+  build    cached     0ms
+  e2e      executed   4.5s
+  install  cached     0ms
+  1 executed, 2 cached (67% cache hit), 4.7s total
+```
+
+`--no-summary` hides it; `--summary-json` prints it as JSON on stdout (and nothing
+else), for CI dashboards or agents. With `--explain`, every rebuilt task also
+prints why it missed the cache, and the summary gets a cause column.
+
+## Dry run
+
+`--dry-run` prints the execution plan in order, with the predicted cache hit or
+miss (and its cause) for every task, without running anything:
+
+```bash
+hammerkit run e2e --dry-run
+```
+
+```
+Dry run (no commands executed):
+  1. install: cache miss (never cached)
+  2. build: cache miss (source changed: src/app.js, dependency changed: install)
+  3. e2e: cache miss (source changed: src/app.js, dependency changed: build)
+```
+
+See also [`explain`](explain.md) and [`graph`](graph.md).
+
+## Read-only cache
+
+`--cache-read-only` (or `HAMMERKIT_CACHE_READ_ONLY=1`) restores results from cache
+backends but never writes to them — for untrusted runners such as agent sandboxes
+or pull requests from forks. See
+[agents, workspaces and CI](../guides/agents-and-ci.md#who-may-write-to-the-cache).

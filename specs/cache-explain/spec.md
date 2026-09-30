@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.7.0)
 
 **Input**: 1.7 brainstorm — surface *why* a task runs or is skipped. The scheduler already computes a per-task state key and compares it to the stored one to decide hit/miss, but discards the comparison. Keeping it as a diff unlocks `explain`, cache-miss reasons, and the build summary.
 
