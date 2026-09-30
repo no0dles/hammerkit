@@ -126,10 +126,17 @@ async function restoreContainer(
       },
       HostConfig: {
         AutoRemove: true,
+        // mount the same volumes archiveContainer reads from, so the restored
+        // archives land in the task's output volumes rather than in this
+        // throwaway container's filesystem
         Binds:
-          item.data.type === 'container-task'
-            ? []
-            : [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+          item.data.type === 'container-service'
+            ? item.data.volumes
+                .filter((v) => !v.inherited)
+                .map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)
+            : item.data.generates
+                .filter((v) => !v.inherited && !v.isFile)
+                .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
       },
     },
     null,
