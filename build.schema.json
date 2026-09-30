@@ -164,6 +164,9 @@
                   "shell": {
                     "type": "string"
                   },
+                  "continuous": {
+                    "type": "boolean"
+                  },
                   "image": {
                     "type": "string"
                   },
@@ -215,6 +218,9 @@
                   },
                   "shell": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
+                  },
+                  "continuous": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/continuous"
                   },
                   "platform": {
                     "type": "object",
@@ -323,8 +329,7 @@
                   }
                 },
                 "required": [
-                  "image",
-                  "ports"
+                  "image"
                 ],
                 "additionalProperties": false,
                 "description": "container service"
@@ -543,6 +548,26 @@
                     "required": [
                       "type",
                       "bucket"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "registry"
+                      },
+                      "repository": {
+                        "type": "string"
+                      },
+                      "insecure": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "repository"
                     ],
                     "additionalProperties": false
                   }

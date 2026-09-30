@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.7.0)
 
 **Input**: 1.7 brainstorm — a third cache backend that stores cache entries in a container registry, alongside the existing `local` and `s3` backends. Everyone already has a registry; this removes the need to provision an S3 bucket for shared caching.
 

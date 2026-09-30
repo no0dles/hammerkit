@@ -19,7 +19,16 @@ export const cacheBackendS3Schema = object({
 }).strict()
 export type CacheBackendS3Schema = z.infer<typeof cacheBackendS3Schema>
 
-export const cacheBackendSchema = union([cacheBackendLocalSchema, cacheBackendS3Schema])
+export const cacheBackendRegistrySchema = object({
+  type: literal('registry'),
+  // repository to store entries in, e.g. `ghcr.io/org/hammerkit-cache`
+  repository: string(),
+  // talk plain http (defaults to true only for localhost registries)
+  insecure: z.boolean().optional(),
+}).strict()
+export type CacheBackendRegistrySchema = z.infer<typeof cacheBackendRegistrySchema>
+
+export const cacheBackendSchema = union([cacheBackendLocalSchema, cacheBackendS3Schema, cacheBackendRegistrySchema])
 export type CacheBackendSchema = z.infer<typeof cacheBackendSchema>
 
 export const buildFileCacheSchema = object({

@@ -24,7 +24,7 @@ needs to go:
 | Mechanism | What it does | Reach for it when |
 |---|---|---|
 | **Cache method** (`checksum`/`modify-date`) | Decides whether a task can be **skipped** locally. | Always on — it's how a task knows it's up to date. |
-| **Cache backend** (`local`/`s3`, this page) | **Shares** the skip-or-restore result across machines automatically. | Developers and CI should reuse each other's results without scripting. |
+| **Cache backend** (`local`/`s3`/`registry`, this page) | **Shares** the skip-or-restore result across machines automatically. | Developers and CI should reuse each other's results without scripting. |
 | **[`export: true`](../task/README.md#exporting-generated-files)** | Copies a container task's output **back into your workspace**. | Another tool outside hammerkit needs the produced files. |
 | **[`store` / `restore`](../cli/store-restore.md)** | Manually moves outputs + cache state to a directory. | Wiring hammerkit into a CI provider's own cache step (no remote backend). |
 
@@ -75,7 +75,7 @@ The method decides whether the source files of a task changed since the last run
 
 ## Backends
 
-The backend decides where task results are stored. Two backend types are built
+The backend decides where task results are stored. Three backend types are built
 in. Hammerkit pulls from the backend when the result is missing locally and pushes
 to it after a task ran successfully.
 
@@ -173,6 +173,40 @@ Azure Blob Storage is **not** S3-compatible, so it is not supported through the 
 backend. The backend registry is pluggable, so an Azure backend could be added as a
 custom backend in the future.
 {% endhint %}
+
+### registry
+
+Stores cache entries in any OCI container registry — GHCR, Docker Hub, ECR, GAR,
+Artifactory, Harbor or a plain `registry:2`. No bucket to provision: use the
+registry you already push images to. Each entry is stored as a small single-layer
+image tagged `<task-id>-<state-key>`.
+
+{% code title=".hammerkit.yaml" %}
+```yaml
+caches:
+  remote:
+    method: checksum
+    backend:
+      type: registry
+      repository: ghcr.io/my-org/hammerkit-cache
+```
+{% endcode %}
+
+| Field        | Required | Description                                                                  |
+|--------------|----------|------------------------------------------------------------------------------|
+| `repository` | yes      | Repository to store entries in, without a tag (e.g. `ghcr.io/org/cache`).    |
+| `insecure`   | no       | Use plain http. Defaults to `true` only for `localhost` / `127.0.0.1`.       |
+
+{% hint style="info" %}
+Credentials come from the docker config that `docker login` (or a CI login step
+such as `docker/login-action`) writes, including credential helpers
+(`credHelpers` / `credsStore`). `DOCKER_CONFIG` is honored. They are never
+stored in the build file. A read-only token is enough for runners that only pull.
+{% endhint %}
+
+Removing entries (`hammerkit clean --cache`) requires the registry to allow
+manifest deletion; retention is otherwise best left to the registry's own
+cleanup policies.
 
 ## Built-in caches
 
