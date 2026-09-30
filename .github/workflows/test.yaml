@@ -50,8 +50,14 @@ jobs:
   # colima needs. macos-15-intel is the last hosted Intel image (until ~2027).
   # k8s specs no-op (CLUSTER_NAME unset) and the registry self-provisions via
   # docker (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
+  #
+  # DISABLED: ~40 min per push on the emulated Intel runner, and colima is not
+  # Docker Desktop, so it does not catch Docker-Desktop-specific behavior anyway.
+  # GitHub's Apple Silicon runners cannot run Docker at all (no nested
+  # virtualization). Remove the `if` to re-enable.
   macos-containers:
     name: integration (macos-latest)
+    if: false
     runs-on: macos-15-intel
     timeout-minutes: 90
     env:

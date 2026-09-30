@@ -70,8 +70,7 @@ node_modules/.bin/jest src/path/to/file.spec.ts -t "test name"
 ## 5. Integration tests — only when you touched docker / k8s / execution
 
 These need a running Docker daemon (and are slow). They are **not** required for
-most commits; the `integration (ubuntu-latest)` and `integration (macos-latest)` jobs
-in `test.yaml` cover them (kind cluster + registry on GitHub-hosted runners). Run locally
+most commits; the `integration (ubuntu-latest)` job in `test.yaml` covers them (kind cluster + registry on GitHub-hosted runners). Run locally
 only if your change affects container/k8s execution:
 
 ```bash
@@ -83,8 +82,8 @@ Add `CLUSTER_NAME=<kube-context>` to also exercise the kubernetes specs.
 
 ## Cross-platform note
 
-The `test` workflow runs the unit suite on **ubuntu, windows, and macos**, plus
-a `macos-containers` job. Keep changes portable:
+The `test` workflow runs the unit suite on **windows** and the full integration
+suite on **ubuntu** (macOS is disabled). Keep changes portable:
 
 - Build paths with `path` helpers; in tests, make separator-sensitive
   expectations native (`val.split(posix.sep).join(sep)`) rather than hardcoding

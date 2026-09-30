@@ -29,9 +29,10 @@ workflow → gate map only to decide which `before-commit` gate to re-run (the c
 live in `before-commit`, not here):
 
 - `build` → prettier (strict over all of `src/`), eslint, tsc build.
-- `test` → the jest unit matrix on **ubuntu, windows, macos** (+ a `macos-containers` job).
-- `integration` / `macos-containers` → docker/k8s tests; need Docker/Kubernetes and usually
-  **cannot** be reproduced locally.
+- `test` → the unit suite on **windows** and the full integration suite (docker +
+  Kubernetes on kind) on **ubuntu**. The `macos-containers` job is disabled.
+- Docker/k8s failures in `integration (ubuntu-latest)` can be reproduced locally with
+  Docker Desktop (and its Kubernetes for the k8s specs).
 
 ## Step 2 — Implement a fix
 
@@ -82,8 +83,7 @@ Or poll `gh run list --branch <branch>` / `gh pr checks` until the run finishes.
   `do-the-work` skill and `.agents/FEEDBACK.md`.
 - Cap attempts (~3–5). If the **same** failure recurs across iterations, stop and surface it.
 - Treat infra/flake as not-your-bug: the `integration (ubuntu-latest)` job depends on a
-  throwaway kind cluster and Docker Hub pulls, and the `macos-containers` job uses colima
-  (flaky, slow, ~40 min). If a failure looks like infra, stop and tell the user rather
+  throwaway kind cluster and Docker Hub pulls. If a failure looks like infra, stop and tell the user rather
   than looping.
 - Never force-push and never touch files unrelated to the fix.
 
