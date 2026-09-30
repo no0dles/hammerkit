@@ -27,6 +27,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       type: 'local-task',
       name: 'task-1',
       cwd,
+      projectRoot: cwd,
       cmds: [],
       generates: [],
       src: [],

@@ -146,6 +146,10 @@ describe('run summary (fast)', () => {
       '.hammerkit.yaml': { tasks: { greet: { cmds: ['node --version'] } } },
     })
     await t.setup(async (cwd, environment) => {
+      // cache ids are checkout-independent, so an identical task run by another
+      // test would otherwise be restored from the shared default backend
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
+      await cli.clean({ cache: true })
       const out = memoryStream()
       environment.stdout = out.stream
       await runProgram(environment, ['hammerkit', 'run', '--summary-json'], true)

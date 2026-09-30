@@ -15,6 +15,7 @@ import { ServiceState } from './scheduler/service-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 
 export async function dockerService(
   docker: Dockerode,
@@ -44,7 +45,7 @@ export async function dockerService(
       Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
+        'hammerkit-id': getWorkInstanceId(item),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'service',
         'hammerkit-state': options.stateKey,

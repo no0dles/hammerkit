@@ -17,6 +17,7 @@ import { existsVolume, removeVolume } from '../executer/get-docker-executor'
 import { dirname } from 'path'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
+import { getWorkInstanceId } from './work-instance-id'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -27,7 +28,7 @@ export function dockerTaskRuntime(
     async initialize(state: State<TaskState>): Promise<void> {
       const currentTasks = await docker.listContainers({
         filters: {
-          label: [`hammerkit-id=${task.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(task)}`],
         },
       })
       const currentTask = currentTasks[0]
@@ -53,7 +54,7 @@ export function dockerTaskRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${task.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(task)}`],
         },
       })
       for (const container of containers) {
@@ -84,7 +85,7 @@ export function dockerTaskRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${task.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(task)}`],
         },
       })
       const container = containers[0]
@@ -119,7 +120,7 @@ async function restoreContainer(
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
+        'hammerkit-id': getWorkInstanceId(item),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },
@@ -153,7 +154,7 @@ export function dockerServiceRuntime(
     async initialize(state: State<ServiceState>): Promise<void> {
       const currentServices = await docker.listContainers({
         filters: {
-          label: [`hammerkit-id=${service.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(service)}`],
         },
       })
       const currentService = currentServices[0]
@@ -178,7 +179,7 @@ export function dockerServiceRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${service.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(service)}`],
         },
       })
       for (const container of containers) {
@@ -210,7 +211,7 @@ export function dockerServiceRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${service.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(service)}`],
         },
       })
       const container = containers[0]
@@ -245,7 +246,7 @@ async function archiveContainer(
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
+        'hammerkit-id': getWorkInstanceId(item),
         'hammerkit-pid': process.pid.toString(),
         'hammerkit-type': 'task',
       },

@@ -14,6 +14,7 @@ import { getWorkCacheStats } from '../optimizer/get-work-cache-stats'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -25,7 +26,7 @@ async function pushToBackend(
     return
   }
   try {
-    const cacheDir = getCacheDirectory(work.id())
+    const cacheDir = getCacheDirectory(getWorkInstanceId(work))
     const stats = await getWorkCacheStats(work.data, environment)
     await writeCacheMetadata(environment, work, stats, getWorkTaskCacheDescription(work.data))
     await work.runtime.archive(environment, cacheDir)

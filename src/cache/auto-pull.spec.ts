@@ -11,6 +11,7 @@ import { LocalWorkTask } from '../planner/work-task'
 import { ResolvedCache } from './resolve-cache'
 import { writeCacheMetadata } from '../executer/cache-metadata'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getWorkCacheStats, getStateKey } from '../optimizer/get-work-cache-stats'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 
@@ -57,6 +58,7 @@ describe('checkCacheState auto-pull', () => {
         type: 'local-task',
         name: 'demo-task',
         cwd,
+        projectRoot: cwd,
         cmds: [],
         generates: [],
         src: [],
@@ -100,7 +102,7 @@ describe('checkCacheState auto-pull', () => {
     const stateKey = getStateKey(stats, 'checksum')
 
     await writeCacheMetadata(envA, itemA, stats, getWorkTaskCacheDescription(itemA.data))
-    const cacheDir = getCacheDirectory(itemA.id())
+    const cacheDir = getCacheDirectory(getWorkInstanceId(itemA))
     await backend.push(itemA.id(), stateKey, cacheDir, envA)
 
     rmSync(machineAScratch, { recursive: true, force: true })

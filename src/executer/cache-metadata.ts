@@ -5,6 +5,7 @@ import { WorkTaskCacheDescription } from '../optimizer/work-task-cache-descripti
 import { WorkItem } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { writeLastResolvedRecord } from '../cache/last-resolved'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 
 export async function writeCacheMetadata(
   environment: Environment,
@@ -12,7 +13,7 @@ export async function writeCacheMetadata(
   stats: WorkCacheFileStats,
   description: WorkTaskCacheDescription
 ): Promise<void> {
-  const taskId = task.id()
+  const taskId = getWorkInstanceId(task)
   await environment.file.createDirectory(getCacheDirectory(taskId))
   await environment.file.writeFile(getCacheStatsFile(taskId), JSON.stringify(stats))
   await environment.file.writeFile(getCacheDescriptionFile(taskId), JSON.stringify(description))

@@ -11,6 +11,7 @@ import { BuildFileEnvironmentSchema } from './build-file-environment-schema'
 import { BuildFileContainerTaskSchema } from './build-file-container-task-schema'
 import { BuildFileCacheSchema } from './cache-schema'
 import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
+import { findProjectRoot } from '../planner/project-root'
 
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
@@ -19,6 +20,8 @@ export interface ReferencedContext {
   environments: { [key: string]: ReferenceEnvironment }
   envFiles: { [key: string]: { [key: string]: string } }
   caches: CacheCatalog
+  // anchor for machine-independent cache identity, see findProjectRoot
+  projectRoot: string
 }
 
 export interface ReferencedFileContext {
@@ -89,6 +92,7 @@ export async function parseReferences(
     envFiles: {},
     environments: {},
     caches: {},
+    projectRoot: await findProjectRoot(mainScope.cwd, environment),
   }
 
   for (const file of Object.values(ctx.files)) {

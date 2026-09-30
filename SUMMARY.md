@@ -59,6 +59,7 @@
 * [Changelog 1.4.0](docs/change-log/change-log-1.4.0.md)
 * [Changelog 1.5.0](docs/change-log/change-log-1.5.0.md)
 * [Changelog 1.6.0](docs/change-log/change-log-1.6.0.md)
+* [Changelog 1.7.0](docs/change-log/change-log-1.7.0.md)
 
 ## Contribution
 

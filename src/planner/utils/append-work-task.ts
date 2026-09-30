@@ -67,6 +67,7 @@ function parseTask(
     description: templateValue(task.schema.description || '', envs).trim(),
     name: task.relativeName,
     cwd,
+    projectRoot: context.projectRoot,
     cmds: parseWorkCommands(cwd, task.schema.cmds || [], envs),
     src: parseWorkSource(cwd, task.schema.src, envs),
     generates: parseWorkGenerate(cwd, task.schema, envs),

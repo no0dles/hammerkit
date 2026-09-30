@@ -64,6 +64,7 @@ function parseService(
   const envs = buildEnvironmentVariables(service.envs, environment, context)
   const workService: BaseWorkService = {
     cwd: service.cwd,
+    projectRoot: context.projectRoot,
     name: service.relativeName,
     ports: parseWorkPorts(service.schema, envs),
     scope: service.scope,

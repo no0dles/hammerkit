@@ -9,6 +9,7 @@ import { writeCacheMetadata } from '../cache-metadata'
 import { getWorkTaskCacheDescription } from '../../optimizer/work-task-cache-description'
 import { getErrorMessage } from '../../log'
 import { computeStateKey } from './state-key'
+import { getWorkInstanceId } from '../../planner/work-instance-id'
 
 export interface CacheState {
   cached: boolean
@@ -36,7 +37,7 @@ export async function checkCacheState(
     }
 
     try {
-      const cacheDir = getCacheDirectory(item.id())
+      const cacheDir = getCacheDirectory(getWorkInstanceId(item))
       const pulled = await resolved.backend.pull(item.id(), stateKey, cacheDir, environment)
       if (pulled) {
         item.status.write('info', `${item.name} pulled from cache "${resolved.name}" (${resolved.backend.type})`)

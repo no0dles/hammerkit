@@ -9,6 +9,7 @@ import { getWorkTaskCacheDescription, WorkTaskCacheDescription } from '../optimi
 import { WorkCacheFileStats } from '../optimizer/work-cache-stats'
 import { getCacheDescriptionFile } from '../optimizer/get-cache-directory'
 import { readLastResolvedRecord } from './last-resolved'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 
 export type ExplainStatus = 'hit' | 'miss' | 'uncacheable'
 
@@ -216,7 +217,7 @@ export async function explainTask(
   const causes: ExplainCause[] = []
   const record = await readLastResolvedRecord(environment, item)
   if (record === null) {
-    const legacyDesc = await environment.file.exists(getCacheDescriptionFile(item.id()))
+    const legacyDesc = await environment.file.exists(getCacheDescriptionFile(getWorkInstanceId(item)))
     if (runtimeStateKey === null && !hasEntry && !legacyDesc) {
       causes.push({ kind: 'never-cached' })
     } else {
