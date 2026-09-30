@@ -8,6 +8,7 @@ import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { computeStateKey } from '../executer/scheduler/state-key'
 import { CacheBackend } from './cache-backend'
 import { resolveCache, withBuiltinCaches } from './resolve-cache'
+import { archiveTaskEntry } from '../executer/archive-task-entry'
 
 export type CacheSyncDirection = 'pull' | 'push'
 
@@ -75,6 +76,18 @@ export async function syncCache(
     const [source, destination] = options.direction === 'pull' ? [remote, local] : [local, remote]
     if (await destination.has(item.id(), stateKey, environment)) {
       results.push(result('present'))
+      continue
+    }
+
+    // Outputs that are up to date in this checkout but were never stored in a
+    // backend (e.g. restored by the runtime's own state) are packaged directly.
+    if (options.direction === 'push' && !(await local.has(item.id(), stateKey, environment))) {
+      if ((await item.runtime.currentStateKey(environment)) !== stateKey) {
+        results.push(result('missing'))
+        continue
+      }
+      await remote.push(item.id(), stateKey, await archiveTaskEntry(item, environment), environment)
+      results.push(result('transferred'))
       continue
     }
 

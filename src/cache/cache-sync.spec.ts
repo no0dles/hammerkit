@@ -90,6 +90,40 @@ describe('cache pull / push', () => {
     })
   })
 
+  itExceptWindows('pushes outputs that are current in the checkout even without a local cache entry', async () => {
+    const localCache = join(tempRoot, 'cache-sync-current-local')
+    const remoteCache = join(tempRoot, 'cache-sync-current-remote')
+    await createTestCase('cache-sync-current', project(localCache, remoteCache)).setup(async (cwd, environment) => {
+      await environment.file.remove(localCache)
+      await environment.file.remove(remoteCache)
+      await hammerkit(environment, ['run', 'build', '--no-summary'])
+      // e.g. a sandbox whose machine cache was discarded, or outputs that were
+      // restored by the runtime's own state rather than from a backend
+      await environment.file.remove(localCache)
+
+      const output = await hammerkit(environment, ['cache', 'push', 'build', '--remote', 'shared'])
+      expect(output).toContain('build: pushed')
+      expect(output).toContain('base: pushed')
+      expect(await entries(environment, remoteCache)).toBe(2)
+    })
+  })
+
+  itExceptWindows('reports a task whose outputs are stale and uncached as missing on push', async () => {
+    const localCache = join(tempRoot, 'cache-sync-stale-local')
+    const remoteCache = join(tempRoot, 'cache-sync-stale-remote')
+    await createTestCase('cache-sync-stale', project(localCache, remoteCache)).setup(async (cwd, environment) => {
+      await environment.file.remove(localCache)
+      await environment.file.remove(remoteCache)
+      await hammerkit(environment, ['run', 'build', '--no-summary'])
+      await environment.file.remove(localCache)
+      await environment.file.writeFile(join(cwd, 'input.txt'), 'changed\n')
+
+      const output = await hammerkit(environment, ['cache', 'push', 'build', '--remote', 'shared'])
+      expect(output).toContain('build: not in local cache')
+      expect(await entries(environment, remoteCache)).toBe(1) // only the unchanged base
+    })
+  })
+
   itExceptWindows('pulls into the local cache so a later build restores without executing', async () => {
     const remoteCache = join(tempRoot, 'cache-sync-pull-remote')
 
