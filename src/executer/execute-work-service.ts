@@ -26,7 +26,11 @@ export async function executeWorkService(
 ) {
   try {
     if (options.type === 'execute') {
-      await awaitRequirement(work, environment.abortCtrl.signal)
+      const required = await awaitRequirement(work, environment.abortCtrl.signal, { untilAllDone: !options.watch })
+      if (!required) {
+        work.status.write('debug', `${work.name} not started, no task needing it had to run`)
+        return
+      }
     }
 
     work.state.set({
@@ -74,6 +78,11 @@ export async function executeWorkService(
         errorMessage: getErrorMessage(e),
         stateKey: null,
       })
+      // fail fast like a failing task: whatever needs this service can never
+      // run, and would otherwise wait for it forever
+      if (!options.watch) {
+        environment.abortCtrl.abort()
+      }
     }
   }
 }

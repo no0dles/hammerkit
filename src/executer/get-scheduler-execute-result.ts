@@ -12,7 +12,12 @@ export function getSchedulerExecuteResult(state: WorkTree): SchedulerResult {
     }
   }
   for (const service of iterateWorkServices(state)) {
-    if (service.state.current.type === 'canceled') {
+    const current = service.state.current
+    if (
+      current.type === 'canceled' ||
+      current.type === 'error' ||
+      (current.type === 'end' && current.reason === 'crash')
+    ) {
       return {
         state,
         success: false,

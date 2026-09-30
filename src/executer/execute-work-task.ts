@@ -8,13 +8,9 @@ import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { awaitCompletedDependencies, awaitRunningNeeds } from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
-import { getCacheDirectory } from '../optimizer/get-cache-directory'
-import { writeCacheMetadata } from './cache-metadata'
-import { getWorkCacheStats } from '../optimizer/get-work-cache-stats'
-import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
-import { getWorkInstanceId } from '../planner/work-instance-id'
+import { archiveTaskEntry } from './archive-task-entry'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -31,10 +27,7 @@ async function pushToBackend(
     return
   }
   try {
-    const cacheDir = getCacheDirectory(getWorkInstanceId(work))
-    const stats = await getWorkCacheStats(work.data, environment)
-    await writeCacheMetadata(environment, work, stats, getWorkTaskCacheDescription(work.data))
-    await work.runtime.archive(environment, cacheDir)
+    const cacheDir = await archiveTaskEntry(work, environment)
     await resolved.backend.push(work.id(), stateKey, cacheDir, environment)
     work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)
   } catch (e) {
@@ -57,12 +50,6 @@ export async function executeWorkTask(
     await watchLoop(work, environment, options, async (cacheState, abort) => {
       const started = new Date()
 
-      work.state.set({
-        type: 'ready',
-        stateKey: cacheState.stateKey,
-        started: new Date(),
-      })
-
       if (cacheState.cached) {
         work.status.write('debug', 'completed for cached state key ' + cacheState.stateKey)
         work.state.set({
@@ -73,6 +60,14 @@ export async function executeWorkTask(
         })
         return
       }
+
+      // Only a cache miss is `ready`: needed services start on `ready`, so a
+      // cached task never starts the services it would have needed.
+      work.state.set({
+        type: 'ready',
+        stateKey: cacheState.stateKey,
+        started: new Date(),
+      })
 
       // Cache miss: under the explain flag, report why this task is rebuilding,
       // reusing the cache-explain engine. Captured BEFORE execution overwrites

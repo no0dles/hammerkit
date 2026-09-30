@@ -1,23 +1,36 @@
+import { State } from './state'
 import { isWorkTaskItem, WorkItem, WorkItemState } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { TaskCompletedState, TaskState } from './scheduler/task-state'
 import { awaitState, isState } from './state-resolver'
-import { ServiceRunningState, ServiceState } from './scheduler/service-state'
+import {
+  ServiceCanceledState,
+  ServiceEndState,
+  ServiceErrorState,
+  ServiceRunningState,
+  ServiceState,
+} from './scheduler/service-state'
 import { WorkService } from '../planner/work-service'
 
+// Resolve true once any requirer is `ready` (about to run). With
+// `untilAllDone`, resolve false instead when every requirer has finished
+// without needing the service — e.g. all of them were cache hits — so the
+// service is never started.
 export async function awaitRequirement(
   svc: WorkItemState<WorkService, ServiceState>,
-  abort: AbortSignal
-): Promise<void> {
-  await Promise.race(
-    svc.requiredBy.map((required) => {
-      if (isWorkTaskItem(required)) {
-        return awaitState('await-requirement', required.state, (state) => state.type === 'ready', abort)
-      } else {
-        return awaitState('await-requirement', required.state, (state) => state.type === 'ready', abort)
-      }
-    })
-  )
+  abort: AbortSignal,
+  options: { untilAllDone: boolean } = { untilAllDone: false }
+): Promise<boolean> {
+  const ready = Promise.race(
+    svc.requiredBy.map((required) =>
+      awaitState('await-requirement', required.state as State<any>, (state) => state.type === 'ready', abort)
+    )
+  ).then(() => true)
+  if (!options.untilAllDone) {
+    return ready
+  }
+  const allDone = awaitNoRequirements(svc, abort).then(() => false)
+  return Promise.race([ready, allDone])
 }
 
 export async function awaitNoRequirements(svc: WorkItemState<WorkService, ServiceState>, abort: AbortSignal) {
@@ -62,12 +75,19 @@ export function awaitCompleted(
   return isState('await-completed-' + work.name, dep.state, isCompleted, abort)
 }
 
-export function awaitRunningNeed(
+// Wait for a needed service to run. A service that reaches a terminal state
+// first (it failed to start or exited) can never become ready, so the waiting
+// item fails instead of waiting forever.
+export async function awaitRunningNeed(
   work: WorkItem<WorkTask | WorkService>,
   dep: WorkItemState<WorkService, ServiceState>,
   abort: AbortSignal
 ): Promise<ServiceRunningState | null> {
-  return isState('await-running-need-' + work.name, dep.state, isRunning, abort)
+  const state = await isState('await-running-need-' + work.name, dep.state, isRunningOrDone, abort)
+  if (state.type !== 'running') {
+    throw new Error(`needed service ${dep.name} ${state.type === 'end' ? 'stopped' : 'failed'} before it was ready`)
+  }
+  return state
 }
 
 export async function awaitRunningNeeds(
@@ -83,6 +103,8 @@ export async function awaitRunningNeeds(
 function isCompleted(val: TaskState): val is TaskCompletedState {
   return val.type === 'completed'
 }
-function isRunning(val: ServiceState): val is ServiceRunningState {
-  return val.type === 'running'
+function isRunningOrDone(
+  val: ServiceState
+): val is ServiceRunningState | ServiceEndState | ServiceErrorState | ServiceCanceledState {
+  return val.type === 'running' || val.type === 'end' || val.type === 'error' || val.type === 'canceled'
 }
