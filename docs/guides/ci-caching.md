@@ -73,6 +73,19 @@ Read-only mode skips every backend push, including the built-in local `default`
 cache. Results a read-only run builds are still reused by later runs in the same
 checkout.
 
+### Splitting network from compute
+
+Instead of letting every task talk to the bucket during the build, keep tasks on
+the machine-local `default` cache and move entries explicitly with
+[`cache pull` / `cache push`](../cli/cache.md). The build itself then does no
+network I/O, and a workspace can be warmed before anyone runs anything:
+
+```bash
+hammerkit cache pull --remote shared     # network only
+hammerkit run                            # compute only
+hammerkit cache push --remote shared     # trusted runners only
+```
+
 ## Option B — store / restore with the CI's own cache
 
 If you'd rather use your CI provider's built-in caching, wrap the run with

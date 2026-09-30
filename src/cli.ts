@@ -25,6 +25,7 @@ import { packageWorkTree } from './docker/package'
 import { explainWorkTree, TaskExplanation } from './cache/explain'
 import { GraphFormat, serializeWorkGraph, WorkGraphSerialization } from './planner/work-graph-serializer'
 import { DryRunPlan, planDryRun } from './executer/dry-run'
+import { CacheSyncOptions, CacheSyncResult, syncCache } from './cache/cache-sync'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -198,6 +199,12 @@ export class Cli {
   // engine — executes nothing, starts nothing, performs no cache push/pull.
   async dryRun(options?: { cacheDefault?: CacheMethod }): Promise<DryRunPlan> {
     return planDryRun(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
+  }
+
+  // Move cache entries between the tasks' own caches and a named remote without
+  // executing anything (`cache pull` / `cache push`).
+  async syncCache(options: CacheSyncOptions): Promise<CacheSyncResult[]> {
+    return syncCache(this.workTree, options, this.environment)
   }
 
   task(name: string): WorkItemState<WorkTask, TaskState> {

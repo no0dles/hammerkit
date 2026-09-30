@@ -21,6 +21,15 @@ function isWithin(into: string, filename: string): boolean {
   return target === base || target.startsWith(base + sep)
 }
 
+// Only a missing object is a cache miss. Anything else (unreachable endpoint,
+// denied credentials) is rethrown: the inline cache lookup catches it and
+// degrades to a miss with a warning, while an explicit `cache pull`/`push`
+// reports it and fails.
+function isNotFound(e: unknown): boolean {
+  const err = e as { name?: string; $metadata?: { httpStatusCode?: number } }
+  return err?.name === 'NotFound' || err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404
+}
+
 export interface S3CacheBackendSpec {
   type: 's3'
   bucket: string
@@ -61,52 +70,53 @@ export function createS3CacheBackend(spec: S3CacheBackendSpec): CacheBackend {
           })
         )
         return true
-      } catch {
-        return false
+      } catch (e) {
+        if (isNotFound(e)) {
+          return false
+        }
+        throw e
       }
     },
     async pull(taskId, stateKey, into, environment): Promise<boolean> {
       try {
-        const head = await client
-          .send(
-            new HeadObjectCommand({
-              Bucket: spec.bucket,
-              Key: keyFor(taskId, stateKey, 'stats.json'),
-            })
-          )
-          .catch(() => null)
-        if (!head) {
-          return false
-        }
-        await environment.file.createDirectory(into)
-        const listed = await client.send(
-          new ListObjectsV2Command({
+        await client.send(
+          new HeadObjectCommand({
             Bucket: spec.bucket,
-            Prefix: dirPrefix(taskId, stateKey),
+            Key: keyFor(taskId, stateKey, 'stats.json'),
           })
         )
-        for (const obj of listed.Contents ?? []) {
-          if (!obj.Key) continue
-          const filename = obj.Key.substring(dirPrefix(taskId, stateKey).length)
-          if (!filename) continue
-          if (!isWithin(into, filename)) {
-            environment.console.warn(`skipping cache object outside restore dir: ${obj.Key}`)
-            continue
-          }
-          const body = await client.send(
-            new GetObjectCommand({
-              Bucket: spec.bucket,
-              Key: obj.Key,
-            })
-          )
-          if (body.Body instanceof Readable) {
-            await environment.file.writeStream(join(into, filename), body.Body)
-          }
+      } catch (e) {
+        if (isNotFound(e)) {
+          return false
         }
-        return true
-      } catch {
-        return false
+        throw e
       }
+      await environment.file.createDirectory(into)
+      const listed = await client.send(
+        new ListObjectsV2Command({
+          Bucket: spec.bucket,
+          Prefix: dirPrefix(taskId, stateKey),
+        })
+      )
+      for (const obj of listed.Contents ?? []) {
+        if (!obj.Key) continue
+        const filename = obj.Key.substring(dirPrefix(taskId, stateKey).length)
+        if (!filename) continue
+        if (!isWithin(into, filename)) {
+          environment.console.warn(`skipping cache object outside restore dir: ${obj.Key}`)
+          continue
+        }
+        const body = await client.send(
+          new GetObjectCommand({
+            Bucket: spec.bucket,
+            Key: obj.Key,
+          })
+        )
+        if (body.Body instanceof Readable) {
+          await environment.file.writeStream(join(into, filename), body.Body)
+        }
+      }
+      return true
     },
     async push(taskId, stateKey, from, environment) {
       const files = await environment.file.listFiles(from)

@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.7.0)
 
 **Input**: 1.7 brainstorm — a standalone `cache pull` command (and its sibling `cache push`) that moves cache artifacts between the configured backend and the local environment **without executing any task**, so a CI pipeline can separate the network-bound phase from the compute-bound phase across jobs or runners.
 

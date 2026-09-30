@@ -25,8 +25,18 @@ export function defaultEnvironment(context: ReferencedContext): WorkEnvironment 
 }
 
 export function getWorkContext(context: ReferencedContext, scope: WorkScope, environment: Environment): WorkTree {
-  const workTree: WorkTree = { services: {}, environment: defaultEnvironment(context), tasks: {} }
-  const filteredWorkTree: WorkTree = { services: {}, environment: defaultEnvironment(context), tasks: {} }
+  const workTree: WorkTree = {
+    services: {},
+    environment: defaultEnvironment(context),
+    tasks: {},
+    caches: context.caches,
+  }
+  const filteredWorkTree: WorkTree = {
+    services: {},
+    environment: defaultEnvironment(context),
+    tasks: {},
+    caches: context.caches,
+  }
 
   for (const [envName, env] of Object.entries(context.environments)) {
     if (envName === scope.environmentName) {

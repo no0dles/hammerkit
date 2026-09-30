@@ -35,5 +35,6 @@ export function resetWorkTree(workTree: WorkTree, type: ExecuteKind): WorkTree {
       return services
     }, {}),
     environment: workTree.environment,
+    caches: workTree.caches,
   }
 }

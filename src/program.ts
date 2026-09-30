@@ -359,6 +359,59 @@ export async function getProgram(
         }
       })
 
+    const cacheCommand = program.command('cache').description('move cache entries between machines')
+    for (const direction of ['pull', 'push'] as const) {
+      cacheCommand
+        .command(`${direction} [task]`)
+        .description(
+          direction === 'pull'
+            ? 'fetch the cache entries of the current state from a remote cache, without running tasks'
+            : 'upload the locally cached entries of the current state to a remote cache, without running tasks'
+        )
+        .addOption(new Option('--remote <name>', 'remote cache declared in the caches block').makeOptionMandatory())
+        .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+        .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+        .addOption(new Option('--env <name>', 'environment'))
+        .addOption(
+          new Option('--cache <method>', 'caching method to compare')
+            .default('checksum')
+            .choices(['checksum', 'modify-date', 'none'])
+        )
+        .action(async (task, options) => {
+          try {
+            if (direction === 'push' && isCacheReadOnly(false, environment.processEnvs)) {
+              program.error(`cache is read-only (${CACHE_READ_ONLY_ENV} is set), refusing to push`, { exitCode: 1 })
+              return
+            }
+            const cli = await createCli(
+              fileName,
+              environment,
+              task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
+            )
+            const results = await cli.syncCache({ direction, remote: options.remote, cacheDefault: options.cache })
+            const labels = {
+              transferred: colors.green(direction === 'pull' ? 'pulled' : 'pushed'),
+              present: colors.grey('already present'),
+              missing: colors.yellow(direction === 'pull' ? 'not in remote' : 'not in local cache'),
+              skipped: colors.grey('skipped'),
+            }
+            for (const result of results) {
+              environment.stdout.write(`• ${result.taskName}: ${labels[result.status]}\n`)
+            }
+            const moved = results.filter((r) => r.status === 'transferred').length
+            environment.stdout.write(
+              `${moved}/${results.length} entries ${direction === 'pull' ? 'pulled' : 'pushed'}\n`
+            )
+          } catch (e) {
+            if (e instanceof CommanderError) {
+              throw e
+            }
+            environment.console.error(getErrorMessage(e))
+            program.error(`Cache ${direction} was not successful: ${getErrorMessage(e)}`, { exitCode: 1 })
+          }
+        })
+    }
+
     program
       .command('up')
       .description('start services(s)')

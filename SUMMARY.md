@@ -36,6 +36,7 @@
   * [Execute](docs/cli/execute.md)
   * [Up](docs/cli/up.md)
   * [Down](docs/cli/down.md)
+  * [Cache pull / push](docs/cli/cache.md)
   * [Store / Restore](docs/cli/store-restore.md)
   * [Package](docs/cli/package.md)
   * [Clean](docs/cli/clean.md)
