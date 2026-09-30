@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../executer/environment-mock'
 import { checkCacheState } from '../executer/scheduler/enqueue-next'
 import { createLocalCacheBackend } from './backends/local-cache-backend'
@@ -49,6 +49,9 @@ describe('checkCacheState auto-pull', () => {
   }
 
   function makeWorkItem(cwd: string, resolved: ResolvedCache): WorkItemState<LocalWorkTask, TaskState> {
+    // identical source content on every "machine", so the state keys match
+    const input = join(cwd, 'input.txt')
+    writeFileSync(input, 'same on every machine')
     const storedStateKey: string | null = null
     return {
       id: () => 'demo-task',
@@ -61,7 +64,15 @@ describe('checkCacheState auto-pull', () => {
         projectRoot: cwd,
         cmds: [],
         generates: [],
-        src: [],
+        src: [
+          {
+            absolutePath: input,
+            source: 'input.txt',
+            matcher: (file: string) => file.startsWith(input),
+            inherited: null,
+            isFile: true,
+          },
+        ],
         envs: { variables: {}, replacements: [] } as any,
         labels: {},
         shell: '/bin/sh',

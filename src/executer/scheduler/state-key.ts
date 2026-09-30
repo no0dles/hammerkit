@@ -23,6 +23,13 @@ export function resolveEffective(
   return declared
 }
 
+// A task without `src` cannot be proven up to date — its state key would be a
+// constant — so it always runs, and so does everything depending on it
+// (specs/task SC-001). Services are not affected.
+export function isProvablyCacheable(item: WorkItemState<WorkTask | WorkService, any>): boolean {
+  return item.data.src.length > 0 && item.deps.every((dep) => isProvablyCacheable(dep))
+}
+
 // Fold a task's own state key together with the state keys of its dependencies.
 // A change anywhere in the dependency subtree must change the resulting key, so
 // that a downstream task is invalidated when an upstream source changes — even

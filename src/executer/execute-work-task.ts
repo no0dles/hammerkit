@@ -11,6 +11,7 @@ import { watchLoop } from './watch-loop'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
+import { isProvablyCacheable } from './scheduler/state-key'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -19,7 +20,7 @@ async function pushToBackend(
   options: CliExecOptions
 ) {
   const { resolved, stateKey } = cacheState
-  if (resolved.method === 'none') {
+  if (resolved.method === 'none' || !isProvablyCacheable(work)) {
     return
   }
   if (options.cacheReadOnly) {

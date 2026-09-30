@@ -8,7 +8,7 @@ import { getCacheDirectory } from '../../optimizer/get-cache-directory'
 import { writeCacheMetadata } from '../cache-metadata'
 import { getWorkTaskCacheDescription } from '../../optimizer/work-task-cache-description'
 import { getErrorMessage } from '../../log'
-import { computeStateKey } from './state-key'
+import { computeStateKey, isProvablyCacheable } from './state-key'
 import { getWorkInstanceId } from '../../planner/work-instance-id'
 
 export interface CacheState {
@@ -26,6 +26,11 @@ export async function checkCacheState(
 
   if (resolved.method === 'none') {
     item.status.write('debug', `${item.name} is skipping cache check, because caching is disabled`)
+    return { cached: false, stateKey, resolved }
+  }
+
+  if (isWorkTaskItem(item) && !isProvablyCacheable(item)) {
+    item.status.write('debug', `${item.name} always runs, it or one of its dependencies declares no src`)
     return { cached: false, stateKey, resolved }
   }
 

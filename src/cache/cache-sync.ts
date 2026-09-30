@@ -5,7 +5,7 @@ import { Environment } from '../executer/environment'
 import { CacheMethod } from '../parser/cache-method'
 import { WorkTree } from '../planner/work-tree'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
-import { computeStateKey } from '../executer/scheduler/state-key'
+import { computeStateKey, isProvablyCacheable } from '../executer/scheduler/state-key'
 import { CacheBackend } from './cache-backend'
 import { resolveCache, withBuiltinCaches } from './resolve-cache'
 import { archiveTaskEntry } from '../executer/archive-task-entry'
@@ -19,7 +19,7 @@ export type CacheSyncStatus =
   | 'present'
   // the source does not hold the entry — best-effort, not an error
   | 'missing'
-  // caching is disabled for the task, or the task already uses the remote itself
+  // caching is disabled or impossible (no src) for the task, or it already uses the remote itself
   | 'skipped'
 
 export interface CacheSyncResult {
@@ -68,7 +68,7 @@ export async function syncCache(
       status,
     })
 
-    if (resolved.method === 'none' || local === remote) {
+    if (resolved.method === 'none' || local === remote || !isProvablyCacheable(item)) {
       results.push(result('skipped'))
       continue
     }
