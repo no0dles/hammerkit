@@ -111,4 +111,4 @@ hammerkit --help
 
 ## Conclusion
 
-In this short introduction you created your first build file and executed your first task. The build file and the task in this example were very basic, to see the full functionality of hammerkit, take a look at the rest of the documentation.
+In this short introduction you created your first build file and executed your first task. The build file and the task in this example were very basic; to see the full functionality of hammerkit, take a look at the rest of the documentation.

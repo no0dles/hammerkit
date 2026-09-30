@@ -1,20 +1,20 @@
 ---
-description: Labels allow to group and categorize your tasks.
+description: Labels let you group and categorize your tasks.
 ---
 
 # Labels
-A label is a key value pair. 
-They can be defined on tasks or build files.
+A label is a key-value pair.
+Labels can be defined on tasks or on build files.
 
-Labeling your tasks will allow you to run multiple task groups or exclude specific tasks.
+Labeling your tasks lets you run multiple task groups or exclude specific tasks.
 
 ## Example use cases
-The following use cases are just some examples to showcase some of the potential usage for labels.
+The following examples show some of the ways labels can be used.
 
 ### Separating tasks by area
-Labels can be useful to separate tasks. 
-For example if you share one build file for different parts of your application or in case of a bigger project/monorepo.
-Add a `project` label to your tasks and be able to build projects independently with a single command `hammerkit -f project=a` or `hammerkit -f project=b`.
+Labels can be useful to separate tasks,
+for example if you share one build file across different parts of your application, or in a bigger project or monorepo.
+Add a `project` label to your tasks to build projects independently with a single command: `hammerkit -f project=a` or `hammerkit -f project=b`.
 
 {% hint style="info" %}
 Label filters are always given as `key=value`. A bare `-f project` (key only) is
@@ -47,13 +47,12 @@ tasks:
 ```
 
 ### Separate by platform
-Labels can be used to separate your tasks in your CI.
-In a CI environment where there are two runners, one that runs macOS and the other linux.
-With the goal to use the macOS host only for the ios related code and the rest should run on linux.
-Add a `platform=ios` label to the task that require macOS and configure your ci to run `hammerkit -f platform=ios` on the mac host and `hammerkit -e platform=ios` on the linux host. 
+Labels can be used to split your tasks across CI runners.
+For example, a CI environment might have two runners, one on macOS and one on Linux, and the macOS host should only run the iOS-related code.
+Add a `platform=ios` label to the tasks that require macOS, and configure your CI to run `hammerkit -f platform=ios` on the macOS host and `hammerkit -e platform=ios` on the Linux host.
 
-If there are tasks dependencies between the platform tasks, take a look at [store / restore](../cli/store-restore.md). 
-These can be used to store and restore generated outputs from tasks, work as well with the label arguments `hammerkit store cache -e platform=ios` and help to move data/cache between hosts.
+If tasks on the two platforms depend on each other, use [store / restore](../cli/store-restore.md) to move generated outputs and cache state between the hosts.
+Both commands accept label filters too, for example `hammerkit store cache -e platform=ios`.
 
 ```yaml
 tasks:
@@ -78,11 +77,10 @@ tasks:
 
 
 ### Group by purpose
-Simplify your workflow by grouping task together.
-Run one command for multiple tasks that have no dependency otherwise.
-For example a `task` label for either developing or publishing. 
-`hammerkit -f task=dev` will start your api server with the frontend development watch build. 
-`hammerkit -f task=release` will upload your container image to docker hub and build and upload to the staging environment.
+Simplify your workflow by grouping tasks: run one command for multiple tasks that don't otherwise depend on each other.
+For example, use a `task` label for developing or releasing.
+`hammerkit -f task=dev` starts your API server together with the frontend development build.
+`hammerkit -f task=release` pushes your container image to Docker Hub and builds and uploads the frontend to the staging environment.
 
 ```yaml
 tasks:

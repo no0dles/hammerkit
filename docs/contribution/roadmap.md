@@ -3,13 +3,13 @@ The following topics are planned to be addressed in the future.
 
 ## Distributed computing
 Offload complex and compute intensive tasks to remote hardware.
-The goal will be to use the power of cloud computing, with very little configuration.
+The goal is to use the power of cloud computing with very little configuration.
 
 ## Secret managers
 Source environment variables from external secret managers (Vault, AWS/GCP, 1Password, …)
 instead of plain `.env` files, and redact secret values from log output.
-The goal will be a pluggable secret-provider mechanism (starting with a `command` provider)
-referenced inline via `secret://<provider>/<name>`. Planned for 1.7.0 — see the
+The goal is a pluggable secret-provider mechanism (starting with a `command` provider)
+referenced inline via `secret://<provider>/<name>`. Planned for a release after 1.7.0 — see the
 [detailed plan](secret-managers.md).
 
 # Past topics on the roadmap
@@ -28,19 +28,18 @@ the checkout location and added the `registry` backend and
 {% endhint %}
 
 ## Services
-Task sometimes require some service to run.
-For example a database, which is required to run an api or an integration test.
-The goal will be to define those and hammerkit spins them up for the task and shuts them down if not needed.
+Tasks sometimes require a service to run, for example a database for an API or an integration test.
+The goal was to define those services and have hammerkit start them for a task and stop them when they are no longer needed.
 
 {% hint style="success" %}
-Services have been implemented with [container services](../service/container.md) and [kubernetes services](../service/kubernetes.md) in 1.5.0.
+Services have been implemented with [container services](../service/container.md) and [Kubernetes services](../service/kubernetes.md) in 1.5.0.
 {% endhint %}
 
 ## Platform requirements
-Define tasks that require a specific platform for local tasks.
-The goal will be to either skip local tasks where platform requirements are not met or execute them on a remote machine.
+Define local tasks that require a specific platform.
+The goal was to either skip local tasks where platform requirements are not met or execute them on a remote machine.
 
 {% hint style="success" %}
-Labels have been implemented since 1.5.0 and can be used to archive this requirement/goal.
+Labels, available since 1.5.0, can be used to achieve this.
 {% endhint %}
 

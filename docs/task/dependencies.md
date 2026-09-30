@@ -1,12 +1,11 @@
 ---
 description: >-
-  A task can require dependent tasks that will get executed first (if not
-  cached).
+  A task can depend on other tasks, which run first (unless they are cached).
 ---
 
 # Dependencies
 
-Every task can have list of dependencies. Those will be executed before and if any of them fails abort the all pending tasks. Dependencies can be chained as deep as needed, as long as there is no loop.&#x20;
+Every task can have a list of dependencies. They run before the task, and if any of them fails, all pending tasks are aborted. Dependencies can be chained as deep as needed, as long as there is no cycle.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

@@ -1,17 +1,17 @@
 ---
 description: >-
-  Includes are similar to references with the key difference, the current work
-  directory. For included build files the current work directory is relative to
-  where it got included.
+  Includes are similar to references, with one key difference: the working
+  directory. An included build file runs in the directory of the file that
+  includes it.
 ---
 
 # Includes
 
-Includes are ideal to define repetitive tasks and reuse them in multiple places. 
-Reference files can be used to split up tasks, but they keep the current work directory fixed to the directory they are placed. 
-For includes the current work directory is dynamically adjusted to where it got included from.
+Includes are ideal for defining repetitive tasks once and reusing them in multiple places.
+Referenced files also split up tasks, but their working directory stays fixed to the directory they are in.
+For includes, the working directory is the directory of the including file.
 
-The following example is a typescript monorepo with two projects `a` and `b`. Project `b` is dependent on `a` and both require to keep the dependencies up-to-date before compiling the source code.
+The following example is a TypeScript monorepo with two projects, `a` and `b`. Project `b` depends on `a`, and both need up-to-date dependencies before compiling the source code.
 
 {% code title="build.npm.yaml" %}
 ```yaml
@@ -27,7 +27,7 @@ tasks:
 ```
 {% endcode %}
 
-For the npm install an include is used, because there is for each project a package.json, but the task definition can be reused.
+The npm install uses an include: each project has its own package.json, but the task definition is the same.
 
 {% code title="project/a/.hammerkit.yaml" %}
 ```yaml
@@ -42,7 +42,7 @@ includes:
 ```
 {% endcode %}
 
-Includes are used for the [task dependency](../task/dependencies.md) of the build task and ensures that the node\_modules is installed before.
+The build task [depends](../task/dependencies.md) on the included install task, which ensures that node\_modules is installed first.
 
 {% code title="project/b/.hammerkit.yaml" %}
 ```yaml
@@ -60,8 +60,8 @@ includes:
 ```
 {% endcode %}
 
-In the build file of project `b`, the include for the npm install task is used as well. 
-An additional [reference](references.md) to `a` and a [task dependency](../task/dependencies.md) to a:build ensures that project `a` will be built first, before project `b` get compiled.
+The build file of project `b` uses the same include for the npm install task.
+An additional [reference](references.md) to `a` and a [task dependency](../task/dependencies.md) on `a:build` ensure that project `a` is built before project `b` is compiled.
 
 ## references vs. includes vs. extend — when to use which
 

@@ -7,6 +7,6 @@ npm version patch|minor|major|prerelease
 git push origin --tags
 ```
 
-In the GitHub CI pipeline builds the binaries needed for homebrew and publishes on docker hub / npm.
+The GitHub CI pipeline then builds the binaries needed for Homebrew and publishes to Docker Hub and npm.
 
-Once build the binaries/checksum can be updated on the [homebrew repo](https://github.com/no0dles/homebrew-hammerkit)
+Once they are built, the binaries/checksums can be updated in the [Homebrew repo](https://github.com/no0dles/homebrew-hammerkit)

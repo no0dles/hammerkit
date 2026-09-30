@@ -59,7 +59,8 @@ Label filters are always `key=value`; a key-only `-f dev` is rejected.
 Independent tasks and dependencies run concurrently up to `--concurrency` workers
 (default `4`). A task only starts once all of its `deps` have completed and all of
 its `needs` are healthy; tasks on separate branches of the graph run at the same
-time. If any task fails, hammerkit stops scheduling new work and the run fails.
+time. If any task fails, or a service a task needs fails to start, hammerkit stops
+scheduling new work and the run fails.
 
 ## Exit codes
 

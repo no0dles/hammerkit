@@ -1,25 +1,25 @@
 ---
 description: >-
-    A service is a continuous task that does not end. 
-    Something a task may require a service to perform.
+    A service is a long-running process, such as a database, that a task needs
+    in order to do its work.
 ---
 
 # Service
-Service can help task to perform their work.
-For example a database for your application or an api to your integration test run.
+Services help tasks do their work — for example, a database for your application
+or an API for your integration tests.
 
-Services can be defined to run in a container or forwarded from a kubernetes cluster. 
-Each need of a task will be available in the container network by the name of the service.
+Services can run in a container or be forwarded from a Kubernetes cluster.
+Each service a task needs is reachable on the container network by the service's name.
 
-Local tasks can also use needs, but hammerkit will not provide a dns resolution.
+Local tasks can also use needs, but hammerkit does not provide DNS resolution for them.
 Instead, the connection details of each needed service are passed to the task as
 environment variables (see [environment hints](#environment-hints-for-local-tasks)).
 
 ## Container
-Similar to [container tasks](../task/container.md) need container services an image to run.
-Tasks can declare the need for services and before the task gets executed, hammerkit will ensure the service is running.
+Like [container tasks](../task/container.md), container services need an image to run.
+Tasks declare which services they need, and hammerkit ensures those services are running before the task executes.
 
-[Healthchecks](./container.md#healthcheck) can be used, to ensure that the service is running and ready to be used.
+Use [healthchecks](./container.md#healthcheck) to ensure that a service is running and ready to be used.
 
 ```yaml
 services:
@@ -30,7 +30,7 @@ services:
       POSTGRES_DB: api
       POSTGRES_PASSWORD: 123456
     healthcheck:
-      cmd: "pg_isready -U postgres"
+      cmd: "pg_isready -U api"
     ports:
       - 5432
 
@@ -44,8 +44,8 @@ tasks:
 
 
 ## Kubernetes
-[Kubernetes services](./kubernetes.md) allow to use resources from local and remote kubernetes clusters.
-This allows easy integration with development or staging environments resources and can be used to debug/troubleshoot your application with data from other environments.
+[Kubernetes services](./kubernetes.md) let tasks use resources from local and remote Kubernetes clusters.
+This makes it easy to integrate with resources from development or staging environments, and to debug or troubleshoot your application with data from other environments.
 
 ```yaml
 services:
@@ -146,7 +146,7 @@ tasks:
 
 ## Starting and stopping services
 Services start and stop automatically based on the needs of the tasks you run.
-They can also be controlled directly with the cli:
+They can also be controlled directly with the CLI:
 
 * `hammerkit up` starts the services.
 * `hammerkit down` stops the services.

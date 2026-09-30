@@ -1,6 +1,6 @@
 # Release 1.4.0
 
-A short retro about the made changes and findings
+A short retrospective on the changes and findings
 
 ## Log Modes
 
@@ -11,14 +11,14 @@ The default can be changed with the `-l`, `--log` flag.
 
 ### Interactive
 
-Print the most recent log for each running task and see always an overview of the overall progress for all dependencies. 
+Print the most recent log for each running task and always see an overview of the overall progress for all dependencies. 
 Failed tasks get printed in full, after completion.
 
 ![](./hardlink.gif)
 
 ### Live
 
-Print all logs from all task instantly. 
+Print all logs from all tasks instantly. 
 Get feedback fast, but makes reading logs harder, if there are many things running in parallel.
 
 ![](./live.gif)
@@ -38,7 +38,7 @@ When executing the task, the source files were watched for changes and the task 
 With the new release the `watch` flag can be removed from the build file and instead be passed to the cli. 
 Every task with source files can be watchable and therefore the flag is not needed anymore. 
 The new implementation also detects changes on dependent tasks and restarts them if needed. 
-This change allows to watch over multiple build steps and reduces the need of manual interaction.
+This change makes it possible to watch multiple build steps and reduces the need for manual interaction.
 
 As a simple showcase, let's take a quick look at a node server application. 
 It requires some npm packages to be installed. 
@@ -81,9 +81,9 @@ tasks:
 
 ## Docker performance improvements
 
-The overall performance on file heavy tasks could be improved a lot by switch for generated files from mounts to volumes. 
-Tasks like `npm install` with several thousands files lead to unresponsiveness in the docker api and required restarts. 
-Debugging and reading the docker-for-mac/windows [user manual](https://docs.docker.com/desktop/mac/#file-sharing) lead to the conclusion **source files get mounted, generates use volumes**.
+The overall performance on file heavy tasks improved a lot by switching generated files from mounts to volumes. 
+Tasks like `npm install` with several thousand files led to unresponsiveness in the Docker API and required restarts. 
+Debugging and reading the docker-for-mac/windows [user manual](https://docs.docker.com/desktop/mac/#file-sharing) led to the conclusion **source files get mounted, generates use volumes**.
 
 The change improved the stability and execution time, but required some changes to the store/restore functionality.
 
@@ -93,15 +93,15 @@ Hammerkit keeps track of all used source files and task definitions.
 This is used to identify, if a task can be skipped because the source has not changed and therefore the old output should still be the same. 
 These cache files were located in the same directory as the build file in a `.hammerkit` subfolder.
 
-Those files needed to be excluded with from git, build steps and IDE's, because they were usually located on the same level as the source code. 
+Those files needed to be excluded from git, build steps and IDEs, because they were usually located on the same level as the source code. 
 To reduce those kind of issues, they were moved into the user directory. 
 Removing the need for special treatments.
 
 ## Automated test runner for macOS and Linux
 
 To fully test hammerkit, a running docker daemon is required. 
-For macOS and Linux there is now GitHub Action, that tests all `examples` in the repository for every merge request. 
-Windows is hopefully coming soon as well, but even tough there are windows runners available on GitHub, the docker setup requires still some work.
+For macOS and Linux there is now a GitHub Action that tests all `examples` in the repository for every merge request. 
+Windows is hopefully coming soon as well, but even though there are Windows runners available on GitHub, the docker setup requires still some work.
 
 ## Update node to v16 and make use of the AbortController
 
@@ -109,7 +109,7 @@ During testing hammerkit on Linux, some examples ended in an `unhandledPromise` 
 After some investigation, the reason could be pinned down to the usage of the `Defer` class, that was used a lot in hammerkit. 
 The Defer class was a wrapper, to reduce repeating code handling callback results. 
 The issue was that the `Defer` class created a promise with the default constructor without adding a catch handler. 
-Since the `Defer` pattern is not a recommended approach anymore (very well explained [here](https://stackoverflow.com/questions/34971078/how-to-replace-promise-defer-with-new-promise)) and in newer versions of node `unhandledPromise` result in process failures, the removable was a no-brainer.
+Since the `Defer` pattern is not a recommended approach anymore (very well explained [here](https://stackoverflow.com/questions/34971078/how-to-replace-promise-defer-with-new-promise)) and in newer versions of node `unhandledPromise` result in process failures, the removal was a no-brainer.
 
 The `Defer` class was mainly used for callback functions and the cancellation logic of tasks. 
 A Defer got resolved when the user pressed Ctrl-C and the task execution handler ended the task early when that promise got resolved.
@@ -119,7 +119,7 @@ The `AbortController` was the perfect replacement and has just made it into the 
 ## Adding best practices
 
 In the repository a new folder `best-practices` got added with tooling specific examples. 
-The build files are intent to be project independent and showcase how popular build tools should be used together with hammerkit.
+The build files are intended to be project-independent and showcase how popular build tools should be used together with hammerkit.
 
 ## Next release
 

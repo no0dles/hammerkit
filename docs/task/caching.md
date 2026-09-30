@@ -1,15 +1,15 @@
 ---
 description: >-
-  A task can be skipped if nothing regarding the input source files has changed.
-  This saves a lot of time and resources.
+  A task can be skipped if none of its inputs have changed. This saves a lot of
+  time and resources.
 ---
 
 # Caching
 
-Every task should define source files it requires. Based on those files, hammerkit can check if since the last run, something has changed that requires to rerun the commands of the task. If all source files are unchanged since the last run, the entire task gets skipped.
+Every task should declare the source files it requires. Based on those files, hammerkit checks whether anything changed since the last run that requires the task's commands to run again. If all source files are unchanged, the task is skipped.
 
 {% hint style="warning" %}
-If a dependency task has changed or has no source files defined, the task gets executed every run. The task can only get skipped, if all dependencies before can be skipped as well, otherwise the result could be inconsistent.
+A task can only be skipped if all of its dependencies can be skipped as well; otherwise the result could be inconsistent. When a dependency changes, every task depending on it runs again.
 {% endhint %}
 
 ### What gets cached, and what invalidates it
@@ -44,7 +44,7 @@ does every task that depends on it. Declare `src` on everything you want cached.
 
 ### Define source files
 
-The following example defines the `package.json` and `package-lock.json` as a source file. Before each run the checksum of those two files are compared with the checksum of the last successful run and if equal the task will get skipped.
+The following example declares `package.json` and `package-lock.json` as source files. Before each run, the checksums of those two files are compared with the checksums from the last successful run; if they are equal, the task is skipped.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -60,7 +60,7 @@ tasks:
 
 ### Define source folders
 
-The next example defines the `src` folder as the task source. The check if the task can be skipped, the entire folder will be recursively traversed.
+The next example declares the `src` folder as the task source. To check whether the task can be skipped, the entire folder is traversed recursively.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -74,12 +74,12 @@ tasks:
 {% endcode %}
 
 {% hint style="warning" %}
-Keep in mind that the recursive traverse can be quite expensive on huge folders. It's not recommended to use for example a `node_modules` folder as a source folder.
+Keep in mind that the recursive traversal can be expensive on huge folders. Avoid using, for example, a `node_modules` folder as a source.
 {% endhint %}
 
 ### Define glob sources
 
-This example defines a glob pattern `src/**/*.ts` as the task source. This is similar to the folder source, but filters for example the extension type.
+This example defines a glob pattern `src/**/*.ts` as the task source. This is similar to a folder source, but filters, for example, by file extension.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -92,16 +92,16 @@ tasks:
 ```
 {% endcode %}
 
-There are multiple patterns supported. Hammerkit uses the node-glob package. For all details checkout the docs [here](https://github.com/isaacs/node-glob) or take a look at a quick summary here:
+Several patterns are supported. Hammerkit matches globs with [minimatch](https://github.com/isaacs/minimatch) (the matcher behind node-glob); see its docs for all details. A quick summary:
 
-* `*` Matches 0 or more characters in a single path portion
-* `?` Matches 1 character
+* `*` Matches 0 or more characters in a single path portion.
+* `?` Matches 1 character.
 * `[...]` Matches a range of characters, similar to a RegExp range. If the first character of the range is `!` or `^` then it matches any character not in the range.
 * `!(pattern|pattern|pattern)` Matches anything that does not match any of the patterns provided.
 * `?(pattern|pattern|pattern)` Matches zero or one occurrence of the patterns provided.
 * `+(pattern|pattern|pattern)` Matches one or more occurrences of the patterns provided.
-* `*(a|b|c)` Matches zero or more occurrences of the patterns provided
-* `@(pattern|pat*|pat?erN)` Matches exactly one of the patterns provided
+* `*(a|b|c)` Matches zero or more occurrences of the patterns provided.
+* `@(pattern|pat*|pat?erN)` Matches exactly one of the patterns provided.
 * `**` If a "globstar" is alone in a path portion, then it matches zero or more directories and subdirectories searching for matches. It does not crawl symlinked directories.
 
 ### checksum vs. modify-date

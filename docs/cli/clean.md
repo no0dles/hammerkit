@@ -1,12 +1,12 @@
 ---
-description: Clear all generated files and folders to get a fresh mind.
+description: Clear all generated files and folders to start from a clean state.
 ---
 
 # Clean
 
 This command cleans up all generated directories and files including the local
 cache state of hammerkit.
-This can be useful to detect errors in the build file and verifying if all tasks work without a previous state.
+This is useful for detecting errors in the build file and for verifying that all tasks work without any previous state.
 
 ```
 hammerkit clean

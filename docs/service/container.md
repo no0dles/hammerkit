@@ -1,37 +1,33 @@
 # Container service
 Container services run in the same network as the other container tasks.
-By default, they are started when needed from by a task and stopped when no longer needed by future tasks.
+By default, they are started when a task needs them and stopped once no remaining task needs them.
 
-## Differences to docker-compose
-Services are similar to a `docker compose`, but are better integrated with your tasks.
-Compared to [docker compose v3](https://docs.docker.com/compose/compose-file/) the container service lacks a lot of features.
-There are some aspects to container services, that should still make them more appealing.
+## Differences from Docker Compose
+Container services are similar to [Docker Compose](https://docs.docker.com/compose/compose-file/) services, but are better integrated with your tasks.
+They lack many of Compose's features, but a few aspects still make them appealing.
 
 ### Seamless integration
 Hammerkit is aware of the task dependency tree and can make decisions about the lifetime of a service.
-Depending on your setup, this can result in less cpu/memory usage in general.
+Depending on your setup, this can reduce CPU and memory usage.
 
-It ensures simplicity and reduces the need for another tool that needs to be started and awaited, before you can run your task.
+It keeps things simple and removes the need for another tool that has to be started, and waited for, before you can run your task.
 
-### Reusage
-Services can be included or referenced similar to tasks.
-This makes it possible to reuse services and their state for multiple hammerkit files/projects.
-
-Making it possible to run just one database for multiple projects and reducing required cpu/memory. 
+### Reuse
+Services can be included or referenced like tasks.
+This makes it possible to reuse services and their state across multiple build files and projects — for example, to run a single database for several projects and save CPU and memory.
 
 ### Store/Restore
-The [store/restore](../cli/store-restore.md) command from the hammerkit cli can be used for services as well.
-Enabling the functionality to export / import volume data of services.
+The [store/restore](../cli/store-restore.md) commands work for services as well, exporting and importing their volume data.
 
-This can be used to seed database data or backup and restore project data states.
+This can be used to seed a database, or to back up and restore project data.
 
 ## Ports
 Services can expose ports to the host machine.
-They can be useful to debug/connect a service.
+This is useful for debugging or for connecting to a service from your machine.
 
 {% hint style="warning" %}
-They are not required for tasks. 
-Task are in the same network as services and have access to all ports.
+Container tasks don't need published ports.
+They share a network with the services and can reach all of their ports.
 {% endhint %}
 
 ```yaml
@@ -43,16 +39,16 @@ services:
 ```
 
 ## Healthcheck
-Healthcheck do check if the service is ready to be used.
-Tasks will only start if a needed service's is running and healthcheck passed if present.
+A healthcheck checks whether a service is ready to be used.
+A task only starts once every service it needs is running and, if a healthcheck is defined, has passed it.
 
 A healthcheck requires a command that can be used to test the readiness of a service.
 The command is executed inside the service container. 
 To pass the healthcheck the command needs to return with an exit code of `0`.
 
-The following example contains a postgres service. 
-It uses the `pg_isready` executable in a healthcheck.
-This ensures the postgres server is ready to accept connections. 
+The following example contains a Postgres service.
+It uses the `pg_isready` executable in a healthcheck,
+which ensures the Postgres server is ready to accept connections.
  
 ```yaml
 services:
@@ -63,7 +59,7 @@ services:
 ```
 
 {% hint style="warning" %}
-Without a healthcheck a task may get started before the service is ready. 
+Without a healthcheck, a task may start before the service is ready.
 {% endhint %}
 
 ### Timing and failure
@@ -85,8 +81,8 @@ On [Kubernetes](../task/kubernetes.md), the same `cmd` is translated into readin
 and liveness probes on the deployment.
 
 ## Volumes
-Services start and stop depending on needs of tasks. 
-In order to persist data over restarts volumes are needed to keep state.
+Services start and stop depending on what tasks need.
+To persist data across restarts, use volumes.
 
 ```yaml
 services:
@@ -98,11 +94,11 @@ services:
 
 ## Mounts
 Mounts can be used to pass local files into the container.
-They allow to mount local configuration and settings files.
+They are meant for local configuration and settings files.
 
 {% hint style="warning" %}
 Mounts are not recommended for frequently changing files. 
-Syncing large directories on macOS/Windows requires a lot of CPU usage.
+Syncing large directories on macOS/Windows uses a lot of CPU.
 {% endhint %}
 
 

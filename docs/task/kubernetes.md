@@ -6,7 +6,7 @@ description: >-
 
 # Running on Kubernetes
 
-Since `1.6.0` hammerkit can execute the same build file either on the local docker
+Since `1.6.0` hammerkit can execute the same build file either on the local Docker
 daemon or on a Kubernetes cluster. This is done through an **environment**: tasks
 run as jobs on the cluster, container services run as deployments, and the result
 of each task is cached the same way as locally.
@@ -69,18 +69,18 @@ once here and select it with `--env`, rather than repeating it on each service.
 
 | Field  | Required | Description                                       |
 |--------|----------|---------------------------------------------------|
-| `host` | no       | Address of a remote docker daemon to run against. |
+| `host` | no       | Address of a remote Docker daemon to run against. |
 
 ## Selecting an environment
 
 Pass `--env <name>` to run against a declared environment. Without it, hammerkit
-uses the local docker daemon.
+uses the local Docker daemon.
 
 ```bash
 hammerkit api --env default
 ```
 
-The `--env` option is available on the execute, [store and restore](../cli/store-restore.md)
+The `--env` option is available on the `run`, [`store` and `restore`](../cli/store-restore.md)
 commands, so cache results can be stored from and restored to a cluster.
 
 ## Healthchecks

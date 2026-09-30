@@ -13,7 +13,7 @@ A cache combines two things: a **method** that decides if a task changed and a
 By default hammerkit caches task results on the local filesystem under
 `~/.hammerkit/remote-cache`, so a result built in one checkout can be reused in
 another on the same machine. Since `1.6.0` you can also declare named caches with
-a remote **backend** (for example an S3 bucket) so a task built on one machine can
+a remote **backend** (for example an S3 bucket or a container registry) so a task built on one machine can
 be restored on another - ideal for sharing results between developers and CI runs.
 
 ## Which caching mechanism?
@@ -71,7 +71,7 @@ The method decides whether the source files of a task changed since the last run
 * `checksum` (default) - compares the content checksum of the source files.
 * `modify-date` - compares the last modification date of the source files. Faster
   on large folders, but less precise.
-* `none` - never skips the task, the commands run every time.
+* `none` - never skips the task; the commands run every time.
 
 ## Backends
 

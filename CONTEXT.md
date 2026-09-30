@@ -29,7 +29,7 @@ A sha1 hash of the task *definition* — command, image, env, mounts, shell, `sr
 _Avoid_: cache id, task hash
 
 **Cache backend**:
-A store that holds task output artifacts addressed by task id + state key (`local`, `s3`, and — proposed — `registry`).
+A store that holds task output artifacts addressed by task id + state key (`local`, `s3` and `registry`).
 _Avoid_: cache store, cache provider
 
 **Local cache**:
@@ -37,7 +37,7 @@ The on-machine cache backend a build reads and writes during a run. The default 
 _Avoid_: cache dir, local store, working cache
 
 **Remote backend**:
-An off-machine cache backend (S3, registry) that a build **never** touches directly. Only `cache pull`/`cache push` sync entries between the local cache and a remote backend, named via `--remote`.
+An off-machine cache backend (S3, registry). `cache pull`/`cache push` sync entries between the local cache and a remote backend named via `--remote`, so the build itself does no network I/O. (A task can still use a remote backend as its own cache — the 1.6 inline mode — in which case the build pulls and pushes it directly.)
 _Avoid_: remote cache, origin cache
 
 ### Remote includes

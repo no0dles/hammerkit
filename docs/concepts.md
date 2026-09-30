@@ -62,7 +62,7 @@ installed on the machine. See [run a task in a container](task/container.md).
 
 * **`src`** — the input files/folders a task reads. They drive
   [caching](task/caching.md): unchanged `src` lets a task be skipped.
-* **`generates`** — the output files/folders a task produces. These are what gets
+* **`generates`** — the output files/folders a task produces. This is what gets
   cached, [stored and restored](cli/store-restore.md).
 * **`mounts`** — extra paths a *container* task needs that aren't sources or
   outputs (config files, caches). See [container](task/container.md#adding-mounts).

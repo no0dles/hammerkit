@@ -1,5 +1,5 @@
 ---
-description: Runs the task in your build file.
+description: Run the tasks in your build file.
 ---
 
 # Execute
@@ -19,15 +19,15 @@ hammerkit example
 Tasks can be executed by matching labels or filtered by label values.
 
 ### By matching labels
-The `-f type=build` will only execute tasks that have the given label value.
-Dependent tasks do not need to fulfill the label requirement.
+`-f type=build` only executes tasks that have the given label value.
+Their dependencies don't need to match the label.
 ```bash
 hammerkit -f type=build
 ```
 
 ### By excluding labels
-The `-e build=ios` will exclude tasks that have the given label value.
-If the task has no matching label, but any of the dependency tasks has a match, the task will be excluded as well.
+`-e build=ios` excludes tasks that have the given label value.
+A task without a matching label is excluded as well if any of its dependencies matches.
 ```bash
 hammerkit -e build=ios
 ```

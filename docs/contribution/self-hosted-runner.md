@@ -7,7 +7,7 @@ The integration test job ([.github/workflows/integration.yaml](../../.github/wor
 Ubuntu 22.04 or 24.04. Install:
 
 - **Docker Engine** (rootful). The runner connects via the local socket; no special config.
-- **Node 20**. Matches the `actions/setup-node@v4` step.
+- **Node 24**. Matches the `actions/setup-node@v4` step.
 - **kubectl** matching the k3d cluster version.
 - **k3d** (`curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash`).
 

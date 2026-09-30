@@ -4,7 +4,7 @@ description: A summary of all build file configuration options
 
 # Build file
 
-The build file is a yaml file in the root of your project. It contains a list of [tasks](../task/README.md) which can be executed over the [cli](../cli/README.md).&#x20;
+The build file is a YAML file in the root of your project. It contains a list of [tasks](../task/README.md) that can be executed from the [CLI](../cli/README.md).
 
 Hammerkit looks for the build file by name, in this order:
 
@@ -34,7 +34,7 @@ includes:
 ```
 {% endcode %}
 
-For more detail about the structure of the build file, checkout the following sections.
+For more detail about the structure of the build file, check out the following sections.
 
 {% content-ref url="environment-variables.md" %}
 [environment-variables.md](environment-variables.md)

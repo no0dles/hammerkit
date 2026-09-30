@@ -1,13 +1,13 @@
 ---
 description: >-
-  A task can be contained inside a container. This improves
-  cross-platform support for your build files and reduce the list locally
-  installed tools that are required to run your tasks.
+  A task can run inside a container. This improves cross-platform support for
+  your build files and reduces the number of locally installed tools required
+  to run your tasks.
 ---
 
 # Container
 
-Every task can run inside a container. Everything that's needed is to set an `image` property on your task.
+Every task can run inside a container. All you need is to set an `image` property on your task.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -19,11 +19,11 @@ tasks:
 ```
 {% endcode %}
 
-This example will run an `npm install` command inside a container with the image `node:24-alpine`. But the container has no access to the local files, nothing will get installed. In order to access your project files sources, generates and mounts can be used.
+This example runs `npm install` inside a container with the image `node:24-alpine`. However, the container has no access to your local files, so nothing gets installed. To give it access to your project files, use sources, generates and mounts.
 
 ### Adding source files/folders
 
-All source files and folders will be mounted on container start and can be accessed inside the container.
+All source files and folders are mounted when the container starts and can be accessed inside it.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -40,7 +40,7 @@ tasks:
 
 ### Adding output files/folders
 
-The installed node\_modules will be saved inside the container file system, if those files and folders are needed after the end of the execution a `generate` property should be added.
+The installed node\_modules are written to the container's file system. If those files and folders are needed after the task has finished, declare them under `generates`.
 
 ```yaml
 tasks:
@@ -57,7 +57,7 @@ tasks:
 
 ### Adding mounts
 
-For other files and folders that do not belong into sources/generates mounts can be used. They can be relative, absolute or relative to the user directory.
+For other files and folders that are neither sources nor generates, use mounts. They can be relative, absolute or relative to your home directory.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -97,12 +97,12 @@ paths in `cmds` (`node_modules/.bin/tsc`, `./script.sh`) behave just like they w
 when running on the host.
 
 {% hint style="info" %}
-Each source and generate of all dependencies get mounted into the container automatically. This behavior should reduce long lists of mounts and should help with the consistency of tasks.&#x20;
+The sources and generates of all dependencies are mounted into the container automatically. This avoids long lists of mounts and keeps tasks consistent.
 {% endhint %}
 
 ### Execution shell
 
-Each command will be executed per default within a `sh` shell. The shell can also be overridden by adding a `shell` property to the task.
+By default, each command runs in a `sh` shell. Override it with a `shell` property on the task.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

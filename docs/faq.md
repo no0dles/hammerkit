@@ -32,11 +32,13 @@ also be skipped. A task with no `src`, or one that depends on a task with no `sr
 runs every time — hammerkit can't prove it's up to date. Give each task accurate
 `src`/`generates`. See [caching](task/caching.md).
 
-## I edited a command (or bumped the image) but the task is still skipped.
+## Why did my task rebuild? / Why was it skipped?
 
-The cache key is built from the `src` files and dependencies only — **not** from
-`cmds`, `image` or `envs`. While iterating on the commands themselves, force a run
-with `--cache none` or [`hammerkit clean`](cli/clean.md). See
+Run [`hammerkit explain <task>`](cli/explain.md): it names the input that caused a
+miss — a changed `src` file, a changed dependency, or a changed task definition
+(`cmds`, `image`, `envs`, `mounts`, …). Editing a command or bumping an image
+invalidates the cache just like a source change. To force a run regardless, use
+`--cache none` or [`hammerkit clean`](cli/clean.md). See
 [what invalidates a key](task/caching.md#what-gets-cached-and-what-invalidates-it).
 
 ## No cache hits in CI, even though the code didn't change.

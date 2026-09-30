@@ -1,6 +1,6 @@
 # Kubernetes service
-Kubernetes services can be used to access resources from kubernetes clusters in your tasks.
-Allowing to share resources on a remote machine or run tasks against test/staging/production environments.
+Kubernetes services give your tasks access to resources in Kubernetes clusters.
+This lets you share resources on a remote machine or run tasks against test, staging or production environments.
 
 {% hint style="info" %}
 To run your own tasks and services **on** a cluster instead of forwarding existing
@@ -48,7 +48,7 @@ used without passing `--env`.
 
 {% hint style="info" %}
 Port-forwarding no longer requires the `kubectl` binary to be installed. Hammerkit
-forwards ports directly through the kubernetes client.
+forwards ports directly through the Kubernetes client.
 {% endhint %}
 
 ## Service fields

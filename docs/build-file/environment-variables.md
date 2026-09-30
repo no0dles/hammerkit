@@ -1,14 +1,14 @@
 ---
 description: >-
-  Environment variables can be used from three different sources. Shell
-  environment, .env files or predefined values inside the build file.
+  Environment variables come from three sources: the shell environment, .env
+  files and values defined in the build file.
 ---
 
 # Environment Variables
 
 ## Shell environment
 
-Environment variables which are available from the shell environment get passed into the command before execution.
+Variables from the shell environment are passed to a command when the task declares them:
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -22,12 +22,12 @@ tasks:
 {% endcode %}
 
 {% hint style="info" %}
-Each environment variable that is used, should be specified in the `envs` of the task. Hammerkit ensures that the environment variable is defined, otherwise will throw an error to prevent undesired behavior.
+Every environment variable a task uses should be declared in its `envs`. Hammerkit checks that each one is defined and otherwise fails with an error, to prevent undesired behavior.
 {% endhint %}
 
 ## .env file
 
-Environment variables can be defined in the .env file. Those are recommended for secret values that should not be committed nor public.
+Environment variables can be defined in a `.env` file. This is recommended for secret values that should neither be committed nor made public.
 
 {% code title=".env" %}
 ```
@@ -69,7 +69,7 @@ tasks:
 {% endcode %}
 
 {% hint style="warning" %}
-The scope of the defined environment variables are fixed to the build file they are defined in. Neither [referenced](references.md) nor [included](includes.md) tasks will have access to those.
+Variables defined in a build file are scoped to that file. Neither [referenced](references.md) nor [included](includes.md) tasks have access to them.
 {% endhint %}
 
 ## Precedence
@@ -107,7 +107,7 @@ from a single value:
 {% code title=".hammerkit.yaml" %}
 ```yaml
 envs:
-  NODE_VERSION: '22'
+  NODE_VERSION: '24'
 
 tasks:
   build:
@@ -120,8 +120,8 @@ tasks:
 {% endcode %}
 
 {% hint style="warning" %}
-Only the whole-value `$NAME` form is recognised in `envs` (no `${NAME}` braces, no
+Only the whole-value `$NAME` form is recognized in `envs` (no `${NAME}` braces, no
 inline `prefix-$NAME`, no default values). Field substitution matches `$NAME`
 anywhere in the string and is case-insensitive. A value defined directly in `envs`
-(like `NODE_VERSION: '22'`) is what gets substituted into fields such as `image`.
+(like `NODE_VERSION: '24'`) is what gets substituted into fields such as `image`.
 {% endhint %}

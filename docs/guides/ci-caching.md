@@ -17,7 +17,8 @@ never hits the cache on a fresh runner. See [caching](../task/caching.md#checksu
 
 ## Option A — a remote cache backend (recommended)
 
-Point the built-in `default` cache at an S3-compatible bucket. Hammerkit then
+Point the built-in `default` cache at an S3-compatible bucket (or a container
+registry — see [caches](../build-file/caches.md#registry)). Hammerkit then
 **pulls** a task's result before running it and **pushes** the result after — no
 cache scripting in your pipeline at all.
 
@@ -128,7 +129,7 @@ jobs:
 | Pipeline wiring | None — automatic pull/push | You add `restore`/`store` steps + a cache step |
 | Granularity | Per task | One directory for the whole run |
 | Shared with local dev | Yes (same bucket) | No (CI cache only) |
-| Needs object storage | Yes | No |
+| Needs a bucket or registry | Yes | No |
 
 A remote backend is the lower-maintenance choice and is shared with local
 development. If you already rely on your CI's cache and don't want a bucket,
