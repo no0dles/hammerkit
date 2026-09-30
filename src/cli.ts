@@ -42,6 +42,8 @@ export interface CliExecOptions {
   // Restore from cache backends but never push to them — for untrusted runners
   // (e.g. agent sandboxes) that may read the shared cache but must not write it.
   cacheReadOnly: boolean
+  // default maximum execution time in ms for tasks without their own timeout
+  timeout: number | null
 }
 
 export interface CliPackageOptions {
@@ -111,6 +113,7 @@ export class Cli {
             type,
             explain: options?.explain ?? false,
             cacheReadOnly: options?.cacheReadOnly ?? false,
+            timeout: options?.timeout ?? null,
           })
         }
 

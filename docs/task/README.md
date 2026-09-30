@@ -40,6 +40,7 @@ A task is built from a small, fixed set of fields:
 | `envs` | [Environment variables](../build-file/environment-variables.md) for the commands. |
 | `labels` | Group/filter tasks (see [labels](../labels/README.md)). |
 | `cache` | The [caching](caching.md) method/backend for this task. |
+| `timeout` | Maximum execution time, e.g. `10m` (see [timeouts](#timeouts)). |
 
 ## Source files (`src`)
 Tasks that depend on input files should declare them under `src`.
@@ -105,4 +106,31 @@ tasks:
         resetOnChange: true
     cmds:
       - node bundle.js
+```
+
+## Timeouts
+A task that hangs — a deadlocked test, a stuck network call — would otherwise block
+the run until your CI provider kills the job. Set a `timeout` and hammerkit aborts
+the task once it runs longer, fails it with `timed out after <duration>`, and stops
+the run like any other failure.
+
+```yaml
+tasks:
+  e2e:
+    image: cypress/included:13.15.0
+    timeout: 15m
+    cmds:
+      - cypress run
+```
+
+Durations are written as a number plus a unit: `ms`, `s`, `m`, `h` or `d`, and can
+be combined (`1h30m`). A timed-out task is cleaned up the same way as a cancelled
+one — its container or Kubernetes job is removed — and never writes a cache entry.
+The timeout does not affect the task's cache key.
+
+To give every task a default, pass `--timeout` to [`run`](../cli/execute.md) or
+[`up`](../cli/up.md); a task's own `timeout` takes precedence.
+
+```bash
+hammerkit run --timeout 30m
 ```

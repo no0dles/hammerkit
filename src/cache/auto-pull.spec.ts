@@ -77,6 +77,7 @@ describe('checkCacheState auto-pull', () => {
         labels: {},
         shell: '/bin/sh',
         continuous: false,
+        timeout: null,
         caching: resolved,
         description: null,
         scope: {} as any,

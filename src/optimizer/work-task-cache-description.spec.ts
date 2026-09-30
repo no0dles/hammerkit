@@ -16,6 +16,7 @@ const baseTask = {
   shell: '/bin/sh',
   caching: {} as any,
   continuous: false,
+  timeout: null,
 }
 
 describe('getWorkTaskCacheDescription', () => {

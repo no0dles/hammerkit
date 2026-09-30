@@ -51,6 +51,7 @@ These options are shared by the task-running commands ([run](execute.md),
 | `--env <name>` | – | Run against a declared [environment](../task/kubernetes.md) (e.g. a cluster). |
 | `-l, --log <mode>` | `interactive` (local) / `live` (CI) | `interactive`, `live` or `grouped`. |
 | `--cache <method>` | `checksum` | `checksum`, `modify-date` or `none`. See [caching](../task/caching.md). |
+| `--timeout <duration>` | – | Default [timeout](../task/README.md#timeouts) for tasks without their own. |
 
 Label filters are always `key=value`; a key-only `-f dev` is rejected.
 

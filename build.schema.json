@@ -167,6 +167,9 @@
                   "continuous": {
                     "type": "boolean"
                   },
+                  "timeout": {
+                    "type": "string"
+                  },
                   "image": {
                     "type": "string"
                   },
@@ -221,6 +224,9 @@
                   },
                   "continuous": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/continuous"
+                  },
+                  "timeout": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                   },
                   "platform": {
                     "type": "object",

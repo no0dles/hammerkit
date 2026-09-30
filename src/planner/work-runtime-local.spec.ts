@@ -35,6 +35,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       labels: {},
       shell: '/bin/sh',
       continuous: false,
+      timeout: null,
       caching: {
         name: 'none',
         method: 'none',

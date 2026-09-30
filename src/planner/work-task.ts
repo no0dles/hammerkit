@@ -25,6 +25,8 @@ export interface BaseWorkTask {
   shell: string
   caching: ResolvedCache
   continuous: boolean
+  // maximum execution time in ms, null for none
+  timeout: number | null
 }
 
 export interface WorkTaskGenerate {

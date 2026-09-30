@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.7.0)
 
 **Input**: Real-world feedback — a stuck test can hang forever; the current mitigation is the test framework's own `--test-timeout`. A hammerkit-native, runtime-agnostic task timeout would make any stuck task fail cleanly instead of hanging, regardless of what runs inside it.
 

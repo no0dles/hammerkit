@@ -186,6 +186,7 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
 
   task.schema.shell = task.schema.shell ?? extend.schema.shell
   task.schema.cache = task.schema.cache ?? extend.schema.cache
+  task.schema.timeout = task.schema.timeout ?? extend.schema.timeout
 
   task.schema.cmds = extendArray(task.schema.cmds, extend.schema.cmds)
   task.schema.src = extendArray(task.schema.src, extend.schema.src)

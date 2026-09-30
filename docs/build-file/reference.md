@@ -41,6 +41,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `extend` | string | [Base task](../task/extending.md) to inherit from (`prefix:name`). |
 | `shell` | string | Shell used to run `cmds` (default `/bin/sh`). |
 | `continuous` | boolean | Task [watches itself](../task/watching.md); hammerkit won't restart it in watch mode. |
+| `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](../task/README.md#timeouts); the task fails when exceeded. |
 
 **Container task** adds:
 

@@ -11,6 +11,8 @@ import { watchLoop } from './watch-loop'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
+import { formatDuration } from '../utils/units'
+import { listenOnAbort } from '../utils/abort-event'
 import { isProvablyCacheable } from './scheduler/state-key'
 
 async function pushToBackend(
@@ -33,6 +35,31 @@ async function pushToBackend(
     work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)
   } catch (e) {
     work.status.write('warn', `${work.name} failed to push to cache "${resolved.name}": ${getErrorMessage(e)}`)
+  }
+}
+
+// An abort signal that follows `parent` and additionally fires after `timeout`
+// ms, so a task deadline reuses the runtimes' existing abort/cleanup path.
+function withDeadline(parent: AbortSignal, timeout: number | null) {
+  const controller = new AbortController()
+  let expired = false
+  const parentListener = listenOnAbort(parent, () => controller.abort())
+  const timer =
+    timeout === null
+      ? null
+      : setTimeout(() => {
+          expired = true
+          controller.abort()
+        }, timeout)
+  return {
+    signal: controller.signal,
+    expired: () => expired,
+    clear() {
+      if (timer) {
+        clearTimeout(timer)
+      }
+      parentListener.close()
+    },
   }
 }
 
@@ -97,13 +124,33 @@ export async function executeWorkTask(
           started,
         })
 
-        await work.runtime.execute(environment, {
-          cache: cacheState,
-          abort,
-          stateKey: cacheState.stateKey,
-          state: work.state,
-          daemon: options.daemon,
-        })
+        const timeout = work.data.timeout ?? options.timeout
+        const deadline = withDeadline(abort, timeout)
+        try {
+          await work.runtime.execute(environment, {
+            cache: cacheState,
+            abort: deadline.signal,
+            stateKey: cacheState.stateKey,
+            state: work.state,
+            daemon: options.daemon,
+          })
+        } finally {
+          deadline.clear()
+        }
+
+        if (deadline.expired() && timeout !== null) {
+          // the runtime saw an abort and cleaned up; report it as a failure
+          // (never a cancellation) and stop the run like any failing task
+          work.state.set({
+            type: 'error',
+            stateKey: cacheState.stateKey,
+            errorMessage: `timed out after ${formatDuration(timeout)}`,
+          })
+          if (!options.watch) {
+            environment.abortCtrl.abort()
+          }
+          return
+        }
 
         checkForAbort(abort)
 

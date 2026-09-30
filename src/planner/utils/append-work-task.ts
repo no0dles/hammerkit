@@ -19,6 +19,7 @@ import { buildEnvironmentVariables } from '../../environment/replace-env-variabl
 import { lazyResolver } from '../../executer/lazy-resolver'
 import { getWorkTaskRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
+import { parseDuration } from '../../utils/units'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -76,6 +77,7 @@ function parseTask(
     caching: resolveCache(task.schema.cache ?? null, context.caches, task.relativeName),
     shell: task.schema.shell ? templateValue(task.schema.shell, envs) : '/bin/sh',
     continuous: task.schema.continuous ?? false,
+    timeout: task.schema.timeout ? parseDuration(task.schema.timeout) : null,
   }
 
   if (isBuildFileContainerTaskSchema(task.schema)) {

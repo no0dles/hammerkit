@@ -41,5 +41,6 @@ Options:
   -l, --log <mode>            log mode (choices: "interactive", "live", "grouped")
   --cache <method>            caching method to compare (choices: "checksum", "modify-date", "none")
   --cache-read-only           restore from cache backends but never push to them (or set HAMMERKIT_CACHE_READ_ONLY=1)
+  --timeout <duration>        fail tasks without their own timeout after this long (e.g. 10m)
   -h, --help                  display help for command
 ```
