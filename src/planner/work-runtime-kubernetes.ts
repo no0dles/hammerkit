@@ -1,3 +1,4 @@
+import { AbortError } from '../executer/abort'
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
 import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
@@ -16,7 +17,7 @@ import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-s
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
-import { awaitJobState } from '../kubernetes/await-running-state'
+import { awaitJobCompletion, deleteJob } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureIngress } from '../kubernetes/ensure-ingress'
@@ -108,11 +109,16 @@ export function kubernetesTaskRuntime(
           const pod = await apply(instance, spec)
 
           if (!pod.status?.succeeded) {
-            await awaitJobState(instance, kubernetes, spec.metadata.name)
+            await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
           }
           task.status.write('debug', 'pod completed')
-          await instance.batchApi.deleteNamespacedJob(podName, kubernetes.namespace)
+          await deleteJob(instance, kubernetes, podName)
         } catch (e) {
+          if (e instanceof AbortError) {
+            options.state.set({ stateKey: options.stateKey, type: 'canceled' })
+            return
+          }
+          await deleteJob(instance, kubernetes, podName).catch(() => undefined)
           options.state.set({
             stateKey: options.stateKey,
             type: 'error',
