@@ -7,21 +7,6 @@ order may change as real-world feedback comes in.
 
 ## Next
 
-### Cache retention
-Remote caches grow without bound once every CI run and workspace pushes to them.
-`hammerkit cache ls` / `cache prune` will report cache usage and evict entries by
-age, last use or total size, with an optional automatic retention policy per cache.
-
-### Skip dependencies of cached tasks
-When a task is a cache hit, its dependencies currently still run if their own
-results are missing. Hammerkit will skip dependencies whose outputs nothing in the
-run actually needs, so a cached e2e job doesn't rebuild the app it was tested
-against.
-
-### Task timeouts
-A `timeout` on a task, so a hanging test fails cleanly on every runtime instead of
-blocking a CI job until the provider kills it.
-
 ### Secrets
 First-class secrets for tasks and services — injected at runtime from the host
 environment, a file or a secret manager, never stored in the build file and redacted
@@ -57,9 +42,12 @@ CI, so work done in one place is never repeated in another.
 
 {% hint style="success" %}
 Shipped in 1.7.0: cache keys independent of the checkout location, the `registry`
-cache backend, [`cache pull` / `cache push`](../cli/cache.md), read-only mode, and
-[`explain`](../cli/explain.md), [`graph`](../cli/graph.md), `run --dry-run` and the
-build summary. See the [release blog](../release-blog/release-1.7.0.md) and
+cache backend, [`cache pull` / `cache push`](../cli/cache.md), read-only mode,
+[cache retention](../build-file/caches.md#retention), skipping
+[dependencies of cached tasks](../task/dependencies.md#dependencies-of-cached-tasks),
+[task timeouts](../task/README.md#timeouts), and [`explain`](../cli/explain.md),
+[`graph`](../cli/graph.md), `run --dry-run` and the build summary. See the
+[release blog](../release-blog/release-1.7.0.md) and
 [agents, workspaces and CI](../guides/agents-and-ci.md).
 {% endhint %}
 

@@ -63,6 +63,63 @@ including all dependencies. That makes it the fastest way to set up a new
 workspace. `cache push` publishes results even when they were never written to
 the local cache. Both are safe to re-run. See [cache pull / push](../cli/cache.md).
 
+## Don't rebuild what nothing needs
+
+A cache hit used to save only the task itself. When CI pulled the result of an e2e
+job, the e2e task was skipped — but the app build it depends on still ran, because
+that build's own result wasn't on the machine. Nothing in the run used it.
+
+Dependencies now run only when a task that needs them has to run. A task pulled into
+the run purely as a dependency waits until something depending on it misses the
+cache; if everything depending on it is a hit, it is **skipped** and shows up as
+such in the build summary. The decision follows the real cache outcome rather than a
+prediction, so a restore that fails still gets its dependencies built. Tasks you
+name or select with labels always run, and `--no-skip-deps` restores the old
+"run the whole graph" behavior. See
+[dependencies of cached tasks](../task/dependencies.md#dependencies-of-cached-tasks).
+
+## Keep shared caches small
+
+Once every CI run and every workspace pushes to a shared cache, it grows without
+bound. Caches can now declare a **retention** policy:
+
+```yaml
+caches:
+  default:
+    method: checksum
+    backend:
+      type: local
+    retention:
+      maxAge: 30d
+      maxSize: 20Gi
+      keepPerTask: 3
+```
+
+`hammerkit cache ls` shows what a cache holds, and `hammerkit cache prune` applies
+the policy (or one given on the command line, with `--dry-run` to preview). A local
+cache with a policy prunes itself after every successful run; remote caches are only
+pruned when you name them with `--remote`. The local cache tracks when each entry
+was last used, so what you still use stays. See
+[retention](../build-file/caches.md#retention).
+
+## Timeouts
+
+A hanging test used to block a CI job until the provider killed it. Tasks can now
+declare a `timeout` (and `--timeout` sets a default for all of them):
+
+```yaml
+tasks:
+  e2e:
+    image: cypress/included:13.15.0
+    timeout: 15m
+    cmds:
+      - cypress run
+```
+
+A task that runs longer fails with `timed out after 15m`, its process, container or
+Kubernetes job is cleaned up, and nothing is written to the cache. See
+[timeouts](../task/README.md#timeouts).
+
 ## Agents, workspaces and CI share one cache
 
 Put together, these change how CI and coding agents can work together. An agent
@@ -118,12 +175,16 @@ Running the new setup end to end surfaced several bugs, all fixed in this releas
 * **Tasks without `src` were cached after one run.** As documented, a task without
   `src` — and everything depending on it — now always runs, since hammerkit can't
   prove it's up to date.
+* **Tasks on Kubernetes didn't wait for their jobs.** A task running as a
+  Kubernetes job was reported as completed as soon as the job was created, and a
+  failing job was never detected. Tasks now wait for the job, fail when it fails,
+  and delete it when the run is cancelled or times out.
 * **S3 errors looked like cache misses.** An unreachable bucket or bad credentials
   are now reported as errors by `cache pull`/`push`; builds still degrade to a
   miss with a warning.
 
 ## Next release
 
-Next up are cache retention (`cache ls` / `cache prune` and automatic eviction, so
-shared caches don't grow without bound), skipping dependencies of cached tasks,
-task timeouts and secrets. See the [roadmap](../contribution/roadmap.md).
+Next up are first-class secrets for tasks and services, and container runtime
+options such as `--shm-size` for browser-based tests. See the
+[roadmap](../contribution/roadmap.md).

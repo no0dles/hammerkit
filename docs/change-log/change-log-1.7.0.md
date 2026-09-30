@@ -10,6 +10,10 @@ see [agents, workspaces and CI](../guides/agents-and-ci.md).
 - **Tasks without `src` always run.** A task with no `src` — and every task depending
   on one — runs on every invocation, as documented. Earlier versions cached such a
   task after its first run.
+- **Dependencies of cached tasks are skipped.** A task pulled into a run only as a
+  dependency no longer runs when every task depending on it is a cache hit, so its
+  outputs (e.g. an exported `dist`) aren't produced. Request the task explicitly or
+  pass `--no-skip-deps` to run the whole graph as before.
 - **Explicit `cache pull`/`push` fail on backend errors.** The `s3` backend now
   distinguishes a missing entry from a transport or credential error. Builds are
   unaffected: they still treat a backend error as a cache miss with a warning.
@@ -25,6 +29,15 @@ see [agents, workspaces and CI](../guides/agents-and-ci.md).
 - Read-only cache mode: `--cache-read-only` on `run`/`up`, or
   `HAMMERKIT_CACHE_READ_ONLY=1`, restores from cache backends but never writes to
   them; `cache push` refuses to run.
+- Cache retention: a `retention` block on caches (`maxAge`, `maxSize`,
+  `keepPerTask`), `hammerkit cache ls` and `hammerkit cache prune` (with `--dry-run`).
+  Local caches with a policy are pruned automatically after every successful run;
+  remote caches only with `--remote`. See [retention](../build-file/caches.md#retention).
+- Skipping dependencies of cached tasks, with `--no-skip-deps` to opt out. See
+  [dependencies of cached tasks](../task/dependencies.md#dependencies-of-cached-tasks).
+- Task timeouts: `timeout` on a task and `--timeout` as a default on `run`/`up`. A
+  timed-out task fails, is cleaned up and writes no cache entry. See
+  [timeouts](../task/README.md#timeouts).
 - `hammerkit explain [task]` (with `--json`) reports whether each task is a cache hit
   or miss and which input caused a miss; `run --explain` prints the cause inline. See
   [explain](../cli/explain.md).
@@ -47,6 +60,9 @@ see [agents, workspaces and CI](../guides/agents-and-ci.md).
   don't start their services.
 
 ## Fixed
+- Tasks running on Kubernetes now wait for their job to finish and fail when it
+  fails. Previously a task was reported as completed as soon as its job was created.
+  Cancelling a run (or a timeout) now deletes the running job.
 - Restoring a **container task** from a cache backend or `store`/`restore` now writes
   the outputs into the task's volumes. Previously they were written into a throwaway
   container and lost, so the task reported a cache hit with empty outputs.
