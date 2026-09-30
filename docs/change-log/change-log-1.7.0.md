@@ -15,3 +15,8 @@
 
 ## Fixed
 - Restoring a **container task** from a cache backend or `store`/`restore` now writes the outputs into the task's volumes. Previously they were written into a throwaway container and lost, so the task reported a cache hit with empty outputs.
+- A task that needs a service no longer fails the run when it is a cache hit; the service is not started at all.
+- A needed service that fails to start (bad image, port already in use) now fails the run immediately instead of hanging forever.
+- `cache push` uploads outputs that are current in the checkout even when they were never stored in the local cache.
+
+See the new guide [Agents, workspaces and CI](../guides/agents-and-ci.md) for the recommended setup.

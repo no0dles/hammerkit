@@ -27,6 +27,7 @@
 * [Guides](docs/guides/local-vs-container.md)
   * [Local vs container tasks](docs/guides/local-vs-container.md)
   * [Caching strategy in CI](docs/guides/ci-caching.md)
+  * [Agents, workspaces and CI](docs/guides/agents-and-ci.md)
   * [Services & networking](docs/guides/services-networking.md)
   * [Monorepo layout](docs/guides/monorepo.md)
   * [Development workflow](docs/guides/development-workflow.md)
