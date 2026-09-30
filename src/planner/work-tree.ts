@@ -14,4 +14,8 @@ export interface WorkTree {
   // `cache pull`/`cache push` to select a backend by name (`--remote`), even one
   // no task references. Optional so synthetic/test work trees need not supply it.
   caches?: CacheCatalog
+  // Names of the tasks the run was asked for (by name or label), as opposed to
+  // tasks only pulled in as dependencies. Only the latter may be skipped when
+  // nothing needing them has to run. Undefined means every task is requested.
+  requested?: string[]
 }

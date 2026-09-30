@@ -37,6 +37,8 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     tasks: {},
     caches: context.caches,
   }
+  const requested: string[] = []
+  filteredWorkTree.requested = requested
 
   for (const [envName, env] of Object.entries(context.environments)) {
     if (envName === scope.environmentName) {
@@ -48,6 +50,7 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
   for (const task of Object.values(context.tasks)) {
     const item = appendWorkTask(workTree, task.cwd, task, environment, context)
     if (matchesTaskWorkScope(item, scope)) {
+      requested.push(item.name)
       applyTask(filteredWorkTree, item)
     }
   }

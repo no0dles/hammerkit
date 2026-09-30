@@ -33,6 +33,29 @@ export async function awaitRequirement(
   return Promise.race([ready, allDone])
 }
 
+// Resolve true once any dependent is `ready` — it missed the cache and is about
+// to run, so it needs this task's outputs — and false once every dependent
+// finished without needing it (all cache hits, or skipped themselves).
+export async function awaitDependentNeed(
+  dependents: WorkItemState<WorkTask, TaskState>[],
+  abort: AbortSignal
+): Promise<boolean> {
+  const ready = Promise.race(
+    dependents.map((dependent) => awaitState('await-dependent', dependent.state, (s) => s.type === 'ready', abort))
+  ).then(() => true)
+  const allDone = Promise.all(
+    dependents.map((dependent) =>
+      awaitState(
+        'await-dependent-done',
+        dependent.state,
+        (s) => s.type === 'completed' || s.type === 'error' || s.type === 'crash' || s.type === 'canceled',
+        abort
+      )
+    )
+  ).then(() => false)
+  return Promise.race([ready, allDone])
+}
+
 export async function awaitNoRequirements(svc: WorkItemState<WorkService, ServiceState>, abort: AbortSignal) {
   await Promise.all(
     svc.requiredBy.map((required) => {

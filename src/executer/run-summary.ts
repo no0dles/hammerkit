@@ -5,7 +5,7 @@ import { TaskState } from './scheduler/task-state'
 import { Environment } from './environment'
 import { printTitle } from '../log'
 
-export type TaskSummaryStatus = 'executed' | 'cached' | 'failed' | 'cancelled'
+export type TaskSummaryStatus = 'executed' | 'cached' | 'skipped' | 'failed' | 'cancelled'
 
 export interface TaskSummary {
   taskId: string
@@ -23,6 +23,8 @@ export interface RunSummary {
   tasks: TaskSummary[]
   executed: number
   cached: number
+  // dependencies not run because every task needing them was a cache hit
+  skipped: number
   failed: number
   cancelled: number
   // cached / (executed + cached); 0 when no task ran.
@@ -34,7 +36,7 @@ export interface RunSummary {
 function statusOf(state: TaskState): TaskSummaryStatus {
   switch (state.type) {
     case 'completed':
-      return state.cached ? 'cached' : 'executed'
+      return state.skipped ? 'skipped' : state.cached ? 'cached' : 'executed'
     case 'error':
     case 'crash':
       return 'failed'
@@ -64,6 +66,7 @@ export function summarizeRun(workTree: WorkTree, totalDuration: number): RunSumm
 
   const executed = tasks.filter((t) => t.status === 'executed').length
   const cached = tasks.filter((t) => t.status === 'cached').length
+  const skipped = tasks.filter((t) => t.status === 'skipped').length
   const failed = tasks.filter((t) => t.status === 'failed').length
   const cancelled = tasks.filter((t) => t.status === 'cancelled').length
   const ran = executed + cached
@@ -72,6 +75,7 @@ export function summarizeRun(workTree: WorkTree, totalDuration: number): RunSumm
     tasks,
     executed,
     cached,
+    skipped,
     failed,
     cancelled,
     cacheHitRatio: ran === 0 ? 0 : cached / ran,
@@ -93,6 +97,8 @@ function colorStatus(status: TaskSummaryStatus): string {
       return colors.cyan(label)
     case 'cached':
       return colors.green(label)
+    case 'skipped':
+      return colors.grey(label)
     case 'failed':
       return colors.red(label)
     case 'cancelled':
@@ -125,10 +131,11 @@ export function printRunSummary(environment: Environment, summary: RunSummary): 
   }
 
   const ratio = Math.round(summary.cacheHitRatio * 100)
+  const skippedSuffix = summary.skipped > 0 ? `, ${summary.skipped} skipped` : ''
   const failedSuffix = summary.failed > 0 ? `, ${summary.failed} failed` : ''
   const cancelledSuffix = summary.cancelled > 0 ? `, ${summary.cancelled} cancelled` : ''
   environment.stdout.write(
-    `  ${summary.executed} executed, ${summary.cached} cached${failedSuffix}${cancelledSuffix} ` +
+    `  ${summary.executed} executed, ${summary.cached} cached${skippedSuffix}${failedSuffix}${cancelledSuffix} ` +
       `(${ratio}% cache hit), ${formatDuration(summary.totalDuration)} total\n`
   )
 }

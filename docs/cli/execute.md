@@ -48,6 +48,7 @@ Options:
   --dry-run                   print the execution plan with predicted cache hits/misses without running (default: false)
   --cache-read-only           restore from cache backends but never push to them (or set HAMMERKIT_CACHE_READ_ONLY=1)
   --timeout <duration>        fail tasks without their own timeout after this long (e.g. 10m)
+  --no-skip-deps              run dependencies even when every task needing them is a cache hit
   -h, --help                  display help for command
 ```
 
@@ -70,6 +71,9 @@ Summary:
   install  cached     0ms
   1 executed, 2 cached (67% cache hit), 4.7s total
 ```
+
+A dependency that wasn't needed because every task depending on it was a cache hit
+is listed as `skipped` — see [dependencies of cached tasks](../task/dependencies.md#dependencies-of-cached-tasks).
 
 `--no-summary` hides it; `--summary-json` prints it as JSON on stdout (and nothing
 else), for CI dashboards or agents. With `--explain`, every rebuilt task also

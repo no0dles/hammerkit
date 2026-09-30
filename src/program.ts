@@ -534,6 +534,7 @@ export async function getProgram(
           parseDuration
         )
       )
+      .addOption(new Option('--no-skip-deps', 'run dependencies even when every task needing them is a cache hit'))
       .action(async (task, options) => {
         try {
           // For machine-readable JSON, suppress the human progress logger (which
@@ -570,6 +571,7 @@ export async function getProgram(
             explain: options.explain,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            skipDeps: options.skipDeps !== false,
           })
 
           // Reporting only: the summary never changes the exit code or behavior.

@@ -44,6 +44,9 @@ export interface CliExecOptions {
   cacheReadOnly: boolean
   // default maximum execution time in ms for tasks without their own timeout
   timeout: number | null
+  // Skip dependencies that were not requested when every task needing them is
+  // a cache hit (default). Off runs the whole dependency graph.
+  skipDeps: boolean
 }
 
 export interface CliPackageOptions {
@@ -114,6 +117,7 @@ export class Cli {
             explain: options?.explain ?? false,
             cacheReadOnly: options?.cacheReadOnly ?? false,
             timeout: options?.timeout ?? null,
+            skipDeps: options?.skipDeps ?? true,
           })
         }
 

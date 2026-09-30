@@ -124,9 +124,13 @@ export async function printWorkTreeResult(schedulerState: WorkTree, env: Environ
       maxNodeNameLength
     )} - ${getStateText(task.state.current)}`
     if (task.state.current.type === 'completed') {
-      message += ` in ${task.state.current.duration}ms`
-      if (task.state.current.cached) {
-        message += ' [CACHED]'
+      if (task.state.current.skipped) {
+        message += ' [SKIPPED]'
+      } else {
+        message += ` in ${task.state.current.duration}ms`
+        if (task.state.current.cached) {
+          message += ' [CACHED]'
+        }
       }
     }
     if (task.state.current.type === 'crash') {
@@ -291,9 +295,13 @@ export function writeWorkTreeStatus(schedulerState: WorkTree, env: Environment, 
         message += ` ${currentMessage.message}`
       }
     } else if (task.state.current.type === 'completed') {
-      message += ` in ${task.state.current.duration}ms`
-      if (task.state.current.cached) {
-        message += ' [CACHED]'
+      if (task.state.current.skipped) {
+        message += ' [SKIPPED]'
+      } else {
+        message += ` in ${task.state.current.duration}ms`
+        if (task.state.current.cached) {
+          message += ' [CACHED]'
+        }
       }
     } else if (task.state.current.type === 'error') {
       message += ` ${task.state.current.errorMessage}`

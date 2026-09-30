@@ -36,5 +36,6 @@ export function resetWorkTree(workTree: WorkTree, type: ExecuteKind): WorkTree {
     }, {}),
     environment: workTree.environment,
     caches: workTree.caches,
+    requested: workTree.requested,
   }
 }

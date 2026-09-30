@@ -30,6 +30,9 @@ export interface TaskCompletedState {
   // Rendered cache-miss causes for a rebuilt task, populated only under the
   // explain flag — additive reporting metadata carried on the event stream.
   missCauses?: string[]
+  // Not run at all: a dependency no task in this run needed, because every
+  // task depending on it was a cache hit.
+  skipped?: boolean
 }
 
 export interface TaskErrorState {
