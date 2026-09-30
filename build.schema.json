@@ -578,6 +578,22 @@
                     "additionalProperties": false
                   }
                 ]
+              },
+              "retention": {
+                "type": "object",
+                "properties": {
+                  "maxAge": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "maxSize": {
+                    "type": "string"
+                  },
+                  "keepPerTask": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [

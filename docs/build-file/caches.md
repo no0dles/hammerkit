@@ -208,6 +208,52 @@ Removing entries (`hammerkit clean --cache`) requires the registry to allow
 manifest deletion; retention is otherwise best left to the registry's own
 cleanup policies.
 
+## Retention
+
+Caches grow with every new version of every task. A `retention` block bounds a
+cache:
+
+{% code title=".hammerkit.yaml" %}
+```yaml
+caches:
+  default:
+    method: checksum
+    backend:
+      type: local
+    retention:
+      maxAge: 30d        # remove entries not used for 30 days
+      maxSize: 20Gi      # then remove least recently used entries above 20Gi
+      keepPerTask: 3     # keep at most the 3 newest versions of each task
+```
+{% endcode %}
+
+| Field         | Description                                                                                  |
+|---------------|----------------------------------------------------------------------------------------------|
+| `maxAge`      | Remove entries not used within this long (`30s`, `5m`, `12h`, `30d`, …).                     |
+| `maxSize`     | Remove least recently used entries until the cache is at most this big (`500Mi`, `5Gi`, `2G`). |
+| `keepPerTask` | Keep only the newest N versions (state keys) of each task.                                   |
+
+Policies apply in that order: `keepPerTask`, then `maxAge`, then `maxSize`.
+Removing an entry never produces a wrong result — the task just rebuilds next time.
+
+A **local** cache with `retention` is pruned automatically after every successful
+run. Remote caches are only pruned when you ask for it:
+
+```bash
+hammerkit cache ls --remote shared                  # what's in it
+hammerkit cache prune --remote shared --dry-run     # what the policy would remove
+hammerkit cache prune --remote shared --max-age 14d # prune, overriding the policy
+```
+
+See [cache ls / prune](../cli/cache.md#cache-ls-and-cache-prune). The local backend
+records when each entry was last used, so `maxAge` and `maxSize` evict what hasn't
+been used recently. S3 and registries only know when an entry was created, so
+there they evict by age of creation. Registries must allow deleting manifests
+(`registry:2`, Harbor, ECR, GAR); for GHCR and Docker Hub use the registry's own
+retention settings instead — for GHCR, for example, the
+[`actions/delete-package-versions`](https://github.com/actions/delete-package-versions)
+action. S3 lifecycle rules work alongside `cache prune` too.
+
 ## Built-in caches
 
 Two caches are always available without declaring them:

@@ -1,4 +1,6 @@
 import { literal, object, string, union, z } from 'zod'
+import { durationSchema } from './duration-schema'
+import { sizeSchema } from './size-schema'
 
 export const cacheMethodSchema = union([literal('checksum'), literal('modify-date'), literal('none')])
 export type CacheMethodSchema = z.infer<typeof cacheMethodSchema>
@@ -31,9 +33,21 @@ export type CacheBackendRegistrySchema = z.infer<typeof cacheBackendRegistrySche
 export const cacheBackendSchema = union([cacheBackendLocalSchema, cacheBackendS3Schema, cacheBackendRegistrySchema])
 export type CacheBackendSchema = z.infer<typeof cacheBackendSchema>
 
+export const cacheRetentionSchema = object({
+  // evict entries not used within this long, e.g. `30d`
+  maxAge: durationSchema.optional(),
+  // evict least recently used entries until the cache is at most this big, e.g. `5Gi`
+  maxSize: sizeSchema.optional(),
+  // keep only the newest N versions per task
+  keepPerTask: z.number().int().positive().optional(),
+}).strict()
+export type CacheRetentionSchema = z.infer<typeof cacheRetentionSchema>
+
 export const buildFileCacheSchema = object({
   method: cacheMethodSchema,
   backend: cacheBackendSchema,
+  // applied by `cache prune`, and automatically after a run for local caches
+  retention: cacheRetentionSchema.optional(),
 }).strict()
 export type BuildFileCacheSchema = z.infer<typeof buildFileCacheSchema>
 

@@ -24,8 +24,8 @@ Commands:
                                  deps/needs edges) as mermaid or dot
   explain [options] [task]       explain whether tasks would be a cache hit or
                                  miss, without running them
-  cache                          move cache entries between machines
-                                 (cache pull / cache push)
+  cache                          inspect, prune and move cache entries
+                                 (cache ls / prune / pull / push)
   up [options]                   start services(s)
   down [options]                 stop services(s)
   run [options] [task]           execute task (default command)

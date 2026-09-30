@@ -19,7 +19,8 @@ import colors from 'colors'
 import { WorkItemValidation } from './planner/work-item-validation'
 import { getVersion } from './version'
 import { CACHE_READ_ONLY_ENV, isCacheReadOnly } from './cache/read-only'
-import { parseDuration } from './utils/units'
+import { formatDuration, formatSize, parseDuration, parseSize } from './utils/units'
+import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
@@ -360,7 +361,7 @@ export async function getProgram(
         }
       })
 
-    const cacheCommand = program.command('cache').description('move cache entries between machines')
+    const cacheCommand = program.command('cache').description('inspect, prune and move cache entries')
     for (const direction of ['pull', 'push'] as const) {
       cacheCommand
         .command(`${direction} [task]`)
@@ -412,6 +413,96 @@ export async function getProgram(
           }
         })
     }
+
+    const describeEntry = (entry: NamedCacheEntry) =>
+      `${entry.taskName ?? colors.grey(entry.taskId.substring(0, 12))} ${colors.grey(
+        entry.stateKey.substring(0, 12)
+      )} ` +
+      `${entry.size === null ? '?' : formatSize(entry.size)}` +
+      (entry.lastAccessedAt ?? entry.createdAt
+        ? colors.grey(` last used ${formatDuration(Date.now() - (entry.lastAccessedAt ?? entry.createdAt ?? 0))} ago`)
+        : '')
+    const totalSize = (entries: NamedCacheEntry[]) =>
+      formatSize(entries.reduce((sum, entry) => sum + (entry.size ?? 0), 0))
+    const countOf = (count: number) => `${count} ${count === 1 ? 'entry' : 'entries'}`
+
+    cacheCommand
+      .command('ls')
+      .description('list the entries of a cache (default: the local default cache)')
+      .addOption(new Option('--remote <name>', 'cache declared in the caches block to list'))
+      .addOption(new Option('--json', 'emit the entries as JSON').default(false))
+      .action(async (options) => {
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope({}))
+          const entries = await cli.listCache(options.remote)
+          if (options.json) {
+            environment.stdout.write(`${JSON.stringify(entries, null, 2)}\n`)
+            return
+          }
+          for (const entry of entries) {
+            environment.stdout.write(`• ${describeEntry(entry)}\n`)
+          }
+          environment.stdout.write(`${countOf(entries.length)}, ${totalSize(entries)} total\n`)
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+          program.error(`Cache ls was not successful: ${getErrorMessage(e)}`, { exitCode: 1 })
+        }
+      })
+
+    cacheCommand
+      .command('prune')
+      .description('remove cache entries by retention policy (default: the local default cache)')
+      .addOption(new Option('--remote <name>', 'cache declared in the caches block to prune'))
+      .addOption(
+        new Option('--max-age <duration>', 'remove entries not used within this long (e.g. 30d)').argParser(
+          parseDuration
+        )
+      )
+      .addOption(
+        new Option('--max-size <size>', 'remove least recently used entries above this size (e.g. 5Gi)').argParser(
+          parseSize
+        )
+      )
+      .addOption(
+        new Option('--keep <count>', 'keep only the newest versions per task').argParser((v) => parseInt(v, 10))
+      )
+      .addOption(new Option('--dry-run', 'show what would be removed without removing it').default(false))
+      .action(async (options) => {
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope({}))
+          const policy = cli.retentionPolicy(options.remote, {
+            maxAge: options.maxAge,
+            maxSize: options.maxSize,
+            keepPerTask: options.keep,
+          })
+          if (!hasPolicy(policy)) {
+            program.error(
+              'no retention policy: pass --max-age, --max-size or --keep, or declare retention on the cache',
+              { exitCode: 1 }
+            )
+            return
+          }
+          const plan = await cli.pruneCache(options.remote, policy, options.dryRun)
+          for (const entry of plan.evict) {
+            environment.stdout.write(`• ${options.dryRun ? 'would remove' : 'removed'} ${describeEntry(entry)}\n`)
+          }
+          for (const note of plan.unavailable) {
+            environment.console.warn(note)
+          }
+          environment.stdout.write(
+            `${options.dryRun ? 'would remove' : 'removed'} ${countOf(plan.evict.length)} (${totalSize(
+              plan.evict
+            )}), ` + `kept ${countOf(plan.keep.length)} (${totalSize(plan.keep)})\n`
+          )
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+          program.error(`Cache prune was not successful: ${getErrorMessage(e)}`, { exitCode: 1 })
+        }
+      })
 
     program
       .command('up')
@@ -586,6 +677,24 @@ export async function getProgram(
 
           if (!result.success) {
             program.error('Execution was not successful', { exitCode: 1 })
+          }
+
+          // Declared retention keeps local caches bounded without anyone having
+          // to remember `cache prune`. Never on remotes, never in read-only mode.
+          if (!options.watch && !isCacheReadOnly(options.cacheReadOnly, environment.processEnvs)) {
+            try {
+              for (const { cacheName, plan } of await cli.autoPrune()) {
+                if (plan.evict.length > 0) {
+                  runEnvironment.console.info(
+                    `pruned ${plan.evict.length} old ${
+                      plan.evict.length === 1 ? 'entry' : 'entries'
+                    } from cache "${cacheName}"`
+                  )
+                }
+              }
+            } catch (e) {
+              runEnvironment.console.warn(`automatic cache prune failed: ${getErrorMessage(e)}`)
+            }
           }
         } catch (e) {
           if (e instanceof CommanderError) {

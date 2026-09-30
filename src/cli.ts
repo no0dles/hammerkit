@@ -26,6 +26,15 @@ import { explainWorkTree, TaskExplanation } from './cache/explain'
 import { GraphFormat, serializeWorkGraph, WorkGraphSerialization } from './planner/work-graph-serializer'
 import { DryRunPlan, planDryRun } from './executer/dry-run'
 import { CacheSyncOptions, CacheSyncResult, syncCache } from './cache/cache-sync'
+import {
+  autoPrune,
+  listCache,
+  NamedCacheEntry,
+  pruneCache,
+  PruneResult,
+  retentionPolicyOf,
+} from './cache/cache-inventory'
+import { RetentionPolicy } from './cache/retention'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -212,6 +221,24 @@ export class Cli {
   // executing anything (`cache pull` / `cache push`).
   async syncCache(options: CacheSyncOptions): Promise<CacheSyncResult[]> {
     return syncCache(this.workTree, options, this.environment)
+  }
+
+  // Entries of a named cache (default: the local `default` cache).
+  async listCache(cacheName?: string): Promise<NamedCacheEntry[]> {
+    return listCache(this.workTree, cacheName, this.environment)
+  }
+
+  retentionPolicy(cacheName: string | undefined, overrides: RetentionPolicy): RetentionPolicy {
+    return retentionPolicyOf(this.workTree, cacheName, overrides)
+  }
+
+  async pruneCache(cacheName: string | undefined, policy: RetentionPolicy, dryRun = false): Promise<PruneResult> {
+    return pruneCache(this.workTree, cacheName, policy, { dryRun }, this.environment)
+  }
+
+  // Apply declared retention to the local caches this build file uses.
+  async autoPrune(): Promise<{ cacheName: string; plan: PruneResult }[]> {
+    return autoPrune(this.workTree, this.environment)
   }
 
   task(name: string): WorkItemState<WorkTask, TaskState> {

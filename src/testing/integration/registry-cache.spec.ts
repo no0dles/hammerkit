@@ -135,6 +135,35 @@ describe('registry cache backend', () => {
   )
 
   it(
+    'lists and removes entries for retention',
+    requiresLinuxContainers(async () => {
+      const scratch = mkdtempSync(join(tmpdir(), 'hammerkit-registry-retention-'))
+      try {
+        const environment = authenticated(scratch)
+        const backend = createRegistryCacheBackend({ type: 'registry', repository: `${host}/cache/retention` })
+        const from = join(scratch, 'from')
+        await environment.file.createDirectory(from)
+        await environment.file.writeFile(join(from, 'stats.json'), '{"files":{}}')
+        await environment.file.writeFile(join(from, 'out-generates.tgz'), 'x'.repeat(2048))
+        const taskId = 'a'.repeat(40)
+        await backend.push(taskId, 'state1', from, environment)
+        await backend.push(taskId, 'state2', from, environment)
+
+        const entries = await backend.list!(environment)
+        expect(entries.map((e) => e.stateKey).sort()).toEqual(['state1', 'state2'])
+        expect(entries[0].size).toBeGreaterThan(2048)
+        expect(entries[0].createdAt).toBeGreaterThan(Date.now() - 60_000)
+
+        await backend.remove!(taskId, 'state1', environment)
+        expect(await backend.has(taskId, 'state1', environment)).toBe(false)
+        expect(await backend.has(taskId, 'state2', environment)).toBe(true)
+      } finally {
+        rmSync(scratch, { recursive: true, force: true })
+      }
+    })
+  )
+
+  it(
     'reports missing credentials as an error rather than a miss',
     requiresLinuxContainers(async () => {
       const scratch = mkdtempSync(join(tmpdir(), 'hammerkit-registry-noauth-'))

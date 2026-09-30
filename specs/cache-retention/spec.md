@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.7.0)
 
 **Input**: 1.7 brainstorm — evict old cache entries by age, last-used (LRU), and/or total storage size. The `checksum`-by-default change plus remote backends make caches grow unbounded; this is the operational counterweight. Distinct from the existing `clean` command, which wipes a project's cache+outputs rather than garbage-collecting by policy.
 

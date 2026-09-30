@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { create, extract } from 'tar'
-import { CacheBackend } from '../cache-backend'
+import { CacheBackend, CacheEntry } from '../cache-backend'
 import { Environment } from '../../executer/environment'
 import { parseRegistryReference } from './registry/registry-reference'
 import {
@@ -98,6 +98,7 @@ export function createRegistryCacheBackend(spec: RegistryCacheBackendSpec): Cach
           JSON.stringify({
             architecture: 'amd64',
             os: 'linux',
+            created: new Date().toISOString(),
             rootfs: { type: 'layers', diff_ids: [layer.digest] },
             config: { Labels: { 'dev.hammerkit.task-id': taskId, 'dev.hammerkit.state-key': stateKey } },
           })
@@ -124,6 +125,39 @@ export function createRegistryCacheBackend(spec: RegistryCacheBackendSpec): Cach
         if (digest) {
           await registry.deleteManifest(digest)
         }
+      }
+    },
+    // Entries from the repository's tags: size from the manifest, creation time
+    // from the image config. Registries keep no last-use marker, so retention
+    // works from age and size.
+    async list(environment): Promise<CacheEntry[]> {
+      const registry = client(environment)
+      const entries: CacheEntry[] = []
+      for (const tag of await registry.listTags()) {
+        const match = /^([0-9a-f]{40})-(.+)$/.exec(tag)
+        if (!match) {
+          continue
+        }
+        const manifest = await registry.getManifest(tag)
+        if (!manifest) {
+          continue
+        }
+        const config = await registry.getBlobJson<{ created?: string }>(manifest.config.digest)
+        entries.push({
+          taskId: match[1],
+          stateKey: match[2],
+          size: manifest.config.size + manifest.layers.reduce((sum, layer) => sum + layer.size, 0),
+          createdAt: config.created ? Date.parse(config.created) : null,
+          lastAccessedAt: null,
+        })
+      }
+      return entries
+    },
+    async remove(taskId, stateKey, environment): Promise<void> {
+      const registry = client(environment)
+      const digest = await registry.manifestDigest(entryTag(taskId, stateKey))
+      if (digest) {
+        await registry.deleteManifest(digest)
       }
     },
   }

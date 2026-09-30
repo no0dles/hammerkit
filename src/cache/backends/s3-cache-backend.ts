@@ -9,7 +9,7 @@ import {
 import { Readable } from 'stream'
 import { readFile } from 'fs/promises'
 import { join, resolve, sep } from 'path'
-import { CacheBackend } from '../cache-backend'
+import { CacheBackend, CacheEntry } from '../cache-backend'
 
 // S3 object keys are arbitrary strings (unlike filesystem listings), so a
 // poisoned/shared bucket can return a key whose suffix contains `../` and escape
@@ -57,6 +57,34 @@ export function createS3CacheBackend(spec: S3CacheBackendSpec): CacheBackend {
 
   function taskPrefix(taskId: string): string {
     return [prefix, taskId].filter((p) => p.length > 0).join('/') + '/'
+  }
+
+  async function listObjects(listPrefix: string): Promise<{ Key: string; Size: number; LastModified?: Date }[]> {
+    const objects: { Key: string; Size: number; LastModified?: Date }[] = []
+    let token: string | undefined
+    do {
+      const listed = await client.send(
+        new ListObjectsV2Command({ Bucket: spec.bucket, Prefix: listPrefix, ContinuationToken: token })
+      )
+      for (const obj of listed.Contents ?? []) {
+        if (obj.Key) {
+          objects.push({ Key: obj.Key, Size: obj.Size ?? 0, LastModified: obj.LastModified })
+        }
+      }
+      token = listed.IsTruncated ? listed.NextContinuationToken : undefined
+    } while (token)
+    return objects
+  }
+
+  async function deleteObjects(keys: string[]): Promise<void> {
+    for (let i = 0; i < keys.length; i += 1000) {
+      await client.send(
+        new DeleteObjectsCommand({
+          Bucket: spec.bucket,
+          Delete: { Objects: keys.slice(i, i + 1000).map((Key) => ({ Key })) },
+        })
+      )
+    }
   }
 
   return {
@@ -137,26 +165,44 @@ export function createS3CacheBackend(spec: S3CacheBackendSpec): CacheBackend {
       }
     },
     async clear(taskId): Promise<void> {
-      let token: string | undefined
-      do {
-        const listed = await client.send(
-          new ListObjectsV2Command({
-            Bucket: spec.bucket,
-            Prefix: taskPrefix(taskId),
-            ContinuationToken: token,
-          })
-        )
-        const objects = (listed.Contents ?? []).filter((o) => o.Key).map((o) => ({ Key: o.Key as string }))
-        if (objects.length > 0) {
-          await client.send(
-            new DeleteObjectsCommand({
-              Bucket: spec.bucket,
-              Delete: { Objects: objects },
-            })
-          )
+      await deleteObjects((await listObjects(taskPrefix(taskId))).map((o) => o.Key))
+    },
+    // Entries from object metadata: size is the sum of the entry's objects,
+    // created is when stats.json (written last) landed. S3 keeps no last-use
+    // marker, so retention on S3 works from age and size.
+    async list(): Promise<CacheEntry[]> {
+      const root = prefix.length > 0 ? `${prefix}/` : ''
+      const entries = new Map<string, CacheEntry & { complete: boolean }>()
+      for (const obj of await listObjects(root)) {
+        const [taskId, stateKey, ...rest] = obj.Key.substring(root.length).split('/')
+        if (!taskId || !stateKey || rest.length === 0) {
+          continue
         }
-        token = listed.IsTruncated ? listed.NextContinuationToken : undefined
-      } while (token)
+        const id = `${taskId}/${stateKey}`
+        const entry = entries.get(id) ?? {
+          taskId,
+          stateKey,
+          size: 0,
+          createdAt: null,
+          lastAccessedAt: null,
+          complete: false,
+        }
+        entry.size = (entry.size ?? 0) + obj.Size
+        if (rest.join('/') === 'stats.json') {
+          entry.complete = true
+          entry.createdAt = obj.LastModified?.getTime() ?? null
+        }
+        entries.set(id, entry)
+      }
+      return [...entries.values()].filter((entry) => entry.complete).map(({ complete, ...entry }) => entry) // eslint-disable-line @typescript-eslint/no-unused-vars
+    },
+    async remove(taskId, stateKey): Promise<void> {
+      // stats.json first, so a concurrent reader sees the entry as missing
+      // rather than half-deleted
+      const objects = (await listObjects(dirPrefix(taskId, stateKey))).map((o) => o.Key)
+      const stats = objects.filter((key) => key.endsWith('/stats.json'))
+      await deleteObjects(stats)
+      await deleteObjects(objects.filter((key) => !stats.includes(key)))
     },
   }
 }

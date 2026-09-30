@@ -39,7 +39,7 @@
   * [Down](docs/cli/down.md)
   * [Explain](docs/cli/explain.md)
   * [Graph](docs/cli/graph.md)
-  * [Cache pull / push](docs/cli/cache.md)
+  * [Cache](docs/cli/cache.md)
   * [Store / Restore](docs/cli/store-restore.md)
   * [Package](docs/cli/package.md)
   * [Clean](docs/cli/clean.md)

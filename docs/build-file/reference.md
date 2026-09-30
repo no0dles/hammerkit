@@ -105,6 +105,7 @@ Each named cache has a `method` and a `backend` (see [caches](caches.md)):
 | `backend.region` / `endpoint` / `prefix` / `forcePathStyle` | – (`s3`) | S3 connection options. |
 | `backend.repository` | string (`registry`, required) | OCI repository without a tag, e.g. `ghcr.io/org/cache`. |
 | `backend.insecure` | boolean (`registry`) | Use plain HTTP; defaults to `true` only for localhost. |
+| `retention.maxAge` / `maxSize` / `keepPerTask` | duration / size / integer | [Retention policy](caches.md#retention) for `cache prune` and automatic pruning. |
 
 A task's `cache` field is either the method shorthand (`cache: checksum`) or a
 reference `{name, method}` to a declared cache.

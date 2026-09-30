@@ -182,6 +182,14 @@ export class RegistryClient {
     return (await response.json()) as ImageManifest
   }
 
+  async getBlobJson<T>(digest: string): Promise<T> {
+    const response = await this.request('GET', `blobs/${digest}`)
+    if (!response.ok) {
+      return this.fail(response, `reading blob ${digest}`)
+    }
+    return (await response.json()) as T
+  }
+
   async manifestDigest(tag: string): Promise<string | null> {
     const response = await this.request('HEAD', `manifests/${tag}`, { headers: { accept: MANIFEST_ACCEPT } })
     if (response.status === 404) {
@@ -209,8 +217,11 @@ export class RegistryClient {
     if (response.status === 404) {
       return
     }
-    if (response.status === 405) {
-      throw new RegistryError('the registry does not allow deleting manifests', 405)
+    if (response.status === 405 || response.status === 403 || response.status === 400) {
+      throw new RegistryError(
+        `the registry does not allow deleting cache entries (${response.status}); use its own retention policy instead`,
+        response.status
+      )
     }
     if (!response.ok) {
       return this.fail(response, `deleting manifest ${digest}`)
