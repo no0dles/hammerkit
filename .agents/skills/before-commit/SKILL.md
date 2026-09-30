@@ -70,7 +70,8 @@ node_modules/.bin/jest src/path/to/file.spec.ts -t "test name"
 ## 5. Integration tests — only when you touched docker / k8s / execution
 
 These need a running Docker daemon (and are slow). They are **not** required for
-most commits; the self-hosted `integration` workflow covers them. Run locally
+most commits; the `integration (ubuntu-latest)` and `integration (macos-latest)` jobs
+in `test.yaml` cover them (kind cluster + registry on GitHub-hosted runners). Run locally
 only if your change affects container/k8s execution:
 
 ```bash

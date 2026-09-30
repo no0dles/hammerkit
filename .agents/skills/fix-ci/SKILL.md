@@ -81,9 +81,10 @@ Or poll `gh run list --branch <branch>` / `gh pr checks` until the run finishes.
   deleting the failing test. That defeats the whole point of this skill. See the
   `do-the-work` skill and `.agents/FEEDBACK.md`.
 - Cap attempts (~3–5). If the **same** failure recurs across iterations, stop and surface it.
-- Treat infra/flake as not-your-bug: the `integration` workflow runs on a self-hosted runner,
-  and the `macos-containers` job uses colima (flaky, slow). If a failure looks like infra,
-  stop and tell the user rather than looping.
+- Treat infra/flake as not-your-bug: the `integration (ubuntu-latest)` job depends on a
+  throwaway kind cluster and Docker Hub pulls, and the `macos-containers` job uses colima
+  (flaky, slow, ~40 min). If a failure looks like infra, stop and tell the user rather
+  than looping.
 - Never force-push and never touch files unrelated to the fix.
 
 ## Quick reference (gh — unique to this skill)

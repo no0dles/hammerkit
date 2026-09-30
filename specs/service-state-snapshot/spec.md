@@ -108,7 +108,7 @@ A developer selects `export` mode (dump/restore commands) for portability, or `v
 
 ## Assumptions
 
-- v1 targets the **`export` mechanism** and the **Docker runtime** first; `volume` mode and the Kubernetes path (which only runs on the self-hosted integration runner per FOLLOWUPS) follow once the model is settled.
+- v1 targets the **`export` mechanism** and the **Docker runtime** first; `volume` mode and the Kubernetes path (covered in CI by the hosted kind cluster) follow once the model is settled.
 - Best-fit producers are explicit, run-time tasks (seed/migrate), not arbitrary external mutation of the service.
 - The snapshot artifact reuses the file-cache path, so [cache-retention](../cache-retention/spec.md) and the cache backends apply without new storage code.
 - This feature extends the service model from **ephemeral** to **cacheable-stateful** — a deliberate conceptual change that warrants a design spike before implementation. Several core questions (producer-set declaration, key composition, volume-mode quiescence) are marked `[NEEDS CLARIFICATION]` and MUST be resolved before this leaves Draft.

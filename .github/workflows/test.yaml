@@ -3,6 +3,11 @@ on:
   push:
     branches:
       - '**'
+# A newer push to the same branch supersedes a running check; master keeps every
+# run so its history stays complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 jobs:
   unit:
     strategy:
@@ -88,9 +93,8 @@ jobs:
             temp
 
   # Full container + Kubernetes integration on a hosted Linux runner. ubuntu-latest
-  # ships a native, running Docker daemon, so this is a self-hosted-independent path
-  # to the whole integration suite (integration.yaml needs a pre-provisioned cluster
-  # and registry). A throwaway kind cluster supplies Kubernetes and a registry:2
+  # ships a native, running Docker daemon, so the whole integration suite runs here
+  # on GitHub-hosted infrastructure. A throwaway kind cluster supplies Kubernetes and a registry:2
   # container satisfies REGISTRY for the docker package-push spec. The k8s specs pull
   # public images (node/postgres) straight from Docker Hub, so no containerd registry
   # mirror is needed. HAMMERKIT_FULL_INTEGRATION makes the linux-container and k8s
@@ -133,14 +137,12 @@ jobs:
         run: docker run -d --restart=always -p 5000:5000 --name registry registry:2
       - name: Install npm packages
         run: npm ci
-      # Serialize on this first hosted-kind setup: one single-node cluster on a
-      # 4-vCPU runner, so running suites one at a time avoids scheduling/volume
-      # races (the self-hosted runner parallelizes against a beefier cluster).
+      # Serialize: one single-node kind cluster on a 4-vCPU runner, so running
+      # suites one at a time avoids scheduling/volume races.
       - name: Run integration tests
         run: npm run test:integration -- --no-file-parallelism
-      # Single coverage source for Codacy. This hosted job runs on every push
-      # (PRs included), unlike the self-hosted integration workflow, so coverage
-      # shows up on PRs. No master-only gate. Integration mode is a superset of the
+      # Single coverage source for Codacy. This job runs on every push (PRs
+      # included), so coverage shows up on PRs. No master-only gate. Integration mode is a superset of the
       # unit suite (see vitest.config.ts), so this one lcov is a complete report —
       # the fast unit/error-path specs and the container/k8s path are both included.
       - name: Upload coverage

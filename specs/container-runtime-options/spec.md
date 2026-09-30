@@ -89,4 +89,4 @@ The `shmSize` and `securityOpt` options apply to services, not just tasks, so a 
 - This spec is the security/runtime-capability axis; CPU/memory budgeting lives in [task-resources](../task-resources/spec.md). Resolved (Q7): **no shared wrapper block** — `resources` is its own sub-object, `shmSize`/`securityOpt` are flat sibling fields, consistent with the existing flat `mounts`/`volumes`.
 - Adding these options removes the NOTE-block + manual-timeout workaround currently on the affected test task (see also [task-timeout](../task-timeout/spec.md)).
 - Kubernetes conventions map cleanly for capabilities/seccomp/privileged via `securityContext`; shared memory maps via an in-memory `emptyDir` mounted at `/dev/shm`.
-- Real Docker (and, where available, the self-hosted k8s runner) exercises these per "real integrations over mocks".
+- Real Docker (and the kind cluster in CI) exercises these per "real integrations over mocks".
