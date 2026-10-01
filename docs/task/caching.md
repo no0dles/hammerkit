@@ -22,15 +22,43 @@ hammerkit keeps under `.hammerkit`). That is what gets reused — and what
 A task's cache key has two parts:
 
 * the task's **definition**: `cmds`, `image` (or the host OS for a local task),
-  `envs`, `mounts`, `shell`, `src` and `generates` paths and the working
-  directory, and
+  the CPU architecture, `envs`, `mounts`, `shell`, `src` and `generates` paths,
+  the working directory, and the definitions of its **dependencies**, and
 * its **state**: the declared **`src`** files (their content checksum by default,
   or their modification dates with `modify-date`) combined with the state of its
   **dependencies**, recursively.
 
 So a task is re-run when its definition changes, when its `src` changes, or when
-anything it depends on changes. Use [`hammerkit explain`](../cli/explain.md) to see
-which of these caused a rebuild.
+anything it depends on changes — its dependencies' sources *or* their definitions.
+Use [`hammerkit explain`](../cli/explain.md) to see which of these caused a
+rebuild.
+
+Changing a task's `description`, `labels` or `timeout` does not invalidate it.
+
+A task's `src` may point at what a dependency `generates` (an `e2e` task reading
+`dist`, say). Those files are not hashed again: they are represented by the
+dependency's definition and state. So the task has the same key on a clean
+checkout, where `dist` isn't built yet, as in a workspace where it is — which is
+what lets a clean CI checkout reuse what an agent pushed.
+
+A cache hit restores the task's outputs where they are expected: a container
+task's exported directories and file outputs on the host, the rest in its
+volumes. Deleting an output (`rm -rf dist`) makes the task restore it from a
+cache backend, or run again.
+
+{% hint style="info" %}
+The architecture is part of the key because outputs often contain native
+binaries (esbuild, cypress, native node modules), and Docker pulls images for
+the host's architecture. An arm64 laptop and an x64 CI runner therefore don't
+share cache entries.
+{% endhint %}
+
+{% hint style="warning" %}
+An `image` is identified by its name, not its content. A tag such as
+`node:24-alpine` moves when it is republished, and hammerkit keeps using results
+built with the old image. Pin images by digest
+(`node:24-alpine@sha256:…`) where that matters.
+{% endhint %}
 
 All paths in the key are relative to the project root (the git root, or the
 directory of the main build file), so the same commit has the same keys in every
@@ -38,8 +66,12 @@ checkout — on a laptop, a CI runner or an agent sandbox. That is what lets a
 [remote cache](../build-file/caches.md) be shared between machines.
 
 {% hint style="warning" %}
-A task **without `src`** can't be proven up to date, so it runs every time — and so
-does every task that depends on it. Declare `src` on everything you want cached.
+A task **without `src`** of its own can't be proven up to date, so it runs every
+time — and so does every task that depends on it. Its dependencies' `src` doesn't
+count: it says nothing about the files the task's own commands read. Declare
+`src` on everything you want cached.
+The same applies when every `src` entry of a task matches no file (a typo, a
+moved directory). Each `src` entry that matches no file is reported as a warning.
 {% endhint %}
 
 ### Define source files
@@ -79,7 +111,7 @@ Keep in mind that the recursive traversal can be expensive on huge folders. Avoi
 
 ### Define glob sources
 
-This example defines a glob pattern `src/**/*.ts` as the task source. This is similar to a folder source, but filters, for example, by file extension.
+This example defines a glob pattern `src/**/*.ts` as the task source. This is similar to a folder source, but filters, for example, by file extension: every `.ts` file under `src`, in any subdirectory.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -92,7 +124,8 @@ tasks:
 ```
 {% endcode %}
 
-Several patterns are supported. Hammerkit matches globs with [minimatch](https://github.com/isaacs/minimatch) (the matcher behind node-glob); see its docs for all details. A quick summary:
+Globs are matched against paths relative to the task's directory, and may use
+environment variables (`$DIR/**/*.ts`). Several patterns are supported. Hammerkit matches globs with [minimatch](https://github.com/isaacs/minimatch) (the matcher behind node-glob); see its docs for all details. A quick summary:
 
 * `*` Matches 0 or more characters in a single path portion.
 * `?` Matches 1 character.
@@ -102,7 +135,14 @@ Several patterns are supported. Hammerkit matches globs with [minimatch](https:/
 * `+(pattern|pattern|pattern)` Matches one or more occurrences of the patterns provided.
 * `*(a|b|c)` Matches zero or more occurrences of the patterns provided.
 * `@(pattern|pat*|pat?erN)` Matches exactly one of the patterns provided.
-* `**` If a "globstar" is alone in a path portion, then it matches zero or more directories and subdirectories searching for matches. It does not crawl symlinked directories.
+* `**` If a "globstar" is alone in a path portion, then it matches zero or more directories and subdirectories searching for matches.
+* `{a,b}` Matches either of the comma-separated alternatives.
+
+{% hint style="info" %}
+A glob starting with `**` walks the whole task directory, including
+`node_modules`. Start it at the directory that holds the sources (`src/**/*.ts`)
+to keep that cheap.
+{% endhint %}
 
 ### checksum vs. modify-date
 

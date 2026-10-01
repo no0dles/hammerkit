@@ -21,11 +21,11 @@ _Avoid_: requirement, link
 ### Caching
 
 **State key**:
-A hash of a task's `src` file *contents* (under the cache method) folded with its dependencies' state keys. It captures input-file changes only — **not** the command, image, or env, which live in the task id. A false hit (serving a stale entry as fresh) is a defect, never a speed trade.
+A hash of a task's `src` file *contents* (under the cache method) folded with its dependencies' state keys. It captures input-file changes only — **not** the command, image, or env, which live in the task id. Files a dependency generates are left out: the dependency's task id and state key already represent them, and the key is computed before dependencies run. A false hit (serving a stale entry as fresh) is a defect, never a speed trade.
 _Avoid_: cache key, fingerprint
 
 **Task id**:
-A sha1 hash of the task *definition* — command, image, env, mounts, shell, `src` paths, `generates`, cwd, deps. Changing any of these yields a new id, and thus a fresh cache location. A cache entry is addressed by **task id + state key**: the id captures *what the task is*, the state key captures *what its inputs contain*.
+A sha1 hash of the task *definition* — command, image (host OS for a local task), CPU architecture, env, mounts, shell, `src` paths, `generates`, cwd, and the task ids of its deps. Changing any of these yields a new id, and thus a fresh cache location. A cache entry is addressed by **task id + state key**: the id captures *what the task is*, the state key captures *what its inputs contain*.
 _Avoid_: cache id, task hash
 
 **Cache backend**:

@@ -27,10 +27,11 @@ See [exporting generated files](task/README.md#exporting-generated-files).
 
 ## Why does my task run every time, even when nothing changed?
 
-A task can only be skipped if it declares `src` **and** all of its dependencies can
-also be skipped. A task with no `src`, or one that depends on a task with no `src`,
-runs every time — hammerkit can't prove it's up to date. Give each task accurate
-`src`/`generates`. See [caching](task/caching.md).
+A task can only be skipped if it declares `src` of its own **and** all of its
+dependencies can also be skipped. A task with no `src` (or whose `src` matches no
+file — check the warnings), or one that depends on such a task, runs every time —
+hammerkit can't prove it's up to date. Give each task accurate `src`/`generates`.
+See [caching](task/caching.md).
 
 ## Why did my task rebuild? / Why was it skipped?
 

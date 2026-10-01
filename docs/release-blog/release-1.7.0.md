@@ -175,6 +175,15 @@ Running the new setup end to end surfaced several bugs, all fixed in this releas
 * **Tasks without `src` were cached after one run.** As documented, a task without
   `src` — and everything depending on it — now always runs, since hammerkit can't
   prove it's up to date.
+* **Cache hits after a change.** Before relying on a shared cache in production we
+  went looking for false hits — a task reported as cached although an input it
+  reads had changed — and found several: globs like `src/**/*.ts` ignored every
+  subdirectory, a dependency's command or env could change without rebuilding the
+  tasks depending on it, deleted outputs stayed "cached", binary sources were
+  compared as text, and a `src` typo kept a task cached forever. All are fixed, and
+  the cache contract is now guarded by an invariant suite (every observable change
+  is a miss, every unobservable one a hit), a property test over random file trees
+  and globs, and mutation testing. See the [changelog](../change-log/change-log-1.7.0.md).
 * **Tasks on Kubernetes didn't wait for their jobs.** A task running as a
   Kubernetes job was reported as completed as soon as the job was created, and a
   failing job was never detected. Tasks now wait for the job, fail when it fails,

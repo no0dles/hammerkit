@@ -28,10 +28,11 @@ How to work in this repo (see the `do-the-work` skill for detail):
 
 ## Commands
 
-- `npm run build` — `tsc -b tsconfig.json`, outputs to `dist/`
-- `npm test` — runs jest across `src/**/*.spec.ts`. Tests run with `maxConcurrency: 1` and a 45s timeout; expect a full run to be slow.
-- `npm run lint` / `npm run format` — eslint / prettier+eslint --fix.
-- Single test: `node_modules/.bin/jest src/path/to/file.spec.ts -t "test name"`. CI uses `jest --runInBand`.
+Scripts live in `package.json`; the vitest unit/integration split is in [vitest.config.ts](vitest.config.ts).
+
+- `npm test` runs the fast unit suite (no Docker/k8s); `npm run test:integration` runs everything, including `src/testing/integration/`.
+- Single test: `npx vitest run src/path/to/file.spec.ts -t "test name"`, plus `--mode integration` for integration specs.
+- `npm run test:mutation` runs Stryker on the modules that decide cache hits ([stryker.config.json](stryker.config.json)). Run it after changing cache logic: surviving mutants are behaviour no test checks.
 
 ### Test environment flags
 

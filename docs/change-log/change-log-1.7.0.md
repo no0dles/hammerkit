@@ -6,7 +6,16 @@ see [agents, workspaces and CI](../guides/agents-and-ci.md).
 
 ## Upgrade notes
 - **One full rebuild after upgrading.** Cache keys are now computed from
-  project-relative paths (see below), so every existing cache entry misses once.
+  project-relative paths (see below) and include the CPU architecture and the
+  definitions of a task's dependencies, so every existing cache entry misses once.
+- **More files count as sources.** Globs now match what they say (see *Fixed*), so
+  a task may see source changes it previously missed, and run.
+- **A `src` that matches no file makes a task always run**, like a task without
+  `src`, and hammerkit warns about each such entry.
+- **A task needs `src` of its own to be cached.** A task without `src` whose
+  dependencies declare `src` (a `test` task depending on `build`) used to be
+  cached on its dependencies' sources alone, so changing only its own files (the
+  tests) left it cached. It now always runs; declare the files it reads.
 - **Tasks without `src` always run.** A task with no `src` — and every task depending
   on one — runs on every invocation, as documented. Earlier versions cached such a
   task after its first run.
@@ -60,6 +69,31 @@ see [agents, workspaces and CI](../guides/agents-and-ci.md).
   don't start their services.
 
 ## Fixed
+- **Cache hits after a change** — several ways a task was reported as cached although
+  an input it reads had changed:
+  - Globs only looked at the top directory: `src/**/*.ts` ignored every file in a
+    subdirectory, and `**/*.ts` matched nothing at all.
+  - Globs using `?`, `[...]`, `{a,b}` or extglobs, a `*` inside a file name
+    (`src/app*.ts`) and globs with environment variables (`$DIR/*.ts`) matched
+    nothing.
+  - Binary sources were compared as text, so two different images or fonts could
+    look identical.
+  - Changing a dependency's `cmds`, `envs` or `image` rebuilt the dependency but
+    not the tasks depending on it; with skipped dependencies, not even the
+    dependency.
+  - Deleting a task's output (`rm -rf dist`) left the task cached without the
+    output.
+  - A `src` entry with a typo kept its task cached forever.
+- A cache hit of a **container task** now restores its exported directories and its
+  file outputs on the host. Previously only its volumes were restored, and file
+  outputs were not stored at all.
+- A task whose `src` includes what a dependency generates now has the same cache
+  key before and after the dependency ran, so a clean checkout (CI) hits entries
+  pushed from a built workspace (an agent).
+- Cache keys no longer depend on the order in which the filesystem lists files,
+  which differs between machines.
+- Cache entries (`description.json`, pushed to remote caches) and the local
+  `explain` records no longer contain env values in plain text — only a digest.
 - Tasks running on Kubernetes now wait for their job to finish and fail when it
   fails. Previously a task was reported as completed as soon as its job was created.
   Cancelling a run (or a timeout) now deletes the running job.
