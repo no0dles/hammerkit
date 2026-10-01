@@ -30,11 +30,12 @@ export function parseWorkSource(
       // Walk from the literal directory prefix and match paths relative to the
       // declaring task's cwd — which stays correct when the source is inherited
       // by a dependant in another directory.
+      const prefix = literalPrefix(pattern)
       result.push({
         matcher: (file, _cwd, partial) => matcher.match(toPosix(relative(cwd, file)), partial),
         inherited: null,
         source,
-        absolutePath: join(cwd, literalPrefix(pattern)),
+        absolutePath: prefix ? join(cwd, prefix) : cwd,
         isFile: false,
       })
     } else {

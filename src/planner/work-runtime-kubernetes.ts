@@ -17,7 +17,7 @@ import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-s
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
-import { awaitJobCompletion, deleteJob } from '../kubernetes/await-running-state'
+import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureIngress } from '../kubernetes/ensure-ingress'
@@ -32,6 +32,22 @@ import { removePersistentData } from '../kubernetes/remove-persistent-data'
 function statusCodeOf(e: unknown): number | undefined {
   const err = e as { statusCode?: number; response?: { statusCode?: number }; body?: { code?: number } }
   return err?.statusCode ?? err?.response?.statusCode ?? err?.body?.code
+}
+
+async function listJobNames(
+  instance: ReturnType<typeof createKubernetesInstances>,
+  kubernetes: WorkKubernetesEnvironment,
+  task: WorkItem<ContainerWorkTask>
+): Promise<string[]> {
+  const jobs = await instance.batchApi.listNamespacedJob(
+    kubernetes.namespace,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    `hammerkit.dev/id=${task.id()}`
+  )
+  return jobs.body.items.flatMap((job) => (job.metadata?.name ? [job.metadata.name] : []))
 }
 
 export function kubernetesTaskRuntime(
@@ -56,6 +72,12 @@ export function kubernetesTaskRuntime(
 
       await ensureNamespace(instance, kubernetes.namespace)
       await ensurePersistentData(instance, kubernetes, environment, task, persistence)
+
+      // The last job of a run stays: its state label is what currentStateKey
+      // reads. Jobs from an earlier run of this task go before this one starts.
+      for (const name of await listJobNames(instance, kubernetes, task)) {
+        await deleteJobAndWait(instance, kubernetes, name, options.abort)
+      }
 
       const podName = `${task.name}-${options.stateKey}`
       let i = 0
@@ -112,7 +134,9 @@ export function kubernetesTaskRuntime(
             await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
           }
           task.status.write('debug', 'pod completed')
-          await deleteJob(instance, kubernetes, podName)
+          if (i < task.data.cmds.length) {
+            await deleteJobAndWait(instance, kubernetes, podName, options.abort)
+          }
         } catch (e) {
           if (e instanceof AbortError) {
             options.state.set({ stateKey: options.stateKey, type: 'canceled' })

@@ -125,3 +125,30 @@ export function awaitDeployRunningState(instance: KubernetesInstance, env: WorkK
     )
   })
 }
+
+// Delete a job and wait until it is gone: its name is reused for the task's next
+// command (and the next run with the same state), and creating it while the old
+// one is still being deleted would pick up the old job.
+export async function deleteJobAndWait(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  abort: AbortSignal,
+  pollInterval = 500
+): Promise<void> {
+  await deleteJob(instance, env, name)
+  for (;;) {
+    try {
+      await instance.batchApi.readNamespacedJob(name, env.namespace)
+    } catch (e) {
+      if (statusCodeOf(e) === 404) {
+        return
+      }
+      throw e
+    }
+    if (abort.aborted) {
+      throw new AbortError()
+    }
+    await sleep(pollInterval, abort)
+  }
+}

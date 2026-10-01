@@ -48,6 +48,23 @@ describe('task timeout', () => {
     )
   })
 
+  // A shell runs a compound command (and dash any command) as child processes;
+  // stopping only the shell would leave them running and the task waiting on
+  // their output until they finish on their own.
+  itExceptWindows('stops every process a command started when the task times out', async () => {
+    const localCache = join(process.cwd(), 'temp', 'task-timeout-children-local')
+    await createTestCase(
+      'task-timeout-children',
+      project(localCache, { timeout: '1s', cmds: ['sleep 30; echo late'] })
+    ).setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'slow' })
+      const started = Date.now()
+      const result = await cli.runExec()
+      expect(Date.now() - started).toBeLessThan(15_000)
+      expect(result.state.tasks['slow'].state.current).toMatchObject({ type: 'error' })
+    })
+  })
+
   itExceptWindows('does not affect a task that finishes in time', async () => {
     const localCache = join(process.cwd(), 'temp', 'task-timeout-in-time-local')
     await createTestCase('task-timeout-in-time', project(localCache, { timeout: '30s', cmds: ['echo done'] })).setup(

@@ -95,7 +95,8 @@ describe('getWorkCacheStats', () => {
       { cwd: dir, src: [src(join(dir, 'sub'), (file) => file.endsWith('.txt'))] } as any,
       env
     )
-    expect(Object.keys(stats.files)).toContain(join('sub', 'keep.txt'))
-    expect(Object.keys(stats.files)).not.toContain(join('sub', 'skip.md'))
+    // '/'-separated on every OS (portable cache keys)
+    expect(Object.keys(stats.files)).toContain('sub/keep.txt')
+    expect(Object.keys(stats.files)).not.toContain('sub/skip.md')
   })
 })
