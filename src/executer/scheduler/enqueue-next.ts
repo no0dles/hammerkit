@@ -8,13 +8,15 @@ import { getCacheDirectory } from '../../optimizer/get-cache-directory'
 import { writeCacheMetadata } from '../cache-metadata'
 import { getWorkTaskCacheDescription } from '../../optimizer/work-task-cache-description'
 import { getErrorMessage } from '../../log'
-import { computeStateKey, isProvablyCacheable } from './state-key'
+import { computeStateKey } from './state-key'
 import { getWorkInstanceId } from '../../planner/work-instance-id'
 
 export interface CacheState {
   cached: boolean
   stateKey: string
   resolved: ResolvedCache
+  // false when the task cannot be proven up to date, see computeStateKey
+  provable: boolean
 }
 
 export async function checkCacheState(
@@ -22,23 +24,33 @@ export async function checkCacheState(
   defaultCacheMethod: CacheMethod,
   environment: Environment
 ): Promise<CacheState> {
-  const { stateKey, stats: currentStats, resolved } = await computeStateKey(item, defaultCacheMethod, environment)
+  const {
+    stateKey,
+    stats: currentStats,
+    resolved,
+    provable,
+    unmatched,
+  } = await computeStateKey(item, defaultCacheMethod, environment)
+
+  for (const src of unmatched) {
+    item.status.write('warn', `src "${src.source}" matches no files`)
+  }
 
   if (resolved.method === 'none') {
     item.status.write('debug', `${item.name} is skipping cache check, because caching is disabled`)
-    return { cached: false, stateKey, resolved }
+    return { cached: false, stateKey, resolved, provable }
   }
 
-  if (isWorkTaskItem(item) && !isProvablyCacheable(item)) {
-    item.status.write('debug', `${item.name} always runs, it or one of its dependencies declares no src`)
-    return { cached: false, stateKey, resolved }
+  if (isWorkTaskItem(item) && !provable) {
+    item.status.write('debug', `${item.name} always runs, it or one of its dependencies has no src files`)
+    return { cached: false, stateKey, resolved, provable }
   }
 
   if (isWorkTaskItem(item)) {
     const runtimeStateKey = await item.runtime.currentStateKey(environment)
 
     if (runtimeStateKey === stateKey) {
-      return { cached: true, stateKey, resolved }
+      return { cached: true, stateKey, resolved, provable }
     }
 
     try {
@@ -47,8 +59,8 @@ export async function checkCacheState(
       if (pulled) {
         item.status.write('info', `${item.name} pulled from cache "${resolved.name}" (${resolved.backend.type})`)
         await item.runtime.restore(environment, cacheDir)
-        await writeCacheMetadata(environment, item, currentStats, getWorkTaskCacheDescription(item.data))
-        return { cached: true, stateKey, resolved }
+        await writeCacheMetadata(environment, item, currentStats, getWorkTaskCacheDescription(item))
+        return { cached: true, stateKey, resolved, provable }
       }
     } catch (e) {
       item.status.write(
@@ -60,5 +72,5 @@ export async function checkCacheState(
     }
   }
 
-  return { cached: false, stateKey, resolved }
+  return { cached: false, stateKey, resolved, provable }
 }

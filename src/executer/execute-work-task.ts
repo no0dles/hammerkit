@@ -13,7 +13,6 @@ import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
 import { formatDuration } from '../utils/units'
 import { listenOnAbort } from '../utils/abort-event'
-import { isProvablyCacheable } from './scheduler/state-key'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -21,8 +20,8 @@ async function pushToBackend(
   cacheState: CacheState,
   options: CliExecOptions
 ) {
-  const { resolved, stateKey } = cacheState
-  if (resolved.method === 'none' || !isProvablyCacheable(work)) {
+  const { resolved, stateKey, provable } = cacheState
+  if (resolved.method === 'none' || !provable) {
     return
   }
   if (options.cacheReadOnly) {

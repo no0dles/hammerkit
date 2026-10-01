@@ -73,10 +73,16 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
     },
     async currentStateKey(environment: Environment): Promise<string | null> {
       const stateFileName = getStateFilename(task)
-      if (await environment.file.exists(stateFileName)) {
-        return await environment.file.read(stateFileName)
+      if (!(await environment.file.exists(stateFileName))) {
+        return null
       }
-      return Promise.resolve(null)
+      // outputs deleted since the run (rm -rf dist) leave nothing to reuse
+      for (const generate of task.data.generates) {
+        if (!generate.inherited && !(await environment.file.exists(generate.path))) {
+          return null
+        }
+      }
+      return await environment.file.read(stateFileName)
     },
     async remove(environment: Environment): Promise<void> {
       for (const generate of task.data.generates) {

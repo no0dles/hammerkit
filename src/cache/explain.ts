@@ -5,7 +5,11 @@ import { WorkTask } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
 import { TaskState } from '../executer/scheduler/task-state'
 import { computeStateKey } from '../executer/scheduler/state-key'
-import { getWorkTaskCacheDescription, WorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
+import {
+  getWorkTaskCacheDescription,
+  storedCacheDescription,
+  WorkTaskCacheDescription,
+} from '../optimizer/work-task-cache-description'
 import { WorkCacheFileStats } from '../optimizer/work-cache-stats'
 import { getCacheDescriptionFile } from '../optimizer/get-cache-directory'
 import { readLastResolvedRecord } from './last-resolved'
@@ -13,11 +17,14 @@ import { getWorkInstanceId } from '../planner/work-instance-id'
 
 export type ExplainStatus = 'hit' | 'miss' | 'uncacheable'
 
-// `no-src`/`caching-disabled` accompany an `uncacheable` status; the rest are
-// miss causes (the closed vocabulary from spec FR-002, plus the graceful
-// `cache-format-changed` degradation for pre-breakdown entries).
+// `no-src`/`no-src-files`/`dependency-uncacheable`/`caching-disabled` accompany
+// an `uncacheable` status; the rest are miss causes (the closed vocabulary from
+// spec FR-002, plus the graceful `cache-format-changed` degradation for
+// pre-breakdown entries).
 export type ExplainCauseKind =
   | 'no-src'
+  | 'no-src-files'
+  | 'dependency-uncacheable'
   | 'caching-disabled'
   | 'never-cached'
   | 'cache-format-changed'
@@ -47,6 +54,10 @@ export function describeCause(cause: ExplainCause): string {
   switch (cause.kind) {
     case 'no-src':
       return 'no src declared (uncacheable)'
+    case 'no-src-files':
+      return 'src matches no files (uncacheable)'
+    case 'dependency-uncacheable':
+      return `dependency always runs: ${cause.identifier}`
     case 'caching-disabled':
       return 'caching disabled'
     case 'never-cached':
@@ -156,6 +167,15 @@ function diffStats(
   }
 }
 
+function isAlwaysRun(explanation: TaskExplanation): boolean {
+  return (
+    explanation.status === 'uncacheable' &&
+    explanation.causes.some(
+      (c) => c.kind === 'no-src' || c.kind === 'no-src-files' || c.kind === 'dependency-uncacheable'
+    )
+  )
+}
+
 // Explain a single task, recursively explaining its dependencies so a downstream
 // task whose own inputs are unchanged is attributed to the upstream dependency
 // that actually changed. Memoized by task id; `visiting` guards against a cyclic
@@ -177,15 +197,29 @@ export async function explainTask(
   }
   visiting.add(item.id())
 
-  const { stateKey, stats, resolved } = await computeStateKey(item, defaultCacheMethod, environment)
+  const { stateKey, stats, resolved, provable, unmatched } = await computeStateKey(
+    item,
+    defaultCacheMethod,
+    environment
+  )
 
-  if (item.data.src.length === 0) {
-    const explanation: TaskExplanation = {
-      taskId: item.id(),
-      taskName: item.name,
-      status: 'uncacheable',
-      causes: [{ kind: 'no-src' }],
+  // Mirrors the scheduler: a task that cannot be proven up to date always runs
+  // (see computeStateKey), whatever a cache holds for it.
+  if (!provable) {
+    const causes: ExplainCause[] = []
+    const declared = item.data.src.filter((src) => !src.inherited)
+    if (declared.length === 0) {
+      causes.push({ kind: 'no-src' })
+    } else if (unmatched.length === declared.length) {
+      causes.push({ kind: 'no-src-files' })
     }
+    for (const dep of item.deps) {
+      const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting)
+      if (isAlwaysRun(depExplanation)) {
+        causes.push({ kind: 'dependency-uncacheable', identifier: dep.name })
+      }
+    }
+    const explanation: TaskExplanation = { taskId: item.id(), taskName: item.name, status: 'uncacheable', causes }
     memo.set(item.id(), explanation)
     visiting.delete(item.id())
     return explanation
@@ -225,7 +259,8 @@ export async function explainTask(
       causes.push({ kind: 'cache-format-changed' })
     }
   } else {
-    diffDescription(getWorkTaskCacheDescription(item.data), record.description, causes)
+    // records store env values as digests, so compare in the stored form
+    diffDescription(storedCacheDescription(getWorkTaskCacheDescription(item)), record.description, causes)
     diffStats(stats, record.stats, resolved.method, causes)
   }
 

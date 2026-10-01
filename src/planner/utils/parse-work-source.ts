@@ -22,36 +22,23 @@ export function parseWorkSource(
   }
 
   for (const source of sources) {
-    const wildcardIndex = source.indexOf('*')
-    if (wildcardIndex >= 0) {
-      if (wildcardIndex === 0) {
-        const absolutePath = cwd
-        result.push({
-          matcher: (file, cwd) => {
-            const matcher = new Minimatch(source, { dot: true })
-            return matcher.match(toPosix(relative(cwd, file)))
-          },
-          inherited: null,
-          source,
-          absolutePath,
-          isFile: false,
-        })
-      } else {
-        const prefixSource = source.substring(0, wildcardIndex)
-        const absolutePath = join(cwd, templateValue(prefixSource, envs))
-        result.push({
-          matcher: (file, cwd) => {
-            const matcher = new Minimatch(toPosix(join(cwd, source)), { dot: true })
-            return matcher.match(toPosix(file))
-          },
-          inherited: null,
-          source,
-          absolutePath,
-          isFile: false,
-        })
-      }
+    // env variables are substituted before matching, so `$DIR/*.ts` globs the
+    // directory the task actually reads; `source` keeps the declared form.
+    const pattern = posix.normalize(toPosix(templateValue(source, envs)))
+    const matcher = new Minimatch(pattern, { dot: true })
+    if (isGlob(matcher)) {
+      // Walk from the literal directory prefix and match paths relative to the
+      // declaring task's cwd — which stays correct when the source is inherited
+      // by a dependant in another directory.
+      result.push({
+        matcher: (file, _cwd, partial) => matcher.match(toPosix(relative(cwd, file)), partial),
+        inherited: null,
+        source,
+        absolutePath: join(cwd, literalPrefix(pattern)),
+        isFile: false,
+      })
     } else {
-      const absolutePath = join(cwd, templateValue(source, envs))
+      const absolutePath = join(cwd, pattern)
       result.push({
         matcher: (file) => file.startsWith(absolutePath),
         absolutePath,
@@ -63,6 +50,26 @@ export function parseWorkSource(
   }
 
   return result
+}
+
+// minimatch parses a literal path into a single set of plain strings; anything
+// else (wildcards, ?, [...], {a,b}, extglobs) is a glob.
+function isGlob(matcher: Minimatch): boolean {
+  return matcher.set.length !== 1 || matcher.set[0].some((part) => typeof part !== 'string')
+}
+
+// The leading directories of a glob that contain no glob syntax — where the
+// walk for matching files starts.
+function literalPrefix(pattern: string): string {
+  const segments = pattern.split('/')
+  const literal: string[] = []
+  for (const segment of segments.slice(0, -1)) {
+    if (/[*?[\]{}()!+@]/.test(segment)) {
+      break
+    }
+    literal.push(segment)
+  }
+  return literal.join('/')
 }
 
 export function createSource(absolutePath: string): WorkSource {

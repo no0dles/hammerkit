@@ -28,7 +28,7 @@ describe('getWorkTaskCacheDescription', () => {
       user: null,
       mounts: [{ mount: 'b:b' }, { mount: 'a:a' }] as any,
     }
-    const d = getWorkTaskCacheDescription(task)
+    const d = getWorkTaskCacheDescription({ data: task, deps: [] } as any)
     expect(d.platform).toBe('node:alpine')
     expect(d.mounts).toEqual(['a:a', 'b:b'])
     expect(d.src).toEqual(['a', 'b'])
@@ -41,7 +41,7 @@ describe('getWorkTaskCacheDescription', () => {
 
   it('describes a local task with the host platform and no mounts', () => {
     const task: LocalWorkTask = { ...baseTask, type: 'local-task' }
-    const d = getWorkTaskCacheDescription(task)
+    const d = getWorkTaskCacheDescription({ data: task, deps: [] } as any)
     expect(d.platform).toBe(platform())
     expect(d.mounts).toBeUndefined()
   })

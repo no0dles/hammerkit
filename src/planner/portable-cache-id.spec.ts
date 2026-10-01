@@ -85,4 +85,21 @@ describe('portable cache id', () => {
       expect(second[key]).not.toEqual(first[key])
     }
   })
+
+  // Outputs built on arm64 (an Apple Silicon agent) contain arm64 binaries —
+  // esbuild, cypress, native node modules — that an x64 CI runner cannot use,
+  // container tasks included: docker pulls the image for the host architecture.
+  it('keeps ids distinct across CPU architectures', async () => {
+    const arch = process.arch
+    const other = arch === 'arm64' ? 'x64' : 'arm64'
+    const native = await collectIds('portable-cache-id-arch-native')
+    Object.defineProperty(process, 'arch', { value: other, configurable: true })
+    try {
+      const foreign = await collectIds('portable-cache-id-arch-foreign')
+      expect(foreign['task:build']).not.toEqual(native['task:build'])
+      expect(foreign['task:lint']).not.toEqual(native['task:lint'])
+    } finally {
+      Object.defineProperty(process, 'arch', { value: arch, configurable: true })
+    }
+  })
 })

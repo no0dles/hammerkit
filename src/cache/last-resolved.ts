@@ -4,7 +4,7 @@ import { Environment } from '../executer/environment'
 import { WorkItem } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { WorkCacheFileStats } from '../optimizer/work-cache-stats'
-import { WorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
+import { storedCacheDescription, WorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 
 // A per-task-*name* record of the last run, additive metadata that lets `explain`
 // diff the current task against the previous one even when a definition change
@@ -40,7 +40,7 @@ export async function writeLastResolvedRecord(
   const payload: LastResolvedRecord = {
     taskId: task.id(),
     taskName: task.name,
-    description: record.description,
+    description: storedCacheDescription(record.description),
     stats: record.stats,
   }
   await environment.file.writeFile(file, JSON.stringify(payload))

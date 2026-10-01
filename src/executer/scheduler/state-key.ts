@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { getStateKey, getWorkCacheStats } from '../../optimizer/get-work-cache-stats'
+import { getStateKey, getWorkItemCacheStats } from '../../optimizer/get-work-cache-stats'
 import { WorkCacheFileStats } from '../../optimizer/work-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
@@ -7,6 +7,7 @@ import { WorkItemState } from '../../planner/work-item'
 import { WorkTask } from '../../planner/work-task'
 import { WorkService } from '../../planner/work-service'
 import { ResolvedCache } from '../../cache/resolve-cache'
+import { WorkSource } from '../../planner/work-source'
 
 // The state-key engine is shared by the scheduler's hit/miss decision
 // (`checkCacheState`) and the read-only cache-explain engine, so a prediction
@@ -23,11 +24,21 @@ export function resolveEffective(
   return declared
 }
 
-// A task without `src` cannot be proven up to date — its state key would be a
-// constant — so it always runs, and so does everything depending on it
-// (specs/task SC-001). Services are not affected.
-export function isProvablyCacheable(item: WorkItemState<WorkTask | WorkService, any>): boolean {
-  return item.data.src.length > 0 && item.deps.every((dep) => isProvablyCacheable(dep))
+// A task whose inputs cannot be observed cannot be proven up to date, so it
+// always runs, and so does everything depending on it (specs/task SC-001). That
+// is a task that declares no `src` of its own — the sources it inherits from its
+// dependencies say nothing about the files its own commands read — and a task
+// whose `src` entries all match no file (a typo, a moved path). Services are not
+// affected.
+function isOwnProvable(item: WorkItemState<WorkTask | WorkService, any>, unmatched: WorkSource[]): boolean {
+  // unmatched ⊆ declared, so this is also false when nothing is declared
+  return unmatched.length < item.data.src.filter((src) => !src.inherited).length
+}
+
+interface EffectiveStateKey {
+  stateKey: string
+  // false when the item or a dependency cannot be proven up to date
+  provable: boolean
 }
 
 // Fold a task's own state key together with the state keys of its dependencies.
@@ -55,29 +66,21 @@ function concreteMethod(resolved: ResolvedCache, defaultCacheMethod: CacheMethod
 // state keys of its dependencies, recursively. This is derived purely from the
 // work tree and the filesystem, so it does not depend on scheduler/run state —
 // important because it runs before dependencies are awaited.
-export async function resolveEffectiveStateKey(
+async function resolveEffectiveStateKey(
   item: WorkItemState<WorkTask | WorkService, any>,
   defaultCacheMethod: CacheMethod,
   environment: Environment,
-  memo: Map<string, string>
-): Promise<string> {
+  memo: Map<string, EffectiveStateKey>
+): Promise<EffectiveStateKey> {
   const existing = memo.get(item.id())
   if (existing !== undefined) {
     return existing
   }
 
-  const resolved = resolveEffective(item, defaultCacheMethod)
-  const stats = await getWorkCacheStats(item.data, environment)
-  const ownKey = getStateKey(stats, concreteMethod(resolved, defaultCacheMethod))
-
-  const depKeys: string[] = []
-  for (const dep of item.deps) {
-    depKeys.push(await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo))
-  }
-
-  const combined = combineStateKeys(ownKey, depKeys)
-  memo.set(item.id(), combined)
-  return combined
+  const { stateKey, provable } = await computeStateKey(item, defaultCacheMethod, environment, memo)
+  const effective = { stateKey, provable }
+  memo.set(item.id(), effective)
+  return effective
 }
 
 export interface StateKeyComputation {
@@ -86,6 +89,11 @@ export interface StateKeyComputation {
   // The source-file stats the own key was derived from.
   stats: WorkCacheFileStats
   resolved: ResolvedCache
+  // Whether the item can be proven up to date at all (see isOwnProvable); an
+  // unprovable task always runs and is never stored in or taken from a cache.
+  provable: boolean
+  // declared src entries that match no file
+  unmatched: WorkSource[]
 }
 
 // Compute the combined state key for a single item together with the source
@@ -94,17 +102,20 @@ export interface StateKeyComputation {
 export async function computeStateKey(
   item: WorkItemState<WorkTask | WorkService, any>,
   defaultCacheMethod: CacheMethod,
-  environment: Environment
+  environment: Environment,
+  memo: Map<string, EffectiveStateKey> = new Map()
 ): Promise<StateKeyComputation> {
   const resolved = resolveEffective(item, defaultCacheMethod)
-  const stats = await getWorkCacheStats(item.data, environment)
+  const { stats, unmatched } = await getWorkItemCacheStats(item, environment)
   const ownKey = getStateKey(stats, concreteMethod(resolved, defaultCacheMethod))
 
-  const memo = new Map<string, string>()
   const depKeys: string[] = []
+  let provable = isOwnProvable(item, unmatched)
   for (const dep of item.deps) {
-    depKeys.push(await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo))
+    const effective = await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo)
+    depKeys.push(effective.stateKey)
+    provable = provable && effective.provable
   }
 
-  return { stateKey: combineStateKeys(ownKey, depKeys), stats, resolved }
+  return { stateKey: combineStateKeys(ownKey, depKeys), stats, resolved, provable, unmatched }
 }

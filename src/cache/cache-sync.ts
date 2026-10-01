@@ -5,7 +5,7 @@ import { Environment } from '../executer/environment'
 import { CacheMethod } from '../parser/cache-method'
 import { WorkTree } from '../planner/work-tree'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
-import { computeStateKey, isProvablyCacheable } from '../executer/scheduler/state-key'
+import { computeStateKey } from '../executer/scheduler/state-key'
 import { CacheBackend } from './cache-backend'
 import { resolveCache, withBuiltinCaches } from './resolve-cache'
 import { archiveTaskEntry } from '../executer/archive-task-entry'
@@ -59,7 +59,7 @@ export async function syncCache(
   const results: CacheSyncResult[] = []
 
   for (const item of iterateWorkTasks(workTree)) {
-    const { stateKey, resolved } = await computeStateKey(item, options.cacheDefault, environment)
+    const { stateKey, resolved, provable } = await computeStateKey(item, options.cacheDefault, environment)
     const local = resolved.backend
     const result = (status: CacheSyncStatus): CacheSyncResult => ({
       taskId: item.id(),
@@ -68,7 +68,7 @@ export async function syncCache(
       status,
     })
 
-    if (resolved.method === 'none' || local === remote || !isProvablyCacheable(item)) {
+    if (resolved.method === 'none' || local === remote || !provable) {
       results.push(result('skipped'))
       continue
     }

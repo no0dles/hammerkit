@@ -80,6 +80,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',
@@ -117,6 +118,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',
@@ -154,6 +156,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',
@@ -192,6 +195,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',

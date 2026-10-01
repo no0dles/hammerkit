@@ -18,7 +18,7 @@ import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernete
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { awaitJobCompletion, deleteJob } from '../kubernetes/await-running-state'
-import { getKubernetesPersistence } from '../kubernetes/volumes'
+import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureIngress } from '../kubernetes/ensure-ingress'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
@@ -188,7 +188,24 @@ export function kubernetesTaskRuntime(
       const completedStates = jobs.body.items
         .filter((j) => j.status?.succeeded && j.metadata?.labels?.['hammerkit.dev/state'])
         .map((j) => j.metadata!.labels!['hammerkit.dev/state'])
-      return completedStates[completedStates.length - 1] ?? null
+      const stateKey = completedStates[completedStates.length - 1] ?? null
+      if (stateKey === null || !task.data.generates.some((g) => !g.inherited)) {
+        return stateKey
+      }
+      // outputs live in the task's claim; without it the finished job left
+      // nothing to reuse
+      try {
+        const claim = await instance.coreApi.readNamespacedPersistentVolumeClaim(
+          getVolumeName(task),
+          kubernetes.namespace
+        )
+        return claim.body.metadata?.deletionTimestamp ? null : stateKey
+      } catch (e) {
+        if (statusCodeOf(e) === 404) {
+          return null
+        }
+        throw e
+      }
     },
   }
 }

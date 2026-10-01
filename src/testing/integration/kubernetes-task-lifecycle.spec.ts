@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { KubeConfig, BatchV1Api } from '@kubernetes/client-node'
+import { KubeConfig, BatchV1Api, CoreV1Api } from '@kubernetes/client-node'
 import { requiresKubernetes } from '../requires-kubernetes'
 import { createTestCase } from '../test-case'
 import { createCli } from '../../program'
@@ -67,6 +67,32 @@ describe('kubernetes task lifecycle', () => {
           expect(await jobNames()).toEqual([])
         }
       )
+    })
+  )
+
+  // outputs live in the task's claim: once it is gone, the finished job alone is
+  // not a reusable result
+  it(
+    'has no reusable state once the claim holding its outputs is deleted',
+    requiresKubernetes(async () => {
+      await createTestCase(
+        'k8s-job-claim-deleted',
+        project({ generates: ['dist'], cmds: ['mkdir -p dist', 'cp input.txt dist/out.txt'] })
+      ).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {
+          taskName: 'job',
+          environmentName: 'default',
+        })
+        expect((await cli.runExec()).success).toBe(true)
+        const task = cli.task('job')
+        expect(await task.runtime.currentStateKey(environment)).not.toBeNull()
+
+        const config = new KubeConfig()
+        config.loadFromDefault()
+        config.setCurrentContext(context)
+        await config.makeApiClient(CoreV1Api).deleteNamespacedPersistentVolumeClaim(`hammerkit-${task.id()}`, namespace)
+        expect(await task.runtime.currentStateKey(environment)).toBeNull()
+      })
     })
   )
 })

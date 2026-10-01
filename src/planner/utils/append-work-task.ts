@@ -31,7 +31,13 @@ export function appendWorkTask(
   const task = parseTask(cwd, referenceTask, environment, context)
   if (!workTree.tasks[task.name]) {
     const workItem: WorkItem<WorkTask> = {
-      id: lazyResolver(() => getWorkTaskId(task)),
+      // A dependency cycle is rejected before anything runs (checkForLoop), but
+      // the id may be asked for earlier; re-entry yields a placeholder instead of
+      // recursing forever.
+      id: lazyResolver(
+        () => getWorkTaskId(workItem),
+        () => `cycle:${task.name}`
+      ),
       name: task.name,
       data: task,
       status: environment.status.from(task),

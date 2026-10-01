@@ -4,7 +4,7 @@ import { WorkTask } from '../planner/work-task'
 import { TaskState } from './scheduler/task-state'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { getWorkInstanceId } from '../planner/work-instance-id'
-import { getWorkCacheStats } from '../optimizer/get-work-cache-stats'
+import { getWorkItemCacheStats } from '../optimizer/get-work-cache-stats'
 import { writeCacheMetadata } from './cache-metadata'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 
@@ -17,8 +17,8 @@ export async function archiveTaskEntry(
   environment: Environment
 ): Promise<string> {
   const cacheDir = getCacheDirectory(getWorkInstanceId(work))
-  const stats = await getWorkCacheStats(work.data, environment)
-  await writeCacheMetadata(environment, work, stats, getWorkTaskCacheDescription(work.data))
+  const { stats } = await getWorkItemCacheStats(work, environment)
+  await writeCacheMetadata(environment, work, stats, getWorkTaskCacheDescription(work))
   await work.runtime.archive(environment, cacheDir)
   return cacheDir
 }

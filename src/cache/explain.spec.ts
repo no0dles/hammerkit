@@ -23,7 +23,7 @@ async function simulateRun(cli: Cli, environment: Environment, taskName: string)
   await environment.file.createDirectory(join(item.data.cwd, '.hammerkit'))
   await environment.file.writeFile(join(item.data.cwd, '.hammerkit', item.id()), stateKey)
   await writeLastResolvedRecord(environment, item, {
-    description: getWorkTaskCacheDescription(item.data),
+    description: getWorkTaskCacheDescription(item),
     stats,
   })
 }
@@ -92,6 +92,32 @@ describe('cache explain (fast)', () => {
       const build = explanationFor(await cli.explain(), 'build')
       expect(build.status).toBe('uncacheable')
       expect(hasCause(build, { kind: 'no-src' })).toBe(true)
+    })
+  })
+
+  it('reports a task whose src matches no files, and its dependants, as uncacheable', async () => {
+    const t = createTestCase('explain-no-src-files', {
+      '.hammerkit.yaml': {
+        tasks: {
+          lib: { cmds: ['node --version'], src: ['scr'] },
+          app: { cmds: ['node --version'], src: ['app.txt'], deps: ['lib'] },
+        },
+      },
+      'app.txt': 'app\n',
+    })
+    await t.setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
+      await cli.clean({ cache: true })
+      await simulateRun(cli, environment, 'lib')
+      await simulateRun(cli, environment, 'app')
+
+      const explanations = await cli.explain()
+      const lib = explanationFor(explanations, 'lib')
+      expect(lib.status).toBe('uncacheable')
+      expect(hasCause(lib, { kind: 'no-src-files' })).toBe(true)
+      const app = explanationFor(explanations, 'app')
+      expect(app.status).toBe('uncacheable')
+      expect(hasCause(app, { kind: 'dependency-uncacheable', identifier: 'lib' })).toBe(true)
     })
   })
 

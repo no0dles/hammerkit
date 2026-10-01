@@ -2,7 +2,7 @@ import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
 import { convertToPosixPath, getContainerCli } from '../executer/execute-docker'
 import { ContainerWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
-import { ContainerWorkTask } from './work-task'
+import { ContainerWorkTask, WorkTaskGenerate } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { State } from '../executer/state'
 import { removeContainer } from '../docker/remove-container'
@@ -14,7 +14,8 @@ import Dockerode from 'dockerode'
 import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
 import { existsVolume, removeVolume } from '../executer/get-docker-executor'
-import { dirname } from 'path'
+import { basename, dirname } from 'path'
+import { create, extract } from 'tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
@@ -81,7 +82,7 @@ export function dockerTaskRuntime(
         }
       }
     },
-    async currentStateKey(): Promise<string | null> {
+    async currentStateKey(environment: Environment): Promise<string | null> {
       const containers = await docker.listContainers({
         all: true,
         filters: {
@@ -97,9 +98,26 @@ export function dockerTaskRuntime(
         return null
       }
 
+      // outputs removed since the run (a deleted export, a pruned volume)
+      // leave nothing to reuse
+      for (const generate of task.data.generates.filter((g) => !g.inherited)) {
+        const present = isOnHost(generate)
+          ? await environment.file.exists(generate.path)
+          : !!(await existsVolume(docker, generate.volumeName))
+        if (!present) {
+          return null
+        }
+      }
+
       return container.Labels['hammerkit-state']
     },
   }
+}
+
+// File outputs are bind mounts of host files and exported directories are
+// copied to the host, so both must be present on the host, not only in a volume.
+function isOnHost(generate: WorkTaskGenerate): boolean {
+  return generate.isFile || generate.export
 }
 
 async function restoreContainer(
@@ -150,6 +168,15 @@ async function restoreContainer(
       }
     }
   )
+
+  if (item.data.type === 'container-task') {
+    const onHost = new Set(item.data.generates.filter((g) => !g.inherited && isOnHost(g)).map((g) => g.path))
+    for (const generate of getArchivePaths(item.data, path)) {
+      if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
+        await extract({ file: generate.filename, cwd: dirname(generate.path) })
+      }
+    }
+  }
 }
 
 export function dockerServiceRuntime(
@@ -271,10 +298,18 @@ async function archiveContainer(
     },
     null,
     async (container) => {
+      const hostFiles = new Set(
+        item.data.type === 'container-task'
+          ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
+          : []
+      )
       for (const generatedArchive of getArchivePaths(item.data, path)) {
-        const readable = await container.getArchive({
-          path: generatedArchive.path,
-        })
+        // a file output is a bind mount of a host file, so archive it from the host
+        const readable = hostFiles.has(generatedArchive.path)
+          ? create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)])
+          : await container.getArchive({
+              path: generatedArchive.path,
+            })
 
         await environment.file.writeStream(generatedArchive.filename, readable)
       }

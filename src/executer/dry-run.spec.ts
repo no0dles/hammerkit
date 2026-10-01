@@ -14,7 +14,7 @@ async function simulateRun(cli: Cli, environment: Environment, taskName: string)
   const { stateKey, stats } = await computeStateKey(item, 'checksum', environment)
   await environment.file.createDirectory(join(item.data.cwd, '.hammerkit'))
   await environment.file.writeFile(join(item.data.cwd, '.hammerkit', item.id()), stateKey)
-  await writeLastResolvedRecord(environment, item, { description: getWorkTaskCacheDescription(item.data), stats })
+  await writeLastResolvedRecord(environment, item, { description: getWorkTaskCacheDescription(item), stats })
 }
 
 describe('dry run (fast)', () => {

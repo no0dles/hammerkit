@@ -113,7 +113,7 @@ describe('checkCacheState auto-pull', () => {
     const stats = await getWorkCacheStats(itemA.data, envA)
     const stateKey = getStateKey(stats, 'checksum')
 
-    await writeCacheMetadata(envA, itemA, stats, getWorkTaskCacheDescription(itemA.data))
+    await writeCacheMetadata(envA, itemA, stats, getWorkTaskCacheDescription(itemA))
     const cacheDir = getCacheDirectory(getWorkInstanceId(itemA))
     await backend.push(itemA.id(), stateKey, cacheDir, envA)
 
