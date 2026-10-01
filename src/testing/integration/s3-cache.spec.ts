@@ -7,6 +7,7 @@ import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { createS3CacheBackend } from '../../cache/backends/s3-cache-backend'
 import { environmentMock } from '../../executer/environment-mock'
 import { requiresLinuxContainers } from '../requires-linux-containers'
+import { prunable } from '../prunable-backend'
 
 // The s3 cache backend against a real S3 API (VersityGW, an S3 gateway over a
 // local directory — MinIO no longer publishes public images): push, pull, list
@@ -105,14 +106,14 @@ describe('s3 cache backend (real S3 API)', () => {
         expect(await backend.pull('task1', 'state1', into, environment)).toBe(true)
         expect(await environment.file.read(join(into, 'out-generates.tgz'))).toBe('x'.repeat(4096))
 
-        const entries = await backend.list!(environment)
+        const entries = await prunable(backend).list(environment)
         expect(entries.map((e) => e.stateKey).sort()).toEqual(['state1', 'state2'])
         expect(entries[0].size).toBe(4096 + '{"files":{}}'.length)
         expect(entries[0].createdAt).toBeGreaterThan(Date.now() - 60_000)
 
-        await backend.remove!('task1', 'state1', environment)
+        await prunable(backend).remove('task1', 'state1', environment)
         expect(await backend.has('task1', 'state1', environment)).toBe(false)
-        expect((await backend.list!(environment)).map((e) => e.stateKey)).toEqual(['state2'])
+        expect((await prunable(backend).list(environment)).map((e) => e.stateKey)).toEqual(['state2'])
       } finally {
         rmSync(scratch, { recursive: true, force: true })
       }

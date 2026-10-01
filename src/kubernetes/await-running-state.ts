@@ -81,7 +81,11 @@ function sleep(ms: number, abort: AbortSignal): Promise<void> {
   })
 }
 
-export async function deleteJob(instance: KubernetesInstance, env: WorkKubernetesEnvironment, name: string) {
+export async function deleteJob(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string
+): Promise<void> {
   try {
     await instance.batchApi.deleteNamespacedJob(name, env.namespace, undefined, undefined, 0, undefined, 'Background')
   } catch (e) {

@@ -118,7 +118,11 @@ describe('cache invalidation', () => {
       }
     }
 
-    async function consumeAfterChange(name: string, before: object, after: object): Promise<string> {
+    async function consumeAfterChange(
+      name: string,
+      before: ReturnType<typeof buildFile>,
+      after: ReturnType<typeof buildFile>
+    ): Promise<string> {
       let output = ''
       await createTestCase(name, {
         '.git/HEAD': 'ref: refs/heads/main\n',

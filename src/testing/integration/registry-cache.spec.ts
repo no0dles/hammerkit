@@ -13,6 +13,7 @@ import { runProgram } from '../../run-program'
 import { requiresLinuxContainers } from '../requires-linux-containers'
 import { memoryStream } from '../test-streams'
 import { listVolume } from '../read-volume'
+import { prunable } from '../prunable-backend'
 
 // The registry cache backend against a real registry:2 with basic auth (the
 // credentials come from a docker config, exactly as `docker login` writes it)
@@ -149,12 +150,12 @@ describe('registry cache backend', () => {
         await backend.push(taskId, 'state1', from, environment)
         await backend.push(taskId, 'state2', from, environment)
 
-        const entries = await backend.list!(environment)
+        const entries = await prunable(backend).list(environment)
         expect(entries.map((e) => e.stateKey).sort()).toEqual(['state1', 'state2'])
         expect(entries[0].size).toBeGreaterThan(2048)
         expect(entries[0].createdAt).toBeGreaterThan(Date.now() - 60_000)
 
-        await backend.remove!(taskId, 'state1', environment)
+        await prunable(backend).remove(taskId, 'state1', environment)
         expect(await backend.has(taskId, 'state1', environment)).toBe(false)
         expect(await backend.has(taskId, 'state2', environment)).toBe(true)
       } finally {
