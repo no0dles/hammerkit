@@ -14,6 +14,13 @@
   ],
   "homepage": "https://no0dles.gitbook.io/hammerkit/",
   "bin": "dist/index.js",
+  "files": [
+    "dist",
+    "!dist/**/*.spec.*",
+    "!dist/testing",
+    "!dist/**/*.map",
+    "build.schema.json"
+  ],
   "bugs": {
     "url": "https://github.com/no0dles/hammerkit/issues"
   },

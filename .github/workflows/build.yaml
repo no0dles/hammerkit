@@ -27,6 +27,19 @@ jobs:
         run: npm run lint
       - name: Build source code
         run: npm run build
+      # The published package is an allowlist (`files` in package.json): install
+      # the packed tarball like a user would and run it, so a missing file fails
+      # here instead of after a release.
+      - name: Smoke test the packed package
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          npm install -g "$RUNNER_TEMP"/hammerkit-*.tgz
+          cd "$RUNNER_TEMP"
+          printf 'tasks:\n  hello:\n    src: [in.txt]\n    cmds: [cat in.txt]\n' > .hammerkit.yaml
+          echo hello > in.txt
+          hammerkit --version
+          hammerkit validate
+          hammerkit run hello --no-summary
   docker:
     strategy:
       fail-fast: false
