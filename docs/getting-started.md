@@ -82,8 +82,10 @@ npx hammerkit example
 
 The first run pulls the `alpine` image if it isn't on your machine yet (later runs
 reuse it), starts a container, executes the echo command `it's Hammer Time!` and
-exits with code `0`. Run it a second time without changing anything and hammerkit
-reports the task as cached and skips it — that's [caching](task/caching.md) at work.
+exits with code `0`. Run it a second time and it runs again: the task declares no
+`src`, so hammerkit can't tell whether anything it reads has changed. Declare the
+files a task reads under `src`, and an unchanged task is reported as cached and
+skipped — that's [caching](task/caching.md) at work.
 
 ## Discover the tasks in a project
 
