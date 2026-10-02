@@ -6,7 +6,7 @@ import { createParseContext } from '../../schema/schema-parser'
 import { parseReferences } from '../../schema/reference-parser'
 import { getWorkContext } from '../../schema/work-scope-parser'
 import { WorkScope } from '../../executer/work-scope'
-import { KubernetesWorkService } from '../work-service'
+import { ContainerWorkService, KubernetesWorkService } from '../work-service'
 
 describe('appendWorkService (kubernetes service env inheritance)', () => {
   let scratch: string
@@ -82,5 +82,30 @@ ${extra}    selector:
     const { referenced, env, workScope } = await parse(postgres(), null)
 
     expect(() => getWorkContext(referenced, workScope, env)).toThrow(/postgres has no context/)
+  })
+})
+
+describe('appendWorkService (container service)', () => {
+  let scratch: string
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'hammerkit-container-svc-'))
+  })
+  afterEach(() => {
+    rmSync(scratch, { recursive: true, force: true })
+  })
+
+  // like a task's image, so one build-file env can pin a service and the tasks
+  // testing against it
+  it('substitutes build-file env variables in the image', async () => {
+    const env = environmentMock(scratch)
+    const file = join(scratch, '.hammerkit.yaml')
+    writeFileSync(file, `envs:\n  POSTGRES_IMAGE: postgres:16-alpine\nservices:\n  db:\n    image: $POSTGRES_IMAGE\n`)
+    const { ctx, scope } = await createParseContext(file, env)
+    const referenced = await parseReferences(ctx, scope, env)
+    const workScope: WorkScope = { environmentName: null, filterLabels: {}, excludeLabels: {} }
+
+    const service = getWorkContext(referenced, workScope, env).services['db'].data as ContainerWorkService
+    expect(service.image).toEqual('postgres:16-alpine')
   })
 })
