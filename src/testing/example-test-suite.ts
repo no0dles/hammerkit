@@ -38,8 +38,14 @@ export class ExampleTestSuite implements TestSuite {
   }
 
   async setup(scope: TestSuiteOptions): Promise<TestSuiteSetup> {
-    await this.file.remove(this.path)
+    // Empty the directory instead of removing and recreating it: Docker
+    // Desktop's file sharing keeps a stale view of a directory that is deleted
+    // and recreated between tests, so bind mounts from it then fail with
+    // "error while creating mount source path … no such file or directory".
     await this.file.createDirectory(this.path)
+    for (const entry of await this.file.listFiles(this.path)) {
+      await this.file.remove(join(this.path, entry))
+    }
 
     const statusStream = memoryStream()
     const environment: Environment = {

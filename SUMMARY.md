@@ -27,15 +27,21 @@
 * [Guides](docs/guides/local-vs-container.md)
   * [Local vs container tasks](docs/guides/local-vs-container.md)
   * [Caching strategy in CI](docs/guides/ci-caching.md)
+  * [Agents, workspaces and CI](docs/guides/agents-and-ci.md)
   * [Services & networking](docs/guides/services-networking.md)
   * [Monorepo layout](docs/guides/monorepo.md)
   * [Development workflow](docs/guides/development-workflow.md)
+* [Migrate CI with an agent](docs/llm/README.md)
+  * [CI migration guide (for agents)](docs/llm/migrate-ci.md)
 * [CLI](docs/cli/README.md)
   * [Init](docs/cli/init.md)
   * [ls](docs/cli/ls.md)
   * [Execute](docs/cli/execute.md)
   * [Up](docs/cli/up.md)
   * [Down](docs/cli/down.md)
+  * [Explain](docs/cli/explain.md)
+  * [Graph](docs/cli/graph.md)
+  * [Cache](docs/cli/cache.md)
   * [Store / Restore](docs/cli/store-restore.md)
   * [Package](docs/cli/package.md)
   * [Clean](docs/cli/clean.md)
@@ -53,16 +59,17 @@
 * [Release 1.4.0](docs/release-blog/release-1.4.0.md)
 * [Release 1.5.0](docs/release-blog/release-1.5.0.md)
 * [Release 1.6.0](docs/release-blog/release-1.6.0.md)
+* [Release 1.7.0](docs/release-blog/release-1.7.0.md)
 
 ## Change Log
 
 * [Changelog 1.4.0](docs/change-log/change-log-1.4.0.md)
 * [Changelog 1.5.0](docs/change-log/change-log-1.5.0.md)
 * [Changelog 1.6.0](docs/change-log/change-log-1.6.0.md)
+* [Changelog 1.7.0](docs/change-log/change-log-1.7.0.md)
 
 ## Contribution
 
 * [Roadmap](docs/contribution/roadmap.md)
   * [Secret managers (planned)](docs/contribution/secret-managers.md)
 * [Publishing](docs/contribution/publish.md)
-* [Self-hosted runner](docs/contribution/self-hosted-runner.md)

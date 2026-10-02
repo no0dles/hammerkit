@@ -45,7 +45,7 @@ describe('parse-work-source', () => {
   describe('with a mid-string wildcard', () => {
     it('uses the prefix for the absolute path and globs against the full path', () => {
       const [src] = parseWorkSource('/proj', ['src/*.ts'], noEnvs)
-      expect(src.absolutePath).toBe(toNative('/proj/src/'))
+      expect(src.absolutePath).toBe(toNative('/proj/src'))
       expect(src.isFile).toBe(false)
       expect(src.matcher('/proj/src/a.ts', '/proj')).toBe(true)
       expect(src.matcher('/proj/src/sub/a.ts', '/proj')).toBe(false)

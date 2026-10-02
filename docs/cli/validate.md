@@ -43,7 +43,7 @@ Here the two warnings are advisory, but the cycle is an error, so the command ex
 `1` and a CI job using it fails.
 
 {% hint style="success" %}
-This command is recommended to be used in CI together with other linting jobs.
+Run this command in CI alongside your other linting jobs.
 {% endhint %}
 
 {% hint style="info" %}

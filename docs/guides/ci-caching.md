@@ -17,7 +17,8 @@ never hits the cache on a fresh runner. See [caching](../task/caching.md#checksu
 
 ## Option A — a remote cache backend (recommended)
 
-Point the built-in `default` cache at an S3-compatible bucket. Hammerkit then
+Point the built-in `default` cache at an S3-compatible bucket (or a container
+registry — see [caches](../build-file/caches.md#registry)). Hammerkit then
 **pulls** a task's result before running it and **pushes** the result after — no
 cache scripting in your pipeline at all.
 
@@ -49,6 +50,42 @@ build — an unreachable bucket just falls back to running the task. The same bu
 works for developers locally, so a result built on a laptop is reused in CI and
 vice versa. See [caches](../build-file/caches.md) for the full backend reference
 (MinIO, R2, GCS).
+
+### Sharing across checkouts, runners and agent sandboxes
+
+Cache ids are computed from paths relative to the project root (the git root), so
+the same commit produces the same ids wherever it is checked out — a CI runner at
+`/home/runner/work/app/app`, an agent sandbox at `/workspace/app` and a laptop all
+hit the same entries. Use **container tasks** for anything you want to share
+between macOS and Linux machines: a local task includes the host OS in its identity.
+
+### Read-only runners
+
+Only trusted runners should write to the shared cache. Give untrusted runners —
+coding-agent sandboxes, pull requests from forks — read-only credentials and run
+them in read-only mode, so they restore results but never push:
+
+```bash
+export HAMMERKIT_CACHE_READ_ONLY=1   # or pass --cache-read-only to run / up
+hammerkit run test
+```
+
+Read-only mode skips every backend push, including the built-in local `default`
+cache. Results a read-only run builds are still reused by later runs in the same
+checkout.
+
+### Splitting network from compute
+
+Instead of letting every task talk to the bucket during the build, keep tasks on
+the machine-local `default` cache and move entries explicitly with
+[`cache pull` / `cache push`](../cli/cache.md). The build itself then does no
+network I/O, and a workspace can be warmed before anyone runs anything:
+
+```bash
+hammerkit cache pull --remote shared     # network only
+hammerkit run                            # compute only
+hammerkit cache push --remote shared     # trusted runners only
+```
 
 ## Option B — store / restore with the CI's own cache
 
@@ -92,7 +129,7 @@ jobs:
 | Pipeline wiring | None — automatic pull/push | You add `restore`/`store` steps + a cache step |
 | Granularity | Per task | One directory for the whole run |
 | Shared with local dev | Yes (same bucket) | No (CI cache only) |
-| Needs object storage | Yes | No |
+| Needs a bucket or registry | Yes | No |
 
 A remote backend is the lower-maintenance choice and is shared with local
 development. If you already rely on your CI's cache and don't want a bucket,

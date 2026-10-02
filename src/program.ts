@@ -5,7 +5,11 @@ import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
 import { Cli, getCli, isCliService, isCliTask } from './cli'
 import { WorkLabelScope, WorkScope } from './executer/work-scope'
-import { getErrorMessage, printItem, printProperty, printTitle } from './log'
+import { consoleContext, getErrorMessage, printItem, printProperty, printTitle } from './log'
+import { emptyWritable } from './utils/empty-writable'
+import { describeCause } from './cache/explain'
+import { printRunSummary, summarizeRun } from './executer/run-summary'
+import { printDryRun } from './executer/dry-run'
 import { hasLabels } from './executer/label-values'
 import { getBuildFilename } from './parser/default-build-file'
 import { createParseContext } from './schema/schema-parser'
@@ -14,6 +18,9 @@ import { parseReferences } from './schema/reference-parser'
 import colors from 'colors'
 import { WorkItemValidation } from './planner/work-item-validation'
 import { getVersion } from './version'
+import { CACHE_READ_ONLY_ENV, isCacheReadOnly } from './cache/read-only'
+import { formatDuration, formatSize, parseDuration, parseSize } from './utils/units'
+import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
@@ -280,6 +287,224 @@ export async function getProgram(
       })
 
     program
+      .command('graph [task]')
+      .description('serialize the build graph (tasks, services, deps/needs edges) as mermaid or dot')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('--env <name>', 'environment'))
+      .addOption(new Option('--format <format>', 'output format').default('mermaid').choices(['mermaid', 'dot']))
+      .action(async (task, options) => {
+        try {
+          const cli = await createCli(
+            fileName,
+            environment,
+            task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
+          )
+          const serialization = cli.graph(options.format)
+          environment.stdout.write(`${serialization.output}\n`)
+          if (serialization.cycle) {
+            environment.console.warn(`cycle detected: ${serialization.cycle.join(' -> ')}`)
+          }
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+
+          environment.console.error(getErrorMessage(e))
+          program.error('Graph was not successful', { exitCode: 1 })
+        }
+      })
+
+    program
+      .command('explain [task]')
+      .description('explain whether tasks would be a cache hit or miss, without running them')
+      .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+      .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('--env <name>', 'environment'))
+      .addOption(
+        new Option('--cache <method>', 'caching method to compare')
+          .default('checksum')
+          .choices(['checksum', 'modify-date', 'none'])
+      )
+      .addOption(new Option('--json', 'emit the explanation as JSON').default(false))
+      .action(async (task, options) => {
+        try {
+          const cli = await createCli(
+            fileName,
+            environment,
+            task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
+          )
+          const explanations = await cli.explain({ cacheDefault: options.cache })
+          if (options.json) {
+            environment.stdout.write(`${JSON.stringify(explanations, null, 2)}\n`)
+            return
+          }
+          for (const explanation of explanations) {
+            const label =
+              explanation.status === 'hit'
+                ? colors.green('cache hit')
+                : explanation.status === 'uncacheable'
+                  ? colors.grey('uncacheable')
+                  : colors.yellow('cache miss')
+            environment.stdout.write(`• ${explanation.taskName}: ${label}\n`)
+            for (const cause of explanation.causes) {
+              printProperty(environment, 'cause', describeCause(cause))
+            }
+          }
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+
+          environment.console.error(getErrorMessage(e))
+          program.error('Explain was not successful', { exitCode: 1 })
+        }
+      })
+
+    const cacheCommand = program.command('cache').description('inspect, prune and move cache entries')
+    for (const direction of ['pull', 'push'] as const) {
+      cacheCommand
+        .command(`${direction} [task]`)
+        .description(
+          direction === 'pull'
+            ? 'fetch the cache entries of the current state from a remote cache, without running tasks'
+            : 'upload the locally cached entries of the current state to a remote cache, without running tasks'
+        )
+        .addOption(new Option('--remote <name>', 'remote cache declared in the caches block').makeOptionMandatory())
+        .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
+        .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+        .addOption(new Option('--env <name>', 'environment'))
+        .addOption(
+          new Option('--cache <method>', 'caching method to compare')
+            .default('checksum')
+            .choices(['checksum', 'modify-date', 'none'])
+        )
+        .action(async (task, options) => {
+          try {
+            if (direction === 'push' && isCacheReadOnly(false, environment.processEnvs)) {
+              program.error(`cache is read-only (${CACHE_READ_ONLY_ENV} is set), refusing to push`, { exitCode: 1 })
+              return
+            }
+            const cli = await createCli(
+              fileName,
+              environment,
+              task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
+            )
+            const results = await cli.syncCache({ direction, remote: options.remote, cacheDefault: options.cache })
+            const labels = {
+              transferred: colors.green(direction === 'pull' ? 'pulled' : 'pushed'),
+              present: colors.grey('already present'),
+              missing: colors.yellow(direction === 'pull' ? 'not in remote' : 'not in local cache'),
+              skipped: colors.grey('skipped'),
+            }
+            for (const result of results) {
+              environment.stdout.write(`• ${result.taskName}: ${labels[result.status]}\n`)
+            }
+            const moved = results.filter((r) => r.status === 'transferred').length
+            environment.stdout.write(
+              `${moved}/${results.length} entries ${direction === 'pull' ? 'pulled' : 'pushed'}\n`
+            )
+          } catch (e) {
+            if (e instanceof CommanderError) {
+              throw e
+            }
+            environment.console.error(getErrorMessage(e))
+            program.error(`Cache ${direction} was not successful: ${getErrorMessage(e)}`, { exitCode: 1 })
+          }
+        })
+    }
+
+    const describeEntry = (entry: NamedCacheEntry) =>
+      `${entry.taskName ?? colors.grey(entry.taskId.substring(0, 12))} ${colors.grey(
+        entry.stateKey.substring(0, 12)
+      )} ` +
+      `${entry.size === null ? '?' : formatSize(entry.size)}` +
+      (entry.lastAccessedAt ?? entry.createdAt
+        ? colors.grey(` last used ${formatDuration(Date.now() - (entry.lastAccessedAt ?? entry.createdAt ?? 0))} ago`)
+        : '')
+    const totalSize = (entries: NamedCacheEntry[]) =>
+      formatSize(entries.reduce((sum, entry) => sum + (entry.size ?? 0), 0))
+    const countOf = (count: number) => `${count} ${count === 1 ? 'entry' : 'entries'}`
+
+    cacheCommand
+      .command('ls')
+      .description('list the entries of a cache (default: the local default cache)')
+      .addOption(new Option('--remote <name>', 'cache declared in the caches block to list'))
+      .addOption(new Option('--json', 'emit the entries as JSON').default(false))
+      .action(async (options) => {
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope({}))
+          const entries = await cli.listCache(options.remote)
+          if (options.json) {
+            environment.stdout.write(`${JSON.stringify(entries, null, 2)}\n`)
+            return
+          }
+          for (const entry of entries) {
+            environment.stdout.write(`• ${describeEntry(entry)}\n`)
+          }
+          environment.stdout.write(`${countOf(entries.length)}, ${totalSize(entries)} total\n`)
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+          program.error(`Cache ls was not successful: ${getErrorMessage(e)}`, { exitCode: 1 })
+        }
+      })
+
+    cacheCommand
+      .command('prune')
+      .description('remove cache entries by retention policy (default: the local default cache)')
+      .addOption(new Option('--remote <name>', 'cache declared in the caches block to prune'))
+      .addOption(
+        new Option('--max-age <duration>', 'remove entries not used within this long (e.g. 30d)').argParser(
+          parseDuration
+        )
+      )
+      .addOption(
+        new Option('--max-size <size>', 'remove least recently used entries above this size (e.g. 5Gi)').argParser(
+          parseSize
+        )
+      )
+      .addOption(
+        new Option('--keep <count>', 'keep only the newest versions per task').argParser((v) => parseInt(v, 10))
+      )
+      .addOption(new Option('--dry-run', 'show what would be removed without removing it').default(false))
+      .action(async (options) => {
+        try {
+          const cli = await createCli(fileName, environment, parseWorkLabelScope({}))
+          const policy = cli.retentionPolicy(options.remote, {
+            maxAge: options.maxAge,
+            maxSize: options.maxSize,
+            keepPerTask: options.keep,
+          })
+          if (!hasPolicy(policy)) {
+            program.error(
+              'no retention policy: pass --max-age, --max-size or --keep, or declare retention on the cache',
+              { exitCode: 1 }
+            )
+            return
+          }
+          const plan = await cli.pruneCache(options.remote, policy, options.dryRun)
+          for (const entry of plan.evict) {
+            environment.stdout.write(`• ${options.dryRun ? 'would remove' : 'removed'} ${describeEntry(entry)}\n`)
+          }
+          for (const note of plan.unavailable) {
+            environment.console.warn(note)
+          }
+          environment.stdout.write(
+            `${options.dryRun ? 'would remove' : 'removed'} ${countOf(plan.evict.length)} (${totalSize(
+              plan.evict
+            )}), ` + `kept ${countOf(plan.keep.length)} (${totalSize(plan.keep)})\n`
+          )
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+          program.error(`Cache prune was not successful: ${getErrorMessage(e)}`, { exitCode: 1 })
+        }
+      })
+
+    program
       .command('up')
       .description('start services(s)')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
@@ -298,6 +523,17 @@ export async function getProgram(
           .default('checksum')
           .choices(['checksum', 'modify-date', 'none'])
       )
+      .addOption(
+        new Option(
+          '--cache-read-only',
+          `restore from cache backends but never push to them (or set ${CACHE_READ_ONLY_ENV}=1)`
+        ).default(false)
+      )
+      .addOption(
+        new Option('--timeout <duration>', 'fail tasks without their own timeout after this long (e.g. 10m)').argParser(
+          parseDuration
+        )
+      )
       .action(async (options) => {
         try {
           const scope = parseWorkLabelScope(options)
@@ -308,6 +544,8 @@ export async function getProgram(
             workers: options.concurrency,
             logMode: options.log,
             daemon: options.daemon,
+            cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
+            timeout: options.timeout ?? null,
           })
 
           if (!result.success) {
@@ -368,11 +606,36 @@ export async function getProgram(
           .default('checksum')
           .choices(['checksum', 'modify-date', 'none'])
       )
+      .addOption(new Option('--no-summary', 'do not print the end-of-run summary'))
+      .addOption(new Option('--summary-json', 'emit the end-of-run summary as JSON').default(false))
+      .addOption(new Option('--explain', 'print the cache-miss cause when a task rebuilds').default(false))
+      .addOption(
+        new Option('--dry-run', 'print the execution plan with predicted cache hits/misses without running').default(
+          false
+        )
+      )
+      .addOption(
+        new Option(
+          '--cache-read-only',
+          `restore from cache backends but never push to them (or set ${CACHE_READ_ONLY_ENV}=1)`
+        ).default(false)
+      )
+      .addOption(
+        new Option('--timeout <duration>', 'fail tasks without their own timeout after this long (e.g. 10m)').argParser(
+          parseDuration
+        )
+      )
+      .addOption(new Option('--no-skip-deps', 'run dependencies even when every task needing them is a cache hit'))
       .action(async (task, options) => {
         try {
+          // For machine-readable JSON, suppress the human progress logger (which
+          // also writes to stdout) so the only thing on stdout is the JSON.
+          const runEnvironment: Environment = options.summaryJson
+            ? { ...environment, stdout: emptyWritable(), console: consoleContext(emptyWritable()) }
+            : environment
           const cli = await createCli(
             fileName,
-            environment,
+            runEnvironment,
             task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options)
           )
           if (cli.tasks().length === 0) {
@@ -380,15 +643,58 @@ export async function getProgram(
             return
           }
 
+          if (options.dryRun) {
+            const plan = await cli.dryRun({ cacheDefault: options.cache })
+            if (plan.cycle) {
+              program.error(`task cycle detected ${plan.cycle.join(' -> ')}`, { exitCode: 1 })
+              return
+            }
+            printDryRun(environment, plan)
+            return
+          }
+
+          const runStart = Date.now()
           const result = await cli.runExec({
             cacheDefault: options.cache,
             watch: options.watch,
             workers: options.concurrency,
             logMode: options.log,
+            explain: options.explain,
+            cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
+            timeout: options.timeout ?? null,
+            skipDeps: options.skipDeps !== false,
           })
+
+          // Reporting only: the summary never changes the exit code or behavior.
+          if (!options.watch) {
+            const summary = summarizeRun(result.state, Date.now() - runStart)
+            if (options.summaryJson) {
+              environment.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
+            } else if (options.summary !== false) {
+              printRunSummary(environment, summary)
+            }
+          }
 
           if (!result.success) {
             program.error('Execution was not successful', { exitCode: 1 })
+          }
+
+          // Declared retention keeps local caches bounded without anyone having
+          // to remember `cache prune`. Never on remotes, never in read-only mode.
+          if (!options.watch && !isCacheReadOnly(options.cacheReadOnly, environment.processEnvs)) {
+            try {
+              for (const { cacheName, plan } of await cli.autoPrune()) {
+                if (plan.evict.length > 0) {
+                  runEnvironment.console.info(
+                    `pruned ${plan.evict.length} old ${
+                      plan.evict.length === 1 ? 'entry' : 'entries'
+                    } from cache "${cacheName}"`
+                  )
+                }
+              }
+            } catch (e) {
+              runEnvironment.console.warn(`automatic cache prune failed: ${getErrorMessage(e)}`)
+            }
           }
         } catch (e) {
           if (e instanceof CommanderError) {

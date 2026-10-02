@@ -1,0 +1,99 @@
+---
+description: >-
+  Move cache entries between a machine and a remote cache without running
+  anything, and inspect or prune what a cache holds.
+---
+
+# Cache
+
+`hammerkit cache pull` and `hammerkit cache push` move cache entries between each
+task's own cache (by default the machine-local `default` cache) and a **remote**
+cache declared in the [`caches:`](../build-file/caches.md) block. They execute no
+task and start no container.
+
+Only the entries for the tasks' **current** state are moved — exactly what the next
+build of this commit looks up — including all transitive dependencies of the
+selected tasks.
+
+{% code title=".hammerkit.yaml" %}
+```yaml
+caches:
+  shared:
+    method: checksum
+    backend:
+      type: s3
+      bucket: my-build-cache
+```
+{% endcode %}
+
+```bash
+# fast workspace setup: fetch everything the build needs, then build offline
+hammerkit cache pull --remote shared
+hammerkit run build
+
+# after a trusted build: upload the results for everyone else
+hammerkit cache push build --remote shared
+```
+
+## Options
+
+```
+Usage: hammerkit cache pull|push [options] [task]
+
+Options:
+  --remote <name>           remote cache declared in the caches block
+  -f, --filter <labels...>  filter task and services with labels
+  -e, --exclude <labels...> exclude task and services with labels
+  --env <name>              environment
+  --cache <method>          caching method to compare (choices: "checksum", "modify-date", "none")
+```
+
+## Behavior
+
+* An entry already present at the destination is skipped, so both commands are
+  safe to re-run.
+* An entry missing at the source is reported and skipped — the command still
+  succeeds.
+* An unreachable or unauthorized remote **fails** the command (unlike a build,
+  where a cache error only degrades to a cache miss).
+* `cache push` refuses to run when `HAMMERKIT_CACHE_READ_ONLY` is set.
+* Tasks with `cache: none`, or tasks whose own cache already *is* the remote, are
+  skipped.
+
+## cache ls and cache prune
+
+`hammerkit cache ls` lists the entries of a cache — by default the machine-local
+`default` cache, or any cache from the `caches:` block with `--remote <name>` — with
+the task, size and when it was last used. `--json` prints them for tooling.
+
+```
+• build 3f2a91c07d4e 12.4Mi last used 2h ago
+• e2e   91bc02f3aa10 1.2Ki last used 2h ago
+2 entries, 12.4Mi total
+```
+
+`hammerkit cache prune` removes entries according to the cache's
+[retention policy](../build-file/caches.md#retention), or the policy given on the
+command line, which takes precedence:
+
+```bash
+hammerkit cache prune --keep 1                  # newest version of each task only
+hammerkit cache prune --max-age 30d --dry-run   # show what would be removed
+hammerkit cache prune --remote shared --max-size 50Gi
+```
+
+```
+Usage: hammerkit cache prune [options]
+
+Options:
+  --remote <name>       cache declared in the caches block to prune
+  --max-age <duration>  remove entries not used within this long (e.g. 30d)
+  --max-size <size>     remove least recently used entries above this size (e.g. 5Gi)
+  --keep <count>        keep only the newest versions per task
+  --dry-run             show what would be removed without removing it
+```
+
+A local cache with a declared `retention` is also pruned automatically after every
+successful `run`. A remote cache is only ever pruned when you name it with
+`--remote`. Unlike [`clean --cache`](clean.md), which drops everything stored for
+the tasks of this build file, `prune` keeps what's recent and removes what's old.

@@ -31,6 +31,14 @@ describe('getStateKey', () => {
     expect(getStateKey(changed, 'checksum')).not.toBe(getStateKey(sample, 'checksum'))
   })
 
+  it('changes when a modification date changes (modify-date method)', () => {
+    const touched = stats({
+      'a.txt': { lastModified: 1000, checksum: 'aaa' },
+      'b.txt': { lastModified: 3000, checksum: 'bbb' },
+    })
+    expect(getStateKey(touched, 'modify-date')).not.toBe(getStateKey(sample, 'modify-date'))
+  })
+
   it('ignores checksum changes when using modify-date', () => {
     const changed = stats({
       'a.txt': { lastModified: 1000, checksum: 'aaa' },
@@ -87,7 +95,8 @@ describe('getWorkCacheStats', () => {
       { cwd: dir, src: [src(join(dir, 'sub'), (file) => file.endsWith('.txt'))] } as any,
       env
     )
-    expect(Object.keys(stats.files)).toContain(join('sub', 'keep.txt'))
-    expect(Object.keys(stats.files)).not.toContain(join('sub', 'skip.md'))
+    // '/'-separated on every OS (portable cache keys)
+    expect(Object.keys(stats.files)).toContain('sub/keep.txt')
+    expect(Object.keys(stats.files)).not.toContain('sub/skip.md')
   })
 })

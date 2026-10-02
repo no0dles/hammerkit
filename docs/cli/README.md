@@ -20,6 +20,12 @@ Commands:
   restore [options] <directory>  restore task outputs from <directory>
   package [options] <registry>   package services into a docker image
   validate [options]             validate hammerkit configurations
+  graph [options] [task]         serialize the build graph (tasks, services,
+                                 deps/needs edges) as mermaid or dot
+  explain [options] [task]       explain whether tasks would be a cache hit or
+                                 miss, without running them
+  cache                          inspect, prune and move cache entries
+                                 (cache ls / prune / pull / push)
   up [options]                   start services(s)
   down [options]                 stop services(s)
   run [options] [task]           execute task (default command)
@@ -45,6 +51,7 @@ These options are shared by the task-running commands ([run](execute.md),
 | `--env <name>` | – | Run against a declared [environment](../task/kubernetes.md) (e.g. a cluster). |
 | `-l, --log <mode>` | `interactive` (local) / `live` (CI) | `interactive`, `live` or `grouped`. |
 | `--cache <method>` | `checksum` | `checksum`, `modify-date` or `none`. See [caching](../task/caching.md). |
+| `--timeout <duration>` | – | Default [timeout](../task/README.md#timeouts) for tasks without their own. |
 
 Label filters are always `key=value`; a key-only `-f dev` is rejected.
 
@@ -53,7 +60,8 @@ Label filters are always `key=value`; a key-only `-f dev` is rejected.
 Independent tasks and dependencies run concurrently up to `--concurrency` workers
 (default `4`). A task only starts once all of its `deps` have completed and all of
 its `needs` are healthy; tasks on separate branches of the graph run at the same
-time. If any task fails, hammerkit stops scheduling new work and the run fails.
+time. If any task fails, or a service a task needs fails to start, hammerkit stops
+scheduling new work and the run fails.
 
 ## Exit codes
 

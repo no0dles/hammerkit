@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../executer/environment-mock'
 import { checkCacheState } from '../executer/scheduler/enqueue-next'
 import { createLocalCacheBackend } from './backends/local-cache-backend'
@@ -11,6 +11,7 @@ import { LocalWorkTask } from '../planner/work-task'
 import { ResolvedCache } from './resolve-cache'
 import { writeCacheMetadata } from '../executer/cache-metadata'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getWorkCacheStats, getStateKey } from '../optimizer/get-work-cache-stats'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 
@@ -48,6 +49,9 @@ describe('checkCacheState auto-pull', () => {
   }
 
   function makeWorkItem(cwd: string, resolved: ResolvedCache): WorkItemState<LocalWorkTask, TaskState> {
+    // identical source content on every "machine", so the state keys match
+    const input = join(cwd, 'input.txt')
+    writeFileSync(input, 'same on every machine')
     const storedStateKey: string | null = null
     return {
       id: () => 'demo-task',
@@ -57,13 +61,23 @@ describe('checkCacheState auto-pull', () => {
         type: 'local-task',
         name: 'demo-task',
         cwd,
+        projectRoot: cwd,
         cmds: [],
         generates: [],
-        src: [],
+        src: [
+          {
+            absolutePath: input,
+            source: 'input.txt',
+            matcher: (file: string) => file.startsWith(input),
+            inherited: null,
+            isFile: true,
+          },
+        ],
         envs: { variables: {}, replacements: [] } as any,
         labels: {},
         shell: '/bin/sh',
         continuous: false,
+        timeout: null,
         caching: resolved,
         description: null,
         scope: {} as any,
@@ -99,8 +113,8 @@ describe('checkCacheState auto-pull', () => {
     const stats = await getWorkCacheStats(itemA.data, envA)
     const stateKey = getStateKey(stats, 'checksum')
 
-    await writeCacheMetadata(envA, itemA.id(), stats, getWorkTaskCacheDescription(itemA.data))
-    const cacheDir = getCacheDirectory(itemA.id())
+    await writeCacheMetadata(envA, itemA, stats, getWorkTaskCacheDescription(itemA))
+    const cacheDir = getCacheDirectory(getWorkInstanceId(itemA))
     await backend.push(itemA.id(), stateKey, cacheDir, envA)
 
     rmSync(machineAScratch, { recursive: true, force: true })

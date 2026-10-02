@@ -27,6 +27,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       type: 'local-task',
       name: 'task-1',
       cwd,
+      projectRoot: cwd,
       cmds: [],
       generates: [],
       src: [],
@@ -34,6 +35,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       labels: {},
       shell: '/bin/sh',
       continuous: false,
+      timeout: null,
       caching: {
         name: 'none',
         method: 'none',
@@ -78,6 +80,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',
@@ -115,6 +118,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',
@@ -152,6 +156,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',
@@ -190,6 +195,7 @@ describe('local task pidfile', () => {
       cache: {
         cached: false,
         stateKey: 'state-x',
+        provable: true,
         resolved: {
           name: 'none',
           method: 'none',

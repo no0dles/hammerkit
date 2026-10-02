@@ -1,5 +1,5 @@
 ---
-description: Runs the task in your build file.
+description: Run the tasks in your build file.
 ---
 
 # Execute
@@ -19,15 +19,15 @@ hammerkit example
 Tasks can be executed by matching labels or filtered by label values.
 
 ### By matching labels
-The `-f type=build` will only execute tasks that have the given label value.
-Dependent tasks do not need to fulfill the label requirement.
+`-f type=build` only executes tasks that have the given label value.
+Their dependencies don't need to match the label.
 ```bash
 hammerkit -f type=build
 ```
 
 ### By excluding labels
-The `-e build=ios` will exclude tasks that have the given label value.
-If the task has no matching label, but any of the dependency tasks has a match, the task will be excluded as well.
+`-e build=ios` excludes tasks that have the given label value.
+A task without a matching label is excluded as well if any of its dependencies matches.
 ```bash
 hammerkit -e build=ios
 ```
@@ -42,6 +42,13 @@ Options:
   --env <name>                environment
   -l, --log <mode>            log mode (choices: "interactive", "live", "grouped")
   --cache <method>            caching method to compare (choices: "checksum", "modify-date", "none")
+  --no-summary                do not print the end-of-run summary
+  --summary-json              emit the end-of-run summary as JSON (default: false)
+  --explain                   print the cache-miss cause when a task rebuilds (default: false)
+  --dry-run                   print the execution plan with predicted cache hits/misses without running (default: false)
+  --cache-read-only           restore from cache backends but never push to them (or set HAMMERKIT_CACHE_READ_ONLY=1)
+  --timeout <duration>        fail tasks without their own timeout after this long (e.g. 10m)
+  --no-skip-deps              run dependencies even when every task needing them is a cache hit
   -h, --help                  display help for command
 ```
 
@@ -51,3 +58,48 @@ in CI, so a result cached on one is reused on the other. `--log` defaults to
 `interactive` outside CI and `live` in CI (hammerkit auto-detects CI from the `CI`,
 `CONTINUOUS_INTEGRATION`, `BUILD_NUMBER` or `RUN_ID` environment variables).
 {% endhint %}
+
+## Build summary
+
+After a run, hammerkit prints one line per task — executed or cached, and how long
+it took — followed by the totals and the cache hit ratio:
+
+```
+Summary:
+  build    cached     0ms
+  e2e      executed   4.5s
+  install  cached     0ms
+  1 executed, 2 cached (67% cache hit), 4.7s total
+```
+
+A dependency that wasn't needed because every task depending on it was a cache hit
+is listed as `skipped` — see [dependencies of cached tasks](../task/dependencies.md#dependencies-of-cached-tasks).
+
+`--no-summary` hides it; `--summary-json` prints it as JSON on stdout (and nothing
+else), for CI dashboards or agents. With `--explain`, every rebuilt task also
+prints why it missed the cache, and the summary gets a cause column.
+
+## Dry run
+
+`--dry-run` prints the execution plan in order, with the predicted cache hit or
+miss (and its cause) for every task, without running anything:
+
+```bash
+hammerkit run e2e --dry-run
+```
+
+```
+Dry run (no commands executed):
+  1. install: cache miss (never cached)
+  2. build: cache miss (source changed: src/app.js, dependency changed: install)
+  3. e2e: cache miss (source changed: src/app.js, dependency changed: build)
+```
+
+See also [`explain`](explain.md) and [`graph`](graph.md).
+
+## Read-only cache
+
+`--cache-read-only` (or `HAMMERKIT_CACHE_READ_ONLY=1`) restores results from cache
+backends but never writes to them — for untrusted runners such as agent sandboxes
+or pull requests from forks. See
+[agents, workspaces and CI](../guides/agents-and-ci.md#who-may-write-to-the-cache).

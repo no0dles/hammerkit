@@ -16,4 +16,14 @@ describe('lazyResolver', () => {
     expect(resolve()).toBe(0)
     expect(factory).toHaveBeenCalledTimes(1)
   })
+
+  it('answers a re-entrant call with the fallback instead of recursing', () => {
+    let resolve: () => string = () => ''
+    resolve = lazyResolver(
+      () => `outer(${resolve()})`,
+      () => 'cycle'
+    )
+    expect(resolve()).toBe('outer(cycle)')
+    expect(resolve()).toBe('outer(cycle)')
+  })
 })

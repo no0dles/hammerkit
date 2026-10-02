@@ -11,8 +11,7 @@ the tools they call.
 
 ## Npm / Yarn
 
-Hammerkit can be easily installed and upgraded by npm/yarn. 
-If node is already installed.
+If Node.js is installed, hammerkit can be installed and upgraded with npm or yarn.
 
 {% tabs %}
 {% tab title="npm" %}
@@ -23,14 +22,14 @@ npm i -g hammerkit
 
 {% tab title="yarn" %}
 ```bash
-yarn add -g hammerkit
+yarn global add hammerkit
 ```
 {% endtab %}
 {% endtabs %}
 
 ## Npx
 
-If node is installed, hammerkit can be run directly without a global install using `npx`.
+If Node.js is installed, hammerkit can be run directly without a global install using `npx`.
 This always uses the latest published version.
 
 ```bash
@@ -46,7 +45,7 @@ to a `build` *task* you define, not a hammerkit subcommand.
 
 ## Homebrew
 
-With homebrew hammerkit can be installed on macOS and linux (including windows with WSL).
+With Homebrew, hammerkit can be installed on macOS and Linux (and on Windows via WSL).
 
 ```
 brew tap no0dles/hammerkit
@@ -55,15 +54,15 @@ brew install hammerkit
 
 ## Binary
 
-Each release of hammerkit has a [release](https://github.com/no0dles/hammerkit/releases) on GitHub with binaries for windows, macOS and linux. 
-Those do not require to have node installed and support `arm` and `x86`.
+Each release of hammerkit has a [release](https://github.com/no0dles/hammerkit/releases) on GitHub with binaries for Windows, macOS and Linux.
+They don't require Node.js and are available for `arm` and `x86`.
 
 ## Container
 
-The container image on [docker hub](https://hub.docker.com/r/no0dles/hammerkit) contains hammerkit and can be used for dind. 
-For container builds on CI systems it's the recommended approach.
+The container image on [Docker Hub](https://hub.docker.com/r/no0dles/hammerkit) contains hammerkit and can be used with Docker-in-Docker (dind).
+It's the recommended approach for container builds on CI systems.
 
-## Gitlab CI
+## GitLab CI
 
 {% code title=".gitlab-ci.yml" %}
 ```yaml
@@ -82,8 +81,8 @@ build:
 
 ## GitHub Action
 
-For GitHub action there is the `no0dles/hammerkit-github-action` action to install hammerkit. 
-The action requires the `setup-node` to run correctly.
+For GitHub Actions, the `no0dles/hammerkit-github-action` action installs hammerkit.
+It requires `actions/setup-node` to run first.
 
 ```yaml
 jobs:

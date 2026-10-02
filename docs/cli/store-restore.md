@@ -1,16 +1,15 @@
 ---
 description: >-
-  Store and Restore generated files and folders. Increase the performance on
-  your CI.
+  Store and restore generated files and folders to speed up your CI.
 ---
 
 # Store / Restore
 
-The store/restore commands are intended to be used in a CI system. The store command requires a destination folder, where all generated folders and files are moved for later recovery. Restoring previous state can give a performance boost to your CI workflows, because it can leverage caching from your tasks over different pipelines.
+The store/restore commands are intended for CI systems. The store command takes a destination folder, into which all generated files and folders are moved for later recovery. Restoring the previous state speeds up your CI workflows, because task caching then works across pipeline runs.
 
 ### Example workflow
 
-To demonstrate the behavior we use the following example below. A simple node typescript project, that requires to install npm dependencies and compile the typescript source code.
+To demonstrate the behavior, we use the following example: a simple Node.js TypeScript project that installs npm dependencies and compiles the TypeScript source code.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -36,7 +35,7 @@ tasks:
 ```
 {% endcode %}
 
-The CI system uses the build task to `build` on every commit. The goal of the store/restore functionality is to prevent unnecessary work in the CI. Together with the caching from hammerkit, the build command will be skipped if nothing regarding source code has changed. The npm install will be skipped as well and the node\_modules folder will be restored if nothing has changed inside the `package.json` and `package-lock.json` file.
+The CI system runs the `build` task on every commit. The goal of store/restore is to prevent unnecessary work in CI. Together with hammerkit's caching, the build task is skipped if the source code hasn't changed. The npm install is skipped as well, and the node\_modules folder is restored, if `package.json` and `package-lock.json` are unchanged.
 
 ### Saving state
 
@@ -44,21 +43,21 @@ The CI system uses the build task to `build` on every commit. The goal of the st
 hammerkit store cache
 ```
 
-&#x20;After the store command completed, the hammerkit cache including all files from tasks that use the `generate` property are saved in the given destination folder. The folder can now be cached with the available caching mechanism in your CI.
+After the store command has completed, the hammerkit cache, including all files from tasks that declare `generates`, is saved in the given destination folder. The folder can then be cached with your CI's caching mechanism.
 
 ### Restoring state
 
-Before running the required tasks in your CI workflow the state should be restored. Make sure your CI caching mechanism restores the previous saved cache and then restore it with hammerkit.
+Restore the state before running the required tasks in your CI workflow: let your CI's caching mechanism restore the previously saved folder, then restore it with hammerkit.
 
 ```
 hammerkit restore <cache_dir>
 ```
 
-### Example with Gitlab CI
+### Example with GitLab CI
 
-This example uses the gitlab ci caching to speed up the build time of the `build` command. For further details, take a look at the [demo repository](https://gitlab.com/pascalbe/hammerkit-typescript-restore-demo).
+This example uses GitLab CI caching to speed up the build time of the `build` command. For further details, take a look at the [demo repository](https://gitlab.com/pascalbe/hammerkit-typescript-restore-demo).
 
-{% code title="gitlab-ci.yml" %}
+{% code title=".gitlab-ci.yml" %}
 ```yaml
 before_script:
   - npm i -g hammerkit
@@ -77,5 +76,3 @@ build:
 
 ```
 {% endcode %}
-
-###

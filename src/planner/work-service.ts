@@ -14,6 +14,8 @@ import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 export interface BaseWorkService {
   name: string
   cwd: string
+  // anchor for machine-independent cache identity (see findProjectRoot)
+  projectRoot: string
   description: string | null
   ports: WorkPort[]
   labels: LabelValues

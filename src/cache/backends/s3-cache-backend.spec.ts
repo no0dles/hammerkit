@@ -47,11 +47,31 @@ describe('s3 cache backend', () => {
     rmSync(scratch, { recursive: true, force: true })
   })
 
-  it('returns false from has() when HeadObject rejects', async () => {
-    sendMock.mockRejectedValueOnce(new Error('not found'))
+  function notFound(): Error {
+    return Object.assign(new Error('NotFound'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } })
+  }
+
+  it('returns false from has() when HeadObject reports the object missing', async () => {
+    sendMock.mockRejectedValueOnce(notFound())
     const backend = createS3CacheBackend({ type: 's3', bucket: 'b', region: 'us-east-1' })
     const env = environmentMock(scratch)
     expect(await backend.has('task', 'state', env)).toBe(false)
+  })
+
+  it('returns false from pull() when the entry is missing', async () => {
+    sendMock.mockRejectedValueOnce(notFound())
+    const backend = createS3CacheBackend({ type: 's3', bucket: 'b', region: 'us-east-1' })
+    const env = environmentMock(scratch)
+    expect(await backend.pull('task', 'state', join(scratch, 'into'), env)).toBe(false)
+  })
+
+  it('rethrows transport errors from has() and pull() instead of reporting a miss', async () => {
+    const backend = createS3CacheBackend({ type: 's3', bucket: 'b', region: 'us-east-1' })
+    const env = environmentMock(scratch)
+    sendMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED'))
+    await expect(backend.has('task', 'state', env)).rejects.toThrow('ECONNREFUSED')
+    sendMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED'))
+    await expect(backend.pull('task', 'state', join(scratch, 'into'), env)).rejects.toThrow('ECONNREFUSED')
   })
 
   it('returns true when HeadObject resolves', async () => {

@@ -5,6 +5,7 @@ import { startContainer } from '../executer/execute-docker'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 
 export async function usingContainer<T>(
   docker: Dockerode,
@@ -29,7 +30,10 @@ export async function usingContainer<T>(
         if (container) {
           await container.pause()
         }
-        const containers = await docker.listContainers({ all: true, filters: { label: [`hammerkit-id=${item.id()}`] } })
+        const containers = await docker.listContainers({
+          all: true,
+          filters: { label: [`hammerkit-id=${getWorkInstanceId(item)}`] },
+        })
         for (const container of containers) {
           item.status.write('debug', `found container ${container.Id}`)
           if (container.Labels['hammerkit-state'] != stateKey) {

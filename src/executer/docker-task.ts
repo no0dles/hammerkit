@@ -15,6 +15,7 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { getContainerBinds } from './get-container-binds'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -55,7 +56,7 @@ function buildCreateOptions(
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
-      'hammerkit-id': item.id(),
+      'hammerkit-id': getWorkInstanceId(item),
       'hammerkit-pid': process.pid.toString(),
       'hammerkit-type': 'task',
       'hammerkit-state': stateKey,

@@ -6,7 +6,7 @@ description: >-
 
 # Extending
 
-Extending tasks can save a lot of duplicated tasks in bigger projects and monorepos. With the task `extend` property a base configuration can be used as a template.&#x20;
+Extending tasks avoids a lot of duplicated task definitions in bigger projects and monorepos. With the `extend` property, a task uses another task's configuration as a template.
 
 The following sections and examples use the two predefined tasks in the `build.tsc.yaml` file — one of the ready-made templates shipped under
 [`best-practices/`](../recipes.md). Copy it into your project (or include it directly) to follow along.
@@ -37,7 +37,7 @@ tasks:
 
 ### Extend a task
 
-Extending the `tsc:build` task will use all defined properties as a base. If nothing else is defined, it will be an exact copy with the working directory of the current build file.
+Extending `tsc:build` uses all of its properties as a base. If nothing else is defined, the result is an exact copy that runs in the working directory of the current build file.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml
@@ -52,7 +52,7 @@ includes:
 
 ### Override properties in an extend
 
-Every extended task can override defined or undefined properties. In this example the dependency gets cleared and runs without a dependency to the `install` task.
+An extending task can override any property, whether the base defines it or not. In this example the dependencies are cleared, so the task runs without depending on `install`.
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

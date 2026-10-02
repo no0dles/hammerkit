@@ -1,13 +1,13 @@
 ---
 description: >-
-  Bake your services and their build dependencies into self-contained docker
+  Bake your services and their build dependencies into self-contained Docker
   images and push them to a registry.
 ---
 
 # Package
 
 The `package` command turns the **container services** of your build file into
-docker images. For each service hammerkit builds a multi-stage image that bakes
+Docker images. For each service hammerkit builds a multi-stage image that bakes
 in the service itself plus the outputs of every task the service depends on, so
 the resulting image is self-contained and ready to run without hammerkit.
 
@@ -20,7 +20,7 @@ defaults to `latest` (see [Versioning](#versioning)). The `<registry>` argument 
 required - it is the prefix of the produced image name and the target of `--push`.
 
 {% hint style="info" %}
-Packaging only runs against the docker runtime. Services without a container
+Packaging only runs against the Docker runtime. Services without a container
 image, and dependency tasks that run locally (without an `image`), are not
 supported.
 {% endhint %}
@@ -66,7 +66,7 @@ hammerkit package registry.gitlab.com/<group>/<project> \
 ## Versioning
 
 By default the produced image is tagged `latest`. Use `-t/--tag` to pin an
-explicit version - for example a release number or a CI commit sha - so the same
+explicit version - for example a release number or a CI commit SHA - so the same
 build can be promoted across environments:
 
 ```bash
@@ -86,8 +86,8 @@ hammerkit package registry.example.com --platform linux/amd64
 ```
 
 {% hint style="info" %}
-`--platform` is forwarded to the docker build, so the docker daemon must be able to
-build that platform (buildkit / emulation enabled for cross-architecture builds).
+`--platform` is forwarded to the Docker build, so the Docker daemon must be able to
+build that platform (BuildKit / emulation enabled for cross-architecture builds).
 {% endhint %}
 
 ## Example

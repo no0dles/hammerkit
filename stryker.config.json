@@ -1,0 +1,40 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "coverageAnalysis": "perTest",
+  "mutate": [
+    "src/optimizer/get-work-cache-stats.ts",
+    "src/optimizer/calculate-checksum.ts",
+    "src/optimizer/work-task-cache-description.ts",
+    "src/planner/work-cache-id.ts",
+    "src/planner/utils/parse-work-source.ts",
+    "src/executer/scheduler/state-key.ts",
+    "src/executer/scheduler/enqueue-next.ts"
+  ],
+  "ignorePatterns": [
+    ".claude",
+    "temp",
+    "dist",
+    "coverage",
+    "logs",
+    "reports",
+    "docs",
+    "specs",
+    "best-practices"
+  ],
+  "concurrency": 2,
+  "reporters": [
+    "clear-text",
+    "progress",
+    "html",
+    "json"
+  ],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": true
+}

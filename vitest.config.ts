@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => {
       environment: 'node',
       // Native runners finish each unit spec well under a minute, so a short
       // default surfaces a genuine hang quickly. The integration run is slower and
-      // raises this on emulated/self-hosted CI via HAMMERKIT_TEST_TIMEOUT.
+      // raises this on slow CI runners via HAMMERKIT_TEST_TIMEOUT.
       testTimeout: integration ? Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000 : 45000,
       // Integration beforeAll/afterAll hooks provision real infra (e.g. a docker
       // registry container in docker-package-registry.spec.ts) — just as slow as the
@@ -36,7 +36,7 @@ export default defineConfig(({ mode }) => {
       // Integration only: remove leftover containers/namespaces from a prior
       // (possibly interrupted) run before starting — see the header of
       // scripts/integration-clean.js — and cap parallelism to 2 forks, since the
-      // self-hosted runner shares one docker daemon and one k8s cluster.
+      // CI runner shares one docker daemon and one k8s cluster.
       ...(integration
         ? {
             globalSetup: ['./scripts/integration-clean.js'],

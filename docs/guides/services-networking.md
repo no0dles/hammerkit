@@ -28,7 +28,7 @@ How a task reaches a service depends on whether it runs in a container:
 
 * **Container task** (`image` set): shares a network with the service and reaches
   it by the **service name** as hostname, on the service's **container port**. You
-  do **not** need to publish a `port` for this.
+  do **not** need to publish a port for this.
 * **Local task** (no `image`): isn't on that network, so hammerkit injects
   `HAMMERKIT_<NAME>_HOST` and `HAMMERKIT_<NAME>_PORT` env vars instead.
 

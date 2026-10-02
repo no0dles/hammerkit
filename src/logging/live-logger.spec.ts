@@ -40,4 +40,16 @@ describe('liveLogger', () => {
     await logger.complete({ state: state.current, success: true }, {} as any)
     expect(mockedPrint).toHaveBeenCalledTimes(1)
   })
+
+  // a program run in-process (getCli, tests) reuses the environment for the next
+  // command; a listener left behind would write into that command's output
+  it('stops forwarding status messages once complete', async () => {
+    const status = emitter<any>()
+    const state = new State<WorkTree>({ services: {}, tasks: {} } as any)
+    const logger = liveLogger(state, { status } as any)
+    await logger.complete({ state: state.current, success: true }, {} as any)
+
+    status.emit({ type: 'status' as const, message: 'later' })
+    expect(mockedWrite).not.toHaveBeenCalled()
+  })
 })

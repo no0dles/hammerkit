@@ -13,6 +13,8 @@ export type WorkTask = LocalWorkTask | ContainerWorkTask
 export interface BaseWorkTask {
   name: string
   cwd: string
+  // anchor for machine-independent cache identity (see findProjectRoot)
+  projectRoot: string
   description: string | null
   src: WorkSource[]
   generates: WorkTaskGenerate[]
@@ -23,6 +25,8 @@ export interface BaseWorkTask {
   shell: string
   caching: ResolvedCache
   continuous: boolean
+  // maximum execution time in ms, null for none
+  timeout: number | null
 }
 
 export interface WorkTaskGenerate {

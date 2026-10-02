@@ -1,4 +1,4 @@
-import { exec } from 'child_process'
+import { spawn } from 'child_process'
 import { platform } from 'os'
 import { getLogs } from '../log'
 import { AbortError } from './abort'
@@ -14,12 +14,21 @@ export async function executeCommand(
   envs: { [key: string]: string },
   environment: Environment
 ): Promise<number> {
+  const windows = platform() === 'win32'
   return new Promise<number>((resolve, reject) => {
-    const ps = exec(command, {
+    const ps = spawn(command, {
       env: { ...envs, PATH: environment.processEnvs['PATH'] },
       cwd,
-      shell: platform() === 'win32' ? 'powershell.exe' : undefined,
+      shell: windows ? 'powershell.exe' : true,
+      // its own process group, so an abort reaches every process the command
+      // started — the shell may run them as children (dash always does), and
+      // they would keep running and holding the output open
+      detached: !windows,
     })
+    // decode across chunk boundaries, so a multi-byte character split between
+    // two chunks stays intact
+    ps.stdout?.setEncoding('utf8')
+    ps.stderr?.setEncoding('utf8')
     ps.stdout?.on('data', async (data) => {
       for (const log of getLogs(data)) {
         status.console('stdout', log)
@@ -45,7 +54,15 @@ export async function executeCommand(
     })
 
     const abortListener = listenOnAbort(abortSignal, () => {
-      ps.kill()
+      if (windows || !ps.pid) {
+        ps.kill()
+        return
+      }
+      try {
+        process.kill(-ps.pid, 'SIGTERM')
+      } catch {
+        // the group is already gone
+      }
     })
   })
 }

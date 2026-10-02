@@ -1,13 +1,13 @@
 ---
 description: >-
-  For tasks which source files change frequently and require to redo the work on
-  a watch.
+  For tasks whose source files change frequently and should re-run on every
+  change.
 ---
 
 # Watching
 
-Tasks with source folders and files can be watched and, on change, get restarted. 
-This can be used for example to run api servers that restart when the server code changes.
+Tasks with source folders and files can be watched and restarted when they change.
+This is useful, for example, to run API servers that restart when the server code changes.
 
 ```yaml
 tasks:
@@ -31,12 +31,11 @@ database running while your api restarts on every edit; the
 [development workflow guide](../guides/development-workflow.md) puts these together.
 
 
-# Continuous tasks
+## Continuous tasks
 
-Task may be continuous and watch for their file changes themselve.
-For example the angular/cli will watch for file changes and restart the build incremental and therefore performs faster than hammerkit can do with restarting the task.
-It's recommended to mark such tasks with `continuous: true`.
-Hammerkit will then not watch for files change in the source directory of such tasks if started in watch mode.
+Some tasks are continuous and watch their files themselves.
+For example, the Angular CLI watches for file changes and rebuilds incrementally, which is faster than hammerkit restarting the task.
+Mark such tasks with `continuous: true`; in watch mode, hammerkit then does not watch their source files.
 
 ```yaml
 tasks:

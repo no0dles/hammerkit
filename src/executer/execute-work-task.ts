@@ -6,28 +6,30 @@ import { getDuration } from './states'
 import { TaskState } from './scheduler/task-state'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
-import { awaitCompletedDependencies, awaitRunningNeeds } from './await-completed-dependencies'
+import { awaitCompletedDependencies, awaitDependentNeed, awaitRunningNeeds } from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
-import { getCacheDirectory } from '../optimizer/get-cache-directory'
-import { writeCacheMetadata } from './cache-metadata'
-import { getWorkCacheStats } from '../optimizer/get-work-cache-stats'
-import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { CacheState } from './scheduler/enqueue-next'
+import { describeCause, explainTask } from '../cache/explain'
+import { archiveTaskEntry } from './archive-task-entry'
+import { formatDuration } from '../utils/units'
+import { listenOnAbort } from '../utils/abort-event'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
   environment: Environment,
-  cacheState: CacheState
+  cacheState: CacheState,
+  options: CliExecOptions
 ) {
-  const { resolved, stateKey } = cacheState
-  if (resolved.method === 'none') {
+  const { resolved, stateKey, provable } = cacheState
+  if (resolved.method === 'none' || !provable) {
+    return
+  }
+  if (options.cacheReadOnly) {
+    work.status.write('debug', `${work.name} not pushed to cache "${resolved.name}" (read-only)`)
     return
   }
   try {
-    const cacheDir = getCacheDirectory(work.id())
-    const stats = await getWorkCacheStats(work.data, environment)
-    await writeCacheMetadata(environment, work.id(), stats, getWorkTaskCacheDescription(work.data))
-    await work.runtime.archive(environment, cacheDir)
+    const cacheDir = await archiveTaskEntry(work, environment)
     await resolved.backend.push(work.id(), stateKey, cacheDir, environment)
     work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)
   } catch (e) {
@@ -35,12 +37,49 @@ async function pushToBackend(
   }
 }
 
+// An abort signal that follows `parent` and additionally fires after `timeout`
+// ms, so a task deadline reuses the runtimes' existing abort/cleanup path.
+function withDeadline(parent: AbortSignal, timeout: number | null) {
+  const controller = new AbortController()
+  let expired = false
+  const parentListener = listenOnAbort(parent, () => controller.abort())
+  const timer =
+    timeout === null
+      ? null
+      : setTimeout(() => {
+          expired = true
+          controller.abort()
+        }, timeout)
+  return {
+    signal: controller.signal,
+    expired: () => expired,
+    clear() {
+      if (timer) {
+        clearTimeout(timer)
+      }
+      parentListener.close()
+    },
+  }
+}
+
 export async function executeWorkTask(
   work: WorkItemState<WorkTask, TaskState>,
   environment: Environment,
-  options: CliExecOptions
+  options: CliExecOptions,
+  // when set, the task was not requested and only runs if one of these tasks
+  // depending on it misses the cache (see executeWorkTree)
+  dependents: WorkItemState<WorkTask, TaskState>[] | null = null
 ) {
   try {
+    if (dependents) {
+      const needed = await awaitDependentNeed(dependents, environment.abortCtrl.signal)
+      if (!needed) {
+        work.status.write('debug', `${work.name} skipped, every task depending on it was a cache hit`)
+        work.state.set({ type: 'completed', cached: false, skipped: true, duration: 0, stateKey: '' })
+        return
+      }
+    }
+
     work.state.set({
       type: 'starting',
       started: new Date(),
@@ -49,12 +88,6 @@ export async function executeWorkTask(
 
     await watchLoop(work, environment, options, async (cacheState, abort) => {
       const started = new Date()
-
-      work.state.set({
-        type: 'ready',
-        stateKey: cacheState.stateKey,
-        started: new Date(),
-      })
 
       if (cacheState.cached) {
         work.status.write('debug', 'completed for cached state key ' + cacheState.stateKey)
@@ -65,6 +98,27 @@ export async function executeWorkTask(
           duration: getDuration(started),
         })
         return
+      }
+
+      // Only a cache miss is `ready`: needed services start on `ready`, so a
+      // cached task never starts the services it would have needed.
+      work.state.set({
+        type: 'ready',
+        stateKey: cacheState.stateKey,
+        started: new Date(),
+      })
+
+      // Cache miss: under the explain flag, report why this task is rebuilding,
+      // reusing the cache-explain engine. Captured BEFORE execution overwrites
+      // the last-resolved record, then carried onto the completed state so the
+      // build summary can show the cause column. Reporting only.
+      let missCauses: string[] | undefined
+      if (options.explain) {
+        const explanation = await explainTask(work, options.cacheDefault, environment)
+        missCauses = explanation.causes.map(describeCause)
+        for (const cause of missCauses) {
+          work.status.write('info', `cache miss: ${cause}`)
+        }
       }
 
       await awaitCompletedDependencies(work, work.deps, abort)
@@ -81,24 +135,45 @@ export async function executeWorkTask(
           started,
         })
 
-        await work.runtime.execute(environment, {
-          cache: cacheState,
-          abort,
-          stateKey: cacheState.stateKey,
-          state: work.state,
-          daemon: options.daemon,
-        })
+        const timeout = work.data.timeout ?? options.timeout
+        const deadline = withDeadline(abort, timeout)
+        try {
+          await work.runtime.execute(environment, {
+            cache: cacheState,
+            abort: deadline.signal,
+            stateKey: cacheState.stateKey,
+            state: work.state,
+            daemon: options.daemon,
+          })
+        } finally {
+          deadline.clear()
+        }
+
+        if (deadline.expired() && timeout !== null) {
+          // the runtime saw an abort and cleaned up; report it as a failure
+          // (never a cancellation) and stop the run like any failing task
+          work.state.set({
+            type: 'error',
+            stateKey: cacheState.stateKey,
+            errorMessage: `timed out after ${formatDuration(timeout)}`,
+          })
+          if (!options.watch) {
+            environment.abortCtrl.abort()
+          }
+          return
+        }
 
         checkForAbort(abort)
 
         if (work.state.current.type === 'running') {
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
-          await pushToBackend(work, environment, cacheState)
+          await pushToBackend(work, environment, cacheState, options)
           work.state.set({
             stateKey: cacheState.stateKey,
             type: 'completed',
             cached: false,
             duration: getDuration(started),
+            missCauses,
           })
         } else {
           if (!options.watch) {

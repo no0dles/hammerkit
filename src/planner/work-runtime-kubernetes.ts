@@ -1,3 +1,4 @@
+import { AbortError } from '../executer/abort'
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
 import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
@@ -16,8 +17,8 @@ import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-s
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
-import { awaitJobState } from '../kubernetes/await-running-state'
-import { getKubernetesPersistence } from '../kubernetes/volumes'
+import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
+import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureIngress } from '../kubernetes/ensure-ingress'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
@@ -31,6 +32,22 @@ import { removePersistentData } from '../kubernetes/remove-persistent-data'
 function statusCodeOf(e: unknown): number | undefined {
   const err = e as { statusCode?: number; response?: { statusCode?: number }; body?: { code?: number } }
   return err?.statusCode ?? err?.response?.statusCode ?? err?.body?.code
+}
+
+async function listJobNames(
+  instance: ReturnType<typeof createKubernetesInstances>,
+  kubernetes: WorkKubernetesEnvironment,
+  task: WorkItem<ContainerWorkTask>
+): Promise<string[]> {
+  const jobs = await instance.batchApi.listNamespacedJob(
+    kubernetes.namespace,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    `hammerkit.dev/id=${task.id()}`
+  )
+  return jobs.body.items.flatMap((job) => (job.metadata?.name ? [job.metadata.name] : []))
 }
 
 export function kubernetesTaskRuntime(
@@ -55,6 +72,12 @@ export function kubernetesTaskRuntime(
 
       await ensureNamespace(instance, kubernetes.namespace)
       await ensurePersistentData(instance, kubernetes, environment, task, persistence)
+
+      // The last job of a run stays: its state label is what currentStateKey
+      // reads. Jobs from an earlier run of this task go before this one starts.
+      for (const name of await listJobNames(instance, kubernetes, task)) {
+        await deleteJobAndWait(instance, kubernetes, name, options.abort)
+      }
 
       const podName = `${task.name}-${options.stateKey}`
       let i = 0
@@ -108,11 +131,18 @@ export function kubernetesTaskRuntime(
           const pod = await apply(instance, spec)
 
           if (!pod.status?.succeeded) {
-            await awaitJobState(instance, kubernetes, spec.metadata.name)
+            await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
           }
           task.status.write('debug', 'pod completed')
-          await instance.batchApi.deleteNamespacedJob(podName, kubernetes.namespace)
+          if (i < task.data.cmds.length) {
+            await deleteJobAndWait(instance, kubernetes, podName, options.abort)
+          }
         } catch (e) {
+          if (e instanceof AbortError) {
+            options.state.set({ stateKey: options.stateKey, type: 'canceled' })
+            return
+          }
+          await deleteJob(instance, kubernetes, podName).catch(() => undefined)
           options.state.set({
             stateKey: options.stateKey,
             type: 'error',
@@ -182,7 +212,24 @@ export function kubernetesTaskRuntime(
       const completedStates = jobs.body.items
         .filter((j) => j.status?.succeeded && j.metadata?.labels?.['hammerkit.dev/state'])
         .map((j) => j.metadata!.labels!['hammerkit.dev/state'])
-      return completedStates[completedStates.length - 1] ?? null
+      const stateKey = completedStates[completedStates.length - 1] ?? null
+      if (stateKey === null || !task.data.generates.some((g) => !g.inherited)) {
+        return stateKey
+      }
+      // outputs live in the task's claim; without it the finished job left
+      // nothing to reuse
+      try {
+        const claim = await instance.coreApi.readNamespacedPersistentVolumeClaim(
+          getVolumeName(task),
+          kubernetes.namespace
+        )
+        return claim.body.metadata?.deletionTimestamp ? null : stateKey
+      } catch (e) {
+        if (statusCodeOf(e) === 404) {
+          return null
+        }
+        throw e
+      }
     },
   }
 }

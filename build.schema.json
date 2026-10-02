@@ -164,6 +164,12 @@
                   "shell": {
                     "type": "string"
                   },
+                  "continuous": {
+                    "type": "boolean"
+                  },
+                  "timeout": {
+                    "type": "string"
+                  },
                   "image": {
                     "type": "string"
                   },
@@ -215,6 +221,12 @@
                   },
                   "shell": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
+                  },
+                  "continuous": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/continuous"
+                  },
+                  "timeout": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                   },
                   "platform": {
                     "type": "object",
@@ -323,8 +335,7 @@
                   }
                 },
                 "required": [
-                  "image",
-                  "ports"
+                  "image"
                 ],
                 "additionalProperties": false,
                 "description": "container service"
@@ -545,8 +556,44 @@
                       "bucket"
                     ],
                     "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "registry"
+                      },
+                      "repository": {
+                        "type": "string"
+                      },
+                      "insecure": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "repository"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
+              },
+              "retention": {
+                "type": "object",
+                "properties": {
+                  "maxAge": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "maxSize": {
+                    "type": "string"
+                  },
+                  "keepPerTask": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [

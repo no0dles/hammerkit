@@ -1,13 +1,13 @@
 ---
 description: >-
-  A task a piece of work with dependencies, that requires input files and
+  A task is a piece of work with dependencies that reads input files and
   generates output files.
 ---
 
 # Task
-Tasks are pieces of work that you need to build or develop your project.
+Tasks are the pieces of work needed to build or develop your project.
 
-The minimal task just contains a list of commands.
+A minimal task contains just a list of commands.
 ```yaml
 tasks:
   example:
@@ -33,17 +33,18 @@ A task is built from a small, fixed set of fields:
 | `cmds` | The commands to run, in order. |
 | `image` | Run the commands inside this container image. Omit to run on the host. |
 | `src` | Input files/folders. Used for [caching](caching.md) — unchanged sources let the task be skipped. |
-| `generates` | Output files/folders the task produces. These are what gets cached, stored and restored. |
+| `generates` | Output files/folders the task produces. This is what gets cached, stored and restored. |
 | `deps` | Other tasks that must run first (see [dependencies](dependencies.md)). |
 | `needs` | Services that must be running first (see [needs](needs.md)). |
 | `mounts` | Extra paths to make available to a container task (see [container](container.md)). |
 | `envs` | [Environment variables](../build-file/environment-variables.md) for the commands. |
 | `labels` | Group/filter tasks (see [labels](../labels/README.md)). |
 | `cache` | The [caching](caching.md) method/backend for this task. |
+| `timeout` | Maximum execution time, e.g. `10m` (see [timeouts](#timeouts)). |
 
 ## Source files (`src`)
 Tasks that depend on input files should declare them under `src`.
-Hammerkit detects if the `src` files have changed compared to previous runs and skips execution if they are unchanged.
+Hammerkit detects whether the `src` files have changed compared to previous runs and skips execution if they are unchanged.
 
 ```yaml
 tasks:
@@ -58,7 +59,7 @@ tasks:
 
 ## Generated files (`generates`)
 Tasks that produce output files should declare them under `generates`.
-Hammerkit can store generated files into archives, which can be used to save and restore build outputs.  
+Hammerkit archives generated files, so build outputs can be cached, stored and restored.
 
 ```yaml
 tasks:
@@ -105,4 +106,31 @@ tasks:
         resetOnChange: true
     cmds:
       - node bundle.js
+```
+
+## Timeouts
+A task that hangs — a deadlocked test, a stuck network call — would otherwise block
+the run until your CI provider kills the job. Set a `timeout` and hammerkit aborts
+the task once it runs longer, fails it with `timed out after <duration>`, and stops
+the run like any other failure.
+
+```yaml
+tasks:
+  e2e:
+    image: cypress/included:13.15.0
+    timeout: 15m
+    cmds:
+      - cypress run
+```
+
+Durations are written as a number plus a unit: `ms`, `s`, `m`, `h` or `d`, and can
+be combined (`1h30m`). A timed-out task is cleaned up the same way as a cancelled
+one — its container or Kubernetes job is removed — and never writes a cache entry.
+The timeout does not affect the task's cache key.
+
+To give every task a default, pass `--timeout` to [`run`](../cli/execute.md) or
+[`up`](../cli/up.md); a task's own `timeout` takes precedence.
+
+```bash
+hammerkit run --timeout 30m
 ```

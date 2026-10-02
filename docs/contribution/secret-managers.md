@@ -1,7 +1,7 @@
 # Secret managers (planned)
 
-> **Status: DEFERRED to 1.7.0.** Out of scope for the 1.6.0 release (feature freeze).
-> Decisions are locked in (see Context); pick this up as a 1.7.0 feature.
+> **Status: planned, not yet implemented.** Deferred from 1.6.0 and not part of 1.7.0.
+> Decisions are locked in (see Context); see also [specs/task-secrets](../../specs/task-secrets/spec.md).
 
 ## Context
 

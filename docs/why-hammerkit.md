@@ -47,7 +47,7 @@ can:
 
 * **skip** a task when its inputs are unchanged, and
 * **share** the cached result between machines and CI runs through a pluggable
-  cache backend (local directory or an S3-compatible bucket).
+  cache backend (local directory, an S3-compatible bucket or any OCI registry).
 
 The bigger the project, the more this pays off: a `git clone` on a fresh runner
 can restore outputs another machine already produced instead of rebuilding them.
@@ -63,7 +63,7 @@ and [task caching](task/caching.md).
 | Also runs directly on the host (no container) | ✅ | ✅ | ✅ | ❌ | ✅ (omit `image`) |
 | Tracks declared inputs **and** outputs | ⚠️ targets | ❌ | ⚠️ sources | ✅ | ✅ (`src` / `generates`) |
 | Skips unchanged work | ⚠️ mtime | ❌ | ✅ checksum | ✅ | ✅ (checksum default) |
-| Shares cache across machines / CI | ❌ | ❌ | ❌ | ✅ | ✅ (local + S3 backends) |
+| Shares cache across machines / CI | ❌ | ❌ | ❌ | ✅ | ✅ (local, S3 and registry backends) |
 | Runs independent work in parallel | ⚠️ `-j` | ❌ | ✅ | ✅ | ✅ |
 | Built-in services (e.g. a database) for a task | ❌ | ❌ | ❌ | ⚠️ | ✅ (`needs`) |
 | Provider-agnostic (no CI lock-in) | ✅ | ✅ | ✅ | ✅ | ✅ |

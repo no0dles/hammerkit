@@ -41,7 +41,7 @@ outputs (`generates`) so hammerkit can cache it:
 {% code title=".hammerkit.yaml" %}
 ```yaml
 envs:
-  NODE_VERSION: '22'
+  NODE_VERSION: '24'
 
 tasks:
   install:
@@ -72,7 +72,7 @@ reuse) `install` first:
 {% code title=".hammerkit.yaml" %}
 ```yaml
 envs:
-  NODE_VERSION: '22'
+  NODE_VERSION: '24'
 
 tasks:
   install:
@@ -177,9 +177,9 @@ Everything above already caches **locally**. To share that work with CI so a fre
 runner reuses results instead of rebuilding, you have two options:
 
 * point the built-in `default` cache at a remote [backend](build-file/caches.md)
-  (an S3 bucket) — pull/push then happens automatically, or
-* wrap the run in [`store` / `restore`](cli/store-restore.md) around your CI
-  provider's own cache step.
+  (an S3 bucket or a container registry) — pull/push then happens automatically, or
+* wrap the run in [`store` / `restore`](cli/store-restore.md) and hand the
+  directory to your CI provider's own cache step.
 
 Because the cache method is `checksum` by default, a result built on your laptop is
 correctly reused on the runner and vice versa. The

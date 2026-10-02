@@ -111,10 +111,12 @@ describe('checkCacheState', () => {
 
   it('reports cached:true when the stored key matches the effective key', async () => {
     const env = environmentMock(scratch)
-    const probe = makeTask('hit-task', { resolved: makeResolved('checksum') })
+    const src = join(scratch, 'hit.txt')
+    writeFileSync(src, 'v1')
+    const probe = makeTask('hit-task', { resolved: makeResolved('checksum'), srcFiles: [src] })
     const { stateKey } = await checkCacheState(probe, 'checksum', env)
 
-    const task = makeTask('hit-task', { resolved: makeResolved('checksum'), storedStateKey: stateKey })
+    const task = makeTask('hit-task', { resolved: makeResolved('checksum'), srcFiles: [src], storedStateKey: stateKey })
     const result = await checkCacheState(task, 'checksum', env)
     expect(result.cached).toBe(true)
     expect(result.stateKey).toBe(stateKey)
@@ -126,8 +128,15 @@ describe('checkCacheState', () => {
     writeFileSync(upstreamSrc, 'v1')
 
     const makeUpstream = () => makeTask('upstream', { resolved: makeResolved('checksum'), srcFiles: [upstreamSrc] })
+    const downstreamSrc = join(scratch, 'downstream.txt')
+    writeFileSync(downstreamSrc, 'unchanged')
     const makeDownstream = (storedStateKey: string | null) =>
-      makeTask('downstream', { resolved: makeResolved('checksum'), deps: [makeUpstream()], storedStateKey })
+      makeTask('downstream', {
+        resolved: makeResolved('checksum'),
+        srcFiles: [downstreamSrc],
+        deps: [makeUpstream()],
+        storedStateKey,
+      })
 
     // First pass: capture the downstream effective key and pretend it was stored.
     const keyBefore = (await checkCacheState(makeDownstream(null), 'checksum', env)).stateKey
@@ -140,6 +149,26 @@ describe('checkCacheState', () => {
     const afterChange = await checkCacheState(makeDownstream(keyBefore), 'checksum', env)
     expect(afterChange.stateKey).not.toBe(keyBefore)
     expect(afterChange.cached).toBe(false)
+  })
+
+  it('never reports a task without src as cached, nor its dependents', async () => {
+    const env = environmentMock(scratch)
+    const src = join(scratch, 'dependent.txt')
+    writeFileSync(src, 'v1')
+    const noSrc = makeTask('no-src', { resolved: makeResolved('checksum') })
+    const { stateKey } = await checkCacheState(noSrc, 'checksum', env)
+    const stored = makeTask('no-src', { resolved: makeResolved('checksum'), storedStateKey: stateKey })
+    expect((await checkCacheState(stored, 'checksum', env)).cached).toBe(false)
+
+    const dependent = makeTask('dependent', { resolved: makeResolved('checksum'), srcFiles: [src], deps: [noSrc] })
+    const dependentKey = (await checkCacheState(dependent, 'checksum', env)).stateKey
+    const storedDependent = makeTask('dependent', {
+      resolved: makeResolved('checksum'),
+      srcFiles: [src],
+      deps: [noSrc],
+      storedStateKey: dependentKey,
+    })
+    expect((await checkCacheState(storedDependent, 'checksum', env)).cached).toBe(false)
   })
 
   it('produces a stable key regardless of dependency declaration order', async () => {
