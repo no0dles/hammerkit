@@ -1,0 +1,171 @@
+---
+title: Installation
+description: Install hammerkit, write a build file and run your first cached task.
+icon: Rocket
+---
+
+<Callout>
+  Tasks that declare an `image` run in a container, so you also need a running
+  container engine such as [Docker](https://docs.docker.com/get-docker/). Check it
+  with `docker info`.
+</Callout>
+
+<Steps>
+<Step>
+
+### Install hammerkit
+
+<Tabs items={['npm', 'Homebrew', 'npx', 'Binary', 'Docker']}>
+<Tab value="npm">
+
+```bash
+npm install --global hammerkit
+```
+
+</Tab>
+<Tab value="Homebrew">
+
+```bash
+brew tap no0dles/hammerkit
+brew install hammerkit
+```
+
+</Tab>
+<Tab value="npx">
+
+Run it without installing — always the latest release:
+
+```bash
+npx hammerkit --version
+```
+
+</Tab>
+<Tab value="Binary">
+
+Download the binary for your platform from the
+[latest release](https://github.com/no0dles/hammerkit/releases/latest) — Linux,
+macOS and Windows, x64 and arm64 — and put it on your `PATH`. No Node.js needed.
+
+</Tab>
+<Tab value="Docker">
+
+```bash
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD:$PWD" -w "$PWD" no0dles/hammerkit:1.7.0 --version
+```
+
+</Tab>
+</Tabs>
+
+</Step>
+<Step>
+
+### Describe a task
+
+Create a `.hammerkit.yaml` next to your code. A task names the image it runs in,
+the files it reads (`src`) and its commands:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  hello:
+    image: alpine:3.21
+    src: [hello.txt]
+    cmds:
+      - cat hello.txt
+```
+
+```bash
+echo "It's hammer time" > hello.txt
+```
+
+</Step>
+<Step>
+
+### Run it
+
+```bash
+hammerkit hello
+```
+
+```txt
+task: hello - It's hammer time
+Summary:
+  hello  executed   2.3s
+  1 executed, 0 cached (0% cache hit), 2.3s total
+```
+
+</Step>
+<Step>
+
+### Run it again
+
+Nothing in `src` changed, so hammerkit reuses the result instead of running the
+task:
+
+```txt
+Summary:
+  hello  cached     0ms
+  0 executed, 1 cached (100% cache hit), 11ms total
+```
+
+Change `hello.txt` and it runs again. That's the whole idea —
+[caching](/docs/task/caching) explains what counts as an input.
+
+</Step>
+</Steps>
+
+## In CI
+
+The [container image](https://hub.docker.com/r/no0dles/hammerkit) contains
+hammerkit and can be used with Docker-in-Docker (dind) — the usual approach for
+container builds on CI systems.
+
+<Tabs items={['GitHub Actions', 'GitLab CI']}>
+<Tab value="GitHub Actions">
+
+The `no0dles/hammerkit-github-action` action installs hammerkit; it needs
+`actions/setup-node` first.
+
+```yaml title=".github/workflows/ci.yml"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: no0dles/hammerkit-github-action@v1.3
+      - run: hammerkit build
+```
+
+</Tab>
+<Tab value="GitLab CI">
+
+```yaml title=".gitlab-ci.yml"
+variables:
+  DOCKER_DRIVER: overlay2
+
+services:
+  - docker:dind
+
+build:
+  image: no0dles/hammerkit
+  script:
+    - hammerkit build
+```
+
+</Tab>
+</Tabs>
+
+To reuse results between CI runs and machines, see
+[caching strategy in CI](/docs/guides/ci-caching).
+
+## Next steps
+
+<Cards>
+  <Card title="Tasks" href="/docs/task" />
+  <Card title="Caching" href="/docs/task/caching" />
+  <Card title="Agents, workspaces and CI" href="/docs/guides/agents-and-ci" />
+  <Card title="Migrate your CI with an agent" href="/docs/llm/migrate-ci" />
+</Cards>

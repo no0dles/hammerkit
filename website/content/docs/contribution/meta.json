@@ -1,0 +1,9 @@
+{
+  "title": "Contribution",
+  "icon": "GitPullRequest",
+  "pages": [
+    "roadmap",
+    "secret-managers",
+    "publish"
+  ]
+}

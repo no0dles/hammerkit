@@ -1,0 +1,104 @@
+---
+title: "Roadmap"
+---
+The topics below are planned for upcoming releases, roughly in priority order. Each
+one has a specification in the repository's
+[`specs/`](https://github.com/no0dles/hammerkit/tree/master/specs) folder; the
+order may change as real-world feedback comes in.
+
+## Next
+
+### Source exclusions
+Exclude paths from a task's `src` with `!` entries (`src: [src, '!src/**/*.md']`),
+so a source folder can be narrowed without long globs. An excluded path is hidden
+from container tasks too, so a task can't read what isn't part of its cache key.
+
+### Secrets
+First-class secrets for tasks and services — injected at runtime from the host
+environment, a file or a secret manager, never stored in the build file and redacted
+from logs. By default a secret doesn't affect the cache; a secret that determines
+the output can opt in. See the [detailed plan](/docs/contribution/secret-managers).
+
+### Container runtime options
+Declare Docker runtime and security options such as `--shm-size` or a seccomp
+profile on container tasks and services, for workloads like browsers or sandboxed
+workers that need them.
+
+## Later
+
+* **Task resources** — CPU and memory requests/limits per task, enforced on Docker
+  and Kubernetes and used for resource-aware local scheduling instead of a flat
+  worker count.
+* **Matrix tasks** — define a task once with a `matrix` of variants (Node versions,
+  architectures) and run one independently cached task per combination.
+* **Remote includes** — reference or include build files from a git repository, so
+  shared templates like the [recipes](/docs/recipes) can be reused across projects.
+* **Service state snapshots** — cache the state a task leaves *inside* a service,
+  such as a seeded database, so it can be restored instead of recreated.
+* **Multi-arch packaging** — let `hammerkit package` build and push multi-platform
+  images.
+* **Distributed computing** — offload compute-intensive tasks to remote hardware
+  with very little configuration.
+
+# Shipped
+
+## Agent-ready caching (1.7.0)
+Make one shared cache work across coding-agent sandboxes, developer workspaces and
+CI, so work done in one place is never repeated in another.
+
+<Callout type="success">
+
+Shipped in 1.7.0: cache keys independent of the checkout location, the `registry`
+cache backend, [`cache pull` / `cache push`](/docs/cli/cache), read-only mode,
+[cache retention](/docs/build-file/caches#retention), skipping
+[dependencies of cached tasks](/docs/task/dependencies#dependencies-of-cached-tasks),
+[task timeouts](/docs/task#timeouts), and [`explain`](/docs/cli/explain),
+[`graph`](/docs/cli/graph), `run --dry-run` and the build summary. See the
+[release blog](/docs/release-blog/release-1.7.0) and
+[agents, workspaces and CI](/docs/guides/agents-and-ci).
+
+</Callout>
+
+## Distributed caching (1.6.0)
+Distribute the local cache, so other developers and CI can reuse already built
+results.
+
+<Callout type="success">
+
+Shipped in 1.6.0 as [pluggable cache backends](/docs/build-file/caches): declare a
+`local` or `s3` cache backend and hammerkit pulls and pushes task results
+automatically, sharing them between developers and CI runs.
+
+</Callout>
+
+## Run on Kubernetes (1.6.0)
+Run the same build file on the local Docker daemon or on a Kubernetes cluster.
+
+<Callout type="success">
+
+Shipped in 1.6.0 through [environments](/docs/task/kubernetes).
+
+</Callout>
+
+## Services (1.5.0)
+Tasks sometimes require a service to run, for example a database for an API or an
+integration test. The goal was to define those services and have hammerkit start
+them for a task and stop them when they are no longer needed.
+
+<Callout type="success">
+
+Implemented in 1.5.0 with [container services](/docs/service/container) and
+[Kubernetes services](/docs/service/kubernetes).
+
+</Callout>
+
+## Platform requirements (1.5.0)
+Define local tasks that require a specific platform. The goal was to either skip
+local tasks where the platform requirements are not met or run them on a suitable
+machine.
+
+<Callout type="success">
+
+Labels, available since 1.5.0, can be used to achieve this.
+
+</Callout>

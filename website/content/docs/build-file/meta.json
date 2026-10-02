@@ -1,0 +1,12 @@
+{
+  "title": "Build file",
+  "icon": "FileCode",
+  "pages": [
+    "index",
+    "environment-variables",
+    "references",
+    "includes",
+    "caches",
+    "reference"
+  ]
+}

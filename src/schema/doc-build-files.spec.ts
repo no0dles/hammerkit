@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'fs'
+import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join, relative } from 'path'
 import { parse as yamlParse } from 'yaml'
 import { buildFileSchema } from './build-file-schema'
@@ -20,6 +20,8 @@ import { buildFileSchema } from './build-file-schema'
 
 const repoRoot = join(__dirname, '..', '..')
 const docsDir = join(repoRoot, 'docs')
+// the hammerkit.dev site's pages, converted from docs/ (website/content/docs)
+const siteDocsDir = join(repoRoot, 'website', 'content', 'docs')
 const bestPracticesDir = join(repoRoot, 'best-practices')
 
 // Top-level keys the build-file schema understands. Mirrors buildFileSchema's
@@ -86,8 +88,10 @@ interface YamlBlock {
 }
 
 interface DocBlock extends YamlBlock {
-  /** path relative to docs/, using the host separator */
+  /** path shown in test names: relative to docs/, or website/... for the site */
   relFile: string
+  /** the docs/ page it corresponds to, for matching FOREIGN_BLOCKS */
+  sourceFile: string
   index: number
 }
 
@@ -97,7 +101,7 @@ function walkMarkdown(dir: string): string[] {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       out.push(...walkMarkdown(full))
-    } else if (entry.name.endsWith('.md')) {
+    } else if (entry.name.endsWith('.md') || entry.name.endsWith('.mdx')) {
       out.push(full)
     }
   }
@@ -111,7 +115,8 @@ function extractYamlBlocks(content: string): YamlBlock[] {
   const lines = content.split(/\r?\n/)
   const blocks: YamlBlock[] = []
   for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*```ya?ml\s*$/.test(lines[i])) {
+    // site pages carry a title on the fence (```yaml title=".hammerkit.yaml")
+    if (!/^\s*```ya?ml(\s.*)?$/.test(lines[i])) {
       continue
     }
     const start = i + 1
@@ -146,17 +151,24 @@ function isBuildFileShaped(parsed: unknown): boolean {
   return keys.length > 0 && keys.every((k) => KNOWN_TOP_KEYS.has(k))
 }
 
-const docFiles = walkMarkdown(docsDir).sort()
+const roots = [
+  { dir: docsDir, prefix: '' },
+  ...(existsSync(siteDocsDir) ? [{ dir: siteDocsDir, prefix: join('website', 'content', 'docs') }] : []),
+]
 const allBlocks: DocBlock[] = []
-for (const file of docFiles) {
-  const relFile = relative(docsDir, file)
-  const topDir = relFile.split(/[\\/]/)[0]
-  if (HISTORICAL_DIRS.includes(topDir)) {
-    continue
+for (const root of roots) {
+  for (const file of walkMarkdown(root.dir).sort()) {
+    const rel = relative(root.dir, file)
+    const topDir = rel.split(/[\\/]/)[0]
+    if (HISTORICAL_DIRS.includes(topDir)) {
+      continue
+    }
+    // a site page maps back to its docs/ source: x.mdx -> x.md, folder/index.mdx -> folder/README.md
+    const sourceFile = rel.replace(/(^|[\\/])index\.mdx$/, '$1README.md').replace(/\.mdx$/, '.md')
+    extractYamlBlocks(readFileSync(file, 'utf8')).forEach((block, index) => {
+      allBlocks.push({ ...block, relFile: join(root.prefix, rel), sourceFile, index })
+    })
   }
-  extractYamlBlocks(readFileSync(file, 'utf8')).forEach((block, index) => {
-    allBlocks.push({ ...block, relFile, index })
-  })
 }
 
 const foreignMatches = new Set<number>()
@@ -176,7 +188,9 @@ describe('docs build-file examples', () => {
       blocks.forEach((block) => {
         const label = `yaml block at line ${block.startLine}`
 
-        const foreignIndex = FOREIGN_BLOCKS.findIndex((f) => f.file === relFile && block.body.includes(f.snippet))
+        const foreignIndex = FOREIGN_BLOCKS.findIndex(
+          (f) => f.file === block.sourceFile && block.body.includes(f.snippet)
+        )
 
         if (foreignIndex >= 0) {
           foreignMatches.add(foreignIndex)
