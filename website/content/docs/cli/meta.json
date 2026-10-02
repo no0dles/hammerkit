@@ -1,0 +1,19 @@
+{
+  "title": "CLI",
+  "icon": "Terminal",
+  "pages": [
+    "index",
+    "init",
+    "ls",
+    "execute",
+    "up",
+    "down",
+    "explain",
+    "graph",
+    "cache",
+    "store-restore",
+    "package",
+    "clean",
+    "validate"
+  ]
+}

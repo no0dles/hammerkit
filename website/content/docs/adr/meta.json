@@ -1,0 +1,12 @@
+{
+  "title": "Architecture decisions",
+  "icon": "Scale",
+  "pages": [
+    "0001-local-cache-with-explicit-remote-bridge",
+    "0002-cache-identity-participation",
+    "0003-container-options-must-be-runtime-portable",
+    "0004-remote-includes-git-cache-pinned",
+    "0005-registry-cache-single-layer-image-manifest",
+    "0006-portable-cache-identity"
+  ]
+}

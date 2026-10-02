@@ -6,7 +6,7 @@
 
 **Status**: Current State (reverse-specified from docs, hammerkit 1.6.0)
 
-**Input**: Existing behavior documented in `docs/build-file/environment-variables.md`
+**Input**: Existing behavior documented in `website/content/docs/build-file/environment-variables.mdx`
 
 ## User Scenarios & Testing *(mandatory)*
 

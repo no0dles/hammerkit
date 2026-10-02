@@ -6,7 +6,7 @@
 
 **Status**: Current State (reverse-specified from docs, hammerkit 1.6.0)
 
-**Input**: Existing behavior documented in `docs/cli/validate.md`
+**Input**: Existing behavior documented in `website/content/docs/cli/validate.mdx`
 
 ## User Scenarios & Testing *(mandatory)*
 

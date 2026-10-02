@@ -8,7 +8,7 @@ import { buildFileSchema } from './build-file-schema'
  * docs must stay valid against the real schema, so the docs cannot silently
  * drift to config the tool would reject.
  *
- * The harness is self-discovering: it walks docs/ at collection time and turns
+ * The harness is self-discovering: it walks website/content/docs at collection time and turns
  * every fenced ```yaml block into its own assertion. A block is treated as a
  * hammerkit build file when it parses to an object whose top-level keys are all
  * part of the schema (envs/tasks/services/...). Anything else (a GitLab/GitHub
@@ -19,7 +19,8 @@ import { buildFileSchema } from './build-file-schema'
  */
 
 const repoRoot = join(__dirname, '..', '..')
-const docsDir = join(repoRoot, 'docs')
+// the pages of hammerkit.dev
+const docsDir = join(repoRoot, 'website', 'content', 'docs')
 const bestPracticesDir = join(repoRoot, 'best-practices')
 
 // Top-level keys the build-file schema understands. Mirrors buildFileSchema's
@@ -42,39 +43,39 @@ const EXPECT_INVALID = '# hammerkit:expect-invalid'
 // Directories that document a specific past version, not the current build-file
 // reference. Their snippets are expected to use the syntax of their release and
 // must not be validated against today's schema.
-const HISTORICAL_DIRS = ['release-blog', 'change-log']
+const HISTORICAL_DIRS = ['release-blog']
 
 // yaml blocks in docs/ that are deliberately NOT hammerkit build files. Each is
 // matched by a unique snippet of its body. Keep the reason — these are the only
 // blocks allowed to be unrecognized.
 const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
   {
-    file: join('installation.md'),
+    file: join('installation.mdx'),
     snippet: 'DOCKER_DRIVER',
     reason: 'GitLab CI (.gitlab-ci.yml) example, not a hammerkit build file',
   },
   {
-    file: join('installation.md'),
+    file: join('installation.mdx'),
     snippet: 'no0dles/hammerkit-github-action',
     reason: 'GitHub Actions workflow example, not a hammerkit build file',
   },
   {
-    file: join('cli', 'store-restore.md'),
+    file: join('cli', 'store-restore.mdx'),
     snippet: 'before_script',
     reason: 'GitLab CI (gitlab-ci.yml) caching example, not a hammerkit build file',
   },
   {
-    file: join('guides', 'ci-caching.md'),
+    file: join('guides', 'ci-caching.mdx'),
     snippet: 'actions/cache@v4',
     reason: 'GitHub Actions workflow example, not a hammerkit build file',
   },
   {
-    file: join('llm', 'migrate-ci.md'),
+    file: join('llm', 'migrate-ci.mdx'),
     snippet: 'docker/login-action@v3',
     reason: 'GitHub Actions workflow template for the CI migration guide, not a hammerkit build file',
   },
   {
-    file: join('contribution', 'secret-managers.md'),
+    file: join('contribution', 'secret-managers.mdx'),
     snippet: 'secret://vault',
     reason: 'design-doc proposal for an unimplemented secrets: provider; not valid against the current schema',
   },
@@ -86,7 +87,7 @@ interface YamlBlock {
 }
 
 interface DocBlock extends YamlBlock {
-  /** path relative to docs/, using the host separator */
+  /** path relative to website/content/docs, using the host separator */
   relFile: string
   index: number
 }
@@ -97,7 +98,7 @@ function walkMarkdown(dir: string): string[] {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       out.push(...walkMarkdown(full))
-    } else if (entry.name.endsWith('.md')) {
+    } else if (entry.name.endsWith('.mdx')) {
       out.push(full)
     }
   }
@@ -111,7 +112,8 @@ function extractYamlBlocks(content: string): YamlBlock[] {
   const lines = content.split(/\r?\n/)
   const blocks: YamlBlock[] = []
   for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*```ya?ml\s*$/.test(lines[i])) {
+    // site pages carry a title on the fence (```yaml title=".hammerkit.yaml")
+    if (!/^\s*```ya?ml(\s.*)?$/.test(lines[i])) {
       continue
     }
     const start = i + 1
@@ -146,9 +148,8 @@ function isBuildFileShaped(parsed: unknown): boolean {
   return keys.length > 0 && keys.every((k) => KNOWN_TOP_KEYS.has(k))
 }
 
-const docFiles = walkMarkdown(docsDir).sort()
 const allBlocks: DocBlock[] = []
-for (const file of docFiles) {
+for (const file of walkMarkdown(docsDir).sort()) {
   const relFile = relative(docsDir, file)
   const topDir = relFile.split(/[\\/]/)[0]
   if (HISTORICAL_DIRS.includes(topDir)) {

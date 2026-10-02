@@ -1,0 +1,9 @@
+{
+  "title": "Service",
+  "icon": "Database",
+  "pages": [
+    "index",
+    "container",
+    "kubernetes"
+  ]
+}

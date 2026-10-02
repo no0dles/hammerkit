@@ -1,0 +1,47 @@
+---
+title: "Build file"
+description: "A summary of all build file configuration options"
+icon: FileCode
+---
+The build file is a YAML file in the root of your project. It contains a list of [tasks](/docs/task) that can be executed from the [CLI](/docs/cli).
+
+Hammerkit looks for the build file by name, in this order:
+
+1. `.hammerkit.yaml`
+2. `.hammerkit.yml`
+3. `build.yaml`
+
+All three are valid; the first one found is used. If more than one exists hammerkit warns about the ambiguity. These docs use `.hammerkit.yaml` as the canonical name in every example. To point hammerkit at a different file, pass [`--file <path>`](/docs/cli).
+
+```yaml title=".hammerkit.yaml"
+envs:
+  NODE_VERSION: '22'
+
+tasks:
+  build:
+    image: node:$NODE_VERSION
+    deps: [npm:install]
+    cmds:
+      - tsc -b
+
+references:
+  subProject: ./packages/subproject
+
+includes:
+  npm: ./build.npm.yaml
+```
+
+For more detail about the structure of the build file, check out the following sections.
+
+<Cards>
+<Card title="environment-variables.md" href="environment-variables.md" />
+</Cards>
+
+<Cards>
+<Card title="references.md" href="references.md" />
+</Cards>
+
+<Cards>
+<Card title="includes.md" href="includes.md" />
+</Cards>
+
