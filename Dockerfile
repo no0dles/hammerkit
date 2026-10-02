@@ -1,7 +1,5 @@
 FROM node:24-alpine AS build
 
-ARG TARGETPLATFORM
-
 WORKDIR /app
 
 # install dependencies
@@ -13,8 +11,9 @@ RUN npm ci
 COPY tsconfig.json .
 COPY src src
 RUN node_modules/.bin/tsc -b
-RUN export ARCH=$(echo $TARGETPLATFORM | cut -c7-11)
-RUN node_modules/.bin/pkg . --targets "node24-alpine-$ARCH" --compress Brotli
+# every platform builds on a native runner, so pkg's default (the build
+# machine's architecture) is the target architecture
+RUN node_modules/.bin/pkg . --targets node24-alpine --compress Brotli
 
 ######################################
 # Minimal runtime: hammerkit talks to the daemon via dockerode and to k8s via
