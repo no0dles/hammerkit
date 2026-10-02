@@ -17,8 +17,6 @@ npm run build     # static export to out/
 - `app/sitemap.ts`, `app/robots.ts` — `sitemap.xml` and `robots.txt`; search,
   `llms.txt` and per-page Markdown come with Fumadocs
 
-The pages were converted from the GitBook docs in `../docs` with
-`npm run convert` (`scripts/convert-gitbook.mjs`). Until the site replaces
-GitBook, re-run it after changing `docs/`; afterwards `content/` is the source
-and `docs/` goes away. The YAML examples in `content/docs` are validated against
-the build-file schema by `src/schema/doc-build-files.spec.ts`.
+The YAML examples in `content/docs` are validated against the build-file schema
+by `src/schema/doc-build-files.spec.ts`, so a docs example the tool would reject
+fails the unit tests.

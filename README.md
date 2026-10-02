@@ -1,6 +1,6 @@
 # About
 
-<figure><img src="docs/hammerkit-small.png" width="144" alt=""><figcaption></figcaption></figure>
+<img src="website/public/logo.png" width="144" alt="hammerkit">
 
 ## What is hammerkit?
 
@@ -9,7 +9,7 @@ Hammerkit is a build tool intended to build software projects in **containers** 
 * the build tools come from the container image, so they are the same across all machines.
 * the build process is isolated since every file in the container has to be declared as a source or an output. Therefore, side effects can be reduced.
 
-For a fuller pitch — including how it compares to Make, npm scripts, Taskfile and Earthly — see [Why hammerkit](docs/why-hammerkit.md).
+For a fuller pitch — including how it compares to Make, npm scripts, Taskfile and Earthly — see [Why hammerkit](https://hammerkit.dev/docs/why-hammerkit).
 
 There are a lot of containerized CI systems that allow writing containerized builds today, but they have shortcomings that hammerkit tries to address:
 
@@ -23,4 +23,4 @@ Hammerkit, on the other hand, knows the source and output files of each build st
 
 ## Where to go next?
 
-Check out the [docs](https://no0dles.gitbook.io/hammerkit/) for more info about how hammerkit can be used.
+Check out the [docs on hammerkit.dev](https://hammerkit.dev) for more info about how hammerkit can be used.

@@ -87,4 +87,4 @@ A developer scopes the graph to one task's subgraph, applies label filters, or w
 
 - The planner already constructs the complete work graph (tasks, services, deps, needs); this feature serializes and previews it rather than recomputing relationships.
 - `--dry-run` shares the prediction engine with [cache-explain](../cache-explain/spec.md); divergence between predicted and actual decisions is a defect in the shared engine, not two implementations.
-- Mermaid is the default because it renders inline in the gitbook docs and GitHub.
+- Mermaid is the default because it renders inline in the docs and on GitHub.

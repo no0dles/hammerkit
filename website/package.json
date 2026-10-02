@@ -6,8 +6,7 @@
     "build": "next build",
     "dev": "next dev",
     "start": "serve out",
-    "types:check": "next typegen && tsc --noEmit",
-    "convert": "node scripts/convert-gitbook.mjs"
+    "types:check": "next typegen && tsc --noEmit"
   },
   "dependencies": {
     "cn": "^0.3.0",

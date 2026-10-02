@@ -10,7 +10,7 @@
 
 ## Motivation
 
-A task declares its inputs in `src`. Today an entry can only add files: a folder, a file or a glob. To leave something out, a task has to switch to a narrowing glob (`src/**/*.ts`), which has two problems: it gets long as soon as several file types matter, and in a container task it hides nothing — the glob's whole starting folder is mounted, so the task can read files that are not hashed. That is exactly the "visible but unhashed" gap the [caching limitations](../../docs/task/caching.md#limitations-what-the-cache-cant-see) warn about.
+A task declares its inputs in `src`. Today an entry can only add files: a folder, a file or a glob. To leave something out, a task has to switch to a narrowing glob (`src/**/*.ts`), which has two problems: it gets long as soon as several file types matter, and in a container task it hides nothing — the glob's whole starting folder is mounted, so the task can read files that are not hashed. That is exactly the "visible but unhashed" gap the [caching limitations](../../website/content/docs/task/caching.mdx#limitations-what-the-cache-cant-see) warn about.
 
 A `!` entry that removes paths from a task's sources lets a task say what it doesn't read. Because a wrong exclusion is a false cache hit, the exclusion has to apply to what the task can see as well as to what is hashed.
 
