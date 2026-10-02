@@ -31,6 +31,8 @@
   * [Services & networking](docs/guides/services-networking.md)
   * [Monorepo layout](docs/guides/monorepo.md)
   * [Development workflow](docs/guides/development-workflow.md)
+* [Migrate CI with an agent](docs/llm/README.md)
+  * [CI migration guide (for agents)](docs/llm/migrate-ci.md)
 * [CLI](docs/cli/README.md)
   * [Init](docs/cli/init.md)
   * [ls](docs/cli/ls.md)

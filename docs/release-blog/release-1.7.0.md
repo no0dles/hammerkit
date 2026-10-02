@@ -194,6 +194,7 @@ Running the new setup end to end surfaced several bugs, all fixed in this releas
 
 ## Next release
 
-Next up are first-class secrets for tasks and services, and container runtime
-options such as `--shm-size` for browser-based tests. See the
+Next up are source exclusions (`!` entries in `src`, hidden from container tasks
+too), first-class secrets for tasks and services, and container runtime options
+such as `--shm-size` for browser-based tests. See the
 [roadmap](../contribution/roadmap.md).

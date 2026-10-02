@@ -55,8 +55,14 @@ see [agents, workspaces and CI](../guides/agents-and-ci.md).
   `--summary-json`).
 - `hammerkit graph [task]` prints the build graph as mermaid or dot. See
   [graph](../cli/graph.md).
+- A guide for coding agents that rewrites an existing CI pipeline into a hammerkit
+  build file. See [migrate CI with an agent](../llm/README.md).
+- The caching docs list what the cache can't see and how to check a build. See
+  [caching limitations](../task/caching.md#limitations-what-the-cache-cant-see).
 
 ## Changed
+- The npm package ships only the CLI (`dist`) and `build.schema.json`: about half
+  the size of 1.6.0, without test files or source maps.
 - **Cache keys no longer depend on where the project is checked out.** Paths in a
   task's or service's cache identity are relative to the project root (the git root,
   or the main build file's directory), so a laptop, a CI runner and an agent sandbox
@@ -106,5 +112,16 @@ see [agents, workspaces and CI](../guides/agents-and-ci.md).
   count as run failures.
 - `cache push` uploads outputs that are current in the checkout even when they were
   never stored in the local cache.
+- Stopping a local task — on a timeout or Ctrl-C — now stops every process its
+  commands started. Previously only the shell was stopped: on Linux (where `sh` is
+  dash) and for compound commands everywhere, the command kept running and the task
+  waited for it to finish on its own.
+- A local task printing more than 1 MB of output is no longer killed.
+- A Kubernetes task keeps the job of its last run, so an unchanged task is reused in
+  place instead of being restored from the cache backend on every run.
+- Running several commands in one process (`getCli`, tests) no longer leaks log
+  output of one run into the next command's output.
+- A container service's `image` substitutes environment variables
+  (`image: $POSTGRES_IMAGE`) like a task's image does.
 - `build.schema.json` is regenerated and matches the build-file schema again
   (`continuous`, service `ports`, `registry` backend).

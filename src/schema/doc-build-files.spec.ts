@@ -69,6 +69,11 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'GitHub Actions workflow example, not a hammerkit build file',
   },
   {
+    file: join('llm', 'migrate-ci.md'),
+    snippet: 'docker/login-action@v3',
+    reason: 'GitHub Actions workflow template for the CI migration guide, not a hammerkit build file',
+  },
+  {
     file: join('contribution', 'secret-managers.md'),
     snippet: 'secret://vault',
     reason: 'design-doc proposal for an unimplemented secrets: provider; not valid against the current schema',

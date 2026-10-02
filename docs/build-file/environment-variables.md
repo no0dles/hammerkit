@@ -101,8 +101,8 @@ the variables hammerkit passed in — exactly like a normal shell. This is the
 
 **Inside other task fields**, hammerkit substitutes `$NAME` itself when it plans
 the task — before anything runs. This works for `image`, `src`, `generates`,
-`mounts`, `ports`, `shell` and command working directories, so you can drive them
-from a single value:
+`mounts`, `ports`, `shell`, command working directories and a service's `image`,
+so you can drive them from a single value:
 
 {% code title=".hammerkit.yaml" %}
 ```yaml

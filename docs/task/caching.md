@@ -246,3 +246,63 @@ examples and the pull/push behavior.
 To keep the network out of the build, leave tasks on the machine-local `default`
 cache and move entries explicitly with [`cache pull` / `cache push`](../cli/cache.md);
 see [agents, workspaces and CI](../guides/agents-and-ci.md).
+
+### Limitations: what the cache can't see
+
+Hammerkit assumes a task is a **function of its declared inputs**: the same
+definition, the same `src` contents and the same dependencies produce the same
+outputs. A cache hit replays the outputs of the first run with those inputs. When
+a task's result depends on anything else, the cache can serve a stale result — so
+these are the places to look when you set up a build.
+
+#### Inputs hammerkit doesn't track
+
+| Situation | What can go wrong | What to do |
+|---|---|---|
+| **A task reads files it doesn't declare.** A local task can read anything on disk. A container task sees its `src`, its `mounts` and its dependencies' sources and outputs — and a glob makes the whole directory it starts in visible (`src/**/*.ts` mounts all of `src`, but only `.ts` files are hashed). | Changing such a file (a `.css` the build bundles, a config one level up) leaves the task cached. | Declare every file and folder a task reads. Use a folder (`src`) rather than a narrowing glob when the task reads more than the glob matches. |
+| **Inputs passed through `mounts`.** A mount is part of the key only by its path, never its contents. | A changed file behind a mount is not noticed. | Use `mounts` only for caches and tooling (`~/.npm`, a docker socket); put inputs in `src`. |
+| **Host tools of a local task.** A local task's key includes the operating system and CPU architecture, but not the versions of Node, Go, a compiler or anything else on the host's `PATH`. | Upgrading a tool on one machine reuses results built with the old one; two developers with different versions share entries. | Use container tasks for anything you cache or share. For a local task, add the tool's version file (`.nvmrc`, `.tool-versions`) to `src`. |
+| **Image tags that move.** An `image` is identified by its name, not its content. | `node:24-alpine` is republished; hammerkit keeps reusing results built with the old image. | Pin images by digest (`node:24-alpine@sha256:…`) where it matters, and bump the digest deliberately. |
+| **Services a task needs.** `needs` is not part of a task's key. | A test task stays cached after only the database image or its configuration changed. | Drive the service image from a build-file variable (`image: $POSTGRES_IMAGE`): build-file `envs` are part of the key of every task in that file. |
+| **The network.** Installs without a lockfile, `apt-get update`, downloads of "latest", calls to live APIs. | The output depends on the day it was built, and a cache hit pins whatever the first run fetched. | Make the inputs explicit: lockfiles in `src`, pinned versions in commands and images. Give a task that must fetch fresh data `cache: none`. |
+| **Time, randomness and version stamps.** Build dates, random seeds, versions from `git describe`, `$GITHUB_SHA` or a build number. | Read through a declared env, the value changes on every commit and the task never hits. Read from `.git` or the clock, it is invisible and a stale stamp is served. | Keep stamping out of cached tasks: put it in a small final task with `cache: none` that reads the cached outputs. |
+
+#### Results hammerkit doesn't check
+
+* **Outputs are checked for existence, not content.** Deleting an output (`rm -rf
+  dist`) makes the task restore or rebuild it, but editing a file inside `dist` by
+  hand is not noticed. Run `hammerkit clean` after manual changes.
+* **Dependency outputs are trusted.** A task reading what a dependency generates
+  is keyed by the dependency's definition and sources, not by those files. A
+  dependency that breaks one of the rules above passes the problem on.
+* **Non-deterministic tasks.** If the same inputs can produce different outputs
+  (timestamps inside archives, test order, flaky tests), a cache hit freezes one
+  of them. A flaky test that passed once stays "passed" until its inputs change.
+* **`modify-date` only sees timestamps.** Content that changes while the
+  modification time is preserved (`cp -p`, `rsync -t`, extracting an archive) is
+  not noticed. Keep the default `checksum` for anything shared.
+* **Trust.** A shared cache hit means "someone with write access ran this". Decide
+  who may push — see [who may write to the cache](../guides/agents-and-ci.md#who-may-write-to-the-cache).
+
+#### Changes that rebuild more than needed
+
+These never serve a stale result, but cost a rebuild:
+
+* **Env values are part of the key**, including tokens: rotating `NPM_TOKEN`
+  rebuilds every task that declares it. Declare credentials only on the tasks that
+  use them.
+* **Build-file `envs` apply to every task in the file**, so changing one rebuilds
+  them all. Put a value on the tasks that use it when only those should rebuild.
+* **The CPU architecture is part of the key.** An arm64 laptop and an x64 CI runner
+  don't share entries.
+
+#### Checking your build
+
+* Run the build twice: the second run should report every task as cached. A task
+  that rebuilds without a change reads something that differs between runs —
+  [`hammerkit explain`](../cli/explain.md) names it.
+* Change one source file: only the tasks reading it, and the tasks depending on
+  them, should rebuild (`hammerkit run --dry-run` shows the plan without running).
+* Audit regularly, for example nightly: build once with the cache and once with
+  `--cache none` on a clean checkout, and compare test results or output
+  checksums. A difference points at an input a task doesn't declare.

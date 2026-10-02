@@ -7,6 +7,11 @@ order may change as real-world feedback comes in.
 
 ## Next
 
+### Source exclusions
+Exclude paths from a task's `src` with `!` entries (`src: [src, '!src/**/*.md']`),
+so a source folder can be narrowed without long globs. An excluded path is hidden
+from container tasks too, so a task can't read what isn't part of its cache key.
+
 ### Secrets
 First-class secrets for tasks and services — injected at runtime from the host
 environment, a file or a secret manager, never stored in the build file and redacted
