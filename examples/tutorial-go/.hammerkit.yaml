@@ -1,7 +1,4 @@
 envs:
-  # Go needs a writable build cache. On Linux hammerkit runs containers as
-  # your user, who has no home directory in the image, so use /tmp.
-  GOCACHE: /tmp/go-build
   # keep the mounted module cache deletable (Go makes it read-only by default)
   GOFLAGS: -modcacherw
 

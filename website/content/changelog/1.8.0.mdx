@@ -89,6 +89,10 @@ works with GitLab's Docker-in-Docker service.
 - **A cache hit restores exactly the stored outputs.** Restoring a task from a cache
   now replaces its output folders and volumes instead of unpacking into them, so
   files a failed or older run left behind don't survive a cache hit.
+- **On Linux, container tasks had no writable home directory.** They run as your
+  user, which has no home in the image, and Docker sets `HOME=/`: npm, the .NET
+  SDK, Go and Maven failed to create their caches. Such a task now gets
+  `HOME=/tmp` unless its `envs` set `HOME`.
 - **A `DOCKER_HOST` pointing at a TCP address was ignored**, so hammerkit couldn't
   reach GitLab's `docker:dind` service or any remote daemon, and every container
   task failed with an empty error message. A `docker.host` in the build file still

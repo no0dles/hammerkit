@@ -37,7 +37,7 @@ export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }
   return { links, hosts }
 }
 
-function buildCreateOptions(
+export function buildCreateOptions(
   item: WorkItem<ContainerWorkTask>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
@@ -46,6 +46,10 @@ function buildCreateOptions(
   const network = getNeedsNetwork(serviceContainers, item.needs)
   const binds = getContainerBinds(item)
   const envs = getEnvironmentVariables(item.data.envs)
+  // Running as the host's uid (Linux), the user has no home in the image and
+  // Docker sets HOME=/, which isn't writable: tools then fail to create their
+  // caches. Set on the container only, so it's not part of the cache key.
+  const home = item.data.user && !('HOME' in envs) ? { HOME: '/tmp' } : {}
 
   return {
     abortSignal: environment.abortCtrl.signal,
@@ -53,7 +57,7 @@ function buildCreateOptions(
     Tty: true,
     Entrypoint: [item.data.shell],
     Cmd: ['-c', 'sleep 3600'],
-    Env: Object.entries(envs).map(([key, value]) => `${key}=${value}`),
+    Env: Object.entries({ ...envs, ...home }).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',

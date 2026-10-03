@@ -37,9 +37,6 @@ reads the module files and all Go sources:
 
 ```yaml title=".hammerkit.yaml"
 envs:
-  # Go needs a writable build cache. On Linux hammerkit runs containers as
-  # your user, who has no home directory in the image, so use /tmp.
-  GOCACHE: /tmp/go-build
   # keep the mounted module cache deletable (Go makes it read-only by default)
   GOFLAGS: -modcacherw
 
@@ -65,10 +62,6 @@ folder isn't part of the project, and it doesn't need to be an input: `go.sum`
 already pins every module's content. So instead of a task output it's a
 [mount](/docs/task/container#adding-mounts): `.cache/go-mod` in the project is
 mounted at `/go/pkg/mod`, and a module is downloaded once, not by every task run.
-
-On Linux, hammerkit runs the container as your user so that files it writes into
-the project belong to you. That user has no home directory in the image, which is
-where Go keeps its build cache by default; `GOCACHE` moves it to `/tmp`.
 
 ## 2. Build
 
