@@ -30,10 +30,9 @@ tasks:
 If a service defines a [`healthcheck`](/docs/service/container#healthcheck),
 hammerkit runs that command inside the service container and only starts the
 dependent task once it exits `0`. The check is polled about once a second until it
-passes; there are no `interval`/`timeout`/`retries` knobs — `cmd` is the only
-field. A check that never passes simply keeps the dependent task waiting until you
-cancel the run, so make the command something that genuinely reports readiness
-(like `pg_isready`).
+passes or its `timeout` (default `20s`) runs out; there are no `interval`/`retries`
+knobs. A check that never passes fails the service and the run, so make the command
+something that genuinely reports readiness (like `pg_isready`).
 
 Without a healthcheck the task may start the moment the container starts, before
 the service inside it is actually accepting connections.

@@ -22,6 +22,7 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
+import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 
 const HEALTHCHECK_INTERVAL_MS = 1000
 
@@ -96,6 +97,8 @@ export async function dockerService(
         remote: null,
       })
     } else {
+      const healthcheck = item.data.healthcheck
+      const deadline = Date.now() + healthcheck.timeout
       let ready = false
       do {
         // The first check waits one interval too, so an entrypoint that drops
@@ -113,6 +116,9 @@ export async function dockerService(
           user,
           options.abort
         )
+        if (!ready && Date.now() >= deadline) {
+          throw new Error(getHealthcheckTimeoutMessage(item.name, healthcheck))
+        }
       } while (!ready && !options.abort.aborted)
 
       if (ready) {

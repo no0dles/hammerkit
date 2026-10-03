@@ -332,6 +332,9 @@
                     "properties": {
                       "cmd": {
                         "type": "string"
+                      },
+                      "timeout": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                       }
                     },
                     "required": [
