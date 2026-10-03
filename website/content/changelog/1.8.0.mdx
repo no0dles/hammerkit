@@ -1,0 +1,94 @@
+---
+title: "Changelog 1.8.0"
+version: "1.8.0"
+---
+The documentation moved to [hammerkit.dev](https://hammerkit.dev) and gained a
+tutorial for each of six languages, every one of them run by hammerkit's own tests.
+hammerkit itself no longer reports a failed or unfinished task as a success, and
+works with GitLab's Docker-in-Docker service.
+
+## Upgrade notes
+- **Kubernetes environments expose services through Gateway API HTTPRoutes only.**
+  The `ingresses` list is replaced by `httpRoutes`, whose entries need a `gateway`;
+  a build file still declaring `ingresses` is rejected with a pointer to the new key.
+  Install the [Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/) in the
+  cluster, and delete Ingresses created by earlier versions yourself:
+  `kubectl delete ingress -n <namespace> -l hammerkit.dev/id`. See
+  [HTTP routes](/docs/task/kubernetes#http-routes).
+- **Grouping tasks report `cached`.** A task without `cmds` that only groups others
+  (`ci: { deps: [test, build] }`) is reported as `cached` when every one of its
+  dependencies was a cache hit, so a fully cached run shows a 100% cache hit. Scripts
+  reading `--summary-json` see `cached` where they saw `executed`. Which tasks run is
+  unchanged.
+- **A task failing before its commands stops the run**, as a failing command always
+  did. That covers errors while checking the cache, such as an unreachable Docker
+  daemon. Previously the other tasks carried on.
+- **Documentation pages moved.** If you saved the prompt for the CI migration guide,
+  point it at
+  `https://hammerkit.dev/llms.mdx/docs/guides/migrate-ci/agent-guide/content.md`.
+  - `/docs/llm` is now [`/docs/guides/migrate-ci`](/docs/guides/migrate-ci), and the
+    guide the agent follows is
+    [`/docs/guides/migrate-ci/agent-guide`](/docs/guides/migrate-ci/agent-guide).
+  - `/docs/tutorial` is now the [Node.js tutorial](/docs/tutorials/node).
+  - The recipes page is gone; the templates are still in
+    [`best-practices/`](https://github.com/no0dles/hammerkit/tree/master/best-practices).
+  - The architecture decisions moved to
+    [`docs/adr`](https://github.com/no0dles/hammerkit/tree/master/docs/adr) in the
+    repository.
+
+## Added
+- Tutorials for [Node.js](/docs/tutorials/node), [Python](/docs/tutorials/python),
+  [Go](/docs/tutorials/go), [Rust](/docs/tutorials/rust),
+  [Java](/docs/tutorials/java) and [.NET](/docs/tutorials/dotnet). Each takes a small
+  project from an empty build file to a cached `ci` task, starting with a task that
+  only downloads dependencies (`npm ci`, `pip install`, `cargo fetch`,
+  `mvn dependency:go-offline`, `dotnet restore`). The projects are in
+  [`examples/`](https://github.com/no0dles/hammerkit/tree/master/examples), and the
+  integration tests run each one and require its second run to come entirely from
+  the cache.
+- [hammerkit.dev](https://hammerkit.dev) replaces the GitBook documentation: search,
+  a [changelog](/changelog), and every page as Markdown for coding agents
+  ([`/llms.txt`](/llms.txt), [`/llms-full.txt`](/llms-full.txt)).
+
+## Changed
+- Updated the Kubernetes client (`@kubernetes/client-node` 0.20 → 2.0). hammerkit no
+  longer prints a `punycode` deprecation warning on every command.
+- Ingress support is removed: an environment's `httpRoutes` create Gateway API
+  HTTPRoutes, the successor to Ingress, attached to the `gateway` they name.
+
+## Security
+- `tar` 7: hammerkit unpacks cache entries, including ones pulled from shared
+  remote caches, with `tar`, and up to 7.5.20 a crafted archive could overwrite
+  files through hardlinks or stall the extraction.
+- `dockerode` 4.0.12 (its `tar-fs` could extract outside the target directory),
+  `minimatch` 6.2.3, `yaml` 2.9.1 and `chokidar` 3.6 with patched `picomatch` and
+  `brace-expansion`: denial-of-service fixes.
+
+## Fixed
+- **A task that failed could be reported as cached.** A local task whose command
+  failed was recorded as if it had succeeded: the next run reported it cached, and
+  `cache push` uploaded it, so every machine pulling the entry skipped it, and a
+  failing test passed. A container task that failed after
+  an earlier successful run with the same inputs (for example with
+  `--cache none`) kept that run's record, so the next run reported it cached with
+  the failed run's files in its outputs.
+- **A cache hit restores exactly the stored outputs.** Restoring a task from a cache
+  now replaces its output folders and volumes instead of unpacking into them, so
+  files a failed or older run left behind don't survive a cache hit.
+- **A `DOCKER_HOST` pointing at a TCP address was ignored**, so hammerkit couldn't
+  reach GitLab's `docker:dind` service or any remote daemon, and every container
+  task failed with an empty error message. A `docker.host` in the build file still
+  takes precedence.
+- **A run could exit with code 0 without running anything.** When a task failed
+  before its commands, for example because the Docker daemon was unreachable, the
+  tasks depending on it waited forever, and hammerkit stopped with no output and
+  exit code 0, so CI reported success. The run now fails with that task's error, and
+  a run that ever ends without finishing exits with code 1 and
+  `hammerkit stopped before the run finished`.
+- A container task whose sources include a path inside another of its sources
+  (often a dependency's `app/app.csproj` under the task's own `app`) mounted that
+  path twice. On Docker Desktop the folder then couldn't be deleted while hammerkit
+  kept the task's container. It is mounted once now.
+- The [GitLab CI example](/docs/installation#in-ci) in the installation guide works:
+  it clears the image's entrypoint, which GitLab requires, and points `DOCKER_HOST`
+  at the `docker:dind` service.

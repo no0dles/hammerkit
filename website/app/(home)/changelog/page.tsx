@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { changelog } from '@/lib/changelog';
+import { source } from '@/lib/source';
 import { getMDXComponents } from '@/components/mdx';
 
 export const metadata: Metadata = {
@@ -58,12 +59,14 @@ export default function ChangelogPage() {
                     {formatDate(entry.date)}
                   </time>
                 )}
-                <Link
-                  href={`/docs/release-blog/release-${entry.version}`}
-                  className="mt-3 inline-block text-sm font-medium text-fd-primary hover:underline"
-                >
-                  Release notes →
-                </Link>
+                {source.getPage(['release-blog', `release-${entry.version}`]) && (
+                  <Link
+                    href={`/docs/release-blog/release-${entry.version}`}
+                    className="mt-3 inline-block text-sm font-medium text-fd-primary hover:underline"
+                  >
+                    Release notes →
+                  </Link>
+                )}
               </div>
               <div className="prose min-w-0">
                 <MDX components={getMDXComponents()} />
