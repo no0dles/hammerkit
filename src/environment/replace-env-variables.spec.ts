@@ -29,6 +29,20 @@ describe('replace-env-variables', () => {
       expect(result.replacements).toEqual([{ key: 'TOKEN', name: 'SECRET', available: true, value: 'from-file' }])
     })
 
+    it('treats a variable set to an empty string as set', () => {
+      const result = buildEnvironmentVariables({ IID: '$MR_IID' }, env({ MR_IID: '' }), ctx({}))
+      expect(result.replacements).toEqual([{ key: 'IID', name: 'MR_IID', available: true, value: '' }])
+    })
+
+    it('prefers an empty process variable over an env file value', () => {
+      const result = buildEnvironmentVariables(
+        { IID: '$MR_IID' },
+        env({ MR_IID: '' }),
+        ctx({ '/proj': { MR_IID: '7' } })
+      )
+      expect(result.replacements).toEqual([{ key: 'IID', name: 'MR_IID', available: true, value: '' }])
+    })
+
     it('marks unresolved references as unavailable', () => {
       const result = buildEnvironmentVariables({ TOKEN: '$MISSING' }, env({}), ctx({}))
       expect(result.replacements).toEqual([{ key: 'TOKEN', name: 'MISSING', available: false, value: null }])

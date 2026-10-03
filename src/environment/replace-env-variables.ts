@@ -31,17 +31,19 @@ export function buildEnvironmentVariables(
     if (value.startsWith('$')) {
       const name = value.substring(1)
 
+      // a variable set to an empty string is set, as in a shell: CI providers
+      // leave many empty (a merge request id on a branch pipeline)
       let nameValue = environment.processEnvs[name] ?? null
-      if (!nameValue) {
+      if (nameValue === null) {
         for (const envFile of Object.values(context.envFiles)) {
           nameValue = envFile[name] ?? null
-          if (nameValue) {
+          if (nameValue !== null) {
             break
           }
         }
       }
 
-      if (nameValue) {
+      if (nameValue !== null) {
         replacements.push({
           key,
           name,

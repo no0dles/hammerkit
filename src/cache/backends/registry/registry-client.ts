@@ -54,6 +54,23 @@ export function parseChallenge(header: string): Challenge {
   return { scheme, params }
 }
 
+// Always ask for pull and push, so one token serves the whole backend, plus
+// what the challenge names for this repository: a DELETE is challenged for
+// `delete`, which a pull/push token lacks. A registry grants the subset the
+// credentials allow.
+export function getTokenScope(repository: string, challengeScope: string | null): string {
+  const actions = ['pull', 'push']
+  const prefix = `repository:${repository}:`
+  if (challengeScope?.startsWith(prefix)) {
+    for (const action of challengeScope.substring(prefix.length).split(',')) {
+      if (action && !actions.includes(action)) {
+        actions.push(action)
+      }
+    }
+  }
+  return `${prefix}${actions.join(',')}`
+}
+
 function basicHeader(credentials: RegistryCredentials): string {
   return `Basic ${Buffer.from(`${credentials.username}:${credentials.password}`).toString('base64')}`
 }
@@ -103,9 +120,7 @@ export class RegistryClient {
     if (challenge.params.service) {
       tokenUrl.searchParams.set('service', challenge.params.service)
     }
-    // always ask for push too: one token then serves the whole backend; a
-    // registry grants the subset the credentials allow
-    tokenUrl.searchParams.set('scope', `repository:${this.reference.repository}:pull,push`)
+    tokenUrl.searchParams.set('scope', getTokenScope(this.reference.repository, challenge.params.scope ?? null))
     const response = await fetch(tokenUrl, {
       headers: credentials ? { authorization: basicHeader(credentials) } : {},
     })
