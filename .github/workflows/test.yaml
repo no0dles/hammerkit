@@ -137,6 +137,10 @@ jobs:
       # `kind-<cluster>`, so rename it to match what the specs ask for.
       - name: Name the kube context after CLUSTER_NAME
         run: kubectl config rename-context "kind-${CLUSTER_NAME}" "${CLUSTER_NAME}"
+      # Services are exposed through Gateway API HTTPRoutes, a CRD kind does not ship
+      # with; environment.spec.ts creates and removes one.
+      - name: Install the Gateway API CRDs
+        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
       # docker-package-registry.spec.ts only probes an externally provided REGISTRY
       # for liveness (it never manages one), so stand up a registry on localhost:5000.
       - name: Start local registry

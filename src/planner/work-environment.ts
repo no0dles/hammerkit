@@ -1,4 +1,4 @@
-import { BuildFileEnvironmentSchemaIngress } from '../schema/build-file-environment-schema-ingress'
+import { BuildFileEnvironmentSchemaHttpRoute } from '../schema/build-file-environment-schema-http-route'
 
 export type WorkEnvironment = WorkKubernetesEnvironment | WorkDockerEnvironment
 
@@ -12,6 +12,6 @@ export interface WorkKubernetesEnvironment {
   namespace: string
   kubeConfig?: string
   context: string
-  ingresses: BuildFileEnvironmentSchemaIngress[]
+  httpRoutes: BuildFileEnvironmentSchemaHttpRoute[]
   storageClass?: string
 }

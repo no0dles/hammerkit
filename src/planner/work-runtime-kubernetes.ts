@@ -20,7 +20,6 @@ import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
-import { ensureIngress } from '../kubernetes/ensure-ingress'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
 import { getErrorMessage } from '../log'
@@ -256,35 +255,16 @@ export function kubernetesServiceRuntime(
         remote: null,
       })
 
-      const ingresses = kubernetes.ingresses.filter((i) => i.service === service.name)
-      for (const ingress of ingresses) {
-        if (ingress.kind === 'httproute') {
-          await ensureHttpRoute(instance, kubernetes, ingress, service)
-        } else {
-          await ensureIngress(instance, kubernetes, ingress, service)
-        }
+      for (const route of kubernetes.httpRoutes.filter((r) => r.service === service.name)) {
+        await ensureHttpRoute(instance, kubernetes, route, service)
       }
     },
     async remove(): Promise<void> {
-      const ingresses = await instance.networkingApi.listNamespacedIngress({
-        namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${service.id()}`,
-      })
-      for (const ingress of ingresses.items) {
-        if (ingress.metadata?.name) {
-          await instance.networkingApi.deleteNamespacedIngress({
-            name: ingress.metadata.name,
-            namespace: kubernetes.namespace,
-          })
-        }
-      }
-
       // HTTPRoutes are a CRD, so they are deleted by name through the generic
       // objectApi rather than listed (a list would error on clusters without the
-      // Gateway API CRDs even when none are declared). Only entries this service
-      // declared as httproute are removed; a missing route (404) is fine.
-      const httpRoutes = kubernetes.ingresses.filter((i) => i.kind === 'httproute' && i.service === service.name)
-      for (const route of httpRoutes) {
+      // Gateway API CRDs even when none are declared). Only the routes this
+      // service declares are removed; a missing route (404) is fine.
+      for (const route of kubernetes.httpRoutes.filter((r) => r.service === service.name)) {
         try {
           await instance.objectApi.delete({
             apiVersion: HTTP_ROUTE_API_VERSION,

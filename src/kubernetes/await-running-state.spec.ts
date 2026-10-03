@@ -3,7 +3,7 @@ import { awaitDeployRunningState, awaitRunningState, deleteJob } from './await-r
 import { KubernetesInstance } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
-const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', ingresses: [] } as WorkKubernetesEnvironment
+const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', httpRoutes: [] } as WorkKubernetesEnvironment
 
 function httpError(code: number): ApiException<undefined> {
   return new ApiException(code, `http ${code}`, undefined, {})

@@ -3,7 +3,7 @@ import { ApiException } from '@kubernetes/client-node'
 import { ensureHttpRoute } from './ensure-http-route'
 import { KubernetesInstance } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { BuildFileEnvironmentSchemaIngress } from '../schema/build-file-environment-schema-ingress'
+import { BuildFileEnvironmentSchemaHttpRoute } from '../schema/build-file-environment-schema-http-route'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 
@@ -15,7 +15,7 @@ function makeInstance(objectApi: Partial<{ read: Mock; patch: Mock; create: Mock
   return { objectApi } as any
 }
 
-const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', ingresses: [] } as WorkKubernetesEnvironment
+const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', httpRoutes: [] } as WorkKubernetesEnvironment
 
 const service = {
   name: 'api',
@@ -23,21 +23,20 @@ const service = {
   data: { ports: [{ containerPort: 3000, hostPort: null }] },
 } as unknown as WorkItem<ContainerWorkService>
 
-function ingress(overrides: Partial<BuildFileEnvironmentSchemaIngress> = {}): BuildFileEnvironmentSchemaIngress {
+function route(overrides: Partial<BuildFileEnvironmentSchemaHttpRoute> = {}): BuildFileEnvironmentSchemaHttpRoute {
   return {
-    kind: 'httproute',
     host: 'api.example.com',
     service: 'api',
     gateway: 'web',
     ...overrides,
-  } as BuildFileEnvironmentSchemaIngress
+  }
 }
 
 describe('ensureHttpRoute', () => {
   it('creates an HTTPRoute with the expected shape', async () => {
     const read = vi.fn().mockRejectedValue(httpError(404))
     const create = vi.fn().mockResolvedValue({})
-    await ensureHttpRoute(makeInstance({ read, create }), env, ingress(), service)
+    await ensureHttpRoute(makeInstance({ read, create }), env, route(), service)
 
     expect(create).toHaveBeenCalledTimes(1)
     expect(create.mock.calls[0][0]).toMatchObject({
@@ -63,7 +62,7 @@ describe('ensureHttpRoute', () => {
     await ensureHttpRoute(
       makeInstance({ read, create }),
       env,
-      ingress({ servicePort: 8080, path: '/api', gatewayNamespace: 'gateways' }),
+      route({ servicePort: 8080, path: '/api', gatewayNamespace: 'gateways' }),
       service
     )
 
@@ -78,14 +77,5 @@ describe('ensureHttpRoute', () => {
         ],
       },
     })
-  })
-
-  it('throws when no gateway is set', async () => {
-    const read = vi.fn()
-    const create = vi.fn()
-    await expect(
-      ensureHttpRoute(makeInstance({ read, create }), env, ingress({ gateway: undefined }), service)
-    ).rejects.toThrow(/requires a "gateway"/)
-    expect(create).not.toHaveBeenCalled()
   })
 })

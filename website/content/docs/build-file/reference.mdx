@@ -114,9 +114,9 @@ Each environment is a [run target](/docs/task/kubernetes) — exactly one of:
 
 | Key | Fields | Description |
 |-----|--------|-------------|
-| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `ingresses[]` | Run tasks as jobs and services as deployments on a cluster. |
+| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]` | Run tasks as jobs and services as deployments on a cluster. |
 | `docker` | `host` | Run against a remote Docker daemon. |
 
-An `ingresses` entry has `kind` (`ingress`/`httproute`), `host`, `service`,
-`servicePort`, `path`, `gateway`, `gatewayNamespace` — see
-[ingresses](/docs/task/kubernetes#ingresses).
+An `httpRoutes` entry has `host`, `service` and `gateway` (all required),
+`servicePort`, `path` and `gatewayNamespace` — see
+[HTTP routes](/docs/task/kubernetes#http-routes).

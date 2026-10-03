@@ -431,18 +431,11 @@
                       "kubeconfig": {
                         "type": "string"
                       },
-                      "ingresses": {
+                      "httpRoutes": {
                         "type": "array",
                         "items": {
                           "type": "object",
                           "properties": {
-                            "kind": {
-                              "type": "string",
-                              "enum": [
-                                "ingress",
-                                "httproute"
-                              ]
-                            },
                             "host": {
                               "type": "string"
                             },
@@ -464,10 +457,14 @@
                           },
                           "required": [
                             "host",
-                            "service"
+                            "service",
+                            "gateway"
                           ],
                           "additionalProperties": false
                         }
+                      },
+                      "ingresses": {
+                        "not": {}
                       }
                     },
                     "required": [

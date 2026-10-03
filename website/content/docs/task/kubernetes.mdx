@@ -53,7 +53,7 @@ tasks:
 | `context`    | yes      | The kube context (cluster + user) the tasks run in.                       |
 | `namespace`  | no       | Namespace the jobs and deployments are created in.                        |
 | `kubeconfig` | no       | Path to a kubeconfig file. Defaults to `$HOME/.kube/config`.              |
-| `ingresses`  | no       | Ingress / Gateway API route definitions to expose services, see [ingresses](#ingresses). |
+| `httpRoutes` | no       | Gateway API routes that expose services, see [HTTP routes](#http-routes). |
 
 <Callout type="info">
 
@@ -87,10 +87,12 @@ A container service [healthcheck](/docs/service/container#healthcheck) is
 translated into readiness and liveness probes on the Kubernetes deployment, so
 dependent tasks only start once the service is ready.
 
-## Ingresses
+## HTTP routes
 
-Ingresses expose a service of the environment under a hostname, for example to
-reach a deployed application from outside the cluster.
+An HTTP route exposes a service of the environment under a hostname, for example to
+reach a deployed application from outside the cluster. Hammerkit creates a Gateway
+API [`HTTPRoute`](https://gateway-api.sigs.k8s.io/) per entry, attached to a
+`Gateway` in the cluster, and removes it again with `hammerkit down`.
 
 ```yaml
 environments:
@@ -98,40 +100,8 @@ environments:
     kubernetes:
       context: staging-cluster
       namespace: my-app
-      ingresses:
+      httpRoutes:
         - host: api.example.com
-          service: api
-          servicePort: 3000
-          path: /
-```
-
-| Field              | Required        | Description                                                   |
-|--------------------|-----------------|---------------------------------------------------------------|
-| `kind`             | no              | `ingress` (default) or `httproute` for the Gateway API.       |
-| `host`             | yes             | Hostname the route responds to.                               |
-| `service`          | yes             | Name of the service to route to.                              |
-| `servicePort`      | no              | Port of the service to route to.                              |
-| `path`             | no              | Path prefix that is routed to the service.                    |
-| `gateway`          | for `httproute` | Name of the parent `Gateway` (Gateway API only).              |
-| `gatewayNamespace` | no              | Namespace of the parent `Gateway`, if not the route's own.    |
-
-### Gateway API
-
-Set `kind: httproute` on an entry to create a Gateway API
-[`HTTPRoute`](https://gateway-api.sigs.k8s.io/) instead of an Ingress. The Gateway
-API is the modern replacement for Ingress: rather than relying on an ingress
-controller, an `httproute` attaches to a parent `gateway`. Both `ingress` and
-`httproute` entries can be mixed in the same `ingresses` list.
-
-```yaml
-environments:
-  staging:
-    kubernetes:
-      context: staging-cluster
-      namespace: my-app
-      ingresses:
-        - kind: httproute
-          host: api.example.com
           service: api
           servicePort: 3000
           path: /
@@ -139,9 +109,20 @@ environments:
           # gatewayNamespace: gateways # set if the Gateway lives elsewhere
 ```
 
+| Field              | Required | Description                                                 |
+|--------------------|----------|-------------------------------------------------------------|
+| `host`             | yes      | Hostname the route responds to.                             |
+| `service`          | yes      | Name of the service to route to.                            |
+| `gateway`          | yes      | Name of the parent `Gateway`.                               |
+| `gatewayNamespace` | no       | Namespace of the parent `Gateway`, if not the route's own.  |
+| `servicePort`      | no       | Port of the service to route to.                            |
+| `path`             | no       | Path prefix that is routed to the service.                  |
+
 <Callout type="info">
 
 This requires the [Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/) and a
-`Gateway` resource to be installed in the cluster.
+`Gateway` resource to be installed in the cluster. Hammerkit no longer creates
+`Ingress` resources: the Gateway API is their successor, and an `ingresses` list in
+a build file is rejected with a pointer to `httpRoutes`.
 
 </Callout>

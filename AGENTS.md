@@ -79,7 +79,7 @@ Each task/service is bound to a runtime: `local`, `docker`, or `kubernetes` (see
 ### Docker + Kubernetes layers
 
 - [src/docker/](src/docker/) — `dockerode`-based helpers: `using-container.ts` (lifecycle), `pull.ts`, `stream.ts`, `package.ts` (image build/push for `hammerkit package`).
-- [src/kubernetes/](src/kubernetes/) — `@kubernetes/client-node` helpers for deployments, services, ingress, PVCs, and store/restore of persistent data. Used for `kubernetes-service` items.
+- [src/kubernetes/](src/kubernetes/) — `@kubernetes/client-node` helpers for deployments, services, Gateway API HTTPRoutes, PVCs, and store/restore of persistent data. Used for `kubernetes-service` items.
 
 ### Testing infrastructure
 

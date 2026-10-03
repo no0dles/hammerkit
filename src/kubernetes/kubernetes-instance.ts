@@ -1,12 +1,4 @@
-import {
-  AppsV1Api,
-  BatchV1Api,
-  CoreV1Api,
-  Exec,
-  KubeConfig,
-  KubernetesObjectApi,
-  NetworkingV1Api,
-} from '@kubernetes/client-node'
+import { AppsV1Api, BatchV1Api, CoreV1Api, Exec, KubeConfig, KubernetesObjectApi } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getErrorMessage } from '../log'
 
@@ -15,7 +7,6 @@ export interface KubernetesInstance {
   objectApi: KubernetesObjectApi
   coreApi: CoreV1Api
   appsApi: AppsV1Api
-  networkingApi: NetworkingV1Api
   batchApi: BatchV1Api
 }
 
@@ -33,13 +24,11 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
     const coreApi = kc.makeApiClient(CoreV1Api)
     const batchApi = kc.makeApiClient(BatchV1Api)
     const appsApi = kc.makeApiClient(AppsV1Api)
-    const networkingApi = kc.makeApiClient(NetworkingV1Api)
     const objectApi = kc.makeApiClient(KubernetesObjectApi)
     const exec = new Exec(kc)
 
     return {
       objectApi,
-      networkingApi,
       exec,
       appsApi,
       coreApi,

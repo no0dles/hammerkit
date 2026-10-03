@@ -37,19 +37,18 @@ An operator needs to specify which cluster context, namespace, and kubeconfig fi
 1. **Given** a kubernetes target with only `context` set, **When** a task runs in that environment, **Then** hammerkit uses `$HOME/.kube/config` and the default namespace.
 2. **Given** a kubernetes target with `kubeconfig` and `namespace` set, **When** a task runs, **Then** the specified kubeconfig file and namespace are used.
 
-### User Story 3 - Expose services via ingresses (Priority: P2)
+### User Story 3 - Expose services via HTTP routes (Priority: P2)
 
-An operator wants a deployed service to be reachable from outside the cluster. They add an `ingresses` entry under the kubernetes target with a hostname and service name. Hammerkit creates an Ingress (or Gateway API HTTPRoute) resource pointing to the service.
+An operator wants a deployed service to be reachable from outside the cluster. They add an `httpRoutes` entry under the kubernetes target with a hostname, service name and parent gateway. Hammerkit creates a Gateway API HTTPRoute resource pointing to the service. (Ingress resources were supported until 1.7 and removed in 1.8.0.)
 
-**Why this priority**: Ingress configuration enables integration testing and end-to-end workflows that require external access to deployed services.
+**Why this priority**: Route configuration enables integration testing and end-to-end workflows that require external access to deployed services.
 
-**Independent Test**: Declare an ingress entry for a service, run in the kubernetes environment, and verify an Ingress resource with the correct host and service reference is created in the cluster.
+**Independent Test**: Declare an `httpRoutes` entry for a service, run in the kubernetes environment, and verify an HTTPRoute resource with the correct host, gateway and service reference is created in the cluster.
 
 **Acceptance Scenarios**:
 
-1. **Given** an ingress entry with `host`, `service`, and `servicePort`, **When** the environment is activated, **Then** hammerkit creates a Kubernetes Ingress resource routing that host to the service.
-2. **Given** an ingress entry with `kind: httproute` and a `gateway` name, **When** the environment is activated, **Then** hammerkit creates a Gateway API HTTPRoute resource attached to the named Gateway.
-3. **Given** an ingress entry with both `ingress` and `httproute` kinds in the same list, **When** the environment is activated, **Then** both resource types are created.
+1. **Given** an `httpRoutes` entry with `host`, `service`, `servicePort` and `gateway`, **When** the environment is activated, **Then** hammerkit creates a Gateway API HTTPRoute attached to the named Gateway, routing that host to the service.
+2. **Given** an `ingresses` list (removed in 1.8.0), **When** the build file is parsed, **Then** it is rejected with a message pointing to `httpRoutes`.
 
 ### User Story 4 - Target a remote Docker daemon (Priority: P3)
 
@@ -91,22 +90,21 @@ A CI engineer stores build cache from a cluster run and restores it on another m
 - **FR-002**: The system MUST accept a `--env <name>` CLI flag on the execute, store, and restore commands.
 - **FR-003**: When `--env` is not supplied, the system MUST use the local Docker daemon.
 - **FR-004**: A kubernetes target MUST require a `context` field identifying the kube context (cluster + user).
-- **FR-005**: A kubernetes target MUST support optional `namespace`, `kubeconfig`, and `ingresses` fields.
+- **FR-005**: A kubernetes target MUST support optional `namespace`, `kubeconfig`, and `httpRoutes` fields.
 - **FR-006**: When `kubeconfig` is not specified, the system MUST default to `$HOME/.kube/config`.
 - **FR-007**: The system MUST execute tasks as Kubernetes jobs and container services as Kubernetes deployments when running in a kubernetes environment.
 - **FR-008**: A service healthcheck MUST be translated into Kubernetes readiness and liveness probes on the corresponding deployment.
-- **FR-009**: The system MUST support an `ingresses` list on a kubernetes target, creating either an Ingress or a Gateway API HTTPRoute resource per entry.
-- **FR-010**: An ingress entry MUST require `host` and `service` fields; `kind` (default `ingress`), `servicePort`, and `path` are optional.
-- **FR-011**: An `httproute` ingress entry MUST require a `gateway` field; `gatewayNamespace` is optional.
+- **FR-009**: The system MUST support an `httpRoutes` list on a kubernetes target, creating a Gateway API HTTPRoute resource per entry.
+- **FR-010**: An `httpRoutes` entry MUST require `host`, `service` and `gateway`; `servicePort`, `path` and `gatewayNamespace` are optional.
 - **FR-012**: A docker environment target MUST support an optional `host` field for a remote Docker daemon address.
 - **FR-013**: Task caching MUST function identically in kubernetes environments as in local docker runs.
 
 ### Key Entities
 
 - **Environment**: A named entry in `environments` specifying either a `kubernetes` or `docker` execution target.
-- **Kubernetes target**: Configuration for cluster execution: `context` (required), `namespace`, `kubeconfig`, `ingresses`.
+- **Kubernetes target**: Configuration for cluster execution: `context` (required), `namespace`, `kubeconfig`, `httpRoutes`.
 - **Docker target**: Configuration for docker execution: `host` (optional).
-- **Ingress entry**: Route configuration with `kind`, `host`, `service`, `servicePort`, `path`, `gateway`, `gatewayNamespace`.
+- **HTTP route entry**: Route configuration with `host`, `service`, `gateway`, `servicePort`, `path`, `gatewayNamespace`.
 
 ## Success Criteria *(mandatory)*
 
@@ -114,8 +112,8 @@ A CI engineer stores build cache from a cluster run and restores it on another m
 
 - **SC-001**: A task run with `--env <kubernetes-env>` creates a job in the target cluster and produces the same output as a local run.
 - **SC-002**: A service with a healthcheck deployed via a kubernetes environment has readiness and liveness probes on its deployment.
-- **SC-003**: An ingress entry with `kind: ingress` creates a Kubernetes Ingress resource with the correct host and backend service.
-- **SC-004**: An ingress entry with `kind: httproute` creates a Gateway API HTTPRoute resource attached to the specified Gateway.
+- **SC-003**: An `httpRoutes` entry creates a Gateway API HTTPRoute resource attached to the specified Gateway, with the correct host and backend service; `hammerkit down` removes it.
+- **SC-004**: A build file declaring `ingresses` is rejected with a message pointing to `httpRoutes`.
 - **SC-005**: Without `--env`, tasks run on the local Docker daemon regardless of declared environments.
 
 ## Assumptions

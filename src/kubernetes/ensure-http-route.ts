@@ -1,5 +1,5 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { BuildFileEnvironmentSchemaIngress } from '../schema/build-file-environment-schema-ingress'
+import { BuildFileEnvironmentSchemaHttpRoute } from '../schema/build-file-environment-schema-http-route'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { KubernetesObject } from '@kubernetes/client-node'
@@ -27,18 +27,14 @@ export const HTTP_ROUTE_KIND = 'HTTPRoute'
 export async function ensureHttpRoute(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
-  ingress: BuildFileEnvironmentSchemaIngress,
+  route: BuildFileEnvironmentSchemaHttpRoute,
   service: WorkItem<ContainerWorkService>
 ) {
-  if (!ingress.gateway) {
-    throw new Error(`httproute for ${ingress.host} requires a "gateway" (the parent Gateway name)`)
-  }
-
   const resource: V1HttpRoute & KubernetesObjectHeader = {
     apiVersion: HTTP_ROUTE_API_VERSION,
     kind: HTTP_ROUTE_KIND,
     metadata: {
-      name: ingress.host,
+      name: route.host,
       namespace: env.namespace,
       labels: {
         'hammerkit.dev/id': service.id(),
@@ -47,25 +43,25 @@ export async function ensureHttpRoute(
     spec: {
       parentRefs: [
         {
-          name: ingress.gateway,
-          ...(ingress.gatewayNamespace ? { namespace: ingress.gatewayNamespace } : {}),
+          name: route.gateway,
+          ...(route.gatewayNamespace ? { namespace: route.gatewayNamespace } : {}),
         },
       ],
-      hostnames: [ingress.host],
+      hostnames: [route.host],
       rules: [
         {
           matches: [
             {
               path: {
                 type: 'PathPrefix',
-                value: ingress.path ?? '/',
+                value: route.path ?? '/',
               },
             },
           ],
           backendRefs: [
             {
               name: getResourceName(service),
-              port: ingress.servicePort ?? service.data.ports[0].containerPort,
+              port: route.servicePort ?? service.data.ports[0].containerPort,
             },
           ],
         },
