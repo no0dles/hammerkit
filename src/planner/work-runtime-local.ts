@@ -7,7 +7,9 @@ import { create, extract } from 'tar'
 import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
+import { getOutputsToReset } from './utils/get-outputs-to-reset'
 import findProcess from 'find-process'
+import { Readable } from 'stream'
 
 function getStateFilename(task: WorkItem<LocalWorkTask>) {
   return join(task.data.cwd, '.hammerkit', `${task.id()}`)
@@ -59,8 +61,21 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
       const pidFile = getPidFilename(task)
       await environment.file.writeFile(pidFile, `${process.pid}`)
       try {
+        // The record says "the outputs belong to this state key". A run that
+        // fails overwrites outputs, so the previous record goes first, and only
+        // a run that succeeded writes a new one.
+        const stateFile = getStateFilename(task)
+        if (await environment.file.exists(stateFile)) {
+          await environment.file.remove(stateFile)
+        }
+        for (const generate of getOutputsToReset(task.data)) {
+          await environment.file.remove(generate.path)
+        }
         await localTask(task, environment, options)
-        await environment.file.writeFile(getStateFilename(task), options.stateKey)
+        const failed = ['crash', 'error', 'canceled'].includes(options.state.current.type)
+        if (!failed) {
+          await environment.file.writeFile(stateFile, options.stateKey)
+        }
       } finally {
         if (await environment.file.exists(pidFile)) {
           await environment.file.remove(pidFile)
@@ -100,13 +115,8 @@ async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTa
   for (const generatedArchive of getArchivePaths(task.data, path)) {
     await environment.file.writeStream(
       generatedArchive.filename,
-      create(
-        {
-          cwd: task.data.cwd,
-          gzip: true,
-        },
-        [relative(task.data.cwd, generatedArchive.path)]
-      )
+      // tar's stream is a Minipass stream; Readable.from adapts it to a Node one
+      Readable.from(create({ cwd: task.data.cwd, gzip: true }, [relative(task.data.cwd, generatedArchive.path)]))
     )
   }
 }
@@ -114,6 +124,9 @@ async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTa
 async function restoreLocal(environment: Environment, task: LocalWorkTask, path: string) {
   for (const generate of getArchivePaths(task, path)) {
     if (await environment.file.exists(generate.filename)) {
+      // a cache hit means exactly the stored outputs: whatever a failed or
+      // older run left in the folder goes first
+      await environment.file.remove(generate.path)
       await extract({
         file: generate.filename,
         cwd: task.cwd,

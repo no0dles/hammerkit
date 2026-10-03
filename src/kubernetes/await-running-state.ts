@@ -3,36 +3,29 @@ import { listenOnAbort } from '../utils/abort-event'
 import { statusCodeOf } from './apply'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
-import { V1Deployment } from '@kubernetes/client-node'
+import { sleep as delay } from '../utils/sleep'
 
-export function awaitRunningState(
+// The waits below poll instead of using the client's Watch: Watch aborts every
+// request after 30s, which a pod or deployment still pulling its image outlasts.
+
+export async function awaitRunningState(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   name: string,
-  phase: string
-) {
-  return new Promise<void>((resolve, reject) => {
-    const req = instance.watch.watch(
-      `/api/v1/namespaces/${env.namespace}/pods`,
-      {},
-      (type, obj) => {
-        if (obj.metadata.name === name && obj.metadata.namespace === env.namespace && obj.status.phase === phase) {
-          req.then((r) => r.abort())
-          resolve()
-        }
-      },
-      (err) => {
-        if (err.message === 'aborted') {
-          return
-        }
-        if (err) {
-          reject(err)
-        } else {
-          resolve()
-        }
-      }
-    )
-  })
+  phase: string,
+  pollInterval = 1000
+): Promise<void> {
+  for (;;) {
+    const pod = await instance.coreApi.readNamespacedPod({ name, namespace: env.namespace })
+    const current = pod.status?.phase
+    if (current === phase) {
+      return
+    }
+    if (current === 'Succeeded' || current === 'Failed') {
+      throw new Error(`pod ${name} ended in phase ${current} before reaching ${phase}`)
+    }
+    await delay(pollInterval)
+  }
 }
 
 // Wait for a job to finish by polling its status: resolves once it succeeded,
@@ -51,8 +44,8 @@ export async function awaitJobCompletion(
       await deleteJob(instance, env, name)
       throw new AbortError()
     }
-    const job = await instance.batchApi.readNamespacedJobStatus(name, env.namespace)
-    const status = job.body.status
+    const job = await instance.batchApi.readNamespacedJobStatus({ name, namespace: env.namespace })
+    const status = job.status
     if (status?.succeeded) {
       return
     }
@@ -87,7 +80,12 @@ export async function deleteJob(
   name: string
 ): Promise<void> {
   try {
-    await instance.batchApi.deleteNamespacedJob(name, env.namespace, undefined, undefined, 0, undefined, 'Background')
+    await instance.batchApi.deleteNamespacedJob({
+      name,
+      namespace: env.namespace,
+      gracePeriodSeconds: 0,
+      propagationPolicy: 'Background',
+    })
   } catch (e) {
     if (statusCodeOf(e) !== 404) {
       throw e
@@ -95,35 +93,19 @@ export async function deleteJob(
   }
 }
 
-export function awaitDeployRunningState(instance: KubernetesInstance, env: WorkKubernetesEnvironment, name: string) {
-  return new Promise<void>((resolve, reject) => {
-    const req = instance.watch.watch(
-      `/apis/apps/v1/namespaces/${env.namespace}/deployments`,
-      {},
-      (type, obj: V1Deployment) => {
-        if (
-          (obj &&
-            obj.metadata?.name === name &&
-            obj.metadata?.namespace === env.namespace &&
-            obj.status?.readyReplicas) ??
-          0 > 0
-        ) {
-          req.then((r) => r.abort())
-          resolve()
-        }
-      },
-      (err) => {
-        if (err && err.message === 'aborted') {
-          return
-        }
-        if (err) {
-          reject(err)
-        } else {
-          resolve()
-        }
-      }
-    )
-  })
+export async function awaitDeployRunningState(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  pollInterval = 1000
+): Promise<void> {
+  for (;;) {
+    const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
+    if ((deployment.status?.readyReplicas ?? 0) > 0) {
+      return
+    }
+    await delay(pollInterval)
+  }
 }
 
 // Delete a job and wait until it is gone: its name is reused for the task's next
@@ -139,7 +121,7 @@ export async function deleteJobAndWait(
   await deleteJob(instance, env, name)
   for (;;) {
     try {
-      await instance.batchApi.readNamespacedJob(name, env.namespace)
+      await instance.batchApi.readNamespacedJob({ name, namespace: env.namespace })
     } catch (e) {
       if (statusCodeOf(e) === 404) {
         return

@@ -62,6 +62,18 @@ function withDeadline(parent: AbortSignal, timeout: number | null) {
   }
 }
 
+// A task without cmds only groups its dependencies (`ci: { deps: [test, build] }`).
+// Having no src of its own it is never a cache hit, so its dependencies are
+// always checked and their outputs restored. When every one of them was a hit,
+// nothing ran: report the group as cached too. Reporting only, the cache
+// decision is untouched.
+function onlyGroupsCacheHits(work: WorkItemState<WorkTask, TaskState>): boolean {
+  return (
+    work.data.cmds.length === 0 &&
+    work.deps.every((dep) => dep.state.current.type === 'completed' && dep.state.current.cached)
+  )
+}
+
 export async function executeWorkTask(
   work: WorkItemState<WorkTask, TaskState>,
   environment: Environment,
@@ -168,12 +180,13 @@ export async function executeWorkTask(
         if (work.state.current.type === 'running') {
           work.status.write('debug', 'completed for state key ' + cacheState.stateKey)
           await pushToBackend(work, environment, cacheState, options)
+          const cached = onlyGroupsCacheHits(work)
           work.state.set({
             stateKey: cacheState.stateKey,
             type: 'completed',
-            cached: false,
+            cached,
             duration: getDuration(started),
-            missCauses,
+            missCauses: cached ? undefined : missCauses,
           })
         } else {
           if (!options.watch) {
@@ -196,6 +209,11 @@ export async function executeWorkTask(
         errorMessage: getErrorMessage(e),
         stateKey: null,
       })
+      // Stop the run like a failing command does: dependents wait for this task
+      // to complete, which it now never will.
+      if (!options.watch) {
+        environment.abortCtrl.abort()
+      }
     }
   }
 }

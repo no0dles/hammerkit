@@ -45,6 +45,18 @@ export async function usingContainer<T>(
         if (container) {
           await removeContainer(container)
         }
+        // A task run that failed has written into the outputs an earlier run's
+        // container still vouches for (its state label is what currentStateKey
+        // reads), so that record goes too.
+        if (stateKey) {
+          const containers = await docker.listContainers({
+            all: true,
+            filters: { label: [`hammerkit-id=${getWorkInstanceId(item)}`] },
+          })
+          for (const old of containers) {
+            await removeContainer(docker.getContainer(old.Id))
+          }
+        }
       }
     } catch (e) {
       item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)

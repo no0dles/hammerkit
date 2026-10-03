@@ -49,10 +49,12 @@ describe('environment', () => {
               kubernetes: {
                 namespace: `hammerkit-env-${(process.env.HAMMERKIT_TEST_RUN_ID ?? 'local').slice(0, 40)}`,
                 context: process.env.CLUSTER_NAME || 'docker-desktop',
-                ingresses: [
+                // the parent Gateway doesn't have to exist for the route to be created
+                httpRoutes: [
                   {
                     host: 'demo.bertschi.io',
                     service: 'api',
+                    gateway: 'web',
                   },
                 ],
               },

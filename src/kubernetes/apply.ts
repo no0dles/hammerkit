@@ -1,4 +1,4 @@
-import { KubernetesObject } from '@kubernetes/client-node/dist/types'
+import { KubernetesObject } from '@kubernetes/client-node'
 import { KubernetesInstance } from './kubernetes-instance'
 
 export type KubernetesObjectHeader = {
@@ -8,31 +8,30 @@ export type KubernetesObjectHeader = {
   }
 } & Pick<KubernetesObject, 'apiVersion' | 'kind'>
 
+// The client throws an ApiException carrying the HTTP status as `code`; watch
+// errors carry it as `statusCode`.
 export function statusCodeOf(e: unknown): number | undefined {
-  const err = e as { statusCode?: number; response?: { statusCode?: number }; body?: { code?: number } }
-  return err?.statusCode ?? err?.response?.statusCode ?? err?.body?.code
+  const err = e as { code?: unknown; statusCode?: number }
+  return typeof err?.code === 'number' ? err.code : err?.statusCode
 }
 
 export async function apply<T extends KubernetesObject>(
   instance: KubernetesInstance,
   spec: T & KubernetesObjectHeader
-) {
+): Promise<T> {
   try {
     await instance.objectApi.read(spec)
-    const response = await instance.objectApi.patch(spec)
-    return response.body
+    return await instance.objectApi.patch(spec)
   } catch (e) {
     try {
-      const response = await instance.objectApi.create(spec)
-      return response.body
+      return await instance.objectApi.create(spec)
     } catch (createError) {
       // Two work items can apply the same object concurrently (e.g. a volume
       // shared between a task and a service that inherits its generates). If we
       // lost the create race, the object now exists — read it back instead of
       // failing the whole item.
       if (statusCodeOf(createError) === 409) {
-        const response = await instance.objectApi.read(spec)
-        return response.body as T & KubernetesObjectHeader
+        return await instance.objectApi.read<T>(spec)
       }
       throw createError
     }

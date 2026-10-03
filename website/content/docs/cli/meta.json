@@ -2,7 +2,6 @@
   "title": "CLI",
   "icon": "Terminal",
   "pages": [
-    "index",
     "init",
     "ls",
     "execute",

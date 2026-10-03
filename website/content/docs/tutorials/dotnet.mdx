@@ -1,0 +1,174 @@
+---
+title: ".NET"
+description: "Restore NuGet packages, test and publish a .NET project in containers, with the restore cached by the lock files."
+---
+This tutorial restores the NuGet packages of a small .NET solution once, then runs
+`dotnet test` and `dotnet publish` against them without network access, each in an
+`mcr.microsoft.com/dotnet/sdk:10.0` container and each skipped when its inputs
+haven't changed. You need [hammerkit and Docker](/docs/installation); the .NET SDK
+doesn't have to be installed on your machine.
+
+The finished project is
+[`examples/tutorial-dotnet`](https://github.com/no0dles/hammerkit/tree/master/examples/tutorial-dotnet).
+
+## The project
+
+A console app and an xUnit test project:
+
+```txt
+tutorial-dotnet/
+├── Directory.Build.props
+├── src/Greet/
+│   ├── Greet.csproj
+│   ├── packages.lock.json
+│   ├── Greeter.cs
+│   └── Program.cs
+└── tests/Greet.Tests/
+    ├── Greet.Tests.csproj
+    ├── packages.lock.json
+    └── GreeterTests.cs
+```
+
+`Directory.Build.props` applies to both projects. It sets up three things the
+build file relies on:
+
+<include cwd lang="xml" meta='title="Directory.Build.props"'>../examples/tutorial-dotnet/Directory.Build.props</include>
+
+* **`UseArtifactsOutput`** writes `bin` and `obj` to `artifacts/` instead of into
+  each project folder. The project folders are the tasks' sources, and they're
+  mounted read-write: build output written into them would change the tasks' own
+  inputs, and the next run would miss the cache.
+* **`RestorePackagesPath`** restores packages into `.nuget/packages` in the
+  repository instead of `~/.nuget/packages`, where a task can keep them as its
+  output.
+* **`RestorePackagesWithLockFile`** writes `packages.lock.json` next to each
+  project: the full list of packages with their hashes, transitive ones included.
+  Commit them; they're what the restore is cached against.
+
+<include cwd lang="xml" meta='title="tests/Greet.Tests/Greet.Tests.csproj"'>../examples/tutorial-dotnet/tests/Greet.Tests/Greet.Tests.csproj</include>
+
+<include cwd lang="cs" meta='title="tests/Greet.Tests/GreeterTests.cs"'>../examples/tutorial-dotnet/tests/Greet.Tests/GreeterTests.cs</include>
+
+## 1. Restore packages
+
+A task names the image it runs in, the files it reads (`src`) and the files it
+produces (`generates`). The `restore` task reads only the project and lock files:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  restore:
+    description: download the locked NuGet packages
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    src:
+      - Directory.Build.props
+      - src/Greet/Greet.csproj
+      - src/Greet/packages.lock.json
+      - tests/Greet.Tests/Greet.Tests.csproj
+      - tests/Greet.Tests/packages.lock.json
+    generates: [.nuget]
+    cmds:
+      - dotnet restore tests/Greet.Tests --locked-mode
+```
+
+```bash
+hammerkit restore
+```
+
+Restoring the test project restores the app it references too. Run it again and
+hammerkit skips it: no project or lock file changed. Editing a `.cs` file doesn't
+invalidate it either, since `restore` doesn't read them. `--locked-mode` makes the
+restore fail instead of quietly updating a lock file that no longer matches its
+project.
+
+## 2. Test and publish
+
+Both tasks depend on `restore`, which mounts its `.nuget` into their containers:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  test:
+    description: run the unit tests
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    deps: [restore]
+    src: [src, tests]
+    cmds:
+      - dotnet test tests/Greet.Tests --disable-build-servers
+
+  publish:
+    description: publish the app
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    deps: [restore]
+    src: [src]
+    generates:
+      - path: out
+        export: true
+    cmds:
+      - dotnet publish src/Greet --configuration Release --output out --disable-build-servers
+```
+
+Neither lists `Directory.Build.props`: a task also sees the sources of the tasks
+it depends on, and a change to them reruns it. `dotnet test` and `dotnet publish`
+restore again before they build, but every package is already in
+`.nuget/packages`, so that step finishes locally without the network.
+
+`--disable-build-servers` stops the SDK from leaving its compiler server running
+after the command. Hammerkit keeps a task's container around for the next run, and
+the server would keep running in it for nothing.
+
+A container task's outputs stay in a volume hammerkit manages; `export: true` also
+copies `out` into your project. The published app runs with `dotnet out/Greet.dll`.
+
+`test` and `publish` don't depend on each other, so they run in parallel.
+
+## 3. One task for CI
+
+A task without `cmds` groups other tasks. `ci` names everything a change has to
+pass. The complete build file:
+
+<include cwd lang="yaml" meta='title=".hammerkit.yaml"'>../examples/tutorial-dotnet/.hammerkit.yaml</include>
+
+```bash
+hammerkit run ci
+```
+
+```txt
+Summary:
+  ci       executed   7.3s
+  publish  executed   5.7s
+  restore  executed   3.7s
+  test     executed   7.3s
+  4 executed, 0 cached (0% cache hit), 7.3s total
+```
+
+Run it again without changing anything:
+
+```txt
+Summary:
+  ci       cached     15ms
+  publish  cached     0ms
+  restore  skipped    0ms
+  test     cached     0ms
+  0 executed, 3 cached, 1 skipped (100% cache hit), 35ms total
+```
+
+`restore` is skipped: every task that needs it was a cache hit, so the packages
+aren't needed either. Edit a file in `src` and `test` and `publish` run again,
+against the packages `restore` already has.
+
+Ignore what hammerkit and the SDK write into the project:
+
+<include cwd lang="txt" meta='title=".gitignore"'>../examples/tutorial-dotnet/.gitignore</include>
+
+## Run it in CI
+
+CI runs the same command: [install hammerkit](/docs/installation#in-ci) and run
+`hammerkit run ci`. A fresh runner starts with an empty cache; to reuse what your
+laptop or the previous run already built, share the cache as described in
+[caching in CI](/docs/guides/ci-caching).
+
+## Next steps
+
+* Tests that need a database: start it as a [service](/docs/service) and let the
+  task [`need`](/docs/task/needs) it, see [services & networking](/docs/guides/services-networking).
+* Several projects in one repository: [monorepos](/docs/guides/monorepo).
+* A task reruns and you don't know why: [`hammerkit explain`](/docs/cli/explain).

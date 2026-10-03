@@ -35,11 +35,11 @@ export function mapGenerate(generate: BuildFileVolumeSchema): {
   export: boolean
 } {
   if (typeof generate === 'string') {
-    return { path: generate, resetOnChange: false, export: false }
+    return { path: generate, resetOnChange: true, export: false }
   } else {
     return {
       path: generate.path,
-      resetOnChange: generate.resetOnChange ?? false,
+      resetOnChange: generate.resetOnChange ?? true,
       export: generate.export ?? false,
     }
   }

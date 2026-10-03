@@ -1,9 +1,5 @@
 import { KubernetesInstance } from './kubernetes-instance'
-
-function statusCodeOf(e: unknown): number | undefined {
-  const err = e as { statusCode?: number; response?: { statusCode?: number }; body?: { code?: number } }
-  return err?.statusCode ?? err?.response?.statusCode ?? err?.body?.code
-}
+import { statusCodeOf } from './apply'
 
 /**
  * Idempotently make sure `namespace` exists. hammerkit does not otherwise
@@ -16,7 +12,7 @@ function statusCodeOf(e: unknown): number | undefined {
  */
 export async function ensureNamespace(instance: KubernetesInstance, namespace: string): Promise<void> {
   try {
-    await instance.coreApi.readNamespace(namespace)
+    await instance.coreApi.readNamespace({ name: namespace })
     return
   } catch (e) {
     if (statusCodeOf(e) !== 404) {
@@ -26,9 +22,11 @@ export async function ensureNamespace(instance: KubernetesInstance, namespace: s
 
   try {
     await instance.coreApi.createNamespace({
-      metadata: {
-        name: namespace,
-        labels: { 'hammerkit.dev/managed': 'true' },
+      body: {
+        metadata: {
+          name: namespace,
+          labels: { 'hammerkit.dev/managed': 'true' },
+        },
       },
     })
   } catch (e) {

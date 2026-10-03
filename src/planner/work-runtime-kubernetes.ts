@@ -12,7 +12,7 @@ import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { V1EnvVar, V1Job } from '@kubernetes/client-node'
-import { apply, KubernetesObjectHeader } from '../kubernetes/apply'
+import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
@@ -20,7 +20,6 @@ import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
-import { ensureIngress } from '../kubernetes/ensure-ingress'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
 import { getErrorMessage } from '../log'
@@ -29,25 +28,16 @@ import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
 
-function statusCodeOf(e: unknown): number | undefined {
-  const err = e as { statusCode?: number; response?: { statusCode?: number }; body?: { code?: number } }
-  return err?.statusCode ?? err?.response?.statusCode ?? err?.body?.code
-}
-
 async function listJobNames(
   instance: ReturnType<typeof createKubernetesInstances>,
   kubernetes: WorkKubernetesEnvironment,
   task: WorkItem<ContainerWorkTask>
 ): Promise<string[]> {
-  const jobs = await instance.batchApi.listNamespacedJob(
-    kubernetes.namespace,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    `hammerkit.dev/id=${task.id()}`
-  )
-  return jobs.body.items.flatMap((job) => (job.metadata?.name ? [job.metadata.name] : []))
+  const jobs = await instance.batchApi.listNamespacedJob({
+    namespace: kubernetes.namespace,
+    labelSelector: `hammerkit.dev/id=${task.id()}`,
+  })
+  return jobs.items.flatMap((job) => (job.metadata?.name ? [job.metadata.name] : []))
 }
 
 export function kubernetesTaskRuntime(
@@ -153,45 +143,36 @@ export function kubernetesTaskRuntime(
       }
     },
     async stop(): Promise<void> {
-      const jobs = await instance.batchApi.listNamespacedJob(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${task.id()}`
-      )
-      for (const pod of jobs.body.items) {
+      const jobs = await instance.batchApi.listNamespacedJob({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${task.id()}`,
+      })
+      for (const pod of jobs.items) {
         if (pod.metadata?.name) {
-          await instance.batchApi.deleteNamespacedJob(pod.metadata.name, kubernetes.namespace)
+          await instance.batchApi.deleteNamespacedJob({ name: pod.metadata.name, namespace: kubernetes.namespace })
         }
       }
 
-      const deployments = await instance.appsApi.listNamespacedDeployment(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${task.id()}`
-      )
-      for (const deploy of deployments.body.items) {
+      const deployments = await instance.appsApi.listNamespacedDeployment({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${task.id()}`,
+      })
+      for (const deploy of deployments.items) {
         if (deploy.metadata?.name) {
-          await instance.appsApi.deleteNamespacedDeployment(deploy.metadata.name, kubernetes.namespace)
+          await instance.appsApi.deleteNamespacedDeployment({
+            name: deploy.metadata.name,
+            namespace: kubernetes.namespace,
+          })
         }
       }
 
-      const pods = await instance.coreApi.listNamespacedPod(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${task.id()}`
-      )
-      for (const pod of pods.body.items) {
+      const pods = await instance.coreApi.listNamespacedPod({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${task.id()}`,
+      })
+      for (const pod of pods.items) {
         if (pod.metadata?.name) {
-          await instance.coreApi.deleteNamespacedPod(pod.metadata.name, kubernetes.namespace)
+          await instance.coreApi.deleteNamespacedPod({ name: pod.metadata.name, namespace: kubernetes.namespace })
         }
       }
     },
@@ -201,15 +182,11 @@ export function kubernetesTaskRuntime(
       await removePersistentData(instance, kubernetes, task)
     },
     async currentStateKey(): Promise<string | null> {
-      const jobs = await instance.batchApi.listNamespacedJob(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${task.id()}`
-      )
-      const completedStates = jobs.body.items
+      const jobs = await instance.batchApi.listNamespacedJob({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${task.id()}`,
+      })
+      const completedStates = jobs.items
         .filter((j) => j.status?.succeeded && j.metadata?.labels?.['hammerkit.dev/state'])
         .map((j) => j.metadata!.labels!['hammerkit.dev/state'])
       const stateKey = completedStates[completedStates.length - 1] ?? null
@@ -219,11 +196,11 @@ export function kubernetesTaskRuntime(
       // outputs live in the task's claim; without it the finished job left
       // nothing to reuse
       try {
-        const claim = await instance.coreApi.readNamespacedPersistentVolumeClaim(
-          getVolumeName(task),
-          kubernetes.namespace
-        )
-        return claim.body.metadata?.deletionTimestamp ? null : stateKey
+        const claim = await instance.coreApi.readNamespacedPersistentVolumeClaim({
+          name: getVolumeName(task),
+          namespace: kubernetes.namespace,
+        })
+        return claim.metadata?.deletionTimestamp ? null : stateKey
       } catch (e) {
         if (statusCodeOf(e) === 404) {
           return null
@@ -250,17 +227,16 @@ export function kubernetesServiceRuntime(
       await storeKubernetesData(service, kubernetes, instance, environment, path)
     },
     async stop(): Promise<void> {
-      const deployments = await instance.appsApi.listNamespacedDeployment(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${service.id()}`
-      )
-      for (const deployment of deployments.body.items) {
+      const deployments = await instance.appsApi.listNamespacedDeployment({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${service.id()}`,
+      })
+      for (const deployment of deployments.items) {
         if (deployment.metadata?.name) {
-          await instance.appsApi.deleteNamespacedDeployment(deployment.metadata.name, kubernetes.namespace)
+          await instance.appsApi.deleteNamespacedDeployment({
+            name: deployment.metadata.name,
+            namespace: kubernetes.namespace,
+          })
         }
       }
     },
@@ -279,36 +255,16 @@ export function kubernetesServiceRuntime(
         remote: null,
       })
 
-      const ingresses = kubernetes.ingresses.filter((i) => i.service === service.name)
-      for (const ingress of ingresses) {
-        if (ingress.kind === 'httproute') {
-          await ensureHttpRoute(instance, kubernetes, ingress, service)
-        } else {
-          await ensureIngress(instance, kubernetes, ingress, service)
-        }
+      for (const route of kubernetes.httpRoutes.filter((r) => r.service === service.name)) {
+        await ensureHttpRoute(instance, kubernetes, route, service)
       }
     },
     async remove(): Promise<void> {
-      const ingresses = await instance.networkingApi.listNamespacedIngress(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${service.id()}`
-      )
-      for (const ingress of ingresses.body.items) {
-        if (ingress.metadata?.name) {
-          await instance.networkingApi.deleteNamespacedIngress(ingress.metadata.name, kubernetes.namespace)
-        }
-      }
-
       // HTTPRoutes are a CRD, so they are deleted by name through the generic
       // objectApi rather than listed (a list would error on clusters without the
-      // Gateway API CRDs even when none are declared). Only entries this service
-      // declared as httproute are removed; a missing route (404) is fine.
-      const httpRoutes = kubernetes.ingresses.filter((i) => i.kind === 'httproute' && i.service === service.name)
-      for (const route of httpRoutes) {
+      // Gateway API CRDs even when none are declared). Only the routes this
+      // service declares are removed; a missing route (404) is fine.
+      for (const route of kubernetes.httpRoutes.filter((r) => r.service === service.name)) {
         try {
           await instance.objectApi.delete({
             apiVersion: HTTP_ROUTE_API_VERSION,
@@ -322,17 +278,16 @@ export function kubernetesServiceRuntime(
         }
       }
 
-      const services = await instance.coreApi.listNamespacedService(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${service.id()}`
-      )
-      for (const service of services.body.items) {
+      const services = await instance.coreApi.listNamespacedService({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${service.id()}`,
+      })
+      for (const service of services.items) {
         if (service.metadata?.name) {
-          await instance.coreApi.deleteNamespacedService(service.metadata.name, kubernetes.namespace)
+          await instance.coreApi.deleteNamespacedService({
+            name: service.metadata.name,
+            namespace: kubernetes.namespace,
+          })
         }
       }
 
@@ -341,15 +296,11 @@ export function kubernetesServiceRuntime(
       await removePersistentData(instance, kubernetes, service)
     },
     async currentStateKey(): Promise<string | null> {
-      const deployments = await instance.appsApi.listNamespacedDeployment(
-        kubernetes.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `hammerkit.dev/id=${service.id()}`
-      )
-      const deployment = deployments.body.items[0]
+      const deployments = await instance.appsApi.listNamespacedDeployment({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${service.id()}`,
+      })
+      const deployment = deployments.items[0]
       return deployment?.metadata?.labels?.['hammerkit.dev/state'] ?? null
     },
   }

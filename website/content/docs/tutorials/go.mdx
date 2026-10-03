@@ -1,0 +1,136 @@
+---
+title: "Go"
+description: "Vet, test and build a Go module in containers, with the module cache mounted and every task cached by its sources."
+---
+This tutorial runs `go vet`, `go test` and `go build` for a small Go module in a
+`golang:1.25-alpine` container, each skipped when its inputs haven't changed. You
+need [hammerkit and Docker](/docs/installation); Go doesn't have to be installed
+on your machine.
+
+The finished project is
+[`examples/tutorial-go`](https://github.com/no0dles/hammerkit/tree/master/examples/tutorial-go).
+
+## The project
+
+```txt
+tutorial-go/
+├── go.mod
+├── go.sum
+├── main.go
+└── greet/
+    ├── greet.go
+    └── greet_test.go
+```
+
+The tests use one third-party module, `go-cmp`:
+
+<include cwd lang="go" meta='title="go.mod"'>../examples/tutorial-go/go.mod</include>
+
+<include cwd lang="go" meta='title="greet/greet.go"'>../examples/tutorial-go/greet/greet.go</include>
+
+<include cwd lang="go" meta='title="greet/greet_test.go"'>../examples/tutorial-go/greet/greet_test.go</include>
+
+## 1. Test
+
+A task names the image it runs in and the files it reads (`src`). The `test` task
+reads the module files and all Go sources:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  # keep the mounted module cache deletable (Go makes it read-only by default)
+  GOFLAGS: -modcacherw
+
+tasks:
+  test:
+    description: vet and test every package
+    image: golang:1.25-alpine
+    src: [go.mod, go.sum, main.go, greet]
+    mounts: [.cache/go-mod:/go/pkg/mod]
+    cmds:
+      - go vet ./...
+      - go test ./...
+```
+
+```bash
+hammerkit test
+```
+
+Run it again and hammerkit skips it: nothing in its `src` changed.
+
+Go downloads modules into its module cache, `/go/pkg/mod` in this image. That
+folder isn't part of the project, and it doesn't need to be an input: `go.sum`
+already pins every module's content. So instead of a task output it's a
+[mount](/docs/task/container#adding-mounts): `.cache/go-mod` in the project is
+mounted at `/go/pkg/mod`, and a module is downloaded once, not by every task run.
+
+## 2. Build
+
+The `build` task compiles the binary into `bin`:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  build:
+    description: compile the greet binary
+    image: golang:1.25-alpine
+    src: [go.mod, go.sum, main.go, greet]
+    mounts: [.cache/go-mod:/go/pkg/mod]
+    generates:
+      - path: bin
+        export: true
+    cmds:
+      - go build -o bin/greet .
+```
+
+A container task's outputs (`generates`) stay in a volume hammerkit manages, ready
+for tasks that depend on it. `export: true` also copies `bin` into your project, so
+you can run `bin/greet` yourself. The binary is built for Linux, the container's
+OS; set `GOOS` in the task's `envs` to build for another one.
+
+`test` and `build` don't depend on each other, so they run in parallel.
+
+## 3. One task for CI
+
+A task without `cmds` groups other tasks. `ci` names everything a change has to
+pass. The complete build file:
+
+<include cwd lang="yaml" meta='title=".hammerkit.yaml"'>../examples/tutorial-go/.hammerkit.yaml</include>
+
+```bash
+hammerkit run ci
+```
+
+```txt
+Summary:
+  build  executed   3.4s
+  ci     executed   4.6s
+  test   executed   4.5s
+  3 executed, 0 cached (0% cache hit), 4.6s total
+```
+
+Run it again without changing anything:
+
+```txt
+Summary:
+  build  cached     0ms
+  ci     cached     12ms
+  test   cached     0ms
+  0 executed, 3 cached (100% cache hit), 28ms total
+```
+
+Ignore what hammerkit and Go write into the project:
+
+<include cwd lang="txt" meta='title=".gitignore"'>../examples/tutorial-go/.gitignore</include>
+
+## Run it in CI
+
+CI runs the same command: [install hammerkit](/docs/installation#in-ci) and run
+`hammerkit run ci`. A fresh runner starts with an empty cache; to reuse what your
+laptop or the previous run already built, share the cache as described in
+[caching in CI](/docs/guides/ci-caching).
+
+## Next steps
+
+* Tests that need a database: start it as a [service](/docs/service) and let the
+  task [`need`](/docs/task/needs) it, see [services & networking](/docs/guides/services-networking).
+* Several modules in one repository: [monorepos](/docs/guides/monorepo).
+* A task reruns and you don't know why: [`hammerkit explain`](/docs/cli/explain).

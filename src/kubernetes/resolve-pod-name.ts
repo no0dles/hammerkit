@@ -8,11 +8,9 @@ function formatSelector(matchLabels: { [key: string]: string }): string {
 }
 
 async function findReadyPod(coreApi: CoreV1Api, namespace: string, labelSelector: string): Promise<string> {
-  const pods = await coreApi.listNamespacedPod(namespace, undefined, undefined, undefined, undefined, labelSelector)
-  const ready = pods.body.items.find(
-    (p) => p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True')
-  )
-  const pod = ready ?? pods.body.items[0]
+  const pods = await coreApi.listNamespacedPod({ namespace, labelSelector })
+  const ready = pods.items.find((p) => p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'))
+  const pod = ready ?? pods.items[0]
   if (!pod?.metadata?.name) {
     throw new Error(`no pod found for selector ${labelSelector} in namespace ${namespace}`)
   }
@@ -30,16 +28,16 @@ export async function resolvePodName(
     return selector.name
   }
   if (type === 'service') {
-    const svc = await coreApi.readNamespacedService(selector.name, namespace)
-    const matchLabels = svc.body.spec?.selector
+    const svc = await coreApi.readNamespacedService({ name: selector.name, namespace })
+    const matchLabels = svc.spec?.selector
     if (!matchLabels || Object.keys(matchLabels).length === 0) {
       throw new Error(`service ${selector.name} has no selector`)
     }
     return findReadyPod(coreApi, namespace, formatSelector(matchLabels))
   }
   if (type === 'deployment') {
-    const deploy = await appsApi.readNamespacedDeployment(selector.name, namespace)
-    const matchLabels = deploy.body.spec?.selector?.matchLabels
+    const deploy = await appsApi.readNamespacedDeployment({ name: selector.name, namespace })
+    const matchLabels = deploy.spec?.selector?.matchLabels
     if (!matchLabels) {
       throw new Error(`deployment ${selector.name} has no matchLabels`)
     }

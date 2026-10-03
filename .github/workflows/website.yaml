@@ -4,10 +4,14 @@ on:
     branches: [master]
     paths:
       - 'website/**'
+      # the tutorials embed these files
+      - 'examples/tutorial-*/**'
       - '.github/workflows/website.yaml'
   pull_request:
     paths:
       - 'website/**'
+      # the tutorials embed these files
+      - 'examples/tutorial-*/**'
       - '.github/workflows/website.yaml'
   workflow_dispatch:
 # a newer push to the same ref supersedes a running build

@@ -32,7 +32,8 @@ workers that need them.
 * **Matrix tasks** — define a task once with a `matrix` of variants (Node versions,
   architectures) and run one independently cached task per combination.
 * **Remote includes** — reference or include build files from a git repository, so
-  shared templates like the [recipes](/docs/recipes) can be reused across projects.
+  shared templates like the ones in
+  [`best-practices/`](https://github.com/no0dles/hammerkit/tree/master/best-practices) can be reused across projects.
 * **Service state snapshots** — cache the state a task leaves *inside* a service,
   such as a seeded database, so it can be restored instead of recreated.
 * **Multi-arch packaging** — let `hammerkit package` build and push multi-platform

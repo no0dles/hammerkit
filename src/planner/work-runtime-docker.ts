@@ -1,5 +1,5 @@
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
-import { convertToPosixPath, getContainerCli } from '../executer/execute-docker'
+import { clearContainerDirectory, convertToPosixPath, getContainerCli } from '../executer/execute-docker'
 import { ContainerWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { ContainerWorkTask, WorkTaskGenerate } from './work-task'
@@ -19,6 +19,7 @@ import { create, extract } from 'tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
+import { Readable } from 'stream'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -161,6 +162,9 @@ async function restoreContainer(
     async (container) => {
       for (const generate of getArchivePaths(item.data, path)) {
         if (await environment.file.exists(generate.filename)) {
+          // a cache hit means exactly the stored outputs: whatever a failed or
+          // older run left in the volume goes first
+          await clearContainerDirectory(item.status, environment, container, generate.path)
           await container.putArchive(environment.file.readStream(generate.filename), {
             path: dirname(generate.path),
           })
@@ -173,6 +177,7 @@ async function restoreContainer(
     const onHost = new Set(item.data.generates.filter((g) => !g.inherited && isOnHost(g)).map((g) => g.path))
     for (const generate of getArchivePaths(item.data, path)) {
       if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
+        await environment.file.remove(generate.path)
         await extract({ file: generate.filename, cwd: dirname(generate.path) })
       }
     }
@@ -306,7 +311,7 @@ async function archiveContainer(
       for (const generatedArchive of getArchivePaths(item.data, path)) {
         // a file output is a bind mount of a host file, so archive it from the host
         const readable = hostFiles.has(generatedArchive.path)
-          ? create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)])
+          ? Readable.from(create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
           : await container.getArchive({
               path: generatedArchive.path,
             })

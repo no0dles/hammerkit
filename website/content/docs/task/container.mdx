@@ -110,7 +110,10 @@ tasks:
 ### File permission
 
 On Linux hosts a container task runs as your `uid:gid`, so files it generates on
-mounted paths come back owned by you rather than by `root`. To avoid permission
+mounted paths come back owned by you rather than by `root`. That user has no home
+directory in the image, so hammerkit sets `HOME=/tmp` for the task (unless its
+`envs` set `HOME`): tools like npm, Go, Maven and the .NET SDK keep their caches
+under it. To avoid permission
 conflicts on the mount points themselves, hammerkit `chown`s the working directory
 and each mount to your `uid:gid` before the task runs.
 

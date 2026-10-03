@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <!-- bin and obj go to artifacts/ instead of into the project folders -->
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <!-- packages are restored into the repository, where the restore task keeps them -->
+    <RestorePackagesPath>$(MSBuildThisFileDirectory).nuget/packages</RestorePackagesPath>
+    <!-- packages.lock.json pins every package, transitive ones included -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

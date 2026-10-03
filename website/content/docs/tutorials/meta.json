@@ -1,0 +1,12 @@
+{
+  "title": "Tutorials",
+  "icon": "GraduationCap",
+  "pages": [
+    "node",
+    "python",
+    "go",
+    "rust",
+    "java",
+    "dotnet"
+  ]
+}

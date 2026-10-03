@@ -1,7 +1,7 @@
 import { Environment } from './environment'
 import { isHostServiceDns, ServiceDns } from './service-dns'
 import Dockerode, { ContainerCreateOptions } from 'dockerode'
-import { convertToPosixPath, execCommand } from './execute-docker'
+import { clearContainerDirectory, convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
@@ -16,6 +16,7 @@ import { getContainerBinds } from './get-container-binds'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
+import { getOutputsToReset } from '../planner/utils/get-outputs-to-reset'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -36,7 +37,7 @@ export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }
   return { links, hosts }
 }
 
-function buildCreateOptions(
+export function buildCreateOptions(
   item: WorkItem<ContainerWorkTask>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
@@ -45,6 +46,10 @@ function buildCreateOptions(
   const network = getNeedsNetwork(serviceContainers, item.needs)
   const binds = getContainerBinds(item)
   const envs = getEnvironmentVariables(item.data.envs)
+  // Running as the host's uid (Linux), the user has no home in the image and
+  // Docker sets HOME=/, which isn't writable: tools then fail to create their
+  // caches. Set on the container only, so it's not part of the cache key.
+  const home = item.data.user && !('HOME' in envs) ? { HOME: '/tmp' } : {}
 
   return {
     abortSignal: environment.abortCtrl.signal,
@@ -52,7 +57,7 @@ function buildCreateOptions(
     Tty: true,
     Entrypoint: [item.data.shell],
     Cmd: ['-c', 'sleep 3600'],
-    Env: Object.entries(envs).map(([key, value]) => `${key}=${value}`),
+    Env: Object.entries({ ...envs, ...home }).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
@@ -79,6 +84,12 @@ export async function dockerTask(
   item.status.write('info', `execute ${item.name} in container`)
 
   try {
+    const outputsToReset = getOutputsToReset(item.data)
+    // outputs on the host: file outputs (bind mounts) and exported directories
+    for (const generate of outputsToReset.filter((g) => g.isFile || g.export)) {
+      await environment.file.remove(generate.path)
+    }
+
     await prepareMounts(item, environment)
     checkForAbort(options.abort)
 
@@ -94,6 +105,10 @@ export async function dockerTask(
 
     await usingContainer(docker, item, containerOptions, options.stateKey, async (container) => {
       await setUserPermissions(item, container, environment)
+
+      for (const generate of outputsToReset.filter((g) => !g.isFile)) {
+        await clearContainerDirectory(item.status, environment, container, generate.path)
+      }
 
       for (const cmd of item.data.cmds) {
         checkForAbort(options.abort)

@@ -30,7 +30,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `cmds` | array of string \| `{cmd, path}` | Commands to run, in order. `path` sets the working directory for that command. |
 | `description` | string | Shown by [`ls`](/docs/cli/ls); a missing one is a [validate](/docs/cli/validate) warning. |
 | `src` | array of string | Input files/folders/globs used for [caching](/docs/task/caching). |
-| `generates` | array of string \| `{path, export, resetOnChange, name}` | [Output](/docs/task#generated-files-generates) paths. `export: true` copies back to the workspace; `resetOnChange: true` wipes it before a re-run. |
+| `generates` | array of string \| `{path, export, resetOnChange, name}` | [Output](/docs/task#generated-files-generates) paths. `export: true` copies back to the workspace; outputs start empty when the task runs, `resetOnChange: false` keeps their content (see [outputs start empty](/docs/task#outputs-start-empty)). |
 | `deps` | array of string | [Tasks](/docs/task/dependencies) (`name` or `prefix:name`) that run first. |
 | `needs` | array of string \| `{service, name}` | [Services](/docs/task/needs) that must be ready first. |
 | `envs` | map of string→string/number | Task-level [environment variables](/docs/build-file/environment-variables) (override build-file `envs`). |
@@ -114,9 +114,9 @@ Each environment is a [run target](/docs/task/kubernetes) — exactly one of:
 
 | Key | Fields | Description |
 |-----|--------|-------------|
-| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `ingresses[]` | Run tasks as jobs and services as deployments on a cluster. |
+| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]` | Run tasks as jobs and services as deployments on a cluster. |
 | `docker` | `host` | Run against a remote Docker daemon. |
 
-An `ingresses` entry has `kind` (`ingress`/`httproute`), `host`, `service`,
-`servicePort`, `path`, `gateway`, `gatewayNamespace` — see
-[ingresses](/docs/task/kubernetes#ingresses).
+An `httpRoutes` entry has `host`, `service` and `gateway` (all required),
+`servicePort`, `path` and `gatewayNamespace` — see
+[HTTP routes](/docs/task/kubernetes#http-routes).

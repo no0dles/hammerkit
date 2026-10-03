@@ -12,7 +12,7 @@ export function appendWorkEnvironment(referenced: ReferenceEnvironment): WorkEnv
       type: 'kubernetes',
       context: referenced.schema.kubernetes.context,
       kubeConfig: referenced.schema.kubernetes.kubeconfig,
-      ingresses: referenced.schema.kubernetes.ingresses || [],
+      httpRoutes: referenced.schema.kubernetes.httpRoutes || [],
       namespace: referenced.schema.kubernetes.namespace ?? 'default',
     }
   }

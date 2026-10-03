@@ -5,23 +5,20 @@
     "why-hammerkit",
     "installation",
     "getting-started",
-    "tutorial",
+    "tutorials",
     "concepts",
+    "faq",
     "---Build---",
     "build-file",
     "task",
     "service",
     "labels",
-    "---Guides---",
-    "guides",
-    "llm",
-    "recipes",
     "---Reference---",
     "cli",
-    "faq",
+    "---Guides---",
+    "...guides",
     "---Project---",
     "release-blog",
-    "contribution",
-    "adr"
+    "contribution"
   ]
 }

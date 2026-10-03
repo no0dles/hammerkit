@@ -128,15 +128,22 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
+      # A current Kubernetes: the Gateway API CRDs below need 1.31+ (their CEL
+      # validations use isIP). Pinned by digest, as kind recommends.
       - name: Create kind cluster
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@v1.15.0
         with:
           cluster_name: hammerkit-ci
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
       # hammerkit's k8s specs use process.env.CLUSTER_NAME directly as the kube
       # context (`context: process.env.CLUSTER_NAME`). kind names the context
       # `kind-<cluster>`, so rename it to match what the specs ask for.
       - name: Name the kube context after CLUSTER_NAME
         run: kubectl config rename-context "kind-${CLUSTER_NAME}" "${CLUSTER_NAME}"
+      # Services are exposed through Gateway API HTTPRoutes, a CRD kind does not ship
+      # with; environment.spec.ts creates and removes one.
+      - name: Install the Gateway API CRDs
+        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
       # docker-package-registry.spec.ts only probes an externally provided REGISTRY
       # for liveness (it never manages one), so stand up a registry on localhost:5000.
       - name: Start local registry

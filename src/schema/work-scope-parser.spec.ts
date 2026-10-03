@@ -34,7 +34,7 @@ describe('work-scope-parser', () => {
       expect(defaultEnvironment(context)).toEqual({
         type: 'kubernetes',
         context: 'prod',
-        ingresses: [],
+        httpRoutes: [],
         namespace: 'default',
       })
     })

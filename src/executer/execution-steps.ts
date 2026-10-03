@@ -32,17 +32,13 @@ export async function prepareVolume(
     }
   }
   if (isContainerWorkTask(item.data)) {
+    // a task's outputs are emptied inside its container (see dockerTask)
     for (const generate of item.data.generates) {
       if (generate.isFile) {
         continue
       }
-      if (generate.resetOnChange && !generate.inherited) {
-        item.status.write('debug', 'recreate volume')
-        await recreateVolume(docker, item.status, generate.volumeName)
-      } else {
-        item.status.write('debug', 'ensure volume exists')
-        await ensureVolumeExists(docker, item.status, generate.volumeName)
-      }
+      item.status.write('debug', 'ensure volume exists')
+      await ensureVolumeExists(docker, item.status, generate.volumeName)
     }
   }
 }

@@ -1,0 +1,16 @@
+[package]
+name = "greet"
+version = "0.1.0"
+edition = "2021"
+
+# Named explicitly so `cargo fetch` works from Cargo.toml and Cargo.lock
+# alone, before the sources are there.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "greet"
+path = "src/main.rs"
+
+[dev-dependencies]
+pretty_assertions = "1"

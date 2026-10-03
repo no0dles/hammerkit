@@ -1,0 +1,33 @@
+envs:
+  # keep Python from writing __pycache__ into the mounted sources
+  PYTHONDONTWRITEBYTECODE: '1'
+
+tasks:
+  install:
+    description: create the virtualenv from the pinned requirements
+    image: python:3.13-slim
+    src: [requirements.txt]
+    generates: [.venv]
+    cmds:
+      - python -m venv .venv
+      - .venv/bin/python -m pip install --no-cache-dir -r requirements.txt
+
+  lint:
+    description: lint with ruff
+    image: python:3.13-slim
+    deps: [install]
+    src: [pyproject.toml, greet, tests]
+    cmds:
+      - .venv/bin/python -m ruff check .
+
+  test:
+    description: run the tests
+    image: python:3.13-slim
+    deps: [install]
+    src: [pyproject.toml, greet, tests]
+    cmds:
+      - .venv/bin/python -m pytest
+
+  ci:
+    description: everything CI checks
+    deps: [lint, test]

@@ -1,0 +1,36 @@
+envs:
+  # flags for every mvn call: no progress noise, and the local repository in
+  # the project, where the deps task keeps it as its output
+  MAVEN_ARGS: --batch-mode -Dmaven.repo.local=.m2
+
+tasks:
+  deps:
+    description: download dependencies and plugins
+    image: maven:3.9-eclipse-temurin-21
+    src: [pom.xml]
+    generates: [.m2]
+    cmds:
+      - mvn dependency:go-offline
+
+  test:
+    description: compile and run the unit tests
+    image: maven:3.9-eclipse-temurin-21
+    deps: [deps]
+    src: [src]
+    cmds:
+      - mvn --offline test
+
+  package:
+    description: build the jar
+    image: maven:3.9-eclipse-temurin-21
+    deps: [deps]
+    src: [src]
+    generates:
+      - path: target
+        export: true
+    cmds:
+      - mvn --offline package -DskipTests
+
+  ci:
+    description: everything CI checks
+    deps: [test, package]
