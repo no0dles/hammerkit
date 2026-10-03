@@ -16,6 +16,7 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
+import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 
 export async function dockerService(
   docker: Dockerode,
@@ -86,10 +87,15 @@ export async function dockerService(
         remote: null,
       })
     } else {
+      const healthcheck = item.data.healthcheck
+      const deadline = Date.now() + healthcheck.timeout
       let ready = false
       do {
-        ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, options.abort)
+        ready = await checkReadiness(item.status, healthcheck, environment, container, options.abort)
         if (!ready) {
+          if (Date.now() >= deadline) {
+            throw new Error(getHealthcheckTimeoutMessage(item.name, healthcheck))
+          }
           await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
         }
       } while (!ready && !options.abort.aborted)

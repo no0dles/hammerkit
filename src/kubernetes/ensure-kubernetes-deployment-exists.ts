@@ -10,6 +10,7 @@ import { getVersion } from '../version'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { awaitDeployRunningState } from './await-running-state'
 import { getResourceName } from './resources'
+import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
@@ -110,5 +111,11 @@ export async function ensureKubernetesDeploymentExists(
     return
   }
 
-  await awaitDeployRunningState(instance, env, name)
+  await awaitDeployRunningState(instance, env, name, {
+    podSelector: `hammerkit.dev/id=${service.id()}`,
+    timeout: service.data.healthcheck?.timeout ?? null,
+    timeoutMessage: service.data.healthcheck
+      ? getHealthcheckTimeoutMessage(service.name, service.data.healthcheck)
+      : '',
+  })
 }

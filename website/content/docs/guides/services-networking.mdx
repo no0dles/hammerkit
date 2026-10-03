@@ -81,7 +81,7 @@ service's network and can reach every container port directly, so they don't nee
 Always give a service a `healthcheck` when a task depends on it being usable, not
 just started. Hammerkit polls the `cmd` about once a second and only starts the
 dependent task once it exits `0`; there are no `interval`/`retries` knobs, and a
-check that never passes blocks the task until you cancel. See
+check that hasn't passed within its `timeout` (default `20s`) fails the run. See
 [healthcheck timing](/docs/service/container#timing-and-failure).
 
 ## Persisting data

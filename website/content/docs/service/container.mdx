@@ -70,21 +70,33 @@ Without a healthcheck, a task may start before the service is ready.
 
 ### Timing and failure
 
-The healthcheck has a single field, `cmd`. There are intentionally no
-`interval`, `timeout` or `retries` knobs:
+The healthcheck has two fields: `cmd` and an optional `timeout`. There are
+intentionally no `interval` or `retries` knobs:
 
 * hammerkit runs `cmd` inside the service container roughly **once a second** and
   treats the service as ready the first time it exits `0`;
 * each individual check has a short execution timeout (a couple of seconds), so a
   hanging check doesn't block forever — it just counts as "not ready yet" and is
   retried;
-* a check that **never** passes keeps the dependent task waiting until you cancel
-  the run. There is no readiness deadline, so the `cmd` must be something that
-  genuinely turns green once the service is usable (like `pg_isready`), not a
-  command that can hang or always fail.
+* a service that doesn't pass within **`timeout` (default 20s)** of its container
+  starting fails, with the healthcheck command in the error, and so does every
+  task that needs it — instead of the run waiting until you cancel it. The clock
+  starts once the container runs, so pulling the image doesn't count. Raise it
+  for slow starters, per service or for every service without one through
+  `HAMMERKIT_HEALTHCHECK_TIMEOUT`:
+
+```yaml
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.1
+    healthcheck:
+      cmd: curl -sf http://localhost:9200/_cluster/health
+      timeout: 90s
+```
 
 On [Kubernetes](/docs/task/kubernetes), the same `cmd` is translated into readiness
-and liveness probes on the deployment.
+and liveness probes on the deployment, and `timeout` bounds the wait for a ready
+replica once a pod runs.
 
 ## Volumes
 Services start and stop depending on what tasks need.

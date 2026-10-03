@@ -35,6 +35,8 @@ describe('awaitRunningState', () => {
 })
 
 describe('awaitDeployRunningState', () => {
+  const noDeadline = { podSelector: 'hammerkit.dev/id=api', timeout: null, timeoutMessage: '' }
+
   it('polls the deployment until a replica is ready', async () => {
     const readNamespacedDeployment = vi
       .fn()
@@ -43,10 +45,64 @@ describe('awaitDeployRunningState', () => {
       .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
     const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
 
-    await awaitDeployRunningState(instance, env, 'api', 0)
+    await awaitDeployRunningState(instance, env, 'api', noDeadline, 0)
 
     expect(readNamespacedDeployment).toHaveBeenCalledTimes(3)
     expect(readNamespacedDeployment).toHaveBeenCalledWith({ name: 'api', namespace: 'demo' })
+  })
+
+  it('starts the deadline only once a pod runs and fails when it passes', async () => {
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { readyReplicas: 0 } })
+    const listNamespacedPod = vi
+      .fn()
+      // pulling the image: does not count against the deadline
+      .mockResolvedValueOnce({ items: [{ status: { phase: 'Pending' } }] })
+      .mockResolvedValueOnce({ items: [{ status: { phase: 'Pending' } }] })
+      .mockResolvedValue({ items: [{ status: { phase: 'Running' } }] })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod },
+    } as unknown as KubernetesInstance
+    let clock = 0
+    const now = () => (clock += 10_000)
+
+    await expect(
+      awaitDeployRunningState(
+        instance,
+        env,
+        'api',
+        { podSelector: 'hammerkit.dev/id=abc', timeout: 20_000, timeoutMessage: 'api not ready' },
+        0,
+        now
+      )
+    ).rejects.toThrow('api not ready')
+
+    expect(listNamespacedPod).toHaveBeenCalledWith({ namespace: 'demo', labelSelector: 'hammerkit.dev/id=abc' })
+    // two pending polls, then running at t=10s, failing once 20s passed
+    expect(listNamespacedPod).toHaveBeenCalledTimes(3)
+    expect(readNamespacedDeployment).toHaveBeenCalledTimes(5)
+  })
+
+  it('returns when a replica becomes ready within the deadline', async () => {
+    const readNamespacedDeployment = vi
+      .fn()
+      .mockResolvedValueOnce({ status: { readyReplicas: 0 } })
+      .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
+    const listNamespacedPod = vi.fn().mockResolvedValue({ items: [{ status: { phase: 'Running' } }] })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod },
+    } as unknown as KubernetesInstance
+
+    await awaitDeployRunningState(
+      instance,
+      env,
+      'api',
+      { podSelector: 'hammerkit.dev/id=abc', timeout: 20_000, timeoutMessage: 'api not ready' },
+      0
+    )
+
+    expect(readNamespacedDeployment).toHaveBeenCalledTimes(2)
   })
 })
 

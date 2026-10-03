@@ -66,7 +66,7 @@ service** (it has a `selector`).
 | `image` | string (required) | The service image. |
 | `cmd` | string | Override the container command. |
 | `ports` | array of string/number | `containerPort` or `hostPort:containerPort` to publish to the host. |
-| `healthcheck` | `{cmd}` | Readiness command; see [healthcheck](/docs/service/container#healthcheck). |
+| `healthcheck` | `{cmd, timeout}` | Readiness command, and how long the service may take to pass it once running (duration, default `20s`, `HAMMERKIT_HEALTHCHECK_TIMEOUT` changes the default); see [healthcheck](/docs/service/container#healthcheck). |
 | `envs` | map of string→string/number | Service environment variables. |
 | `volumes` | array of string | `name:containerPath` volumes that [persist](/docs/service/container#volumes) across restarts. |
 | `mounts` | array of string | `host:container` config mounts. |
