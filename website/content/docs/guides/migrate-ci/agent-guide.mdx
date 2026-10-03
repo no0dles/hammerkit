@@ -127,7 +127,7 @@ Run these and check each expected result:
 | `hammerkit ls` | every task from step 3, with the images, `src` and `generates` you meant |
 | `hammerkit run ci --dry-run` | the tasks in a sensible order, nothing missing |
 | `hammerkit run ci` | succeeds; the same tests run and pass as in the old pipeline |
-| `hammerkit run ci` again | every task reported as `cached` in the summary |
+| `hammerkit run ci` again | `0 executed` in the summary: every task `cached`, or `skipped` because what needs it was cached |
 | change one source file, then `hammerkit run ci --dry-run` | only the tasks reading that file, and tasks depending on them, are misses |
 | `hammerkit run ci --cache none` | succeeds, and the outputs match the cached run |
 

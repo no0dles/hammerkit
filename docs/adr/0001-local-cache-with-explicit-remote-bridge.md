@@ -1,6 +1,5 @@
----
-title: "Local cache with an explicit remote bridge (no read-through tier)"
----
+# 0001: Local cache with an explicit remote bridge (no read-through tier)
+
 A hammerkit cache has a single backend, and a build only ever reads/writes the **local cache**. To split network from compute for distributed/CI caching, we do **not** introduce a read-through two-tier cache. Instead, tasks keep caching against a local backend, and two new commands — `hammerkit cache pull --remote <name>` and `hammerkit cache push --remote <name>` — are the *only* operations that touch a **remote backend** (S3, registry). Pull syncs remote→local for the in-scope tasks' current state keys; push syncs local→remote. The build itself never performs remote I/O, so a CI pipeline can run a network-bound `cache pull` job and a compute-bound build job separately.
 
 The remote is declared as a normal entry in the `caches:` block and selected by the `--remote` flag, rather than referenced by tasks or expressed as a `remote:` field on a cache.

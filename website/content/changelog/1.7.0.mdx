@@ -59,7 +59,7 @@ see [agents, workspaces and CI](/docs/guides/agents-and-ci).
 - `hammerkit graph [task]` prints the build graph as mermaid or dot. See
   [graph](/docs/cli/graph).
 - A guide for coding agents that rewrites an existing CI pipeline into a hammerkit
-  build file. See [migrate CI with an agent](/docs/llm).
+  build file. See [migrate CI with an agent](/docs/guides/migrate-ci).
 - The caching docs list what the cache can't see and how to check a build. See
   [caching limitations](/docs/task/caching#limitations-what-the-cache-cant-see).
 
@@ -71,7 +71,7 @@ see [agents, workspaces and CI](/docs/guides/agents-and-ci).
   or the main build file's directory), so a laptop, a CI runner and an agent sandbox
   share cache entries. Machine-local runtime state (Docker containers, staging
   directory) stays scoped per checkout, so worktrees on one machine never share
-  running containers. See [ADR-0006](/docs/adr/0006-portable-cache-identity).
+  running containers. See [ADR-0006](https://github.com/no0dles/hammerkit/blob/master/docs/adr/0006-portable-cache-identity.md).
 - The built-in `default` cache is now actually shared between checkouts on the same
   machine, as documented.
 - A service is only started when a task that needs it actually runs; cache hits

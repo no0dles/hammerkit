@@ -1,6 +1,5 @@
----
-title: "Registry cache entries are single-layer OCI image manifests"
----
+# 0005: Registry cache entries are single-layer OCI image manifests
+
 The `registry` cache backend stores each cache entry (task outputs) as a standard OCI **image manifest with a single tar layer**, not as an OCI artifact with a custom media type. A cache entry therefore looks like an ordinary one-layer image, so it works on every registry (Docker Hub, GHCR, ECR, GAR, Artifactory, plain `registry:2`) and reuses the image push/pull plumbing already built for `package <registry>`.
 
 ## Considered options

@@ -1,6 +1,5 @@
----
-title: "What participates in cache identity"
----
+# 0002: What participates in cache identity
+
 Cache identity (the **task id**) is a content hash of the fields that determine a task's *output*: command, image, CPU architecture, env, mounts, shell, `src` paths, `generates`, cwd, and the task ids of its deps (so a change to a dependency's definition reaches every task depending on it). The new schema surfaces added in 1.7 are governed as follows:
 
 - **Resource limits, task timeout, container runtime/security options — do NOT participate.** They affect *whether and how* a task runs, not its output; including them would churn the cache on routine tuning (bumping a memory limit, relaxing seccomp to unblock a syscall).

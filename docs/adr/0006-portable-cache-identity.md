@@ -1,6 +1,5 @@
----
-title: "Cache identity is checkout-independent; runtime state is checkout-scoped"
----
+# 0006: Cache identity is checkout-independent; runtime state is checkout-scoped
+
 A task/service **id** (the cache key) is computed from a description whose paths are expressed relative to the **project root** — the nearest ancestor with a `.git` entry, falling back to the directory of the main build file — with paths under the home directory written as `~/…`. The same project therefore gets the same ids in an agent sandbox (`/workspace/app`), a CI runner (`/home/runner/work/app/app`) and a laptop, which is what lets a shared remote cache actually hit.
 
 Machine-local runtime state — docker container labels (`hammerkit-id`) and the cache staging directory — is keyed by a separate **instance id** (`getWorkInstanceId`: the portable id folded with the absolute project root). Two worktrees of the same repo on one host share cache entries but never each other's paused containers or staging files.

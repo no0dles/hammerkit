@@ -143,17 +143,22 @@ jobs:
 <Tab value="GitLab CI">
 
 ```yaml title=".gitlab-ci.yml"
-variables:
-  DOCKER_DRIVER: overlay2
-
-services:
-  - docker:dind
-
 build:
-  image: no0dles/hammerkit
+  image:
+    name: no0dles/hammerkit
+    entrypoint: ['']             # the image's entrypoint is hammerkit itself
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375   # the docker:dind service
+    DOCKER_TLS_CERTDIR: ''
   script:
     - hammerkit build
 ```
+
+GitLab runs the job's script through the image's entrypoint, so it has to be
+cleared. Tasks run in the `docker:dind` service, which sees the checkout under
+`/builds` at the same path, so sources mount as they do locally.
 
 </Tab>
 </Tabs>
@@ -167,5 +172,5 @@ To reuse results between CI runs and machines, see
   <Card title="Tasks" href="/docs/task" />
   <Card title="Caching" href="/docs/task/caching" />
   <Card title="Agents, workspaces and CI" href="/docs/guides/agents-and-ci" />
-  <Card title="Migrate your CI with an agent" href="/docs/llm/migrate-ci" />
+  <Card title="Migrate your CI with an agent" href="/docs/guides/migrate-ci" />
 </Cards>

@@ -6,7 +6,7 @@ Guidance for AI coding agents (Claude Code, Cursor, Copilot, etc.) working in th
 
 Hammerkit is a containerized build tool (CLI distributed as `dist/index.js`). It reads a `.hammerkit.yaml` build file, plans a graph of tasks and services, and executes them locally, in Docker, or on Kubernetes. Source/output files are explicitly declared per task, which is what enables hammerkit's incremental caching and "store/restore" workflow for CI.
 
-User-facing docs live at https://hammerkit.dev, built from [website/](website/README.md): pages are MDX in `website/content/docs`, the sidebar order is in their `meta.json` files.
+User-facing docs live at https://hammerkit.dev, built from [website/](website/README.md): pages are MDX in `website/content/docs`, the sidebar order is in their `meta.json` files. Architecture decisions (the `ADR-000N` cited in code and `specs/`) live in [docs/adr/](docs/adr/).
 
 ## Working agreement
 

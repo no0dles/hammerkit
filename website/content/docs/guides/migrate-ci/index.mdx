@@ -7,7 +7,7 @@ Moving an existing pipeline to hammerkit is mostly mechanical: every CI job beco
 a task, every setup step becomes an image, every cache and artifact step goes away.
 That makes it a good job for a coding agent (Claude Code, Cursor, Copilot, …).
 
-The [CI migration guide](/docs/llm/migrate-ci) is written for the agent, not for you: it
+The [CI migration guide](/docs/guides/migrate-ci/agent-guide) is written for the agent, not for you: it
 walks it through taking stock of your pipeline, writing the build file, rewriting
 the CI config and proving the result runs the same checks as before.
 
@@ -17,12 +17,12 @@ Give your agent the repository and this prompt:
 
 ```
 Migrate this repository's CI to hammerkit. Follow the guide at
-https://hammerkit.dev/llms.mdx/docs/llm/migrate-ci/content.md
+https://hammerkit.dev/llms.mdx/docs/guides/migrate-ci/agent-guide/content.md
 step by step, including its verification and its final report.
 ```
 
 If your agent can't read URLs, copy
-[`website/content/docs/llm/migrate-ci.mdx`](https://github.com/no0dles/hammerkit/blob/master/website/content/docs/llm/migrate-ci.mdx)
+[`website/content/docs/guides/migrate-ci/agent-guide.mdx`](https://github.com/no0dles/hammerkit/blob/master/website/content/docs/guides/migrate-ci/agent-guide.mdx)
 into your repository and point it at the file instead.
 
 You need [hammerkit](/docs/installation) and a running Docker daemon where the agent
@@ -49,8 +49,7 @@ Check the report first, then:
   This is where a migration can go wrong without anything failing.
 * **Pinned toolchain.** Images carry the versions your CI used, ideally pinned by
   digest.
-* **Runs twice.** `hammerkit run` twice in a row: the second run reports every task
-  as cached.
+* **Runs twice.** `hammerkit run ci` twice in a row: the second run executes nothing.
 
 Then try it on a branch and compare the run with the old pipeline before switching
 over.

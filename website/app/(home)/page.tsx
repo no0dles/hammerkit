@@ -1,9 +1,9 @@
 import Link from 'next/link';
-import { DynamicCodeBlock } from 'fumadocs-ui/components/dynamic-codeblock';
 import { Bot, Container, DatabaseZap, Workflow } from 'lucide-react';
 import { Terminal } from '@/components/home/terminal';
-import { Roles } from '@/components/home/roles';
-import { buildFile, ciAfter, installCommand } from '@/components/home/snippets';
+import { Stacks } from '@/components/home/stacks';
+import { installCommand } from '@/components/home/snippets';
+import { CiShowcase } from '@/components/home/ci-showcase';
 
 const features = [
   { icon: Container, title: 'Same tools everywhere', text: 'Every task runs in the image it names. No “works on my machine”.' },
@@ -17,7 +17,7 @@ export default function HomePage() {
     <main className="flex flex-1 flex-col">
       <section className="relative overflow-hidden">
         <div className="pointer-events-none absolute inset-x-0 -top-40 mx-auto h-96 max-w-3xl rounded-full bg-emerald-500/25 blur-3xl" />
-        <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 pb-20 pt-20 lg:grid-cols-2">
+        <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 pb-20 pt-20 lg:grid-cols-2 xl:grid-cols-[1.15fr_1fr]">
           <div>
             <Link
               href="/changelog"
@@ -25,11 +25,11 @@ export default function HomePage() {
             >
               New in 1.7: agent-ready caching →
             </Link>
-            <h1 className="text-5xl font-extrabold tracking-tight sm:text-6xl">
-              Build it once.
+            <h1 className="text-5xl font-extrabold tracking-tight sm:text-6xl lg:text-5xl xl:text-6xl">
+              Build once.
               <br />
               <span className="bg-gradient-to-r from-emerald-500 to-teal-400 bg-clip-text text-transparent">
-                Never again.
+                Reuse everywhere.
               </span>
             </h1>
             <p className="mt-6 max-w-lg text-lg text-fd-muted-foreground">
@@ -64,25 +64,9 @@ export default function HomePage() {
         </div>
       </section>
 
-      <Roles />
+      <Stacks />
 
-      <section className="border-t border-fd-border">
-        <div className="mx-auto grid max-w-6xl gap-10 px-6 py-20 lg:grid-cols-[1.2fr_1fr]">
-          <div>
-            <h2 className="mb-2 text-2xl font-bold">One file for every machine</h2>
-            <p className="mb-6 text-fd-muted-foreground">Tasks declare their image, what they read and what they produce.</p>
-            <DynamicCodeBlock lang="yaml" code={buildFile} codeblock={{ title: '.hammerkit.yaml' }} />
-          </div>
-          <div>
-            <h2 className="mb-2 text-2xl font-bold">…and CI shrinks to this</h2>
-            <p className="mb-6 text-fd-muted-foreground">The same command your laptop runs. Cache hits execute nothing.</p>
-            <DynamicCodeBlock lang="yaml" code={ciAfter} codeblock={{ title: '.github/workflows/ci.yml' }} />
-            <Link href="/docs/llm/migrate-ci" className="mt-6 inline-block font-medium text-fd-primary hover:underline">
-              Let an agent migrate your CI →
-            </Link>
-          </div>
-        </div>
-      </section>
+      <CiShowcase />
     </main>
   );
 }

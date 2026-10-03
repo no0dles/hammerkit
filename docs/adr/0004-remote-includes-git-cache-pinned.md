@@ -1,6 +1,5 @@
----
-title: "Remote includes: git-only, mutable refs, cache-pinned, no lockfile"
----
+# 0004: Remote includes: git-only, mutable refs, cache-pinned, no lockfile
+
 Remote `references`/`includes` resolve a build file from a **git repository only** (no HTTP transport). A reference may use a **mutable** ref (branch or tag) or an immutable **commit SHA**. There is **no lockfile**: the first resolution fetches the repo at the ref and caches it locally, and subsequent runs use the cached copy (so a machine is stable run-to-run, including offline). The cache — not a lockfile or an in-manifest SHA — is the pin. A dedicated **refresh/pull command** (and `hammerkit clean --cache`) re-fetches the latest for mutable refs. A commit SHA is the opt-in for full reproducibility.
 
 ## Considered options
