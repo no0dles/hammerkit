@@ -9,6 +9,7 @@ export async function checkReadiness(
   healthCheck: WorkHealthcheck,
   environment: Environment,
   container: Container,
+  user: string | null,
   abort: AbortSignal
 ): Promise<boolean> {
   const result = await execCommand(
@@ -17,7 +18,7 @@ export async function checkReadiness(
     container,
     undefined,
     [healthCheck.cmd.parsed.command, ...healthCheck.cmd.parsed.args],
-    null,
+    user,
     2000,
     abort
   )

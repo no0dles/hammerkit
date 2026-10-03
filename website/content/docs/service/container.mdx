@@ -73,8 +73,14 @@ Without a healthcheck, a task may start before the service is ready.
 The healthcheck has a single field, `cmd`. There are intentionally no
 `interval`, `timeout` or `retries` knobs:
 
-* hammerkit runs `cmd` inside the service container roughly **once a second** and
-  treats the service as ready the first time it exits `0`;
+* hammerkit runs `cmd` inside the service container roughly **once a second**,
+  starting one second after the container starts, and treats the service as
+  ready the first time it exits `0`;
+* the check runs as the **user of the container's main process** (PID 1), like a
+  Kubernetes exec probe runs as the container's user. Images whose entrypoint
+  drops privileges (`exec su-exec rabbitmq …`) are checked as that user, so a
+  check can't create files the service then cannot read — a RabbitMQ CLI run as
+  root would create the Erlang cookie the server is locked out of;
 * each individual check has a short execution timeout (a couple of seconds), so a
   hanging check doesn't block forever — it just counts as "not ready yet" and is
   retried;
