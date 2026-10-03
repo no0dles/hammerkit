@@ -209,6 +209,11 @@ export async function executeWorkTask(
         errorMessage: getErrorMessage(e),
         stateKey: null,
       })
+      // Stop the run like a failing command does: dependents wait for this task
+      // to complete, which it now never will.
+      if (!options.watch) {
+        environment.abortCtrl.abort()
+      }
     }
   }
 }

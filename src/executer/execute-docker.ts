@@ -9,9 +9,15 @@ import { WorkDockerEnvironment } from '../planner/work-environment'
 
 let dockerInstance: Dockerode | null = null
 
+// Without options dockerode reads DOCKER_HOST and the TLS variables; passing
+// `{ host: undefined }` would overwrite the host it parsed from DOCKER_HOST.
+export function createDockerClient(host: string | undefined): Dockerode {
+  return host ? new Dockerode({ host }) : new Dockerode()
+}
+
 export function getContainerCli(workEnvironment: WorkDockerEnvironment): Dockerode {
   if (!dockerInstance) {
-    dockerInstance = new Dockerode({ host: workEnvironment.host })
+    dockerInstance = createDockerClient(workEnvironment.host)
   }
   return dockerInstance
 }
