@@ -270,16 +270,16 @@ export async function getProgram(
           if (validation.type === 'error') {
             errors++
           }
+        }
 
-          for (const [buildFilename, errors] of Object.entries(fileErrors)) {
-            environment.stdout.write(`${colors.underline(colors.gray(buildFilename))}\n`)
-            for (const error of errors) {
-              environment.stdout.write(
-                ` ${colors.underline(colors.blue(error.type))} at ${colors.gray(error.item.name)} ${error.message}\n`
-              )
-            }
-            environment.stdout.write('\n')
+        for (const [buildFilename, errors] of Object.entries(fileErrors)) {
+          environment.stdout.write(`${colors.underline(colors.gray(buildFilename))}\n`)
+          for (const error of errors) {
+            environment.stdout.write(
+              ` ${colors.underline(colors.blue(error.type))} at ${colors.gray(error.item.name)} ${error.message}\n`
+            )
           }
+          environment.stdout.write('\n')
         }
         if (errors !== 0) {
           program.error('Detected errors in the hammerkit configuration', { exitCode: 1 })

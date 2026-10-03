@@ -154,7 +154,15 @@ function taskItem(name: string, data: Partial<WorkTask>): WorkItemState<WorkTask
     id: () => name,
     name,
     status: {} as any,
-    data: { type: 'local-task', name, description: 'a task', cmds: [{} as any], src: [], ...data } as any,
+    data: {
+      type: 'local-task',
+      name,
+      description: 'a task',
+      cmds: [{} as any],
+      src: [],
+      scope: { namePrefix: '', schema: { tasks: { [name]: {} } } },
+      ...data,
+    } as any,
     needs: [] as WorkItemNeed[],
     deps: [] as WorkItemState<WorkTask, TaskState>[],
     requiredBy: [] as any[],
@@ -226,6 +234,24 @@ describe('validate (generator)', () => {
     const tree = workTree({ tasks: [taskItem('build', { src: [{ absolutePath: '/yes' } as any] })] })
     const result = await collect(validate(tree, fakeEnv(['/yes'])))
     expect(result.map((r) => r.message)).not.toContain('src /yes does not exist')
+  })
+
+  it('warns about build-file envs a task does not reference', async () => {
+    const scope = {
+      namePrefix: '',
+      schema: {
+        envs: { NODE_IMAGE: 'node:24', TOKEN: 'x' },
+        tasks: { lint: { image: '$NODE_IMAGE', cmds: ['eslint .'] } },
+      },
+    }
+    const tree = workTree({ tasks: [taskItem('lint', { scope: scope as any })] })
+    const result = await collect(validate(tree, fakeEnv()))
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        type: 'warn',
+        message: expect.stringContaining("build-file envs TOKEN are part of this task's cache key"),
+      })
+    )
   })
 
   it('emits a cycle error through the generator', async () => {
