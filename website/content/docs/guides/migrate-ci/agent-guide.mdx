@@ -177,9 +177,10 @@ While you iterate:
 
 * Run with `--log live` to get plain line-by-line output that you can read back
   from a file. The interactive view redraws the terminal.
-* Every `$NAME` reference must resolve before anything runs, including those of
-  tasks the job doesn't run. A job that lacks a variable another job uses
-  exports it empty (`export DEPLOY_TOKEN=""`) or never sees it.
+* Every `$NAME` that a task in the run declares must be set, even if empty;
+  tasks outside the run don't need theirs. A variable the CI provider sets only
+  on some pipelines (merge request ids, branch names) is exported empty by the
+  job when it's missing (`export CI_MERGE_REQUEST_IID="${CI_MERGE_REQUEST_IID:-}"`).
 * Stopping a run with Ctrl-C (or `SIGTERM`) removes its services and stops its
   local tasks. A run killed outright (`kill -9`) can't: `hammerkit clean` removes
   what it left behind.
