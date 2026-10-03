@@ -126,4 +126,43 @@ describe('tasks without src', () => {
       expect(status.read()).not.toContain('matches no files')
     })
   })
+
+  // A task without cmds only groups its dependencies (`ci: { deps: [test, build] }`).
+  // It still always runs, so its dependencies are checked and restored, but when
+  // every one of them was a cache hit nothing ran, and the run reports it so.
+  itExceptWindows('without cmds are reported cached when every dependency was a hit', async () => {
+    await createTestCase('no-cmds-groups-deps', {
+      '.git/HEAD': 'ref: refs/heads/main\n',
+      '.hammerkit.yaml': {
+        tasks: {
+          test: { src: ['test.txt'], cmds: ['echo test'] },
+          build: { src: ['build.txt'], cmds: ['echo build'] },
+          ci: { deps: ['test', 'build'] },
+        },
+      },
+      'test.txt': 'x\n',
+      'build.txt': 'x\n',
+    }).setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'ci' })
+      await cli.clean({ cache: true })
+
+      const first = await cli.runExec()
+      expect(first.success).toBe(true)
+      expect(first.state.tasks['ci'].state.current).toMatchObject({ type: 'completed', cached: false })
+
+      const second = await cli.runExec()
+      expect(second.success).toBe(true)
+      expect(second.state.tasks['test'].state.current).toMatchObject({ type: 'completed', cached: true })
+      expect(second.state.tasks['build'].state.current).toMatchObject({ type: 'completed', cached: true })
+      expect(second.state.tasks['ci'].state.current).toMatchObject({ type: 'completed', cached: true })
+
+      // one dependency executes again: the group did not come from the cache
+      await environment.file.writeFile(join(cwd, 'build.txt'), 'y\n')
+      const third = await cli.runExec()
+      expect(third.success).toBe(true)
+      expect(third.state.tasks['test'].state.current).toMatchObject({ type: 'completed', cached: true })
+      expect(third.state.tasks['build'].state.current).toMatchObject({ type: 'completed', cached: false })
+      expect(third.state.tasks['ci'].state.current).toMatchObject({ type: 'completed', cached: false })
+    })
+  })
 })
