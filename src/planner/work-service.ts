@@ -33,6 +33,8 @@ export interface ContainerWorkService extends BaseWorkService {
   envs: WorkEnvironmentVariables
   image: string
   cmd: WorkCommand | null
+  // explicit container working directory; null = the build file's directory (cwd)
+  workdir: string | null
   //user: string | null
   src: WorkSource[]
   continuous: boolean
@@ -51,3 +53,7 @@ export interface KubernetesWorkService extends BaseWorkService {
   selector: WorkKubernetesSelector
   src: WorkSource[]
 }
+
+// The container's working directory: the declared `workdir`, else the build
+// file's directory (the default every runtime applied before `workdir`).
+export const getServiceWorkingDir = (service: ContainerWorkService): string => service.workdir ?? service.cwd

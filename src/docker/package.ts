@@ -224,7 +224,10 @@ function toContainerPath(relativePath: string): string {
   return normalized === '' ? CONTAINER_ROOT : `${CONTAINER_ROOT}/${normalized}`
 }
 
-function getServiceInstructions(service: WorkItem<ContainerWorkService>, options: CliPackageOptions): TaskInstructions {
+export function getServiceInstructions(
+  service: WorkItem<ContainerWorkService>,
+  options: CliPackageOptions
+): TaskInstructions {
   const dependencyCwd = getDependencyCwd(service.data.cwd, service)
   const tasks: { [task: string]: TaskInstructions } = {}
   const deps = getDependencyInstructions(dependencyCwd, service, tasks)
@@ -268,6 +271,8 @@ function getServiceInstructions(service: WorkItem<ContainerWorkService>, options
       : []),
 
     options.overrideUser ? 'USER 1000:1000' : '',
+    // last, so the COPY destinations above stay relative to the build directory
+    service.data.workdir ? `WORKDIR ${service.data.workdir}` : '',
   ]
 
   if (service.data.cmd) {

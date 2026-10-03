@@ -1,6 +1,6 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
-import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkService, getServiceWorkingDir } from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
 import { V1Deployment, V1HostAlias, V1Probe } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader } from './apply'
@@ -77,7 +77,7 @@ export async function ensureKubernetesDeploymentExists(
             {
               name: service.name.replace(/:/, '-'),
               image: service.data.image,
-              workingDir: service.data.cwd ?? undefined,
+              workingDir: getServiceWorkingDir(service.data),
               env: Object.entries(envs).map(([key, value]) => ({
                 name: key,
                 value: value,

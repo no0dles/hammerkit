@@ -86,6 +86,26 @@ The healthcheck has a single field, `cmd`. There are intentionally no
 On [Kubernetes](/docs/task/kubernetes), the same `cmd` is translated into readiness
 and liveness probes on the deployment.
 
+## Working directory [#working-directory]
+
+A service runs in the build file's directory, like a task: its `src`, `mounts`
+and the outputs of its `deps` are mounted there, so a command such as
+`node server.js` finds its files.
+
+Images that start a process relative to their own `WORKDIR` — an entrypoint
+calling `./dist/index.js`, or `npm start` in `/app` — need that directory back.
+Set `workdir` to an absolute path inside the container:
+
+```yaml
+services:
+  core:
+    image: registry.example.com/core:6
+    workdir: /app/packages/core
+```
+
+`workdir` applies to the Docker and Kubernetes runtimes alike and is part of the
+service's identity; services that don't declare it keep their id.
+
 ## Volumes
 Services start and stop depending on what tasks need.
 To persist data across restarts, use volumes.
