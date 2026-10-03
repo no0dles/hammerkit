@@ -81,6 +81,11 @@ works with GitLab's Docker-in-Docker service.
   an earlier successful run with the same inputs (for example with
   `--cache none`) kept that run's record, so the next run reported it cached with
   the failed run's files in its outputs.
+- **`resetOnChange: true` didn't reset Docker outputs** while any container still
+  mounted the output's volume, such as the task's own or a dependent's paused
+  container from an earlier run: Docker refuses to remove a volume in use, and
+  hammerkit logged a warning and kept the old content. Outputs are now emptied in
+  place.
 - **A cache hit restores exactly the stored outputs.** Restoring a task from a cache
   now replaces its output folders and volumes instead of unpacking into them, so
   files a failed or older run left behind don't survive a cache hit.
