@@ -1,4 +1,4 @@
-import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkService, getServiceWorkingDir } from '../planner/work-service'
 import Dockerode, { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
@@ -55,7 +55,7 @@ export async function dockerService(
         return map
       }, {}),
       Cmd: item.data.cmd ? [item.data.cmd.parsed.command, ...item.data.cmd.parsed.args] : undefined,
-      WorkingDir: item.data.cwd ? convertToPosixPath(item.data.cwd) : undefined,
+      WorkingDir: convertToPosixPath(getServiceWorkingDir(item.data)),
       HostConfig: {
         ExtraHosts: network.hosts,
         Links: network.links,

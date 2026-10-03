@@ -309,6 +309,9 @@
                   "cmd": {
                     "type": "string"
                   },
+                  "workdir": {
+                    "type": "string"
+                  },
                   "volumes": {
                     "type": "array",
                     "items": {

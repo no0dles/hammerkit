@@ -16,6 +16,10 @@ export const buildFileContainerServiceSchema = object({
   src: array(string()).optional(),
   needs: array(buildFileNeedSchema).optional(),
   cmd: string().optional(),
+  // Absolute path inside the container. Without it the service runs in the
+  // build file's directory, like a task; images whose entrypoint expects their
+  // own WORKDIR (relative `./dist/…` paths, `npm start`) need it.
+  workdir: string().optional(),
   volumes: array(string()).optional(),
   labels: labelsSchema.optional(),
   continuous: boolean().optional(),
