@@ -20,10 +20,10 @@ export default function HomePage() {
         <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 pb-20 pt-20 lg:grid-cols-2 xl:grid-cols-[1.15fr_1fr]">
           <div>
             <Link
-              href="/changelog"
+              href="/changelog#v1.8.0"
               className="mb-4 inline-flex rounded-full border border-fd-border bg-fd-card px-3 py-1 text-xs font-medium text-fd-muted-foreground hover:text-fd-foreground"
             >
-              New in 1.7: agent-ready caching →
+              New in 1.8: tutorials for six languages →
             </Link>
             <h1 className="text-5xl font-extrabold tracking-tight sm:text-6xl lg:text-5xl xl:text-6xl">
               Build once.
