@@ -6,6 +6,7 @@ import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
 import { getWorkInstanceId } from '../planner/work-instance-id'
+import { isProcessAlive } from './remove-orphaned-containers'
 
 // Runs the callback in a fresh container and removes it afterwards, whatever
 // the outcome. What state the outputs hold is recorded outside docker (see
@@ -34,9 +35,10 @@ export async function usingContainer<T>(
   }
 }
 
-// Containers of this item that are not running: the paused state records
-// hammerkit kept before 1.9, or ones a killed run could not remove. A running
-// one belongs to another run and stays.
+// Containers of this item nothing will remove: the paused state records
+// hammerkit kept before 1.9, and stopped ones of a hammerkit process that is
+// gone. A container of a live process (one another call of this run has just
+// created, say) stays.
 async function removeLeftoverContainers(
   docker: Dockerode,
   item: WorkItem<ContainerWorkTask | ContainerWorkService>
@@ -45,7 +47,12 @@ async function removeLeftoverContainers(
     all: true,
     filters: { label: [`hammerkit-id=${getWorkInstanceId(item)}`] },
   })
-  for (const leftover of containers.filter((c) => c.State !== 'running')) {
+  const leftovers = containers.filter(
+    (c) =>
+      c.State === 'paused' ||
+      (c.State !== 'running' && !isProcessAlive(parseInt(c.Labels['hammerkit-pid'] ?? '', 10) || process.pid))
+  )
+  for (const leftover of leftovers) {
     item.status.write('debug', `remove leftover container ${leftover.Id}`)
     await removeContainer(docker.getContainer(leftover.Id))
   }

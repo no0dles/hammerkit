@@ -25,7 +25,10 @@ interface FakeDocker {
   getContainer: Mock
 }
 
-function makeDocker(newContainer: FakeContainer, listed: { Id: string; State: string }[] = []) {
+function makeDocker(
+  newContainer: FakeContainer,
+  listed: { Id: string; State: string; Labels?: Record<string, string> }[] = []
+) {
   const containersById: Record<string, FakeContainer> = { [newContainer.id]: newContainer }
   for (const entry of listed) {
     containersById[entry.Id] = makeContainer(entry.Id)
@@ -85,18 +88,22 @@ describe('usingContainer', () => {
     expect(created.remove).toHaveBeenCalledTimes(1)
   })
 
-  it('removes paused and exited leftovers of the item but keeps a running one', async () => {
+  it('removes paused records and stopped containers of dead processes, nothing of a live one', async () => {
     const created = makeContainer('new-cid')
+    const dead = { 'hammerkit-pid': '999999999' }
+    const live = { 'hammerkit-pid': process.pid.toString() }
     const { docker, containersById } = makeDocker(created, [
-      { Id: 'paused-cid', State: 'paused' },
-      { Id: 'exited-cid', State: 'exited' },
-      { Id: 'running-cid', State: 'running' },
+      { Id: 'paused-cid', State: 'paused', Labels: live },
+      { Id: 'exited-cid', State: 'exited', Labels: dead },
+      { Id: 'created-cid', State: 'created', Labels: live },
+      { Id: 'running-cid', State: 'running', Labels: dead },
     ])
 
     await usingContainer(docker as any, makeItem('task-1'), {}, async () => true)
 
     expect(containersById['paused-cid'].remove).toHaveBeenCalledTimes(1)
     expect(containersById['exited-cid'].remove).toHaveBeenCalledTimes(1)
+    expect(containersById['created-cid'].remove).not.toHaveBeenCalled()
     expect(containersById['running-cid'].remove).not.toHaveBeenCalled()
   })
 

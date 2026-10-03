@@ -1,0 +1,66 @@
+---
+title: "Changelog 1.9.0"
+version: "1.9.0"
+date: "2026-10-03"
+---
+Services now behave like their Compose counterparts. They can run in the image's
+working directory and through a shell, their healthchecks run as the service's own
+user, and a service that never becomes ready fails the run instead of hanging it.
+A run also cleans up after itself: no paused task containers, and no services or
+local processes left behind when it's stopped.
+
+## Upgrade notes
+- **A healthcheck that doesn't pass within 20 seconds fails the run.** Before, the
+  run waited until you cancelled it. Give slow starters a longer
+  `healthcheck.timeout` (`timeout: 90s`), or raise the default for every service
+  with `HAMMERKIT_HEALTHCHECK_TIMEOUT`. See
+  [timing and failure](/docs/service/container#timing-and-failure).
+- **Healthchecks run as the user of the service's main process**, starting one
+  second after the container. A check that relied on root inside a container whose
+  entrypoint drops privileges has to work as that user now.
+- **Container tasks re-run once.** Their cache state moved out of the paused
+  container into `~/.hammerkit/state`, so the first run after upgrading misses the
+  local cache for each container task. Entries in remote caches are unaffected.
+  The paused containers of earlier versions are removed when their task next runs,
+  or by `hammerkit clean`.
+
+## Added
+- [`workdir`](/docs/service/container#working-directory) on container services:
+  the working directory inside the container, for images whose command relies on
+  their own `WORKDIR`. It applies to Docker, Kubernetes and `hammerkit package`.
+- [`shell`](/docs/service/container#shell) on container services: runs `cmd` and
+  the healthcheck as `<shell> -c "<cmd>"`, so pipes, `&&` and variable expansion
+  work as in a Compose `CMD-SHELL`.
+- `healthcheck.timeout` with a 20s default, and `HAMMERKIT_HEALTHCHECK_TIMEOUT`. On
+  Kubernetes the clock starts once a pod runs, so image pulls don't count.
+- `validate` warns about build-file `envs` a task never references: they are part
+  of every task's cache key, so changing one reruns every task in the file. See
+  [cache key](/docs/build-file/environment-variables#cache-key).
+- `HAMMERKIT_STOP_TIMEOUT_MS` (default 10s): how long a local task's processes get
+  to exit after a run is stopped before they are killed.
+- The [CI migration guide](/docs/guides/migrate-ci/agent-guide) covers what a
+  GitLab pipeline with a Compose test stack needs: tasks running without root, one
+  C library per dependency tree, outputs inside source folders, GitLab runners, and
+  a [Compose test stacks](/docs/guides/migrate-ci/agent-guide#compose-test-stacks)
+  section.
+
+## Changed
+- A container task's container is removed when the task ends, so `docker ps` no
+  longer lists one paused container per task. Its state is recorded in
+  `~/.hammerkit/state` ([ADR 0007](https://github.com/no0dles/hammerkit/tree/master/docs/adr)).
+- `SIGTERM` and `SIGHUP` stop a run the way Ctrl-C does. Before, hammerkit exited at
+  once and left services and local processes running.
+- `hammerkit clean` also removes containers that runs killed outright on this
+  machine left behind, in any project. Services started with `up --daemon` stay.
+
+## Fixed
+- **Stopping a run left its services running.** Ctrl-C during a run with a service
+  crashed hammerkit with an unhandled `AbortError` before it removed the service
+  container.
+- **A local process ignoring `SIGTERM` outlived the run.** The whole process group
+  is now killed after `HAMMERKIT_STOP_TIMEOUT_MS`.
+- **A healthcheck could lock a service out.** Checks ran as root from the first
+  second, so a CLI such as `rabbitmq-diagnostics` created files (the Erlang cookie)
+  the server, running as its own user, could no longer read.
+- **`validate` printed every finding again** after each new one; each finding is
+  printed once.

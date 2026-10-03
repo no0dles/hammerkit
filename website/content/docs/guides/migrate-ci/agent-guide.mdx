@@ -180,8 +180,9 @@ While you iterate:
 * Every `$NAME` reference must resolve before anything runs, including those of
   tasks the job doesn't run. A job that lacks a variable another job uses
   exports it empty (`export CHROMATIC_PROJECT_TOKEN=""`) or never sees it.
-* Stop a run with Ctrl-C, which removes its services. A run that's killed outright
-  leaves them up: check `docker ps --filter label=app=hammerkit`.
+* Stopping a run with Ctrl-C (or `SIGTERM`) removes its services and stops its
+  local tasks. A run killed outright (`kill -9`) can't: `hammerkit clean` removes
+  what it left behind.
 * Output volumes of every state you tried stay on the Docker host until
   `hammerkit clean`. On a small CI or workspace disk, watch `docker system df`.
 
@@ -230,7 +231,7 @@ against a database, a build whose output CI uploads, and e2e tests:
 ```yaml title=".hammerkit.yaml"
 envs:
   NODE_IMAGE: node:24-alpine
-  POSTGRES_IMAGE: postgres:16-alpine     # part of every task's key in this file
+  POSTGRES_IMAGE: postgres:16-alpine     # part of every task's key in this file (`validate` warns)
   DATABASE_URL: postgres://app:app@db:5432/app
 
 caches:
@@ -352,11 +353,13 @@ becomes a task that `needs` them:
 |---|---|
 | `image:` | `image`, pinned by the digest of the multi-arch index (`docker buildx imagetools inspect`), so every machine pulls its native platform |
 | `environment:` | `envs` |
-| `command:` | `cmd` (replaces the image's `CMD`; split into words, quotes group them) |
+| `command:` | `cmd` (replaces the image's `CMD`; split into words, quotes group them; with `shell: sh` it runs through the shell) |
+| `working_dir:`, or the image's `WORKDIR` when the command relies on it | `workdir` |
 | `volumes:` with a config file | `mounts` (`./config.json:/etc/app/config.json`) |
 | `volumes:` with data | `volumes`, or nothing: a test stack usually starts empty |
 | `depends_on: { condition: service_healthy }` | `needs` plus a `healthcheck` on the needed service |
-| `healthcheck: test:` | `healthcheck: cmd:` |
+| `healthcheck: test:` | `healthcheck: cmd:` (`CMD-SHELL` checks need `shell: sh` on the service) |
+| `healthcheck: start_period`, `retries` | `healthcheck: timeout:` (default `20s`) |
 | `ports:` | only for reaching the service from your host; tasks use `name:containerPort` |
 | a `build:` of the app under test | a service on the toolchain image with `deps: [install, build]`, running the built app |
 | a one-shot setup container (`createbuckets`, `rs.initiate`, migrations) | an idempotent `healthcheck` that performs the setup and passes once it holds |
@@ -364,18 +367,17 @@ becomes a task that `needs` them:
 Things that behave differently from Compose:
 
 * **A service's working directory is the project directory**, not the image's
-  `WORKDIR`. An image that runs relative paths needs
-  `cmd: sh -c "cd /app && exec npm start"`.
-* **`cmd` and `healthcheck.cmd` are not run by a shell.** Pipes, `&&` and
-  variable expansion need `sh -c "…"`. Avoid quotes nested inside that: put a long
-  check into a script in the repository and mount it.
-* **Healthchecks run as root, about once a second from the start.** A check that
-  calls a CLI writing state as a side effect can break the server: the RabbitMQ
-  CLI creating the Erlang cookie as root locks the server out. Prefer an HTTP
-  probe (`wget -q -O /dev/null http://127.0.0.1:15672/...`), and use `127.0.0.1`:
+  `WORKDIR`, so its `src` and dependency outputs are found by relative paths. An
+  image whose command relies on its own directory needs `workdir: /app`.
+* **`cmd` and `healthcheck.cmd` are not run by a shell** unless the service sets
+  `shell: sh`. Pipes, `&&` and variable expansion need it.
+* **Healthchecks start one second after the container, as the user of its main
+  process,** and repeat about once a second. Use `127.0.0.1` in HTTP probes:
   `localhost` may resolve to `::1` while the server listens on IPv4 only.
-* **A healthcheck that never passes waits until the run is cancelled.** Get each
-  service healthy with `hammerkit up` first, watching its log.
+* **A healthcheck that hasn't passed after `timeout` (default `20s`) fails the
+  run**, naming the check. Give slow starters (Elasticsearch, a JVM app) a longer
+  `timeout`, and get each service healthy with `hammerkit up` first, watching its
+  log.
 * **There are no one-shot services.** Services are recreated on every run, so
   setup that a cached task would do once is lost next time; put it into the
   healthcheck, written to succeed when run again (`mc mb --ignore-existing`).
@@ -410,7 +412,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm install -g hammerkit@1.7.0          # pin the version
+      - run: npm install -g hammerkit@1.9.0          # pin the version
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
