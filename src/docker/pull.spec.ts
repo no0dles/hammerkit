@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { ImageInfo } from 'dockerode'
-import { isImagePresent, pull, splitImageName } from './pull'
+import { isImagePresent, normalizeArchitecture, pull, splitImageName } from './pull'
 import { environmentMock } from '../executer/environment-mock'
 import { getFileContext } from '../file/get-file-context'
 import { Environment } from '../executer/environment'
@@ -52,10 +52,12 @@ describe('pull', () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-  function fakeDocker(images: ImageInfo[] = []) {
+  function fakeDocker(images: ImageInfo[] = [], imageArchitecture = 'arm64', daemonArchitecture = 'aarch64') {
     return {
       listImages: vi.fn().mockResolvedValue(images),
       pull: vi.fn().mockResolvedValue({}),
+      info: vi.fn().mockResolvedValue({ Architecture: daemonArchitecture }),
+      getImage: vi.fn(() => ({ inspect: vi.fn().mockResolvedValue({ Architecture: imageArchitecture }) })),
       modem: { followProgress: (_stream: unknown, done: (err: unknown, res: unknown) => void) => done(null, []) },
     }
   }
@@ -97,5 +99,34 @@ describe('pull', () => {
       environment
     )
     expect(docker.pull).not.toHaveBeenCalled()
+  })
+
+  it('warns when a digest-pinned image is present for another architecture', async () => {
+    const status = { write: vi.fn() }
+    const pinned = `registry.example.com/org/worker:6@${DIGEST}`
+    const docker = fakeDocker([image([], [`registry.example.com/org/worker@${DIGEST}`])], 'amd64', 'aarch64')
+    await pull(status as any, docker as any, pinned, environment)
+    expect(docker.pull).not.toHaveBeenCalled()
+    expect(status.write).toHaveBeenCalledWith('warn', expect.stringContaining('runs emulated'))
+    expect(status.write).toHaveBeenCalledWith(
+      'warn',
+      expect.stringContaining(`docker image rm registry.example.com/org/worker@${DIGEST}`)
+    )
+  })
+
+  it('stays quiet when the architecture matches', async () => {
+    const status = { write: vi.fn() }
+    const pinned = `registry.example.com/org/native:6@${DIGEST}`
+    const docker = fakeDocker([image([], [`registry.example.com/org/native@${DIGEST}`])], 'arm64', 'aarch64')
+    await pull(status as any, docker as any, pinned, environment)
+    expect(status.write).not.toHaveBeenCalledWith('warn', expect.anything())
+  })
+})
+
+describe('normalizeArchitecture', () => {
+  it('maps the kernel names docker info reports to image architectures', () => {
+    expect(normalizeArchitecture('x86_64')).toEqual('amd64')
+    expect(normalizeArchitecture('aarch64')).toEqual('arm64')
+    expect(normalizeArchitecture('arm64')).toEqual('arm64')
   })
 })

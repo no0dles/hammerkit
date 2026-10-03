@@ -12,6 +12,7 @@ export async function pull(
 ): Promise<void> {
   const images = await docker.listImages({})
   if (isImagePresent(images, imageName)) {
+    await warnOnForeignPlatform(status, docker, imageName)
     return
   }
 
@@ -58,4 +59,47 @@ async function getPullAuth(
     return null
   }
   return { ...credentials, serveraddress: credentialHost }
+}
+
+const daemonArchitectures = new WeakMap<Dockerode, Promise<string>>()
+const warnedImages = new Set<string>()
+
+// A digest pins a multi-arch index; a copy pulled earlier for another
+// architecture (an amd64 one from a Compose file with `platform:`) carries the
+// same digest, so docker uses it and the image runs emulated instead of native.
+async function warnOnForeignPlatform(status: StatusScopedConsole, docker: Dockerode, imageName: string): Promise<void> {
+  const { repository, digest } = splitImageName(imageName)
+  if (!digest || warnedImages.has(imageName)) {
+    return
+  }
+  try {
+    if (!daemonArchitectures.has(docker)) {
+      daemonArchitectures.set(
+        docker,
+        docker.info().then((info: { Architecture?: string }) => normalizeArchitecture(info.Architecture ?? ''))
+      )
+    }
+    const [image, daemonArchitecture] = await Promise.all([
+      docker.getImage(imageName).inspect(),
+      daemonArchitectures.get(docker) as Promise<string>,
+    ])
+    const imageArchitecture = normalizeArchitecture(image.Architecture ?? '')
+    if (!imageArchitecture || !daemonArchitecture || imageArchitecture === daemonArchitecture) {
+      return
+    }
+    warnedImages.add(imageName)
+    status.write(
+      'warn',
+      `image ${imageName} is present for ${imageArchitecture} on this ${daemonArchitecture} docker host and runs ` +
+        `emulated; if the digest is a multi-arch index, remove the copy to pull the native one: ` +
+        `docker image rm ${repository}@${digest}`
+    )
+  } catch {
+    // only a hint: never fail a pull over it
+  }
+}
+
+export function normalizeArchitecture(architecture: string): string {
+  const aliases: { [key: string]: string } = { x86_64: 'amd64', aarch64: 'arm64' }
+  return aliases[architecture] ?? architecture
 }
