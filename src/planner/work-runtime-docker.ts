@@ -1,4 +1,5 @@
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
+import { getRunLabels } from '../docker/run-labels'
 import { clearContainerDirectory, convertToPosixPath, getContainerCli } from '../executer/execute-docker'
 import { ContainerWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
@@ -20,6 +21,7 @@ import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
 import { Readable } from 'stream'
+import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -33,7 +35,8 @@ export function dockerTaskRuntime(
           label: [`hammerkit-id=${getWorkInstanceId(task)}`],
         },
       })
-      const currentTask = currentTasks[0]
+      // a paused container is a state record of hammerkit before 1.9, not a run
+      const currentTask = currentTasks.find((c) => c.State === 'running')
       if (!currentTask) {
         return
       }
@@ -66,8 +69,9 @@ export function dockerTaskRuntime(
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       await dockerTask(docker, task, environment, options)
     },
-    async remove(): Promise<void> {
+    async remove(environment: Environment): Promise<void> {
       await this.stop()
+      await removeContainerTaskState(environment, task)
 
       for (const generate of task.data.generates) {
         if (generate.inherited) {
@@ -84,18 +88,8 @@ export function dockerTaskRuntime(
       }
     },
     async currentStateKey(environment: Environment): Promise<string | null> {
-      const containers = await docker.listContainers({
-        all: true,
-        filters: {
-          label: [`hammerkit-id=${getWorkInstanceId(task)}`],
-        },
-      })
-      const container = containers[0]
-      if (!container) {
-        return null
-      }
-
-      if (!container.Labels['hammerkit-state']) {
+      const stateKey = await readContainerTaskState(environment, task)
+      if (!stateKey) {
         return null
       }
 
@@ -110,7 +104,7 @@ export function dockerTaskRuntime(
         }
       }
 
-      return container.Labels['hammerkit-state']
+      return stateKey
     },
   }
 }
@@ -140,7 +134,7 @@ async function restoreContainer(
       Labels: {
         app: 'hammerkit',
         'hammerkit-id': getWorkInstanceId(item),
-        'hammerkit-pid': process.pid.toString(),
+        ...getRunLabels(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
@@ -158,7 +152,6 @@ async function restoreContainer(
                 .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
       },
     },
-    null,
     async (container) => {
       for (const generate of getArchivePaths(item.data, path)) {
         if (await environment.file.exists(generate.filename)) {
@@ -286,7 +279,7 @@ async function archiveContainer(
       Labels: {
         app: 'hammerkit',
         'hammerkit-id': getWorkInstanceId(item),
-        'hammerkit-pid': process.pid.toString(),
+        ...getRunLabels(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
@@ -301,7 +294,6 @@ async function archiveContainer(
                 .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
       },
     },
-    null,
     async (container) => {
       const hostFiles = new Set(
         item.data.type === 'container-task'

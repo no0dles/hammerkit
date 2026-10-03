@@ -1,4 +1,5 @@
 import { Environment } from './environment'
+import { getRunLabels } from '../docker/run-labels'
 import { isHostServiceDns, ServiceDns } from './service-dns'
 import Dockerode, { ContainerCreateOptions } from 'dockerode'
 import { clearContainerDirectory, convertToPosixPath, execCommand } from './execute-docker'
@@ -17,6 +18,7 @@ import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getOutputsToReset } from '../planner/utils/get-outputs-to-reset'
+import { removeContainerTaskState, writeContainerTaskState } from './container-task-state'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -62,7 +64,7 @@ export function buildCreateOptions(
     Labels: {
       app: 'hammerkit',
       'hammerkit-id': getWorkInstanceId(item),
-      'hammerkit-pid': process.pid.toString(),
+      ...getRunLabels(),
       'hammerkit-type': 'task',
       'hammerkit-state': stateKey,
     },
@@ -84,6 +86,9 @@ export async function dockerTask(
   item.status.write('info', `execute ${item.name} in container`)
 
   try {
+    // A run that fails overwrites outputs, so the previous record goes first,
+    // and only a run that succeeded writes a new one.
+    await removeContainerTaskState(environment, item)
     const outputsToReset = getOutputsToReset(item.data)
     // outputs on the host: file outputs (bind mounts) and exported directories
     for (const generate of outputsToReset.filter((g) => g.isFile || g.export)) {
@@ -103,7 +108,7 @@ export async function dockerTask(
     const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers, environment)
     printContainerOptions(item.status, containerOptions)
 
-    await usingContainer(docker, item, containerOptions, options.stateKey, async (container) => {
+    const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {
       await setUserPermissions(item, container, environment)
 
       for (const generate of outputsToReset.filter((g) => !g.isFile)) {
@@ -169,6 +174,9 @@ export async function dockerTask(
 
       return true
     })
+    if (succeeded) {
+      await writeContainerTaskState(environment, item, options.stateKey)
+    }
   } catch (e) {
     if (e instanceof AbortError) {
       options.state.set({

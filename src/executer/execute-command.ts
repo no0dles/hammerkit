@@ -5,6 +5,13 @@ import { AbortError } from './abort'
 import { listenOnAbort } from '../utils/abort-event'
 import { StatusScopedConsole } from '../planner/work-item-status'
 import { Environment } from './environment'
+import { getEnvironmentConfig } from '../utils/environment-config'
+
+// how long a local command's process group gets to exit after SIGTERM before
+// it is killed
+function getStopTimeout(): number {
+  return getEnvironmentConfig('HAMMERKIT_STOP_TIMEOUT_MS', 10000)
+}
 
 export async function executeCommand(
   status: StatusScopedConsole,
@@ -58,11 +65,37 @@ export async function executeCommand(
         ps.kill()
         return
       }
-      try {
-        process.kill(-ps.pid, 'SIGTERM')
-      } catch {
-        // the group is already gone
-      }
+      stopGroup(ps.pid)
     })
   })
+}
+
+// SIGTERM the whole group, then SIGKILL whatever is still in it after
+// HAMMERKIT_STOP_TIMEOUT_MS. The shell exiting doesn't end the wait: a child that ignores
+// SIGTERM would otherwise outlive hammerkit.
+function stopGroup(pid: number): void {
+  if (!signalGroup(pid, 'SIGTERM')) {
+    return
+  }
+  const deadline = Date.now() + getStopTimeout()
+  const poll = setInterval(() => {
+    if (!signalGroup(pid, 0)) {
+      clearInterval(poll)
+      return
+    }
+    if (Date.now() >= deadline) {
+      signalGroup(pid, 'SIGKILL')
+      clearInterval(poll)
+    }
+  }, 100)
+}
+
+function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal)
+    return true
+  } catch {
+    // the group is already gone
+    return false
+  }
 }

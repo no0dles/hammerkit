@@ -7,59 +7,46 @@ import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 
+// Runs the callback in a fresh container and removes it afterwards, whatever
+// the outcome. What state the outputs hold is recorded outside docker (see
+// container-task-state.ts), so no container outlives the run.
 export async function usingContainer<T>(
   docker: Dockerode,
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   createOptions: ContainerCreateOptions,
-  stateKey: string | null,
   callback: (container: Container) => Promise<T>
 ): Promise<T> {
+  await removeLeftoverContainers(docker, item)
   let container: Container | null = null
-  let succeeded = false
-  let result: T
   try {
     container = await docker.createContainer(createOptions)
     item.status.write('debug', `starting container with image ${item.data.image}`)
     await startContainer(item.status, container)
-    result = await callback(container)
-    succeeded = result !== false
-    return result
+    return await callback(container)
   } finally {
     try {
-      if (stateKey && succeeded) {
-        if (container) {
-          await container.pause()
-        }
-        const containers = await docker.listContainers({
-          all: true,
-          filters: { label: [`hammerkit-id=${getWorkInstanceId(item)}`] },
-        })
-        for (const container of containers) {
-          item.status.write('debug', `found container ${container.Id}`)
-          if (container.Labels['hammerkit-state'] != stateKey) {
-            const oldContainer = docker.getContainer(container.Id)
-            await removeContainer(oldContainer)
-          }
-        }
-      } else {
-        if (container) {
-          await removeContainer(container)
-        }
-        // A task run that failed has written into the outputs an earlier run's
-        // container still vouches for (its state label is what currentStateKey
-        // reads), so that record goes too.
-        if (stateKey) {
-          const containers = await docker.listContainers({
-            all: true,
-            filters: { label: [`hammerkit-id=${getWorkInstanceId(item)}`] },
-          })
-          for (const old of containers) {
-            await removeContainer(docker.getContainer(old.Id))
-          }
-        }
+      if (container) {
+        await removeContainer(container)
       }
     } catch (e) {
       item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
     }
+  }
+}
+
+// Containers of this item that are not running: the paused state records
+// hammerkit kept before 1.9, or ones a killed run could not remove. A running
+// one belongs to another run and stays.
+async function removeLeftoverContainers(
+  docker: Dockerode,
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>
+): Promise<void> {
+  const containers = await docker.listContainers({
+    all: true,
+    filters: { label: [`hammerkit-id=${getWorkInstanceId(item)}`] },
+  })
+  for (const leftover of containers.filter((c) => c.State !== 'running')) {
+    item.status.write('debug', `remove leftover container ${leftover.Id}`)
+    await removeContainer(docker.getContainer(leftover.Id))
   }
 }

@@ -53,9 +53,16 @@ export async function executeWorkService(
       )
 
       if (options.type === 'execute') {
-        awaitNoRequirements(work, abort).then(() => {
-          stop()
-        })
+        // rejects when the run is aborted; unhandled, that rejection would
+        // crash hammerkit before the service container is removed
+        awaitNoRequirements(work, abort).then(
+          () => {
+            stop()
+          },
+          () => {
+            // aborted: the service is stopping anyway
+          }
+        )
       }
 
       await work.runtime.execute(environment, {

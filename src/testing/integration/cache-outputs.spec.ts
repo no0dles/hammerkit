@@ -115,8 +115,8 @@ describe('container task outputs on a cache hit', () => {
     })
   )
 
-  // Outputs start empty when a task runs. A dependent's paused container still
-  // mounts the volume, so it has to be emptied in place, not recreated.
+  // Outputs start empty when a task runs. Another container (a running
+  // dependent's) may still mount the volume, so it is emptied in place, not recreated.
   it(
     'starts the outputs of a rerun empty',
     requiresLinuxContainers(async () => {

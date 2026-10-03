@@ -15,7 +15,7 @@ export function getContainerBinds(item: WorkItem<ContainerWorkTask>): ContainerB
     // A source inside another source (a dependency's `app/app.csproj` under the
     // task's own `app`) is already visible through the outer bind. Binding it
     // again would nest bind mounts, which Docker Desktop then refuses to let the
-    // host delete while the paused container exists.
+    // host delete while the container exists.
     ...sources
       .filter((path) => !sources.some((other) => isInside(path, other)))
       .map((path) => ({ localPath: path, containerPath: path })),

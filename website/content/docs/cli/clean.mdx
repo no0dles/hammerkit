@@ -31,3 +31,11 @@ from the backend. See [caches](/docs/build-file/caches) for how backends work.
 subset of tasks and services.
 
 </Callout>
+
+## Leftovers of killed runs
+
+A run that was killed outright (`kill -9`, an out-of-memory kill) can't remove its
+containers. `clean` also removes every hammerkit container on the docker host that
+was started on this machine by a hammerkit process that no longer exists, whatever
+project it belongs to. Services started with [`up --daemon`](/docs/cli/up) are
+kept: [`down`](/docs/cli/down) stops those.
