@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { createTestCase } from '../test-case'
 import { createCli } from '../../program'
 import { requiresLinuxContainers } from '../requires-linux-containers'
@@ -111,6 +111,47 @@ describe('container task outputs on a cache hit', () => {
         expect(existsSync(join(cwd, 'dist', 'partial.txt'))).toBe(false)
         const report = result.state.tasks['build'].data.generates.find((g) => g.path.endsWith('report'))
         expect(await listVolume(report!.volumeName)).toEqual(['r.txt'])
+      })
+    })
+  )
+
+  // Outputs start empty when a task runs. A dependent's paused container still
+  // mounts the volume, so it has to be emptied in place, not recreated.
+  it(
+    'starts the outputs of a rerun empty',
+    requiresLinuxContainers(async () => {
+      await createTestCase('cache-outputs-reset-on-run', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            build: {
+              image: 'alpine:3.19',
+              src: ['in.txt'],
+              generates: [{ path: 'dist', export: true }, 'report', { path: 'keep', resetOnChange: false }],
+              cmds: [
+                'mkdir -p dist report keep',
+                'touch "dist/$(cat in.txt)" "report/$(cat in.txt)" "keep/$(cat in.txt)"',
+              ],
+            },
+            check: { image: 'alpine:3.19', deps: ['build'], src: ['check.txt'], cmds: ['ls report'] },
+          },
+        },
+        'in.txt': 'a\n',
+        'check.txt': 'x\n',
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'check' })
+        await cli.clean({ cache: true })
+        expect((await cli.runExec()).success).toBe(true)
+
+        writeFileSync(join(cwd, 'in.txt'), 'b\n')
+        const result = await cli.runExec()
+        expect(result.success).toBe(true)
+
+        const volume = (name: string) =>
+          result.state.tasks['build'].data.generates.find((g) => g.path.endsWith(name))!.volumeName
+        expect(readdirSync(join(cwd, 'dist'))).toEqual(['b'])
+        expect(await listVolume(volume('report'))).toEqual(['b'])
+        expect((await listVolume(volume('keep'))).sort()).toEqual(['a', 'b'])
       })
     })
   )

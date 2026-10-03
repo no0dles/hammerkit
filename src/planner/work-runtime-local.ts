@@ -7,6 +7,7 @@ import { create, extract } from 'tar'
 import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
+import { getOutputsToReset } from './utils/get-outputs-to-reset'
 import findProcess from 'find-process'
 import { Readable } from 'stream'
 
@@ -66,6 +67,9 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
         const stateFile = getStateFilename(task)
         if (await environment.file.exists(stateFile)) {
           await environment.file.remove(stateFile)
+        }
+        for (const generate of getOutputsToReset(task.data)) {
+          await environment.file.remove(generate.path)
         }
         await localTask(task, environment, options)
         const failed = ['crash', 'error', 'canceled'].includes(options.state.current.type)

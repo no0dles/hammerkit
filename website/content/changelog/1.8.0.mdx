@@ -8,6 +8,11 @@ hammerkit itself no longer reports a failed or unfinished task as a success, and
 works with GitLab's Docker-in-Docker service.
 
 ## Upgrade notes
+- **Outputs start empty when a task runs.** Before a task's commands run, hammerkit
+  now deletes what an earlier run left in its outputs (`resetOnChange` defaults to
+  `true`). Set `resetOnChange: false` on an output a tool builds on incrementally,
+  such as Cargo's `target`. An output that is also a source of the task, or
+  contains one, is left alone. See [outputs start empty](/docs/task#outputs-start-empty).
 - **Kubernetes environments expose services through Gateway API HTTPRoutes only.**
   The `ingresses` list is replaced by `httpRoutes`, whose entries need a `gateway`;
   a build file still declaring `ingresses` is rejected with a pointer to the new key.
@@ -51,6 +56,10 @@ works with GitLab's Docker-in-Docker service.
   ([`/llms.txt`](/llms.txt), [`/llms-full.txt`](/llms-full.txt)).
 
 ## Changed
+- A task's outputs start empty when it runs, so files a deleted source used to
+  produce or a failed run left behind no longer end up in the next result and the
+  cache. This applies to local and Docker tasks; tasks running on Kubernetes keep
+  their previous behaviour.
 - Updated the Kubernetes client (`@kubernetes/client-node` 0.20 → 2.0). hammerkit no
   longer prints a `punycode` deprecation warning on every command.
 - Ingress support is removed: an environment's `httpRoutes` create Gateway API

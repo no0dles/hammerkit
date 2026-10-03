@@ -148,3 +148,27 @@ export async function execCommand(
     }
   })
 }
+
+// Empty a directory inside a running container, as root. Volumes are emptied
+// this way rather than recreated: Docker refuses to remove a volume while any
+// container (a dependent's paused one, say) still mounts it.
+export async function clearContainerDirectory(
+  status: StatusScopedConsole,
+  environment: Environment,
+  container: Container,
+  path: string
+): Promise<void> {
+  const result = await execCommand(
+    status,
+    environment,
+    container,
+    '/',
+    ['sh', '-c', 'rm -rf "$1"/* "$1"/.[!.]* "$1"/..?*', 'sh', convertToPosixPath(path)],
+    null,
+    undefined,
+    environment.abortCtrl.signal
+  )
+  if (result.type !== 'result' || result.result.ExitCode !== 0) {
+    throw new Error(`unable to empty ${path}`)
+  }
+}

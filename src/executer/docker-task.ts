@@ -1,7 +1,7 @@
 import { Environment } from './environment'
 import { isHostServiceDns, ServiceDns } from './service-dns'
 import Dockerode, { ContainerCreateOptions } from 'dockerode'
-import { convertToPosixPath, execCommand } from './execute-docker'
+import { clearContainerDirectory, convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
@@ -16,6 +16,7 @@ import { getContainerBinds } from './get-container-binds'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
+import { getOutputsToReset } from '../planner/utils/get-outputs-to-reset'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -79,6 +80,12 @@ export async function dockerTask(
   item.status.write('info', `execute ${item.name} in container`)
 
   try {
+    const outputsToReset = getOutputsToReset(item.data)
+    // outputs on the host: file outputs (bind mounts) and exported directories
+    for (const generate of outputsToReset.filter((g) => g.isFile || g.export)) {
+      await environment.file.remove(generate.path)
+    }
+
     await prepareMounts(item, environment)
     checkForAbort(options.abort)
 
@@ -94,6 +101,10 @@ export async function dockerTask(
 
     await usingContainer(docker, item, containerOptions, options.stateKey, async (container) => {
       await setUserPermissions(item, container, environment)
+
+      for (const generate of outputsToReset.filter((g) => !g.isFile)) {
+        await clearContainerDirectory(item.status, environment, container, generate.path)
+      }
 
       for (const cmd of item.data.cmds) {
         checkForAbort(options.abort)

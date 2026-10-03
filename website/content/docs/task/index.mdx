@@ -91,22 +91,33 @@ tasks:
       - tsc -b
 ```
 
-### Resetting generated files on change
-By default a generated directory keeps its contents between runs, so a re-run can
-reuse previous output. Mark a generate with `resetOnChange: true` to wipe it
-before the task runs again, guaranteeing the task starts from an empty output
-directory and no stale files from a previous run remain.
+### Outputs start empty
+When a task runs, its outputs start empty: hammerkit deletes what an earlier run
+left in them before the task's commands run. A file a deleted source used to
+produce, or a partial result of a failed run, would otherwise end up in the next
+result and in the cache.
+
+An output that is also a source of the task, or contains one, is left alone: a
+`package-lock.json` that `npm install` both reads and writes keeps its content.
+
+Set `resetOnChange: false` on an output to keep its content between runs, for a
+tool that builds incrementally on top of its previous output:
 
 ```yaml
 tasks:
-  bundle:
-    image: node:alpine
+  build:
+    image: rust:1.90-slim
+    src: [Cargo.toml, Cargo.lock, src]
     generates:
-      - path: dist
-        resetOnChange: true
+      - path: target
+        resetOnChange: false   # cargo reuses what it compiled before
     cmds:
-      - node bundle.js
+      - cargo build --release
 ```
+
+Whatever such an output keeps becomes part of the next result, so prefer a
+[mount](/docs/task/container#adding-mounts) for a tool's cache: a mount is never
+part of a task's result.
 
 ## Timeouts
 A task that hangs — a deadlocked test, a stuck network call — would otherwise block
