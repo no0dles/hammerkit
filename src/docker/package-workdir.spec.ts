@@ -23,13 +23,13 @@ async function instructionsOf(name: string, service: object): Promise<string[]> 
 describe('package service workdir', () => {
   it('ends with the declared workdir, after the copies', async () => {
     const instructions = await instructionsOf('package-workdir-declared', {
-      image: 'mlink/core:6',
-      workdir: '/app/mlink',
+      image: 'example/core:6',
+      workdir: '/app/core',
       cmd: 'node dist/index.js',
     })
     const workdirs = instructions.filter((i) => i.startsWith('WORKDIR '))
-    expect(workdirs[workdirs.length - 1]).toEqual('WORKDIR /app/mlink')
-    expect(instructions.indexOf('WORKDIR /app/mlink')).toBeLessThan(instructions.findIndex((i) => i.startsWith('CMD ')))
+    expect(workdirs[workdirs.length - 1]).toEqual('WORKDIR /app/core')
+    expect(instructions.indexOf('WORKDIR /app/core')).toBeLessThan(instructions.findIndex((i) => i.startsWith('CMD ')))
   })
 
   it('keeps only the build directory without workdir', async () => {

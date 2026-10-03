@@ -11,8 +11,8 @@ const services = {
     envs: { CORE_DIR: '/app/core' },
     services: {
       plain: { image: 'postgres:16' },
-      pinned: { image: 'mlink/core:6', workdir: '/app/mlink' },
-      templated: { image: 'mlink/core:6', workdir: '$CORE_DIR' },
+      pinned: { image: 'example/core:6', workdir: '/app/core' },
+      templated: { image: 'example/core:6', workdir: '$CORE_DIR' },
     },
   },
 }
@@ -39,8 +39,8 @@ describe('service workdir', () => {
 
   it('uses the declared working directory inside the container', async () => {
     const { pinned } = await loadServices('service-workdir-declared')
-    expect(pinned.data.workdir).toEqual('/app/mlink')
-    expect(getServiceWorkingDir(pinned.data)).toEqual('/app/mlink')
+    expect(pinned.data.workdir).toEqual('/app/core')
+    expect(getServiceWorkingDir(pinned.data)).toEqual('/app/core')
   })
 
   it('substitutes build file envs', async () => {
@@ -58,7 +58,7 @@ describe('service workdir', () => {
     expect(plain.id()).toEqual(legacyPlainId)
 
     const withoutWorkdir = createHash('sha1')
-      .update(JSON.stringify({ cwd: '.', image: 'mlink/core:6', volumes: [], src: [], mounts: [] }))
+      .update(JSON.stringify({ cwd: '.', image: 'example/core:6', volumes: [], src: [], mounts: [] }))
       .digest('hex')
     expect(pinned.id()).not.toEqual(withoutWorkdir)
   })

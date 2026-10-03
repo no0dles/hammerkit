@@ -6,7 +6,7 @@
 
 **Status**: Implemented
 
-**Input**: Real-world migration of a Docker Compose e2e stack to hammerkit services (contract-assistant). A RabbitMQ service with the common healthcheck `rabbitmq-diagnostics -q check_port_connectivity` never started: hammerkit ran the check immediately and as root; the CLI created `/var/lib/rabbitmq/.erlang.cookie` owned by root before the server (which the image's entrypoint drops to user `rabbitmq`) did, and the server then failed with `Error when reading /var/lib/rabbitmq/.erlang.cookie: eacces`. Reproduced with hammerkit 1.8.0 on `rabbitmq:3.13-alpine`.
+**Input**: Real-world migration of a Docker Compose e2e stack to hammerkit services. A RabbitMQ service with the common healthcheck `rabbitmq-diagnostics -q check_port_connectivity` never started: hammerkit ran the check immediately and as root; the CLI created `/var/lib/rabbitmq/.erlang.cookie` owned by root before the server (which the image's entrypoint drops to user `rabbitmq`) did, and the server then failed with `Error when reading /var/lib/rabbitmq/.erlang.cookie: eacces`. Reproduced with hammerkit 1.8.0 on `rabbitmq:3.13-alpine`.
 
 ## Motivation
 

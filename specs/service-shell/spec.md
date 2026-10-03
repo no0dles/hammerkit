@@ -6,7 +6,7 @@
 
 **Status**: Implemented
 
-**Input**: Real-world migration of a Docker Compose e2e stack to hammerkit services (contract-assistant). Compose-style service commands and healthchecks (`sh -c "…"`, `&&`, pipes, `$(…)`) had to be rewritten: a service `cmd` and a healthcheck `cmd` are tokenized into exec-form arguments with no shell, so a MongoDB replica-set initiation had to move into a separate JS file and multi-step readiness checks into single commands.
+**Input**: Real-world migration of a Docker Compose e2e stack to hammerkit services. Compose-style service commands and healthchecks (`sh -c "…"`, `&&`, pipes, `$(…)`) had to be rewritten: a service `cmd` and a healthcheck `cmd` are tokenized into exec-form arguments with no shell, so a MongoDB replica-set initiation had to move into a separate JS file and multi-step readiness checks into single commands.
 
 ## Motivation
 
