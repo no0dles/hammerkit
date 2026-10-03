@@ -1,0 +1,63 @@
+---
+title: "Tutorials"
+description: "Build, test and cache a small project in your language, the same way on your laptop and in CI."
+icon: GraduationCap
+---
+Each tutorial takes a small `greet` project from an empty build file to a cached
+pipeline that CI runs with one command. The steps are the same in every language:
+
+1. Pick an image that pins the toolchain, so nothing needs to be installed on the host.
+2. Declare what each task reads (`src`) and produces (`generates`).
+3. Order the tasks with `deps`.
+4. Group everything CI checks in one `ci` task.
+5. Run it twice: the second run executes nothing.
+
+<Cards>
+  <Card title="Node.js" href="/docs/tutorials/node">
+    TypeScript with npm, `tsc` and `node --test`.
+  </Card>
+  <Card title="Python" href="/docs/tutorials/python">
+    A virtualenv, pytest and ruff.
+  </Card>
+  <Card title="Go" href="/docs/tutorials/go">
+    Modules, `go vet`, `go test` and a binary.
+  </Card>
+  <Card title="Rust" href="/docs/tutorials/rust">
+    Cargo, tests and a release binary.
+  </Card>
+  <Card title="Java" href="/docs/tutorials/java">
+    Maven, JUnit and a jar.
+  </Card>
+  <Card title=".NET" href="/docs/tutorials/dotnet">
+    NuGet, xUnit and a published app.
+  </Card>
+</Cards>
+
+## Dependencies first
+
+Every tutorial except Go starts with a task that only downloads dependencies. It
+reads nothing but the manifest and the lockfile, so it runs again only when a
+dependency changes, and the tasks after it build against what it downloaded:
+
+| Language | Image | Download task | Keeps |
+|---|---|---|---|
+| Node.js | `node:24-alpine` | `npm ci` | `node_modules` |
+| Python | `python:3.13-slim` | `pip install -r requirements.txt` | `.venv` |
+| Rust | `rust:1.90-slim` | `cargo fetch` | `.cargo-home` |
+| Java | `maven:3.9-eclipse-temurin-21` | `mvn dependency:go-offline` | `.m2` |
+| .NET | `mcr.microsoft.com/dotnet/sdk:10.0` | `dotnet restore` | `.nuget` |
+
+A task's outputs have to be inside the project, so where a package manager
+downloads into the home directory by default, the tutorial points it at a folder
+in the project. Go is the exception: its module cache can only be set to an
+absolute path, which differs between your laptop and CI. There the module cache
+is [mounted](/docs/task/container#adding-mounts) instead, and every task
+downloads what's missing from it.
+
+## Tested like the code
+
+Every tutorial's project is in the repository's
+[`examples/`](https://github.com/no0dles/hammerkit/tree/master/examples) folder
+(`tutorial-node`, `tutorial-python`, …) and hammerkit's integration tests run it:
+`ci` builds from scratch, then a second run has to come entirely from the cache.
+The build files in the tutorials are those files.

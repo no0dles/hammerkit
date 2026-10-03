@@ -1,0 +1,144 @@
+---
+title: "Python"
+description: "Create a virtualenv, lint and test a Python project in containers, cached by its requirements and sources."
+---
+This tutorial runs a small Python package's checks, ruff and pytest, in a
+`python:3.13-slim` container, with the virtualenv built once and reused until the
+requirements change. You need [hammerkit and Docker](/docs/installation); Python
+doesn't have to be installed on your machine.
+
+The finished project is
+[`examples/tutorial-python`](https://github.com/no0dles/hammerkit/tree/master/examples/tutorial-python).
+
+## The project
+
+```txt
+tutorial-python/
+├── requirements.txt
+├── pyproject.toml
+├── greet/__init__.py
+└── tests/test_greet.py
+```
+
+Every package is pinned, including the ones pytest pulls in, so the file
+determines exactly what gets installed:
+
+<include cwd lang="txt" meta='title="requirements.txt"'>../examples/tutorial-python/requirements.txt</include>
+
+<include cwd lang="python" meta='title="greet/__init__.py"'>../examples/tutorial-python/greet/\_\_init\_\_.py</include>
+
+<include cwd lang="python" meta='title="tests/test_greet.py"'>../examples/tutorial-python/tests/test_greet.py</include>
+
+## 1. Create the virtualenv
+
+A task names the image it runs in, the files it reads (`src`) and the files it
+produces (`generates`). The `install` task builds `.venv` from the requirements:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  install:
+    description: create the virtualenv from the pinned requirements
+    image: python:3.13-slim
+    src: [requirements.txt]
+    generates: [.venv]
+    cmds:
+      - python -m venv .venv
+      - .venv/bin/python -m pip install --no-cache-dir -r requirements.txt
+```
+
+```bash
+hammerkit install
+```
+
+Run it again and hammerkit skips it: `requirements.txt` is unchanged. Only a
+dependency change rebuilds the virtualenv.
+
+Call tools as `.venv/bin/python -m <tool>` rather than `.venv/bin/<tool>`. The
+scripts in `.venv/bin` hard-code the absolute path the venv was created at, so they
+break when a cached `.venv` is restored into a checkout at another path, like a
+CI runner's. `python -m` works from anywhere.
+
+## 2. Lint and test
+
+Both tasks depend on `install`, which mounts its `.venv` into their containers, and
+read the package, the tests and the tool configuration:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  # keep Python from writing __pycache__ into the mounted sources
+  PYTHONDONTWRITEBYTECODE: '1'
+
+tasks:
+  lint:
+    description: lint with ruff
+    image: python:3.13-slim
+    deps: [install]
+    src: [pyproject.toml, greet, tests]
+    cmds:
+      - .venv/bin/python -m ruff check .
+
+  test:
+    description: run the tests
+    image: python:3.13-slim
+    deps: [install]
+    src: [pyproject.toml, greet, tests]
+    cmds:
+      - .venv/bin/python -m pytest
+```
+
+Sources are mounted read-write. Without `PYTHONDONTWRITEBYTECODE`, Python writes
+`__pycache__` folders into `greet` and `tests`, which changes the tasks' own
+inputs, and the next run misses the cache.
+
+`lint` and `test` don't depend on each other, so they run in parallel.
+
+## 3. One task for CI
+
+A task without `cmds` groups other tasks. `ci` names everything a change has to
+pass. The complete build file:
+
+<include cwd lang="yaml" meta='title=".hammerkit.yaml"'>../examples/tutorial-python/.hammerkit.yaml</include>
+
+```bash
+hammerkit run ci
+```
+
+```txt
+Summary:
+  ci       executed   6.9s
+  install  executed   6.1s
+  lint     executed   6.6s
+  test     executed   6.9s
+  4 executed, 0 cached (0% cache hit), 7.0s total
+```
+
+Run it again without changing anything:
+
+```txt
+Summary:
+  ci       cached     19ms
+  install  skipped    0ms
+  lint     cached     0ms
+  test     cached     0ms
+  0 executed, 3 cached, 1 skipped (100% cache hit), 45ms total
+```
+
+`install` is skipped: every task that needs it was a cache hit, so the virtualenv
+isn't needed either. Edit a file in `greet` and only `lint` and `test` run again.
+
+Ignore what hammerkit and the tools write into the project:
+
+<include cwd lang="txt" meta='title=".gitignore"'>../examples/tutorial-python/.gitignore</include>
+
+## Run it in CI
+
+CI runs the same command: [install hammerkit](/docs/installation#in-ci) and run
+`hammerkit run ci`. A fresh runner starts with an empty cache; to reuse what your
+laptop or the previous run already built, share the cache as described in
+[caching in CI](/docs/guides/ci-caching).
+
+## Next steps
+
+* Tests that need a database: start it as a [service](/docs/service) and let the
+  task [`need`](/docs/task/needs) it, see [services & networking](/docs/guides/services-networking).
+* A task reruns and you don't know why: [`hammerkit explain`](/docs/cli/explain).

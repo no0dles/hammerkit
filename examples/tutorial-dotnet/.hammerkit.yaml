@@ -1,0 +1,36 @@
+tasks:
+  restore:
+    description: download the locked NuGet packages
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    src:
+      - Directory.Build.props
+      - src/Greet/Greet.csproj
+      - src/Greet/packages.lock.json
+      - tests/Greet.Tests/Greet.Tests.csproj
+      - tests/Greet.Tests/packages.lock.json
+    generates: [.nuget]
+    cmds:
+      - dotnet restore tests/Greet.Tests --locked-mode
+
+  test:
+    description: run the unit tests
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    deps: [restore]
+    src: [src, tests]
+    cmds:
+      - dotnet test tests/Greet.Tests --disable-build-servers
+
+  publish:
+    description: publish the app
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    deps: [restore]
+    src: [src]
+    generates:
+      - path: out
+        export: true
+    cmds:
+      - dotnet publish src/Greet --configuration Release --output out --disable-build-servers
+
+  ci:
+    description: everything CI checks
+    deps: [test, publish]
