@@ -1,5 +1,5 @@
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
-import { convertToPosixPath, getContainerCli } from '../executer/execute-docker'
+import { convertToPosixPath, execCommand, getContainerCli } from '../executer/execute-docker'
 import { ContainerWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { ContainerWorkTask, WorkTaskGenerate } from './work-task'
@@ -162,6 +162,21 @@ async function restoreContainer(
     async (container) => {
       for (const generate of getArchivePaths(item.data, path)) {
         if (await environment.file.exists(generate.filename)) {
+          // a cache hit means exactly the stored outputs: whatever a failed or
+          // older run left in the volume goes first
+          const cleared = await execCommand(
+            item.status,
+            environment,
+            container,
+            '/',
+            ['sh', '-c', 'rm -rf "$1"/* "$1"/.[!.]* "$1"/..?*', 'sh', convertToPosixPath(generate.path)],
+            null,
+            undefined,
+            environment.abortCtrl.signal
+          )
+          if (cleared.type !== 'result' || cleared.result.ExitCode !== 0) {
+            throw new Error(`unable to clear ${generate.path} before restoring it`)
+          }
           await container.putArchive(environment.file.readStream(generate.filename), {
             path: dirname(generate.path),
           })
@@ -174,6 +189,7 @@ async function restoreContainer(
     const onHost = new Set(item.data.generates.filter((g) => !g.inherited && isOnHost(g)).map((g) => g.path))
     for (const generate of getArchivePaths(item.data, path)) {
       if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
+        await environment.file.remove(generate.path)
         await extract({ file: generate.filename, cwd: dirname(generate.path) })
       }
     }
