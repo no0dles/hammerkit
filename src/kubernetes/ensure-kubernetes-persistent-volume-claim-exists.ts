@@ -1,12 +1,11 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { V1PersistentVolumeClaim } from '@kubernetes/client-node'
+import { V1PersistentVolumeClaim, V1Volume } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
-import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
 
 export async function ensureKubernetesPersistentVolumeClaimExists(
   instance: KubernetesInstance,

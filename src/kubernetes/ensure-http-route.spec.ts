@@ -1,4 +1,5 @@
 import type { Mock } from 'vitest'
+import { ApiException } from '@kubernetes/client-node'
 import { ensureHttpRoute } from './ensure-http-route'
 import { KubernetesInstance } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -6,8 +7,8 @@ import { BuildFileEnvironmentSchemaIngress } from '../schema/build-file-environm
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 
-function httpError(statusCode: number): Error & { statusCode: number } {
-  return Object.assign(new Error(`http ${statusCode}`), { statusCode })
+function httpError(code: number): ApiException<undefined> {
+  return new ApiException(code, `http ${code}`, undefined, {})
 }
 
 function makeInstance(objectApi: Partial<{ read: Mock; patch: Mock; create: Mock }>): KubernetesInstance {
@@ -35,7 +36,7 @@ function ingress(overrides: Partial<BuildFileEnvironmentSchemaIngress> = {}): Bu
 describe('ensureHttpRoute', () => {
   it('creates an HTTPRoute with the expected shape', async () => {
     const read = vi.fn().mockRejectedValue(httpError(404))
-    const create = vi.fn().mockResolvedValue({ body: {} })
+    const create = vi.fn().mockResolvedValue({})
     await ensureHttpRoute(makeInstance({ read, create }), env, ingress(), service)
 
     expect(create).toHaveBeenCalledTimes(1)
@@ -58,7 +59,7 @@ describe('ensureHttpRoute', () => {
 
   it('uses servicePort, path and gatewayNamespace when provided', async () => {
     const read = vi.fn().mockRejectedValue(httpError(404))
-    const create = vi.fn().mockResolvedValue({ body: {} })
+    const create = vi.fn().mockResolvedValue({})
     await ensureHttpRoute(
       makeInstance({ read, create }),
       env,

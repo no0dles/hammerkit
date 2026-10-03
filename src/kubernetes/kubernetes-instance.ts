@@ -6,13 +6,11 @@ import {
   KubeConfig,
   KubernetesObjectApi,
   NetworkingV1Api,
-  Watch,
 } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getErrorMessage } from '../log'
 
 export interface KubernetesInstance {
-  watch: Watch
   exec: Exec
   objectApi: KubernetesObjectApi
   coreApi: CoreV1Api
@@ -38,12 +36,10 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
     const networkingApi = kc.makeApiClient(NetworkingV1Api)
     const objectApi = kc.makeApiClient(KubernetesObjectApi)
     const exec = new Exec(kc)
-    const watch = new Watch(kc)
 
     return {
       objectApi,
       networkingApi,
-      watch,
       exec,
       appsApi,
       coreApi,

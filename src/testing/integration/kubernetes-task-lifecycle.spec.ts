@@ -28,8 +28,8 @@ async function jobNames(): Promise<string[]> {
   const config = new KubeConfig()
   config.loadFromDefault()
   config.setCurrentContext(context)
-  const jobs = await config.makeApiClient(BatchV1Api).listNamespacedJob(namespace)
-  return jobs.body.items.filter((job) => !job.metadata?.deletionTimestamp).map((job) => job.metadata?.name ?? '')
+  const jobs = await config.makeApiClient(BatchV1Api).listNamespacedJob({ namespace })
+  return jobs.items.filter((job) => !job.metadata?.deletionTimestamp).map((job) => job.metadata?.name ?? '')
 }
 
 describe('kubernetes task lifecycle', () => {
@@ -90,7 +90,9 @@ describe('kubernetes task lifecycle', () => {
         const config = new KubeConfig()
         config.loadFromDefault()
         config.setCurrentContext(context)
-        await config.makeApiClient(CoreV1Api).deleteNamespacedPersistentVolumeClaim(`hammerkit-${task.id()}`, namespace)
+        await config
+          .makeApiClient(CoreV1Api)
+          .deleteNamespacedPersistentVolumeClaim({ name: `hammerkit-${task.id()}`, namespace })
         expect(await task.runtime.currentStateKey(environment)).toBeNull()
       })
     })
