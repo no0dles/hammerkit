@@ -43,6 +43,40 @@ describe('replace-env-variables', () => {
       expect(result.replacements).toEqual([{ key: 'IID', name: 'MR_IID', available: true, value: '' }])
     })
 
+    it('interpolates ${NAME} inside a value from the process environment', () => {
+      const result = buildEnvironmentVariables(
+        { URL: 'amqp://${QUEUE_USER}@queue:5672/' },
+        env({ QUEUE_USER: 'app' }),
+        ctx({})
+      )
+      expect(result.variables).toEqual({ URL: 'amqp://app@queue:5672/' })
+      expect(result.replacements).toEqual([])
+    })
+
+    it('uses the :- default when the variable is unset, and the value when it is set', () => {
+      const spec = { SPEC: '${E2E_SPEC:-e2e/all.cy.ts}' }
+      expect(buildEnvironmentVariables(spec, env({}), ctx({})).variables).toEqual({ SPEC: 'e2e/all.cy.ts' })
+      expect(buildEnvironmentVariables(spec, env({ E2E_SPEC: 'e2e/one.cy.ts' }), ctx({})).variables).toEqual({
+        SPEC: 'e2e/one.cy.ts',
+      })
+      expect(buildEnvironmentVariables({ IID: '${MR_IID:-}' }, env({}), ctx({})).variables).toEqual({ IID: '' })
+    })
+
+    it('reads a literal from the same envs before the default', () => {
+      const envs = { TOKEN: 'abc', HEADER: 'Bearer ${TOKEN}', URL: 'http://${HOST:-localhost}:${PORT:-80}' }
+      expect(buildEnvironmentVariables(envs, env({}), ctx({})).variables).toEqual({
+        TOKEN: 'abc',
+        HEADER: 'Bearer abc',
+        URL: 'http://localhost:80',
+      })
+    })
+
+    it('reports the first missing ${NAME} without a default as unavailable', () => {
+      const result = buildEnvironmentVariables({ URL: 'http://${HOST}:${PORT}' }, env({ PORT: '80' }), ctx({}))
+      expect(result.variables).toEqual({})
+      expect(result.replacements).toEqual([{ key: 'URL', name: 'HOST', available: false, value: null }])
+    })
+
     it('marks unresolved references as unavailable', () => {
       const result = buildEnvironmentVariables({ TOKEN: '$MISSING' }, env({}), ctx({}))
       expect(result.replacements).toEqual([{ key: 'TOKEN', name: 'MISSING', available: false, value: null }])

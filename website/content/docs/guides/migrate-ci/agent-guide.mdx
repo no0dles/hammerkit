@@ -178,9 +178,9 @@ While you iterate:
 * Run with `--log live` to get plain line-by-line output that you can read back
   from a file. The interactive view redraws the terminal.
 * Every `$NAME` that a task in the run declares must be set, even if empty;
-  tasks outside the run don't need theirs. A variable the CI provider sets only
-  on some pipelines (merge request ids, branch names) is exported empty by the
-  job when it's missing (`export CI_MERGE_REQUEST_IID="${CI_MERGE_REQUEST_IID:-}"`).
+  tasks outside the run don't need theirs. For a variable the CI provider sets
+  only on some pipelines (merge request ids, branch names), declare a default
+  instead: `MR_IID: ${CI_MERGE_REQUEST_IID:-}`.
 * Stopping a run with Ctrl-C (or `SIGTERM`) removes its services and stops its
   local tasks. A run killed outright (`kill -9`) can't: `hammerkit clean` removes
   what it left behind.
@@ -397,6 +397,20 @@ queue and storage service and give each target its own database name, key
 prefix, vhost or bucket. Only the parts that really differ become one service per
 target (`api-a`, `api-b`), and the test tasks per target run in parallel because
 nothing orders them.
+
+For a fast loop while iterating, keep the stack up and narrow the run.
+`hammerkit up --daemon -f stack=e2e` starts the labelled services once, and a task
+that needs them reuses the running containers. A spec filter with a default
+(`SPEC: ${E2E_SPEC:-e2e/**/*.cy.ts}`) runs one test:
+`E2E_SPEC=e2e/login.cy.ts hammerkit run e2e-a`. Services that stay up keep their
+data, so reset the target's database, prefix or bucket at the start of the test
+task.
+
+The same services can replace a Compose file for local development: publish the
+ports the app on the host uses, give data a named `volume`, and start them with
+`hammerkit up --daemon`. Values only some machines have (a secret file path, a
+public origin) get a default (`${GEMINI_KEY_FILE:-/dev/null}`), so one build file
+serves laptops, workspaces and CI.
 
 ## CI template: GitHub Actions
 

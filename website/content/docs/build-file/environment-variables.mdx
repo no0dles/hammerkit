@@ -131,11 +131,33 @@ tasks:
       - tsc -b
 ```
 
+**Inside an `envs` value**, `${NAME}` is replaced anywhere in the string, and
+`${NAME:-default}` falls back to `default` when `NAME` is set nowhere. A name comes
+from the shell / process environment, then a `.env` file, then a literal value of
+the same `envs` (build file and task merged), then the default:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  DB_USER: app
+
+tasks:
+  e2e:
+    envs:
+      DATABASE_URL: postgres://${DB_USER}@db:5432/app   # -> postgres://app@db:5432/app
+      SPEC: ${E2E_SPEC:-e2e/**/*.cy.ts}                 # E2E_SPEC=e2e/login.cy.ts narrows it
+      MR_IID: ${CI_MERGE_REQUEST_IID:-}                 # empty outside merge request pipelines
+    cmds:
+      - cypress run --spec "$SPEC"
+```
+
+A `${NAME}` without a default that is set nowhere fails like a missing `$NAME`,
+when a task that declares it runs.
+
 <Callout type="warn">
 
-Only the whole-value `$NAME` form is recognized in `envs` (no `${NAME}` braces, no
-inline `prefix-$NAME`, no default values). Field substitution matches `$NAME`
-anywhere in the string and is case-insensitive. A value defined directly in `envs`
-(like `NODE_VERSION: '24'`) is what gets substituted into fields such as `image`.
+The whole value `$NAME` (no braces) is a reference to the shell or `.env` only, as
+before. Field substitution matches `$NAME` and `${NAME}` anywhere in the string and
+is case-insensitive; a value defined in `envs` (like `NODE_VERSION: '24'`, or one
+built with `${…}`) is what gets substituted into fields such as `image`.
 
 </Callout>

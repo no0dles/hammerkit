@@ -1,0 +1,32 @@
+---
+title: "Changelog 1.10.0"
+version: "1.10.0"
+date: "2026-10-03"
+---
+Environment values can be composed and given defaults, so one build file serves
+laptops, cloud workspaces and CI without wrapper scripts exporting placeholders.
+
+## Upgrade notes
+- **`${NAME}` inside an `envs` value is now replaced.** A value that contained a
+  literal `${…}` used to be passed through unchanged; it is now interpolated, and
+  fails as missing if `NAME` is set nowhere and has no `:-default`.
+- **A variable set to an empty string counts as set.** `export NAME=` used to fail
+  with `missing environment variable NAME`; it now passes an empty value, and an
+  empty process variable takes precedence over a `.env` file value.
+
+## Added
+- `${NAME}` and `${NAME:-default}` in `envs` values: from the shell or `.env`, else a
+  literal of the same `envs`, else the default. Fields such as `image` also accept
+  the `${NAME}` form. See [interpolation](/docs/build-file/environment-variables#interpolation).
+- A warning when an image pinned by digest is present for another CPU architecture
+  than the docker host's, which makes it run emulated; it names the command that
+  removes the copy so the native one is pulled.
+- The CI migration guide covers targeted runs against services that stay up, and
+  local development on the same services.
+
+## Fixed
+- **Registry caches couldn't delete entries on registries that scope tokens per
+  action**, such as GitLab's: `cache prune` and `clean --cache` failed with 401.
+  The token request now includes the actions the registry's challenge names.
+- The migration guide said every `$NAME` had to be set, including those of tasks a
+  job doesn't run; only the tasks in the run need theirs.
