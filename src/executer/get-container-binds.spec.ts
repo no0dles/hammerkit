@@ -25,7 +25,7 @@ describe('getContainerBinds', () => {
   // A source inside another source (a dependency's `Greet/Greet.csproj` under the
   // task's own `Greet`) is already visible through the outer bind. Binding it
   // again nests one bind mount in another, which Docker Desktop then refuses to
-  // let the host delete while the paused container exists.
+  // let the host delete while the container exists.
   it('skips a source that lies inside another source', () => {
     const binds = getContainerBinds(
       task([join(root, 'Greet', 'Greet.csproj'), join(root, 'Greet'), join(root, 'src', 'main'), join(root, 'src')])

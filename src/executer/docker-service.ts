@@ -1,4 +1,10 @@
-import { ContainerWorkService } from '../planner/work-service'
+import {
+  ContainerWorkService,
+  getHealthcheckCommand,
+  getServiceCommand,
+  getServiceWorkingDir,
+} from '../planner/work-service'
+import { getRunLabels } from '../docker/run-labels'
 import Dockerode, { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
@@ -7,6 +13,7 @@ import { listenOnAbort } from '../utils/abort-event'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
+import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
 import { getNeedsNetwork } from './docker-task'
@@ -16,6 +23,9 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
+import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
+
+const HEALTHCHECK_INTERVAL_MS = 1000
 
 export async function dockerService(
   docker: Dockerode,
@@ -40,22 +50,25 @@ export async function dockerService(
 
     item.status.write('debug', `create container with image ${item.data.image}`)
     const envs = getEnvironmentVariables(item.data.envs)
+    const command = getServiceCommand(item.data)
     container = await docker.createContainer({
       Image: item.data.image,
       Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
       Labels: {
         app: 'hammerkit',
         'hammerkit-id': getWorkInstanceId(item),
-        'hammerkit-pid': process.pid.toString(),
+        ...getRunLabels(),
         'hammerkit-type': 'service',
         'hammerkit-state': options.stateKey,
+        'hammerkit-daemon': options.daemon ? 'true' : 'false',
       },
       ExposedPorts: item.data.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
         map[`${port.containerPort}/tcp`] = {}
         return map
       }, {}),
-      Cmd: item.data.cmd ? [item.data.cmd.parsed.command, ...item.data.cmd.parsed.args] : undefined,
-      WorkingDir: item.data.cwd ? convertToPosixPath(item.data.cwd) : undefined,
+      Entrypoint: command.entrypoint ?? undefined,
+      Cmd: command.cmd ?? undefined,
+      WorkingDir: convertToPosixPath(getServiceWorkingDir(item.data)),
       HostConfig: {
         ExtraHosts: network.hosts,
         Links: network.links,
@@ -86,11 +99,27 @@ export async function dockerService(
         remote: null,
       })
     } else {
+      const healthcheck = item.data.healthcheck
+      const deadline = Date.now() + healthcheck.timeout
       let ready = false
       do {
-        ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, options.abort)
-        if (!ready) {
-          await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
+        // The first check waits one interval too, so an entrypoint that drops
+        // privileges (`exec su-exec app …`) has done so before anything runs.
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), HEALTHCHECK_INTERVAL_MS))
+        if (options.abort.aborted) {
+          break
+        }
+        const user = await getMainProcessUser(container)
+        ready = await checkReadiness(
+          item.status,
+          getHealthcheckCommand(item.data) ?? [],
+          environment,
+          container,
+          user,
+          options.abort
+        )
+        if (!ready && Date.now() >= deadline) {
+          throw new Error(getHealthcheckTimeoutMessage(item.name, healthcheck))
         }
       } while (!ready && !options.abort.aborted)
 

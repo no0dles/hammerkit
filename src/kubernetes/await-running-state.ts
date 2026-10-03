@@ -93,16 +93,44 @@ export async function deleteJob(
   }
 }
 
+export interface DeployReadiness {
+  // label selector of the deployment's pods
+  podSelector: string
+  // ms a pod may take to become ready once it runs; null = no deadline
+  timeout: number | null
+  // message when the deadline passes
+  timeoutMessage: string
+}
+
+// Waits for a ready replica. The deadline only starts once a pod runs, so an
+// image pull doesn't count against it (as on docker, where it starts after
+// the container started).
 export async function awaitDeployRunningState(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   name: string,
-  pollInterval = 1000
+  readiness: DeployReadiness,
+  pollInterval = 1000,
+  now: () => number = Date.now
 ): Promise<void> {
+  let runningSince: number | null = null
   for (;;) {
     const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
     if ((deployment.status?.readyReplicas ?? 0) > 0) {
       return
+    }
+    if (readiness.timeout !== null) {
+      if (runningSince === null) {
+        const pods = await instance.coreApi.listNamespacedPod({
+          namespace: env.namespace,
+          labelSelector: readiness.podSelector,
+        })
+        if (pods.items.some((pod) => pod.status?.phase === 'Running')) {
+          runningSince = now()
+        }
+      } else if (now() - runningSince >= readiness.timeout) {
+        throw new Error(readiness.timeoutMessage)
+      }
     }
     await delay(pollInterval)
   }

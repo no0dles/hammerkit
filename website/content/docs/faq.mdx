@@ -63,9 +63,11 @@ variable. See [environment variables](/docs/build-file/environment-variables#pre
 ## My task hangs "waiting" for a service that's running.
 
 The service's [healthcheck](/docs/service/container#timing-and-failure) never exits
-`0`, so hammerkit never considers it ready. There's no readiness deadline, so it
-waits indefinitely. Make the `cmd` a real readiness probe (like `pg_isready`) and
-confirm it succeeds inside the container.
+`0`, so hammerkit never considers it ready. After the readiness deadline
+(`healthcheck.timeout`, default `20s`, or `HAMMERKIT_HEALTHCHECK_TIMEOUT`) the
+service fails and the run stops with the command that never passed. Make the `cmd`
+a real readiness probe (like `pg_isready`) and confirm it succeeds inside the
+container; raise the `timeout` if the service is just slow to start.
 
 ## My container task can't reach the service.
 

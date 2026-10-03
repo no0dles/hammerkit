@@ -20,6 +20,8 @@ import { State } from '../../executer/state'
 import { lazyResolver } from '../../executer/lazy-resolver'
 import { getWorkServiceRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
+import { parseDuration } from '../../utils/units'
+import { getErrorMessage } from '../../log'
 
 export function appendWorkService(
   workTree: WorkTree,
@@ -107,17 +109,39 @@ function parseService(
       continuous: service.schema.continuous ?? false,
       healthcheck: service.schema.healthcheck
         ? {
-            cmd: parseWorkCommand(service.cwd, service.schema.healthcheck, envs),
+            cmd: parseWorkCommand(service.cwd, service.schema.healthcheck.cmd, envs),
+            timeout: getHealthcheckTimeout(service.schema.healthcheck.timeout, environment),
           }
         : null,
       envs: buildEnvironmentVariables(service.envs, environment, context),
       image: templateValue(service.schema.image, envs),
       cwd: service.cwd,
       cmd: service.schema.cmd ? parseWorkCommand(service.cwd, service.schema.cmd, envs) : null,
+      workdir: service.schema.workdir ? templateValue(service.schema.workdir, envs) : null,
+      shell: service.schema.shell ? templateValue(service.schema.shell, envs) : null,
       volumes: parseWorkVolumes(service.cwd, service.schema.volumes, envs),
       mounts: parseWorkMounts(service.cwd, service.schema, envs),
       src: parseWorkSource(service.cwd, service.schema.src, envs),
       caching,
     }
   }
+}
+
+export const DEFAULT_HEALTHCHECK_TIMEOUT = '20s'
+
+// A service's own `healthcheck.timeout`, else HAMMERKIT_HEALTHCHECK_TIMEOUT,
+// else 20s: a check that never passes fails the run instead of hanging it.
+export function getHealthcheckTimeout(timeout: string | undefined, environment: Environment): number {
+  if (timeout) {
+    return parseDuration(timeout)
+  }
+  const fromEnv = environment.processEnvs['HAMMERKIT_HEALTHCHECK_TIMEOUT']
+  if (fromEnv) {
+    try {
+      return parseDuration(fromEnv)
+    } catch (e) {
+      throw new Error(`HAMMERKIT_HEALTHCHECK_TIMEOUT: ${getErrorMessage(e)}`)
+    }
+  }
+  return parseDuration(DEFAULT_HEALTHCHECK_TIMEOUT)
 }

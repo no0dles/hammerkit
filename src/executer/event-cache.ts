@@ -1,4 +1,6 @@
 import { Environment } from './environment'
+import { removeOrphanedContainers } from '../docker/remove-orphaned-containers'
+import { getContainerCli } from './execute-docker'
 import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { join, relative, sep } from 'path'
@@ -107,6 +109,13 @@ export async function cleanCache(
 
     if (options?.cache) {
       await service.data.caching.backend.clear(service.id(), environment)
+    }
+  }
+
+  if (workTree.environment.type === 'docker') {
+    const removed = await removeOrphanedContainers(getContainerCli(workTree.environment))
+    for (const id of removed) {
+      environment.console.info(`removed container ${id.substring(0, 12)} left behind by a stopped run`)
     }
   }
 }

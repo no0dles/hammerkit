@@ -1,0 +1,16 @@
+# A service whose command and healthcheck need a shell: `&&`, `$(...)`, a
+# pipe and quoted arguments. With `shell` both run as `/bin/sh -c "<cmd>"`.
+services:
+  status:
+    image: alpine:3.21
+    shell: /bin/sh
+    cmd: mkdir -p /srv && printf 'HTTP/1.0 200 OK\r\n\r\nready on %s\n' "$(uname -s)" > /srv/response && while true; do nc -l -p 8080 < /srv/response; done
+    healthcheck:
+      cmd: grep -q "ready on" /srv/response && nc -z 127.0.0.1 8080
+
+tasks:
+  fetch:
+    image: alpine:3.21
+    needs: [status]
+    cmds:
+      - wget -qO- http://status:8080/

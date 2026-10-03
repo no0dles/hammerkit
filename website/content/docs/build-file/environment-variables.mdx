@@ -64,6 +64,24 @@ Variables defined in a build file are scoped to that file. Neither [referenced](
 
 </Callout>
 
+## Cache key [#cache-key]
+
+Every variable a task receives, including each build-file `envs` value, is part of
+its [cache key](/docs/task/caching): changing one reruns the task. A build-file
+value only a few tasks need — an image tag, a test token — therefore reruns every
+task in the file when it changes. Define such values on the tasks that use them.
+
+[`validate`](/docs/cli/validate) warns about this: for each task with commands it
+lists the build-file `envs` its definition never mentions as `$NAME` or `${NAME}`.
+
+```
+ warn at lint build-file envs E2E_TOKEN are part of this task's cache key but not referenced by it: …
+```
+
+Hammerkit can't see what a tool reads at runtime, so a variable such as
+`NODE_ENV` that every task's tooling picks up on its own belongs in the build-file
+`envs` despite the warning.
+
 ## Precedence
 
 A variable can be defined in more than one place. Hammerkit resolves it like this:

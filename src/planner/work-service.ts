@@ -33,6 +33,10 @@ export interface ContainerWorkService extends BaseWorkService {
   envs: WorkEnvironmentVariables
   image: string
   cmd: WorkCommand | null
+  // explicit container working directory; null = the build file's directory (cwd)
+  workdir: string | null
+  // run `cmd` and the healthcheck through this shell; null = exec form
+  shell: string | null
   //user: string | null
   src: WorkSource[]
   continuous: boolean
@@ -50,4 +54,32 @@ export interface KubernetesWorkService extends BaseWorkService {
   caching: ResolvedCache
   selector: WorkKubernetesSelector
   src: WorkSource[]
+}
+
+// The container's working directory: the declared `workdir`, else the build
+// file's directory (the default every runtime applied before `workdir`).
+export const getServiceWorkingDir = (service: ContainerWorkService): string => service.workdir ?? service.cwd
+// The container's entrypoint and command for a service: with a `shell`, its
+// `cmd` runs as `<shell> -c "<cmd>"` in place of the image entrypoint; without
+// one the tokenized `cmd` becomes the command and the image entrypoint stays.
+export function getServiceCommand(service: ContainerWorkService): {
+  entrypoint: string[] | null
+  cmd: string[] | null
+} {
+  if (!service.cmd) {
+    return { entrypoint: null, cmd: null }
+  }
+  if (service.shell) {
+    return { entrypoint: [service.shell, '-c'], cmd: [service.cmd.cmd] }
+  }
+  return { entrypoint: null, cmd: [service.cmd.parsed.command, ...service.cmd.parsed.args] }
+}
+
+// The healthcheck as an exec command, through the service's `shell` if it has one.
+export function getHealthcheckCommand(service: ContainerWorkService): string[] | null {
+  if (!service.healthcheck) {
+    return null
+  }
+  const cmd = service.healthcheck.cmd
+  return service.shell ? [service.shell, '-c', cmd.cmd] : [cmd.parsed.command, ...cmd.parsed.args]
 }

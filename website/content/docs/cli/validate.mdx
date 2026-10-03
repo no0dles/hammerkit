@@ -14,8 +14,10 @@ It reports two levels:
 * **error** — something that would break a run, such as a dependency cycle. Any
   error makes `validate` exit with code `1`.
 * **warn** — something suspicious that still runs, such as a task with no
-  description, a container service without a healthcheck, or a `src`/`mount` path
-  that doesn't exist. Warnings do **not** change the exit code.
+  description, a container service without a healthcheck, a `src`/`mount` path
+  that doesn't exist, or build-file `envs` a task never references (see
+  [environment variables](/docs/build-file/environment-variables#cache-key)).
+  Warnings do **not** change the exit code.
 
 ## A clean run
 

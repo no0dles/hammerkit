@@ -309,6 +309,12 @@
                   "cmd": {
                     "type": "string"
                   },
+                  "workdir": {
+                    "type": "string"
+                  },
+                  "shell": {
+                    "type": "string"
+                  },
                   "volumes": {
                     "type": "array",
                     "items": {
@@ -326,6 +332,9 @@
                     "properties": {
                       "cmd": {
                         "type": "string"
+                      },
+                      "timeout": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                       }
                     },
                     "required": [
