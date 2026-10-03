@@ -6,6 +6,7 @@ import { delimiter, join } from 'path'
 import { parseRegistryReference } from './registry-reference'
 import { parseChallenge, RegistryClient } from './registry-client'
 import { resolveRegistryCredentials } from './registry-credentials'
+import { getTokenScope } from './registry-client'
 import { entryTag } from '../registry-cache-backend'
 import { environmentMock } from '../../../executer/environment-mock'
 import { Environment } from '../../../executer/environment'
@@ -177,5 +178,20 @@ describe('RegistryClient bearer auth', () => {
     expect(tokenRequests).toHaveLength(1)
     expect(tokenRequests[0]).toContain('scope=repository%3Aorg%2Fcache%3Apull%2Cpush')
     expect(tokenRequests[0]).toContain(`Basic ${Buffer.from('me:pw').toString('base64')}`)
+  })
+})
+
+describe('getTokenScope', () => {
+  it('asks for pull and push by default', () => {
+    expect(getTokenScope('org/cache', null)).toEqual('repository:org/cache:pull,push')
+  })
+
+  it('adds what the challenge names for the repository', () => {
+    expect(getTokenScope('org/cache', 'repository:org/cache:delete')).toEqual('repository:org/cache:pull,push,delete')
+    expect(getTokenScope('org/cache', 'repository:org/cache:pull,*')).toEqual('repository:org/cache:pull,push,*')
+  })
+
+  it('ignores a challenge for another repository', () => {
+    expect(getTokenScope('org/cache', 'repository:other/repo:delete')).toEqual('repository:org/cache:pull,push')
   })
 })

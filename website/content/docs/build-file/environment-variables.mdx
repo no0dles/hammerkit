@@ -93,7 +93,9 @@ A variable can be defined in more than one place. Hammerkit resolves it like thi
    2. a **`.env`** file in the build file's directory.
 
 If a referenced `$NAME` is set nowhere, hammerkit aborts before running with
-`missing environment variable NAME` — references are never silently empty.
+`missing environment variable NAME`. A variable set to an empty string counts as
+set, as in a shell: `export NAME=` passes an empty value, which is how a CI job
+provides a variable its provider leaves unset on some pipelines.
 
 <Callout type="info">
 
