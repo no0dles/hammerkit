@@ -6,6 +6,7 @@ import { KubernetesWorkService, WorkService } from './work-service'
 import { read } from '../parser/read-build-file'
 import { iterateWorkTasks, iterateWorkServices } from './utils/plan-work-tasks'
 import { WorkItem } from './work-item'
+import { getUnreferencedBuildFileEnvs } from './unreferenced-build-file-envs'
 
 export async function* validate(workTree: WorkTree, context: Environment): AsyncGenerator<WorkItemValidation> {
   const cycleItems: WorkItem<WorkTask | WorkService>[] = []
@@ -54,6 +55,17 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
 
     if ((!task.cmds || task.cmds.length === 0) && (!item.deps || item.deps.length === 0)) {
       yield { type: 'warn', message: `task is empty`, item: task }
+    }
+
+    const unreferencedEnvs = getUnreferencedBuildFileEnvs(task)
+    if (unreferencedEnvs.length > 0) {
+      yield {
+        type: 'warn',
+        message:
+          `build-file envs ${unreferencedEnvs.join(', ')} are part of this task's cache key but not referenced ` +
+          `by it: changing them reruns it. If it doesn't read them at runtime, define them on the tasks that do`,
+        item: task,
+      }
     }
 
     for (const src of task.src) {
