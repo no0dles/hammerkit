@@ -19,6 +19,7 @@ import { create, extract } from 'tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
+import { Readable } from 'stream'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -306,7 +307,7 @@ async function archiveContainer(
       for (const generatedArchive of getArchivePaths(item.data, path)) {
         // a file output is a bind mount of a host file, so archive it from the host
         const readable = hostFiles.has(generatedArchive.path)
-          ? create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)])
+          ? Readable.from(create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
           : await container.getArchive({
               path: generatedArchive.path,
             })

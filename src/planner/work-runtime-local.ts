@@ -8,6 +8,7 @@ import { join, relative } from 'path'
 import { localTask } from '../executer/local-task'
 import { getArchivePaths } from '../executer/event-cache'
 import findProcess from 'find-process'
+import { Readable } from 'stream'
 
 function getStateFilename(task: WorkItem<LocalWorkTask>) {
   return join(task.data.cwd, '.hammerkit', `${task.id()}`)
@@ -100,13 +101,8 @@ async function archiveLocal(environment: Environment, task: WorkItem<LocalWorkTa
   for (const generatedArchive of getArchivePaths(task.data, path)) {
     await environment.file.writeStream(
       generatedArchive.filename,
-      create(
-        {
-          cwd: task.data.cwd,
-          gzip: true,
-        },
-        [relative(task.data.cwd, generatedArchive.path)]
-      )
+      // tar's stream is a Minipass stream; Readable.from adapts it to a Node one
+      Readable.from(create({ cwd: task.data.cwd, gzip: true }, [relative(task.data.cwd, generatedArchive.path)]))
     )
   }
 }

@@ -15,6 +15,7 @@ import { getErrorMessage } from '../log'
 import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
+import { Readable } from 'stream'
 
 // A previous run that crashed between creating an upload/download pod and its
 // `finally` cleanup leaves a pod behind under the same deterministic name. apply()
@@ -151,14 +152,16 @@ export async function ensurePersistentData(
       }
 
       const fileItem = basename(source.localPath)
-      const data = create(
-        {
-          cwd: dirname(source.localPath),
-          filter(path: string): boolean {
-            return source.matcher(path, source.localPath)
+      const data = Readable.from(
+        create(
+          {
+            cwd: dirname(source.localPath),
+            filter(path: string): boolean {
+              return source.matcher(path, source.localPath)
+            },
           },
-        },
-        [fileItem]
+          [fileItem]
+        )
       )
 
       service.status.console('stdout', `upload ${source.localPath}`)
