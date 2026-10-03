@@ -111,6 +111,9 @@ export async function printWorkTreeResult(schedulerState: WorkTree, env: Environ
       maxNodeNameLength
     )} - ${getStateText(service.state.current)}`
     if (service.state.current.type === 'end') {
+      if (service.state.current.reason === 'not-started') {
+        continue
+      }
       if (service.state.current.reason === 'crash') {
         message += ` crashed`
       }

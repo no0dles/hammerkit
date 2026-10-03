@@ -381,6 +381,11 @@ Things that behave differently from Compose:
 * **There are no one-shot services.** Services are recreated on every run, so
   setup that a cached task would do once is lost next time; put it into the
   healthcheck, written to succeed when run again (`mc mb --ignore-existing`).
+* **A name resolves only for direct `needs`.** A container reaches the services
+  it lists itself, not the ones those need. When a service hands out another
+  service's address (an object store's presigned URLs, a callback URL), every
+  consumer of that address needs that service too: the test task, and a renderer
+  downloading from it.
 * **A service can't reach itself by its name.** Tasks resolve service names, the
   service's own container doesn't. Software that advertises its own address
   (a MongoDB replica set, Kafka) has to advertise its container IP.

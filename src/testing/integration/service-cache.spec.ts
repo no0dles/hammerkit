@@ -49,7 +49,7 @@ describe('services and the cache', () => {
 
         const second = await cli.runExec()
         expect(second.state.tasks['e2e'].state.current).toMatchObject({ type: 'completed', cached: true })
-        expect(second.state.services['db'].state.current.type).toBe('pending')
+        expect(second.state.services['db'].state.current).toMatchObject({ type: 'end', reason: 'not-started' })
         expect(second.success).toBe(true)
       })
     })

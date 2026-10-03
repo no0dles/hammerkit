@@ -29,6 +29,13 @@ export async function executeWorkService(
       const required = await awaitRequirement(work, environment.abortCtrl.signal, { untilAllDone: !options.watch })
       if (!required) {
         work.status.write('debug', `${work.name} not started, no task needing it had to run`)
+        // ended, so the services it needs see it done too; left pending they
+        // would wait for it forever and the run would never finish
+        work.state.set({
+          type: 'end',
+          reason: 'not-started',
+          stateKey: null,
+        })
         return
       }
     }
