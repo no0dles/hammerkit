@@ -224,7 +224,10 @@ function toContainerPath(relativePath: string): string {
   return normalized === '' ? CONTAINER_ROOT : `${CONTAINER_ROOT}/${normalized}`
 }
 
-export function getServiceInstructions(service: WorkItem<ContainerWorkService>, options: CliPackageOptions): TaskInstructions {
+export function getServiceInstructions(
+  service: WorkItem<ContainerWorkService>,
+  options: CliPackageOptions
+): TaskInstructions {
   const dependencyCwd = getDependencyCwd(service.data.cwd, service)
   const tasks: { [task: string]: TaskInstructions } = {}
   const deps = getDependencyInstructions(dependencyCwd, service, tasks)
