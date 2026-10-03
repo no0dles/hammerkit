@@ -98,7 +98,7 @@ export async function dockerTask(
     await prepareMounts(item, environment)
     checkForAbort(options.abort)
 
-    await pullImage(item, docker)
+    await pullImage(item, docker, environment)
     checkForAbort(options.abort)
 
     await prepareVolume(item, docker)

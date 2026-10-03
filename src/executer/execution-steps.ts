@@ -11,9 +11,10 @@ import { getContainerBinds } from './get-container-binds'
 
 export async function pullImage(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  docker: Dockerode
+  docker: Dockerode,
+  environment: Environment
 ): Promise<void> {
-  await pull(item.status, docker, item.data.image)
+  await pull(item.status, docker, item.data.image, environment)
 }
 
 export async function prepareVolume(
