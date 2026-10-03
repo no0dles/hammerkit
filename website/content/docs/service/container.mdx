@@ -42,6 +42,28 @@ services:
       - 5432:5432
 ```
 
+## Shell [#shell]
+
+A service's `cmd` and its healthcheck `cmd` run in exec form by default: the
+command line is split into arguments and handed to the container directly, and
+the `cmd` becomes the arguments of the image's entrypoint. Set `shell` to run
+both through a shell instead, like a container task's [execution shell](/docs/task/container#execution-shell):
+
+```yaml
+services:
+  status:
+    image: alpine:3.21
+    shell: /bin/sh
+    cmd: mkdir -p /srv && printf 'HTTP/1.0 200 OK\r\n\r\nready on %s\n' "$(uname -s)" > /srv/response && while true; do nc -l -p 8080 < /srv/response; done
+    healthcheck:
+      cmd: grep -q "ready on" /srv/response && nc -z 127.0.0.1 8080
+```
+
+With `shell`, the service starts as `<shell> -c "<cmd>"` in place of the image
+entrypoint, on Docker and Kubernetes alike, and the healthcheck runs as
+`<shell> -c "<healthcheck cmd>"`. The shell has to exist in the image. Without a
+`cmd`, the image's own entrypoint and command are kept.
+
 ## Healthcheck
 A healthcheck checks whether a service is ready to be used.
 A task only starts once every service it needs is running and, if a healthcheck is defined, has passed it.
@@ -67,6 +89,10 @@ services:
 Without a healthcheck, a task may start before the service is ready.
 
 </Callout>
+
+The `cmd` runs in exec form: it is split into arguments (quotes group one
+argument), with no shell in between — so `&&`, pipes and `$(...)` need the
+service's [`shell`](#shell).
 
 ### Timing and failure
 

@@ -23,6 +23,8 @@ export function getWorkServiceId(service: WorkService): string {
             .sort(),
           src: service.src.map((s) => portable(s.absolutePath)).sort(),
           mounts: service.mounts.map((m) => m.mount).sort(),
+          // only when declared, so existing services keep their ids
+          ...(service.shell ? { shell: service.shell } : {}),
         }
       : {
           context: service.context,

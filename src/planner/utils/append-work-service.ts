@@ -114,6 +114,7 @@ function parseService(
       image: templateValue(service.schema.image, envs),
       cwd: service.cwd,
       cmd: service.schema.cmd ? parseWorkCommand(service.cwd, service.schema.cmd, envs) : null,
+      shell: service.schema.shell ? templateValue(service.schema.shell, envs) : null,
       volumes: parseWorkVolumes(service.cwd, service.schema.volumes, envs),
       mounts: parseWorkMounts(service.cwd, service.schema, envs),
       src: parseWorkSource(service.cwd, service.schema.src, envs),
