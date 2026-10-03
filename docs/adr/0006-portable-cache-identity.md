@@ -16,3 +16,5 @@ Machine-local runtime state — docker container labels (`hammerkit-id`) and the
 - The built-in `default` cache (`~/.hammerkit/remote-cache`) is now actually shared between checkouts on one machine, as documented.
 - Local tasks still include the host OS in their identity; only container tasks share across macOS/Linux, and only on the same CPU architecture (outputs hold native binaries, and docker pulls images for the host architecture).
 - Kubernetes resource labels still use the portable id; two checkouts deploying the same service into one namespace already collide on resource names.
+
+Since ADR 0007 the runtime state of a container task is a state file under the instance id, not a paused container.

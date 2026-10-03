@@ -103,3 +103,16 @@ See also [`explain`](/docs/cli/explain) and [`graph`](/docs/cli/graph).
 backends but never writes to them — for untrusted runners such as agent sandboxes
 or pull requests from forks. See
 [agents, workspaces and CI](/docs/guides/agents-and-ci#who-may-write-to-the-cache).
+
+## Stopping a run
+
+Ctrl-C (`SIGINT`), a cancelled CI job or a supervisor stopping hammerkit
+(`SIGTERM`) and a closed terminal (`SIGHUP`) all stop a run the same way: running
+tasks are cancelled, their containers and the run's services are removed, and each
+local task's command gets `SIGTERM` for its whole process group. Whatever is still
+alive in that group after 10 seconds is killed; set `HAMMERKIT_STOP_TIMEOUT_MS` to
+change the grace period.
+
+A container task's container is removed when the task ends, so `docker ps` shows
+nothing from hammerkit once a run is over. If hammerkit itself is killed
+(`SIGKILL`), [`clean`](/docs/cli/clean) removes what that run left behind.

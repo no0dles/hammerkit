@@ -1,4 +1,5 @@
 import { ContainerWorkService } from '../planner/work-service'
+import { getRunLabels } from '../docker/run-labels'
 import Dockerode, { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
@@ -46,9 +47,10 @@ export async function dockerService(
       Labels: {
         app: 'hammerkit',
         'hammerkit-id': getWorkInstanceId(item),
-        'hammerkit-pid': process.pid.toString(),
+        ...getRunLabels(),
         'hammerkit-type': 'service',
         'hammerkit-state': options.stateKey,
+        'hammerkit-daemon': options.daemon ? 'true' : 'false',
       },
       ExposedPorts: item.data.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
         map[`${port.containerPort}/tcp`] = {}

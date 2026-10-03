@@ -5,12 +5,11 @@ import { getFileContext } from './file/get-file-context'
 import { statusConsole } from './planner/work-item-status'
 import { emptyWritable } from './utils/empty-writable'
 import { runProgram } from './run-program'
+import { abortOnSignals } from './utils/abort-on-signals'
 
 const abortCtrl = new AbortController()
 
-process.on('SIGINT', function () {
-  abortCtrl.abort()
-})
+abortOnSignals(process, abortCtrl)
 
 let settled = false
 
