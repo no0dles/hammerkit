@@ -12,6 +12,7 @@ import { listenOnAbort } from '../utils/abort-event'
 import { getErrorMessage } from '../log'
 import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
+import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
 import { getNeedsNetwork } from './docker-task'
@@ -21,6 +22,8 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
+
+const HEALTHCHECK_INTERVAL_MS = 1000
 
 export async function dockerService(
   docker: Dockerode,
@@ -95,16 +98,21 @@ export async function dockerService(
     } else {
       let ready = false
       do {
+        // The first check waits one interval too, so an entrypoint that drops
+        // privileges (`exec su-exec app …`) has done so before anything runs.
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), HEALTHCHECK_INTERVAL_MS))
+        if (options.abort.aborted) {
+          break
+        }
+        const user = await getMainProcessUser(container)
         ready = await checkReadiness(
           item.status,
           getHealthcheckCommand(item.data) ?? [],
           environment,
           container,
+          user,
           options.abort
         )
-        if (!ready) {
-          await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
-        }
       } while (!ready && !options.abort.aborted)
 
       if (ready) {

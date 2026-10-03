@@ -8,9 +8,10 @@ export async function checkReadiness(
   command: string[],
   environment: Environment,
   container: Container,
+  user: string | null,
   abort: AbortSignal
 ): Promise<boolean> {
-  const result = await execCommand(status, environment, container, undefined, command, null, 2000, abort)
+  const result = await execCommand(status, environment, container, undefined, command, user, 2000, abort)
 
   if (result.type === 'timeout') {
     return false
