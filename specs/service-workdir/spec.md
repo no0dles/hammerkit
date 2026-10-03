@@ -38,3 +38,4 @@ A developer sets `workdir` on a container service. The container starts in that 
 - **FR-001**: Container services accept an optional string `workdir`, an absolute path inside the container; `$NAME` is substituted from the build file envs.
 - **FR-002**: The Docker runtime sets the container's `WorkingDir`, the Kubernetes runtime the container's `workingDir`, to `workdir` when declared, else to the build file's directory (portable per ADR-0003).
 - **FR-003**: `workdir` participates in the service id only when declared.
+- **FR-004**: `hammerkit package` sets the declared `workdir` as the image's final `WORKDIR` (after the `COPY` steps, which stay relative to the build directory).
