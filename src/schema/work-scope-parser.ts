@@ -62,7 +62,21 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     }
   }
 
+  keepRequirersInScope(filteredWorkTree)
   return filteredWorkTree
+}
+
+// The whole build file is planned first, so a shared service lists every task
+// and service that needs it. Those outside this run never start or end, and a
+// service waiting for them to finish would keep the run open forever.
+function keepRequirersInScope(workTree: WorkTree) {
+  const inScope = new Set<WorkItem<WorkTask | WorkService>>([
+    ...Object.values(workTree.tasks),
+    ...Object.values(workTree.services),
+  ])
+  for (const service of Object.values(workTree.services)) {
+    service.requiredBy = service.requiredBy.filter((required) => inScope.has(required))
+  }
 }
 
 function applyTask(workTree: WorkTree, item: WorkItemState<WorkTask, TaskState>) {

@@ -25,6 +25,11 @@ laptops, cloud workspaces and CI without wrapper scripts exporting placeholders.
   local development on the same services.
 
 ## Fixed
+- **Running one task of several that share a service never finished.** A shared
+  service (one database for two targets) waited for every task and service in the
+  build file that needs it, including those outside the run, which never start or
+  end; the task completed and hammerkit then kept the services up until stopped.
+  Only what is part of the run counts now.
 - **Registry caches couldn't delete entries on registries that scope tokens per
   action**, such as GitLab's: `cache prune` and `clean --cache` failed with 401.
   The token request now includes the actions the registry's challenge names.
