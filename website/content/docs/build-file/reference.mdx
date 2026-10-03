@@ -66,6 +66,7 @@ service** (it has a `selector`).
 | `image` | string (required) | The service image. |
 | `cmd` | string | Override the container command. |
 | `workdir` | string | Working directory inside the container; see [working directory](/docs/service/container#working-directory). Defaults to the build file's directory. |
+| `shell` | string | Run `cmd` and the healthcheck as `<shell> -c "<cmd>"`; see [shell](/docs/service/container#shell). Without it both run in exec form. |
 | `ports` | array of string/number | `containerPort` or `hostPort:containerPort` to publish to the host. |
 | `healthcheck` | `{cmd}` | Readiness command; see [healthcheck](/docs/service/container#healthcheck). |
 | `envs` | map of string→string/number | Service environment variables. |

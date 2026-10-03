@@ -25,6 +25,7 @@ export function getWorkServiceId(service: WorkService): string {
           mounts: service.mounts.map((m) => m.mount).sort(),
           // only when declared, so existing services keep their ids
           ...(service.workdir ? { workdir: service.workdir } : {}),
+          ...(service.shell ? { shell: service.shell } : {}),
         }
       : {
           context: service.context,

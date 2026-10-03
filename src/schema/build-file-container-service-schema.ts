@@ -20,6 +20,10 @@ export const buildFileContainerServiceSchema = object({
   // build file's directory, like a task; images whose entrypoint expects their
   // own WORKDIR (relative `./dist/…` paths, `npm start`) need it.
   workdir: string().optional(),
+  // Runs `cmd` and the healthcheck as `<shell> -c "<cmd>"` (replacing the
+  // image entrypoint for `cmd`), like a task's `shell`. Without it both are
+  // split into exec-form arguments.
+  shell: string().optional(),
   volumes: array(string()).optional(),
   labels: labelsSchema.optional(),
   continuous: boolean().optional(),

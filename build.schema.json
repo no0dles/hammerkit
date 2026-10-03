@@ -312,6 +312,9 @@
                   "workdir": {
                     "type": "string"
                   },
+                  "shell": {
+                    "type": "string"
+                  },
                   "volumes": {
                     "type": "array",
                     "items": {

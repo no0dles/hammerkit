@@ -1,6 +1,11 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
-import { ContainerWorkService, getServiceWorkingDir } from '../planner/work-service'
+import {
+  ContainerWorkService,
+  getHealthcheckCommand,
+  getServiceCommand,
+  getServiceWorkingDir,
+} from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
 import { V1Deployment, V1HostAlias, V1Probe } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader } from './apply'
@@ -34,10 +39,12 @@ export async function ensureKubernetesDeploymentExists(
   }
   const envs = getEnvironmentVariables(service.data.envs)
   const name = getResourceName(service)
-  const probe: V1Probe | undefined = service.data.healthcheck
+  const healthcheckCommand = getHealthcheckCommand(service.data)
+  const serviceCommand = getServiceCommand(service.data)
+  const probe: V1Probe | undefined = healthcheckCommand
     ? {
         exec: {
-          command: [service.data.healthcheck.cmd.parsed.command, ...service.data.healthcheck.cmd.parsed.args],
+          command: healthcheckCommand,
         },
         periodSeconds: 5,
         failureThreshold: 3,
@@ -82,8 +89,7 @@ export async function ensureKubernetesDeploymentExists(
                 name: key,
                 value: value,
               })),
-              command: service.data.cmd ? [service.data.cmd.parsed.command] : undefined,
-              args: service.data.cmd ? service.data.cmd.parsed.args : undefined,
+              ...getKubernetesCommand(serviceCommand),
               ports: service.data.ports.map((p) => ({
                 containerPort: p.containerPort,
               })),
@@ -111,4 +117,20 @@ export async function ensureKubernetesDeploymentExists(
   }
 
   await awaitDeployRunningState(instance, env, name)
+}
+
+// Kubernetes `command` replaces the image entrypoint and `args` its command.
+// A shell service sets both; an exec-form `cmd` keeps the established mapping
+// (first token as `command`, the rest as `args`).
+function getKubernetesCommand(command: { entrypoint: string[] | null; cmd: string[] | null }): {
+  command?: string[]
+  args?: string[]
+} {
+  if (command.entrypoint && command.cmd) {
+    return { command: command.entrypoint, args: command.cmd }
+  }
+  if (command.cmd) {
+    return { command: [command.cmd[0]], args: command.cmd.slice(1) }
+  }
+  return {}
 }

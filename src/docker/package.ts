@@ -10,7 +10,7 @@ import {
   isLocalWorkTaskItem,
   WorkItem,
 } from '../planner/work-item'
-import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkService, getServiceCommand } from '../planner/work-service'
 import { getContainerCli } from '../executer/execute-docker'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'path'
@@ -275,10 +275,14 @@ export function getServiceInstructions(
     service.data.workdir ? `WORKDIR ${service.data.workdir}` : '',
   ]
 
-  if (service.data.cmd) {
-    instructions.push(
-      `CMD [${[service.data.cmd.parsed.command, ...service.data.cmd.parsed.args].map((p) => `"${p}"`).join(', ')}]`
-    )
+  // exec form, JSON-encoded so arguments with quotes or a whole shell command
+  // survive intact
+  const command = getServiceCommand(service.data)
+  if (command.entrypoint) {
+    instructions.push(`ENTRYPOINT ${JSON.stringify(command.entrypoint)}`)
+  }
+  if (command.cmd) {
+    instructions.push(`CMD ${JSON.stringify(command.cmd)}`)
   }
 
   return {

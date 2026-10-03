@@ -1,4 +1,9 @@
-import { ContainerWorkService, getServiceWorkingDir } from '../planner/work-service'
+import {
+  ContainerWorkService,
+  getHealthcheckCommand,
+  getServiceCommand,
+  getServiceWorkingDir,
+} from '../planner/work-service'
 import Dockerode, { Container } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
@@ -40,6 +45,7 @@ export async function dockerService(
 
     item.status.write('debug', `create container with image ${item.data.image}`)
     const envs = getEnvironmentVariables(item.data.envs)
+    const command = getServiceCommand(item.data)
     container = await docker.createContainer({
       Image: item.data.image,
       Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
@@ -54,7 +60,8 @@ export async function dockerService(
         map[`${port.containerPort}/tcp`] = {}
         return map
       }, {}),
-      Cmd: item.data.cmd ? [item.data.cmd.parsed.command, ...item.data.cmd.parsed.args] : undefined,
+      Entrypoint: command.entrypoint ?? undefined,
+      Cmd: command.cmd ?? undefined,
       WorkingDir: convertToPosixPath(getServiceWorkingDir(item.data)),
       HostConfig: {
         ExtraHosts: network.hosts,
@@ -88,7 +95,13 @@ export async function dockerService(
     } else {
       let ready = false
       do {
-        ready = await checkReadiness(item.status, item.data.healthcheck, environment, container, options.abort)
+        ready = await checkReadiness(
+          item.status,
+          getHealthcheckCommand(item.data) ?? [],
+          environment,
+          container,
+          options.abort
+        )
         if (!ready) {
           await new Promise<void>((resolve) => setTimeout(() => resolve(), 1000))
         }
