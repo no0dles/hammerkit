@@ -1,0 +1,16 @@
+---
+title: "Changelog 1.9.1"
+version: "1.9.1"
+date: "2026-10-03"
+---
+## Fixed
+- **A fully cached run with chained services never finished.** When a service that
+  another service needs (`api` needs `db`) wasn't started because every task
+  needing it was a cache hit, it stayed pending, so the services it needs waited
+  for it forever. hammerkit then stopped with
+  `hammerkit stopped before the run finished` and exit code 1. A service that isn't
+  started now ends right away, with the reason `not-started` in `--summary-json`
+  state where it used to stay `pending`.
+- The [Compose test stacks](/docs/guides/migrate-ci/agent-guide#compose-test-stacks)
+  section of the CI migration guide explains that a service name resolves only for
+  direct `needs`.

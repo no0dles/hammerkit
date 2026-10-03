@@ -24,7 +24,8 @@ export interface ServiceRunningState {
 
 export interface ServiceEndState {
   type: 'end'
-  reason: 'crash' | 'terminated'
+  // not-started: no task needing it had to run
+  reason: 'crash' | 'terminated' | 'not-started'
   stateKey: string | null
 }
 
