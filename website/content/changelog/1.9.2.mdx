@@ -1,0 +1,13 @@
+---
+title: "Changelog 1.9.2"
+version: "1.9.2"
+date: "2026-10-03"
+---
+## Fixed
+- **Private images couldn't be pulled.** hammerkit pulled task and service images
+  without credentials, so an image from a private registry only worked when it was
+  already present locally, and failed with `access forbidden` otherwise. Pulls now
+  use the credentials `docker login` stored for the registry (credential helpers,
+  `auths` and `credsStore` in the docker config, like the registry cache).
+- **Images pinned by digest were pulled on every run.** An image referenced as
+  `name:tag@sha256:…` is now used when an image with that digest is present.
