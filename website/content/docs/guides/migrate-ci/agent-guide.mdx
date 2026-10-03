@@ -108,7 +108,7 @@ This step decides whether the cache is correct. For every task:
   workspace (an artifact upload) or that a human inspects.
 * **Everything a command writes is an output**, even inside a source folder:
   tool state (`.yarn/install-state.gz`, `.eslintcache`), generated files a later
-  command reads (`documentation.json`), reports. Declare the path in `generates`,
+  command reads (generated API docs), reports. Declare the path in `generates`,
   or point the tool somewhere declared (`YARN_INSTALL_STATE_PATH`). A path that's
   in neither `src` nor `generates` doesn't exist in the container, and the task's
   user can't create it there: writing to it fails with `EACCES` or `ENOENT`.
@@ -179,7 +179,7 @@ While you iterate:
   from a file. The interactive view redraws the terminal.
 * Every `$NAME` reference must resolve before anything runs, including those of
   tasks the job doesn't run. A job that lacks a variable another job uses
-  exports it empty (`export CHROMATIC_PROJECT_TOKEN=""`) or never sees it.
+  exports it empty (`export DEPLOY_TOKEN=""`) or never sees it.
 * Stopping a run with Ctrl-C (or `SIGTERM`) removes its services and stops its
   local tasks. A run killed outright (`kill -9`) can't: `hammerkit clean` removes
   what it left behind.
@@ -391,7 +391,7 @@ Things that behave differently from Compose:
   (a MongoDB replica set, Kafka) has to advertise its container IP.
 
 Run several targets against one stack instead of one stack per target. Where the
-old pipeline started a Compose project per customer or tenant, keep one database,
+old pipeline started a Compose project per tenant or test target, keep one database,
 queue and storage service and give each target its own database name, key
 prefix, vhost or bucket. Only the parts that really differ become one service per
 target (`api-a`, `api-b`), and the test tasks per target run in parallel because

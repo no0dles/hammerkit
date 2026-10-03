@@ -6,7 +6,7 @@
 
 **Status**: Implemented
 
-**Input**: Real-world migration of a Docker Compose e2e stack to hammerkit services (contract-assistant). Its `mlink-core` image starts with `exec node --require ./dist/instrumentation.js dist/index.js`, and its word renderer with `npm start` — both relative to the image's `WORKDIR`. Hammerkit runs every container service in the build file's directory, so neither image can start, and a service has no way to get its directory back (`cmd` only becomes arguments to the image's entrypoint).
+**Input**: Real-world migration of a Docker Compose e2e stack to hammerkit services. One of its API images starts with `exec node dist/index.js`, and another with `npm start` — both relative to the image's `WORKDIR`. Hammerkit runs every container service in the build file's directory, so neither image can start, and a service has no way to get its directory back (`cmd` only becomes arguments to the image's entrypoint).
 
 ## Motivation
 
