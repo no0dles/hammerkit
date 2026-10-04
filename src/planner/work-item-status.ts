@@ -5,6 +5,7 @@ import { Writable } from 'stream'
 import { WorkService } from './work-service'
 import { WorkTask } from './work-task'
 import { BufferContext } from '../utils/buffer-context'
+import { redact } from '../utils/redact'
 
 export type WorkItemLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
@@ -74,7 +75,8 @@ export function statusConsole(writable: Writable): StatusConsole {
 
   const emit = emitter<Message>()
 
-  function addMessage(context: LogContext, message: Message) {
+  function addMessage(context: LogContext, unredacted: Message) {
+    const message = { ...unredacted, message: redact(unredacted.message) }
     emit.emit(message)
     writable.write(JSON.stringify({ context, message }) + '\n')
     if (message.type === 'console') {

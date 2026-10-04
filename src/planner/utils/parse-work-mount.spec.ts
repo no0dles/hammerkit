@@ -63,7 +63,17 @@ describe('parse-work-mount', () => {
     })
   })
 
-  it('throws for a mount string with more than two parts', () => {
+  it('reads a third :ro part as read-only, :rw and two parts as writable', () => {
+    expect(parseWorkMount('/home/test', './config.json:/etc/app.json:ro')).toMatchObject({
+      localPath: normalizePath('/home/test/config.json'),
+      containerPath: '/etc/app.json',
+      readOnly: true,
+    })
+    expect(parseWorkMount('/home/test', './data:/data:rw')).toMatchObject({ readOnly: false })
+    expect(parseWorkMount('/home/test', './data:/data')).toMatchObject({ readOnly: false })
+  })
+
+  it('throws for a third part that is not ro or rw', () => {
     expect(() => parseWorkMount('/home/test', 'a:b:c')).toThrow('invalid mount a:b:c')
   })
 })

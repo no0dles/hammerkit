@@ -1,4 +1,5 @@
 import commaner, { Command, CommanderError, Option } from 'commander'
+import { parseSetArguments } from './parse-set-arguments'
 import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
@@ -59,7 +60,9 @@ export async function getProgram(
 ): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
 
-  const args = [...argv]
+  const parsed = parseSetArguments(argv)
+  const args = parsed.args
+  environment.processEnvs = { ...environment.processEnvs, ...parsed.values }
   const fileIndex = args.indexOf('--file')
   const fileName =
     fileIndex >= 0 ? join(environment.cwd, args[fileIndex + 1]) : await getBuildFilename(environment.cwd, environment)
@@ -512,6 +515,11 @@ export async function getProgram(
       .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
       .addOption(new Option('-w, --watch', 'watch tasks').default(false))
       .addOption(new Option('-d, --daemon', 'run services in background').default(false))
+      .addOption(
+        new Option('--wait <mode>', 'with --daemon, return once services are ready or once they started')
+          .default('ready')
+          .choices(['ready', 'start'])
+      )
       .addOption(new Option('--env <name>', 'environment'))
       .addOption(
         new Option('-l, --log <mode>', 'log mode')
@@ -544,6 +552,7 @@ export async function getProgram(
             workers: options.concurrency,
             logMode: options.log,
             daemon: options.daemon,
+            wait: options.wait,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
           })
@@ -728,6 +737,7 @@ tasks:
   program.version(getVersion())
   program.option('--verbose', 'log debugging information', false)
   program.option('--file', 'set build file', '.hammerkit.yaml')
+  program.option('--set <NAME=value>', 'value for $NAME / ${NAME} references, ahead of the shell and .env (repeatable)')
   program.configureOutput({
     writeOut: (str) => environment.console.info(str),
     writeErr: (str) => {

@@ -13,7 +13,9 @@ export function parseWorkVolume(
   if (typeof volume === 'string') {
     const parts = volume.split(':')
     if (parts.length === 2) {
-      return parseVolume(cwd, parts[0], parts[1])
+      return parseVolume(cwd, parts[0], parts[1], false)
+    } else if (parts.length === 3 && (parts[2] === 'ro' || parts[2] === 'rw')) {
+      return parseVolume(cwd, parts[0], parts[1], parts[2] === 'ro')
     } else {
       throw new Error(`invalid volume ${volume}`)
     }
@@ -21,10 +23,11 @@ export function parseWorkVolume(
     const path = templateValue(volume.path, envs)
     return {
       containerPath: path,
-      export: volume.export ?? false,
+      export: !!volume.export,
       name: volume.name ? templateValue(volume.name, envs) : getVolumeName(path),
       inherited: null,
       resetOnChange: volume.resetOnChange ?? false,
+      readOnly: volume.readOnly ?? false,
     }
   }
 }
@@ -40,12 +43,13 @@ export function parseWorkVolumes(
   return volumes.map((v) => parseWorkVolume(cwd, v, envs))
 }
 
-function parseVolume(cwd: string, name: string, containerPath: string): WorkVolume {
+function parseVolume(cwd: string, name: string, containerPath: string, readOnly: boolean): WorkVolume {
   return {
     name,
     resetOnChange: false,
     containerPath: normalizePath(cwd, cwd, containerPath),
     inherited: null,
     export: false,
+    readOnly,
   }
 }

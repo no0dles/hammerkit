@@ -1,3 +1,4 @@
+import { WorkSecret } from './work-secret'
 import { WorkPort } from './work-port'
 import { WorkMount } from './work-mount'
 import { WorkTask } from './work-task'
@@ -10,6 +11,10 @@ import { WorkKubernetesSelector } from './work-kubernetes-selector'
 import { WorkCommand } from './work-command'
 import { ResolvedCache } from '../cache/resolve-cache'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
+import { WorkItemState } from './work-item'
+import { TaskState } from '../executer/scheduler/task-state'
+import { ServiceState } from '../executer/scheduler/service-state'
+import { State } from '../executer/state'
 
 export interface BaseWorkService {
   name: string
@@ -44,6 +49,17 @@ export interface ContainerWorkService extends BaseWorkService {
   mounts: WorkMount[]
   volumes: WorkVolume[]
   healthcheck: WorkHealthcheck | null
+  // one-shot after the healthcheck passed, before dependents start
+  init: WorkServiceInit | null
+  secrets: WorkSecret[]
+}
+
+export interface WorkServiceInit {
+  // the task named by `init`, planned like any other task
+  task: WorkItemState<WorkTask, TaskState>
+  // the service as its init task sees it: running once the healthcheck passed,
+  // while everything else still waits for the init to succeed
+  state: State<ServiceState>
 }
 
 export interface KubernetesWorkService extends BaseWorkService {

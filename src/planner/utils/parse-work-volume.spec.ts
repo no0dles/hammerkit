@@ -8,7 +8,14 @@ describe('parse-work-volume', () => {
       resetOnChange: false,
       export: false,
       inherited: null,
+      readOnly: false,
     })
+  })
+
+  it('should parse projdata:/usr/data:ro as read-only', () => {
+    expect(
+      parseWorkVolume('/home/user/proj', 'projdata:/usr/data:ro', { replacements: [], variables: {} })
+    ).toMatchObject({ name: 'projdata', containerPath: '/usr/data', readOnly: true })
   })
 
   it('throws for a volume string that is not name:path', () => {

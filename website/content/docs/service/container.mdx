@@ -27,6 +27,12 @@ This can be used to seed a database, or to back up and restore project data.
 Services can expose ports to the host machine.
 This is useful for debugging or for connecting to a service from your machine.
 
+Host ports are published when the service runs through
+[`hammerkit up`](/docs/cli/up), and during `hammerkit run` only when a
+[local task](/docs/task) needs the service (it reaches services through the host).
+Container tasks reach a service over its link, so a `run` that only has container
+tasks publishes nothing, and two runs on one machine never collide on a host port.
+
 <Callout type="warn">
 
 Container tasks don't need published ports.
@@ -162,9 +168,70 @@ services:
       - "postgres-db:/var/lib/postgresql/data"
 ```
 
+## Init [#init]
+
+Setup that has to happen once the service is up — create buckets, initiate a
+replica set, assign roles in an identity provider — goes into a task the service
+names as its `init`. The task runs after the service passed its healthcheck, and
+the service counts as ready only once it succeeded: whatever else needs the service
+starts against a set-up service. A failing or timed-out init fails the run.
+
+```yaml
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.6
+    healthcheck:
+      cmd: …
+    init: keycloak-roles
+
+tasks:
+  keycloak-roles:
+    image: curlimages/curl:8.10.1
+    mounts:
+      - ./assign-roles.sh:/assign-roles.sh:ro
+    envs:
+      KEYCLOAK_URL: http://keycloak:8080
+    secrets:
+      - from: env:KEYCLOAK_ADMIN_PASSWORD
+        env: KEYCLOAK_ADMIN_PASSWORD
+    cmds:
+      - sh /assign-roles.sh
+```
+
+`init` names a task like `deps` does (`name` or `prefix:name`), so the init has
+everything a task has: `deps`, `envs`, [`secrets`](/docs/task/secrets), `mounts`,
+`extend` for one setup shared by several services, or a local task. The task needs
+the service under the service's name without listing it; it may list other
+services it needs as well.
+
+* **It runs each time the service starts in a run**, never from the cache. A
+  service kept running by `up --daemon` already ran its init and is reused without
+  running it again; name the task (`hammerkit run keycloak-roles`) to run it
+  against the running service anyway. Asked for by name while the service is not
+  running, the service starts for it and the init runs once.
+* **Its `timeout`** defaults to 5 minutes (`HAMMERKIT_INIT_TIMEOUT` changes it).
+* **A changed init task recreates the service** on the next `up` or `run`, so the
+  init runs again.
+* A service with an `init` is always awaited, also under `up --daemon --wait start`.
+
+## Hostname [#hostname]
+
+A service's container uses the service name as its hostname, so the service
+resolves its own name: software that advertises its own address, such as a MongoDB
+replica-set member `mongodb:27017`, works without knowing the container's IP.
+Other containers reach it by the name they list it under in `needs`.
+
+## Secrets [#secrets]
+
+Credentials reach a service through `secrets`, as an environment variable or a
+read-only file, without being written to the build file or hammerkit's logs; its
+`init` gets them too. See [secrets](/docs/task/secrets).
+
 ## Mounts
 Mounts can be used to pass local files into the container.
-They are meant for local configuration and settings files.
+They are meant for local configuration and settings files. Append `:ro` to mount
+one read-only (`./postgres.conf:/etc/postgresql/postgresql.conf:ro`); volumes take
+`:ro` too (`secrets:/run/secrets:ro`, or `readOnly: true` in the object form).
 
 <Callout type="warn">
 

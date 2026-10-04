@@ -8,4 +8,6 @@ export interface WorkVolume {
   resetOnChange: boolean
   inherited: WorkItem<WorkService | WorkTask> | null
   export: boolean
+  // `name:path:ro` / `readOnly: true` - the container can't write it
+  readOnly: boolean
 }

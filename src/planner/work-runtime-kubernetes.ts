@@ -1,17 +1,18 @@
 import { AbortError } from '../executer/abort'
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
+import { getServiceIp } from '../kubernetes/get-service-ip'
 import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ContainerWorkTask } from './work-task'
-import { WorkItem } from './work-item'
+import { isContainerWorkServiceItem, WorkItem } from './work-item'
 import { State } from '../executer/state'
 import { Environment } from '../executer/environment'
 import { kubernetesService } from '../executer/kubernetes-service'
 import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { V1EnvVar, V1Job } from '@kubernetes/client-node'
+import { V1EnvVar, V1HostAlias, V1Job } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
@@ -27,6 +28,7 @@ import { getVersion } from '../version'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
+import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 
 async function listJobNames(
   instance: ReturnType<typeof createKubernetesInstances>,
@@ -62,11 +64,31 @@ export function kubernetesTaskRuntime(
 
       await ensureNamespace(instance, kubernetes.namespace)
       await ensurePersistentData(instance, kubernetes, environment, task, persistence)
+      const secrets = getKubernetesSecretRefs(task, task.data.secrets)
+      try {
+        await ensureKubernetesSecret(instance, kubernetes, task, task.data.secrets, environment)
+      } catch (e) {
+        options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+        return
+      }
 
       // The last job of a run stays: its state label is what currentStateKey
       // reads. Jobs from an earlier run of this task go before this one starts.
       for (const name of await listJobNames(instance, kubernetes, task)) {
         await deleteJobAndWait(instance, kubernetes, name, options.abort)
+      }
+
+      // the services the task needs, by the names it lists them under
+      const hostAliases: V1HostAlias[] = []
+      for (const need of task.needs) {
+        if (!isContainerWorkServiceItem(need.service)) {
+          continue
+        }
+        const ip = await getServiceIp(instance, kubernetes, need.service)
+        if (!ip) {
+          throw new Error(`unable to get service ip for ${need.name}`)
+        }
+        hostAliases.push({ ip, hostnames: [need.name] })
       }
 
       const podName = `${task.name}-${options.stateKey}`
@@ -101,15 +123,20 @@ export function kubernetesTaskRuntime(
                 containers: [
                   {
                     image: task.data.image,
-                    command: [cmd.parsed.command],
-                    args: cmd.parsed.args,
+                    // through the task's shell, as on Docker
+                    command: [task.data.shell, '-c'],
+                    args: [cmd.cmd],
                     workingDir: cmd.cwd,
-                    env: Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
+                    env: [
+                      ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
+                      ...secrets.env,
+                    ],
                     name: `cmd-${++i}`,
-                    volumeMounts: persistence.mounts.map((m) => m.mount),
+                    volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
                   },
                 ],
-                volumes: persistence.volumes,
+                volumes: [...persistence.volumes, ...secrets.volumes],
+                hostAliases,
                 restartPolicy: 'Never',
               },
             },
@@ -138,9 +165,12 @@ export function kubernetesTaskRuntime(
             type: 'error',
             errorMessage: getErrorMessage(e),
           })
+          await removeKubernetesSecret(instance, kubernetes, task).catch(() => undefined)
           return
         }
       }
+      // the finished job stays for its state, the values it read need not
+      await removeKubernetesSecret(instance, kubernetes, task)
     },
     async stop(): Promise<void> {
       const jobs = await instance.batchApi.listNamespacedJob({
@@ -180,6 +210,7 @@ export function kubernetesTaskRuntime(
       await this.stop()
 
       await removePersistentData(instance, kubernetes, task)
+      await removeKubernetesSecret(instance, kubernetes, task)
     },
     async currentStateKey(): Promise<string | null> {
       const jobs = await instance.batchApi.listNamespacedJob({
@@ -239,13 +270,22 @@ export function kubernetesServiceRuntime(
           })
         }
       }
+      await removeKubernetesSecret(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const persistence = await getKubernetesPersistence(service)
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)
-      await ensureKubernetesDeploymentExists(instance, kubernetes, service, persistence, options.stateKey)
+      await ensureKubernetesSecret(instance, kubernetes, service, service.data.secrets, environment)
+      await ensureKubernetesDeploymentExists(
+        instance,
+        kubernetes,
+        service,
+        persistence,
+        getKubernetesSecretRefs(service, service.data.secrets),
+        options.stateKey
+      )
 
       const name = getResourceName(service)
       options.state.set({

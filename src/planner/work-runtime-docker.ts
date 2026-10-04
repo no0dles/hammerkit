@@ -11,6 +11,7 @@ import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
 import { dockerTask } from '../executer/docker-task'
 import { dockerService } from '../executer/docker-service'
+import { removeContainerSecrets } from '../executer/container-secrets'
 import Dockerode from 'dockerode'
 import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
@@ -21,6 +22,7 @@ import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
 import { Readable } from 'stream'
+import { getServiceDefinitionHash } from './service-definition'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
 
 export function dockerTaskRuntime(
@@ -194,6 +196,12 @@ export function dockerServiceRuntime(
         return
       }
 
+      if (currentService.Labels['hammerkit-definition'] !== getServiceDefinitionHash(service)) {
+        service.status.write('info', `${service.name} changed since it was started, recreating it`)
+        await removeContainer(docker.getContainer(currentService.Id))
+        return
+      }
+
       const servicePid =
         'hammerkit-pid' in currentService.Labels ? parseInt(currentService.Labels['hammerkit-pid']) : undefined
       const serviceState = 'hammerkit-state' in currentService.Labels ? currentService.Labels['hammerkit-state'] : ''
@@ -217,6 +225,7 @@ export function dockerServiceRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
+      await removeContainerSecrets(getWorkInstanceId(service))
     },
     async remove(): Promise<void> {
       await this.stop()

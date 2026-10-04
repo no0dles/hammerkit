@@ -56,6 +56,9 @@ export interface CliExecOptions {
   // Skip dependencies that were not requested when every task needing them is
   // a cache hit (default). Off runs the whole dependency graph.
   skipDeps: boolean
+  // `up --daemon` returns once services are healthy (ready) or once their
+  // containers started (start); services others need are always awaited
+  wait: 'ready' | 'start'
 }
 
 export interface CliPackageOptions {
@@ -127,6 +130,7 @@ export class Cli {
             cacheReadOnly: options?.cacheReadOnly ?? false,
             timeout: options?.timeout ?? null,
             skipDeps: options?.skipDeps ?? true,
+            wait: options?.wait ?? 'ready',
           })
         }
 

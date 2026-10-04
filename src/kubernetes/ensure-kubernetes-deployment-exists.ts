@@ -7,7 +7,9 @@ import {
   getServiceWorkingDir,
 } from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
+import { KubernetesSecretRefs } from './secrets'
 import { V1Deployment, V1HostAlias, V1Probe } from '@kubernetes/client-node'
+import { getServiceHostname } from '../planner/utils/service-hostname'
 import { apply, KubernetesObjectHeader } from './apply'
 import { getServiceIp } from './get-service-ip'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -22,6 +24,7 @@ export async function ensureKubernetesDeploymentExists(
   env: WorkKubernetesEnvironment,
   service: WorkItem<ContainerWorkService>,
   persistence: KubernetesPersistence,
+  secrets: KubernetesSecretRefs,
   stateKey: string
 ) {
   const hostAliases: V1HostAlias[] = []
@@ -80,23 +83,28 @@ export async function ensureKubernetesDeploymentExists(
           },
         },
         spec: {
+          // the pod resolves its own service name, as with Docker's Hostname
+          hostname: getServiceHostname(service.name),
           hostAliases: hostAliases,
           containers: [
             {
               name: service.name.replace(/:/, '-'),
               image: service.data.image,
               workingDir: getServiceWorkingDir(service.data),
-              env: Object.entries(envs).map(([key, value]) => ({
-                name: key,
-                value: value,
-              })),
+              env: [
+                ...Object.entries(envs).map(([key, value]) => ({
+                  name: key,
+                  value: value,
+                })),
+                ...secrets.env,
+              ],
               ...getKubernetesCommand(serviceCommand),
               ports: service.data.ports.map((p) => ({
                 containerPort: p.containerPort,
               })),
               readinessProbe: probe,
               livenessProbe: probe,
-              volumeMounts: persistence.mounts.map((m) => m.mount),
+              volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
             },
             {
               name: 'debug',
@@ -106,7 +114,7 @@ export async function ensureKubernetesDeploymentExists(
               volumeMounts: persistence.mounts.map((m) => m.mount),
             },
           ],
-          volumes: persistence.volumes,
+          volumes: [...persistence.volumes, ...secrets.volumes],
         },
       },
     },

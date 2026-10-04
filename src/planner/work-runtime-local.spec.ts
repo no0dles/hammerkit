@@ -36,6 +36,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       shell: '/bin/sh',
       continuous: false,
       timeout: null,
+      secrets: [],
       caching: {
         name: 'none',
         method: 'none',
@@ -95,6 +96,8 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
+      waitForReady: true,
     })
 
     expect(await env.file.exists(join(cwd, '.hammerkit', 'task-1.pid'))).toBe(false)
@@ -133,6 +136,8 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
+      waitForReady: true,
     })
 
     expect(state.current.type).not.toBe('error')
@@ -171,6 +176,8 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
+      waitForReady: true,
     })
 
     expect(state.current.type).toBe('error')
@@ -210,6 +217,8 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
+      waitForReady: true,
     })
 
     expect(state.current.type).not.toBe('error')

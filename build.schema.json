@@ -141,7 +141,15 @@
                           "type": "object",
                           "properties": {
                             "export": {
-                              "type": "boolean"
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "string",
+                                  "const": "always"
+                                }
+                              ]
                             },
                             "resetOnChange": {
                               "type": "boolean"
@@ -151,6 +159,9 @@
                             },
                             "name": {
                               "type": "string"
+                            },
+                            "readOnly": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -169,6 +180,33 @@
                   },
                   "timeout": {
                     "type": "string"
+                  },
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "pattern": "^(env|file):.+$"
+                        },
+                        "env": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "cache": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "from"
+                      ],
+                      "additionalProperties": false,
+                      "description": "secret from env:NAME or file:path, injected as env or a read-only file"
+                    }
                   },
                   "image": {
                     "type": "string"
@@ -227,6 +265,9 @@
                   },
                   "timeout": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "secrets": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets"
                   },
                   "platform": {
                     "type": "object",
@@ -341,6 +382,16 @@
                       "cmd"
                     ],
                     "additionalProperties": false
+                  },
+                  "init": {
+                    "type": "string",
+                    "description": "task run once the service is healthy, before dependents start"
+                  },
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets/items"
+                    }
                   }
                 },
                 "required": [

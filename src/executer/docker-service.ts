@@ -5,7 +5,9 @@ import {
   getServiceWorkingDir,
 } from '../planner/work-service'
 import { getRunLabels } from '../docker/run-labels'
-import Dockerode, { Container } from 'dockerode'
+import { getServiceHostname } from '../planner/utils/service-hostname'
+import { getServiceDefinitionHash } from '../planner/service-definition'
+import Dockerode, { Container, ContainerCreateOptions } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
 import { logStream } from '../docker/stream'
@@ -17,6 +19,7 @@ import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
 import { getNeedsNetwork } from './docker-task'
+import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { WorkItem } from '../planner/work-item'
 import { ServiceState } from './scheduler/service-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
@@ -26,6 +29,60 @@ import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 
 const HEALTHCHECK_INTERVAL_MS = 1000
+
+export function buildServiceCreateOptions(
+  item: WorkItem<ContainerWorkService>,
+  options: ExecuteOptions<ServiceState>,
+  network: { links: string[]; hosts: string[] },
+  secrets: ContainerSecrets
+): ContainerCreateOptions {
+  const envs = getEnvironmentVariables(item.data.envs)
+  const command = getServiceCommand(item.data)
+  return {
+    Image: item.data.image,
+    Hostname: getServiceHostname(item.name),
+    Env: Object.entries({ ...envs, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
+    Labels: {
+      app: 'hammerkit',
+      'hammerkit-id': getWorkInstanceId(item),
+      ...getRunLabels(),
+      'hammerkit-type': 'service',
+      'hammerkit-state': options.stateKey,
+      'hammerkit-daemon': options.daemon ? 'true' : 'false',
+      'hammerkit-definition': getServiceDefinitionHash(item),
+    },
+    ExposedPorts: item.data.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
+      map[`${port.containerPort}/tcp`] = {}
+      return map
+    }, {}),
+    Entrypoint: command.entrypoint ?? undefined,
+    Cmd: command.cmd ?? undefined,
+    WorkingDir: convertToPosixPath(getServiceWorkingDir(item.data)),
+    HostConfig: {
+      ExtraHosts: network.hosts,
+      Links: network.links,
+      Binds: [
+        ...item.data.src.map((s) => `${s.absolutePath}:${s.absolutePath}`),
+        ...item.data.mounts.map(
+          (v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}${v.readOnly ? ':ro' : ''}`
+        ),
+        ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}${v.readOnly ? ':ro' : ''}`),
+        ...secrets.binds,
+      ],
+      // host ports are for `hammerkit up` and local tasks; container tasks
+      // reach the service over its link, and a run publishing them would
+      // collide with another run on the same host
+      PortBindings: options.publishPorts
+        ? item.data.ports
+            .filter((p) => !!p.hostPort)
+            .reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+              map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
+              return map
+            }, {})
+        : {},
+    },
+  }
+}
 
 export async function dockerService(
   docker: Dockerode,
@@ -49,49 +106,15 @@ export async function dockerService(
     const network = getNeedsNetwork(serviceContainers, item.needs)
 
     item.status.write('debug', `create container with image ${item.data.image}`)
-    const envs = getEnvironmentVariables(item.data.envs)
-    const command = getServiceCommand(item.data)
-    container = await docker.createContainer({
-      Image: item.data.image,
-      Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
-      Labels: {
-        app: 'hammerkit',
-        'hammerkit-id': getWorkInstanceId(item),
-        ...getRunLabels(),
-        'hammerkit-type': 'service',
-        'hammerkit-state': options.stateKey,
-        'hammerkit-daemon': options.daemon ? 'true' : 'false',
-      },
-      ExposedPorts: item.data.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
-        map[`${port.containerPort}/tcp`] = {}
-        return map
-      }, {}),
-      Entrypoint: command.entrypoint ?? undefined,
-      Cmd: command.cmd ?? undefined,
-      WorkingDir: convertToPosixPath(getServiceWorkingDir(item.data)),
-      HostConfig: {
-        ExtraHosts: network.hosts,
-        Links: network.links,
-        Binds: [
-          ...item.data.src.map((s) => `${s.absolutePath}:${s.absolutePath}`),
-          ...item.data.mounts.map((v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}`),
-          ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`),
-        ],
-        PortBindings: item.data.ports
-          .filter((p) => !!p.hostPort)
-          .reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-            map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-            return map
-          }, {}),
-      },
-    })
+    const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
+    container = await docker.createContainer(buildServiceCreateOptions(item, options, network, secrets))
 
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)
 
     await container.start()
 
-    if (!item.data.healthcheck) {
+    if (!item.data.healthcheck || !options.waitForReady) {
       options.state.set({
         type: 'running',
         dns: { containerId: container.id },
@@ -175,6 +198,10 @@ export async function dockerService(
       } catch (e) {
         item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
       }
+    }
+    // a daemon keeps its secret files until `hammerkit down` stops it
+    if (!options.daemon) {
+      await removeContainerSecrets(getWorkInstanceId(item))
     }
   }
 }
