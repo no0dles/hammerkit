@@ -6,6 +6,7 @@ import {
 } from '../planner/work-service'
 import { getRunLabels } from '../docker/run-labels'
 import { getServiceHostname } from '../planner/utils/service-hostname'
+import { getServiceDefinitionHash } from '../planner/service-definition'
 import Dockerode, { Container, ContainerCreateOptions } from 'dockerode'
 import { AbortError, checkForAbort } from './abort'
 import { convertToPosixPath } from './execute-docker'
@@ -46,6 +47,7 @@ export function buildServiceCreateOptions(
       'hammerkit-type': 'service',
       'hammerkit-state': options.stateKey,
       'hammerkit-daemon': options.daemon ? 'true' : 'false',
+      'hammerkit-definition': getServiceDefinitionHash(item),
     },
     ExposedPorts: item.data.ports.reduce<{ [key: string]: Record<string, unknown> }>((map, port) => {
       map[`${port.containerPort}/tcp`] = {}
@@ -108,7 +110,7 @@ export async function dockerService(
 
     await container.start()
 
-    if (!item.data.healthcheck) {
+    if (!item.data.healthcheck || !options.waitForReady) {
       options.state.set({
         type: 'running',
         dns: { containerId: container.id },

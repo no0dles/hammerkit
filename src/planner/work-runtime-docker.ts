@@ -21,6 +21,7 @@ import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
 import { Readable } from 'stream'
+import { getServiceDefinitionHash } from './service-definition'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
 
 export function dockerTaskRuntime(
@@ -191,6 +192,12 @@ export function dockerServiceRuntime(
       })
       const currentService = currentServices[0]
       if (!currentService) {
+        return
+      }
+
+      if (currentService.Labels['hammerkit-definition'] !== getServiceDefinitionHash(service)) {
+        service.status.write('info', `${service.name} changed since it was started, recreating it`)
+        await removeContainer(docker.getContainer(currentService.Id))
         return
       }
 

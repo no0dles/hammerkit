@@ -157,6 +157,7 @@ export async function executeWorkTask(
             state: work.state,
             daemon: options.daemon,
             publishPorts: false,
+            waitForReady: true,
           })
         } finally {
           deadline.clear()

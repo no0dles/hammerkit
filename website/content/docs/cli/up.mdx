@@ -18,6 +18,15 @@ start the services in the background and return immediately.
 hammerkit up --daemon
 ```
 
+With `--daemon`, `up` returns once every service passed its healthcheck
+(`--wait ready`, the default). `--wait start` returns as soon as the containers
+are started instead; services that other services need are still awaited, since
+those can only start once their needs are ready.
+
+A service that is already running is reused, unless its definition changed since
+it was started (image, command, env values, ports, mounts, volumes, healthcheck, or
+a service it needs): then `up` and `run` recreate it.
+
 Stop services started this way with [`hammerkit down`](/docs/cli/down).
 
 <Callout type="info">
@@ -36,6 +45,9 @@ Options:
   -e, --exclude <labels...>   exclude task and services with labels
   -c, --concurrency <number>  parallel worker count (default: 4)
   -w, --watch                 watch tasks (default: false)
+  --wait <mode>                with --daemon, return once services are ready or
+                               once they started (choices: "ready", "start",
+                               default: "ready")
   -d, --daemon                run services in background (default: false)
   --env <name>                environment
   -l, --log <mode>            log mode (choices: "interactive", "live", "grouped")

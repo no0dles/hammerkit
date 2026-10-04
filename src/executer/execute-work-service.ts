@@ -81,6 +81,7 @@ export async function executeWorkService(
         stateKey: cacheState.stateKey,
         daemon: options.daemon,
         publishPorts: options.type === 'up' || work.requiredBy.some(isLocalTaskItem),
+        waitForReady: options.wait === 'ready' || work.requiredBy.length > 0,
       })
     })
   } catch (e) {

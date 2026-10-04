@@ -11,6 +11,9 @@ export interface ExecuteOptions<S> {
   // publish service ports on the host: on `up`, or when a local task (which
   // reaches services through the host) needs the service
   publishPorts: boolean
+  // wait for the healthcheck before the service counts as running; off only
+  // for `up --wait start` on services nothing else in the run needs
+  waitForReady: boolean
 }
 
 export interface WorkRuntime<S> {

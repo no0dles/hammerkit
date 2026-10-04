@@ -515,6 +515,11 @@ export async function getProgram(
       .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
       .addOption(new Option('-w, --watch', 'watch tasks').default(false))
       .addOption(new Option('-d, --daemon', 'run services in background').default(false))
+      .addOption(
+        new Option('--wait <mode>', 'with --daemon, return once services are ready or once they started')
+          .default('ready')
+          .choices(['ready', 'start'])
+      )
       .addOption(new Option('--env <name>', 'environment'))
       .addOption(
         new Option('-l, --log <mode>', 'log mode')
@@ -547,6 +552,7 @@ export async function getProgram(
             workers: options.concurrency,
             logMode: options.log,
             daemon: options.daemon,
+            wait: options.wait,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
           })
