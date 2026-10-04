@@ -89,8 +89,9 @@ A variable can be defined in more than one place. Hammerkit resolves it like thi
 1. **Task `envs`** win over **build-file `envs`** on the same key. In the example
    above `override_example` prints `20`, while `example` prints `22`.
 2. A value of exactly `$NAME` is a *reference* that is filled in from, in order:
-   1. the **shell / process environment**, then
-   2. a **`.env`** file in the build file's directory.
+   1. a **`--set NAME=value`** argument on the hammerkit command, then
+   2. the **shell / process environment**, then
+   3. a **`.env`** file in the build file's directory.
 
 If a referenced `$NAME` is set nowhere, hammerkit aborts before running with
 `missing environment variable NAME`. A variable set to an empty string counts as

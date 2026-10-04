@@ -10,6 +10,8 @@ Options:
   -V, --version                  output the version number
   --verbose                      log debugging information (default: false)
   --file <path>                  set build file (default: .hammerkit.yaml)
+  --set <NAME=value>             value for $NAME / ${NAME} references, ahead of
+                                 the shell and .env (repeatable)
   -h, --help                     display help for command
 
 Commands:
@@ -34,6 +36,12 @@ Commands:
 When no build file is present, only the [`init`](/docs/cli/init) command is available,
 which creates a default `.hammerkit.yaml`. Point hammerkit at a non-default file
 with `--file <path>`.
+
+`--set NAME=value` works with every command and in any position, as often as needed.
+It supplies the value of `$NAME` and `${NAME}` references in the build file, ahead of
+the shell and `.env` files, so a run can be narrowed without exporting variables:
+`hammerkit run e2e --set E2E_SPEC=e2e/login.cy.ts`. Like any env value it is part of
+the cache key of the tasks that declare it.
 
 ## Common options
 

@@ -1,4 +1,5 @@
 import commaner, { Command, CommanderError, Option } from 'commander'
+import { parseSetArguments } from './parse-set-arguments'
 import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
@@ -59,7 +60,9 @@ export async function getProgram(
 ): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
 
-  const args = [...argv]
+  const parsed = parseSetArguments(argv)
+  const args = parsed.args
+  environment.processEnvs = { ...environment.processEnvs, ...parsed.values }
   const fileIndex = args.indexOf('--file')
   const fileName =
     fileIndex >= 0 ? join(environment.cwd, args[fileIndex + 1]) : await getBuildFilename(environment.cwd, environment)
@@ -728,6 +731,7 @@ tasks:
   program.version(getVersion())
   program.option('--verbose', 'log debugging information', false)
   program.option('--file', 'set build file', '.hammerkit.yaml')
+  program.option('--set <NAME=value>', 'value for $NAME / ${NAME} references, ahead of the shell and .env (repeatable)')
   program.configureOutput({
     writeOut: (str) => environment.console.info(str),
     writeErr: (str) => {
