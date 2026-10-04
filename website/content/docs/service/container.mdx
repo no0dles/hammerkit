@@ -27,6 +27,12 @@ This can be used to seed a database, or to back up and restore project data.
 Services can expose ports to the host machine.
 This is useful for debugging or for connecting to a service from your machine.
 
+Host ports are published when the service runs through
+[`hammerkit up`](/docs/cli/up), and during `hammerkit run` only when a
+[local task](/docs/task) needs the service (it reaches services through the host).
+Container tasks reach a service over its link, so a `run` that only has container
+tasks publishes nothing, and two runs on one machine never collide on a host port.
+
 <Callout type="warn">
 
 Container tasks don't need published ports.
@@ -162,9 +168,18 @@ services:
       - "postgres-db:/var/lib/postgresql/data"
 ```
 
+## Hostname [#hostname]
+
+A service's container uses the service name as its hostname, so the service
+resolves its own name: software that advertises its own address, such as a MongoDB
+replica-set member `mongodb:27017`, works without knowing the container's IP.
+Other containers reach it by the name they list it under in `needs`.
+
 ## Mounts
 Mounts can be used to pass local files into the container.
-They are meant for local configuration and settings files.
+They are meant for local configuration and settings files. Append `:ro` to mount
+one read-only (`./postgres.conf:/etc/postgresql/postgresql.conf:ro`); volumes take
+`:ro` too (`secrets:/run/secrets:ro`, or `readOnly: true` in the object form).
 
 <Callout type="warn">
 

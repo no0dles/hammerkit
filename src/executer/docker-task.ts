@@ -69,7 +69,7 @@ export function buildCreateOptions(
       'hammerkit-state': stateKey,
     },
     HostConfig: {
-      Binds: binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}`),
+      Binds: binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}${b.readOnly ? ':ro' : ''}`),
       ExtraHosts: network.hosts,
       Links: network.links,
       AutoRemove: true,

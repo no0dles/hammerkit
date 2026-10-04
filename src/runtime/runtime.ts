@@ -8,6 +8,9 @@ export interface ExecuteOptions<S> {
   abort: AbortSignal
   state: State<S>
   daemon: boolean
+  // publish service ports on the host: on `up`, or when a local task (which
+  // reaches services through the host) needs the service
+  publishPorts: boolean
 }
 
 export interface WorkRuntime<S> {

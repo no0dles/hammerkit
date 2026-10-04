@@ -47,6 +47,7 @@ export function appendWorkDependencies(
               resetOnChange: false,
               containerPath: generate.path,
               inherited: depNode,
+              readOnly: false,
             })
           }
         } else {

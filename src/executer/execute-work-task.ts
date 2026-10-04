@@ -156,6 +156,7 @@ export async function executeWorkTask(
             stateKey: cacheState.stateKey,
             state: work.state,
             daemon: options.daemon,
+            publishPorts: false,
           })
         } finally {
           deadline.clear()

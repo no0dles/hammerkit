@@ -7,6 +7,7 @@ export const buildFileVolumeSchema = union([
     resetOnChange: boolean().optional(),
     path: string(),
     name: string().optional(),
+    readOnly: boolean().optional(),
   }),
 ])
 

@@ -74,7 +74,8 @@ your start script instead, e.g. `postgres://api@$HAMMERKIT_POSTGRES_HOST:$HAMMER
 `ports` publish a service to your **host** machine — handy for connecting a GUI
 client or `psql` to a running database during development. Tasks share the
 service's network and can reach every container port directly, so they don't need
-`ports` at all.
+`ports` at all. hammerkit publishes them on `hammerkit up`, and during `hammerkit run`
+only when a local task needs the service.
 
 ## Readiness
 

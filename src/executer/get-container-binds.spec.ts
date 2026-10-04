@@ -17,8 +17,8 @@ describe('getContainerBinds', () => {
   it('binds every source at its own path', () => {
     const binds = getContainerBinds(task([join(root, 'src'), join(root, 'package.json')]))
     expect(binds).toEqual([
-      { localPath: join(root, 'src'), containerPath: join(root, 'src') },
-      { localPath: join(root, 'package.json'), containerPath: join(root, 'package.json') },
+      { localPath: join(root, 'src'), containerPath: join(root, 'src'), readOnly: false },
+      { localPath: join(root, 'package.json'), containerPath: join(root, 'package.json'), readOnly: false },
     ])
   })
 
@@ -41,14 +41,14 @@ describe('getContainerBinds', () => {
   it('keeps mounts and generated volumes inside a source', () => {
     const binds = getContainerBinds(
       task([join(root, 'Greet')], {
-        mounts: [{ localPath: join(root, '.cache'), containerPath: join(root, 'Greet', 'cache') }],
+        mounts: [{ localPath: join(root, '.cache'), containerPath: join(root, 'Greet', 'cache'), readOnly: true }],
         generates: [{ path: join(root, 'Greet', 'obj'), volumeName: 'hammerkit-obj', isFile: false }],
       })
     )
     expect(binds).toEqual([
-      { localPath: join(root, '.cache'), containerPath: join(root, 'Greet', 'cache') },
-      { localPath: join(root, 'Greet'), containerPath: join(root, 'Greet') },
-      { localPath: 'hammerkit-obj', containerPath: join(root, 'Greet', 'obj') },
+      { localPath: join(root, '.cache'), containerPath: join(root, 'Greet', 'cache'), readOnly: true },
+      { localPath: join(root, 'Greet'), containerPath: join(root, 'Greet'), readOnly: false },
+      { localPath: 'hammerkit-obj', containerPath: join(root, 'Greet', 'obj'), readOnly: false },
     ])
   })
 })

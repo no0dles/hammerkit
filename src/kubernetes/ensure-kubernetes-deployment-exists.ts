@@ -8,6 +8,7 @@ import {
 } from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
 import { V1Deployment, V1HostAlias, V1Probe } from '@kubernetes/client-node'
+import { getServiceHostname } from '../planner/utils/service-hostname'
 import { apply, KubernetesObjectHeader } from './apply'
 import { getServiceIp } from './get-service-ip'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -80,6 +81,8 @@ export async function ensureKubernetesDeploymentExists(
           },
         },
         spec: {
+          // the pod resolves its own service name, as with Docker's Hostname
+          hostname: getServiceHostname(service.name),
           hostAliases: hostAliases,
           containers: [
             {

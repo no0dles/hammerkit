@@ -95,6 +95,7 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
     })
 
     expect(await env.file.exists(join(cwd, '.hammerkit', 'task-1.pid'))).toBe(false)
@@ -133,6 +134,7 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
     })
 
     expect(state.current.type).not.toBe('error')
@@ -171,6 +173,7 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
     })
 
     expect(state.current.type).toBe('error')
@@ -210,6 +213,7 @@ describe('local task pidfile', () => {
         },
       },
       daemon: false,
+      publishPorts: false,
     })
 
     expect(state.current.type).not.toBe('error')

@@ -1,4 +1,6 @@
-import { WorkItemState } from '../planner/work-item'
+import { isLocalWorkTaskItem, isWorkTaskItem, WorkItemState } from '../planner/work-item'
+import { WorkTask } from '../planner/work-task'
+import { TaskState } from './scheduler/task-state'
 import { WorkService } from '../planner/work-service'
 import { ServiceState } from './scheduler/service-state'
 import { Environment } from './environment'
@@ -78,6 +80,7 @@ export async function executeWorkService(
         state: work.state,
         stateKey: cacheState.stateKey,
         daemon: options.daemon,
+        publishPorts: options.type === 'up' || work.requiredBy.some(isLocalTaskItem),
       })
     })
   } catch (e) {
@@ -99,4 +102,8 @@ export async function executeWorkService(
       }
     }
   }
+}
+
+function isLocalTaskItem(item: WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>): boolean {
+  return isWorkTaskItem(item) && isLocalWorkTaskItem(item)
 }

@@ -72,7 +72,9 @@ A mount is written `host[:container]`:
 * `path` — a single path mounts the host path to the **same** path inside the
   container.
 * `host:container` — mounts the host path on the left to the container path on the
-  right. More than one `:` is an error.
+  right.
+* `host:container:ro` — the same, read-only for the container (`:rw` is the
+  default). Any other third part is an error.
 
 Host paths can be relative (resolved against the build file's directory), absolute,
 or `~`-relative to your home directory. Relative container paths resolve against the

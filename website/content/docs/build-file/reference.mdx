@@ -46,7 +46,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | Field | Type | Description |
 |-------|------|-------------|
 | `image` | string (required) | The container image to run in. Its presence is what makes the task containerized. |
-| `mounts` | array of string | Extra `host[:container]` [mounts](/docs/task/container#adding-mounts). |
+| `mounts` | array of string | Extra `host[:container][:ro]` [mounts](/docs/task/container#adding-mounts). |
 
 **Local task** adds:
 
@@ -70,8 +70,8 @@ service** (it has a `selector`).
 | `ports` | array of string/number | `containerPort` or `hostPort:containerPort` to publish to the host. |
 | `healthcheck` | `{cmd, timeout}` | Readiness command, and how long the service may take to pass it once running (duration, default `20s`, `HAMMERKIT_HEALTHCHECK_TIMEOUT` changes the default); see [healthcheck](/docs/service/container#healthcheck). |
 | `envs` | map of string→string/number | Service environment variables. |
-| `volumes` | array of string | `name:containerPath` volumes that [persist](/docs/service/container#volumes) across restarts. |
-| `mounts` | array of string | `host:container` config mounts. |
+| `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
+| `mounts` | array of string | `host:container[:ro]` config mounts. |
 | `deps` | array of string | Tasks that must run before the service starts. |
 | `needs` | array of string \| `{service, name}` | Other services this one depends on. |
 | `src` | array of string | Sources, used for caching the service image build. |
