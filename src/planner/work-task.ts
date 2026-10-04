@@ -35,6 +35,8 @@ export interface WorkTaskGenerate {
   inherited: WorkItem<WorkTask> | null
   resetOnChange: boolean
   export: boolean
+  // `export: always`: copied out of the container when the task fails too
+  exportAlways: boolean
   isFile: boolean
 }
 

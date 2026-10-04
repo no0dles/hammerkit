@@ -8,7 +8,7 @@ const noEnvs: WorkEnvironmentVariables = { variables: {}, replacements: [] }
 
 describe('mapGenerate', () => {
   it('treats a bare string as path with defaults', () => {
-    expect(mapGenerate('dist')).toEqual({ path: 'dist', resetOnChange: true, export: false })
+    expect(mapGenerate('dist')).toEqual({ path: 'dist', resetOnChange: true, export: false, exportAlways: false })
   })
 
   it('preserves resetOnChange and export from an object', () => {
@@ -16,11 +16,26 @@ describe('mapGenerate', () => {
       path: 'out',
       resetOnChange: true,
       export: true,
+      exportAlways: false,
+    })
+  })
+
+  it('reads export: always as exported, also on failure', () => {
+    expect(mapGenerate({ path: 'report', export: 'always' })).toEqual({
+      path: 'report',
+      resetOnChange: true,
+      export: true,
+      exportAlways: true,
     })
   })
 
   it('defaults resetOnChange to true and export to false when omitted', () => {
-    expect(mapGenerate({ path: 'out' } as any)).toEqual({ path: 'out', resetOnChange: true, export: false })
+    expect(mapGenerate({ path: 'out' } as any)).toEqual({
+      path: 'out',
+      resetOnChange: true,
+      export: false,
+      exportAlways: false,
+    })
   })
 })
 

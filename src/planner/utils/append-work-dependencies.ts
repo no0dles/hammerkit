@@ -55,6 +55,7 @@ export function appendWorkDependencies(
             item.data.generates.push({
               volumeName: generate.volumeName,
               export: false,
+              exportAlways: false,
               resetOnChange: false,
               path: generate.path,
               inherited: depNode,

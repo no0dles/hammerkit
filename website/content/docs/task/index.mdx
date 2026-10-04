@@ -91,6 +91,22 @@ tasks:
       - tsc -b
 ```
 
+An exported output is copied back only when the task succeeds. Test reports,
+screenshots and videos are most useful when a test fails: mark those
+`export: always` and hammerkit copies them to the workspace even when the task
+exits non-zero. A failed task is never cached, so nothing else changes.
+
+```yaml
+tasks:
+  e2e:
+    image: cypress/included:13.15.0
+    generates:
+      - path: cypress/videos
+        export: always
+    cmds:
+      - cypress run
+```
+
 ### Outputs start empty
 When a task runs, its outputs start empty: hammerkit deletes what an earlier run
 left in them before the task's commands run. A file a deleted source used to

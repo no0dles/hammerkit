@@ -23,7 +23,7 @@ export function parseWorkVolume(
     const path = templateValue(volume.path, envs)
     return {
       containerPath: path,
-      export: volume.export ?? false,
+      export: !!volume.export,
       name: volume.name ? templateValue(volume.name, envs) : getVolumeName(path),
       inherited: null,
       resetOnChange: volume.resetOnChange ?? false,

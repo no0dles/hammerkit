@@ -141,7 +141,15 @@
                           "type": "object",
                           "properties": {
                             "export": {
-                              "type": "boolean"
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "string",
+                                  "const": "always"
+                                }
+                              ]
                             },
                             "resetOnChange": {
                               "type": "boolean"
@@ -151,6 +159,9 @@
                             },
                             "name": {
                               "type": "string"
+                            },
+                            "readOnly": {
+                              "type": "boolean"
                             }
                           },
                           "required": [

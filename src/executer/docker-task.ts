@@ -1,7 +1,7 @@
 import { Environment } from './environment'
 import { getRunLabels } from '../docker/run-labels'
 import { isHostServiceDns, ServiceDns } from './service-dns'
-import Dockerode, { ContainerCreateOptions } from 'dockerode'
+import Dockerode, { Container, ContainerCreateOptions } from 'dockerode'
 import { clearContainerDirectory, convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
@@ -9,7 +9,7 @@ import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './e
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
-import { ContainerWorkTask } from '../planner/work-task'
+import { ContainerWorkTask, WorkTaskGenerate } from '../planner/work-task'
 import { WorkItem, WorkItemNeed } from '../planner/work-item'
 import { TaskState } from './scheduler/task-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
@@ -140,6 +140,11 @@ export async function dockerTask(
         }
 
         if (result.result.ExitCode !== 0) {
+          await exportGenerates(
+            environment,
+            container,
+            item.data.generates.filter((g) => g.exportAlways)
+          )
           options.state.set({
             stateKey: options.stateKey,
             type: 'crash',
@@ -149,28 +154,11 @@ export async function dockerTask(
         }
       }
 
-      for (const generate of item.data.generates) {
-        if (!generate.export || generate.inherited || generate.isFile) {
-          continue
-        }
-
-        const readable = await container.getArchive({
-          path: generate.path,
-        })
-        await environment.file.createDirectory(generate.path)
-        await new Promise<void>((resolve, reject) => {
-          readable
-            .pipe(
-              extract({
-                cwd: generate.path,
-                newer: true,
-                stripComponents: 1,
-              })
-            )
-            .on('close', () => resolve())
-            .on('error', (err) => reject(err))
-        })
-      }
+      await exportGenerates(
+        environment,
+        container,
+        item.data.generates.filter((g) => g.export)
+      )
 
       return true
     })
@@ -190,5 +178,36 @@ export async function dockerTask(
         errorMessage: getErrorMessage(e),
       })
     }
+  }
+}
+
+// Copy exported directory outputs out of the container to the host. File
+// outputs are bind mounts and inherited outputs belong to their task.
+async function exportGenerates(
+  environment: Environment,
+  container: Container,
+  generates: WorkTaskGenerate[]
+): Promise<void> {
+  for (const generate of generates) {
+    if (generate.inherited || generate.isFile) {
+      continue
+    }
+
+    const readable = await container.getArchive({
+      path: generate.path,
+    })
+    await environment.file.createDirectory(generate.path)
+    await new Promise<void>((resolve, reject) => {
+      readable
+        .pipe(
+          extract({
+            cwd: generate.path,
+            newer: true,
+            stripComponents: 1,
+          })
+        )
+        .on('close', () => resolve())
+        .on('error', (err) => reject(err))
+    })
   }
 }
