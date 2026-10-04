@@ -5,9 +5,7 @@ import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-wor
 import { executeWorkService, stopService } from './execute-work-service'
 import { executeWorkTask } from './execute-work-task'
 import { executeInitTask, findInitOf } from './execute-init-task'
-import { WorkItemState } from '../planner/work-item'
-import { WorkTask } from '../planner/work-task'
-import { TaskState } from './scheduler/task-state'
+import { Dependent } from './await-completed-dependencies'
 
 export async function executeWorkTree(work: WorkTree, environment: Environment, options: CliExecOptions) {
   const itemPromises: Promise<void>[] = []
@@ -59,31 +57,30 @@ function mirrorServicesToInitViews(work: WorkTree) {
   }
 }
 
-// For every task that may be skipped when nothing needs it, the tasks in this
-// run that depend on it. Requested tasks always run; so does anything a service
-// depends on, and everything in watch mode or with skipping turned off.
-function skippableDependents(
-  work: WorkTree,
-  options: CliExecOptions
-): Map<string, WorkItemState<WorkTask, TaskState>[]> {
-  const result = new Map<string, WorkItemState<WorkTask, TaskState>[]>()
+// For every task that may be skipped when nothing needs it, the tasks and
+// services in this run that depend on it. Requested tasks always run; a
+// service's dependency runs once the service starts. Everything runs in watch
+// mode, under `up` and with skipping turned off.
+function skippableDependents(work: WorkTree, options: CliExecOptions): Map<string, Dependent[]> {
+  const result = new Map<string, Dependent[]>()
   if (options.type !== 'execute' || !options.skipDeps || options.watch || !work.requested) {
     return result
   }
 
-  const neededByService = new Set<string>()
-  for (const service of iterateWorkServices(work)) {
-    for (const dep of service.deps) {
-      neededByService.add(dep.name)
+  // a dependency of nothing in the run (its service needs no one here) has no
+  // dependents left, and is skipped
+  for (const task of iterateWorkTasks(work)) {
+    if (!work.requested.includes(task.name) && !findInitOf(task)) {
+      result.set(task.name, [])
     }
   }
-
-  for (const task of iterateWorkTasks(work)) {
-    for (const dep of task.deps) {
-      if (work.requested.includes(dep.name) || neededByService.has(dep.name)) {
+  const items: Dependent[] = [...iterateWorkTasks(work), ...iterateWorkServices(work)]
+  for (const item of items) {
+    for (const dep of item.deps) {
+      if (work.requested.includes(dep.name)) {
         continue
       }
-      result.set(dep.name, [...(result.get(dep.name) ?? []), task])
+      result.set(dep.name, [...(result.get(dep.name) ?? []), item])
     }
   }
   return result

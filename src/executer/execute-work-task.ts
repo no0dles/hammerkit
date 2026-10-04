@@ -6,7 +6,12 @@ import { getDuration } from './states'
 import { TaskState } from './scheduler/task-state'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
-import { awaitCompletedDependencies, awaitDependentNeed, awaitRunningNeeds } from './await-completed-dependencies'
+import {
+  awaitCompletedDependencies,
+  awaitDependentNeed,
+  awaitRunningNeeds,
+  Dependent,
+} from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
 import { withDeadline } from './deadline'
 import { CacheState } from './scheduler/enqueue-next'
@@ -53,15 +58,15 @@ export async function executeWorkTask(
   work: WorkItemState<WorkTask, TaskState>,
   environment: Environment,
   options: CliExecOptions,
-  // when set, the task was not requested and only runs if one of these tasks
-  // depending on it misses the cache (see executeWorkTree)
-  dependents: WorkItemState<WorkTask, TaskState>[] | null = null
+  // when set, the task was not requested and only runs if one of these items
+  // depending on it needs it (see executeWorkTree)
+  dependents: Dependent[] | null = null
 ) {
   try {
     if (dependents) {
       const needed = await awaitDependentNeed(dependents, environment.abortCtrl.signal)
       if (!needed) {
-        work.status.write('debug', `${work.name} skipped, every task depending on it was a cache hit`)
+        work.status.write('debug', `${work.name} skipped, nothing depending on it had to run`)
         work.state.set({ type: 'completed', cached: false, skipped: true, duration: 0, stateKey: '' })
         return
       }

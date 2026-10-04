@@ -634,7 +634,7 @@ export async function getProgram(
           parseDuration
         )
       )
-      .addOption(new Option('--no-skip-deps', 'run dependencies even when every task needing them is a cache hit'))
+      .addOption(new Option('--no-skip-deps', 'run dependencies even when nothing needing them has to run'))
       .action(async (task, options) => {
         try {
           // For machine-readable JSON, suppress the human progress logger (which
