@@ -363,7 +363,7 @@ becomes a task that `needs` them:
 | `healthcheck: start_period`, `retries` | `healthcheck: timeout:` (default `20s`) |
 | `ports:` | only for reaching the service from your host; tasks use `name:containerPort` |
 | a `build:` of the app under test | a service on the toolchain image with `deps: [install, build]`, running the built app |
-| a one-shot setup container (`createbuckets`, `rs.initiate`, migrations) | an idempotent `healthcheck` that performs the setup and passes once it holds |
+| a one-shot setup container (`createbuckets`, `rs.initiate`, migrations) | the service's [`init`](/docs/service/container#init): runs after the healthcheck passed, before anything needing the service starts |
 
 Things that behave differently from Compose:
 
@@ -379,17 +379,18 @@ Things that behave differently from Compose:
   run**, naming the check. Give slow starters (Elasticsearch, a JVM app) a longer
   `timeout`, and get each service healthy with `hammerkit up` first, watching its
   log.
-* **There are no one-shot services.** Services are recreated on every run, so
-  setup that a cached task would do once is lost next time; put it into the
-  healthcheck, written to succeed when run again (`mc mb --ignore-existing`).
+* **Setup goes into `init`, written to succeed when run again.** Services are
+  recreated on every run (unless kept up with `hammerkit up --daemon`), so the
+  init runs again too: `mc mb --ignore-existing`, "initiate the replica set unless
+  it exists".
 * **A name resolves only for direct `needs`.** A container reaches the services
   it lists itself, not the ones those need. When a service hands out another
   service's address (an object store's presigned URLs, a callback URL), every
   consumer of that address needs that service too: the test task, and a renderer
   downloading from it.
-* **A service can't reach itself by its name.** Tasks resolve service names, the
-  service's own container doesn't. Software that advertises its own address
-  (a MongoDB replica set, Kafka) has to advertise its container IP.
+* **A service reaches itself by its name** (it is the container's hostname), so
+  software that advertises its own address (a MongoDB replica-set member
+  `mongodb:27017`, Kafka) advertises the service name.
 
 Run several targets against one stack instead of one stack per target. Where the
 old pipeline started a Compose project per tenant or test target, keep one database,

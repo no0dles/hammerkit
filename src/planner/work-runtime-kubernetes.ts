@@ -1,17 +1,19 @@
 import { AbortError } from '../executer/abort'
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
+import { runServiceInit } from '../executer/run-service-init'
+import { getServiceIp } from '../kubernetes/get-service-ip'
 import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ContainerWorkTask } from './work-task'
-import { WorkItem } from './work-item'
+import { isContainerWorkServiceItem, WorkItem } from './work-item'
 import { State } from '../executer/state'
 import { Environment } from '../executer/environment'
 import { kubernetesService } from '../executer/kubernetes-service'
 import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { V1EnvVar, V1Job } from '@kubernetes/client-node'
+import { V1EnvVar, V1HostAlias, V1Job } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
@@ -69,6 +71,19 @@ export function kubernetesTaskRuntime(
         await deleteJobAndWait(instance, kubernetes, name, options.abort)
       }
 
+      // the services the task needs, by the names it lists them under
+      const hostAliases: V1HostAlias[] = []
+      for (const need of task.needs) {
+        if (!isContainerWorkServiceItem(need.service)) {
+          continue
+        }
+        const ip = await getServiceIp(instance, kubernetes, need.service)
+        if (!ip) {
+          throw new Error(`unable to get service ip for ${need.name}`)
+        }
+        hostAliases.push({ ip, hostnames: [need.name] })
+      }
+
       const podName = `${task.name}-${options.stateKey}`
       let i = 0
       for (const cmd of task.data.cmds) {
@@ -101,8 +116,9 @@ export function kubernetesTaskRuntime(
                 containers: [
                   {
                     image: task.data.image,
-                    command: [cmd.parsed.command],
-                    args: cmd.parsed.args,
+                    // through the task's shell, as on Docker
+                    command: [task.data.shell, '-c'],
+                    args: [cmd.cmd],
                     workingDir: cmd.cwd,
                     env: Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
                     name: `cmd-${++i}`,
@@ -110,6 +126,7 @@ export function kubernetesTaskRuntime(
                   },
                 ],
                 volumes: persistence.volumes,
+                hostAliases,
                 restartPolicy: 'Never',
               },
             },
@@ -248,6 +265,12 @@ export function kubernetesServiceRuntime(
       await ensureKubernetesDeploymentExists(instance, kubernetes, service, persistence, options.stateKey)
 
       const name = getResourceName(service)
+      const init = service.data.init
+      if (init) {
+        await runServiceInit(service, init, { containerId: name }, options, (task, taskOptions) =>
+          kubernetesTaskRuntime(task, kubernetes).execute(environment, taskOptions)
+        )
+      }
       options.state.set({
         type: 'running',
         dns: { containerId: name },

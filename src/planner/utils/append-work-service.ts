@@ -1,7 +1,13 @@
 import { WorkTree } from '../work-tree'
 import { ReferencedContext, ReferenceService } from '../../schema/reference-parser'
 import { getWorkServiceId } from '../work-service-id'
-import { BaseWorkService, ContainerWorkService, KubernetesWorkService, WorkService } from '../work-service'
+import {
+  BaseWorkService,
+  ContainerWorkService,
+  KubernetesWorkService,
+  WorkService,
+  WorkServiceInit,
+} from '../work-service'
 import { parseWorkPorts } from './parse-work-ports'
 import { templateValue } from './template-value'
 import { isBuildFileKubernetesServiceSchema } from '../../schema/build-file-service-schema'
@@ -14,7 +20,9 @@ import { appendWorkDependencies } from './append-work-dependencies'
 import { appendWorkNeeds } from './append-work-needs'
 import { Environment } from '../../executer/environment'
 import { WorkItem, WorkItemState } from '../work-item'
-import { buildEnvironmentVariables } from '../../environment/replace-env-variables'
+import { buildEnvironmentVariables, WorkEnvironmentVariables } from '../../environment/replace-env-variables'
+import { mergeEnvironmentVariables } from '../../environment/merge-environment-variables'
+import { BuildFileContainerServiceSchema } from '../../schema/build-file-container-service-schema'
 import { ServiceState } from '../../executer/scheduler/service-state'
 import { State } from '../../executer/state'
 import { lazyResolver } from '../../executer/lazy-resolver'
@@ -123,8 +131,50 @@ function parseService(
       mounts: parseWorkMounts(service.cwd, service.schema, envs),
       src: parseWorkSource(service.cwd, service.schema.src, envs),
       caching,
+      init: parseServiceInit(service, envs, environment, context),
     }
   }
+}
+
+function parseServiceInit(
+  service: ReferenceService,
+  serviceEnvs: WorkEnvironmentVariables,
+  environment: Environment,
+  context: ReferencedContext
+): WorkServiceInit | null {
+  if (isBuildFileKubernetesServiceSchema(service.schema) || !service.schema.init) {
+    return null
+  }
+  const init = service.schema.init
+  // the init sees the service's env values, its own on top
+  const envs = buildEnvironmentVariables(mergeEnvironmentVariables(init.envs, service.envs), environment, context)
+  return {
+    image: init.image ? templateValue(init.image, envs) : templateValue(service.schema.image, serviceEnvs),
+    shell: init.shell ? templateValue(init.shell, envs) : 'sh',
+    cmds: init.cmds.map((cmd) => parseWorkCommand(service.cwd, cmd, envs)),
+    envs,
+    mounts: parseWorkMounts(service.cwd, { mounts: init.mounts } as BuildFileContainerServiceSchema, envs),
+    timeout: getInitTimeout(init.timeout, environment),
+  }
+}
+
+export const DEFAULT_INIT_TIMEOUT = '5m'
+
+// A service's own `init.timeout`, else HAMMERKIT_INIT_TIMEOUT, else 5 minutes:
+// an init that never ends would otherwise keep the run waiting.
+export function getInitTimeout(timeout: string | undefined, environment: Environment): number {
+  if (timeout) {
+    return parseDuration(timeout)
+  }
+  const fromEnv = environment.processEnvs.HAMMERKIT_INIT_TIMEOUT
+  if (fromEnv) {
+    try {
+      return parseDuration(fromEnv)
+    } catch (e) {
+      throw new Error(`HAMMERKIT_INIT_TIMEOUT: ${getErrorMessage(e)}`)
+    }
+  }
+  return parseDuration(DEFAULT_INIT_TIMEOUT)
 }
 
 export const DEFAULT_HEALTHCHECK_TIMEOUT = '20s'

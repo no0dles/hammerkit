@@ -168,6 +168,37 @@ services:
       - "postgres-db:/var/lib/postgresql/data"
 ```
 
+## Init [#init]
+
+Setup that has to happen once the service is up — create buckets, initiate a
+replica set, assign roles in an identity provider — goes into `init`: a one-shot
+container that runs its commands to completion after the service passed its
+healthcheck, and before anything needing the service starts. It reaches the service
+by its name, runs again every time the service starts, and a failing or timed-out
+init fails the service.
+
+```yaml
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.6
+    healthcheck:
+      cmd: …
+    init:
+      image: curlimages/curl:8.10.1   # defaults to the service's image
+      mounts:
+        - ./assign-roles.sh:/assign-roles.sh:ro
+      envs:
+        KEYCLOAK_URL: http://keycloak:8080
+      cmds:
+        - sh /assign-roles.sh
+      timeout: 2m                     # default 5m or HAMMERKIT_INIT_TIMEOUT
+```
+
+`init` takes `image`, `shell` (default `sh`), `cmds`, `envs` (on top of the
+service's), `mounts` and `timeout`. It runs as a container task with the service's
+`needs` plus the service itself; on Kubernetes as a Job. A service with an `init` is
+always awaited, also under `up --daemon --wait start`.
+
 ## Hostname [#hostname]
 
 A service's container uses the service name as its hostname, so the service

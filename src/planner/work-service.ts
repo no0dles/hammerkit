@@ -44,6 +44,18 @@ export interface ContainerWorkService extends BaseWorkService {
   mounts: WorkMount[]
   volumes: WorkVolume[]
   healthcheck: WorkHealthcheck | null
+  // one-shot after the healthcheck passed, before dependents start
+  init: WorkServiceInit | null
+}
+
+export interface WorkServiceInit {
+  image: string
+  shell: string
+  cmds: WorkCommand[]
+  envs: WorkEnvironmentVariables
+  mounts: WorkMount[]
+  // ms: init.timeout, HAMMERKIT_INIT_TIMEOUT or 5 minutes
+  timeout: number
 }
 
 export interface KubernetesWorkService extends BaseWorkService {

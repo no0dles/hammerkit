@@ -352,6 +352,41 @@
                       "cmd"
                     ],
                     "additionalProperties": false
+                  },
+                  "init": {
+                    "type": "object",
+                    "properties": {
+                      "image": {
+                        "type": "string"
+                      },
+                      "shell": {
+                        "type": "string"
+                      },
+                      "cmds": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cmds/items"
+                        }
+                      },
+                      "envs": {
+                        "$ref": "#/definitions/hammerkit/properties/envs",
+                        "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
+                      },
+                      "mounts": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "timeout": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                      }
+                    },
+                    "required": [
+                      "cmds"
+                    ],
+                    "additionalProperties": false,
+                    "description": "one-shot run after the service is ready"
                   }
                 },
                 "required": [

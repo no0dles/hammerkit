@@ -23,6 +23,15 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
     volumes: service.volumes.map((v) => `${v.name}:${v.containerPath}:${v.readOnly ? 'ro' : 'rw'}`),
     src: service.src.map((s) => s.absolutePath),
     healthcheck: service.healthcheck?.cmd.cmd ?? null,
+    init: service.init
+      ? {
+          image: service.init.image,
+          shell: service.init.shell,
+          cmds: service.init.cmds.map((c) => c.cmd),
+          envs: service.init.envs.variables,
+          mounts: service.init.mounts.map((m) => `${m.localPath}:${m.containerPath}:${m.readOnly ? 'ro' : 'rw'}`),
+        }
+      : null,
     needs: item.needs
       .filter((need) => isContainerWorkService(need.service.data))
       .map((need) => `${need.name}=${getServiceDefinitionHash(need.service as WorkItem<ContainerWorkService>)}`),

@@ -8,11 +8,11 @@ import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
 import { awaitCompletedDependencies, awaitDependentNeed, awaitRunningNeeds } from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
+import { withDeadline } from './deadline'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
 import { formatDuration } from '../utils/units'
-import { listenOnAbort } from '../utils/abort-event'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -34,31 +34,6 @@ async function pushToBackend(
     work.status.write('info', `${work.name} pushed to cache "${resolved.name}" (${resolved.backend.type})`)
   } catch (e) {
     work.status.write('warn', `${work.name} failed to push to cache "${resolved.name}": ${getErrorMessage(e)}`)
-  }
-}
-
-// An abort signal that follows `parent` and additionally fires after `timeout`
-// ms, so a task deadline reuses the runtimes' existing abort/cleanup path.
-function withDeadline(parent: AbortSignal, timeout: number | null) {
-  const controller = new AbortController()
-  let expired = false
-  const parentListener = listenOnAbort(parent, () => controller.abort())
-  const timer =
-    timeout === null
-      ? null
-      : setTimeout(() => {
-          expired = true
-          controller.abort()
-        }, timeout)
-  return {
-    signal: controller.signal,
-    expired: () => expired,
-    clear() {
-      if (timer) {
-        clearTimeout(timer)
-      }
-      parentListener.close()
-    },
   }
 }
 
