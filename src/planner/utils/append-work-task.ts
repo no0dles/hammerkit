@@ -1,3 +1,4 @@
+import { getSecretName, parseWorkSecrets } from '../work-secret'
 import { BaseWorkTask, ContainerWorkTask, LocalWorkTask, WorkTask } from '../work-task'
 import { parseWorkGenerate } from './parse-work-generate'
 import { templateValue } from './template-value'
@@ -84,6 +85,7 @@ function parseTask(
     shell: task.schema.shell ? templateValue(task.schema.shell, envs) : '/bin/sh',
     continuous: task.schema.continuous ?? false,
     timeout: task.schema.timeout ? parseDuration(task.schema.timeout) : null,
+    secrets: parseWorkSecrets(cwd, context.projectRoot, task.schema.secrets, envs, environment),
   }
 
   if (isBuildFileContainerTaskSchema(task.schema)) {
@@ -95,6 +97,12 @@ function parseTask(
       mounts: parseWorkMounts(cwd, task.schema, envs),
     }
   } else {
+    const fileSecret = baseWorkNode.secrets.find((secret) => secret.target.type === 'file')
+    if (fileSecret) {
+      throw new Error(
+        `task ${task.relativeName}: a local task takes secrets as env only (${getSecretName(fileSecret)})`
+      )
+    }
     return <LocalWorkTask>{
       ...baseWorkNode,
       type: 'local-task',

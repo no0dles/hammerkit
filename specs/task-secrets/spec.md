@@ -4,7 +4,7 @@
 
 **Created**: 2026-05-31
 
-**Status**: Draft
+**Status**: Implemented (1.11.0)
 
 **Input**: Real-world feedback — some tests need GCloud pubsub credentials that the old CI provided. Hammerkit has no dedicated way to inject credentials into a containerized task; today there is only `envs`, env files, and `mounts`. This spec adds a first-class secrets mechanism for tasks and services that does not bake credentials into images or commit them to the build file.
 
@@ -94,3 +94,14 @@ On Kubernetes, secrets map to a Secret resource consumed via env or volume and a
 - Secrets are ambient credentials by default and do not participate in cache identity; the `cache: true` opt-in (ADR-0002) covers the case where a secret genuinely determines output.
 - This mechanism is the supported path for credentials like the GCloud pubsub keys referenced in the feedback, replacing ad-hoc `mounts`/`envs`.
 - Credential resolution reuses standard host mechanisms; it introduces no persistent secret storage of its own.
+
+## Implementation notes (1.11.0)
+
+- Schema: `secrets: [{ from: env:NAME | file:path, env | path, cache? }]` on tasks and container services; exactly one target per secret. A service's `init` gets the service's secrets.
+- Values are read when the task or service starts (planning never reads them); a missing source fails the item before its container starts, naming the secret (FR-006).
+- Docker: `env` targets are container env; `file:` sources are bind-mounted `:ro`; `env:` sources with a `path` target are written to an owner-only file in hammerkit's data directory, mounted `:ro` and removed with the container (a daemon service keeps it until `down`).
+- Kubernetes: one Secret per task or service, referenced via `secretKeyRef` / a read-only `subPath` mount; a task's Secret is deleted after it ran, a service's on stop (FR-005).
+- Local tasks take `env` targets only.
+- Redaction: every value hammerkit reads is masked as `***` in all status and console output it writes, per line for multi-line values; values under four characters are not masked (FR-004).
+- Cache: secrets stay out of the description by default; `cache: true` adds `name=sha256:<salted digest>`, with file targets named project-relative so the key matches across checkouts (FR-007, FR-007a).
+- The service definition hash (recreate on `up`) covers secret declarations, never values: a rotated value needs `down`.

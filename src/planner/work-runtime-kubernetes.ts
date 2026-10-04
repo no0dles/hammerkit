@@ -29,6 +29,7 @@ import { getVersion } from '../version'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
+import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 
 async function listJobNames(
   instance: ReturnType<typeof createKubernetesInstances>,
@@ -64,6 +65,13 @@ export function kubernetesTaskRuntime(
 
       await ensureNamespace(instance, kubernetes.namespace)
       await ensurePersistentData(instance, kubernetes, environment, task, persistence)
+      const secrets = getKubernetesSecretRefs(task, task.data.secrets)
+      try {
+        await ensureKubernetesSecret(instance, kubernetes, task, task.data.secrets, environment)
+      } catch (e) {
+        options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+        return
+      }
 
       // The last job of a run stays: its state label is what currentStateKey
       // reads. Jobs from an earlier run of this task go before this one starts.
@@ -120,12 +128,15 @@ export function kubernetesTaskRuntime(
                     command: [task.data.shell, '-c'],
                     args: [cmd.cmd],
                     workingDir: cmd.cwd,
-                    env: Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
+                    env: [
+                      ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
+                      ...secrets.env,
+                    ],
                     name: `cmd-${++i}`,
-                    volumeMounts: persistence.mounts.map((m) => m.mount),
+                    volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
                   },
                 ],
-                volumes: persistence.volumes,
+                volumes: [...persistence.volumes, ...secrets.volumes],
                 hostAliases,
                 restartPolicy: 'Never',
               },
@@ -155,9 +166,12 @@ export function kubernetesTaskRuntime(
             type: 'error',
             errorMessage: getErrorMessage(e),
           })
+          await removeKubernetesSecret(instance, kubernetes, task).catch(() => undefined)
           return
         }
       }
+      // the finished job stays for its state, the values it read need not
+      await removeKubernetesSecret(instance, kubernetes, task)
     },
     async stop(): Promise<void> {
       const jobs = await instance.batchApi.listNamespacedJob({
@@ -197,6 +211,7 @@ export function kubernetesTaskRuntime(
       await this.stop()
 
       await removePersistentData(instance, kubernetes, task)
+      await removeKubernetesSecret(instance, kubernetes, task)
     },
     async currentStateKey(): Promise<string | null> {
       const jobs = await instance.batchApi.listNamespacedJob({
@@ -256,13 +271,22 @@ export function kubernetesServiceRuntime(
           })
         }
       }
+      await removeKubernetesSecret(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const persistence = await getKubernetesPersistence(service)
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)
-      await ensureKubernetesDeploymentExists(instance, kubernetes, service, persistence, options.stateKey)
+      await ensureKubernetesSecret(instance, kubernetes, service, service.data.secrets, environment)
+      await ensureKubernetesDeploymentExists(
+        instance,
+        kubernetes,
+        service,
+        persistence,
+        getKubernetesSecretRefs(service, service.data.secrets),
+        options.stateKey
+      )
 
       const name = getResourceName(service)
       const init = service.data.init

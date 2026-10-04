@@ -11,6 +11,7 @@ import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
 import { dockerTask } from '../executer/docker-task'
 import { dockerService } from '../executer/docker-service'
+import { removeContainerSecrets } from '../executer/container-secrets'
 import Dockerode from 'dockerode'
 import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
@@ -224,6 +225,7 @@ export function dockerServiceRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
+      await removeContainerSecrets(getWorkInstanceId(service))
     },
     async remove(): Promise<void> {
       await this.stop()

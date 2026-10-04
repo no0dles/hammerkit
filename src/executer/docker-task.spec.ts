@@ -17,7 +17,7 @@ describe('container task environment', () => {
       const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'build' })
       const item = cli.task('build') as any
       item.data.user = user
-      env = buildCreateOptions(item, 'state', {}, environment).Env ?? []
+      env = buildCreateOptions(item, 'state', {}, environment, { env: {}, binds: [] }).Env ?? []
     })
     return env
   }

@@ -13,12 +13,6 @@ Exclude paths from a task's `src` with `!` entries (`src: [src, '!src/**/*.md']`
 so a source folder can be narrowed without long globs. An excluded path is hidden
 from container tasks too, so a task can't read what isn't part of its cache key.
 
-### Secrets
-First-class secrets for tasks and services — injected at runtime from the host
-environment, a file or a secret manager, never stored in the build file and redacted
-from logs. By default a secret doesn't affect the cache; a secret that determines
-the output can opt in. See the [detailed plan](/docs/contribution/secret-managers).
-
 ### Container runtime options
 Declare Docker runtime and security options such as `--shm-size` or a seccomp
 profile on container tasks and services, for workloads like browsers or sandboxed
@@ -26,6 +20,9 @@ workers that need them.
 
 ## Later
 
+* **Secret managers** — [secrets](/docs/task/secrets) from the host environment or a
+  file shipped in 1.11; sourcing them from a secret manager (Vault, cloud secret
+  stores) is planned, see the [detailed plan](/docs/contribution/secret-managers).
 * **Task resources** — CPU and memory requests/limits per task, enforced on Docker
   and Kubernetes and used for resource-aware local scheduling instead of a flat
   worker count.

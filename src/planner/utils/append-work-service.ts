@@ -1,3 +1,4 @@
+import { parseWorkSecrets } from '../work-secret'
 import { WorkTree } from '../work-tree'
 import { ReferencedContext, ReferenceService } from '../../schema/reference-parser'
 import { getWorkServiceId } from '../work-service-id'
@@ -132,6 +133,7 @@ function parseService(
       src: parseWorkSource(service.cwd, service.schema.src, envs),
       caching,
       init: parseServiceInit(service, envs, environment, context),
+      secrets: parseWorkSecrets(service.cwd, context.projectRoot, service.schema.secrets, envs, environment),
     }
   }
 }

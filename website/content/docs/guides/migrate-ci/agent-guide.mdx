@@ -217,7 +217,7 @@ Write the migration report (as `MIGRATION.md` or the pull request description):
 | Caches | `actions/cache` / `cache:` | none — per-task caching from `src`, shared via a [remote cache](/docs/build-file/caches) |
 | Service containers | `services:` | `services` + `needs`; reach them by service name |
 | Environment | `env:` / `variables:` | `envs` (build-file or task level) |
-| Secrets | `${{ secrets.X }}` / masked variables | CI exports `X`; the task declares `envs: { X: $X }` |
+| Secrets | `${{ secrets.X }}` / masked variables | CI exports `X`; the task declares [`secrets: [{ from: env:X, env: X }]`](/docs/task/secrets) — out of the cache key and masked in logs |
 | Matrix | `strategy.matrix` / `parallel:matrix` | one task per variant via `extend` |
 | Timeout | `timeout-minutes` / `timeout` | `timeout: 20m` |
 | Working directory | `working-directory` / `cd` | `{cmd, path}` in `cmds`, or a [referenced](/docs/build-file/references) build file per package |

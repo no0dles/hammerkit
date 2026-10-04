@@ -18,6 +18,7 @@ function service(name: string, data: Partial<ContainerWorkService>, needs: WorkI
       volumes: [],
       src: [],
       healthcheck: null,
+      secrets: [],
       ...data,
     },
   } as unknown as WorkItem<ContainerWorkService>
@@ -34,6 +35,20 @@ describe('service definition hash', () => {
     expect(
       getServiceDefinitionHash(service('db', { ports: [{ hostPort: 5432, containerPort: 5432 }] } as any))
     ).not.toEqual(base)
+  })
+
+  it('changes with where a secret goes, never with its value', () => {
+    const secret = (name: string, digest: string) => ({
+      source: { type: 'env', name: 'DB_PASSWORD' },
+      target: { type: 'env', name },
+      cache: false,
+      digest: () => digest,
+    })
+    const base = getServiceDefinitionHash(service('db', { secrets: [secret('POSTGRES_PASSWORD', 'a')] } as any))
+    expect(getServiceDefinitionHash(service('db', { secrets: [secret('POSTGRES_PASSWORD', 'b')] } as any))).toEqual(
+      base
+    )
+    expect(getServiceDefinitionHash(service('db', { secrets: [secret('PGPASSWORD', 'a')] } as any))).not.toEqual(base)
   })
 
   it('changes for a dependent when a service it needs changes', () => {

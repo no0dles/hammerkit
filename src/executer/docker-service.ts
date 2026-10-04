@@ -20,6 +20,7 @@ import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
 import { dockerTask, getNeedsNetwork } from './docker-task'
 import { runServiceInit } from './run-service-init'
+import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { WorkItem } from '../planner/work-item'
 import { ServiceState } from './scheduler/service-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
@@ -33,14 +34,15 @@ const HEALTHCHECK_INTERVAL_MS = 1000
 export function buildServiceCreateOptions(
   item: WorkItem<ContainerWorkService>,
   options: ExecuteOptions<ServiceState>,
-  network: { links: string[]; hosts: string[] }
+  network: { links: string[]; hosts: string[] },
+  secrets: ContainerSecrets
 ): ContainerCreateOptions {
   const envs = getEnvironmentVariables(item.data.envs)
   const command = getServiceCommand(item.data)
   return {
     Image: item.data.image,
     Hostname: getServiceHostname(item.name),
-    Env: Object.keys(envs).map((k) => `${k}=${envs[k]}`),
+    Env: Object.entries({ ...envs, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
     Labels: {
       app: 'hammerkit',
       'hammerkit-id': getWorkInstanceId(item),
@@ -66,6 +68,7 @@ export function buildServiceCreateOptions(
           (v) => `${v.localPath}:${convertToPosixPath(v.containerPath)}${v.readOnly ? ':ro' : ''}`
         ),
         ...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}${v.readOnly ? ':ro' : ''}`),
+        ...secrets.binds,
       ],
       // host ports are for `hammerkit up` and local tasks; container tasks
       // reach the service over its link, and a run publishing them would
@@ -104,7 +107,8 @@ export async function dockerService(
     const network = getNeedsNetwork(serviceContainers, item.needs)
 
     item.status.write('debug', `create container with image ${item.data.image}`)
-    container = await docker.createContainer(buildServiceCreateOptions(item, options, network))
+    const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
+    container = await docker.createContainer(buildServiceCreateOptions(item, options, network, secrets))
 
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)
@@ -207,6 +211,10 @@ export async function dockerService(
       } catch (e) {
         item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
       }
+    }
+    // a daemon keeps its secret files until `hammerkit down` stops it
+    if (!options.daemon) {
+      await removeContainerSecrets(getWorkInstanceId(item))
     }
   }
 }

@@ -7,6 +7,7 @@ import { WorkMount } from './work-mount'
 import { ParseScope } from '../schema/parse-context'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { WorkItem } from './work-item'
+import { WorkSecret } from './work-secret'
 
 export type WorkTask = LocalWorkTask | ContainerWorkTask
 
@@ -27,6 +28,7 @@ export interface BaseWorkTask {
   continuous: boolean
   // maximum execution time in ms, null for none
   timeout: number | null
+  secrets: WorkSecret[]
 }
 
 export interface WorkTaskGenerate {

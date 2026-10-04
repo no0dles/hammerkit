@@ -40,6 +40,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `shell` | string | Shell used to run `cmds` (default `/bin/sh`). |
 | `continuous` | boolean | Task [watches itself](/docs/task/watching); hammerkit won't restart it in watch mode. |
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
+| `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
 
 **Container task** adds:
 
@@ -71,6 +72,7 @@ service** (it has a `selector`).
 | `healthcheck` | `{cmd, timeout}` | Readiness command, and how long the service may take to pass it once running (duration, default `20s`, `HAMMERKIT_HEALTHCHECK_TIMEOUT` changes the default); see [healthcheck](/docs/service/container#healthcheck). |
 | `init` | `{image, shell, cmds, envs, mounts, timeout}` | One-shot after the healthcheck, before dependents start; see [init](/docs/service/container#init). |
 | `envs` | map of string→string/number | Service environment variables. |
+| `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file; the `init` gets them too. |
 | `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
 | `mounts` | array of string | `host:container[:ro]` config mounts. |
 | `deps` | array of string | Tasks that must run before the service starts. |

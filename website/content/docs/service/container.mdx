@@ -206,6 +206,12 @@ resolves its own name: software that advertises its own address, such as a Mongo
 replica-set member `mongodb:27017`, works without knowing the container's IP.
 Other containers reach it by the name they list it under in `needs`.
 
+## Secrets [#secrets]
+
+Credentials reach a service through `secrets`, as an environment variable or a
+read-only file, without being written to the build file or hammerkit's logs; its
+`init` gets them too. See [secrets](/docs/task/secrets).
+
 ## Mounts
 Mounts can be used to pass local files into the container.
 They are meant for local configuration and settings files. Append `:ro` to mount

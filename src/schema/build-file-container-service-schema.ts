@@ -4,6 +4,7 @@ import { buildFileNeedSchema } from './build-file-need-schema'
 import { labelsSchema } from './labels-schema'
 import { buildFileServiceContainerHealthcheck } from './build-file-service-container-healthcheck'
 import { buildFileServiceInitSchema } from './build-file-service-init-schema'
+import { buildFileSecretSchema } from './build-file-secret-schema'
 
 export const buildFileContainerServiceSchema = object({
   image: string(),
@@ -30,6 +31,7 @@ export const buildFileContainerServiceSchema = object({
   continuous: boolean().optional(),
   healthcheck: buildFileServiceContainerHealthcheck.optional(),
   init: buildFileServiceInitSchema.optional(),
+  secrets: array(buildFileSecretSchema).optional(),
 })
   .strict()
   .describe('container service')

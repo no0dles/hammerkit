@@ -47,6 +47,8 @@ export function getServiceInitTask(
       caching: service.data.caching,
       continuous: false,
       timeout: init.timeout,
+      // the init acts on the service, so it gets the service's secrets
+      secrets: service.data.secrets,
     },
   }
 }

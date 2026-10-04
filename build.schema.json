@@ -181,6 +181,33 @@
                   "timeout": {
                     "type": "string"
                   },
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "pattern": "^(env|file):.+$"
+                        },
+                        "env": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "cache": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "from"
+                      ],
+                      "additionalProperties": false,
+                      "description": "secret from env:NAME or file:path, injected as env or a read-only file"
+                    }
+                  },
                   "image": {
                     "type": "string"
                   },
@@ -238,6 +265,9 @@
                   },
                   "timeout": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "secrets": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets"
                   },
                   "platform": {
                     "type": "object",
@@ -387,6 +417,12 @@
                     ],
                     "additionalProperties": false,
                     "description": "one-shot run after the service is ready"
+                  },
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets/items"
+                    }
                   }
                 },
                 "required": [

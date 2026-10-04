@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { getSecretName } from './work-secret'
 import { WorkItem } from './work-item'
 import { ContainerWorkService, isContainerWorkService } from './work-service'
 
@@ -23,6 +24,8 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
     volumes: service.volumes.map((v) => `${v.name}:${v.containerPath}:${v.readOnly ? 'ro' : 'rw'}`),
     src: service.src.map((s) => s.absolutePath),
     healthcheck: service.healthcheck?.cmd.cmd ?? null,
+    // where secrets go, never their values: a rotated value needs a `down`
+    secrets: service.secrets.map((s) => `${s.source.type}:${getSecretName(s)}`),
     init: service.init
       ? {
           image: service.init.image,

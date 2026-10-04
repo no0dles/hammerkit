@@ -1,3 +1,4 @@
+import { WorkSecret } from './work-secret'
 import { WorkPort } from './work-port'
 import { WorkMount } from './work-mount'
 import { WorkTask } from './work-task'
@@ -46,6 +47,7 @@ export interface ContainerWorkService extends BaseWorkService {
   healthcheck: WorkHealthcheck | null
   // one-shot after the healthcheck passed, before dependents start
   init: WorkServiceInit | null
+  secrets: WorkSecret[]
 }
 
 export interface WorkServiceInit {

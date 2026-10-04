@@ -18,6 +18,7 @@ import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getOutputsToReset } from '../planner/utils/get-outputs-to-reset'
+import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { removeContainerTaskState, writeContainerTaskState } from './container-task-state'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
@@ -43,7 +44,8 @@ export function buildCreateOptions(
   item: WorkItem<ContainerWorkTask>,
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
-  environment: Environment
+  environment: Environment,
+  secrets: ContainerSecrets
 ): ContainerCreateOptions {
   const network = getNeedsNetwork(serviceContainers, item.needs)
   const binds = getContainerBinds(item)
@@ -59,7 +61,7 @@ export function buildCreateOptions(
     Tty: true,
     Entrypoint: [item.data.shell],
     Cmd: ['-c', 'sleep 3600'],
-    Env: Object.entries({ ...envs, ...home }).map(([key, value]) => `${key}=${value}`),
+    Env: Object.entries({ ...envs, ...home, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
     WorkingDir: convertToPosixPath(item.data.cwd),
     Labels: {
       app: 'hammerkit',
@@ -69,7 +71,10 @@ export function buildCreateOptions(
       'hammerkit-state': stateKey,
     },
     HostConfig: {
-      Binds: binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}${b.readOnly ? ':ro' : ''}`),
+      Binds: [
+        ...binds.map((b) => `${b.localPath}:${convertToPosixPath(b.containerPath)}${b.readOnly ? ':ro' : ''}`),
+        ...secrets.binds,
+      ],
       ExtraHosts: network.hosts,
       Links: network.links,
       AutoRemove: true,
@@ -105,7 +110,8 @@ export async function dockerTask(
     checkForAbort(options.abort)
 
     const serviceContainers = getServiceContainers(item.needs)
-    const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers, environment)
+    const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
+    const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers, environment, secrets)
     printContainerOptions(item.status, containerOptions)
 
     const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {
@@ -178,6 +184,8 @@ export async function dockerTask(
         errorMessage: getErrorMessage(e),
       })
     }
+  } finally {
+    await removeContainerSecrets(getWorkInstanceId(item))
   }
 }
 

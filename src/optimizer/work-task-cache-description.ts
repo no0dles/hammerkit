@@ -4,6 +4,7 @@ import { WorkTask } from '../planner/work-task'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { portablePath } from '../planner/utils/portable-path'
 import { WorkItem } from '../planner/work-item'
+import { getPortableSecretName } from '../planner/work-secret'
 
 export interface WorkTaskCacheDescription {
   cwd?: string
@@ -17,6 +18,8 @@ export interface WorkTaskCacheDescription {
   shell?: string | null
   platform?: string
   arch?: string
+  // `cache: true` secrets: name and salted digest, never the value
+  secrets?: string[]
 }
 
 // Every path is made project-relative (portablePath) so the description, and the
@@ -29,6 +32,10 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
   const task = item.data
   const portable = (path: string) => portablePath(task.projectRoot, path)
   const envs = getEnvironmentVariables(task.envs)
+  const cachedSecrets = task.secrets
+    .filter((secret) => secret.cache)
+    .map((secret) => `${getPortableSecretName(task.projectRoot, secret)}=${secret.digest()}`)
+    .sort()
   return {
     shell: task.shell ?? undefined,
     platform: task.type === 'container-task' ? task.image : platform(),
@@ -48,6 +55,7 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
     mounts: task.type === 'container-task' ? task.mounts.map((m) => m.mount).sort() : undefined,
     cwd: portable(task.cwd),
     deps: item.deps.length > 0 ? item.deps.map((dep) => dep.id()).sort() : undefined,
+    secrets: cachedSecrets.length > 0 ? cachedSecrets : undefined,
   }
 }
 
