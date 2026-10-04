@@ -168,6 +168,20 @@ services:
       - "postgres-db:/var/lib/postgresql/data"
 ```
 
+A volume name is a Docker volume, the same for every checkout on that Docker host.
+Where several checkouts share one host — CI jobs on one runner — name it after one
+of the service's `envs`, so each job gets its own:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    envs:
+      DATA_PREFIX: ${CI_JOB_ID:-dev}
+    volumes:
+      - "${DATA_PREFIX}-postgres:/var/lib/postgresql/data"
+```
+
 ## Init [#init]
 
 Setup that has to happen once the service is up — create buckets, initiate a
