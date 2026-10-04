@@ -11,13 +11,16 @@ export function parseWorkVolume(
   envs: WorkEnvironmentVariables
 ): WorkVolume {
   if (typeof volume === 'string') {
-    const parts = volume.split(':')
+    // `$NAME` references resolve first, as in mounts, so a value holding a
+    // colon can't break the name:path split
+    const value = templateValue(volume, envs)
+    const parts = value.split(':')
     if (parts.length === 2) {
       return parseVolume(cwd, parts[0], parts[1], false)
     } else if (parts.length === 3 && (parts[2] === 'ro' || parts[2] === 'rw')) {
       return parseVolume(cwd, parts[0], parts[1], parts[2] === 'ro')
     } else {
-      throw new Error(`invalid volume ${volume}`)
+      throw new Error(`invalid volume ${value}`)
     }
   } else {
     const path = templateValue(volume.path, envs)
