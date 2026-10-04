@@ -38,8 +38,9 @@ show up as `skipped` in the [build summary](/docs/cli/execute#build-summary).
 
 Tasks you ask for — by name, or selected with a [label filter](/docs/labels)
 — always run (or restore from the cache); only tasks pulled in purely as
-dependencies are skipped. Dependencies of services, and everything in watch mode,
-always run.
+dependencies are skipped. A service's dependency runs once the service starts,
+so when every task needing the service is a cache hit, neither the service nor
+its dependencies run. Under `up` and in watch mode everything runs.
 
 <Callout type="info">
 

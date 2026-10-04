@@ -33,24 +33,41 @@ export async function awaitRequirement(
   return Promise.race([ready, allDone])
 }
 
-// Resolve true once any dependent is `ready` — it missed the cache and is about
-// to run, so it needs this task's outputs — and false once every dependent
-// finished without needing it (all cache hits, or skipped themselves).
-export async function awaitDependentNeed(
-  dependents: WorkItemState<WorkTask, TaskState>[],
-  abort: AbortSignal
-): Promise<boolean> {
+export type Dependent = WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>
+
+// Resolve true once any dependent needs this task's outputs — a task that is
+// `ready` (it missed the cache and is about to run), a service that is
+// `starting` (a task needing it runs) — and false once every dependent
+// finished without needing it: tasks that were cache hits or skipped, services
+// that never started.
+export async function awaitDependentNeed(dependents: Dependent[], abort: AbortSignal): Promise<boolean> {
   const ready = Promise.race(
-    dependents.map((dependent) => awaitState('await-dependent', dependent.state, (s) => s.type === 'ready', abort))
+    dependents.map((dependent) =>
+      isWorkTaskItem(dependent)
+        ? awaitState('await-dependent', dependent.state, (s) => s.type === 'ready', abort)
+        : awaitState(
+            'await-dependent',
+            (dependent as WorkItemState<WorkService, ServiceState>).state,
+            (s) => s.type === 'starting' || s.type === 'ready' || s.type === 'running',
+            abort
+          )
+    )
   ).then(() => true)
   const allDone = Promise.all(
     dependents.map((dependent) =>
-      awaitState(
-        'await-dependent-done',
-        dependent.state,
-        (s) => s.type === 'completed' || s.type === 'error' || s.type === 'crash' || s.type === 'canceled',
-        abort
-      )
+      isWorkTaskItem(dependent)
+        ? awaitState(
+            'await-dependent-done',
+            dependent.state,
+            (s) => s.type === 'completed' || s.type === 'error' || s.type === 'crash' || s.type === 'canceled',
+            abort
+          )
+        : awaitState(
+            'await-dependent-done',
+            (dependent as WorkItemState<WorkService, ServiceState>).state,
+            (s) => s.type === 'end' || s.type === 'error' || s.type === 'canceled',
+            abort
+          )
     )
   ).then(() => false)
   return Promise.race([ready, allDone])
