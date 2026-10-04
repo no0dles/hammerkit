@@ -3,7 +3,6 @@ import { envsSchema } from './envs-schema'
 import { buildFileNeedSchema } from './build-file-need-schema'
 import { labelsSchema } from './labels-schema'
 import { buildFileServiceContainerHealthcheck } from './build-file-service-container-healthcheck'
-import { buildFileServiceInitSchema } from './build-file-service-init-schema'
 import { buildFileSecretSchema } from './build-file-secret-schema'
 
 export const buildFileContainerServiceSchema = object({
@@ -30,7 +29,9 @@ export const buildFileContainerServiceSchema = object({
   labels: labelsSchema.optional(),
   continuous: boolean().optional(),
   healthcheck: buildFileServiceContainerHealthcheck.optional(),
-  init: buildFileServiceInitSchema.optional(),
+  // a task (name or prefix:name, as in deps) that runs once the healthcheck
+  // passed; the service counts as ready for dependents only after it succeeded
+  init: string().describe('task run once the service is healthy, before dependents start').optional(),
   secrets: array(buildFileSecretSchema).optional(),
 })
   .strict()

@@ -62,6 +62,7 @@ export interface ReferenceService {
   schema: BuildFileServiceSchema
   deps: ReferenceTaskLink[]
   needs: ReferenceServiceLink[]
+  init: ReferenceTaskLink | null
   cwd: string
   relativeName: string
   envs: { [key: string]: string }
@@ -154,6 +155,7 @@ export async function parseReferences(
           scope: file,
           needs: [],
           deps: [],
+          init: null,
           envs: serviceEnvs,
         }
       }
@@ -169,6 +171,7 @@ export async function parseReferences(
   for (const service of Object.values(reference.services)) {
     resolveDeps(reference, service, service.scope, service.schema)
     resolveNeeds(reference, service, service.scope, service.schema)
+    resolveInit(reference, service)
   }
 
   reference.caches = withBuiltinCaches(declaredCaches)
@@ -246,6 +249,19 @@ function resolveDeps(
       cwd: depTask.type === 'include' ? taskOrService.cwd : depTask.task.cwd,
       relativeName: depName,
     })
+  }
+}
+
+function resolveInit(reference: ReferencedContext, service: ReferenceService) {
+  if (isBuildFileKubernetesServiceSchema(service.schema) || !service.schema.init) {
+    return
+  }
+  const initTask = findTask(reference, service.scope, service.schema.init, null)
+  service.init = {
+    task: initTask.task,
+    type: initTask.type,
+    cwd: initTask.type === 'include' ? service.cwd : initTask.task.cwd,
+    relativeName: service.schema.init,
   }
 }
 

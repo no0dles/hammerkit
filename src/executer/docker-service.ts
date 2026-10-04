@@ -18,8 +18,7 @@ import { checkReadiness } from './check-readiness'
 import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
-import { dockerTask, getNeedsNetwork } from './docker-task'
-import { runServiceInit } from './run-service-init'
+import { getNeedsNetwork } from './docker-task'
 import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { WorkItem } from '../planner/work-item'
 import { ServiceState } from './scheduler/service-state'
@@ -115,14 +114,7 @@ export async function dockerService(
 
     await container.start()
 
-    const init = item.data.init
-    // an init needs a ready service, so a service with one is always awaited
-    if (!item.data.healthcheck || (!options.waitForReady && !init)) {
-      if (init) {
-        await runServiceInit(item, init, { containerId: container.id }, options, (task, taskOptions) =>
-          dockerTask(docker, task, environment, taskOptions)
-        )
-      }
+    if (!item.data.healthcheck || !options.waitForReady) {
       options.state.set({
         type: 'running',
         dns: { containerId: container.id },
@@ -155,11 +147,6 @@ export async function dockerService(
       } while (!ready && !options.abort.aborted)
 
       if (ready) {
-        if (init) {
-          await runServiceInit(item, init, { containerId: container.id }, options, (task, taskOptions) =>
-            dockerTask(docker, task, environment, taskOptions)
-          )
-        }
         options.state.set({
           type: 'running',
           dns: { containerId: container.id },

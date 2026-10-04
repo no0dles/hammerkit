@@ -14,6 +14,8 @@ import {
 import { AbortError } from './abort'
 import { getErrorMessage } from '../log'
 import { watchLoop } from './watch-loop'
+import { WorkServiceInit } from '../planner/work-service'
+import { State } from './state'
 
 export async function stopService(work: WorkItemState<WorkService, ServiceState>) {
   if (work.state.current.type === 'running') {
@@ -74,14 +76,17 @@ export async function executeWorkService(
         )
       }
 
+      const init = getServiceInit(work)
       await work.runtime.execute(environment, {
         cache: cacheState,
         abort,
-        state: work.state,
+        state: init ? gateOnInit(work, init) : work.state,
         stateKey: cacheState.stateKey,
         daemon: options.daemon,
-        publishPorts: options.type === 'up' || work.requiredBy.some(isLocalTaskItem),
-        waitForReady: options.wait === 'ready' || work.requiredBy.length > 0,
+        publishPorts:
+          options.type === 'up' || work.requiredBy.some(isLocalTaskItem) || (!!init && isLocalTaskItem(init.task)),
+        // an init needs a healthy service, so a service with one is always awaited
+        waitForReady: options.wait === 'ready' || work.requiredBy.length > 0 || !!init,
       })
     })
   } catch (e) {
@@ -103,6 +108,28 @@ export async function executeWorkService(
       }
     }
   }
+}
+
+function getServiceInit(work: WorkItemState<WorkService, ServiceState>): WorkServiceInit | null {
+  return work.data.type === 'container-service' ? work.data.init : null
+}
+
+// With an init, the runtime's `running` (healthcheck passed) first reaches only
+// the init task's view of the service; executeInitTask runs the init and then
+// sets the service running, or failed.
+function gateOnInit(work: WorkItemState<WorkService, ServiceState>, init: WorkServiceInit): State<ServiceState> {
+  const gate = new State<ServiceState>(work.state.current)
+  gate.on('init-gate', (state) => {
+    if (state.type !== 'running') {
+      if (work.state.current.type !== 'error') {
+        work.state.set(state)
+      }
+      return
+    }
+    work.status.write('info', `${work.name} is healthy, run its init ${init.task.name}`)
+    init.state.set(state)
+  })
+  return gate
 }
 
 function isLocalTaskItem(item: WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>): boolean {

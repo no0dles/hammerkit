@@ -17,6 +17,10 @@ export function appendWorkNeeds(
 ) {
   for (const need of referenced.needs) {
     const serviceNeed = appendWorkService(workTree, need.service, environment, context)
+    if (isInitOf(serviceNeed, item)) {
+      // planning the service planned this task as its init, with the view
+      continue
+    }
     item.needs.push({
       service: serviceNeed,
       name: need.relativeName,
@@ -25,4 +29,11 @@ export function appendWorkNeeds(
       serviceNeed.requiredBy.push(item)
     }
   }
+}
+
+function isInitOf(
+  service: WorkItemState<WorkService, ServiceState>,
+  item: WorkItemState<WorkTask, TaskState> | WorkItemState<WorkService, ServiceState>
+): boolean {
+  return service.data.type === 'container-service' && service.data.init?.task === item
 }

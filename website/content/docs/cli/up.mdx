@@ -24,8 +24,9 @@ are started instead; services that other services need are still awaited, since
 those can only start once their needs are ready.
 
 A service that is already running is reused, unless its definition changed since
-it was started (image, command, env values, ports, mounts, volumes, healthcheck, or
-a service it needs): then `up` and `run` recreate it.
+it was started (image, command, env values, ports, mounts, volumes, healthcheck, its
+init task, or a service it needs): then `up` and `run` recreate it. A reused service
+does not run its [init](/docs/service/container#init) again.
 
 Stop services started this way with [`hammerkit down`](/docs/cli/down).
 

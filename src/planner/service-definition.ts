@@ -26,15 +26,9 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
     healthcheck: service.healthcheck?.cmd.cmd ?? null,
     // where secrets go, never their values: a rotated value needs a `down`
     secrets: service.secrets.map((s) => `${s.source.type}:${getSecretName(s)}`),
-    init: service.init
-      ? {
-          image: service.init.image,
-          shell: service.init.shell,
-          cmds: service.init.cmds.map((c) => c.cmd),
-          envs: service.init.envs.variables,
-          mounts: service.init.mounts.map((m) => `${m.localPath}:${m.containerPath}:${m.readOnly ? 'ro' : 'rw'}`),
-        }
-      : null,
+    // the init task's id covers its image, commands, envs and mounts: a changed
+    // init recreates the service, so it runs again
+    init: service.init ? service.init.task.id() : null,
     needs: item.needs
       .filter((need) => isContainerWorkService(need.service.data))
       .map((need) => `${need.name}=${getServiceDefinitionHash(need.service as WorkItem<ContainerWorkService>)}`),

@@ -70,7 +70,7 @@ describe('secrets', () => {
   )
 
   it(
-    'hands a secret to a service and its init',
+    'hands secrets to a service and to its init task',
     requiresLinuxContainers(async () => {
       await createTestCase('secrets-service', {
         '.git/HEAD': 'ref: refs/heads/main\n',
@@ -81,10 +81,15 @@ describe('secrets', () => {
               cmd: 'sleep 300',
               secrets: [{ from: 'env:HK_SECRET_TOKEN', path: '/run/secrets/token' }],
               healthcheck: { cmd: 'cat /run/secrets/token' },
-              init: { cmds: ['test "$(cat /run/secrets/token)" = "' + TOKEN + '"'] },
+              init: 'seed',
             },
           },
           tasks: {
+            seed: {
+              image: 'alpine:3.19',
+              secrets: [{ from: 'env:HK_SECRET_TOKEN', env: 'TOKEN' }],
+              cmds: ['test "$TOKEN" = "' + TOKEN + '"'],
+            },
             check: {
               image: 'alpine:3.19',
               needs: ['api'],

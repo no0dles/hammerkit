@@ -11,6 +11,10 @@ import { WorkKubernetesSelector } from './work-kubernetes-selector'
 import { WorkCommand } from './work-command'
 import { ResolvedCache } from '../cache/resolve-cache'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
+import { WorkItemState } from './work-item'
+import { TaskState } from '../executer/scheduler/task-state'
+import { ServiceState } from '../executer/scheduler/service-state'
+import { State } from '../executer/state'
 
 export interface BaseWorkService {
   name: string
@@ -51,13 +55,11 @@ export interface ContainerWorkService extends BaseWorkService {
 }
 
 export interface WorkServiceInit {
-  image: string
-  shell: string
-  cmds: WorkCommand[]
-  envs: WorkEnvironmentVariables
-  mounts: WorkMount[]
-  // ms: init.timeout, HAMMERKIT_INIT_TIMEOUT or 5 minutes
-  timeout: number
+  // the task named by `init`, planned like any other task
+  task: WorkItemState<WorkTask, TaskState>
+  // the service as its init task sees it: running once the healthcheck passed,
+  // while everything else still waits for the init to succeed
+  state: State<ServiceState>
 }
 
 export interface KubernetesWorkService extends BaseWorkService {

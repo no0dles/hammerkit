@@ -70,9 +70,9 @@ service** (it has a `selector`).
 | `shell` | string | Run `cmd` and the healthcheck as `<shell> -c "<cmd>"`; see [shell](/docs/service/container#shell). Without it both run in exec form. |
 | `ports` | array of string/number | `containerPort` or `hostPort:containerPort` to publish to the host. |
 | `healthcheck` | `{cmd, timeout}` | Readiness command, and how long the service may take to pass it once running (duration, default `20s`, `HAMMERKIT_HEALTHCHECK_TIMEOUT` changes the default); see [healthcheck](/docs/service/container#healthcheck). |
-| `init` | `{image, shell, cmds, envs, mounts, timeout}` | One-shot after the healthcheck, before dependents start; see [init](/docs/service/container#init). |
+| `init` | string | A task (`name` or `prefix:name`) run once the healthcheck passed; the service is ready for dependents only after it succeeded; see [init](/docs/service/container#init). |
 | `envs` | map of string→string/number | Service environment variables. |
-| `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file; the `init` gets them too. |
+| `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file. |
 | `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
 | `mounts` | array of string | `host:container[:ro]` config mounts. |
 | `deps` | array of string | Tasks that must run before the service starts. |

@@ -1,6 +1,5 @@
 import { AbortError } from '../executer/abort'
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
-import { runServiceInit } from '../executer/run-service-init'
 import { getServiceIp } from '../kubernetes/get-service-ip'
 import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
@@ -289,12 +288,6 @@ export function kubernetesServiceRuntime(
       )
 
       const name = getResourceName(service)
-      const init = service.data.init
-      if (init) {
-        await runServiceInit(service, init, { containerId: name }, options, (task, taskOptions) =>
-          kubernetesTaskRuntime(task, kubernetes).execute(environment, taskOptions)
-        )
-      }
       options.state.set({
         type: 'running',
         dns: { containerId: name },

@@ -363,7 +363,7 @@ becomes a task that `needs` them:
 | `healthcheck: start_period`, `retries` | `healthcheck: timeout:` (default `20s`) |
 | `ports:` | only for reaching the service from your host; tasks use `name:containerPort` |
 | a `build:` of the app under test | a service on the toolchain image with `deps: [install, build]`, running the built app |
-| a one-shot setup container (`createbuckets`, `rs.initiate`, migrations) | the service's [`init`](/docs/service/container#init): runs after the healthcheck passed, before anything needing the service starts |
+| a one-shot setup container (`createbuckets`, `rs.initiate`, migrations) | a task named by the service's [`init`](/docs/service/container#init): runs after the healthcheck passed, and the service is ready for anything needing it only once it succeeded |
 
 Things that behave differently from Compose:
 
@@ -379,8 +379,8 @@ Things that behave differently from Compose:
   run**, naming the check. Give slow starters (Elasticsearch, a JVM app) a longer
   `timeout`, and get each service healthy with `hammerkit up` first, watching its
   log.
-* **Setup goes into `init`, written to succeed when run again.** Services are
-  recreated on every run (unless kept up with `hammerkit up --daemon`), so the
+* **Setup goes into an `init` task, written to succeed when run again.** Services
+  are recreated on every run (unless kept up with `hammerkit up --daemon`), so the
   init runs again too: `mc mb --ignore-existing`, "initiate the replica set unless
   it exists".
 * **A name resolves only for direct `needs`.** A container reaches the services
