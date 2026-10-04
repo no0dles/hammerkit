@@ -160,7 +160,8 @@ function appendServiceInit(
     task.needs.push({ name: item.name, service: view })
   }
   removeRequirer(item, task.name)
-  task.data.caching = { ...task.data.caching, method: 'none' }
+  // explicit, so neither the default method nor `--cache` turns it back on
+  task.data.caching = { ...task.data.caching, method: 'none', implicit: false }
   if (task.data.timeout === null) {
     task.data.timeout = getInitTimeout(undefined, environment)
   }

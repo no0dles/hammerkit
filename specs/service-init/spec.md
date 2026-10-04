@@ -21,5 +21,5 @@
 
 - **FR-001**: `init` names a task like `deps` (`name` or `prefix:name`); the task is planned like any other and may be a container or local task with `deps`, `needs`, `envs`, `secrets`, `mounts`, `extend`.
 - **FR-002**: The init task needs the service under the service's name without declaring it, through a view of the service that runs once the healthcheck passed. The service runs for everything else once the init succeeded. The init task is not a requirer of the service (it never makes the service start), except when it is asked for alone.
-- **FR-003**: The init task is never a cache hit (`cache: none`); its id is part of the service's definition hash, so a changed init recreates a running service.
+- **FR-003**: The init task is never a cache hit (`cache: none`), also when it declares no `cache` of its own: neither the run's default method nor `--cache` turns caching back on, since its effect lives in the service, which a later run may have recreated. Its id is part of the service's definition hash, so a changed init recreates a running service.
 - **FR-004**: A service in a run brings its init task into the run; an init task whose service does not start in the run completes as skipped.
