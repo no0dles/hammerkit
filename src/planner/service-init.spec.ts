@@ -2,7 +2,8 @@ import { join } from 'path'
 import { createTestCase } from '../testing/test-case'
 import { createCli } from '../program'
 import { ContainerWorkService } from './work-service'
-import { WorkItem } from './work-item'
+import { WorkItem, WorkItemState } from './work-item'
+import { resolveEffective } from '../executer/scheduler/state-key'
 import { getInitTimeout } from './utils/append-work-service'
 import { Environment } from '../executer/environment'
 import { WorkTask } from './work-task'
@@ -67,6 +68,12 @@ describe('service init', () => {
     expect(services.db.data.init!.task.data.caching.method).toEqual('none')
     expect(services.db.data.init!.task.data.timeout).toEqual(300000)
     expect(services.idp.data.init!.task.data.timeout).toEqual(30000)
+  })
+
+  it('stays uncached when the run falls back to the default cache method', async () => {
+    const { services } = await load('service-init-cache-effective', null)
+    const task = services.db.data.init!.task as unknown as WorkItemState<WorkTask, unknown>
+    expect(resolveEffective(task, 'checksum').method).toEqual('none')
   })
 
   it('comes into the run with its service', async () => {
