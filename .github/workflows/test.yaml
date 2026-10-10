@@ -25,9 +25,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: 'npm'
@@ -40,7 +40,7 @@ jobs:
           VERBOSE: true
       - name: Archive test artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: console-log-${{ matrix.os }}
           path: |
@@ -70,9 +70,9 @@ jobs:
       HAMMERKIT_TEST_TIMEOUT: '900000'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: 'npm'
@@ -93,7 +93,7 @@ jobs:
         run: npm run test:integration -- --no-file-parallelism
       - name: Archive logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: macos-container-logs
           path: |
@@ -127,7 +127,7 @@ jobs:
       VERBOSE: 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up hammerkit and the shared cache
         uses: ./.github/actions/hammerkit
         with:
@@ -192,7 +192,7 @@ jobs:
           coverage-reports: coverage/lcov.info
       - name: Archive logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: linux-integration-logs
           path: |
