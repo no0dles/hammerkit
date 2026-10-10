@@ -98,6 +98,18 @@ describe('program commands (fast)', () => {
     await t.shell([HK, 'explain'])
   })
 
+  it('explain --check fails while a task would be a cache miss and passes once it is cached', async () => {
+    const t = createTestCase('cmd-explain-check', {
+      '.hammerkit.yaml': {
+        tasks: { build: { cmds: ['true'], src: ['input.txt'] } },
+      },
+      'input.txt': 'x\n',
+    })
+    await expect(t.shell([HK, 'explain', '--check'])).rejects.toThrow('would be a cache miss')
+    await t.shell([HK, 'run', 'build'])
+    await t.shell([HK, 'explain', '--check'])
+  })
+
   it('init writes a default .hammerkit.yaml when none exists', async () => {
     // empty fixture so getBuildFilename finds nothing; only the `init` command is registered then
     const t = createTestCase('cmd-init', {})

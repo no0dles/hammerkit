@@ -134,12 +134,16 @@ jobs:
       # already tested green, the pull above restored its result, and the
       # cluster below is not worth starting. Without a reachable cache this is
       # always a miss, so the job runs as it always did.
+      # `explain --check` exits 1 for a miss, and for a hammerkit too old to know
+      # the flag, so the cluster is started whenever in doubt.
       - name: Plan
         id: plan
         run: |
-          status=$(hammerkit explain test:integration --json | jq -r '.[] | select(.taskName == "test:integration") | .status' || echo unknown)
-          echo "test:integration is a cache $status"
-          echo "hit=$([ "$status" = hit ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          if hammerkit explain test:integration --check; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
       # A current Kubernetes: the Gateway API CRDs below need 1.31+ (their CEL
       # validations use isIP). Pinned by digest, as kind recommends.
       - name: Create kind cluster

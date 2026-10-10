@@ -330,6 +330,7 @@ export async function getProgram(
           .choices(['checksum', 'modify-date', 'none'])
       )
       .addOption(new Option('--json', 'emit the explanation as JSON').default(false))
+      .addOption(new Option('--check', 'exit with code 1 when any task would be a cache miss').default(false))
       .action(async (task, options) => {
         try {
           const cli = await createCli(
@@ -338,8 +339,12 @@ export async function getProgram(
             task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
           )
           const explanations = await cli.explain({ cacheDefault: options.cache })
+          const missed = explanations.filter((explanation) => explanation.status === 'miss')
           if (options.json) {
             environment.stdout.write(`${JSON.stringify(explanations, null, 2)}\n`)
+            if (options.check && missed.length > 0) {
+              program.error('', { exitCode: 1 })
+            }
             return
           }
           for (const explanation of explanations) {
@@ -353,6 +358,9 @@ export async function getProgram(
             for (const cause of explanation.causes) {
               printProperty(environment, 'cause', describeCause(cause))
             }
+          }
+          if (options.check && missed.length > 0) {
+            program.error(`${missed.length} of ${explanations.length} tasks would be a cache miss`, { exitCode: 1 })
           }
         } catch (e) {
           if (e instanceof CommanderError) {
