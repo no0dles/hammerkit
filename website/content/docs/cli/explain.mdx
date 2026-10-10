@@ -61,6 +61,39 @@ hammerkit cache pull --remote ci
 if hammerkit explain test --check; then echo "up to date"; else hammerkit run test; fi
 ```
 
+## Showing a task's definition
+
+`--definition` prints, instead of the cache prediction, the task as hammerkit resolved it:
+the image, commands, `src`, `generates`, `deps` and `envs` after includes, inputs and
+`extend` were applied, and where each part came from. It is how you review what an
+[included](/docs/build-file/includes) or [catalog](/docs/catalog) task does before you
+run it. Nothing is executed.
+
+```bash
+hammerkit explain --definition npm:install
+```
+
+```
+• npm:install
+   defined in: catalog/npm/build.yaml of https://github.com/no0dles/hammerkit.git at v1.16.0 (commit 7b183f0a91c2)
+   included as: npm
+   image: node:22-alpine
+   src: package.json, package-lock.json
+   generates: node_modules
+   cmd: npm ci
+   env NODE_VERSION: 22  (input of include npm)
+   env CI: true  (task)
+```
+
+- **defined in** names the file, and for a git include the repository, ref and the commit
+  the cache holds, so you see exactly which version runs.
+- Each env value shows where it was declared: `task`, `build file`, `input of include <name>`
+  (a value your `with` passed) or `extended task`.
+- A variable taken from your shell or a `.env` file is listed with `from $NAME` and whether
+  it is set, never its value.
+
+`--json` prints the same information as a list for tools. Services are not part of it yet.
+
 ## Related
 
 * `hammerkit run --explain` prints the miss cause inline for every task that
@@ -80,4 +113,5 @@ Options:
   --cache <method>           caching method to compare (choices: "checksum", "modify-date", "none", default: "checksum")
   --json                     emit the explanation as JSON (default: false)
   --check                    exit with code 1 when any task would be a cache miss (default: false)
+  --definition               show the resolved definition of the tasks and where it came from instead (default: false)
 ```

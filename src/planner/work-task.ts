@@ -10,6 +10,11 @@ import { WorkItem } from './work-item'
 import { WorkSecret } from './work-secret'
 import { WorkResources } from './work-resources'
 
+// `task`: the task's own envs; `input`: a value the including file passed with
+// `with`; `build-file`: the top-level envs of its build file; `extend`: carried
+// from the task it extends.
+export type WorkEnvOrigin = 'task' | 'input' | 'build-file' | 'extend'
+
 export type WorkTask = LocalWorkTask | ContainerWorkTask
 
 export interface BaseWorkTask {
@@ -21,6 +26,8 @@ export interface BaseWorkTask {
   src: WorkSource[]
   generates: WorkTaskGenerate[]
   envs: WorkEnvironmentVariables
+  // where each variable was declared, for `explain --definition`
+  envOrigins: { [key: string]: WorkEnvOrigin }
   cmds: WorkCommand[]
   scope: ParseScope
   labels: LabelValues

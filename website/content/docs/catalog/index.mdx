@@ -73,5 +73,7 @@ Tasks are building blocks, not templates you edit. To go beyond the inputs:
 ## What an include brings
 
 Before you adopt an entry, read its page: it shows the whole build file. After including
-it, `hammerkit ls` lists its tasks. An entry contributes tasks and never runs anything
-until you run one of them.
+it, `hammerkit ls` lists its tasks and
+[`hammerkit explain --definition npm:install`](/docs/cli/explain#showing-a-tasks-definition)
+shows what one runs, with the repository, ref and commit it came from and where each env
+value was set. An entry contributes tasks and never runs anything until you run one of them.

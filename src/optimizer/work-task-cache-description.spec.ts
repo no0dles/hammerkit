@@ -10,6 +10,7 @@ const baseTask = {
   src: [{ source: 'b' }, { source: 'a' }] as any,
   generates: [{ path: '/work/app/out/b' }, { path: '/work/app/out/a' }] as any,
   envs: { variables: { B: '2', A: '1' }, replacements: [] } as any,
+  envOrigins: {},
   cmds: [{ cwd: '/work/app/sub', cmd: 'tsc' }] as any,
   scope: {} as any,
   labels: {},
