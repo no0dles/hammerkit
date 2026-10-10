@@ -122,3 +122,37 @@ jobs:
         # auth comes from the OIDC trusted publisher configured on npmjs.com;
         # no NPM_TOKEN needed, and provenance is attached automatically
         run: npm publish --tag "${{ needs.version.outputs.npm_tag }}"
+
+  homebrew:
+    # Regenerates Formula/hammerkit.rb in the tap from the checksums of the
+    # binaries on the release. Needs a token that can push to the tap (the
+    # default one is limited to this repository): without the secret the job does
+    # nothing and the tap is updated by hand.
+    needs: [version, binaries]
+    if: needs.version.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Update the Homebrew tap
+        if: env.TAP_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
+            --pattern 'hammerkit-macos-*' --pattern 'hammerkit-linux-*'
+          sha() { sha256sum "$GITHUB_WORKSPACE/assets/$1" | cut -d' ' -f1; }
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/no0dles/homebrew-hammerkit" tap
+          cd tap
+          sed -e "s/{{VERSION}}/$TAG/g" \
+              -e "s/{{MACOS-ARM64-SHA256}}/$(sha hammerkit-macos-arm64)/" \
+              -e "s/{{MACOS-AMD64-SHA256}}/$(sha hammerkit-macos-x64)/" \
+              -e "s/{{LINUX-ARM64-SHA256}}/$(sha hammerkit-linux-arm64)/" \
+              -e "s/{{LINUX-AMD64-SHA256}}/$(sha hammerkit-linux-x64)/" \
+              hammerkit.rb.tmpl > Formula/hammerkit.rb
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/hammerkit.rb
+          git commit -m "hammerkit $TAG"
+          git push

@@ -29,15 +29,17 @@ AI agents working in this repository ask first and never add the marker themselv
    `chore(release): x.y.z [skip ci]` commit on master,
 2. tags `vX.Y.Z` and creates the GitHub release with the notes,
 3. starts the publish workflow (`.github/workflows/push.yaml`) for the tag: binaries on the
-   release, the Docker Hub image and npm.
+   release, the Docker Hub image and npm. For a stable release it then regenerates the
+   formula in the [Homebrew tap](https://github.com/no0dles/homebrew-hammerkit) from the
+   binaries' checksums and pushes it to the tap's `main`.
 
 ## Setup and recovery
 
 * `master` must accept pushes from the workflow (the release commit and the tag).
+* The Homebrew step needs the secret `HOMEBREW_TAP_TOKEN`, a fine-grained token with *Contents:
+  write* on `no0dles/homebrew-hammerkit` only. Without it the step is skipped and the formula is
+  updated by hand (`hammerkit.rb.tmpl` in the tap lists the placeholders).
 * If publishing fails, fix the cause and re-run it from the tag: *Actions → publish → Run
   workflow*, choosing the `vX.Y.Z` tag as the ref.
 * A prerelease (`1.12.0-alpha.0`) is still cut by hand with `npm version prerelease --preid alpha`
   and `git push origin --follow-tags`; the npm dist-tag follows the preid.
-
-Once the binaries are built, they can be added to the
-[Homebrew repo](https://github.com/no0dles/homebrew-hammerkit) with their checksums.
