@@ -121,6 +121,31 @@ describe('pull', () => {
     await pull(status as any, docker as any, pinned, environment)
     expect(status.write).not.toHaveBeenCalledWith('warn', expect.anything())
   })
+
+  it('pulls an untagged image by its own name when latest is missing', async () => {
+    const status = { write: vi.fn() }
+    const docker = fakeDocker([image(['alpine:3.19'], [])])
+    await pull(status as any, docker as any, 'alpine', environment)
+    expect(status.write).toHaveBeenCalledWith('debug', 'pull image alpine')
+    expect(docker.pull).toHaveBeenCalledWith('alpine', {})
+  })
+
+  it('rejects when the pull progress reports an error', async () => {
+    const docker = fakeDocker()
+    docker.modem.followProgress = (_stream: unknown, done: (err: unknown, res: unknown) => void) =>
+      done(new Error('pull failed'), null)
+    await expect(pull({ write: vi.fn() } as any, docker as any, 'alpine:3.19', environment)).rejects.toThrow(
+      'pull failed'
+    )
+  })
+
+  it('rejects when the daemon refuses the pull', async () => {
+    const docker = fakeDocker()
+    docker.pull.mockRejectedValue(new Error('connection refused'))
+    await expect(pull({ write: vi.fn() } as any, docker as any, 'alpine:3.19', environment)).rejects.toThrow(
+      'connection refused'
+    )
+  })
 })
 
 describe('normalizeArchitecture', () => {
