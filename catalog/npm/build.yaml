@@ -1,0 +1,13 @@
+# Installs the locked dependencies of a Node.js project with npm.
+envs:
+  # tag of the node image the install runs in
+  NODE_VERSION: 24
+
+tasks:
+  install:
+    description: install the locked dependencies with npm ci
+    image: node:${NODE_VERSION}-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    cmds:
+      - npm ci

@@ -1,0 +1,17 @@
+# Consumes the npm entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog.
+includes:
+  npm:
+    git: CATALOG_URL
+    path: catalog/npm
+    with:
+      NODE_VERSION: 22
+
+tasks:
+  verify:
+    description: the installed dependencies are usable
+    image: node:22-alpine
+    src: [package.json]
+    deps: [npm:install]
+    cmds:
+      - node -e "require('ms')"

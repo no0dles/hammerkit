@@ -1,0 +1,17 @@
+# Installs the locked dependencies of a Node.js project with pnpm.
+envs:
+  # tag of the node image the install runs in
+  NODE_VERSION: 24
+  # pnpm release to run, fetched with corepack
+  PNPM_VERSION: 10
+
+tasks:
+  install:
+    description: install the locked dependencies with pnpm
+    image: node:${NODE_VERSION}-alpine
+    src: [package.json, pnpm-lock.yaml]
+    generates: [node_modules]
+    envs:
+      COREPACK_HOME: /tmp/corepack
+    cmds:
+      - corepack pnpm@${PNPM_VERSION} install --frozen-lockfile

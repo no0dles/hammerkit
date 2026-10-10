@@ -1,0 +1,77 @@
+---
+title: "Catalog"
+description: "Tested, ready-made tasks for common tools. Include one, pass a few inputs, and run it."
+icon: Package
+---
+The catalog is a set of build files for common tools such as `npm ci` or
+`yarn install`, kept in the hammerkit repository. Each entry is built the way this
+documentation recommends, runs in a pinned container image, declares what it reads
+and writes so it is cached, and is run by hammerkit's own test suite against a real
+project on every change.
+
+You use an entry by [including it from git](/docs/build-file/includes#include-from-a-git-repository)
+and calling its tasks:
+
+```yaml title=".hammerkit.yaml"
+includes:
+  npm:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.16.0
+    path: catalog/npm
+    with:
+      NODE_VERSION: 22
+
+tasks:
+  build:
+    image: node:22-alpine
+    deps: [npm:install]
+    src: [src, tsconfig.json]
+    generates: [dist]
+    cmds:
+      - npm run build
+```
+
+`hammerkit build` installs the dependencies (or reuses them when `package.json` and
+`package-lock.json` are unchanged) and then builds. The include runs in your directory,
+so every package of a monorepo can include the same entry.
+
+## Entries
+
+| Entry | What it does |
+|---|---|
+| [npm](/docs/catalog/npm) | Install locked dependencies with `npm ci`. |
+| [yarn](/docs/catalog/yarn) | Install locked dependencies with `yarn install`. |
+| [pnpm](/docs/catalog/pnpm) | Install locked dependencies with `pnpm install`. |
+
+## Versions
+
+`ref` is a release tag of hammerkit: the catalog at `v1.16.0` is the one that release's
+tests ran. A commit SHA pins exactly, and a branch such as `master` follows the latest
+entries but can differ between machines (see
+[caching and offline use](/docs/build-file/includes#caching-and-offline-use)). A task or
+input of an entry is not renamed or removed within a major version of hammerkit.
+
+## Inputs
+
+An entry declares its inputs as top-level `envs` with defaults, and lists them on its
+page. `with` replaces them for one include; a name the entry does not declare is an
+error that lists the ones it does. See
+[inputs](/docs/build-file/includes#inputs).
+
+## Adapting an entry
+
+Tasks are building blocks, not templates you edit. To go beyond the inputs:
+
+- **Depend on it.** Your own task lists the entry's task in `deps`, as above.
+- **Extend it.** `extend: npm:install` adds to an entry task: more `src` entries, more
+  `cmds`, more `envs`. Add `reset: [src]` to drop what it brings for a property. See
+  [extending](/docs/task/extending).
+- **Another layout.** An entry reads files relative to the directory that includes it, so a
+  project in `packages/web` includes it from `packages/web/.hammerkit.yaml`. For a lockfile
+  that lives elsewhere, extend the task and point `src` at it.
+
+## What an include brings
+
+Before you adopt an entry, read its page: it shows the whole build file. After including
+it, `hammerkit ls` lists its tasks. An entry contributes tasks and never runs anything
+until you run one of them.

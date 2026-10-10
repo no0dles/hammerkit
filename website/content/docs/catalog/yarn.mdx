@@ -1,0 +1,39 @@
+---
+title: "yarn"
+description: "Install locked Node.js dependencies with yarn."
+---
+Install locked Node.js dependencies with yarn.
+The task runs in a `node` container and keeps `node_modules` as its output, so it
+is skipped when `package.json` and `yarn.lock` are unchanged.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  yarn:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.16.0
+    path: catalog/yarn
+
+tasks:
+  build:
+    image: node:24-alpine
+    deps: [yarn:install]
+    cmds:
+      - yarn build
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `install` | Install locked Node.js dependencies with yarn. | `package.json`, `yarn.lock` | `node_modules` |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `NODE_VERSION` | `24` | Tag of the `node` image the install runs in, e.g. `22` or `24`. The image is `node:<NODE_VERSION>-alpine`. |
+| `YARN_ARGS` | `--frozen-lockfile` | Arguments of `yarn install`. The image ships yarn 1; for yarn berry (2 and later) use a Node image that provides it and pass `--immutable`. |
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/yarn/build.yaml"'>../catalog/yarn/build.yaml</include>
