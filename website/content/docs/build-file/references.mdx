@@ -67,3 +67,10 @@ each file's `envs` are scoped to that file. Declare the variables a referenced t
 needs in that file (or on the task itself).
 
 </Callout>
+
+## References from git
+
+A reference can also point at a git repository, with `git`, an optional `ref` and an
+optional `path`. See [include from a git repository](/docs/build-file/includes#include-from-a-git-repository)
+for the fields and the caching rules. A git reference runs in its cached checkout, so
+use an [include](/docs/build-file/includes) when the task should run in your directory.

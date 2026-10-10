@@ -52,6 +52,55 @@ includes:
 The build file of project `b` uses the same include for the npm install task.
 An additional [reference](/docs/build-file/references) to `a` and a [task dependency](/docs/task/dependencies) on `a:build` ensure that project `a` is built before project `b` is compiled.
 
+## Include from a git repository
+
+Instead of a path, an include (or a [reference](/docs/build-file/references)) can name a
+git repository. Use this to share build files between projects without copying them.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  npm:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.13.0
+    path: best-practices/build.npm.yaml
+
+tasks:
+  build:
+    deps: [npm:ci]
+    cmds:
+      - npm run build
+```
+
+| Field | Meaning |
+|---|---|
+| `git` | Repository URL or path. Required. |
+| `ref` | Branch, tag or commit SHA. The repository's `HEAD` when left out. |
+| `path` | Build file, or a directory holding one, inside the repository. The repository root when left out. |
+
+A plain string stays a local path, exactly as before. Prefer `includes` for shared task
+definitions: they run in your directory, while a git `reference` runs inside the cached
+checkout.
+
+### Caching and offline use
+
+The first run fetches the repository at `ref` into `~/.hammerkit/includes` and every later
+run uses that copy without touching the network, so a build keeps working offline and does
+not change underneath you. The cache is the pin: there is no lockfile.
+
+- A **commit SHA** (or a release tag you trust) gives the same content on every machine.
+- A **branch** is frozen at the commit of the first fetch on *each machine*, so a fresh CI
+  runner can see newer content than a developer laptop. Pin a SHA when that matters.
+- A repository that was never fetched and is unreachable fails with an error naming the
+  repository and ref. There is no silent fallback.
+
+### What a remote file may do
+
+A remote build file contributes tasks, services, caches and environments. Fetching it runs
+nothing; commands run only when you run one of its tasks. Its own relative `includes` and
+`references` resolve inside the same repository at the same commit, and a path that leaves
+the repository is rejected. Private repositories use your usual git credentials (credential
+helpers, SSH keys); hammerkit never prompts and has no secrets of its own for this.
+
 ## references vs. includes vs. extend — when to use which
 
 All three reuse definitions, but they differ in *what* they reuse and *where it

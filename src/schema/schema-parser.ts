@@ -5,6 +5,8 @@ import { ParseContext, ParseScope } from './parse-context'
 import { dirname, join } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
 import { ParseError } from './parse-error'
+import { BuildFileIncludeSchema, isGitSource } from './build-file-include-schema'
+import { isWithin, ResolvedGitSource, resolveGitSource } from '../includes/resolve-git-source'
 
 export async function createParseContext(
   fileName: string,
@@ -24,7 +26,8 @@ export async function appendBuildFile(
   ctx: ParseContext,
   environment: Environment,
   fileName: string,
-  namePrefix: string[]
+  namePrefix: string[],
+  remote?: ResolvedGitSource
 ): Promise<ParseScope> {
   const relativeName = namePrefix.join(':')
   const key = `${cwd}:${fileName}`
@@ -40,18 +43,28 @@ export async function appendBuildFile(
       cwd,
       schema: result.data,
       namePrefix: relativeName,
+      remote,
       references: {},
     }
     ctx.files[key] = scope
 
     if (scope.schema.references) {
       for (const referenceName of Object.keys(scope.schema.references)) {
-        const reference = scope.schema.references[referenceName]
-        const referenceFilename = await getBuildFilename(join(scope.cwd, reference), environment)
-        const referenceScope = await appendBuildFile(dirname(referenceFilename), ctx, environment, referenceFilename, [
-          ...namePrefix,
-          referenceName,
-        ])
+        const target = await locateInclude(
+          scope,
+          scope.schema.references[referenceName],
+          // a remote file's paths resolve within its repository
+          remote ? dirname(scope.fileName) : scope.cwd,
+          environment
+        )
+        const referenceScope = await appendBuildFile(
+          dirname(target.fileName),
+          ctx,
+          environment,
+          target.fileName,
+          [...namePrefix, referenceName],
+          target.remote
+        )
         if (scope.references[referenceName]) {
           throw new Error(referenceName + ' already exists')
         }
@@ -61,9 +74,20 @@ export async function appendBuildFile(
 
     if (scope.schema.includes) {
       for (const includeName of Object.keys(scope.schema.includes)) {
-        const include = scope.schema.includes[includeName]
-        const includeFilename = await getBuildFilename(join(dirname(scope.fileName), include), environment)
-        const includeScope = await appendBuildFile(cwd, ctx, environment, includeFilename, [...namePrefix, includeName])
+        const target = await locateInclude(
+          scope,
+          scope.schema.includes[includeName],
+          dirname(scope.fileName),
+          environment
+        )
+        const includeScope = await appendBuildFile(
+          cwd,
+          ctx,
+          environment,
+          target.fileName,
+          [...namePrefix, includeName],
+          target.remote
+        )
         if (scope.references[includeName]) {
           throw new Error(includeName + ' already exists')
         }
@@ -75,4 +99,29 @@ export async function appendBuildFile(
   } else {
     throw new ParseError(result.error, fileName)
   }
+}
+
+// A string is a local path below `base`; an object is a git source, fetched once
+// into the include cache. Inside a cached checkout a local path may not leave it:
+// a remote file contributes definitions from its own repository only.
+async function locateInclude(
+  scope: ParseScope,
+  include: BuildFileIncludeSchema,
+  base: string,
+  environment: Environment
+): Promise<{ fileName: string; remote?: ResolvedGitSource }> {
+  if (isGitSource(include)) {
+    const remote = await resolveGitSource(include, environment)
+    const path = join(remote.root, include.path ?? '')
+    if (!isWithin(remote.root, path)) {
+      throw new Error(`${include.path} in ${include.git} points outside the repository`)
+    }
+    return { fileName: await getBuildFilename(path, environment), remote }
+  }
+
+  const path = join(base, include)
+  if (scope.remote && !isWithin(scope.remote.root, path)) {
+    throw new Error(`${include} in ${scope.fileName} points outside ${scope.remote.git}`)
+  }
+  return { fileName: await getBuildFilename(path, environment), remote: scope.remote }
 }
