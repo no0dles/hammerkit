@@ -88,6 +88,7 @@ function parseTask(
     timeout: task.schema.timeout ? parseDuration(task.schema.timeout) : null,
     secrets: parseWorkSecrets(cwd, context.projectRoot, task.schema.secrets, envs, environment),
     resources: parseWorkResources(task.schema.resources),
+    runner: task.schema.runner ?? task.scope.schema.runner ?? null,
   }
 
   if (isBuildFileContainerTaskSchema(task.schema)) {

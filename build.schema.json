@@ -255,6 +255,10 @@
                     "additionalProperties": false,
                     "description": "cpu and memory requests and limits"
                   },
+                  "runner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
                   "image": {
                     "type": "string"
                   },
@@ -321,6 +325,9 @@
                   },
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources"
+                  },
+                  "runner": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
                   },
                   "platform": {
                     "type": "object",
@@ -750,6 +757,9 @@
         },
         "labels": {
           "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/labels"
+        },
+        "runner": {
+          "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
         }
       },
       "additionalProperties": false,

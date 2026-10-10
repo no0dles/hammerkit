@@ -25,6 +25,7 @@ import { checkForLoop } from './executer/scheduler/check-for-loop'
 import { State } from './executer/state'
 import { getSchedulerExecuteResult } from './executer/get-scheduler-execute-result'
 import { resetWorkTree } from './executer/reset-work-tree'
+import { resolveRunLocation } from './remote/location'
 import { executeWorkTree } from './executer/execute-work-tree'
 import { TaskState } from './executer/scheduler/task-state'
 import { ServiceState } from './executer/scheduler/service-state'
@@ -122,6 +123,14 @@ export class Cli {
       state: processWorkTree,
       start: async () => {
         checkForLoop(workTree)
+
+        const location = await resolveRunLocation(workTree, this.environment)
+        if (location.type === 'server') {
+          throw new Error(
+            `this run is meant for server ${location.name}, but running on a server is not available yet. ` +
+              'Remove the runner, or run locally with: hammerkit remote use local'
+          )
+        }
 
         const capacity = hasError(workTree) ? null : await getResourceCapacity(workTree, this.environment)
         if (capacity && type !== 'down' && (options?.resourceCheck ?? true)) {

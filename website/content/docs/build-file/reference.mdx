@@ -19,6 +19,7 @@ the dedicated pages.
 | `environments` | map of name→environment | [Run targets](/docs/task/kubernetes) (Kubernetes or remote Docker). |
 | `caches` | map of name→cache | Named [cache](/docs/build-file/caches) declarations (method + backend). |
 | `labels` | map of string→string/number | [Labels](/docs/labels) applied to every task/service in the file. |
+| `runner` | string | Default [`runner`](/docs/task#runner) of the tasks in this file. |
 
 ## Task
 
@@ -42,6 +43,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
 | `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/task#resources) limits and requests (`2`, `500m`; `512Mi`, `2Gi`); the run is planned by the requests. Not enforced for a local task, not part of the cache key. |
+| `runner` | string | Name of the [server](/docs/cli/remote) the task has to run on (experimental, see [runner](/docs/task#runner)). |
 
 **Container task** adds:
 
