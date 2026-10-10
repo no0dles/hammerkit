@@ -75,14 +75,14 @@ hammerkit explain --definition npm:install
 
 ```
 • npm:install
-   defined in: catalog/npm/build.yaml of https://github.com/no0dles/hammerkit.git at v1.16.0 (commit 7b183f0a91c2)
+   defined in: catalog/npm/build.yaml of https://github.com/no0dles/hammerkit.git at v1.16.0 (commit c6e41e961e87)
    included as: npm
+   description: install the locked dependencies with npm ci
    image: node:22-alpine
    src: package.json, package-lock.json
    generates: node_modules
    cmd: npm ci
    env NODE_VERSION: 22  (input of include npm)
-   env CI: true  (task)
 ```
 
 - **defined in** names the file, and for a git include the repository, ref and the commit
