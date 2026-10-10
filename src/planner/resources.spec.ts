@@ -47,6 +47,10 @@ async function parseError(name: string, buildFile: { [key: string]: unknown }): 
   throw new Error('expected a parse error')
 }
 
+// Spawning local processes hangs on the hosted Windows runners (see
+// execute.spec.ts), so the real run is gated off win32 like the other specs.
+const itExceptWindows = process.platform === 'win32' ? it.skip : it
+
 function status() {
   return { write: vi.fn() } as any
 }
@@ -249,7 +253,7 @@ describe('resources', () => {
       })
     })
 
-    it('runs', async () => {
+    itExceptWindows('runs', async () => {
       await withCli('resources-local-run', buildFile, async (cli) => {
         const result = await cli.runExec()
         expect(result.success).toBe(true)
