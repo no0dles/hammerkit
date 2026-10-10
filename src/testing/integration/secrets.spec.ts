@@ -111,6 +111,50 @@ describe('secrets', () => {
   )
 
   it(
+    'reads a provider secret as an account, hands it to a container and masks it in the logs',
+    requiresLinuxContainers(async () => {
+      const fake = join(__dirname, '..', 'fake-secret-cli.cjs')
+      await createTestCase('secrets-provider-container-task', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        'company.yaml': {
+          secretProviders: { fake: { command: [process.execPath, fake, 'value', '{{ref}}'] } },
+          secretAccounts: {
+            test: { default: true, providers: { fake: { env: { FAKE_TOKEN: '${HK_SECRET_TOKEN}' } } } },
+          },
+        },
+        '.hammerkit.yaml': {
+          includes: { company: 'company.yaml' },
+          tasks: {
+            check: {
+              image: 'alpine:3.19',
+              generates: [{ path: 'out', export: true }],
+              secrets: [
+                { from: 'fake:db', env: 'TOKEN' },
+                { from: 'fake:db', path: '/run/secrets/token' },
+              ],
+              cmds: ['mkdir -p out', 'echo "token is $TOKEN"', 'cat /run/secrets/token > out/token.txt'],
+            },
+          },
+        },
+      }).setup(async (cwd, environment) => {
+        environment.processEnvs = { ...environment.processEnvs, HK_SECRET_TOKEN: TOKEN }
+        const logs = collectLogs(environment)
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'check' })
+        await cli.clean({ cache: true })
+        const result = await cli.runExec()
+        expect(result.state.tasks['check'].state.current.type).toEqual('completed')
+        const value = `value-of-db-as-${TOKEN}\n`
+        expect(readFileSync(join(cwd, 'out', 'token.txt'), 'utf8')).toEqual(value)
+        expect(logs).toContain('token is ***')
+        expect(logs.some((log) => log.includes(TOKEN))).toBe(false)
+        const item = cli.task('check') as unknown as WorkItem<WorkTask>
+        expect(existsSync(getSecretDirectory(getWorkInstanceId(item)))).toBe(false)
+      })
+    }),
+    120000
+  )
+
+  it(
     'fails naming the secret before the container starts when its source is missing',
     requiresLinuxContainers(async () => {
       await createTestCase('secrets-missing', {

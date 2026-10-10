@@ -34,6 +34,8 @@ export const buildFileBaseTaskSchema = object({
   // runs longer. Does not affect the cache key (ADR-0002).
   timeout: durationSchema.optional(),
   secrets: array(buildFileSecretSchema).optional(),
+  // the service account its provider secrets are read as, unless a secret names one
+  account: string().optional(),
   // CPU and memory limits of the container; a local task is not limited
   resources: resourcesSchema.optional(),
 })

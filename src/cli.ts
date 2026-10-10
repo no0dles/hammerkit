@@ -42,6 +42,7 @@ import {
   retentionPolicyOf,
 } from './cache/cache-inventory'
 import { RetentionPolicy } from './cache/retention'
+import { beginSecretRun } from './secrets/provider-values'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -121,6 +122,7 @@ export class Cli {
     return {
       state: processWorkTree,
       start: async () => {
+        beginSecretRun(this.environment)
         checkForLoop(workTree)
 
         const capacity = hasError(workTree) ? null : await getResourceCapacity(workTree, this.environment)
