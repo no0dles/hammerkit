@@ -1,3 +1,10 @@
+# [1.14.0](https://github.com/no0dles/hammerkit/compare/v1.13.1...v1.14.0) (2026-10-10)
+
+
+### Features
+
+* include build files from a git repository, with inputs ([#60](https://github.com/no0dles/hammerkit/issues/60)) ([1eaf6bd](https://github.com/no0dles/hammerkit/commit/1eaf6bd3449dbc4cb36a7e1f901d5f0811de3d4b)), closes [#26](https://github.com/no0dles/hammerkit/issues/26)
+
 ## [1.13.1](https://github.com/no0dles/hammerkit/compare/v1.13.0...v1.13.1) (2026-10-10)
 
 
