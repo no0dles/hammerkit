@@ -53,6 +53,11 @@ const HISTORICAL_DIRS = ['release-blog']
 // blocks allowed to be unrecognized.
 const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
   {
+    file: join('cli', 'server.mdx'),
+    snippet: 'audience: hammerkit',
+    reason: 'server config (hammerkit server --config), not a build file',
+  },
+  {
     file: join('cli', 'remote.mdx'),
     snippet: 'issuer: https://login.example.com',
     reason: 'host config (~/.hammerkit/config.yaml), not a build file',
