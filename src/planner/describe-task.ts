@@ -1,6 +1,8 @@
-import { relative } from 'path'
+import { posix, relative, sep } from 'path'
 import { WorkItem } from './work-item'
 import { isContainerWorkTask, WorkEnvOrigin, WorkTask } from './work-task'
+
+const toPosix = (value: string): string => (sep === posix.sep ? value : value.split(sep).join(posix.sep))
 
 // What `explain --definition` shows of a task: the definition as hammerkit
 // resolved it, where it came from and where each env value was declared.
@@ -38,7 +40,7 @@ export function describeTask(item: WorkItem<WorkTask>, cwd: string): TaskDefinit
     type: isContainerWorkTask(task) ? 'container' : 'local',
     description: task.description || null,
     source: {
-      file: remote ? relative(remote.root, task.scope.fileName) : relative(cwd, task.scope.fileName),
+      file: toPosix(remote ? relative(remote.root, task.scope.fileName) : relative(cwd, task.scope.fileName)),
       includedAs: task.scope.namePrefix,
       git: remote?.git ?? null,
       ref: remote?.ref ?? null,
