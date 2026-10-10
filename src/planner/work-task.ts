@@ -32,6 +32,8 @@ export interface BaseWorkTask {
   secrets: WorkSecret[]
   // container limits, null for none; a hint only for a local task
   resources: WorkResources | null
+  // server the task has to run on, null for wherever the run happens
+  runner: string | null
 }
 
 export interface WorkTaskGenerate {

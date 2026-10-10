@@ -6,6 +6,7 @@ import { buildFileTaskSchema } from './build-file-task-schema'
 import { labelsSchema } from './labels-schema'
 import { buildFileCacheSchema } from './cache-schema'
 import { buildFileIncludeSchema } from './build-file-include-schema'
+import { runnerSchema } from './runner-schema'
 
 export const buildFileSchema = object({
   envs: envsSchema.optional(),
@@ -16,6 +17,8 @@ export const buildFileSchema = object({
   environments: record(buildFileEnvironmentSchema).optional(),
   caches: record(buildFileCacheSchema).optional(),
   labels: labelsSchema.optional(),
+  // default `runner` of the tasks of this file
+  runner: runnerSchema.optional(),
 })
   .strict()
   .describe('Build file with support for containerization\nhttps://hammerkit.dev/docs/build-file')
