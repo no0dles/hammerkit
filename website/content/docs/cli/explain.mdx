@@ -49,6 +49,18 @@ A task with `cache: none` is reported as `uncacheable`.
 ]
 ```
 
+## Gating a CI step
+
+`--check` turns the prediction into an exit code: `0` when no task in scope would
+be a cache miss (`uncacheable` tasks do not count), `1` otherwise. After a
+[`cache pull`](/docs/cli/cache) it tells a pipeline whether a run has anything to
+do, so a job can skip expensive setup:
+
+```bash
+hammerkit cache pull --remote ci
+if hammerkit explain test --check; then echo "up to date"; else hammerkit run test; fi
+```
+
 ## Related
 
 * `hammerkit run --explain` prints the miss cause inline for every task that
@@ -67,4 +79,5 @@ Options:
   --env <name>               environment
   --cache <method>           caching method to compare (choices: "checksum", "modify-date", "none", default: "checksum")
   --json                     emit the explanation as JSON (default: false)
+  --check                    exit with code 1 when any task would be a cache miss (default: false)
 ```
