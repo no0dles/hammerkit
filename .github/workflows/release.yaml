@@ -16,11 +16,11 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # the tags decide the last release
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'
       - run: npx -y -p semantic-release@25 -p @semantic-release/changelog@7 -p @semantic-release/git@11 -p @semantic-release/exec@7 semantic-release
