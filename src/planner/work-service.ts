@@ -15,6 +15,7 @@ import { WorkItemState } from './work-item'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
+import { WorkResources } from './work-resources'
 
 export interface BaseWorkService {
   name: string
@@ -52,6 +53,8 @@ export interface ContainerWorkService extends BaseWorkService {
   // one-shot after the healthcheck passed, before dependents start
   init: WorkServiceInit | null
   secrets: WorkSecret[]
+  // container limits, null for none
+  resources: WorkResources | null
 }
 
 export interface WorkServiceInit {

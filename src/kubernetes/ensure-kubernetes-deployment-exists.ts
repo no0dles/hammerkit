@@ -18,6 +18,7 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { awaitDeployRunningState } from './await-running-state'
 import { getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
+import { getKubernetesResources } from './container-resources'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
@@ -104,6 +105,7 @@ export async function ensureKubernetesDeploymentExists(
               })),
               readinessProbe: probe,
               livenessProbe: probe,
+              ...getKubernetesResources(service.data.resources),
               volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
             },
             {

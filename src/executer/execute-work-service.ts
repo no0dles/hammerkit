@@ -77,17 +77,22 @@ export async function executeWorkService(
       }
 
       const init = getServiceInit(work)
-      await work.runtime.execute(environment, {
-        cache: cacheState,
-        abort,
-        state: init ? gateOnInit(work, init) : work.state,
-        stateKey: cacheState.stateKey,
-        daemon: options.daemon,
-        publishPorts:
-          options.type === 'up' || work.requiredBy.some(isLocalTaskItem) || (!!init && isLocalTaskItem(init.task)),
-        // an init needs a healthy service, so a service with one is always awaited
-        waitForReady: options.wait === 'ready' || work.requiredBy.length > 0 || !!init,
-      })
+      const release = options.processManager.service(work)
+      try {
+        await work.runtime.execute(environment, {
+          cache: cacheState,
+          abort,
+          state: init ? gateOnInit(work, init) : work.state,
+          stateKey: cacheState.stateKey,
+          daemon: options.daemon,
+          publishPorts:
+            options.type === 'up' || work.requiredBy.some(isLocalTaskItem) || (!!init && isLocalTaskItem(init.task)),
+          // an init needs a healthy service, so a service with one is always awaited
+          waitForReady: options.wait === 'ready' || work.requiredBy.length > 0 || !!init,
+        })
+      } finally {
+        release()
+      }
     })
   } catch (e) {
     if (e instanceof AbortError) {

@@ -35,7 +35,10 @@ hammerkit -e build=ios
 Options:
   -f, --filter <labels...>    filter task and services with labels
   -e, --exclude <labels...>   exclude task and services with labels
-  -c, --concurrency <number>  parallel worker count (default: 4)
+  -c, --concurrency <number>  parallel worker count (default: 4, unbounded when every task and
+                              service requests cpus and memory)
+  --skip-resource-check       start even when a task with its services requests more than
+                              the host has
   -w, --watch                 watch tasks (default: false)
   --env <name>                environment
   -l, --log <mode>            log mode (choices: "interactive", "live", "grouped")
