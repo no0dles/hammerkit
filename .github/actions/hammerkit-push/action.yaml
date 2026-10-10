@@ -1,0 +1,19 @@
+name: hammerkit push
+description: >
+  Uploads the results of the given tasks to the shared CI cache. Only branches of
+  this repository get a token that can write; elsewhere, and whenever GHCR is
+  unreachable, the push is skipped without failing the job.
+inputs:
+  tasks:
+    description: tasks whose cache entries to push
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Push results to the cache
+      continue-on-error: true
+      shell: bash
+      run: |
+        for task in ${{ inputs.tasks }}; do
+          hammerkit cache push "$task" --remote ci
+        done
