@@ -41,7 +41,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `continuous` | boolean | Task [watches itself](/docs/task/watching); hammerkit won't restart it in watch mode. |
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
 | `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
-| `resources` | `{cpus, memory}` | [CPU and memory limits](/docs/task#resources) of the container (`2`, `500m`; `512Mi`, `2Gi`); not enforced for a local task, not part of the cache key. |
+| `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/task#resources) limits and requests (`2`, `500m`; `512Mi`, `2Gi`); the run is planned by the requests. Not enforced for a local task, not part of the cache key. |
 
 **Container task** adds:
 
@@ -74,7 +74,7 @@ service** (it has a `selector`).
 | `init` | string | A task (`name` or `prefix:name`) run once the healthcheck passed; the service is ready for dependents only after it succeeded; see [init](/docs/service/container#init). |
 | `envs` | map of string→string/number | Service environment variables. |
 | `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file. |
-| `resources` | `{cpus, memory}` | [CPU and memory limits](/docs/service/container#resources) of the container, as for a task. |
+| `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/service/container#resources) limits and requests of the container, as for a task. |
 | `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
 | `mounts` | array of string | `host:container[:ro]` config mounts. |
 | `deps` | array of string | Tasks that must run before the service starts. |

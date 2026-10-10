@@ -165,7 +165,8 @@ hammerkit run --timeout 30m
 
 ## Resources
 A heavy build step can take every core and all the memory of the machine it runs
-on. Declare `resources` and hammerkit limits the task's container to them.
+on. Declare `resources` and hammerkit limits the task's container to them, and
+plans the run by them.
 
 ```yaml
 tasks:
@@ -180,14 +181,48 @@ tasks:
 
 Both fields are optional and use Kubernetes notation: `cpus` as cores (`2`, `0.5`)
 or millicores (`500m`), `memory` with a `Ki`/`Mi`/`Gi`/`Ti` suffix (at least `6Mi`).
-On Docker they become the container's CPU and memory limits; on Kubernetes the job
-container requests and is limited to the same values. A task that exceeds its memory
-limit is killed by the runtime and fails.
+`cpus` and `memory` set the limit and request the same. To set them apart, use
+`requests` and `limits`; a request must not exceed its limit, and a request without a
+limit is not capped:
 
-`cpus` above what the Docker host has runs the container without a CPU limit, with a
-warning, as such a limit would limit nothing. On Kubernetes a request beyond what any
-node offers leaves the pod Pending.
+```yaml
+tasks:
+  build:
+    image: node:22
+    resources:
+      requests: { cpus: 500m, memory: 1Gi }
+      limits: { cpus: 2, memory: 4Gi }
+    cmds:
+      - npm run build
+```
 
-A local task can declare `resources` too, but nothing enforces them;
+On Docker the limits become the container's CPU and memory limits, and a memory
+request below its limit a soft memory reservation. On Kubernetes the job container
+gets the same `requests` and `limits`. A task that exceeds its memory limit is killed
+by the runtime and fails. `cpus` above what the Docker host has runs the container
+without a CPU limit, with a warning, as such a limit would limit nothing. On
+Kubernetes a request beyond what any node offers leaves the pod Pending.
+
+A local task can declare `resources` too, but nothing limits it;
 [`validate`](/docs/cli/validate) and `run --dry-run` say so. Resources are not part
 of the task's cache key: changing them does not rebuild the task.
+
+### Planning the run
+The requests also plan the run on the machine hammerkit runs on, for local tasks and
+for containers on Docker (on Kubernetes the cluster places pods by their requests):
+
+* **Before anything starts**, hammerkit checks that every task fits, together with the
+  services it needs. A task whose requests plus those of its services exceed the
+  host's CPUs or memory fails the run up front, naming the task, instead of hanging or
+  being killed halfway. With `up`, all services must fit together.
+  `--skip-resource-check` starts anyway.
+* **While it runs**, a task starts only when its requests fit next to everything
+  running, the services included. When every task and service on the host requests
+  both `cpus` and `memory`, the run is not capped at a worker count (`--concurrency`,
+  default 4): as many tasks run in parallel as the requests allow. Otherwise
+  `--concurrency` still caps the run, and tasks with requests also wait for room. A
+  task that alone exceeds the host runs once nothing else does.
+
+The capacity is the Docker host's when containers run there, else this machine's.
+`HAMMERKIT_CPUS` and `HAMMERKIT_MEMORY` (e.g. `8`, `16Gi`) set it, for a CI runner
+that shares its machine, for example.

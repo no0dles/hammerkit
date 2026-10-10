@@ -219,10 +219,25 @@
                       },
                       "memory": {
                         "type": "string"
+                      },
+                      "requests": {
+                        "type": "object",
+                        "properties": {
+                          "cpus": {
+                            "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources/properties/cpus"
+                          },
+                          "memory": {
+                            "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources/properties/memory"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "limits": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources/properties/requests"
                       }
                     },
                     "additionalProperties": false,
-                    "description": "cpu and memory limits"
+                    "description": "cpu and memory requests and limits"
                   },
                   "image": {
                     "type": "string"
@@ -414,7 +429,7 @@
                   },
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources",
-                    "description": "cpu and memory limits"
+                    "description": "cpu and memory requests and limits"
                   }
                 },
                 "required": [

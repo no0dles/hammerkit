@@ -20,6 +20,10 @@ export function printContainerOptions(status: StatusScopedConsole, containerOpti
     status.write('debug', `limit memory to ${containerOptions.HostConfig.Memory} bytes`)
   }
 
+  if (containerOptions.HostConfig?.MemoryReservation) {
+    status.write('debug', `reserve memory ${containerOptions.HostConfig.MemoryReservation} bytes`)
+  }
+
   for (const link of containerOptions.HostConfig?.Links || []) {
     status.write('debug', `link ${link}`)
   }

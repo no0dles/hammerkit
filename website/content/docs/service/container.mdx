@@ -243,10 +243,12 @@ read-only file, without being written to the build file or hammerkit's logs; its
 
 ## Resources [#resources]
 
-`resources` limits a service's container like a [task's](/docs/task#resources):
-`cpus` as cores or millicores, `memory` as `Mi`/`Gi`. On Kubernetes the deployment's
-container requests and is limited to the same values. A running service whose
-resources changed is recreated.
+`resources` limits a service's container like a [task's](/docs/task#resources), and
+`cpus`/`memory` or `requests`/`limits` work the same. A service holds its requests for
+as long as it runs, so the tasks of the run share what is left, and `up` fails up
+front when the services together request more than the host has (`--skip-resource-check`
+starts anyway). On Kubernetes the deployment's container gets the same requests and
+limits. A running service whose resources changed is recreated.
 
 ```yaml
 services:

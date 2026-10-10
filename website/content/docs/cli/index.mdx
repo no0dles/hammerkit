@@ -53,7 +53,8 @@ These options are shared by the task-running commands ([run](/docs/cli/execute),
 |--------|---------|-------------|
 | `-f, --filter <labels...>` | – | Keep only tasks/services matching `key=value` [labels](/docs/labels). |
 | `-e, --exclude <labels...>` | – | Drop tasks/services matching `key=value` labels. |
-| `-c, --concurrency <number>` | `4` | Number of tasks run in parallel. |
+| `-c, --concurrency <number>` | `4` | Number of tasks run in parallel. Unbounded by default when every task and service requests `cpus` and `memory`: the [requests](/docs/task#planning-the-run) then bound the run. |
+| `--skip-resource-check` | | Start even when a task with the services it needs [requests more](/docs/task#planning-the-run) than the host has. |
 | `-w, --watch` | `false` | Re-run tasks when their `src` changes. |
 | `--env <name>` | – | Run against a declared [environment](/docs/task/kubernetes) (e.g. a cluster). |
 | `-l, --log <mode>` | `interactive` (local) / `live` (CI) | `interactive`, `live` or `grouped`. |

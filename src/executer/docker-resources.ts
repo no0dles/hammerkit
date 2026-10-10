@@ -5,10 +5,12 @@ import { StatusScopedConsole } from '../planner/work-item-status'
 export interface DockerResources {
   NanoCpus?: number
   Memory?: number
+  MemoryReservation?: number
 }
 
 // The host config limits of a container with these resources; none without.
-// Docker refuses more CPUs than the host has, while a limit at or above the
+// A memory request below the limit is a soft reservation; Docker has no CPU
+// request, the run schedules by it (see ResourceBudget). Docker refuses more CPUs than the host has, while a limit at or above the
 // host's count limits nothing: such a container runs unlimited, with a
 // warning, instead of failing or being clamped to fewer CPUs.
 export function getDockerResources(
@@ -19,21 +21,25 @@ export function getDockerResources(
   if (!resources) {
     return {}
   }
-  const limits: DockerResources = {}
-  if (resources.cpus !== null) {
-    if (hostCpus !== null && resources.cpus > hostCpus) {
+  const { limits, requests } = resources
+  const config: DockerResources = {}
+  if (limits.cpus !== null) {
+    if (hostCpus !== null && limits.cpus > hostCpus) {
       status.write(
         'warn',
-        `cpus ${resources.cpus} exceeds the ${hostCpus} cpus of the docker host, running without a cpu limit`
+        `cpus ${limits.cpus} exceeds the ${hostCpus} cpus of the docker host, running without a cpu limit`
       )
     } else {
-      limits.NanoCpus = Math.round(resources.cpus * 1e9)
+      config.NanoCpus = Math.round(limits.cpus * 1e9)
     }
   }
-  if (resources.memory !== null) {
-    limits.Memory = resources.memory
+  if (limits.memory !== null) {
+    config.Memory = limits.memory
   }
-  return limits
+  if (requests.memory !== null && (limits.memory === null || requests.memory < limits.memory)) {
+    config.MemoryReservation = requests.memory
+  }
+  return config
 }
 
 // The limits for the docker host, asking it for its CPU count only when a
@@ -43,7 +49,7 @@ export async function resolveDockerResources(
   resources: WorkResources | null,
   status: StatusScopedConsole
 ): Promise<DockerResources> {
-  const hostCpus = resources?.cpus != null ? await getDockerHostCpus(docker) : null
+  const hostCpus = resources?.limits.cpus != null ? await getDockerHostCpus(docker) : null
   return getDockerResources(resources, hostCpus, status)
 }
 

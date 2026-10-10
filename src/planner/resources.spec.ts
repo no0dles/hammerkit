@@ -13,6 +13,7 @@ import { getKubernetesResources } from '../kubernetes/container-resources'
 import { getServiceDefinitionHash } from './service-definition'
 import { ExecuteOptions } from '../runtime/runtime'
 import { ParseError } from '../schema/parse-error'
+import { WorkResources } from './work-resources'
 import { ServiceState } from '../executer/scheduler/service-state'
 
 const noSecrets = { env: {}, binds: [] }
@@ -51,6 +52,10 @@ async function parseError(name: string, buildFile: { [key: string]: unknown }): 
 // execute.spec.ts), so the real run is gated off win32 like the other specs.
 const itExceptWindows = process.platform === 'win32' ? it.skip : it
 
+function limited(cpus: number | null, memory: number | null): WorkResources {
+  return { requests: { cpus, memory }, limits: { cpus, memory } }
+}
+
 function status() {
   return { write: vi.fn() } as any
 }
@@ -65,18 +70,35 @@ describe('resources', () => {
             build: { image: 'node:22', cmds: ['true'], resources: { cpus: 2, memory: '512Mi' } },
             lint: { image: 'node:22', cmds: ['true'], resources: { cpus: '500m' } },
             plain: { image: 'node:22', cmds: ['true'] },
+            split: {
+              image: 'node:22',
+              cmds: ['true'],
+              resources: { requests: { cpus: '500m', memory: '256Mi' }, limits: { cpus: 2, memory: '1Gi' } },
+            },
+            limitOnly: { image: 'node:22', cmds: ['true'], resources: { limits: { cpus: 1, memory: '512Mi' } } },
+            requestOnly: { image: 'node:22', cmds: ['true'], resources: { requests: { cpus: '250m' } } },
           },
           services: {
             db: { image: 'postgres:16', resources: { cpus: '1.5', memory: '1Gi' } },
           },
         },
         async (cli) => {
-          expect(cli.task('build').data.resources).toEqual({ cpus: 2, memory: 512 * 1024 ** 2 })
-          expect(cli.task('lint').data.resources).toEqual({ cpus: 0.5, memory: null })
+          expect(cli.task('build').data.resources).toEqual(limited(2, 512 * 1024 ** 2))
+          expect(cli.task('lint').data.resources).toEqual(limited(0.5, null))
           expect(cli.task('plain').data.resources).toBeNull()
-          expect((cli.service('db').data as ContainerWorkService).resources).toEqual({
-            cpus: 1.5,
-            memory: 1024 ** 3,
+          expect((cli.service('db').data as ContainerWorkService).resources).toEqual(limited(1.5, 1024 ** 3))
+          expect(cli.task('split').data.resources).toEqual({
+            requests: { cpus: 0.5, memory: 256 * 1024 ** 2 },
+            limits: { cpus: 2, memory: 1024 ** 3 },
+          })
+          // a limit without a request requests the same, a request needs no limit
+          expect(cli.task('limitOnly').data.resources).toEqual({
+            requests: { cpus: 1, memory: 512 * 1024 ** 2 },
+            limits: { cpus: 1, memory: 512 * 1024 ** 2 },
+          })
+          expect(cli.task('requestOnly').data.resources).toEqual({
+            requests: { cpus: 0.25, memory: null },
+            limits: { cpus: null, memory: null },
           })
         }
       )
@@ -88,8 +110,19 @@ describe('resources', () => {
       ['resources-cpus-precision', { cpus: '0.0005' }, /invalid cpus \\"0.0005\\"/],
       ['resources-memory-unit', { memory: '512MB' }, /invalid memory \\"512MB\\"/],
       ['resources-memory-small', { memory: '1Mi' }, /invalid memory \\"1Mi\\"/],
-      // one value is the limit and the request: no separate requests to exceed it
-      ['resources-requests', { requests: { cpus: 4 }, limits: { cpus: 2 } }, /Unrecognized key.*requests/],
+      [
+        'resources-requests-cpus',
+        { requests: { cpus: 4 }, limits: { cpus: 2 } },
+        /requested cpus 4 exceeds the limit 2/,
+      ],
+      [
+        'resources-requests-memory',
+        { requests: { memory: '2Gi' }, limits: { memory: '1Gi' } },
+        /requested memory 2Gi exceeds the limit 1Gi/,
+      ],
+      ['resources-mixed', { cpus: 1, limits: { cpus: 2 } }, /either cpus\/memory or requests\/limits/],
+      ['resources-requests-invalid', { requests: { cpus: 'x' } }, /invalid cpus \\"x\\"/],
+      ['resources-unknown', { gpus: 1 }, /Unrecognized key.*gpus/],
     ])('rejects %s', async (name, resources, message) => {
       const error = await parseError(name, { tasks: { build: { image: 'node:22', cmds: ['true'], resources } } })
       expect(JSON.stringify(error.zod.issues)).toMatch(message)
@@ -177,20 +210,31 @@ describe('resources', () => {
 
     it('warns and runs without a cpu limit beyond the host cpus', () => {
       const scoped = status()
-      expect(getDockerResources({ cpus: 16, memory: 1024 ** 3 }, 4, scoped)).toEqual({ Memory: 1024 ** 3 })
+      expect(getDockerResources(limited(16, 1024 ** 3), 4, scoped)).toEqual({ Memory: 1024 ** 3 })
       expect(scoped.write).toHaveBeenCalledWith('warn', expect.stringContaining('exceeds the 4 cpus'))
     })
 
     it('applies a limit of exactly the host cpus', () => {
       const scoped = status()
-      expect(getDockerResources({ cpus: 4, memory: null }, 4, scoped)).toEqual({ NanoCpus: 4_000_000_000 })
+      expect(getDockerResources(limited(4, null), 4, scoped)).toEqual({ NanoCpus: 4_000_000_000 })
       expect(scoped.write).not.toHaveBeenCalled()
+    })
+
+    it('reserves a memory request below the limit', () => {
+      const resources = { requests: { cpus: 1, memory: 256 * 1024 ** 2 }, limits: { cpus: 2, memory: 1024 ** 3 } }
+      expect(getDockerResources(resources, 8, status())).toEqual({
+        NanoCpus: 2_000_000_000,
+        Memory: 1024 ** 3,
+        MemoryReservation: 256 * 1024 ** 2,
+      })
+      const requestOnly = { requests: { cpus: 1, memory: 256 * 1024 ** 2 }, limits: { cpus: null, memory: null } }
+      expect(getDockerResources(requestOnly, 8, status())).toEqual({ MemoryReservation: 256 * 1024 ** 2 })
     })
   })
 
   describe('kubernetes', () => {
     it('requests what it limits', () => {
-      expect(getKubernetesResources({ cpus: 0.5, memory: 512 * 1024 ** 2 })).toEqual({
+      expect(getKubernetesResources(limited(0.5, 512 * 1024 ** 2))).toEqual({
         resources: {
           requests: { cpu: '500m', memory: `${512 * 1024 ** 2}` },
           limits: { cpu: '500m', memory: `${512 * 1024 ** 2}` },
@@ -199,8 +243,16 @@ describe('resources', () => {
     })
 
     it('sets only what is declared', () => {
-      expect(getKubernetesResources({ cpus: 2, memory: null })).toEqual({
+      expect(getKubernetesResources(limited(2, null))).toEqual({
         resources: { requests: { cpu: '2000m' }, limits: { cpu: '2000m' } },
+      })
+    })
+
+    it('sets requests and limits apart', () => {
+      expect(
+        getKubernetesResources({ requests: { cpus: 0.25, memory: 1024 ** 3 }, limits: { cpus: 1, memory: null } })
+      ).toEqual({
+        resources: { requests: { cpu: '250m', memory: `${1024 ** 3}` }, limits: { cpu: '1000m' } },
       })
     })
 
@@ -249,7 +301,7 @@ describe('resources', () => {
       await withCli('resources-local-plan', buildFile, async (cli) => {
         const build = cli.task('build') as WorkItem<LocalWorkTask>
         expect(build.data.type).toEqual('local-task')
-        expect(build.data.resources).toEqual({ cpus: 2, memory: 1024 ** 3 })
+        expect(build.data.resources).toEqual(limited(2, 1024 ** 3))
       })
     })
 
