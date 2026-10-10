@@ -44,17 +44,53 @@ includes:
 
 ### Override properties in an extend
 
-An extending task can override any property, whether the base defines it or not. In this example the dependencies are cleared, so the task runs without depending on `install`.
+An extending task can override any property, whether the base defines it or not. Single
+values such as `image`, `shell`, `cache` and `timeout` are replaced by the extending
+task's own value. Lists and maps are **added to** the base's instead:
+
+| Property | With `extend` |
+|---|---|
+| `image`, `shell`, `cache`, `timeout` | The task's own value replaces the base's. |
+| `cmds`, `src`, `generates`, `mounts` | The base's entries come first, the task's own follow. |
+| `deps`, `needs` | Both are used. |
+| `envs`, `labels` | Merged. The task's own value wins for a name both define. |
+
+The `envs` of the base also include the top-level `envs` of the build file it comes from,
+so a base that reads `$NODE_VERSION` keeps its default when you extend it.
 
 ```yaml title=".hammerkit.yaml"
 tasks:
   build:
     extend: tsc:build
-    deps: []
+    src:
+      - ../../tsconfig.base.json
     
 includes:
   tsc: ./build.tsc.yaml
 ```
+
+Here `build` runs the base's commands against the base's sources plus
+`../../tsconfig.base.json`.
+
+### Reset inherited values
+
+To take nothing from the base for a property, name it in `reset`. The task's own value for
+that property still applies. In this example the dependencies are cleared, so the task runs
+without depending on `install`:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  build:
+    extend: tsc:build
+    reset: [deps]
+    
+includes:
+  tsc: ./build.tsc.yaml
+```
+
+`reset` accepts `deps`, `needs`, `src`, `generates`, `cmds`, `mounts`, `envs` and `labels`.
+It is an error without `extend`. An empty `deps: []` does not clear the base's
+dependencies, because the lists are added together.
 
 ### Naming the base task
 

@@ -1,4 +1,4 @@
-import { array, boolean, object, string } from 'zod'
+import { array, boolean, enum as zenum, object, string } from 'zod'
 import { buildFileNeedSchema } from './build-file-need-schema'
 import { envsSchema } from './envs-schema'
 import { labelsSchema } from './labels-schema'
@@ -9,11 +9,17 @@ import { durationSchema } from './duration-schema'
 import { buildFileSecretSchema } from './build-file-secret-schema'
 import { resourcesSchema } from './resources-schema'
 
+// what `extend` adds to (the rest, e.g. `image` or `shell`, the task just overrides)
+export const RESET_PROPERTIES = ['deps', 'needs', 'src', 'generates', 'cmds', 'mounts', 'envs', 'labels'] as const
+export type ResetProperty = (typeof RESET_PROPERTIES)[number]
+
 export const buildFileBaseTaskSchema = object({
   deps: array(string()).optional(),
   needs: array(buildFileNeedSchema).optional(),
   description: string().optional(),
   extend: string().optional(),
+  // properties of the `extend` base this task does not inherit
+  reset: array(zenum(RESET_PROPERTIES)).optional(),
   envs: envsSchema.optional(),
   labels: labelsSchema.optional(),
   cache: cacheSchema.optional(),

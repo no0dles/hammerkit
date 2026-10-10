@@ -42,7 +42,8 @@ export interface ReferenceTask {
   labels: LabelValues
   // `extend` is applied once per task, the bases it came from nearest last
   extension?: 'applying' | 'applied'
-  bases?: { scope: ParseScope; schema: BuildFileTaskSchema }[]
+  depBases?: { scope: ParseScope; schema: BuildFileTaskSchema }[]
+  needBases?: { scope: ParseScope; schema: BuildFileTaskSchema }[]
 }
 
 export type ReferenceLinkType = 'include' | 'reference' | 'build-file'
@@ -192,8 +193,13 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     throw new Error(`task ${task.relativeName} extends itself`)
   }
   task.extension = 'applying'
-  task.bases = []
+  task.depBases = []
+  task.needBases = []
+  const reset = new Set<string>(task.schema.reset ?? [])
   if (!task.schema.extend) {
+    if (reset.size > 0) {
+      throw new Error(`task ${task.relativeName} sets reset without extend`)
+    }
     task.extension = 'applied'
     return
   }
@@ -205,25 +211,32 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
   task.schema.cache = task.schema.cache ?? extend.schema.cache
   task.schema.timeout = task.schema.timeout ?? extend.schema.timeout
 
-  task.schema.cmds = extendArray(task.schema.cmds, extend.schema.cmds)
-  task.schema.src = extendArray(task.schema.src, extend.schema.src)
-  task.schema.generates = extendArray(task.schema.generates, extend.schema.generates)
+  if (!reset.has('cmds')) task.schema.cmds = extendArray(task.schema.cmds, extend.schema.cmds)
+  if (!reset.has('src')) task.schema.src = extendArray(task.schema.src, extend.schema.src)
+  if (!reset.has('generates')) task.schema.generates = extendArray(task.schema.generates, extend.schema.generates)
 
-  task.schema.labels = extendObject(task.schema.labels, extend.schema.labels)
-  task.envs = mergeEnvironmentVariables(task.envs, extend.schema.envs)
+  if (!reset.has('labels')) task.schema.labels = extendObject(task.schema.labels, extend.schema.labels)
+  // the base's resolved envs: its own plus the top-level envs of its build file
+  // (and the inputs an include passed), which carry the defaults it relies on
+  if (!reset.has('envs')) task.envs = mergeEnvironmentVariables(task.envs, extend.envs)
 
   if (isBuildFileContainerTaskSchema(extend.schema)) {
     const taskSchema = task.schema as BuildFileContainerTaskSchema
     taskSchema.image = taskSchema.image ?? extend.schema.image
-    taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
+    if (!reset.has('mounts')) taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
   }
 
   // deps and needs resolve in the file that declares them, so every base up the
-  // chain contributes its own, not only the nearest
-  task.bases = [...(extend.bases ?? []), { scope: extend.scope, schema: extend.schema }]
-  for (const base of task.bases) {
-    resolveNeeds(reference, task, base.scope, base.schema)
-    resolveDeps(reference, task, base.scope, base.schema)
+  // chain contributes its own, not only the nearest; what a task resets is not
+  // passed on to the tasks extending it either
+  const base = { scope: extend.scope, schema: extend.schema }
+  task.needBases = reset.has('needs') ? [] : [...(extend.needBases ?? []), base]
+  task.depBases = reset.has('deps') ? [] : [...(extend.depBases ?? []), base]
+  for (const needBase of task.needBases) {
+    resolveNeeds(reference, task, needBase.scope, needBase.schema)
+  }
+  for (const depBase of task.depBases) {
+    resolveDeps(reference, task, depBase.scope, depBase.schema)
   }
   task.extension = 'applied'
 }
