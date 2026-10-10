@@ -106,4 +106,53 @@ describe('reference-parser', () => {
       )
     })
   })
+
+  describe('extend chain', () => {
+    it('gives the last task of a chain every base deps and each cmd once', async () => {
+      await withCli(
+        {
+          tasks: {
+            dep: { cmds: ['d'] },
+            a: { deps: ['dep'], cmds: ['a'] },
+            b: { extend: 'a', cmds: ['b'] },
+            c: { extend: 'b', cmds: ['c'] },
+          },
+        },
+        { taskName: 'c' },
+        (cli) => {
+          const c = cli.task('c')
+          expect(c.deps.map((d) => d.name)).toEqual(['dep'])
+          expect(c.data.cmds.map((cmd) => cmd.cmd)).toEqual(['a', 'b', 'c'])
+        }
+      )
+    })
+
+    it('keeps two tasks extending the same base independent', async () => {
+      await withCli(
+        {
+          tasks: {
+            base: { cmds: ['base'] },
+            mid: { extend: 'base', cmds: ['mid'] },
+            left: { extend: 'mid', cmds: ['left'] },
+            right: { extend: 'mid', cmds: ['right'] },
+          },
+        },
+        { taskName: 'right' },
+        (cli) => {
+          expect(cli.task('right').data.cmds.map((cmd) => cmd.cmd)).toEqual(['base', 'mid', 'right'])
+        }
+      )
+    })
+
+    it('rejects tasks that extend each other', async () => {
+      const testCase = createTestCase('reference-parser', {
+        '.hammerkit.yaml': { tasks: { a: { extend: 'b', cmds: ['a'] }, b: { extend: 'a', cmds: ['b'] } } },
+      })
+      await testCase.setup(async (cwd, environment) => {
+        await expect(createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'a' })).rejects.toThrow(
+          'extends itself'
+        )
+      })
+    })
+  })
 })

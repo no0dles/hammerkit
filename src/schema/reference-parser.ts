@@ -40,6 +40,9 @@ export interface ReferenceTask {
   envs: { [key: string]: string }
   cwd: string
   labels: LabelValues
+  // `extend` is applied once per task, the bases it came from nearest last
+  extension?: 'applying' | 'applied'
+  bases?: { scope: ParseScope; schema: BuildFileTaskSchema }[]
 }
 
 export type ReferenceLinkType = 'include' | 'reference' | 'build-file'
@@ -180,7 +183,18 @@ export async function parseReferences(
 }
 
 function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask) {
+  // a base is reached once per task extending it; applying it again would add
+  // its own base's lists a second time
+  if (task.extension === 'applied') {
+    return
+  }
+  if (task.extension === 'applying') {
+    throw new Error(`task ${task.relativeName} extends itself`)
+  }
+  task.extension = 'applying'
+  task.bases = []
   if (!task.schema.extend) {
+    task.extension = 'applied'
     return
   }
 
@@ -204,8 +218,14 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
   }
 
-  resolveNeeds(reference, task, extend.scope, extend.schema)
-  resolveDeps(reference, task, extend.scope, extend.schema)
+  // deps and needs resolve in the file that declares them, so every base up the
+  // chain contributes its own, not only the nearest
+  task.bases = [...(extend.bases ?? []), { scope: extend.scope, schema: extend.schema }]
+  for (const base of task.bases) {
+    resolveNeeds(reference, task, base.scope, base.schema)
+    resolveDeps(reference, task, base.scope, base.schema)
+  }
+  task.extension = 'applied'
 }
 
 function extendArray<T>(base: T[] | undefined, extend: T[] | undefined): T[] | undefined {
