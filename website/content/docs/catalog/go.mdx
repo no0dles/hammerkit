@@ -1,0 +1,40 @@
+---
+title: "go"
+description: "Build and test a Go module, with the module cache kept on the host."
+---
+Build and test a Go module, with the module cache kept on the host.
+`build` compiles the packages into `bin`, `test` runs their tests. Both are skipped
+while the `.go` files and the `go.*` files are unchanged, and downloaded modules are
+kept in `~/go/pkg/mod`, so they are not fetched again.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  go:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.19.0
+    path: catalog/go
+    with:
+      GO_VERSION: '1.25'
+
+tasks:
+  check:
+    deps: [go:test]
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `build` | Build the packages into `bin`. | `go.mod`, `go.sum` and `go.work` where present, every `.go` file | `bin` |
+| `test` | Run the tests of the packages. | `go.mod`, `go.sum` and `go.work` where present, every `.go` file | |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `GO_VERSION` | `1.25` | Tag of the `golang` image the tasks run in. The image is `golang:<GO_VERSION>-alpine`. Quote it in `with` (`'1.30'`), or YAML reads it as the number 1.3. |
+| `PACKAGES` | `./...` | The packages to build and test. |
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/go/build.yaml"'>../catalog/go/build.yaml</include>

@@ -1,5 +1,5 @@
 {
   "title": "Catalog",
   "icon": "Package",
-  "pages": ["npm", "yarn", "pnpm"]
+  "pages": ["npm", "yarn", "pnpm", "pip", "go", "cargo"]
 }

@@ -1,0 +1,37 @@
+# Builds and tests a Rust crate or workspace with the cargo registry kept on the host.
+envs:
+  # tag of the rust image the tasks run in, quoted so 1.90 stays 1.90
+  RUST_VERSION: '1.90'
+  # arguments for cargo, for example --locked --workspace
+  CARGO_ARGS: --locked
+
+tasks:
+  build:
+    description: build the crate into target
+    image: rust:${RUST_VERSION}-slim
+    src:
+      - Cargo.toml
+      - Cargo.lock
+      - '**/Cargo.toml'
+      - '**/*.rs'
+    generates: [target]
+    mounts:
+      - ~/.cargo/registry:/usr/local/cargo/registry
+      - ~/.cargo/git:/usr/local/cargo/git
+    cmds:
+      - cargo build ${CARGO_ARGS}
+
+  test:
+    description: run the tests of the crate
+    image: rust:${RUST_VERSION}-slim
+    deps: [build]
+    src:
+      - Cargo.toml
+      - Cargo.lock
+      - '**/Cargo.toml'
+      - '**/*.rs'
+    mounts:
+      - ~/.cargo/registry:/usr/local/cargo/registry
+      - ~/.cargo/git:/usr/local/cargo/git
+    cmds:
+      - cargo test ${CARGO_ARGS}

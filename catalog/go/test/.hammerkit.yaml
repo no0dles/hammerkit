@@ -1,0 +1,17 @@
+# Consumes the go entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog.
+includes:
+  go:
+    git: CATALOG_URL
+    path: catalog/go
+    with:
+      GO_VERSION: '1.24'
+
+tasks:
+  verify:
+    description: the built program runs after the tests passed
+    image: alpine:3.22
+    src: [main.go]
+    deps: [go:test]
+    cmds:
+      - ./bin/hello | grep -q "hello catalog"

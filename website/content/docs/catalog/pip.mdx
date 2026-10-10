@@ -1,0 +1,43 @@
+---
+title: "pip"
+description: "Install the pinned requirements of a Python project with pip."
+---
+Install the pinned requirements of a Python project with pip.
+The task runs in a `python` container and installs into `__pypackages__`, so it is
+skipped when the requirements file is unchanged. Tasks that need the packages set
+`PYTHONPATH=__pypackages__`.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  pip:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.19.0
+    path: catalog/pip
+
+tasks:
+  test:
+    image: python:3.13-slim
+    deps: [pip:install]
+    src: [app, tests]
+    envs:
+      PYTHONPATH: __pypackages__
+    cmds:
+      - python -m unittest
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `install` | Install the pinned requirements with pip. | the requirements file (`requirements.txt`) | `__pypackages__` |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `PYTHON_VERSION` | `3.13` | Tag of the `python` image the install runs in. The image is `python:<PYTHON_VERSION>-slim`. Quote it in `with` (`'3.10'`), or YAML reads it as the number 3.1. |
+| `REQUIREMENTS` | `requirements.txt` | The file to install from, with exact versions (`pip freeze`, `pip-compile`). Use it for a different name or folder, for example `requirements/prod.txt`. |
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/pip/build.yaml"'>../catalog/pip/build.yaml</include>

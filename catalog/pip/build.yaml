@@ -1,0 +1,16 @@
+# Installs the pinned requirements of a Python project with pip.
+envs:
+  # tag of the python image the install runs in, quoted so 3.10 stays 3.10
+  PYTHON_VERSION: '3.13'
+  # the file to install from, with exact versions (pip freeze, pip-compile)
+  REQUIREMENTS: requirements.txt
+
+tasks:
+  install:
+    description: install the pinned requirements with pip
+    image: python:${PYTHON_VERSION}-slim
+    src:
+      - '${REQUIREMENTS}'
+    generates: [__pypackages__]
+    cmds:
+      - pip install --no-cache-dir --disable-pip-version-check --target __pypackages__ -r ${REQUIREMENTS}

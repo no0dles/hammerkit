@@ -1,0 +1,17 @@
+# Consumes the cargo entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog.
+includes:
+  cargo:
+    git: CATALOG_URL
+    path: catalog/cargo
+    with:
+      RUST_VERSION: '1.89'
+
+tasks:
+  verify:
+    description: the built program runs after the tests passed
+    image: rust:1.89-slim
+    src: [Cargo.toml]
+    deps: [cargo:test]
+    cmds:
+      - ./target/debug/hello | grep -q "hello catalog"

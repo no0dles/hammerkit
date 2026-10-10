@@ -1,0 +1,19 @@
+# Consumes the pip entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog.
+includes:
+  pip:
+    git: CATALOG_URL
+    path: catalog/pip
+    with:
+      PYTHON_VERSION: '3.12'
+
+tasks:
+  verify:
+    description: the installed requirements are importable
+    image: python:3.12-slim
+    src: [requirements.txt]
+    deps: [pip:install]
+    envs:
+      PYTHONPATH: __pypackages__
+    cmds:
+      - python -c "import six"
