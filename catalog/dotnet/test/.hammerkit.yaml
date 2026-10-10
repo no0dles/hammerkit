@@ -1,0 +1,18 @@
+# Consumes the dotnet entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog.
+includes:
+  dotnet:
+    git: CATALOG_URL
+    path: catalog/dotnet
+    with:
+      DOTNET_VERSION: '9.0'
+      PROJECT: tests/Hello.Tests
+
+tasks:
+  verify:
+    description: the built program runs after the tests passed
+    image: mcr.microsoft.com/dotnet/sdk:9.0
+    src: [src]
+    deps: [dotnet:test]
+    cmds:
+      - dotnet artifacts/bin/Hello/release/Hello.dll | grep -q "hello catalog"
