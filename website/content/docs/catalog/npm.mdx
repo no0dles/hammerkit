@@ -1,0 +1,38 @@
+---
+title: "npm"
+description: "Install locked Node.js dependencies with npm ci."
+---
+Install locked Node.js dependencies with npm ci.
+The task runs in a `node` container and keeps `node_modules` as its output, so it
+is skipped when `package.json` and `package-lock.json` are unchanged.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  npm:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.14.0
+    path: catalog/npm
+
+tasks:
+  build:
+    image: node:24-alpine
+    deps: [npm:install]
+    cmds:
+      - npm run build
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `install` | Install locked Node.js dependencies with npm ci. | `package.json`, `package-lock.json` | `node_modules` |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `NODE_VERSION` | `24` | Tag of the `node` image the install runs in, e.g. `22` or `24`. The image is `node:<NODE_VERSION>-alpine`. |
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/npm/build.yaml"'>../catalog/npm/build.yaml</include>

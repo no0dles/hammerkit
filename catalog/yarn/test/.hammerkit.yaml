@@ -1,0 +1,17 @@
+# Consumes the yarn entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog.
+includes:
+  yarn:
+    git: CATALOG_URL
+    path: catalog/yarn
+    with:
+      NODE_VERSION: 22
+
+tasks:
+  verify:
+    description: the installed dependencies are usable
+    image: node:22-alpine
+    src: [package.json]
+    deps: [yarn:install]
+    cmds:
+      - node -e "require('ms')"

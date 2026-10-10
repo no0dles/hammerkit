@@ -1,0 +1,5 @@
+{
+  "title": "Catalog",
+  "icon": "Package",
+  "pages": ["npm", "yarn", "pnpm"]
+}

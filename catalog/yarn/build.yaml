@@ -1,0 +1,15 @@
+# Installs the locked dependencies of a Node.js project with yarn.
+envs:
+  # tag of the node image the install runs in
+  NODE_VERSION: 24
+  # arguments of `yarn install`; yarn berry (2+) uses --immutable instead
+  YARN_ARGS: --frozen-lockfile
+
+tasks:
+  install:
+    description: install the locked dependencies with yarn
+    image: node:${NODE_VERSION}-alpine
+    src: [package.json, yarn.lock]
+    generates: [node_modules]
+    cmds:
+      - yarn install $YARN_ARGS

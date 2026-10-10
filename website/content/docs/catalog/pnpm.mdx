@@ -1,0 +1,39 @@
+---
+title: "pnpm"
+description: "Install locked Node.js dependencies with pnpm."
+---
+Install locked Node.js dependencies with pnpm.
+The task runs in a `node` container and keeps `node_modules` as its output, so it
+is skipped when `package.json` and `pnpm-lock.yaml` are unchanged.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  pnpm:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.14.0
+    path: catalog/pnpm
+
+tasks:
+  build:
+    image: node:24-alpine
+    deps: [pnpm:install]
+    cmds:
+      - npm run build
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `install` | Install locked Node.js dependencies with pnpm. | `package.json`, `pnpm-lock.yaml` | `node_modules` |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `NODE_VERSION` | `24` | Tag of the `node` image the install runs in, e.g. `22` or `24`. The image is `node:<NODE_VERSION>-alpine`. |
+| `PNPM_VERSION` | `10` | pnpm release to run, fetched with corepack the first time, e.g. `9` or `10.28.0`. |
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/pnpm/build.yaml"'>../catalog/pnpm/build.yaml</include>
