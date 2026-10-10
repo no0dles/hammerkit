@@ -7,60 +7,37 @@ Releases are derived from commit messages. Nobody bumps a version or pushes a ta
 
 `master` is squash-merged, so the **pull request title** is the commit message. It follows
 [Conventional Commits](https://www.conventionalcommits.org/): `<type>: <what changed>`.
-The `pr-title` check rejects anything else.
 
 | Type | Release |
 | --- | --- |
 | `feat` | minor (`1.11.3` → `1.12.0`) |
 | `fix`, `perf` | patch (`1.11.3` → `1.11.4`) |
 | `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `style` | none |
+| a `!` after the type (`feat!:`) or a `BREAKING CHANGE:` footer | **major** |
 
-Breaking-change markers (`feat!:`, a `BREAKING CHANGE:` footer) are rejected by the check:
-a major release is never a side effect of a merge.
+A title in another shape (`Add x`, `1.12.0: add x`) is not an error, it just does not release.
+
+A breaking change releases a major version on its own, so it is only ever written on request.
+AI agents working in this repository ask first and never add the marker themselves.
 
 ## What happens on a merge to master
 
-1. [release-please](https://github.com/googleapis/release-please) keeps one pull request,
-   `chore: release x.y.z`, up to date. It carries the version bump in `package.json` and
-   `package-lock.json` and the new `CHANGELOG.md` section, built from the commits since the
-   last release.
-2. Merging that pull request creates the tag `vX.Y.Z` and the GitHub release with the changelog
-   as its notes (`.github/workflows/release.yaml`).
-3. The tag starts the publish workflow (`.github/workflows/push.yaml`): it builds the
-   binaries and attaches them to the release, publishes the Docker Hub image and publishes to
-   npm.
+[semantic-release](https://semantic-release.gitbook.io) (`.github/workflows/release.yaml`,
+`.releaserc.json`) reads the commits since the last tag. When one of them releases, it:
 
-Setting the repository variable `RELEASE_AUTO_MERGE` to `true` makes step 2 happen on its own
-for patch and minor releases, so every releasable merge ships. Leave it unset to batch
-several changes into one release and merge the pull request when you want to ship.
-
-## A major release
-
-Merge a change whose commit message ends with a footer naming the version:
-
-```
-feat: drop the legacy build file format
-
-Release-As: 2.0.0
-```
-
-The release pull request then proposes `2.0.0`. A major release pull request is never merged
-automatically; merge it yourself. `Release-As` works for any version, which is also how to force
-a release when only `docs` or `chore` commits are pending.
+1. bumps `package.json` and `package-lock.json` and adds the section to `CHANGELOG.md`, in a
+   `chore(release): x.y.z [skip ci]` commit on master,
+2. tags `vX.Y.Z` and creates the GitHub release with the notes,
+3. starts the publish workflow (`.github/workflows/push.yaml`) for the tag: binaries on the
+   release, the Docker Hub image and npm.
 
 ## Setup and recovery
 
-* The repository needs *Settings → Actions → General → Allow GitHub Actions to create and approve
-  pull requests*.
-* Pull requests opened with the default token do not start the build and test workflows. To have
-  the release pull request checked, add a personal access token (or app token) with
-  `contents` and `pull requests` write access as the secret `RELEASE_PLEASE_TOKEN`.
+* `master` must accept pushes from the workflow (the release commit and the tag).
 * If publishing fails, fix the cause and re-run it from the tag: *Actions → publish → Run
-  workflow*, choosing the `vX.Y.Z` tag as the ref. Binaries are replaced on the release, the
-  Docker tag is overwritten.
+  workflow*, choosing the `vX.Y.Z` tag as the ref.
 * A prerelease (`1.12.0-alpha.0`) is still cut by hand with `npm version prerelease --preid alpha`
-  and `git push origin --follow-tags`; the npm dist-tag follows the preid. Stable versions
-  are no longer made that way.
+  and `git push origin --follow-tags`; the npm dist-tag follows the preid.
 
 Once the binaries are built, they can be added to the
 [Homebrew repo](https://github.com/no0dles/homebrew-hammerkit) with their checksums.

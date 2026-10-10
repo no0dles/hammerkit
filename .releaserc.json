@@ -1,0 +1,12 @@
+{
+  "branches": ["master"],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/changelog",
+    ["@semantic-release/npm", { "npmPublish": false }],
+    ["@semantic-release/git", { "assets": ["package.json", "package-lock.json", "CHANGELOG.md"] }],
+    ["@semantic-release/github", { "successComment": false, "failComment": false, "releasedLabels": false }],
+    ["@semantic-release/exec", { "successCmd": "gh workflow run push.yaml --ref v${nextRelease.version}" }]
+  ]
+}
