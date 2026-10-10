@@ -208,6 +208,37 @@
                       "description": "secret from env:NAME or file:path, injected as env or a read-only file"
                     }
                   },
+                  "resources": {
+                    "type": "object",
+                    "properties": {
+                      "cpus": {
+                        "type": [
+                          "number",
+                          "string"
+                        ]
+                      },
+                      "memory": {
+                        "type": "string"
+                      },
+                      "requests": {
+                        "type": "object",
+                        "properties": {
+                          "cpus": {
+                            "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources/properties/cpus"
+                          },
+                          "memory": {
+                            "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources/properties/memory"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "limits": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources/properties/requests"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "cpu and memory requests and limits"
+                  },
                   "image": {
                     "type": "string"
                   },
@@ -268,6 +299,9 @@
                   },
                   "secrets": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets"
+                  },
+                  "resources": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources"
                   },
                   "platform": {
                     "type": "object",
@@ -392,6 +426,10 @@
                     "items": {
                       "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets/items"
                     }
+                  },
+                  "resources": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources",
+                    "description": "cpu and memory requests and limits"
                   }
                 },
                 "required": [

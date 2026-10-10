@@ -32,6 +32,8 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
     needs: item.needs
       .filter((need) => isContainerWorkService(need.service.data))
       .map((need) => `${need.name}=${getServiceDefinitionHash(need.service as WorkItem<ContainerWorkService>)}`),
+    // only when declared, so a service without keeps its hash
+    ...(service.resources ? { resources: service.resources } : {}),
   }
   return createHash('sha1').update(JSON.stringify(definition)).digest('hex')
 }

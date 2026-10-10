@@ -82,3 +82,16 @@ export function formatSize(bytes: number): string {
   }
   return `${bytes}B`
 }
+
+// Parse a CPU quantity in Kubernetes notation, `2`, `0.5` or `500m`
+// (millicores), into cores. Kubernetes' precision is a millicore, so anything
+// finer, and zero, is rejected.
+export function parseCpus(value: string | number): number {
+  const text = `${value}`
+  const match = /^(\d+(?:\.\d+)?)(m)?$/.exec(text)
+  const millicores = match ? parseFloat(match[1]) * (match[2] ? 1 : 1000) : NaN
+  if (!Number.isInteger(millicores) || millicores <= 0) {
+    throw new Error(`invalid cpus "${text}", expected cores or millicores, e.g. 2, 0.5 or 500m`)
+  }
+  return millicores / 1000
+}

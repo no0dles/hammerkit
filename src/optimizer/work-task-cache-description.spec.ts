@@ -18,6 +18,7 @@ const baseTask = {
   continuous: false,
   timeout: null,
   secrets: [],
+  resources: null,
 }
 
 describe('getWorkTaskCacheDescription', () => {

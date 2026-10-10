@@ -24,6 +24,7 @@ import { getWorkServiceRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
 import { parseDuration } from '../../utils/units'
 import { getErrorMessage } from '../../log'
+import { parseWorkResources } from '../work-resources'
 
 export function appendWorkService(
   workTree: WorkTree,
@@ -129,6 +130,7 @@ function parseService(
       // set once the service is planned, see appendServiceInit
       init: null,
       secrets: parseWorkSecrets(service.cwd, context.projectRoot, service.schema.secrets, envs, environment),
+      resources: parseWorkResources(service.schema.resources),
     }
   }
 }

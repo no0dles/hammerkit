@@ -8,6 +8,7 @@ import { ParseScope } from '../schema/parse-context'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { WorkItem } from './work-item'
 import { WorkSecret } from './work-secret'
+import { WorkResources } from './work-resources'
 
 export type WorkTask = LocalWorkTask | ContainerWorkTask
 
@@ -29,6 +30,8 @@ export interface BaseWorkTask {
   // maximum execution time in ms, null for none
   timeout: number | null
   secrets: WorkSecret[]
+  // container limits, null for none; a hint only for a local task
+  resources: WorkResources | null
 }
 
 export interface WorkTaskGenerate {

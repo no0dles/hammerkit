@@ -27,6 +27,7 @@ import { ExecuteOptions } from '../runtime/runtime'
 import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
+import { DockerResources, resolveDockerResources } from './docker-resources'
 
 const HEALTHCHECK_INTERVAL_MS = 1000
 
@@ -34,7 +35,8 @@ export function buildServiceCreateOptions(
   item: WorkItem<ContainerWorkService>,
   options: ExecuteOptions<ServiceState>,
   network: { links: string[]; hosts: string[] },
-  secrets: ContainerSecrets
+  secrets: ContainerSecrets,
+  resources: DockerResources = {}
 ): ContainerCreateOptions {
   const envs = getEnvironmentVariables(item.data.envs)
   const command = getServiceCommand(item.data)
@@ -80,6 +82,7 @@ export function buildServiceCreateOptions(
               return map
             }, {})
         : {},
+      ...resources,
     },
   }
 }
@@ -107,7 +110,8 @@ export async function dockerService(
 
     item.status.write('debug', `create container with image ${item.data.image}`)
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
-    container = await docker.createContainer(buildServiceCreateOptions(item, options, network, secrets))
+    const resources = await resolveDockerResources(docker, item.data.resources, item.status)
+    container = await docker.createContainer(buildServiceCreateOptions(item, options, network, secrets, resources))
 
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)

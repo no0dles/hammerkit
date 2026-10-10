@@ -1,14 +1,45 @@
 ---
 title: "Release procedure"
 ---
-The release procedure can be started with a git tag.
+Releases are derived from commit messages. Nobody bumps a version or pushes a tag by hand.
 
+## Commit messages
 
-```bash
-npm version patch|minor|major|prerelease
-git push origin --tags
-```
+`master` is squash-merged, so the **pull request title** is the commit message. It follows
+[Conventional Commits](https://www.conventionalcommits.org/): `<type>: <what changed>`.
 
-The GitHub CI pipeline then builds the binaries needed for Homebrew and publishes to Docker Hub and npm.
+| Type | Release |
+| --- | --- |
+| `feat` | minor (`1.11.3` → `1.12.0`) |
+| `fix`, `perf` | patch (`1.11.3` → `1.11.4`) |
+| `docs`, `refactor`, `test`, `build`, `ci`, `chore`, `style` | none |
+| a `!` after the type (`feat!:`) or a `BREAKING CHANGE:` footer | **major** |
 
-Once they are built, the binaries/checksums can be updated in the [Homebrew repo](https://github.com/no0dles/homebrew-hammerkit)
+A title in another shape (`Add x`, `1.12.0: add x`) is not an error, it just does not release.
+
+A breaking change releases a major version on its own, so it is only ever written on request.
+AI agents working in this repository ask first and never add the marker themselves.
+
+## What happens on a merge to master
+
+[semantic-release](https://semantic-release.gitbook.io) (`.github/workflows/release.yaml`,
+`.releaserc.json`) reads the commits since the last tag. When one of them releases, it:
+
+1. bumps `package.json` and `package-lock.json` and adds the section to `CHANGELOG.md`, in a
+   `chore(release): x.y.z [skip ci]` commit on master,
+2. tags `vX.Y.Z` and creates the GitHub release with the notes,
+3. starts the publish workflow (`.github/workflows/push.yaml`) for the tag: binaries on the
+   release, the Docker Hub image and npm. For a stable release it then regenerates the
+   formula in the [Homebrew tap](https://github.com/no0dles/homebrew-hammerkit) from the
+   binaries' checksums and pushes it to the tap's `main`.
+
+## Setup and recovery
+
+* `master` must accept pushes from the workflow (the release commit and the tag).
+* The Homebrew step needs the secret `HOMEBREW_TAP_TOKEN`, a fine-grained token with *Contents:
+  write* on `no0dles/homebrew-hammerkit` only. Without it the step is skipped and the formula is
+  updated by hand (`hammerkit.rb.tmpl` in the tap lists the placeholders).
+* If publishing fails, fix the cause and re-run it from the tag: *Actions → publish → Run
+  workflow*, choosing the `vX.Y.Z` tag as the ref.
+* A prerelease (`1.12.0-alpha.0`) is still cut by hand with `npm version prerelease --preid alpha`
+  and `git push origin --follow-tags`; the npm dist-tag follows the preid.

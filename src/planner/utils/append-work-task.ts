@@ -21,6 +21,7 @@ import { lazyResolver } from '../../executer/lazy-resolver'
 import { getWorkTaskRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
 import { parseDuration } from '../../utils/units'
+import { parseWorkResources } from '../work-resources'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -86,6 +87,7 @@ function parseTask(
     continuous: task.schema.continuous ?? false,
     timeout: task.schema.timeout ? parseDuration(task.schema.timeout) : null,
     secrets: parseWorkSecrets(cwd, context.projectRoot, task.schema.secrets, envs, environment),
+    resources: parseWorkResources(task.schema.resources),
   }
 
   if (isBuildFileContainerTaskSchema(task.schema)) {
