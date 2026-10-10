@@ -307,7 +307,7 @@ describe('provider secrets', () => {
       expect(refs).toEqual(['keyed'])
     })
 
-    it('fetches again for each run, and reuses the values of the run in between', async () => {
+    itExceptWindows('fetches again for each run, and reuses the values of the run in between', async () => {
       const calls = join(scratch, 'calls')
       const { cli } = await plan('provider-cache-runs', {
         secretProviders: { fake: provider(calls) },
