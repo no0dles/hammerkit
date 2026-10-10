@@ -49,6 +49,7 @@ export async function appendBuildFile(
       schema: inputs ? applyInputs(result.data, inputs, namePrefix, fileName) : result.data,
       namePrefix: relativeName,
       remote,
+      inputs,
       references: {},
     }
     ctx.files[key] = scope

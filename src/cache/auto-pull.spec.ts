@@ -59,6 +59,7 @@ describe('checkCacheState auto-pull', () => {
       status: { write: vi.fn() } as any,
       data: {
         type: 'local-task',
+        envOrigins: {},
         name: 'demo-task',
         cwd,
         projectRoot: cwd,

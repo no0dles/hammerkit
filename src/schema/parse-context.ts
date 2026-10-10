@@ -15,5 +15,7 @@ export interface ParseScope {
   cwd: string
   // set for a file that lives in a cached git checkout
   remote?: ResolvedGitSource
+  // what the including file passed with `with`
+  inputs?: NonNullable<BuildFileSchema['envs']>
   references: { [key: string]: { type: 'include' | 'reference'; scope: ParseScope } }
 }

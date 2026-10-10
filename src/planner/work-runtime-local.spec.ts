@@ -25,6 +25,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
     status: { write: vi.fn() } as any,
     data: {
       type: 'local-task',
+      envOrigins: {},
       name: 'task-1',
       cwd,
       projectRoot: cwd,

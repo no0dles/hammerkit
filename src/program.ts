@@ -5,6 +5,8 @@ import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
 import { Cli, getCli, isCliService, isCliTask } from './cli'
+import { TaskDefinition } from './planner/describe-task'
+import { WorkEnvOrigin } from './planner/work-task'
 import { WorkLabelScope, WorkScope } from './executer/work-scope'
 import { consoleContext, getErrorMessage, printItem, printProperty, printTitle } from './log'
 import { emptyWritable } from './utils/empty-writable'
@@ -28,6 +30,64 @@ export async function createCli(fileName: string, environment: Environment, work
   const referencedScope = await parseReferences(ctx, scope, environment)
   const workTree = getWorkContext(referencedScope, workScope, environment)
   return getCli(workTree, environment)
+}
+
+const ENV_ORIGINS: { [origin in WorkEnvOrigin]: (includedAs: string) => string } = {
+  task: () => 'task',
+  input: (includedAs) => `input of include ${includedAs}`,
+  'build-file': () => 'build file',
+  extend: () => 'extended task',
+}
+
+function printTaskDefinition(environment: Environment, definition: TaskDefinition) {
+  environment.stdout.write(`• ${definition.name}\n`)
+  const source = definition.source
+  if (source.git) {
+    printProperty(
+      environment,
+      'defined in',
+      `${source.file} of ${source.git} at ${source.ref ?? 'HEAD'} (commit ${(source.commit ?? '').slice(0, 12)})`
+    )
+  } else {
+    printProperty(environment, 'defined in', source.file)
+  }
+  if (source.includedAs) {
+    printProperty(environment, 'included as', source.includedAs)
+  }
+  if (definition.description) {
+    printProperty(environment, 'description', definition.description)
+  }
+  if (definition.image) {
+    printProperty(environment, 'image', definition.image)
+  }
+  for (const [name, values] of [
+    ['deps', definition.deps],
+    ['needs', definition.needs],
+    ['src', definition.src],
+    ['generates', definition.generates],
+    ['mounts', definition.mounts],
+  ] as const) {
+    if (values.length > 0) {
+      printProperty(environment, name, values.join(', '))
+    }
+  }
+  for (const cmd of definition.cmds) {
+    printProperty(environment, 'cmd', cmd)
+  }
+  for (const env of definition.envs) {
+    printProperty(
+      environment,
+      `env ${env.name}`,
+      `${env.value}  ${colors.grey(`(${ENV_ORIGINS[env.origin](source.includedAs)})`)}`
+    )
+  }
+  for (const reference of definition.envReferences) {
+    printProperty(
+      environment,
+      `env ${reference.name}`,
+      `from $${reference.from} ${colors.grey(reference.available ? '(set)' : '(not set)')}`
+    )
+  }
 }
 
 function parseWorkLabelScope(options: unknown): WorkLabelScope {
@@ -331,6 +391,11 @@ export async function getProgram(
       )
       .addOption(new Option('--json', 'emit the explanation as JSON').default(false))
       .addOption(new Option('--check', 'exit with code 1 when any task would be a cache miss').default(false))
+      .addOption(
+        new Option('--definition', 'show the resolved definition of the tasks and where it came from instead').default(
+          false
+        )
+      )
       .action(async (task, options) => {
         try {
           const cli = await createCli(
@@ -338,6 +403,17 @@ export async function getProgram(
             environment,
             task ? { taskName: task, environmentName: options.env ?? null } : parseWorkLabelScope(options)
           )
+          if (options.definition) {
+            const definitions = cli.explainDefinition()
+            if (options.json) {
+              environment.stdout.write(`${JSON.stringify(definitions, null, 2)}\n`)
+            } else {
+              for (const definition of definitions) {
+                printTaskDefinition(environment, definition)
+              }
+            }
+            return
+          }
           const explanations = await cli.explain({ cacheDefault: options.cache })
           const missed = explanations.filter((explanation) => explanation.status === 'miss')
           if (options.json) {

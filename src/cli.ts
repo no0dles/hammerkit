@@ -30,6 +30,7 @@ import { TaskState } from './executer/scheduler/task-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { packageWorkTree } from './docker/package'
 import { explainWorkTree, TaskExplanation } from './cache/explain'
+import { describeTask, TaskDefinition } from './planner/describe-task'
 import { GraphFormat, serializeWorkGraph, WorkGraphSerialization } from './planner/work-graph-serializer'
 import { DryRunPlan, planDryRun } from './executer/dry-run'
 import { CacheSyncOptions, CacheSyncResult, syncCache } from './cache/cache-sync'
@@ -229,6 +230,10 @@ export class Cli {
 
   // Read-only cache prediction for every task in scope: executes no command,
   // starts no container/service, performs no cache push/pull.
+  explainDefinition(): TaskDefinition[] {
+    return [...iterateWorkTasks(this.workTree)].map((task) => describeTask(task, this.environment.cwd))
+  }
+
   async explain(options?: { cacheDefault?: CacheMethod }): Promise<TaskExplanation[]> {
     return explainWorkTree(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
   }

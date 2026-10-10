@@ -1,5 +1,5 @@
 import { getSecretName, parseWorkSecrets } from '../work-secret'
-import { BaseWorkTask, ContainerWorkTask, LocalWorkTask, WorkTask } from '../work-task'
+import { BaseWorkTask, ContainerWorkTask, LocalWorkTask, WorkEnvOrigin, WorkTask } from '../work-task'
 import { parseWorkGenerate } from './parse-work-generate'
 import { templateValue } from './template-value'
 import { parseWorkMounts } from './parse-work-mounts'
@@ -73,6 +73,7 @@ function parseTask(
   const envs = buildEnvironmentVariables(task.envs, environment, context)
   const baseWorkNode: BaseWorkTask = {
     envs,
+    envOrigins: getEnvOrigins(task),
     description: templateValue(task.schema.description || '', envs).trim(),
     name: task.relativeName,
     cwd,
@@ -110,4 +111,20 @@ function parseTask(
       type: 'local-task',
     }
   }
+}
+
+function getEnvOrigins(task: ReferenceTask): { [key: string]: WorkEnvOrigin } {
+  const origins: { [key: string]: WorkEnvOrigin } = {}
+  for (const key of Object.keys(task.envs)) {
+    if (key in (task.schema.envs ?? {})) {
+      origins[key] = 'task'
+    } else if (key in (task.scope.inputs ?? {}) && key in (task.scope.schema.envs ?? {})) {
+      origins[key] = 'input'
+    } else if (key in (task.scope.schema.envs ?? {})) {
+      origins[key] = 'build-file'
+    } else {
+      origins[key] = 'extend'
+    }
+  }
+  return origins
 }
