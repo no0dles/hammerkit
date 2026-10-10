@@ -14,6 +14,10 @@ switch (mode) {
     // the value ends in a newline on purpose: it must arrive verbatim
     process.stdout.write(`value-of-${ref}-as-${process.env.FAKE_TOKEN ?? 'nobody'}\n`)
     break
+  case 'static':
+    // the same value whoever asks
+    process.stdout.write(`static-of-${ref}`)
+    break
   case 'empty':
     break
   case 'fail':

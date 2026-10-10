@@ -10,7 +10,7 @@ import { portablePath } from './utils/portable-path'
 import { AbortError } from '../executer/abort'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { SecretProviderBinding } from '../secrets/secret-provider'
-import { fetchProviderValue } from '../secrets/provider-values'
+import { fetchProviderValue, peekProviderValue } from '../secrets/provider-values'
 
 export type WorkSecretSource =
   | { type: 'env'; name: string }
@@ -64,10 +64,6 @@ export function parseWorkSecrets(
       : { type: 'file', path: normalizePath(cwd, cwd, templateValue(secret.path ?? '', envs)) }
     const name = target.type === 'env' ? target.name : secret.path
     const source = parseSecretSource(secret, ref, cwd, envs, catalog, account, `secret ${name}`)
-    if (source.type === 'provider' && secret.cache) {
-      // the digest needs the value before the task is planned, see ADR 0008
-      throw new Error(`secret ${name}: cache: true is not supported for provider secrets yet`)
-    }
     const workSecret: WorkSecret = {
       source,
       target,
@@ -141,9 +137,16 @@ function readSecretValueSync(secret: WorkSecret, environment: Environment): stri
     return value
   }
   if (secret.source.type === 'provider') {
-    throw new Error(
-      `secret ${getSecretName(secret)}: ${describeSecretSource(secret)} was not fetched before it was hashed`
-    )
+    const value = peekProviderValue(secret.source.binding, secret.source.ref, environment)
+    if (value === undefined) {
+      throw new Error(
+        `secret ${getSecretName(secret)}: ${describeSecretSource(
+          secret
+        )} was not fetched before its task id was computed`
+      )
+    }
+    environment.secrets.register(value)
+    return value
   }
   if (!existsSync(secret.source.path)) {
     throw new Error(`secret ${getSecretName(secret)}: file ${secret.source.path} does not exist`)

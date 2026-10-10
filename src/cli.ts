@@ -42,7 +42,7 @@ import {
   retentionPolicyOf,
 } from './cache/cache-inventory'
 import { RetentionPolicy } from './cache/retention'
-import { beginSecretRun } from './secrets/provider-values'
+import { prefetchSecrets } from './secrets/prefetch-secrets'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -106,6 +106,12 @@ export class Cli {
     private environment: Environment
   ) {}
 
+  // Starts the run's secrets: the values that make up a task id are fetched
+  // before anything asks for an id, see prefetchSecrets.
+  private async prepareSecrets(newRun = false): Promise<void> {
+    await prefetchSecrets(this.workTree, this.environment, newRun)
+  }
+
   setup(type: ExecuteKind, options?: Partial<CliExecOptions>): CliExecResult {
     const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
 
@@ -122,7 +128,9 @@ export class Cli {
     return {
       state: processWorkTree,
       start: async () => {
-        beginSecretRun(this.environment)
+        if (type !== 'down') {
+          await this.prepareSecrets(true)
+        }
         checkForLoop(workTree)
 
         const capacity = hasError(workTree) ? null : await getResourceCapacity(workTree, this.environment)
@@ -195,18 +203,22 @@ export class Cli {
   }
 
   async clean(options?: { cache?: boolean }): Promise<void> {
+    await this.prepareSecrets()
     await cleanCache(this.workTree, this.environment, options)
   }
 
   async restore(path: string): Promise<void> {
+    await this.prepareSecrets()
     await restoreCache(this.environment, path, this.workTree)
   }
 
   async package(options: CliPackageOptions): Promise<void> {
+    await this.prepareSecrets()
     await packageWorkTree(this.workTree, this.environment, options)
   }
 
   async store(path: string): Promise<void> {
+    await this.prepareSecrets()
     await storeCache(this.environment, path, this.workTree)
   }
 
@@ -232,6 +244,7 @@ export class Cli {
   // Read-only cache prediction for every task in scope: executes no command,
   // starts no container/service, performs no cache push/pull.
   async explain(options?: { cacheDefault?: CacheMethod }): Promise<TaskExplanation[]> {
+    await this.prepareSecrets()
     return explainWorkTree(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
   }
 
@@ -244,17 +257,20 @@ export class Cli {
   // Ordered execution plan with predicted cache decisions, reusing the explain
   // engine — executes nothing, starts nothing, performs no cache push/pull.
   async dryRun(options?: { cacheDefault?: CacheMethod }): Promise<DryRunPlan> {
+    await this.prepareSecrets()
     return planDryRun(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
   }
 
   // Move cache entries between the tasks' own caches and a named remote without
   // executing anything (`cache pull` / `cache push`).
   async syncCache(options: CacheSyncOptions): Promise<CacheSyncResult[]> {
+    await this.prepareSecrets()
     return syncCache(this.workTree, options, this.environment)
   }
 
   // Entries of a named cache (default: the local `default` cache).
   async listCache(cacheName?: string): Promise<NamedCacheEntry[]> {
+    await this.prepareSecrets()
     return listCache(this.workTree, cacheName, this.environment)
   }
 
@@ -263,11 +279,13 @@ export class Cli {
   }
 
   async pruneCache(cacheName: string | undefined, policy: RetentionPolicy, dryRun = false): Promise<PruneResult> {
+    await this.prepareSecrets()
     return pruneCache(this.workTree, cacheName, policy, { dryRun }, this.environment)
   }
 
   // Apply declared retention to the local caches this build file uses.
   async autoPrune(): Promise<{ cacheName: string; plan: PruneResult }[]> {
+    await this.prepareSecrets()
     return autoPrune(this.workTree, this.environment)
   }
 

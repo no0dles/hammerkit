@@ -6,6 +6,7 @@ import { createCli } from '../program'
 import { createGitRepo, isolateHammerkitHome } from '../testing/git-repo'
 import { WorkItem } from './work-item'
 import { WorkTask } from './work-task'
+import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
 import { Environment } from '../executer/environment'
 import { ParseError } from '../schema/parse-error'
 
@@ -36,14 +37,19 @@ describe('provider secrets', () => {
     rmSync(scratch, { recursive: true, force: true })
   })
 
-  async function plan(name: string, buildFile: { [key: string]: unknown }, files: { [name: string]: unknown } = {}) {
+  async function plan(
+    name: string,
+    buildFile: { [key: string]: unknown },
+    files: { [name: string]: unknown } = {},
+    envs: { [key: string]: string | undefined } = hostEnvs
+  ) {
     let result: { cli: Awaited<ReturnType<typeof createCli>>; environment: Environment } | null = null
     await createTestCase(name, {
       '.git/HEAD': 'ref: refs/heads/main\n',
       '.hammerkit.yaml': buildFile,
       ...(files as { [name: string]: string }),
     }).setup(async (cwd, environment) => {
-      environment.processEnvs = { ...environment.processEnvs, ...hostEnvs }
+      environment.processEnvs = { ...environment.processEnvs, ...envs }
       const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
       result = { cli, environment }
     })
@@ -135,16 +141,6 @@ describe('provider secrets', () => {
           tasks: { build: { cmds: ['true'] } },
         })
       ).rejects.toThrow('more than one default secret account: test, deploy')
-    })
-
-    it('rejects a secret with cache: true until the digest can be fetched', async () => {
-      await expect(
-        plan('provider-cache-true', {
-          secretProviders: { fake: provider() },
-          secretAccounts: accounts,
-          tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A', cache: true }] } },
-        })
-      ).rejects.toThrow('cache: true is not supported for provider secrets yet')
     })
   })
 
@@ -238,6 +234,110 @@ describe('provider secrets', () => {
         expect(Object.keys(context.secrets.providers)).toEqual(['fake'])
         expect(Object.keys(context.secrets.accounts)).toEqual(['test'])
       })
+    })
+  })
+
+  describe('cache: true', () => {
+    const task = (secret: object = {}) => ({
+      cmds: ['true'],
+      secrets: [{ from: 'fake:db', env: 'TOKEN', cache: true, ...secret }],
+    })
+    const buildFile = (mode = 'value', tasks: { [name: string]: unknown } = { build: task() }) => ({
+      secretProviders: { fake: { command: [process.execPath, fake, mode, '{{ref}}'] } },
+      secretAccounts: accounts,
+      tasks,
+    })
+
+    // the id and description of `build`, once the run's secrets were fetched
+    async function identify(name: string, file: { [key: string]: unknown }, envs = hostEnvs, taskName = 'build') {
+      const { cli } = await plan(name, file, {}, envs)
+      const item = cli.task(taskName) as unknown as WorkItem<WorkTask>
+      await cli.explain()
+      return { id: item.id(), description: JSON.stringify(getWorkTaskCacheDescription(item)) }
+    }
+
+    it('needs the value fetched before a task id is computed', async () => {
+      const { cli } = await plan('provider-cache-unfetched', buildFile())
+      const item = cli.task('build') as unknown as WorkItem<WorkTask>
+      expect(() => item.id()).toThrow('secret TOKEN: fake:db as test was not fetched before its task id was computed')
+      await cli.explain()
+      expect(item.id()).toBeTruthy()
+    })
+
+    it('keys the task by a digest of the value, never the value', async () => {
+      const first = await identify('provider-cache-a', buildFile())
+      const second = await identify('provider-cache-a', buildFile(), { ...hostEnvs, TEST_SA: 'rotated-sa' })
+      expect(first.id).not.toEqual(second.id)
+      expect(first.description).toContain('TOKEN=sha256:')
+      expect(first.description).not.toContain('value-of-db')
+    })
+
+    it('gives the same id on every checkout and for every account that reads the same value', async () => {
+      const first = await identify('provider-cache-b', buildFile('static'))
+      const other = await identify('provider-cache-c', buildFile('static'))
+      expect(other.id).toEqual(first.id)
+      const deploy = await identify(
+        'provider-cache-d',
+        buildFile('static', { build: { ...task(), account: 'deploy' } }),
+        { ...hostEnvs, DEPLOY_SA: 'other-sa' }
+      )
+      expect(deploy.id).toEqual(first.id)
+    })
+
+    it('fetches only secrets that make up an id before the run', async () => {
+      const calls = join(scratch, 'calls')
+      const file = {
+        secretProviders: { fake: provider(calls) },
+        secretAccounts: accounts,
+        tasks: {
+          build: {
+            cmds: ['true'],
+            secrets: [
+              { from: 'fake:keyed', env: 'KEYED', cache: true },
+              { from: 'fake:ambient', env: 'AMBIENT' },
+            ],
+          },
+        },
+      }
+      await identify('provider-cache-prefetch', file)
+      const refs = readFileSync(calls, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).ref)
+      expect(refs).toEqual(['keyed'])
+    })
+
+    it('fetches again for each run, and reuses the values of the run in between', async () => {
+      const calls = join(scratch, 'calls')
+      const { cli } = await plan('provider-cache-runs', {
+        secretProviders: { fake: provider(calls) },
+        secretAccounts: accounts,
+        tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:db', env: 'TOKEN', cache: true }] } },
+      })
+      const fetches = () => (existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').length : 0)
+
+      await cli.explain()
+      await cli.explain()
+      expect(fetches()).toBe(1)
+
+      await cli.runExec()
+      expect(fetches()).toBe(2)
+      await cli.runExec()
+      expect(fetches()).toBe(3)
+    })
+
+    itExceptWindows('is fetched once for the id and the start of the task', async () => {
+      const calls = join(scratch, 'calls')
+      const { cli } = await plan('provider-cache-once', {
+        secretProviders: { fake: provider(calls) },
+        secretAccounts: accounts,
+        tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:db', env: 'TOKEN', cache: true }] } },
+      })
+
+      const result = await cli.runExec()
+
+      expect(result.success).toBe(true)
+      expect(readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(1)
     })
   })
 

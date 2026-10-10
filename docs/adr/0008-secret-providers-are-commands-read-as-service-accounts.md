@@ -25,5 +25,5 @@ A secret's `from` can name a **provider** (`from: gsm:db-password`) next to `env
 ## Consequences
 
 - Additive: two optional top-level keys, `account` on tasks, container services and secrets, and a wider `from` pattern.
-- `cache: true` is not supported for provider secrets in the first version: the task id is computed synchronously and needs the value fetched beforehand.
+- A task id is computed synchronously, so the values of `cache: true` provider secrets are fetched first, by the commands that need ids (`prefetchSecrets`). Those commands need the account's credential; a machine without it fails closed instead of computing another id. The digest depends on the value, not the reader.
 - A task that receives a secret can print it, and so can the code it runs. Masking reduces accidents, it is not a boundary.
