@@ -1,3 +1,10 @@
+## [1.14.1](https://github.com/no0dles/hammerkit/compare/v1.14.0...v1.14.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* a task extending a chain of tasks inherits every base once ([#61](https://github.com/no0dles/hammerkit/issues/61)) ([33b5567](https://github.com/no0dles/hammerkit/commit/33b5567caafda74c9d594cb98f141ba5b217f598))
+
 # [1.14.0](https://github.com/no0dles/hammerkit/compare/v1.13.1...v1.14.0) (2026-10-10)
 
 
