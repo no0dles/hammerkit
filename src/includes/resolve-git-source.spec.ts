@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { createGitRepo, GitRepo, isolateHammerkitHome } from '../testing/git-repo'
-import { resolveGitSource } from './resolve-git-source'
+import { purgeGitSources, refreshGitSource, resolveGitSource } from './resolve-git-source'
 
 describe('resolveGitSource', () => {
   let repo: GitRepo
@@ -110,5 +110,69 @@ describe('resolveGitSource', () => {
     await expect(resolveGitSource({ git: 'ext::sh -c touch% pwned' }, environment)).rejects.toThrow(
       /unable to resolve ext::sh/
     )
+  })
+
+  describe('refreshGitSource', () => {
+    it('moves a branch to its latest commit', async () => {
+      const first = repo.commit({ 'build.yaml': 'v1' })
+      await resolveGitSource({ git: repo.url, ref: 'main' }, environment)
+      const second = repo.commit({ 'build.yaml': 'v2' })
+
+      const refreshed = await refreshGitSource({ git: repo.url, ref: 'main' }, environment)
+      const resolved = await resolveGitSource({ git: repo.url, ref: 'main' }, environment)
+
+      expect(refreshed).toMatchObject({ previous: first, commit: second, pinned: false })
+      expect(read(resolved.root, 'build.yaml')).toBe('v2')
+    })
+
+    it('reports an unchanged branch and a source that was not cached yet', async () => {
+      const first = repo.commit({ 'build.yaml': 'v1' })
+
+      const fresh = await refreshGitSource({ git: repo.url, ref: 'main' }, environment)
+      const again = await refreshGitSource({ git: repo.url, ref: 'main' }, environment)
+
+      expect(fresh).toMatchObject({ previous: null, commit: first })
+      expect(again).toMatchObject({ previous: first, commit: first })
+    })
+
+    it('does not fetch a commit SHA again', async () => {
+      const first = repo.commit({ 'build.yaml': 'v1' })
+      await resolveGitSource({ git: repo.url, ref: first }, environment)
+      repo.remove()
+
+      const refreshed = await refreshGitSource({ git: repo.url, ref: first }, environment)
+
+      expect(refreshed).toMatchObject({ previous: first, commit: first, pinned: true })
+    })
+
+    it('keeps the cached copy when the fetch fails', async () => {
+      const first = repo.commit({ 'build.yaml': 'v1' })
+      await resolveGitSource({ git: repo.url, ref: 'main' }, environment)
+      repo.remove()
+
+      await expect(refreshGitSource({ git: repo.url, ref: 'main' }, environment)).rejects.toThrow(
+        `unable to resolve ${repo.url} at main`
+      )
+
+      const resolved = await resolveGitSource({ git: repo.url, ref: 'main' }, environment)
+      expect(resolved.commit).toBe(first)
+    })
+  })
+
+  describe('purgeGitSources', () => {
+    it('forgets every cached source so the next resolution fetches again', async () => {
+      repo.commit({ 'build.yaml': 'v1' })
+      await resolveGitSource({ git: repo.url, ref: 'main' }, environment)
+      const second = repo.commit({ 'build.yaml': 'v2' })
+
+      await purgeGitSources()
+      const resolved = await resolveGitSource({ git: repo.url, ref: 'main' }, environment)
+
+      expect(resolved.commit).toBe(second)
+    })
+
+    it('succeeds when nothing is cached', async () => {
+      await expect(purgeGitSources()).resolves.toBeUndefined()
+    })
   })
 })

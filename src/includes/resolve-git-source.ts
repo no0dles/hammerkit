@@ -55,7 +55,53 @@ export async function resolveGitSource(
   if (cached) {
     return cached
   }
+  return fetchIntoCache(source, directory, environment, false)
+}
 
+export interface RefreshedGitSource {
+  git: string
+  ref: string | null
+  // the commit the cache held before, null when it was not cached yet
+  previous: string | null
+  commit: string
+  // a full commit SHA never changes, so it is not fetched again
+  pinned: boolean
+}
+
+// `hammerkit includes pull`: fetch a source again and replace the cached copy
+// with the ref's current commit. The old copy stays when the fetch fails.
+export async function refreshGitSource(
+  source: BuildFileGitSourceSchema,
+  environment: Environment
+): Promise<RefreshedGitSource> {
+  const directory = join(getIncludesDirectory(), getSourceKey(source))
+  const cached = await readCached(directory)
+  const pinned = isCommitSha(source.ref)
+  const resolved = pinned && cached ? cached : await fetchIntoCache(source, directory, environment, cached !== null)
+  return {
+    git: source.git,
+    ref: source.ref ?? null,
+    previous: cached?.commit ?? null,
+    commit: resolved.commit,
+    pinned,
+  }
+}
+
+// `hammerkit clean --cache`: the next run fetches every source again.
+export async function purgeGitSources(): Promise<void> {
+  await rm(getIncludesDirectory(), { recursive: true, force: true })
+}
+
+function isCommitSha(ref: string | undefined): boolean {
+  return ref !== undefined && /^[0-9a-f]{40}$/i.test(ref)
+}
+
+async function fetchIntoCache(
+  source: BuildFileGitSourceSchema,
+  directory: string,
+  environment: Environment,
+  replace: boolean
+): Promise<ResolvedGitSource> {
   await mkdir(getIncludesDirectory(), { recursive: true })
   const staging = `${directory}.${randomUUID()}`
   try {
@@ -63,6 +109,9 @@ export async function resolveGitSource(
     const commit = await fetchInto(join(staging, 'repo'), source, environment)
     const stored: StoredSource = { git: source.git, ref: source.ref ?? null, commit }
     await writeFile(join(staging, 'source.json'), JSON.stringify(stored, null, 2))
+    if (replace) {
+      await rm(directory, { recursive: true, force: true })
+    }
     try {
       await rename(staging, directory)
     } catch (e) {

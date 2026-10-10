@@ -10,6 +10,7 @@
     "explain",
     "graph",
     "cache",
+    "includes",
     "store-restore",
     "package",
     "clean",

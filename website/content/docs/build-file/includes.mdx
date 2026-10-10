@@ -130,6 +130,10 @@ not change underneath you. The cache is the pin: there is no lockfile.
 - A repository that was never fetched and is unreachable fails with an error naming the
   repository and ref. There is no silent fallback.
 
+To update a branch or tag, run [`hammerkit includes pull`](/docs/cli/includes); a commit SHA
+stays as it is. [`hammerkit clean --cache`](/docs/cli/clean) removes the cached repositories,
+so the next run fetches them again.
+
 ### What a remote file may do
 
 A remote build file contributes tasks, services, caches and environments. Fetching it runs
