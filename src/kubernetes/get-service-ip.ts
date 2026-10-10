@@ -10,7 +10,7 @@ export async function getServiceIp(
   workService: WorkItem<ContainerWorkService>
 ): Promise<string | null> {
   const name = getResourceName(workService)
-  const svc = await instance.coreApi.readNamespacedService(name, env.namespace)
+  const svc = await instance.coreApi.readNamespacedService({ name, namespace: env.namespace })
 
-  return svc.body.spec?.clusterIP ?? null
+  return svc.spec?.clusterIP ?? null
 }

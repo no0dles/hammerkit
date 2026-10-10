@@ -2,6 +2,7 @@ import { CacheBackendSchema } from '../schema/cache-schema'
 import { CacheBackend, CacheBackendFactory } from './cache-backend'
 import { createLocalCacheBackend } from './backends/local-cache-backend'
 import { createS3CacheBackend } from './backends/s3-cache-backend'
+import { createRegistryCacheBackend, RegistryCacheBackendSpec } from './backends/registry-cache-backend'
 
 const factories = new Map<string, CacheBackendFactory>()
 
@@ -30,3 +31,4 @@ registerCacheBackend('s3', (spec) =>
     }
   )
 )
+registerCacheBackend('registry', (spec) => createRegistryCacheBackend(spec as RegistryCacheBackendSpec))

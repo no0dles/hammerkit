@@ -1,0 +1,156 @@
+---
+title: "Rust"
+description: "Fetch crates, test and build a Cargo project in containers, with the download cached by Cargo.lock."
+---
+This tutorial fetches the crates of a small Cargo project once, then runs
+`cargo test` and `cargo build --release` against them offline, each in a
+`rust:1.90-slim` container and each skipped when its inputs haven't changed. You
+need [hammerkit and Docker](/docs/installation); Rust doesn't have to be installed
+on your machine.
+
+The finished project is
+[`examples/tutorial-rust`](https://github.com/no0dles/hammerkit/tree/master/examples/tutorial-rust).
+
+## The project
+
+```txt
+tutorial-rust/
+├── Cargo.toml
+├── Cargo.lock
+└── src/
+    ├── lib.rs
+    └── main.rs
+```
+
+The tests use one third-party crate, `pretty_assertions`. The manifest names the
+library and the binary explicitly; the next step explains why.
+
+<include cwd lang="toml" meta='title="Cargo.toml"'>../examples/tutorial-rust/Cargo.toml</include>
+
+<include cwd lang="rust" meta='title="src/lib.rs"'>../examples/tutorial-rust/src/lib.rs</include>
+
+## 1. Fetch dependencies
+
+A task names the image it runs in, the files it reads (`src`) and the files it
+produces (`generates`). The `fetch` task downloads every crate `Cargo.lock` pins:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  # Cargo keeps downloaded crates in CARGO_HOME. In the project, the fetch
+  # task can keep them as its output.
+  CARGO_HOME: .cargo-home
+
+tasks:
+  fetch:
+    description: download the locked crates
+    image: rust:1.90-slim
+    src: [Cargo.toml, Cargo.lock]
+    generates: [.cargo-home]
+    cmds:
+      - cargo fetch --locked
+```
+
+```bash
+hammerkit fetch
+```
+
+Run it again and hammerkit skips it: `Cargo.toml` and `Cargo.lock` are unchanged.
+Only a dependency change downloads again.
+
+`fetch` reads only the manifest and the lockfile, so editing a source file doesn't
+invalidate it. That's why `Cargo.toml` names its targets: without the sources,
+Cargo can't discover `src/lib.rs` and `src/main.rs` on its own and refuses to
+fetch. `--locked` makes Cargo fail instead of quietly updating `Cargo.lock`.
+
+## 2. Test and build
+
+Both tasks depend on `fetch`, which mounts its `.cargo-home` into their containers:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  test:
+    description: run the unit tests
+    image: rust:1.90-slim
+    deps: [fetch]
+    src: [src]
+    cmds:
+      - cargo test --offline --locked
+
+  build:
+    description: compile the release binary
+    image: rust:1.90-slim
+    deps: [fetch]
+    src: [src]
+    generates:
+      - path: bin
+        export: true
+    cmds:
+      - cargo build --release --offline --locked
+      - install -D target/release/greet bin/greet
+```
+
+Neither lists `Cargo.toml` or `Cargo.lock`: a task also sees the sources of the
+tasks it depends on, and a change to them reruns it, so editing the manifest
+reruns `fetch`, `test` and `build`. `--offline` keeps Cargo from reaching the
+network, so a crate missing from `fetch`'s output fails the build instead of
+being downloaded on the side.
+
+A container task's outputs stay in a volume hammerkit manages, ready for the tasks
+that depend on it. `export: true` also copies `bin` into your project. Declaring
+the whole `target` folder would work too, but `target` holds every intermediate
+build file; `bin` holds only what you ship. The binary is built for Linux, the
+container's OS.
+
+`test` and `build` don't depend on each other, so they run in parallel.
+
+## 3. One task for CI
+
+A task without `cmds` groups other tasks. `ci` names everything a change has to
+pass. The complete build file:
+
+<include cwd lang="yaml" meta='title=".hammerkit.yaml"'>../examples/tutorial-rust/.hammerkit.yaml</include>
+
+```bash
+hammerkit run ci
+```
+
+```txt
+Summary:
+  build  executed   1.6s
+  ci     executed   1.8s
+  fetch  executed   944ms
+  test   executed   1.8s
+  4 executed, 0 cached (0% cache hit), 1.8s total
+```
+
+Run it again without changing anything:
+
+```txt
+Summary:
+  build  cached     0ms
+  ci     cached     15ms
+  fetch  skipped    0ms
+  test   cached     0ms
+  0 executed, 3 cached, 1 skipped (100% cache hit), 33ms total
+```
+
+`fetch` is skipped: every task that needs it was a cache hit, so the crates aren't
+needed either. Edit a file in `src` and `test` and `build` run again, against the
+crates `fetch` already has.
+
+Ignore what hammerkit and Cargo write into the project:
+
+<include cwd lang="txt" meta='title=".gitignore"'>../examples/tutorial-rust/.gitignore</include>
+
+## Run it in CI
+
+CI runs the same command: [install hammerkit](/docs/installation#in-ci) and run
+`hammerkit run ci`. A fresh runner starts with an empty cache; to reuse what your
+laptop or the previous run already built, share the cache as described in
+[caching in CI](/docs/guides/ci-caching).
+
+## Next steps
+
+* Tests that need a database: start it as a [service](/docs/service) and let the
+  task [`need`](/docs/task/needs) it, see [services & networking](/docs/guides/services-networking).
+* A task reruns and you don't know why: [`hammerkit explain`](/docs/cli/explain).

@@ -4,6 +4,16 @@ import { join } from 'path'
 import { cleanCache, getArchivePaths, restoreCache, storeCache } from './event-cache'
 import { environmentMock } from './environment-mock'
 import { getCacheDirectory, getHammerkitDirectory } from '../optimizer/get-cache-directory'
+import { getWorkInstanceId } from '../planner/work-instance-id'
+import { removeOrphanedContainers } from '../docker/remove-orphaned-containers'
+
+vi.mock('../docker/remove-orphaned-containers', () => ({ removeOrphanedContainers: vi.fn() }))
+vi.mock('./execute-docker', () => ({ getContainerCli: vi.fn(() => ({ docker: true })) }))
+
+const cacheId = 't1'
+// the staging directory is per checkout: keyed by the id and the project root
+const projectRoot = join(tmpdir(), 'hammerkit-event-cache-project')
+const cachePath = getCacheDirectory(getWorkInstanceId({ id: () => cacheId, data: { projectRoot } } as any))
 
 describe('getArchivePaths', () => {
   it('yields one archive per non-inherited container-service volume', () => {
@@ -49,8 +59,6 @@ describe('getArchivePaths', () => {
 })
 
 describe('restoreCache', () => {
-  const cacheId = 't1'
-  const cachePath = getCacheDirectory(cacheId)
   let path: string
   let environment: ReturnType<typeof environmentMock>
 
@@ -78,6 +86,7 @@ describe('restoreCache', () => {
           name: cacheId,
           status: { write: vi.fn() },
           runtime: { restore },
+          data: { projectRoot },
         },
       },
       services: {},
@@ -94,8 +103,6 @@ describe('restoreCache', () => {
 })
 
 describe('storeCache', () => {
-  const cacheId = 't1'
-  const cachePath = getCacheDirectory(cacheId)
   let path: string
   let environment: ReturnType<typeof environmentMock>
 
@@ -121,6 +128,7 @@ describe('storeCache', () => {
           name: cacheId,
           status: { write: vi.fn() },
           runtime: { archive },
+          data: { projectRoot },
         },
       },
       services: {},
@@ -137,8 +145,6 @@ describe('storeCache', () => {
 })
 
 describe('cleanCache', () => {
-  const cacheId = 't1'
-  const cachePath = getCacheDirectory(cacheId)
   let path: string
   let environment: ReturnType<typeof environmentMock>
 
@@ -167,11 +173,13 @@ describe('cleanCache', () => {
           runtime: { remove },
           data: {
             type: 'local-task',
+            projectRoot,
             caching: { name: 'default', method: 'none', backend: { clear }, implicit: true },
           },
         },
       },
       services: {},
+      environment: { type: 'kubernetes' },
     } as any
 
     await cleanCache(workTree, environment, { cache: true })
@@ -193,17 +201,47 @@ describe('cleanCache', () => {
           runtime: { remove },
           data: {
             type: 'local-task',
+            projectRoot,
             caching: { name: 'default', method: 'none', backend: { clear }, implicit: true },
           },
         },
       },
       services: {},
+      environment: { type: 'kubernetes' },
     } as any
 
     await cleanCache(workTree, environment)
 
     expect(remove).toHaveBeenCalledWith(environment)
     expect(clear).not.toHaveBeenCalled()
+    expect(removeOrphanedContainers).not.toHaveBeenCalled()
+  })
+
+  it('clears services and removes containers left behind on docker', async () => {
+    vi.mocked(removeOrphanedContainers).mockResolvedValue(['0123456789abcdef'])
+    const info = vi.spyOn(environment.console, 'info')
+    const remove = vi.fn()
+    const clear = vi.fn()
+    const workTree = {
+      tasks: {},
+      services: {
+        s1: {
+          id: () => 's1',
+          name: 's1',
+          status: { write: vi.fn() },
+          runtime: { remove },
+          data: { type: 'container-service', projectRoot, caching: { backend: { clear } } },
+        },
+      },
+      environment: { type: 'docker' },
+    } as any
+
+    await cleanCache(workTree, environment, { cache: true })
+
+    expect(remove).toHaveBeenCalledWith(environment)
+    expect(clear).toHaveBeenCalledWith('s1', environment)
+    expect(removeOrphanedContainers).toHaveBeenCalledWith({ docker: true })
+    expect(info).toHaveBeenCalledWith('removed container 0123456789ab left behind by a stopped run')
   })
 })
 

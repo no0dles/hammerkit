@@ -27,6 +27,7 @@ export function getContainerVolumes(task: BaseWorkTask, mounts: WorkMount[]): Wo
       containerPath: generate.path,
       inherited: generate.inherited,
       export: generate.export,
+      readOnly: false,
     })
   }
 

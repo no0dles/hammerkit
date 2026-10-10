@@ -42,16 +42,15 @@ environments:
     kubernetes:
       namespace: default
       context: popos
-      ingresses:
-        # classic Ingress (default kind), routed by the nginx ingress controller
+      # Gateway API HTTPRoutes: require the Gateway API CRDs and a Gateway named
+      # "web" in the cluster
+      httpRoutes:
         - host: web.hammerkit.dev
           service: spa:web
           servicePort: 4200
           path: /
-        # Gateway API HTTPRoute - requires the Gateway API CRDs and a Gateway
-        # named "web" in the cluster
-        - kind: httproute
-          host: api.hammerkit.dev
+          gateway: web
+        - host: api.hammerkit.dev
           service: api
           servicePort: 3000
           path: /

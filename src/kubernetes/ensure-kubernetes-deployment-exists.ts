@@ -1,8 +1,15 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
-import { ContainerWorkService } from '../planner/work-service'
+import {
+  ContainerWorkService,
+  getHealthcheckCommand,
+  getServiceCommand,
+  getServiceWorkingDir,
+} from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
+import { KubernetesSecretRefs } from './secrets'
 import { V1Deployment, V1HostAlias, V1Probe } from '@kubernetes/client-node'
+import { getServiceHostname } from '../planner/utils/service-hostname'
 import { apply, KubernetesObjectHeader } from './apply'
 import { getServiceIp } from './get-service-ip'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -10,12 +17,14 @@ import { getVersion } from '../version'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { awaitDeployRunningState } from './await-running-state'
 import { getResourceName } from './resources'
+import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   service: WorkItem<ContainerWorkService>,
   persistence: KubernetesPersistence,
+  secrets: KubernetesSecretRefs,
   stateKey: string
 ) {
   const hostAliases: V1HostAlias[] = []
@@ -34,10 +43,12 @@ export async function ensureKubernetesDeploymentExists(
   }
   const envs = getEnvironmentVariables(service.data.envs)
   const name = getResourceName(service)
-  const probe: V1Probe | undefined = service.data.healthcheck
+  const healthcheckCommand = getHealthcheckCommand(service.data)
+  const serviceCommand = getServiceCommand(service.data)
+  const probe: V1Probe | undefined = healthcheckCommand
     ? {
         exec: {
-          command: [service.data.healthcheck.cmd.parsed.command, ...service.data.healthcheck.cmd.parsed.args],
+          command: healthcheckCommand,
         },
         periodSeconds: 5,
         failureThreshold: 3,
@@ -72,24 +83,28 @@ export async function ensureKubernetesDeploymentExists(
           },
         },
         spec: {
+          // the pod resolves its own service name, as with Docker's Hostname
+          hostname: getServiceHostname(service.name),
           hostAliases: hostAliases,
           containers: [
             {
               name: service.name.replace(/:/, '-'),
               image: service.data.image,
-              workingDir: service.data.cwd ?? undefined,
-              env: Object.entries(envs).map(([key, value]) => ({
-                name: key,
-                value: value,
-              })),
-              command: service.data.cmd ? [service.data.cmd.parsed.command] : undefined,
-              args: service.data.cmd ? service.data.cmd.parsed.args : undefined,
+              workingDir: getServiceWorkingDir(service.data),
+              env: [
+                ...Object.entries(envs).map(([key, value]) => ({
+                  name: key,
+                  value: value,
+                })),
+                ...secrets.env,
+              ],
+              ...getKubernetesCommand(serviceCommand),
               ports: service.data.ports.map((p) => ({
                 containerPort: p.containerPort,
               })),
               readinessProbe: probe,
               livenessProbe: probe,
-              volumeMounts: persistence.mounts.map((m) => m.mount),
+              volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
             },
             {
               name: 'debug',
@@ -99,7 +114,7 @@ export async function ensureKubernetesDeploymentExists(
               volumeMounts: persistence.mounts.map((m) => m.mount),
             },
           ],
-          volumes: persistence.volumes,
+          volumes: [...persistence.volumes, ...secrets.volumes],
         },
       },
     },
@@ -110,5 +125,27 @@ export async function ensureKubernetesDeploymentExists(
     return
   }
 
-  await awaitDeployRunningState(instance, env, name)
+  await awaitDeployRunningState(instance, env, name, {
+    podSelector: `hammerkit.dev/id=${service.id()}`,
+    timeout: service.data.healthcheck?.timeout ?? null,
+    timeoutMessage: service.data.healthcheck
+      ? getHealthcheckTimeoutMessage(service.name, service.data.healthcheck)
+      : '',
+  })
+}
+
+// Kubernetes `command` replaces the image entrypoint and `args` its command.
+// A shell service sets both; an exec-form `cmd` keeps the established mapping
+// (first token as `command`, the rest as `args`).
+function getKubernetesCommand(command: { entrypoint: string[] | null; cmd: string[] | null }): {
+  command?: string[]
+  args?: string[]
+} {
+  if (command.entrypoint && command.cmd) {
+    return { command: command.entrypoint, args: command.cmd }
+  }
+  if (command.cmd) {
+    return { command: [command.cmd[0]], args: command.cmd.slice(1) }
+  }
+  return {}
 }

@@ -1,0 +1,7 @@
+{
+  "title": "Migrate CI with an agent",
+  "icon": "Bot",
+  "pages": [
+    "agent-guide"
+  ]
+}

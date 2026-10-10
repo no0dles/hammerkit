@@ -1,0 +1,37 @@
+envs:
+  # Cargo keeps downloaded crates in CARGO_HOME. In the project, the fetch
+  # task can keep them as its output.
+  CARGO_HOME: .cargo-home
+
+tasks:
+  fetch:
+    description: download the locked crates
+    image: rust:1.90-slim
+    src: [Cargo.toml, Cargo.lock]
+    generates: [.cargo-home]
+    cmds:
+      - cargo fetch --locked
+
+  test:
+    description: run the unit tests
+    image: rust:1.90-slim
+    deps: [fetch]
+    src: [src]
+    cmds:
+      - cargo test --offline --locked
+
+  build:
+    description: compile the release binary
+    image: rust:1.90-slim
+    deps: [fetch]
+    src: [src]
+    generates:
+      - path: bin
+        export: true
+    cmds:
+      - cargo build --release --offline --locked
+      - install -D target/release/greet bin/greet
+
+  ci:
+    description: everything CI checks
+    deps: [test, build]

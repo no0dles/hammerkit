@@ -1,16 +1,14 @@
 import { resolvePodName } from './resolve-pod-name'
 import { AppsV1Api, CoreV1Api } from '@kubernetes/client-node'
 
-function podBody(items: Array<{ name: string; ready?: boolean }>) {
+function podList(items: Array<{ name: string; ready?: boolean }>) {
   return {
-    body: {
-      items: items.map((p) => ({
-        metadata: { name: p.name },
-        status: {
-          conditions: [{ type: 'Ready', status: p.ready ? 'True' : 'False' }],
-        },
-      })),
-    },
+    items: items.map((p) => ({
+      metadata: { name: p.name },
+      status: {
+        conditions: [{ type: 'Ready', status: p.ready ? 'True' : 'False' }],
+      },
+    })),
   } as any
 }
 
@@ -21,8 +19,8 @@ function makeCoreApi(
   } = {}
 ): CoreV1Api {
   return {
-    readNamespacedService: vi.fn().mockResolvedValue({ body: { spec: { selector: opts.service?.selector } } }),
-    listNamespacedPod: vi.fn().mockResolvedValue(podBody(opts.pods ?? [])),
+    readNamespacedService: vi.fn().mockResolvedValue({ spec: { selector: opts.service?.selector } }),
+    listNamespacedPod: vi.fn().mockResolvedValue(podList(opts.pods ?? [])),
   } as any
 }
 
@@ -30,7 +28,7 @@ function makeAppsApi(opts: { deployment?: { matchLabels?: { [k: string]: string 
   return {
     readNamespacedDeployment: vi
       .fn()
-      .mockResolvedValue({ body: { spec: { selector: { matchLabels: opts.deployment?.matchLabels } } } }),
+      .mockResolvedValue({ spec: { selector: { matchLabels: opts.deployment?.matchLabels } } }),
   } as any
 }
 
@@ -52,7 +50,7 @@ describe('resolvePodName', () => {
     })
     const apps = makeAppsApi()
     await expect(resolvePodName(core, apps, 'ns', { type: 'service', name: 'api' })).resolves.toBe('api-new')
-    expect(core.listNamespacedPod).toHaveBeenCalledWith('ns', undefined, undefined, undefined, undefined, 'app=api')
+    expect(core.listNamespacedPod).toHaveBeenCalledWith({ namespace: 'ns', labelSelector: 'app=api' })
   })
 
   it('falls back to the first pod if none are ready', async () => {
@@ -71,14 +69,7 @@ describe('resolvePodName', () => {
     const core = makeCoreApi({ pods: [{ name: 'p', ready: true }] })
     const apps = makeAppsApi({ deployment: { matchLabels: { 'hammerkit.dev/id': 'x' } } })
     await expect(resolvePodName(core, apps, 'ns', { type: 'deployment', name: 'api' })).resolves.toBe('p')
-    expect(core.listNamespacedPod).toHaveBeenCalledWith(
-      'ns',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      'hammerkit.dev/id=x'
-    )
+    expect(core.listNamespacedPod).toHaveBeenCalledWith({ namespace: 'ns', labelSelector: 'hammerkit.dev/id=x' })
   })
 
   it('throws when a service has no selector', async () => {

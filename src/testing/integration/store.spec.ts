@@ -2,6 +2,7 @@ import { join } from 'path'
 import { getTestSuite } from '../get-test-suite'
 import { existsSync } from 'fs'
 import { expectSuccessfulResult } from '../expect'
+import { listVolume } from '../read-volume'
 import { requiresLinuxContainers } from '../requires-linux-containers'
 
 describe('store/restore', () => {
@@ -65,6 +66,8 @@ describe('store/restore', () => {
       if (taskState.state.current.type === 'completed') {
         expect(taskState.state.current.cached).toBeTruthy()
       }
+      // the restored outputs must actually be back in the task's volume
+      expect(await listVolume(taskState.data.generates[0].volumeName)).toContain('.package-lock.json')
     }),
     900000
   )

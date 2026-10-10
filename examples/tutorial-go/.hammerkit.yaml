@@ -1,0 +1,28 @@
+envs:
+  # keep the mounted module cache deletable (Go makes it read-only by default)
+  GOFLAGS: -modcacherw
+
+tasks:
+  test:
+    description: vet and test every package
+    image: golang:1.25-alpine
+    src: [go.mod, go.sum, main.go, greet]
+    mounts: [.cache/go-mod:/go/pkg/mod]
+    cmds:
+      - go vet ./...
+      - go test ./...
+
+  build:
+    description: compile the greet binary
+    image: golang:1.25-alpine
+    src: [go.mod, go.sum, main.go, greet]
+    mounts: [.cache/go-mod:/go/pkg/mod]
+    generates:
+      - path: bin
+        export: true
+    cmds:
+      - go build -o bin/greet .
+
+  ci:
+    description: everything CI checks
+    deps: [test, build]

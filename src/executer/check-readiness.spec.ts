@@ -7,24 +7,21 @@ vi.mock('./execute-docker', () => ({
 import { execCommand } from './execute-docker'
 import { Environment } from './environment'
 import { Container } from 'dockerode'
-import { WorkHealthcheck } from '../planner/work-healthcheck'
 
 const status = { write: vi.fn() } as any
 const environment = {} as Environment
 const container = {} as Container
 const abort = new AbortController().signal
-const healthCheck: WorkHealthcheck = {
-  cmd: { cwd: '/w', cmd: 'curl -f http://x', parsed: { command: 'curl', args: ['-f', 'http://x'] } },
-}
+const command = ['curl', '-f', 'http://x']
 
 describe('checkReadiness', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('runs the parsed command with a 2000ms timeout', async () => {
+  it('runs the command with a 2000ms timeout', async () => {
     vi.mocked(execCommand).mockResolvedValue({ type: 'result', result: { ExitCode: 0 } } as any)
-    await checkReadiness(status, healthCheck, environment, container, abort)
+    await checkReadiness(status, command, environment, container, null, abort)
 
     expect(execCommand).toHaveBeenCalledWith(
       status,
@@ -38,25 +35,41 @@ describe('checkReadiness', () => {
     )
   })
 
+  it('runs the command as the given user', async () => {
+    vi.mocked(execCommand).mockResolvedValue({ type: 'result', result: { ExitCode: 0 } } as any)
+    await checkReadiness(status, command, environment, container, 'postgres', abort)
+
+    expect(execCommand).toHaveBeenCalledWith(
+      status,
+      environment,
+      container,
+      undefined,
+      command,
+      'postgres',
+      2000,
+      abort
+    )
+  })
+
   it('returns false on timeout', async () => {
     vi.mocked(execCommand).mockResolvedValue({ type: 'timeout' } as any)
-    await expect(checkReadiness(status, healthCheck, environment, container, abort)).resolves.toBe(false)
+    await expect(checkReadiness(status, command, environment, container, null, abort)).resolves.toBe(false)
   })
 
   it('returns false when canceled', async () => {
     vi.mocked(execCommand).mockResolvedValue({ type: 'canceled' } as any)
-    await expect(checkReadiness(status, healthCheck, environment, container, abort)).resolves.toBe(false)
+    await expect(checkReadiness(status, command, environment, container, null, abort)).resolves.toBe(false)
   })
 
   it('returns true and debug-writes on exit code 0', async () => {
     vi.mocked(execCommand).mockResolvedValue({ type: 'result', result: { ExitCode: 0 } } as any)
-    await expect(checkReadiness(status, healthCheck, environment, container, abort)).resolves.toBe(true)
-    expect(status.write).toHaveBeenCalledWith('debug', expect.stringContaining('succeeded'))
+    await expect(checkReadiness(status, command, environment, container, null, abort)).resolves.toBe(true)
+    expect(status.write).toHaveBeenCalledWith('debug', 'healthcheck curl -f http://x succeeded')
   })
 
   it('returns false and debug-writes the exit code on failure', async () => {
     vi.mocked(execCommand).mockResolvedValue({ type: 'result', result: { ExitCode: 1 } } as any)
-    await expect(checkReadiness(status, healthCheck, environment, container, abort)).resolves.toBe(false)
-    expect(status.write).toHaveBeenCalledWith('debug', expect.stringContaining('1'))
+    await expect(checkReadiness(status, command, environment, container, null, abort)).resolves.toBe(false)
+    expect(status.write).toHaveBeenCalledWith('debug', 'healthcheck curl -f http://x failed with 1')
   })
 })

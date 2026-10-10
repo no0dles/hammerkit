@@ -1,0 +1,18 @@
+# A service whose process depends on its working directory: python serves the
+# directory it runs in. With `workdir: /etc` it serves the image's /etc, so the
+# task can fetch alpine-release; without it the service would run in the build
+# file's directory.
+services:
+  files:
+    image: python:3.13-alpine
+    workdir: /etc
+    cmd: python3 -m http.server 8080
+    healthcheck:
+      cmd: wget -q -O /dev/null http://127.0.0.1:8080/alpine-release
+
+tasks:
+  fetch:
+    image: alpine:3.21
+    needs: [files]
+    cmds:
+      - wget -qO- http://files:8080/alpine-release

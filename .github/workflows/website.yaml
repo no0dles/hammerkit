@@ -1,0 +1,60 @@
+name: website
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'website/**'
+      # the tutorials embed these files
+      - 'examples/tutorial-*/**'
+      - '.github/workflows/website.yaml'
+  pull_request:
+    paths:
+      - 'website/**'
+      # the tutorials embed these files
+      - 'examples/tutorial-*/**'
+      - '.github/workflows/website.yaml'
+  workflow_dispatch:
+# a newer push to the same ref supersedes a running build
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  # Builds the static site on every PR (catching broken MDX) and on master.
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the changelog dates come from the release tags
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: website/out
+
+  # Publishes master to GitHub Pages (custom domain hammerkit.dev).
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

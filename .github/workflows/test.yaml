@@ -3,6 +3,11 @@ on:
   push:
     branches:
       - '**'
+# A newer push to the same branch supersedes a running check; master keeps every
+# run so its history stays complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 jobs:
   unit:
     strategy:
@@ -45,8 +50,14 @@ jobs:
   # colima needs. macos-15-intel is the last hosted Intel image (until ~2027).
   # k8s specs no-op (CLUSTER_NAME unset) and the registry self-provisions via
   # docker (REGISTRY unset); see src/testing/requires-* and ensure-local-registry.
+  #
+  # DISABLED: ~40 min per push on the emulated Intel runner, and colima is not
+  # Docker Desktop, so it does not catch Docker-Desktop-specific behavior anyway.
+  # GitHub's Apple Silicon runners cannot run Docker at all (no nested
+  # virtualization). Remove the `if` to re-enable.
   macos-containers:
     name: integration (macos-latest)
+    if: false
     runs-on: macos-15-intel
     timeout-minutes: 90
     env:
@@ -88,9 +99,8 @@ jobs:
             temp
 
   # Full container + Kubernetes integration on a hosted Linux runner. ubuntu-latest
-  # ships a native, running Docker daemon, so this is a self-hosted-independent path
-  # to the whole integration suite (integration.yaml needs a pre-provisioned cluster
-  # and registry). A throwaway kind cluster supplies Kubernetes and a registry:2
+  # ships a native, running Docker daemon, so the whole integration suite runs here
+  # on GitHub-hosted infrastructure. A throwaway kind cluster supplies Kubernetes and a registry:2
   # container satisfies REGISTRY for the docker package-push spec. The k8s specs pull
   # public images (node/postgres) straight from Docker Hub, so no containerd registry
   # mirror is needed. HAMMERKIT_FULL_INTEGRATION makes the linux-container and k8s
@@ -118,29 +128,34 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
+      # A current Kubernetes: the Gateway API CRDs below need 1.31+ (their CEL
+      # validations use isIP). Pinned by digest, as kind recommends.
       - name: Create kind cluster
-        uses: helm/kind-action@v1.10.0
+        uses: helm/kind-action@v1.15.0
         with:
           cluster_name: hammerkit-ci
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
       # hammerkit's k8s specs use process.env.CLUSTER_NAME directly as the kube
       # context (`context: process.env.CLUSTER_NAME`). kind names the context
       # `kind-<cluster>`, so rename it to match what the specs ask for.
       - name: Name the kube context after CLUSTER_NAME
         run: kubectl config rename-context "kind-${CLUSTER_NAME}" "${CLUSTER_NAME}"
+      # Services are exposed through Gateway API HTTPRoutes, a CRD kind does not ship
+      # with; environment.spec.ts creates and removes one.
+      - name: Install the Gateway API CRDs
+        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
       # docker-package-registry.spec.ts only probes an externally provided REGISTRY
       # for liveness (it never manages one), so stand up a registry on localhost:5000.
       - name: Start local registry
         run: docker run -d --restart=always -p 5000:5000 --name registry registry:2
       - name: Install npm packages
         run: npm ci
-      # Serialize on this first hosted-kind setup: one single-node cluster on a
-      # 4-vCPU runner, so running suites one at a time avoids scheduling/volume
-      # races (the self-hosted runner parallelizes against a beefier cluster).
+      # Serialize: one single-node kind cluster on a 4-vCPU runner, so running
+      # suites one at a time avoids scheduling/volume races.
       - name: Run integration tests
         run: npm run test:integration -- --no-file-parallelism
-      # Single coverage source for Codacy. This hosted job runs on every push
-      # (PRs included), unlike the self-hosted integration workflow, so coverage
-      # shows up on PRs. No master-only gate. Integration mode is a superset of the
+      # Single coverage source for Codacy. This job runs on every push (PRs
+      # included), so coverage shows up on PRs. No master-only gate. Integration mode is a superset of the
       # unit suite (see vitest.config.ts), so this one lcov is a complete report —
       # the fast unit/error-path specs and the container/k8s path are both included.
       - name: Upload coverage

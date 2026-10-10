@@ -1,0 +1,13 @@
+{
+  "title": "Guides",
+  "icon": "Map",
+  "pages": [
+    "local-vs-container",
+    "ci-caching",
+    "agents-and-ci",
+    "migrate-ci",
+    "services-networking",
+    "monorepo",
+    "development-workflow"
+  ]
+}

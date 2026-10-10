@@ -1,0 +1,24 @@
+{
+  "pages": [
+    "---Get started---",
+    "index",
+    "why-hammerkit",
+    "installation",
+    "getting-started",
+    "tutorials",
+    "concepts",
+    "faq",
+    "---Build---",
+    "build-file",
+    "task",
+    "service",
+    "labels",
+    "---Reference---",
+    "cli",
+    "---Guides---",
+    "...guides",
+    "---Project---",
+    "release-blog",
+    "contribution"
+  ]
+}

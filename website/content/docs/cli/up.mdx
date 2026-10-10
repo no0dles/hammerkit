@@ -1,0 +1,59 @@
+---
+title: "Up"
+description: "Start the services of your build file and keep them running."
+---
+Services normally start and stop automatically based on the `needs` of the tasks
+you run. The `up` command starts them directly, which is useful to keep shared
+services such as a database running across several task runs during development.
+
+```bash
+hammerkit up
+```
+
+This starts every service in the build file (or the ones matching the
+`--filter`/`--exclude` labels) and waits until you stop it. Use `--daemon` to
+start the services in the background and return immediately.
+
+```bash
+hammerkit up --daemon
+```
+
+With `--daemon`, `up` returns once every service passed its healthcheck
+(`--wait ready`, the default). `--wait start` returns as soon as the containers
+are started instead; services that other services need are still awaited, since
+those can only start once their needs are ready.
+
+A service that is already running is reused, unless its definition changed since
+it was started (image, command, env values, ports, mounts, volumes, healthcheck, its
+init task, or a service it needs): then `up` and `run` recreate it. A reused service
+does not run its [init](/docs/service/container#init) again.
+
+Stop services started this way with [`hammerkit down`](/docs/cli/down).
+
+<Callout type="info">
+
+Pass `--env <name>` to start the services in a configured environment, for
+example a Kubernetes cluster declared under `environments:`. See
+[running on Kubernetes](/docs/task/kubernetes).
+
+</Callout>
+
+## Options
+
+```
+Options:
+  -f, --filter <labels...>    filter task and services with labels
+  -e, --exclude <labels...>   exclude task and services with labels
+  -c, --concurrency <number>  parallel worker count (default: 4)
+  -w, --watch                 watch tasks (default: false)
+  --wait <mode>                with --daemon, return once services are ready or
+                               once they started (choices: "ready", "start",
+                               default: "ready")
+  -d, --daemon                run services in background (default: false)
+  --env <name>                environment
+  -l, --log <mode>            log mode (choices: "interactive", "live", "grouped")
+  --cache <method>            caching method to compare (choices: "checksum", "modify-date", "none")
+  --cache-read-only           restore from cache backends but never push to them (or set HAMMERKIT_CACHE_READ_ONLY=1)
+  --timeout <duration>        fail tasks without their own timeout after this long (e.g. 10m)
+  -h, --help                  display help for command
+```

@@ -1,0 +1,118 @@
+---
+title: "Execute"
+description: "Run the tasks in your build file."
+---
+Running `hammerkit` without a command (or with the explicit `run` command)
+executes a task. It is the default command, so `hammerkit build` and
+`hammerkit run build` are equivalent.
+
+## Execute a task
+Tasks can be executed by name.
+
+```bash
+hammerkit example
+```
+
+## Execute tasks with labels
+Tasks can be executed by matching labels or filtered by label values.
+
+### By matching labels
+`-f type=build` only executes tasks that have the given label value.
+Their dependencies don't need to match the label.
+```bash
+hammerkit -f type=build
+```
+
+### By excluding labels
+`-e build=ios` excludes tasks that have the given label value.
+A task without a matching label is excluded as well if any of its dependencies matches.
+```bash
+hammerkit -e build=ios
+```
+
+## Options
+```
+Options:
+  -f, --filter <labels...>    filter task and services with labels
+  -e, --exclude <labels...>   exclude task and services with labels
+  -c, --concurrency <number>  parallel worker count (default: 4)
+  -w, --watch                 watch tasks (default: false)
+  --env <name>                environment
+  -l, --log <mode>            log mode (choices: "interactive", "live", "grouped")
+  --cache <method>            caching method to compare (choices: "checksum", "modify-date", "none")
+  --no-summary                do not print the end-of-run summary
+  --summary-json              emit the end-of-run summary as JSON (default: false)
+  --explain                   print the cache-miss cause when a task rebuilds (default: false)
+  --dry-run                   print the execution plan with predicted cache hits/misses without running (default: false)
+  --cache-read-only           restore from cache backends but never push to them (or set HAMMERKIT_CACHE_READ_ONLY=1)
+  --timeout <duration>        fail tasks without their own timeout after this long (e.g. 10m)
+  --no-skip-deps              run dependencies even when nothing needing them has to run
+  -h, --help                  display help for command
+```
+
+<Callout type="info">
+
+`--cache` defaults to `checksum` everywhere — the same comparison runs locally and
+in CI, so a result cached on one is reused on the other. `--log` defaults to
+`interactive` outside CI and `live` in CI (hammerkit auto-detects CI from the `CI`,
+`CONTINUOUS_INTEGRATION`, `BUILD_NUMBER` or `RUN_ID` environment variables).
+
+</Callout>
+
+## Build summary
+
+After a run, hammerkit prints one line per task — executed or cached, and how long
+it took — followed by the totals and the cache hit ratio:
+
+```
+Summary:
+  build    cached     0ms
+  e2e      executed   4.5s
+  install  cached     0ms
+  1 executed, 2 cached (67% cache hit), 4.7s total
+```
+
+A dependency that wasn't needed because every task depending on it was a cache hit
+is listed as `skipped` — see [dependencies of cached tasks](/docs/task/dependencies#dependencies-of-cached-tasks).
+
+`--no-summary` hides it; `--summary-json` prints it as JSON on stdout (and nothing
+else), for CI dashboards or agents. With `--explain`, every rebuilt task also
+prints why it missed the cache, and the summary gets a cause column.
+
+## Dry run
+
+`--dry-run` prints the execution plan in order, with the predicted cache hit or
+miss (and its cause) for every task, without running anything:
+
+```bash
+hammerkit run e2e --dry-run
+```
+
+```
+Dry run (no commands executed):
+  1. install: cache miss (never cached)
+  2. build: cache miss (source changed: src/app.js, dependency changed: install)
+  3. e2e: cache miss (source changed: src/app.js, dependency changed: build)
+```
+
+See also [`explain`](/docs/cli/explain) and [`graph`](/docs/cli/graph).
+
+## Read-only cache
+
+`--cache-read-only` (or `HAMMERKIT_CACHE_READ_ONLY=1`) restores results from cache
+backends but never writes to them — for untrusted runners such as agent sandboxes
+or pull requests from forks. See
+[agents, workspaces and CI](/docs/guides/agents-and-ci#who-may-write-to-the-cache).
+
+## Stopping a run
+
+Ctrl-C (`SIGINT`), a cancelled CI job or a supervisor stopping hammerkit
+(`SIGTERM`) and a closed terminal (`SIGHUP`) all stop a run the same way: running
+tasks are cancelled, their containers and the run's services are removed, and each
+local task's command gets `SIGTERM` for its whole process group. Whatever is still
+alive in that group after 10 seconds is killed; set `HAMMERKIT_STOP_TIMEOUT_MS` to
+change the grace period.
+
+A container task's container is removed when the task ends, so `docker ps` shows
+nothing from hammerkit once a run is over. If hammerkit itself is killed
+(`SIGKILL`), [`clean`](/docs/cli/clean) removes what that run left behind.

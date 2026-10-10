@@ -1,0 +1,16 @@
+# A service whose healthcheck never passes: with `timeout` the run fails after
+# that long instead of waiting until it is cancelled.
+services:
+  never:
+    image: alpine:3.21
+    cmd: sleep 600
+    healthcheck:
+      cmd: test -f /ready
+      timeout: 2s
+
+tasks:
+  use:
+    image: alpine:3.21
+    needs: [never]
+    cmds:
+      - echo unreachable

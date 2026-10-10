@@ -1,0 +1,164 @@
+---
+title: "Environment Variables"
+description: "Environment variables come from three sources: the shell environment, .env files and values defined in the build file."
+---
+## Shell environment
+
+Variables from the shell environment are passed to a command when the task declares them:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  example:
+    envs:
+      VERSION: $VERSION
+    cmds:
+      - echo $VERSION
+```
+
+<Callout type="info">
+
+Every environment variable a task uses should be declared in its `envs`. Hammerkit checks that each one is defined and otherwise fails with an error, to prevent undesired behavior.
+
+</Callout>
+
+## .env file
+
+Environment variables can be defined in a `.env` file. This is recommended for secret values that should neither be committed nor made public.
+
+```txt title=".env"
+NPM_TOKEN=abc
+```
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  example:
+    envs:
+      NPM_TOKEN: $NPM_TOKEN
+    cmds:
+      - npm publish
+```
+
+## Defined values in the build file
+
+Environment variables can be defined in the build file itself. They can be defined for the entire build file or only for specific tasks.
+
+```yaml title=".hammerkit.yaml"
+envs:
+  NODE_VERSION: '22'
+  
+tasks:
+  example:
+    cmds:
+      - echo $NODE_VERSION
+      
+  override_example:
+    envs:
+      NODE_VERSION: '20'
+    cmds:
+      - echo $NODE_VERSION
+```
+
+<Callout type="warn">
+
+Variables defined in a build file are scoped to that file. Neither [referenced](/docs/build-file/references) nor [included](/docs/build-file/includes) tasks have access to them.
+
+</Callout>
+
+## Cache key [#cache-key]
+
+Every variable a task receives, including each build-file `envs` value, is part of
+its [cache key](/docs/task/caching): changing one reruns the task. A build-file
+value only a few tasks need — an image tag, a test token — therefore reruns every
+task in the file when it changes. Define such values on the tasks that use them.
+
+[`validate`](/docs/cli/validate) warns about this: for each task with commands it
+lists the build-file `envs` its definition never mentions as `$NAME` or `${NAME}`.
+
+```
+ warn at lint build-file envs E2E_TOKEN are part of this task's cache key but not referenced by it: …
+```
+
+Hammerkit can't see what a tool reads at runtime, so a variable such as
+`NODE_ENV` that every task's tooling picks up on its own belongs in the build-file
+`envs` despite the warning.
+
+## Precedence
+
+A variable can be defined in more than one place. Hammerkit resolves it like this:
+
+1. **Task `envs`** win over **build-file `envs`** on the same key. In the example
+   above `override_example` prints `20`, while `example` prints `22`.
+2. A value of exactly `$NAME` is a *reference* that is filled in from, in order:
+   1. a **`--set NAME=value`** argument on the hammerkit command, then
+   2. the **shell / process environment**, then
+   3. a **`.env`** file in the build file's directory.
+
+If a referenced `$NAME` is set nowhere, hammerkit aborts before running with
+`missing environment variable NAME`. A variable set to an empty string counts as
+set, as in a shell: `export NAME=` passes an empty value, which is how a CI job
+provides a variable its provider leaves unset on some pipelines.
+
+<Callout type="info">
+
+Every variable a task uses must be declared in its `envs` (directly or via
+`$NAME`). Hammerkit only passes declared variables to the command, so an
+undeclared shell variable is *not* leaked into the task.
+
+</Callout>
+
+## Interpolation
+
+There are two distinct places a variable can appear:
+
+**Inside a command** (`cmds`), `$NAME` is expanded by the shell at runtime, using
+the variables hammerkit passed in — exactly like a normal shell. This is the
+`echo $NODE_VERSION` case above.
+
+**Inside other task fields**, hammerkit substitutes `$NAME` itself when it plans
+the task — before anything runs. This works for `image`, `src`, `generates`,
+`mounts`, `ports`, `shell`, command working directories and a service's `image`,
+so you can drive them from a single value:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  NODE_VERSION: '24'
+
+tasks:
+  build:
+    image: node:$NODE_VERSION-alpine   # -> node:24-alpine
+    src:
+      - src
+    cmds:
+      - tsc -b
+```
+
+**Inside an `envs` value**, `${NAME}` is replaced anywhere in the string, and
+`${NAME:-default}` falls back to `default` when `NAME` is set nowhere. A name comes
+from the shell / process environment, then a `.env` file, then a literal value of
+the same `envs` (build file and task merged), then the default:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  DB_USER: app
+
+tasks:
+  e2e:
+    envs:
+      DATABASE_URL: postgres://${DB_USER}@db:5432/app   # -> postgres://app@db:5432/app
+      SPEC: ${E2E_SPEC:-e2e/**/*.cy.ts}                 # E2E_SPEC=e2e/login.cy.ts narrows it
+      MR_IID: ${CI_MERGE_REQUEST_IID:-}                 # empty outside merge request pipelines
+    cmds:
+      - cypress run --spec "$SPEC"
+```
+
+A `${NAME}` without a default that is set nowhere fails like a missing `$NAME`,
+when a task that declares it runs.
+
+<Callout type="warn">
+
+The whole value `$NAME` (no braces) is a reference to the shell or `.env` only, as
+before. Field substitution matches `$NAME` and `${NAME}` anywhere in the string and
+is case-insensitive; a value defined in `envs` (like `NODE_VERSION: '24'`, or one
+built with `${…}`) is what gets substituted into fields such as `image`.
+
+</Callout>

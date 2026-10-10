@@ -89,7 +89,9 @@ function makeOptions(abort: AbortSignal): ExecuteOptions<ServiceState> {
     stateKey: 'ks',
     abort,
     daemon: false,
-    cache: { cached: false, stateKey: 'ks', resolved: {} as any },
+    publishPorts: true,
+    waitForReady: true,
+    cache: { cached: false, stateKey: 'ks', resolved: {} as any, provable: true },
   }
 }
 

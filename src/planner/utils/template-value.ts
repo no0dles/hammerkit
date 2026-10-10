@@ -9,7 +9,7 @@ export function templateValue(value: string | null, envs: WorkEnvironmentVariabl
 
   let result = value
   for (const [key, envValue] of Object.entries(envs.variables)) {
-    result = result.replace(new RegExp(`\\$${key}`, 'gi'), envValue)
+    result = result.replace(new RegExp(`\\$\\{${key}\\}|\\$${key}`, 'gi'), envValue)
   }
   return result
 }

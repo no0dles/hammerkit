@@ -1,0 +1,31 @@
+tasks:
+  install:
+    description: install the locked dependencies
+    image: node:24-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    cmds:
+      - npm ci
+
+  build:
+    description: compile src to dist
+    image: node:24-alpine
+    deps: [install]
+    src: [src, tsconfig.json]
+    generates:
+      - path: dist
+        export: true
+    cmds:
+      - npm run build
+
+  test:
+    description: test the compiled code
+    image: node:24-alpine
+    deps: [build]
+    src: [test]
+    cmds:
+      - npm test
+
+  ci:
+    description: everything CI checks
+    deps: [build, test]

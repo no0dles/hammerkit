@@ -1,0 +1,47 @@
+---
+title: Introduction
+description: One build definition that runs the same way on your laptop, in CI and in a coding agent's sandbox.
+icon: BookOpen
+---
+
+import { Bot, Container, DatabaseZap, Workflow } from 'lucide-react';
+
+Hammerkit runs your build steps as **tasks** declared in a `.hammerkit.yaml` file.
+Each task runs in the container image it names, declares what it reads and what it
+produces, and is skipped when nothing it reads has changed.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  install:
+    image: node:24-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    cmds: [npm ci]
+
+  build:
+    image: node:24-alpine
+    deps: [install]
+    src: [src, tsconfig.json]
+    generates: [dist]
+    cmds: [npm run build]
+```
+
+`hammerkit run build` on your laptop is the same build CI runs. Its results can be
+shared through a cache, so work done once — anywhere — isn't repeated anywhere else.
+
+## Why hammerkit
+
+<Cards>
+  <Card icon={<Container />} title="Same tools everywhere" href="/docs/installation">
+    Tools come from the task's image, not from what's installed on the machine.
+  </Card>
+  <Card icon={<DatabaseZap />} title="Incremental by default" href="/docs/task/caching">
+    A task runs again only when its inputs change — locally and in CI.
+  </Card>
+  <Card icon={<Workflow />} title="Shared across machines" href="/docs/guides/agents-and-ci">
+    Agents, laptops and CI runners reuse each other's results through a remote cache.
+  </Card>
+  <Card icon={<Bot />} title="Migrate with an agent" href="/docs/guides/migrate-ci">
+    Point your coding agent at the guide and it rewrites your CI into tasks.
+  </Card>
+</Cards>

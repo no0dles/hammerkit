@@ -7,12 +7,15 @@ import { WorkMount } from './work-mount'
 import { ParseScope } from '../schema/parse-context'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { WorkItem } from './work-item'
+import { WorkSecret } from './work-secret'
 
 export type WorkTask = LocalWorkTask | ContainerWorkTask
 
 export interface BaseWorkTask {
   name: string
   cwd: string
+  // anchor for machine-independent cache identity (see findProjectRoot)
+  projectRoot: string
   description: string | null
   src: WorkSource[]
   generates: WorkTaskGenerate[]
@@ -23,6 +26,9 @@ export interface BaseWorkTask {
   shell: string
   caching: ResolvedCache
   continuous: boolean
+  // maximum execution time in ms, null for none
+  timeout: number | null
+  secrets: WorkSecret[]
 }
 
 export interface WorkTaskGenerate {
@@ -31,6 +37,8 @@ export interface WorkTaskGenerate {
   inherited: WorkItem<WorkTask> | null
   resetOnChange: boolean
   export: boolean
+  // `export: always`: copied out of the container when the task fails too
+  exportAlways: boolean
   isFile: boolean
 }
 

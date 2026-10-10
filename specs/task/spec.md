@@ -6,7 +6,7 @@
 
 **Status**: Current State (reverse-specified from docs, hammerkit 1.6.0)
 
-**Input**: Existing behavior documented in `docs/task/README.md`
+**Input**: Existing behavior documented in `website/content/docs/task/index.mdx`
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -51,7 +51,9 @@ A developer adds a `generates` list so hammerkit knows which output directories 
 
 ### Edge Cases
 
-- A task with no `src` declaration is always executed (never skipped by caching).
+- A task with no `src` declaration is always executed (never skipped by caching), even when its dependencies declare `src`.
+- A task whose `src` entries all match no file is treated like a task without `src`; every `src` entry that matches no file is reported as a warning.
+- Deleting a task's output makes it a cache miss: the output is restored from a cache backend or the task runs again.
 - `resetOnChange: true` only wipes the directory when the task actually re-runs (i.e. cache miss); it has no effect when the task is skipped.
 - `export: true` is only meaningful for container tasks; for local tasks outputs are already on the host filesystem.
 

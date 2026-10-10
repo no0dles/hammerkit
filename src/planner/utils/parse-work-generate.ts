@@ -23,6 +23,7 @@ export function parseWorkGenerate(
       volumeName: getVolumeName(filePath),
       resetOnChange: generate.resetOnChange,
       export: generate.export,
+      exportAlways: generate.exportAlways,
       isFile: extname(generate.path).length > 1,
       inherited: null,
     }
@@ -33,14 +34,16 @@ export function mapGenerate(generate: BuildFileVolumeSchema): {
   path: string
   resetOnChange: boolean
   export: boolean
+  exportAlways: boolean
 } {
   if (typeof generate === 'string') {
-    return { path: generate, resetOnChange: false, export: false }
+    return { path: generate, resetOnChange: true, export: false, exportAlways: false }
   } else {
     return {
       path: generate.path,
-      resetOnChange: generate.resetOnChange ?? false,
-      export: generate.export ?? false,
+      resetOnChange: generate.resetOnChange ?? true,
+      export: !!generate.export,
+      exportAlways: generate.export === 'always',
     }
   }
 }

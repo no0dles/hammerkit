@@ -9,9 +9,15 @@ import { WorkDockerEnvironment } from '../planner/work-environment'
 
 let dockerInstance: Dockerode | null = null
 
+// Without options dockerode reads DOCKER_HOST and the TLS variables; passing
+// `{ host: undefined }` would overwrite the host it parsed from DOCKER_HOST.
+export function createDockerClient(host: string | undefined): Dockerode {
+  return host ? new Dockerode({ host }) : new Dockerode()
+}
+
 export function getContainerCli(workEnvironment: WorkDockerEnvironment): Dockerode {
   if (!dockerInstance) {
-    dockerInstance = new Dockerode({ host: workEnvironment.host })
+    dockerInstance = createDockerClient(workEnvironment.host)
   }
   return dockerInstance
 }
@@ -141,4 +147,28 @@ export async function execCommand(
       }, timeout)
     }
   })
+}
+
+// Empty a directory inside a running container, as root. Volumes are emptied
+// this way rather than recreated: Docker refuses to remove a volume while any
+// container (a running dependent's, say) still mounts it.
+export async function clearContainerDirectory(
+  status: StatusScopedConsole,
+  environment: Environment,
+  container: Container,
+  path: string
+): Promise<void> {
+  const result = await execCommand(
+    status,
+    environment,
+    container,
+    '/',
+    ['sh', '-c', 'rm -rf "$1"/* "$1"/.[!.]* "$1"/..?*', 'sh', convertToPosixPath(path)],
+    null,
+    undefined,
+    environment.abortCtrl.signal
+  )
+  if (result.type !== 'result' || result.result.ExitCode !== 0) {
+    throw new Error(`unable to empty ${path}`)
+  }
 }

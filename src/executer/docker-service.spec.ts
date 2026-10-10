@@ -22,6 +22,7 @@ vi.mock('./execute-docker', async (importOriginal) => {
   return { ...actual, execCommand: vi.fn() }
 })
 vi.mock('./check-readiness', () => ({ checkReadiness: vi.fn() }))
+vi.mock('./main-process-user', () => ({ getMainProcessUser: vi.fn().mockResolvedValue('999:999') }))
 
 function makeItem(overrides: Partial<ContainerWorkService> = {}): WorkItem<ContainerWorkService> {
   return {
@@ -31,16 +32,21 @@ function makeItem(overrides: Partial<ContainerWorkService> = {}): WorkItem<Conta
     data: {
       type: 'container-service',
       name: 'svc',
+      projectRoot: tmpdir(),
       cwd: tmpdir(),
       description: null,
       image: 'img:1',
       envs: { variables: {}, replacements: [] } as any,
       cmd: null,
+      workdir: null,
+      shell: null,
       src: [],
       mounts: [],
       volumes: [],
       ports: [],
       healthcheck: null,
+      init: null,
+      secrets: [],
       continuous: false,
       caching: {} as any,
       labels: {},
@@ -67,13 +73,22 @@ function makeDocker(container: unknown) {
   return { createContainer: vi.fn().mockResolvedValue(container) } as any
 }
 
-function makeOptions(abort: AbortSignal, daemon = false): ExecuteOptions<ServiceState> {
+function makeOptions(abort: AbortSignal, daemon = false, publishPorts = true): ExecuteOptions<ServiceState> {
   return {
     state: new State<ServiceState>({ type: 'pending', stateKey: null }),
     stateKey: 'k1',
     abort,
     daemon,
-    cache: { cached: false, stateKey: 'k1', resolved: {} as any },
+    publishPorts,
+    waitForReady: true,
+    cache: { cached: false, stateKey: 'k1', resolved: {} as any, provable: true },
+  }
+}
+
+function healthcheck(timeout: number) {
+  return {
+    cmd: { cwd: tmpdir(), cmd: 'pg_isready -q', parsed: { command: 'pg_isready', args: ['-q'] } },
+    timeout,
   }
 }
 
@@ -141,42 +156,84 @@ describe('dockerService', () => {
     expect(removeContainer).not.toHaveBeenCalled()
   })
 
+  it('does not publish host ports unless asked to', async () => {
+    const docker = makeDocker(makeContainer())
+    const item = makeItem({ ports: [{ hostPort: 8080, containerPort: 8080 }] })
+
+    await dockerService(docker, item, makeOptions(new AbortController().signal, true, false), makeEnvironment())
+
+    expect(docker.createContainer.mock.calls[0][0].HostConfig.PortBindings).toEqual({})
+  })
+
   it('becomes running when the healthcheck is ready', async () => {
     const container = makeContainer()
     const docker = makeDocker(container)
-    const healthcheck = { cmd: 'true', timeout: 1, retries: 1 } as any
-    const item = makeItem({ healthcheck })
+    const item = makeItem({ healthcheck: healthcheck(60_000) })
     const abort = new AbortController()
     const options = makeOptions(abort.signal, true)
     const environment = makeEnvironment()
 
     await dockerService(docker, item, options, environment)
 
-    expect(checkReadiness).toHaveBeenCalledWith(item.status, healthcheck, environment, container, abort.signal)
+    expect(checkReadiness).toHaveBeenCalledWith(
+      item.status,
+      ['pg_isready', '-q'],
+      environment,
+      container,
+      '999:999',
+      abort.signal
+    )
     expect(options.state.current).toEqual({
       type: 'running',
       dns: { containerId: 'cid-1' },
       stateKey: 'k1',
       remote: null,
     })
-    // never-ready loop exits on abort; abort the controller so wait resolves terminated
-    abort.abort()
   })
 
-  it('keeps checking readiness until abort, then ends terminated', async () => {
+  it('becomes running right away when it need not wait for the healthcheck', async () => {
+    const docker = makeDocker(makeContainer())
+    const item = makeItem({ healthcheck: healthcheck(60_000) })
+    const options = { ...makeOptions(new AbortController().signal, true), waitForReady: false }
+
+    await dockerService(docker, item, options, makeEnvironment())
+
+    expect(checkReadiness).not.toHaveBeenCalled()
+    expect(options.state.current).toMatchObject({ type: 'running', dns: { containerId: 'cid-1' } })
+  })
+
+  it('stops checking readiness on abort, then ends terminated', async () => {
+    const abort = new AbortController()
+    vi.mocked(checkReadiness).mockImplementation(async () => {
+      abort.abort()
+      return false
+    })
+    const container = makeContainer()
+    const docker = makeDocker(container)
+    const item = makeItem({ healthcheck: healthcheck(60_000) })
+    const options = makeOptions(abort.signal)
+
+    await dockerService(docker, item, options, makeEnvironment())
+
+    expect(checkReadiness).toHaveBeenCalledTimes(1)
+    expect(options.state.current).toEqual({ type: 'end', reason: 'terminated', stateKey: 'k1' })
+    expect(removeContainer).toHaveBeenCalledWith(container)
+  })
+
+  it('crashes once the healthcheck deadline passed', async () => {
     vi.mocked(checkReadiness).mockResolvedValue(false)
     const container = makeContainer()
     const docker = makeDocker(container)
-    const item = makeItem({ healthcheck: { cmd: 'false', timeout: 1, retries: 1 } as any })
-    const abort = new AbortController()
-    const options = makeOptions(abort.signal)
-    const done = dockerService(docker, item, options, makeEnvironment())
-    setTimeout(() => abort.abort(), 50)
+    const item = makeItem({ healthcheck: healthcheck(0) })
+    const options = makeOptions(new AbortController().signal)
 
-    await done
+    await dockerService(docker, item, options, makeEnvironment())
 
-    expect(checkReadiness).toHaveBeenCalled()
-    expect(options.state.current).toEqual({ type: 'end', reason: 'terminated', stateKey: 'k1' })
+    expect(options.state.current).toEqual({ type: 'end', reason: 'crash', stateKey: 'k1' })
+    expect(item.status.write).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('service svc did not pass its healthcheck "pg_isready -q"')
+    )
     expect(removeContainer).toHaveBeenCalledWith(container)
   })
 

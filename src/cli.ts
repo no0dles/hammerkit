@@ -22,6 +22,19 @@ import { executeWorkTree } from './executer/execute-work-tree'
 import { TaskState } from './executer/scheduler/task-state'
 import { ServiceState } from './executer/scheduler/service-state'
 import { packageWorkTree } from './docker/package'
+import { explainWorkTree, TaskExplanation } from './cache/explain'
+import { GraphFormat, serializeWorkGraph, WorkGraphSerialization } from './planner/work-graph-serializer'
+import { DryRunPlan, planDryRun } from './executer/dry-run'
+import { CacheSyncOptions, CacheSyncResult, syncCache } from './cache/cache-sync'
+import {
+  autoPrune,
+  listCache,
+  NamedCacheEntry,
+  pruneCache,
+  PruneResult,
+  retentionPolicyOf,
+} from './cache/cache-inventory'
+import { RetentionPolicy } from './cache/retention'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -32,6 +45,20 @@ export interface CliExecOptions {
   logMode: LogMode
   cacheDefault: CacheMethod
   processManager: ProcessManager
+  // When set, a task that executes due to a cache miss prints its miss cause
+  // inline (reusing the cache-explain engine). Reporting only.
+  explain: boolean
+  // Restore from cache backends but never push to them — for untrusted runners
+  // (e.g. agent sandboxes) that may read the shared cache but must not write it.
+  cacheReadOnly: boolean
+  // default maximum execution time in ms for tasks without their own timeout
+  timeout: number | null
+  // Skip dependencies that were not requested when every task needing them is
+  // a cache hit (default). Off runs the whole dependency graph.
+  skipDeps: boolean
+  // `up --daemon` returns once services are healthy (ready) or once their
+  // containers started (start); services others need are always awaited
+  wait: 'ready' | 'start'
 }
 
 export interface CliPackageOptions {
@@ -99,6 +126,11 @@ export class Cli {
             workers: options?.workers ?? 0,
             processManager,
             type,
+            explain: options?.explain ?? false,
+            cacheReadOnly: options?.cacheReadOnly ?? false,
+            timeout: options?.timeout ?? null,
+            skipDeps: options?.skipDeps ?? true,
+            wait: options?.wait ?? 'ready',
           })
         }
 
@@ -169,6 +201,48 @@ export class Cli {
 
   validate(): AsyncGenerator<WorkItemValidation> {
     return validate(this.workTree, this.environment)
+  }
+
+  // Read-only cache prediction for every task in scope: executes no command,
+  // starts no container/service, performs no cache push/pull.
+  async explain(options?: { cacheDefault?: CacheMethod }): Promise<TaskExplanation[]> {
+    return explainWorkTree(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
+  }
+
+  // Serialize the in-scope work graph for rendering (mermaid/dot). Pure read of
+  // the planner's graph — nothing executes.
+  graph(format: GraphFormat): WorkGraphSerialization {
+    return serializeWorkGraph(this.workTree, format)
+  }
+
+  // Ordered execution plan with predicted cache decisions, reusing the explain
+  // engine — executes nothing, starts nothing, performs no cache push/pull.
+  async dryRun(options?: { cacheDefault?: CacheMethod }): Promise<DryRunPlan> {
+    return planDryRun(this.workTree, options?.cacheDefault ?? 'checksum', this.environment)
+  }
+
+  // Move cache entries between the tasks' own caches and a named remote without
+  // executing anything (`cache pull` / `cache push`).
+  async syncCache(options: CacheSyncOptions): Promise<CacheSyncResult[]> {
+    return syncCache(this.workTree, options, this.environment)
+  }
+
+  // Entries of a named cache (default: the local `default` cache).
+  async listCache(cacheName?: string): Promise<NamedCacheEntry[]> {
+    return listCache(this.workTree, cacheName, this.environment)
+  }
+
+  retentionPolicy(cacheName: string | undefined, overrides: RetentionPolicy): RetentionPolicy {
+    return retentionPolicyOf(this.workTree, cacheName, overrides)
+  }
+
+  async pruneCache(cacheName: string | undefined, policy: RetentionPolicy, dryRun = false): Promise<PruneResult> {
+    return pruneCache(this.workTree, cacheName, policy, { dryRun }, this.environment)
+  }
+
+  // Apply declared retention to the local caches this build file uses.
+  async autoPrune(): Promise<{ cacheName: string; plan: PruneResult }[]> {
+    return autoPrune(this.workTree, this.environment)
   }
 
   task(name: string): WorkItemState<WorkTask, TaskState> {

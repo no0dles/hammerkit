@@ -1,0 +1,14 @@
+{
+  "title": "Task",
+  "icon": "Hammer",
+  "pages": [
+    "dependencies",
+    "needs",
+    "caching",
+    "container",
+    "secrets",
+    "kubernetes",
+    "watching",
+    "extending"
+  ]
+}

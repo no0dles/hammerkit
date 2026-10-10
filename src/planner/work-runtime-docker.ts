@@ -1,8 +1,9 @@
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
-import { convertToPosixPath, getContainerCli } from '../executer/execute-docker'
+import { getRunLabels } from '../docker/run-labels'
+import { clearContainerDirectory, convertToPosixPath, getContainerCli } from '../executer/execute-docker'
 import { ContainerWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
-import { ContainerWorkTask } from './work-task'
+import { ContainerWorkTask, WorkTaskGenerate } from './work-task'
 import { TaskState } from '../executer/scheduler/task-state'
 import { State } from '../executer/state'
 import { removeContainer } from '../docker/remove-container'
@@ -10,13 +11,19 @@ import { WorkItem } from './work-item'
 import { Environment } from '../executer/environment'
 import { dockerTask } from '../executer/docker-task'
 import { dockerService } from '../executer/docker-service'
+import { removeContainerSecrets } from '../executer/container-secrets'
 import Dockerode from 'dockerode'
 import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
 import { existsVolume, removeVolume } from '../executer/get-docker-executor'
-import { dirname } from 'path'
+import { basename, dirname } from 'path'
+import { create, extract } from 'tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
+import { getWorkInstanceId } from './work-instance-id'
+import { Readable } from 'stream'
+import { getServiceDefinitionHash } from './service-definition'
+import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -27,10 +34,11 @@ export function dockerTaskRuntime(
     async initialize(state: State<TaskState>): Promise<void> {
       const currentTasks = await docker.listContainers({
         filters: {
-          label: [`hammerkit-id=${task.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(task)}`],
         },
       })
-      const currentTask = currentTasks[0]
+      // a paused container is a state record of hammerkit before 1.9, not a run
+      const currentTask = currentTasks.find((c) => c.State === 'running')
       if (!currentTask) {
         return
       }
@@ -53,7 +61,7 @@ export function dockerTaskRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${task.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(task)}`],
         },
       })
       for (const container of containers) {
@@ -63,8 +71,9 @@ export function dockerTaskRuntime(
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       await dockerTask(docker, task, environment, options)
     },
-    async remove(): Promise<void> {
+    async remove(environment: Environment): Promise<void> {
       await this.stop()
+      await removeContainerTaskState(environment, task)
 
       for (const generate of task.data.generates) {
         if (generate.inherited) {
@@ -80,25 +89,32 @@ export function dockerTaskRuntime(
         }
       }
     },
-    async currentStateKey(): Promise<string | null> {
-      const containers = await docker.listContainers({
-        all: true,
-        filters: {
-          label: [`hammerkit-id=${task.id()}`],
-        },
-      })
-      const container = containers[0]
-      if (!container) {
+    async currentStateKey(environment: Environment): Promise<string | null> {
+      const stateKey = await readContainerTaskState(environment, task)
+      if (!stateKey) {
         return null
       }
 
-      if (!container.Labels['hammerkit-state']) {
-        return null
+      // outputs removed since the run (a deleted export, a pruned volume)
+      // leave nothing to reuse
+      for (const generate of task.data.generates.filter((g) => !g.inherited)) {
+        const present = isOnHost(generate)
+          ? await environment.file.exists(generate.path)
+          : !!(await existsVolume(docker, generate.volumeName))
+        if (!present) {
+          return null
+        }
       }
 
-      return container.Labels['hammerkit-state']
+      return stateKey
     },
   }
+}
+
+// File outputs are bind mounts of host files and exported directories are
+// copied to the host, so both must be present on the host, not only in a volume.
+function isOnHost(generate: WorkTaskGenerate): boolean {
+  return generate.isFile || generate.export
 }
 
 async function restoreContainer(
@@ -119,22 +135,31 @@ async function restoreContainer(
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
-        'hammerkit-pid': process.pid.toString(),
+        'hammerkit-id': getWorkInstanceId(item),
+        ...getRunLabels(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
         AutoRemove: true,
+        // mount the same volumes archiveContainer reads from, so the restored
+        // archives land in the task's output volumes rather than in this
+        // throwaway container's filesystem
         Binds:
-          item.data.type === 'container-task'
-            ? []
-            : [...item.data.volumes.map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)],
+          item.data.type === 'container-service'
+            ? item.data.volumes
+                .filter((v) => !v.inherited)
+                .map((v) => `${v.name}:${convertToPosixPath(v.containerPath)}`)
+            : item.data.generates
+                .filter((v) => !v.inherited && !v.isFile)
+                .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
       },
     },
-    null,
     async (container) => {
       for (const generate of getArchivePaths(item.data, path)) {
         if (await environment.file.exists(generate.filename)) {
+          // a cache hit means exactly the stored outputs: whatever a failed or
+          // older run left in the volume goes first
+          await clearContainerDirectory(item.status, environment, container, generate.path)
           await container.putArchive(environment.file.readStream(generate.filename), {
             path: dirname(generate.path),
           })
@@ -142,6 +167,16 @@ async function restoreContainer(
       }
     }
   )
+
+  if (item.data.type === 'container-task') {
+    const onHost = new Set(item.data.generates.filter((g) => !g.inherited && isOnHost(g)).map((g) => g.path))
+    for (const generate of getArchivePaths(item.data, path)) {
+      if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
+        await environment.file.remove(generate.path)
+        await extract({ file: generate.filename, cwd: dirname(generate.path) })
+      }
+    }
+  }
 }
 
 export function dockerServiceRuntime(
@@ -153,11 +188,17 @@ export function dockerServiceRuntime(
     async initialize(state: State<ServiceState>): Promise<void> {
       const currentServices = await docker.listContainers({
         filters: {
-          label: [`hammerkit-id=${service.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(service)}`],
         },
       })
       const currentService = currentServices[0]
       if (!currentService) {
+        return
+      }
+
+      if (currentService.Labels['hammerkit-definition'] !== getServiceDefinitionHash(service)) {
+        service.status.write('info', `${service.name} changed since it was started, recreating it`)
+        await removeContainer(docker.getContainer(currentService.Id))
         return
       }
 
@@ -178,12 +219,13 @@ export function dockerServiceRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${service.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(service)}`],
         },
       })
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
+      await removeContainerSecrets(getWorkInstanceId(service))
     },
     async remove(): Promise<void> {
       await this.stop()
@@ -210,7 +252,7 @@ export function dockerServiceRuntime(
       const containers = await docker.listContainers({
         all: true,
         filters: {
-          label: [`hammerkit-id=${service.id()}`],
+          label: [`hammerkit-id=${getWorkInstanceId(service)}`],
         },
       })
       const container = containers[0]
@@ -245,8 +287,8 @@ async function archiveContainer(
       WorkingDir: convertToPosixPath(item.data.cwd),
       Labels: {
         app: 'hammerkit',
-        'hammerkit-id': item.id(),
-        'hammerkit-pid': process.pid.toString(),
+        'hammerkit-id': getWorkInstanceId(item),
+        ...getRunLabels(),
         'hammerkit-type': 'task',
       },
       HostConfig: {
@@ -261,12 +303,19 @@ async function archiveContainer(
                 .map((v) => `${v.volumeName}:${convertToPosixPath(v.path)}`),
       },
     },
-    null,
     async (container) => {
+      const hostFiles = new Set(
+        item.data.type === 'container-task'
+          ? item.data.generates.filter((g) => !g.inherited && g.isFile).map((g) => g.path)
+          : []
+      )
       for (const generatedArchive of getArchivePaths(item.data, path)) {
-        const readable = await container.getArchive({
-          path: generatedArchive.path,
-        })
+        // a file output is a bind mount of a host file, so archive it from the host
+        const readable = hostFiles.has(generatedArchive.path)
+          ? Readable.from(create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
+          : await container.getArchive({
+              path: generatedArchive.path,
+            })
 
         await environment.file.writeStream(generatedArchive.filename, readable)
       }

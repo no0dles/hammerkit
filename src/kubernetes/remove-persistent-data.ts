@@ -9,31 +9,27 @@ export async function removePersistentData(
   kubernetes: WorkKubernetesEnvironment,
   task: WorkItem<ContainerWorkService | ContainerWorkTask>
 ) {
-  const configmaps = await instance.coreApi.listNamespacedConfigMap(
-    kubernetes.namespace,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    `hammerkit.dev/id=${task.id()}`
-  )
-  for (const configMap of configmaps.body.items) {
+  const labelSelector = `hammerkit.dev/id=${task.id()}`
+  const configmaps = await instance.coreApi.listNamespacedConfigMap({ namespace: kubernetes.namespace, labelSelector })
+  for (const configMap of configmaps.items) {
     if (configMap.metadata?.name) {
-      await instance.coreApi.deleteNamespacedConfigMap(configMap.metadata.name, kubernetes.namespace)
+      await instance.coreApi.deleteNamespacedConfigMap({
+        name: configMap.metadata.name,
+        namespace: kubernetes.namespace,
+      })
     }
   }
 
-  const pvcs = await instance.coreApi.listNamespacedPersistentVolumeClaim(
-    kubernetes.namespace,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    `hammerkit.dev/id=${task.id()}`
-  )
-  for (const pvc of pvcs.body.items) {
+  const pvcs = await instance.coreApi.listNamespacedPersistentVolumeClaim({
+    namespace: kubernetes.namespace,
+    labelSelector,
+  })
+  for (const pvc of pvcs.items) {
     if (pvc.metadata?.name) {
-      await instance.coreApi.deleteNamespacedPersistentVolumeClaim(pvc.metadata.name, kubernetes.namespace)
+      await instance.coreApi.deleteNamespacedPersistentVolumeClaim({
+        name: pvc.metadata.name,
+        namespace: kubernetes.namespace,
+      })
     }
   }
 }

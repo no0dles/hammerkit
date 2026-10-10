@@ -28,40 +28,41 @@ function makeClients(): { coreApi: CoreV1Api; appsApi: AppsV1Api } {
 
 async function ensureNamespace(coreApi: CoreV1Api): Promise<void> {
   try {
-    await coreApi.readNamespace(NS)
+    await coreApi.readNamespace({ name: NS })
     return
   } catch {
     /* missing */
   }
   try {
-    await coreApi.createNamespace({ metadata: { name: NS } })
+    await coreApi.createNamespace({ body: { metadata: { name: NS } } })
   } catch {
     /* racing creator */
   }
 }
 
 async function applyNginx(coreApi: CoreV1Api, appsApi: AppsV1Api): Promise<void> {
-  await appsApi.deleteNamespacedDeployment(DEPLOY_NAME, NS).catch(() => undefined)
-  await appsApi.createNamespacedDeployment(NS, {
-    metadata: { name: DEPLOY_NAME, labels: { app: DEPLOY_NAME } },
-    spec: {
-      replicas: 1,
-      selector: { matchLabels: { app: DEPLOY_NAME } },
-      template: {
-        metadata: { labels: { app: DEPLOY_NAME } },
-        spec: {
-          containers: [{ name: DEPLOY_NAME, image: 'nginx:1.25-alpine', ports: [{ containerPort: 80 }] }],
+  await appsApi.deleteNamespacedDeployment({ name: DEPLOY_NAME, namespace: NS }).catch(() => undefined)
+  await appsApi.createNamespacedDeployment({
+    namespace: NS,
+    body: {
+      metadata: { name: DEPLOY_NAME, labels: { app: DEPLOY_NAME } },
+      spec: {
+        replicas: 1,
+        selector: { matchLabels: { app: DEPLOY_NAME } },
+        template: {
+          metadata: { labels: { app: DEPLOY_NAME } },
+          spec: {
+            containers: [{ name: DEPLOY_NAME, image: 'nginx:1.25-alpine', ports: [{ containerPort: 80 }] }],
+          },
         },
       },
     },
-  } as never)
+  })
 
   const deadline = Date.now() + 90000
   while (Date.now() < deadline) {
-    const pods = await coreApi.listNamespacedPod(NS, undefined, undefined, undefined, undefined, `app=${DEPLOY_NAME}`)
-    const ready = pods.body.items.some(
-      (p) => p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True')
-    )
+    const pods = await coreApi.listNamespacedPod({ namespace: NS, labelSelector: `app=${DEPLOY_NAME}` })
+    const ready = pods.items.some((p) => p.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True'))
     if (ready) return
     await new Promise((r) => setTimeout(r, 1000))
   }
@@ -124,7 +125,7 @@ describe('kubernetes-service (port-forward)', () => {
   afterAll(async () => {
     try {
       const { coreApi } = makeClients()
-      await coreApi.deleteNamespace(NS).catch(() => undefined)
+      await coreApi.deleteNamespace({ name: NS }).catch(() => undefined)
     } catch {
       /* no cluster available */
     }

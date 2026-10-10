@@ -40,9 +40,10 @@ afterAll(() => {
 describe('pullImage', () => {
   it('delegates to pull', async () => {
     const docker = {} as any
+    const environment = environmentMock(tmpDir)
     const item = makeItem({ image: 'node:20', type: 'container-task' })
-    await pullImage(item, docker)
-    expect(pull).toHaveBeenCalledWith(item.status, docker, 'node:20')
+    await pullImage(item, docker, environment)
+    expect(pull).toHaveBeenCalledWith(item.status, docker, 'node:20', environment)
   })
 })
 

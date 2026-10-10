@@ -9,3 +9,5 @@ temp
 .DS_Store
 logs
 .claude/worktrees
+.stryker-tmp
+reports

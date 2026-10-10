@@ -1,4 +1,4 @@
-import { Exec, Watch } from '@kubernetes/client-node'
+import { Exec } from '@kubernetes/client-node'
 import { createKubernetesInstances } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
@@ -19,17 +19,15 @@ vi.mock('@kubernetes/client-node', () => {
     makeApiClient = mocks.makeApiClient
   }
   class Exec {}
-  class Watch {}
   class CoreV1Api {}
   class BatchV1Api {}
   class AppsV1Api {}
-  class NetworkingV1Api {}
   class KubernetesObjectApi {}
-  return { KubeConfig, Exec, Watch, CoreV1Api, BatchV1Api, AppsV1Api, NetworkingV1Api, KubernetesObjectApi }
+  return { KubeConfig, Exec, CoreV1Api, BatchV1Api, AppsV1Api, KubernetesObjectApi }
 })
 
 function makeEnv(overrides: Partial<WorkKubernetesEnvironment> = {}): WorkKubernetesEnvironment {
-  return { type: 'kubernetes', namespace: 'ns', context: 'ctx', ingresses: [], ...overrides }
+  return { type: 'kubernetes', namespace: 'ns', context: 'ctx', httpRoutes: [], ...overrides }
 }
 
 beforeEach(() => {
@@ -65,9 +63,7 @@ describe('createKubernetesInstances', () => {
     expect(instance.coreApi).toBe('client-for-CoreV1Api')
     expect(instance.batchApi).toBe('client-for-BatchV1Api')
     expect(instance.appsApi).toBe('client-for-AppsV1Api')
-    expect(instance.networkingApi).toBe('client-for-NetworkingV1Api')
     expect(instance.exec).toBeInstanceOf(Exec)
-    expect(instance.watch).toBeInstanceOf(Watch)
   })
 
   it('translates "No active cluster!" into a context-specific error mentioning the kubeConfig file', () => {

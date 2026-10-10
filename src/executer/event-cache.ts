@@ -1,4 +1,6 @@
 import { Environment } from './environment'
+import { removeOrphanedContainers } from '../docker/remove-orphaned-containers'
+import { getContainerCli } from './execute-docker'
 import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { join, relative, sep } from 'path'
@@ -6,10 +8,11 @@ import { moveFiles } from '../file/move-files'
 import { WorkTree } from '../planner/work-tree'
 import { ContainerWorkTask, LocalWorkTask } from '../planner/work-task'
 import { ContainerWorkService } from '../planner/work-service'
+import { getWorkInstanceId } from '../planner/work-instance-id'
 
 export async function restoreCache(environment: Environment, path: string, workTree: WorkTree): Promise<void> {
   for (const task of iterateWorkTasks(workTree)) {
-    const cachePath = getCacheDirectory(task.id())
+    const cachePath = getCacheDirectory(getWorkInstanceId(task))
     const sourceCacheDir = join(path, task.id())
 
     // TODO move into local runtime
@@ -22,7 +25,7 @@ export async function restoreCache(environment: Environment, path: string, workT
   }
 
   for (const service of iterateWorkServices(workTree)) {
-    const cachePath = getCacheDirectory(service.id())
+    const cachePath = getCacheDirectory(getWorkInstanceId(service))
     const sourceCacheDir = join(path, service.id())
 
     // TODO move into local runtime
@@ -56,7 +59,7 @@ export function* getArchivePaths(task: LocalWorkTask | ContainerWorkTask | Conta
 
 export async function storeCache(environment: Environment, path: string, workTree: WorkTree): Promise<void> {
   for (const task of iterateWorkTasks(workTree)) {
-    const cachePath = getCacheDirectory(task.id())
+    const cachePath = getCacheDirectory(getWorkInstanceId(task))
     const sourceCacheDir = join(path, task.id())
 
     await moveFiles(task, environment, function* () {
@@ -69,7 +72,7 @@ export async function storeCache(environment: Environment, path: string, workTre
   }
 
   for (const service of iterateWorkServices(workTree)) {
-    const cachePath = getCacheDirectory(service.id())
+    const cachePath = getCacheDirectory(getWorkInstanceId(service))
     const sourceCacheDir = join(path, service.id())
 
     await moveFiles(service, environment, function* () {
@@ -94,7 +97,7 @@ export async function cleanCache(
       await task.data.caching.backend.clear(task.id(), environment)
     }
 
-    const cachePath = getCacheDirectory(task.id())
+    const cachePath = getCacheDirectory(getWorkInstanceId(task))
     if (await environment.file.exists(cachePath)) {
       task.status.write('info', `remove cache ${cachePath}`)
       await environment.file.remove(cachePath)
@@ -106,6 +109,13 @@ export async function cleanCache(
 
     if (options?.cache) {
       await service.data.caching.backend.clear(service.id(), environment)
+    }
+  }
+
+  if (workTree.environment.type === 'docker') {
+    const removed = await removeOrphanedContainers(getContainerCli(workTree.environment))
+    for (const id of removed) {
+      environment.console.info(`removed container ${id.substring(0, 12)} left behind by a stopped run`)
     }
   }
 }

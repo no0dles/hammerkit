@@ -1,0 +1,163 @@
+---
+title: "Task"
+description: "A task is a piece of work with dependencies that reads input files and generates output files."
+icon: Hammer
+---
+Tasks are the pieces of work needed to build or develop your project.
+
+A minimal task contains just a list of commands.
+```yaml
+tasks:
+  example:
+    cmds:
+      - echo "minimal example"
+```
+
+<Callout type="info">
+
+**Local vs. container — the one rule to remember.** If a task declares an `image`,
+its commands run **inside that container**. If it has no `image`, they run
+**directly on your host** using the tools installed there. Everything else (sources,
+outputs, caching, dependencies) works the same in both cases. Containers are the
+recommended default: they remove the need to install build tools on every machine
+and make a build behave identically on your laptop and in CI. See
+[run a task in a container](/docs/task/container).
+
+</Callout>
+
+## Anatomy of a task
+A task is built from a small, fixed set of fields:
+
+| Field | Purpose |
+|-------|---------|
+| `cmds` | The commands to run, in order. |
+| `image` | Run the commands inside this container image. Omit to run on the host. |
+| `src` | Input files/folders. Used for [caching](/docs/task/caching) — unchanged sources let the task be skipped. |
+| `generates` | Output files/folders the task produces. This is what gets cached, stored and restored. |
+| `deps` | Other tasks that must run first (see [dependencies](/docs/task/dependencies)). |
+| `needs` | Services that must be running first (see [needs](/docs/task/needs)). |
+| `mounts` | Extra paths to make available to a container task (see [container](/docs/task/container)). |
+| `envs` | [Environment variables](/docs/build-file/environment-variables) for the commands. |
+| `labels` | Group/filter tasks (see [labels](/docs/labels)). |
+| `cache` | The [caching](/docs/task/caching) method/backend for this task. |
+| `timeout` | Maximum execution time, e.g. `10m` (see [timeouts](#timeouts)). |
+
+## Source files (`src`)
+Tasks that depend on input files should declare them under `src`.
+Hammerkit detects whether the `src` files have changed compared to previous runs and skips execution if they are unchanged.
+
+```yaml
+tasks:
+  build:
+    description: "run typescript build"
+    src:
+      - tsconfig.json
+      - src
+    cmds:
+      - tsc
+```
+
+## Generated files (`generates`)
+Tasks that produce output files should declare them under `generates`.
+Hammerkit archives generated files, so build outputs can be cached, stored and restored.
+
+```yaml
+tasks:
+  build:
+    description: "run typescript build"
+    src:
+      - tsconfig.json
+      - src
+    generates:
+      - dist
+    cmds:
+      - tsc
+```
+
+### Exporting generated files
+By default generated files of a container task stay inside the container volume.
+Mark a generate with `export: true` to copy it back into your workspace after the
+task ran. This is useful when another tool outside hammerkit needs the produced
+files, for example a build artifact you want to inspect or publish.
+
+```yaml
+tasks:
+  build:
+    image: node:alpine
+    generates:
+      - path: dist
+        export: true
+    cmds:
+      - tsc -b
+```
+
+An exported output is copied back only when the task succeeds. Test reports,
+screenshots and videos are most useful when a test fails: mark those
+`export: always` and hammerkit copies them to the workspace even when the task
+exits non-zero. A failed task is never cached, so nothing else changes.
+
+```yaml
+tasks:
+  e2e:
+    image: cypress/included:13.15.0
+    generates:
+      - path: cypress/videos
+        export: always
+    cmds:
+      - cypress run
+```
+
+### Outputs start empty
+When a task runs, its outputs start empty: hammerkit deletes what an earlier run
+left in them before the task's commands run. A file a deleted source used to
+produce, or a partial result of a failed run, would otherwise end up in the next
+result and in the cache.
+
+An output that is also a source of the task, or contains one, is left alone: a
+`package-lock.json` that `npm install` both reads and writes keeps its content.
+
+Set `resetOnChange: false` on an output to keep its content between runs, for a
+tool that builds incrementally on top of its previous output:
+
+```yaml
+tasks:
+  build:
+    image: rust:1.90-slim
+    src: [Cargo.toml, Cargo.lock, src]
+    generates:
+      - path: target
+        resetOnChange: false   # cargo reuses what it compiled before
+    cmds:
+      - cargo build --release
+```
+
+Whatever such an output keeps becomes part of the next result, so prefer a
+[mount](/docs/task/container#adding-mounts) for a tool's cache: a mount is never
+part of a task's result.
+
+## Timeouts
+A task that hangs — a deadlocked test, a stuck network call — would otherwise block
+the run until your CI provider kills the job. Set a `timeout` and hammerkit aborts
+the task once it runs longer, fails it with `timed out after <duration>`, and stops
+the run like any other failure.
+
+```yaml
+tasks:
+  e2e:
+    image: cypress/included:13.15.0
+    timeout: 15m
+    cmds:
+      - cypress run
+```
+
+Durations are written as a number plus a unit: `ms`, `s`, `m`, `h` or `d`, and can
+be combined (`1h30m`). A timed-out task is cleaned up the same way as a cancelled
+one — its container or Kubernetes job is removed — and never writes a cache entry.
+The timeout does not affect the task's cache key.
+
+To give every task a default, pass `--timeout` to [`run`](/docs/cli/execute) or
+[`up`](/docs/cli/up); a task's own `timeout` takes precedence.
+
+```bash
+hammerkit run --timeout 30m
+```

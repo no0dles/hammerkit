@@ -1,0 +1,127 @@
+---
+title: "Build file reference"
+description: "Every key the build-file schema accepts."
+---
+This is the complete reference for the hammerkit build file, derived from the
+schema hammerkit validates against (`build.schema.json`). Unknown keys are
+rejected, so this list is exhaustive. For prose and examples, follow the links to
+the dedicated pages.
+
+## Top-level keys
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `envs` | map of string→string/number | Build-file-wide [environment variables](/docs/build-file/environment-variables). |
+| `tasks` | map of name→task | The [tasks](/docs/task) in this file. |
+| `services` | map of name→service | The [services](/docs/service) in this file. |
+| `references` | map of prefix→path | [Reference](/docs/build-file/references) other build files (keep their own directory). |
+| `includes` | map of prefix→path | [Include](/docs/build-file/includes) other build files (use this file's directory). |
+| `environments` | map of name→environment | [Run targets](/docs/task/kubernetes) (Kubernetes or remote Docker). |
+| `caches` | map of name→cache | Named [cache](/docs/build-file/caches) declarations (method + backend). |
+| `labels` | map of string→string/number | [Labels](/docs/labels) applied to every task/service in the file. |
+
+## Task
+
+A task is either a **container task** (it has an `image`) or a **local task** (no
+`image`). Both share these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cmds` | array of string \| `{cmd, path}` | Commands to run, in order. `path` sets the working directory for that command. |
+| `description` | string | Shown by [`ls`](/docs/cli/ls); a missing one is a [validate](/docs/cli/validate) warning. |
+| `src` | array of string | Input files/folders/globs used for [caching](/docs/task/caching). |
+| `generates` | array of string \| `{path, export, resetOnChange, name}` | [Output](/docs/task#generated-files-generates) paths. `export: true` copies back to the workspace when the task succeeds, `export: always` also when it fails; outputs start empty when the task runs, `resetOnChange: false` keeps their content (see [outputs start empty](/docs/task#outputs-start-empty)). |
+| `deps` | array of string | [Tasks](/docs/task/dependencies) (`name` or `prefix:name`) that run first. |
+| `needs` | array of string \| `{service, name}` | [Services](/docs/task/needs) that must be ready first. |
+| `envs` | map of string→string/number | Task-level [environment variables](/docs/build-file/environment-variables) (override build-file `envs`). |
+| `labels` | map of string→string/number | [Labels](/docs/labels) for filtering. |
+| `cache` | string \| `{name, method}` | [Cache](/docs/task/caching) method shorthand or a named cache reference. |
+| `extend` | string | [Base task](/docs/task/extending) to inherit from (`prefix:name`). |
+| `shell` | string | Shell used to run `cmds` (default `/bin/sh`). |
+| `continuous` | boolean | Task [watches itself](/docs/task/watching); hammerkit won't restart it in watch mode. |
+| `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
+| `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
+
+**Container task** adds:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `image` | string (required) | The container image to run in. Its presence is what makes the task containerized. |
+| `mounts` | array of string | Extra `host[:container][:ro]` [mounts](/docs/task/container#adding-mounts). |
+
+**Local task** adds:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `platform` | `{os, arch}` | Restrict to `os` (`win`/`macos`/`linux`) and/or `arch` (`arm64`/`arm`). |
+
+## Service
+
+A service is either a **container service** (it has an `image`) or a **Kubernetes
+service** (it has a `selector`).
+
+**Container service:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `image` | string (required) | The service image. |
+| `cmd` | string | Override the container command. |
+| `workdir` | string | Working directory inside the container; see [working directory](/docs/service/container#working-directory). Defaults to the build file's directory. |
+| `shell` | string | Run `cmd` and the healthcheck as `<shell> -c "<cmd>"`; see [shell](/docs/service/container#shell). Without it both run in exec form. |
+| `ports` | array of string/number | `containerPort` or `hostPort:containerPort` to publish to the host. |
+| `healthcheck` | `{cmd, timeout}` | Readiness command, and how long the service may take to pass it once running (duration, default `20s`, `HAMMERKIT_HEALTHCHECK_TIMEOUT` changes the default); see [healthcheck](/docs/service/container#healthcheck). |
+| `init` | string | A task (`name` or `prefix:name`) run once the healthcheck passed; the service is ready for dependents only after it succeeded; see [init](/docs/service/container#init). |
+| `envs` | map of string→string/number | Service environment variables. |
+| `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file. |
+| `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
+| `mounts` | array of string | `host:container[:ro]` config mounts. |
+| `deps` | array of string | Tasks that must run before the service starts. |
+| `needs` | array of string \| `{service, name}` | Other services this one depends on. |
+| `src` | array of string | Sources, used for caching the service image build. |
+| `labels` | map of string→string/number | Labels for filtering. |
+| `description` | string | Description shown by `ls`. |
+| `continuous` | boolean | Long-running service (the usual case). |
+
+**Kubernetes service** (forwards an existing cluster resource — see
+[Kubernetes service](/docs/service/kubernetes)):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `selector` | `{type, name}` (required) | Resource `type` (`deployment`/`service`/`pod`) and `name` to forward. |
+| `ports` | array of string/number (required) | `hostPort:containerPort` mappings to forward to localhost. |
+| `context` | string | Override the environment's kube context. |
+| `namespace` | string | Override the environment's namespace. |
+| `kubeconfig` | string | Override the environment's kubeconfig path. |
+| `deps` | array of string | Tasks that run before forwarding. |
+| `labels` / `description` | – | As above. |
+
+## Cache (`caches`)
+
+Each named cache has a `method` and a `backend` (see [caches](/docs/build-file/caches)):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `method` | `checksum` \| `modify-date` \| `none` | How changes are detected. |
+| `backend.type` | `local` \| `s3` \| `registry` | Where results are stored. |
+| `backend.path` | string (`local`) | Directory; defaults to `~/.hammerkit/remote-cache`. |
+| `backend.bucket` | string (`s3`, required) | Target bucket. |
+| `backend.region` / `endpoint` / `prefix` / `forcePathStyle` | – (`s3`) | S3 connection options. |
+| `backend.repository` | string (`registry`, required) | OCI repository without a tag, e.g. `ghcr.io/org/cache`. |
+| `backend.insecure` | boolean (`registry`) | Use plain HTTP; defaults to `true` only for localhost. |
+| `retention.maxAge` / `maxSize` / `keepPerTask` | duration / size / integer | [Retention policy](/docs/build-file/caches#retention) for `cache prune` and automatic pruning. |
+
+A task's `cache` field is either the method shorthand (`cache: checksum`) or a
+reference `{name, method}` to a declared cache.
+
+## Environment (`environments`)
+
+Each environment is a [run target](/docs/task/kubernetes) — exactly one of:
+
+| Key | Fields | Description |
+|-----|--------|-------------|
+| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]` | Run tasks as jobs and services as deployments on a cluster. |
+| `docker` | `host` | Run against a remote Docker daemon. |
+
+An `httpRoutes` entry has `host`, `service` and `gateway` (all required),
+`servicePort`, `path` and `gatewayNamespace` — see
+[HTTP routes](/docs/task/kubernetes#http-routes).

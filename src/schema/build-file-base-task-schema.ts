@@ -5,6 +5,8 @@ import { labelsSchema } from './labels-schema'
 import { cacheSchema } from './cache-schema'
 import { buildFileTaskCommandSchema } from './build-file-task-command-schema'
 import { buildFileVolumeSchema } from './build-file-volume-schema'
+import { durationSchema } from './duration-schema'
+import { buildFileSecretSchema } from './build-file-secret-schema'
 
 export const buildFileBaseTaskSchema = object({
   deps: array(string()).optional(),
@@ -21,4 +23,8 @@ export const buildFileBaseTaskSchema = object({
   // A task that watches its own sources and restarts itself (e.g. `ng serve`,
   // `tsc -w`). In watch mode hammerkit then does not watch/restart it itself.
   continuous: boolean().optional(),
+  // Maximum execution time, e.g. `30s`, `10m`, `1h30m`. The task fails when it
+  // runs longer. Does not affect the cache key (ADR-0002).
+  timeout: durationSchema.optional(),
+  secrets: array(buildFileSecretSchema).optional(),
 })

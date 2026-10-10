@@ -58,32 +58,32 @@ CI=true npm test
 Run with `CI=true`. In CI the container/k8s tests gate themselves to a no-op
 when their env flag is unset (see `src/testing/requires-*.ts`); **without**
 `CI=true` those same tests try to talk to Docker/Kubernetes locally and fail.
-The unit suite (`jest`) excludes `src/testing/integration/`, so it needs no
+The unit suite (vitest, default mode) excludes `src/testing/integration/`, so it needs no
 Docker.
 
 Single test while iterating:
 
 ```bash
-node_modules/.bin/jest src/path/to/file.spec.ts -t "test name"
+npx vitest run src/path/to/file.spec.ts -t "test name"
 ```
 
 ## 5. Integration tests — only when you touched docker / k8s / execution
 
 These need a running Docker daemon (and are slow). They are **not** required for
-most commits; the self-hosted `integration` workflow covers them. Run locally
+most commits; the `integration (ubuntu-latest)` job in `test.yaml` covers them (kind cluster + registry on GitHub-hosted runners). Run locally
 only if your change affects container/k8s execution:
 
 ```bash
-# Docker must be running. CI runs this --runInBand.
-LINUX_CONTAINERS=true npm run test:integration -- --runInBand
+# Docker must be running. CI runs the spec files one at a time too.
+LINUX_CONTAINERS=true npm run test:integration -- --no-file-parallelism
 ```
 
 Add `CLUSTER_NAME=<kube-context>` to also exercise the kubernetes specs.
 
 ## Cross-platform note
 
-The `test` workflow runs the unit suite on **ubuntu, windows, and macos**, plus
-a `macos-containers` job. Keep changes portable:
+The `test` workflow runs the unit suite on **windows** and the full integration
+suite on **ubuntu** (macOS is disabled). Keep changes portable:
 
 - Build paths with `path` helpers; in tests, make separator-sensitive
   expectations native (`val.split(posix.sep).join(sep)`) rather than hardcoding

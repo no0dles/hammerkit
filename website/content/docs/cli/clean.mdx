@@ -1,0 +1,41 @@
+---
+title: "Clean"
+description: "Clear all generated files and folders to start from a clean state."
+---
+This command cleans up all generated directories and files including the local
+cache state of hammerkit.
+This is useful for detecting errors in the build file and for verifying that all tasks work without any previous state.
+
+```
+hammerkit clean
+```
+
+## Clearing stored cache results
+
+By default `clean` removes the generated outputs and the per-task cache state of
+the current checkout. Add `--cache` to also drop the **stored results** kept by
+the cache backend - the local result store under `~/.hammerkit/remote-cache` or a
+configured remote backend (for example an S3 bucket or a registry — which must
+allow deleting manifests).
+
+```
+hammerkit clean --cache
+```
+
+This forces the next run to rebuild from scratch instead of restoring a result
+from the backend. See [caches](/docs/build-file/caches) for how backends work.
+
+<Callout type="info">
+
+`--filter`/`--exclude` label options apply to `clean` as well, so you can clean a
+subset of tasks and services.
+
+</Callout>
+
+## Leftovers of killed runs
+
+A run that was killed outright (`kill -9`, an out-of-memory kill) can't remove its
+containers. `clean` also removes every hammerkit container on the docker host that
+was started on this machine by a hammerkit process that no longer exists, whatever
+project it belongs to. Services started with [`up --daemon`](/docs/cli/up) are
+kept: [`down`](/docs/cli/down) stops those.

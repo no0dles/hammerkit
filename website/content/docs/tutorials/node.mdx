@@ -1,0 +1,151 @@
+---
+title: "Node.js"
+description: "Install, build and test a TypeScript project in containers, cached by its lockfile and sources."
+---
+This tutorial builds a small TypeScript library with `npm ci`, `tsc` and
+`node --test`, each in a `node:24-alpine` container and each skipped when its
+inputs haven't changed. You need [hammerkit and Docker](/docs/installation); Node
+doesn't have to be installed on your machine.
+
+The finished project is
+[`examples/tutorial-node`](https://github.com/no0dles/hammerkit/tree/master/examples/tutorial-node).
+
+## The project
+
+```txt
+tutorial-node/
+├── package.json
+├── package-lock.json
+├── tsconfig.json
+├── src/greet.ts
+└── test/greet.test.js
+```
+
+<include cwd lang="json" meta='title="package.json"'>../examples/tutorial-node/package.json</include>
+
+<include cwd lang="ts" meta='title="src/greet.ts"'>../examples/tutorial-node/src/greet.ts</include>
+
+The tests import the compiled code from `dist`:
+
+<include cwd lang="js" meta='title="test/greet.test.js"'>../examples/tutorial-node/test/greet.test.js</include>
+
+## 1. Install dependencies
+
+A task names the image it runs in, the files it reads (`src`) and the files it
+produces (`generates`). Create `.hammerkit.yaml` with an `install` task:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  install:
+    description: install the locked dependencies
+    image: node:24-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    cmds:
+      - npm ci
+```
+
+```bash
+hammerkit install
+```
+
+`npm ci` runs in the container and `node_modules` is kept as the task's output.
+Run it again and hammerkit skips it: `package.json` and `package-lock.json` are
+unchanged, so there's nothing to install.
+
+## 2. Build
+
+The `build` task compiles `src`. `deps: [install]` runs `install` first (or reuses
+its cached result) and mounts its `node_modules` into the build container:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  build:
+    description: compile src to dist
+    image: node:24-alpine
+    deps: [install]
+    src: [src, tsconfig.json]
+    generates:
+      - path: dist
+        export: true
+    cmds:
+      - npm run build
+```
+
+A container task's outputs stay in a volume hammerkit manages, ready for the tasks
+that depend on it. `export: true` also copies `dist` into your project, so you
+can use the compiled code outside hammerkit.
+
+Edit `src/greet.ts` and run `hammerkit build`: `install` is cached and only `build`
+runs.
+
+## 3. Test
+
+The tests read `test` and the `dist` that `build` generates:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  test:
+    description: test the compiled code
+    image: node:24-alpine
+    deps: [build]
+    src: [test]
+    cmds:
+      - npm test
+```
+
+`test` only declares its own folder in `src`. Its dependency's sources are part of
+its cache key anyway, so a change in `src/` reruns `build` and then `test`, while a
+change in `test/` reruns only `test`.
+
+## 4. One task for CI
+
+A task without `cmds` groups other tasks. `ci` names everything a change has to
+pass. The complete build file:
+
+<include cwd lang="yaml" meta='title=".hammerkit.yaml"'>../examples/tutorial-node/.hammerkit.yaml</include>
+
+```bash
+hammerkit run ci
+```
+
+```txt
+Summary:
+  build    executed   2.4s
+  ci       executed   3.1s
+  install  executed   1.2s
+  test     executed   3.1s
+  4 executed, 0 cached (0% cache hit), 3.1s total
+```
+
+Run it again without changing anything:
+
+```txt
+Summary:
+  build    cached     1ms
+  ci       cached     14ms
+  install  skipped    0ms
+  test     cached     0ms
+  0 executed, 3 cached, 1 skipped (100% cache hit), 30ms total
+```
+
+`install` is skipped: every task that needs it was a cache hit, so its output
+isn't needed either.
+
+Ignore what hammerkit and the tools write into the project:
+
+<include cwd lang="txt" meta='title=".gitignore"'>../examples/tutorial-node/.gitignore</include>
+
+## Run it in CI
+
+CI runs the same command: [install hammerkit](/docs/installation#in-ci) and run
+`hammerkit run ci`. A fresh runner starts with an empty cache; to reuse what your
+laptop or the previous run already built, share the cache as described in
+[caching in CI](/docs/guides/ci-caching).
+
+## Next steps
+
+* Tests that need a database: start it as a [service](/docs/service) and let the
+  task [`need`](/docs/task/needs) it, see [services & networking](/docs/guides/services-networking).
+* Several packages in one repository: [monorepos](/docs/guides/monorepo).
+* A task reruns and you don't know why: [`hammerkit explain`](/docs/cli/explain).

@@ -6,7 +6,7 @@
 
 **Status**: Current State (reverse-specified from docs, hammerkit 1.6.0)
 
-**Input**: Existing behavior documented in `docs/task/caching.md`
+**Input**: Existing behavior documented in `website/content/docs/task/caching.mdx`
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -85,6 +85,8 @@ A team wants CI and developer machines to share build results. They declare a na
 - **FR-008**: When a remote cache backend is configured and a cache hit exists remotely, the system MUST pull and restore the result without executing the task.
 - **FR-009**: After a successful task run with a remote backend, the system MUST push the result to the remote backend.
 - **FR-010**: Glob patterns in `src` MUST support the node-glob pattern set including `*`, `?`, `[...]`, `!(…)`, `?(…)`, `+(…)`, `*(…)`, `@(…)`, and `**`.
+- **FR-011**: A change to a dependency's definition (command, image, env, …) MUST invalidate every task depending on it, not only the dependency.
+- **FR-012**: Files a dependency generates MUST NOT contribute to a dependant's own state key; they are represented by the dependency's task id and state key.
 
 ### Key Entities
 

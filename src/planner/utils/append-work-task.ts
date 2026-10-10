@@ -1,3 +1,4 @@
+import { getSecretName, parseWorkSecrets } from '../work-secret'
 import { BaseWorkTask, ContainerWorkTask, LocalWorkTask, WorkTask } from '../work-task'
 import { parseWorkGenerate } from './parse-work-generate'
 import { templateValue } from './template-value'
@@ -19,6 +20,7 @@ import { buildEnvironmentVariables } from '../../environment/replace-env-variabl
 import { lazyResolver } from '../../executer/lazy-resolver'
 import { getWorkTaskRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
+import { parseDuration } from '../../utils/units'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -30,7 +32,13 @@ export function appendWorkTask(
   const task = parseTask(cwd, referenceTask, environment, context)
   if (!workTree.tasks[task.name]) {
     const workItem: WorkItem<WorkTask> = {
-      id: lazyResolver(() => getWorkTaskId(task)),
+      // A dependency cycle is rejected before anything runs (checkForLoop), but
+      // the id may be asked for earlier; re-entry yields a placeholder instead of
+      // recursing forever.
+      id: lazyResolver(
+        () => getWorkTaskId(workItem),
+        () => `cycle:${task.name}`
+      ),
       name: task.name,
       data: task,
       status: environment.status.from(task),
@@ -67,6 +75,7 @@ function parseTask(
     description: templateValue(task.schema.description || '', envs).trim(),
     name: task.relativeName,
     cwd,
+    projectRoot: context.projectRoot,
     cmds: parseWorkCommands(cwd, task.schema.cmds || [], envs),
     src: parseWorkSource(cwd, task.schema.src, envs),
     generates: parseWorkGenerate(cwd, task.schema, envs),
@@ -75,6 +84,8 @@ function parseTask(
     caching: resolveCache(task.schema.cache ?? null, context.caches, task.relativeName),
     shell: task.schema.shell ? templateValue(task.schema.shell, envs) : '/bin/sh',
     continuous: task.schema.continuous ?? false,
+    timeout: task.schema.timeout ? parseDuration(task.schema.timeout) : null,
+    secrets: parseWorkSecrets(cwd, context.projectRoot, task.schema.secrets, envs, environment),
   }
 
   if (isBuildFileContainerTaskSchema(task.schema)) {
@@ -86,6 +97,12 @@ function parseTask(
       mounts: parseWorkMounts(cwd, task.schema, envs),
     }
   } else {
+    const fileSecret = baseWorkNode.secrets.find((secret) => secret.target.type === 'file')
+    if (fileSecret) {
+      throw new Error(
+        `task ${task.relativeName}: a local task takes secrets as env only (${getSecretName(fileSecret)})`
+      )
+    }
     return <LocalWorkTask>{
       ...baseWorkNode,
       type: 'local-task',

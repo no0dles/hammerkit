@@ -1,0 +1,264 @@
+---
+title: "Container service"
+---
+Container services run in the same network as the other container tasks.
+By default, they are started when a task needs them and stopped once no remaining task needs them.
+
+## Differences from Docker Compose
+Container services are similar to [Docker Compose](https://docs.docker.com/compose/compose-file/) services, but are better integrated with your tasks.
+They lack many of Compose's features, but a few aspects still make them appealing.
+
+### Seamless integration
+Hammerkit is aware of the task dependency tree and can make decisions about the lifetime of a service.
+Depending on your setup, this can reduce CPU and memory usage.
+
+It keeps things simple and removes the need for another tool that has to be started, and waited for, before you can run your task.
+
+### Reuse
+Services can be included or referenced like tasks.
+This makes it possible to reuse services and their state across multiple build files and projects — for example, to run a single database for several projects and save CPU and memory.
+
+### Store/Restore
+The [store/restore](/docs/cli/store-restore) commands work for services as well, exporting and importing their volume data.
+
+This can be used to seed a database, or to back up and restore project data.
+
+## Ports
+Services can expose ports to the host machine.
+This is useful for debugging or for connecting to a service from your machine.
+
+Host ports are published when the service runs through
+[`hammerkit up`](/docs/cli/up), and during `hammerkit run` only when a
+[local task](/docs/task) needs the service (it reaches services through the host).
+Container tasks reach a service over its link, so a `run` that only has container
+tasks publishes nothing, and two runs on one machine never collide on a host port.
+
+<Callout type="warn">
+
+Container tasks don't need published ports.
+They share a network with the services and can reach all of their ports.
+
+</Callout>
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - 5432:5432
+```
+
+## Shell [#shell]
+
+A service's `cmd` and its healthcheck `cmd` run in exec form by default: the
+command line is split into arguments and handed to the container directly, and
+the `cmd` becomes the arguments of the image's entrypoint. Set `shell` to run
+both through a shell instead, like a container task's [execution shell](/docs/task/container#execution-shell):
+
+```yaml
+services:
+  status:
+    image: alpine:3.21
+    shell: /bin/sh
+    cmd: mkdir -p /srv && printf 'HTTP/1.0 200 OK\r\n\r\nready on %s\n' "$(uname -s)" > /srv/response && while true; do nc -l -p 8080 < /srv/response; done
+    healthcheck:
+      cmd: grep -q "ready on" /srv/response && nc -z 127.0.0.1 8080
+```
+
+With `shell`, the service starts as `<shell> -c "<cmd>"` in place of the image
+entrypoint, on Docker and Kubernetes alike, and the healthcheck runs as
+`<shell> -c "<healthcheck cmd>"`. The shell has to exist in the image. Without a
+`cmd`, the image's own entrypoint and command are kept.
+
+## Healthcheck
+A healthcheck checks whether a service is ready to be used.
+A task only starts once every service it needs is running and, if a healthcheck is defined, has passed it.
+
+A healthcheck requires a command that can be used to test the readiness of a service.
+The command is executed inside the service container. 
+To pass the healthcheck the command needs to return with an exit code of `0`.
+
+The following example contains a Postgres service.
+It uses the `pg_isready` executable in a healthcheck,
+which ensures the Postgres server is ready to accept connections.
+ 
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    healthcheck:
+      cmd: "pg_isready -U postgres"
+```
+
+<Callout type="warn">
+
+Without a healthcheck, a task may start before the service is ready.
+
+</Callout>
+
+The `cmd` runs in exec form: it is split into arguments (quotes group one
+argument), with no shell in between — so `&&`, pipes and `$(...)` need the
+service's [`shell`](#shell).
+
+### Timing and failure
+
+The healthcheck has two fields: `cmd` and an optional `timeout`. There are
+intentionally no `interval` or `retries` knobs:
+
+* hammerkit runs `cmd` inside the service container roughly **once a second**,
+  starting one second after the container starts, and treats the service as
+  ready the first time it exits `0`;
+* the check runs as the **user of the container's main process** (PID 1), like a
+  Kubernetes exec probe runs as the container's user. Images whose entrypoint
+  drops privileges (`exec su-exec rabbitmq …`) are checked as that user, so a
+  check can't create files the service then cannot read — a RabbitMQ CLI run as
+  root would create the Erlang cookie the server is locked out of;
+* each individual check has a short execution timeout (a couple of seconds), so a
+  hanging check doesn't block forever — it just counts as "not ready yet" and is
+  retried;
+* a service that doesn't pass within **`timeout` (default 20s)** of its container
+  starting fails, with the healthcheck command in the error, and so does every
+  task that needs it — instead of the run waiting until you cancel it. The clock
+  starts once the container runs, so pulling the image doesn't count. Raise it
+  for slow starters, per service or for every service without one through
+  `HAMMERKIT_HEALTHCHECK_TIMEOUT`:
+
+```yaml
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.1
+    healthcheck:
+      cmd: curl -sf http://localhost:9200/_cluster/health
+      timeout: 90s
+```
+
+On [Kubernetes](/docs/task/kubernetes), the same `cmd` is translated into readiness
+and liveness probes on the deployment, and `timeout` bounds the wait for a ready
+replica once a pod runs.
+
+## Working directory [#working-directory]
+
+A service runs in the build file's directory, like a task: its `src`, `mounts`
+and the outputs of its `deps` are mounted there, so a command such as
+`node server.js` finds its files.
+
+Images that start a process relative to their own `WORKDIR` — an entrypoint
+calling `./dist/index.js`, or `npm start` in `/app` — need that directory back.
+Set `workdir` to an absolute path inside the container:
+
+```yaml
+services:
+  core:
+    image: registry.example.com/core:6
+    workdir: /app/packages/core
+```
+
+`workdir` applies to the Docker and Kubernetes runtimes alike and is part of the
+service's identity; services that don't declare it keep their id.
+
+## Volumes
+Services start and stop depending on what tasks need.
+To persist data across restarts, use volumes.
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - "postgres-db:/var/lib/postgresql/data"
+```
+
+A volume name is a Docker volume, the same for every checkout on that Docker host.
+Where several checkouts share one host — CI jobs on one runner — name it after one
+of the service's `envs`, so each job gets its own:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    envs:
+      DATA_PREFIX: ${CI_JOB_ID:-dev}
+    volumes:
+      - "${DATA_PREFIX}-postgres:/var/lib/postgresql/data"
+```
+
+## Init [#init]
+
+Setup that has to happen once the service is up — create buckets, initiate a
+replica set, assign roles in an identity provider — goes into a task the service
+names as its `init`. The task runs after the service passed its healthcheck, and
+the service counts as ready only once it succeeded: whatever else needs the service
+starts against a set-up service. A failing or timed-out init fails the run.
+
+```yaml
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.6
+    healthcheck:
+      cmd: …
+    init: keycloak-roles
+
+tasks:
+  keycloak-roles:
+    image: curlimages/curl:8.10.1
+    mounts:
+      - ./assign-roles.sh:/assign-roles.sh:ro
+    envs:
+      KEYCLOAK_URL: http://keycloak:8080
+    secrets:
+      - from: env:KEYCLOAK_ADMIN_PASSWORD
+        env: KEYCLOAK_ADMIN_PASSWORD
+    cmds:
+      - sh /assign-roles.sh
+```
+
+`init` names a task like `deps` does (`name` or `prefix:name`), so the init has
+everything a task has: `deps`, `envs`, [`secrets`](/docs/task/secrets), `mounts`,
+`extend` for one setup shared by several services, or a local task. The task needs
+the service under the service's name without listing it; it may list other
+services it needs as well.
+
+* **It runs each time the service starts in a run**, never from the cache. A
+  service kept running by `up --daemon` already ran its init and is reused without
+  running it again; name the task (`hammerkit run keycloak-roles`) to run it
+  against the running service anyway. Asked for by name while the service is not
+  running, the service starts for it and the init runs once.
+* **Its `timeout`** defaults to 5 minutes (`HAMMERKIT_INIT_TIMEOUT` changes it).
+* **A changed init task recreates the service** on the next `up` or `run`, so the
+  init runs again.
+* A service with an `init` is always awaited, also under `up --daemon --wait start`.
+
+## Hostname [#hostname]
+
+A service's container uses the service name as its hostname, so the service
+resolves its own name: software that advertises its own address, such as a MongoDB
+replica-set member `mongodb:27017`, works without knowing the container's IP.
+Other containers reach it by the name they list it under in `needs`.
+
+## Secrets [#secrets]
+
+Credentials reach a service through `secrets`, as an environment variable or a
+read-only file, without being written to the build file or hammerkit's logs; its
+`init` gets them too. See [secrets](/docs/task/secrets).
+
+## Mounts
+Mounts can be used to pass local files into the container.
+They are meant for local configuration and settings files. Append `:ro` to mount
+one read-only (`./postgres.conf:/etc/postgresql/postgresql.conf:ro`); volumes take
+`:ro` too (`secrets:/run/secrets:ro`, or `readOnly: true` in the object form).
+
+<Callout type="warn">
+
+Mounts are not recommended for frequently changing files. 
+Syncing large directories on macOS/Windows uses a lot of CPU.
+
+</Callout>
+
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    mounts:
+      - "./postgres.conf:/etc/postgresql/postgresql.conf"
+```

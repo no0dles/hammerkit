@@ -165,8 +165,22 @@ describe('getKubernetesPersistence for a container service', () => {
       mounts: [],
       src: [],
       volumes: [
-        { name: 'data', containerPath: '/var/data', resetOnChange: false, inherited: null, export: true },
-        { name: 'logs', containerPath: '/var/log/app.log', resetOnChange: false, inherited: owner, export: false },
+        {
+          name: 'data',
+          containerPath: '/var/data',
+          resetOnChange: false,
+          inherited: null,
+          export: true,
+          readOnly: false,
+        },
+        {
+          name: 'logs',
+          containerPath: '/var/log/app.log',
+          resetOnChange: false,
+          inherited: owner,
+          export: false,
+          readOnly: false,
+        },
       ],
     } as unknown as ContainerWorkService)
 

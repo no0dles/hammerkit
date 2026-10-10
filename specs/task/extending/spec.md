@@ -6,7 +6,7 @@
 
 **Status**: Current State (reverse-specified from docs, hammerkit 1.6.0)
 
-**Input**: Existing behavior documented in `docs/task/extending.md`
+**Input**: Existing behavior documented in `website/content/docs/task/extending.mdx`
 
 ## User Scenarios & Testing *(mandatory)*
 

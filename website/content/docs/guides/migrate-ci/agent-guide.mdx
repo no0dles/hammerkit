@@ -1,0 +1,478 @@
+---
+title: "CI migration guide (for coding agents)"
+description: "Step-by-step guide for a coding agent migrating an existing CI pipeline to hammerkit: inventory, build file, CI rewrite, verification, report."
+---
+You are migrating this repository's CI pipeline to
+[hammerkit](https://github.com/no0dles/hammerkit). Hammerkit runs build steps as
+**tasks** declared in a `.hammerkit.yaml` file, each in a container image, and
+skips a task when its declared inputs are unchanged. The CI then shrinks to
+installing hammerkit and running tasks; the same tasks run on a laptop.
+
+Two words carry the bar for this work:
+
+* **Parity** — the migrated pipeline runs the same checks and produces the same
+  artifacts as the old one. Nothing the old pipeline verified goes unverified.
+* **Hermetic** — a task's result depends only on what it declares: its image, its
+  commands, its `envs`, its `src` files and its `deps`. The cache trusts this; an
+  undeclared input lets a stale result through without any error.
+
+Work through the steps in order. Each ends on a **done when** check; finish it
+before moving on. The reference sections after the steps hold the syntax and
+mappings you need along the way.
+
+## Step 1 — Take stock of the current pipeline
+
+Read every CI definition in the repository and everything it calls:
+
+* `.github/workflows/*.yml`, `.gitlab-ci.yml`, `Jenkinsfile`, `.circleci/config.yml`,
+  `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `.buildkite/`, `.drone.yml`;
+* the scripts those run: `Makefile`, `package.json` scripts, `scripts/*.sh`,
+  `docker-compose*.yml` used by tests.
+
+Build an inventory table with one row per job, recording: trigger and conditions
+(branches, paths, PR vs push, schedules), toolchain (runner image, `container:`,
+setup actions and their versions), each step's command, services (databases,
+queues), environment variables and secrets, caches, artifacts produced and
+consumed, matrix axes, job dependencies, timeouts, and steps allowed to fail.
+
+**Done when** every job and every step of every CI file appears in the inventory.
+
+## Step 2 — Classify every step
+
+Give each step exactly one class:
+
+| Class | Examples | Becomes |
+|---|---|---|
+| **Task** | install dependencies, lint, typecheck, unit/integration tests, build, e2e | a hammerkit task (step 3) |
+| **Toolchain** | `actions/setup-node`, `setup-java`, `container: node:20`, `apt-get install` of build tools | the task's `image` |
+| **Service** | `services: postgres`, `docker compose up db` for tests | a hammerkit `service` plus `needs` (a whole Compose stack: see [Compose test stacks](#compose-test-stacks)) |
+| **Plumbing** | checkout, `actions/cache`, cache keys, upload/download of artifacts *between jobs* | dropped: hammerkit caches per task and passes outputs along `deps` |
+| **CI-owned** | triggers, branch and path conditions, secret injection, permissions, publishing releases or packages, deployments, notifications, uploading artifacts for humans | stays in the CI config |
+
+**Done when** every inventory row has exactly one class, and every Plumbing step
+has a note on what replaces it.
+
+## Step 3 — Write the build file
+
+Create `.hammerkit.yaml` at the repository root (in a monorepo, see
+[monorepo layout](/docs/guides/monorepo)). For every Task-class step group:
+
+1. Make it a task named after what it does (`install`, `lint`, `test`, `build`,
+   `e2e`). Put its commands in `cmds`, in order.
+2. Give it an `image` carrying the toolchain the CI used, at the same version
+   (`setup-node` with `node-version: 20` → `node:20-alpine`, or the Debian variant
+   when the commands need glibc or bash). Use a local task (no `image`) only for
+   steps that need the host itself: Xcode, signing tools, running `docker` or
+   `kubectl` with host credentials.
+3. Add `deps` from the data flow: a task depends on every task whose outputs it
+   reads (`build` reads `node_modules`, so `deps: [install]`).
+4. Add `needs` for every service its commands connect to, and declare the service.
+5. Declare each environment variable its commands read in `envs`. Hammerkit passes
+   only declared variables to a task. Secrets come from the CI environment as
+   `NAME: $NAME`.
+6. For every CI job, add an aggregate task with only `deps` listing what that job
+   ran (`ci: { deps: [lint, test, build] }`), so each CI job runs one hammerkit
+   command.
+
+A CI matrix becomes one task per variant, sharing a base through
+[`extend`](/docs/task/extending), aggregated by a task with `deps` on all variants.
+
+Pick images with these in mind:
+
+* **Tasks run as your user, not root.** On Linux a container task runs with the
+  host's uid and `HOME=/tmp`, so `apt-get install` or `apk add` in `cmds` fails.
+  Every tool the commands call (git, jq, python3, bash, a docker CLI) must already
+  be in the image. When the old job installed tools first, use an image that has
+  them (the `mcr.microsoft.com/devcontainers/*` images carry git, bash and python)
+  or a tools task that downloads a pinned binary into its `generates`.
+* **One C library per dependency tree.** Native modules (`node_modules` with
+  compiled addons, Python wheels) are built for the image that installed them.
+  Every task that loads `install`'s output needs the same libc: all Alpine (musl)
+  or all Debian (glibc), not a mix.
+
+**Done when** every Task-class step appears in exactly one task's `cmds`, and
+`hammerkit validate` reports no errors.
+
+## Step 4 — Declare inputs and outputs
+
+This step decides whether the cache is correct. For every task:
+
+* **`src`** — every file and folder its commands read: sources, configs
+  (`tsconfig.json`, `eslint.config.js`, `.babelrc`), lockfiles, test fixtures, and
+  `package.json` when scripts are run through it. Prefer folders (`src`) over
+  narrowing globs when the command reads more than the glob would match. A task
+  without `src` of its own runs on every invocation — fine for aggregate tasks, not
+  for the work itself.
+* **`generates`** — everything a later task or the CI reads: `node_modules`, `dist`,
+  coverage and test reports. Add `export: true` to outputs a CI step reads from the
+  workspace (an artifact upload) or that a human inspects.
+* **Everything a command writes is an output**, even inside a source folder:
+  tool state (`.yarn/install-state.gz`, `.eslintcache`), generated files a later
+  command reads (generated API docs), reports. Declare the path in `generates`,
+  or point the tool somewhere declared (`YARN_INSTALL_STATE_PATH`). A path that's
+  in neither `src` nor `generates` doesn't exist in the container, and the task's
+  user can't create it there: writing to it fails with `EACCES` or `ENOENT`.
+* **Monorepos have one `node_modules` per workspace.** `generates` takes paths, not
+  globs: list `node_modules` and each `packages/<name>/node_modules` the install
+  creates (`find . -name node_modules -prune -not -path './node_modules/*'` after
+  a local install shows them).
+
+Then apply the rules in [hermetic tasks](#hermetic-tasks) below.
+
+**Done when**, for every task, you can name each file its commands read and it is
+covered by that task's `src` or by a dependency's `generates`.
+
+## Step 5 — Rewrite the CI config
+
+Keep everything CI-owned from step 2. Replace the rest of each job with:
+
+1. install a pinned hammerkit version,
+2. log in to the registry used as remote cache (if you add one),
+3. `hammerkit cache pull --remote shared`,
+4. `hammerkit run <aggregate task>`,
+5. `hammerkit cache push --remote shared`, only on trusted refs (the default
+   branch).
+
+Use the [GitHub Actions template](#ci-template-github-actions) below; for other
+providers keep the same sequence (see [installation](/docs/installation) for the
+container image and the GitLab example). Add `.hammerkit` to `.gitignore`.
+
+On GitLab:
+
+* Container tasks bind-mount the checkout, so the Docker daemon must see it at the
+  same path. A shell runner with the host's Docker, or the Docker executor with a
+  `docker:dind` service (the [installation](/docs/installation) example), both work.
+  The Docker executor with the host's socket mounted in does not: the host has no
+  `/builds/...`.
+* A shell runner reuses its working copy. Keep hammerkit's project state across
+  jobs with `GIT_CLEAN_FLAGS: -ffdx -e .hammerkit`, and install the pinned binary
+  under the runner's `$HOME`, which also keeps `~/.hammerkit` between jobs.
+* For a registry remote cache in GitLab's container registry, log in with the job
+  token: `docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"`.
+
+**Done when** every CI job consists of CI-owned steps plus one hammerkit run, and
+no Plumbing step remains.
+
+## Step 6 — Verify
+
+Run these and check each expected result:
+
+| Command | Expected |
+|---|---|
+| `hammerkit validate` | no errors (warnings about descriptions are fine) |
+| `hammerkit ls` | every task from step 3, with the images, `src` and `generates` you meant |
+| `hammerkit run ci --dry-run` | the tasks in a sensible order, nothing missing |
+| `hammerkit run ci` | succeeds; the same tests run and pass as in the old pipeline |
+| `hammerkit run ci` again | `0 executed` in the summary: every task `cached`, or `skipped` because what needs it was cached |
+| change one source file, then `hammerkit run ci --dry-run` | only the tasks reading that file, and tasks depending on them, are misses |
+| `hammerkit run ci --cache none` | succeeds, and the outputs match the cached run |
+| `docker ps --filter label=hammerkit-type=service` after the runs | empty: no service outlived its run |
+
+A task that rebuilds without a change reads something that differs between runs;
+`hammerkit explain <task>` names the input. A step that fails only under hammerkit
+usually reads a file or variable it doesn't declare: fix the declaration, not the
+command.
+
+While you iterate:
+
+* Run with `--log live` to get plain line-by-line output that you can read back
+  from a file. The interactive view redraws the terminal.
+* Every `$NAME` that a task in the run declares must be set, even if empty;
+  tasks outside the run don't need theirs. For a variable the CI provider sets
+  only on some pipelines (merge request ids, branch names), declare a default
+  instead: `MR_IID: ${CI_MERGE_REQUEST_IID:-}`.
+* Stopping a run with Ctrl-C (or `SIGTERM`) removes its services and stops its
+  local tasks. A run killed outright (`kill -9`) can't: `hammerkit clean` removes
+  what it left behind.
+* Output volumes of every state you tried stay on the Docker host until
+  `hammerkit clean`. On a small CI or workspace disk, watch `docker system df`.
+
+**Done when** every row matches, and the test and artifact list matches the old
+pipeline (parity).
+
+## Step 7 — Report
+
+Write the migration report (as `MIGRATION.md` or the pull request description):
+
+* a table mapping each old CI job and step to its task, or to "kept in CI" or
+  "dropped" with the reason;
+* the verification results from step 6;
+* everything that needs a human: secrets to configure, registry permissions for
+  the remote cache, deployment steps left untouched, and any input you couldn't
+  pin down.
+
+**Done when** the report covers every inventory row.
+
+---
+
+## Reference: CI concepts in hammerkit
+
+| CI concept | GitHub Actions / GitLab CI | Hammerkit |
+|---|---|---|
+| Job | `jobs.<id>` / a job | a task, or an aggregate task with `deps` |
+| Steps | `run:` / `script:` | `cmds` |
+| Toolchain | `runs-on`, `container:`, `setup-*` actions / `image:` | `image` |
+| Job order | `needs:` / `stages`, `needs:` | `deps` |
+| Artifacts between jobs | `upload-artifact` + `download-artifact` / `artifacts` + `dependencies` | `generates` on one task, `deps` on the next |
+| Caches | `actions/cache` / `cache:` | none — per-task caching from `src`, shared via a [remote cache](/docs/build-file/caches) |
+| Service containers | `services:` | `services` + `needs`; reach them by service name |
+| Environment | `env:` / `variables:` | `envs` (build-file or task level) |
+| Secrets | `${{ secrets.X }}` / masked variables | CI exports `X`; the task declares [`secrets: [{ from: env:X, env: X }]`](/docs/task/secrets) — out of the cache key and masked in logs |
+| Matrix | `strategy.matrix` / `parallel:matrix` | one task per variant via `extend` |
+| Timeout | `timeout-minutes` / `timeout` | `timeout: 20m` |
+| Working directory | `working-directory` / `cd` | `{cmd, path}` in `cmds`, or a [referenced](/docs/build-file/references) build file per package |
+| Conditions, triggers | `on:`, `if:` / `rules:` | stay in CI; CI picks which task to run |
+| Allowed failure | `continue-on-error` / `allow_failure` | stays in CI as a separate job running that task |
+
+## Reference: the build file
+
+A complete example covering the common shapes — a dependency install, lint, tests
+against a database, a build whose output CI uploads, and e2e tests:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  NODE_IMAGE: node:24-alpine
+  POSTGRES_IMAGE: postgres:16-alpine     # part of every task's key in this file (`validate` warns)
+  DATABASE_URL: postgres://app:app@db:5432/app
+
+caches:
+  shared:
+    method: checksum
+    backend:
+      type: registry
+      repository: ghcr.io/my-org/hammerkit-cache
+
+services:
+  db:
+    description: database for tests
+    image: $POSTGRES_IMAGE
+    envs:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    healthcheck:
+      cmd: pg_isready -U app
+
+tasks:
+  install:
+    description: install npm dependencies
+    image: $NODE_IMAGE
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    cmds: [npm ci]
+
+  lint:
+    description: lint the sources
+    image: $NODE_IMAGE
+    deps: [install]
+    src: [src, eslint.config.js, package.json]
+    cmds: [npm run lint]
+
+  test:
+    description: unit and integration tests
+    image: $NODE_IMAGE
+    deps: [install]
+    needs: [db]
+    src: [src, test, tsconfig.json, package.json]
+    cmds: [npm test]
+
+  build:
+    description: compile the app
+    image: $NODE_IMAGE
+    deps: [install]
+    src: [src, tsconfig.json, package.json]
+    generates:
+      - path: dist
+        export: true                     # CI uploads dist as an artifact
+    cmds: [npm run build]
+
+  e2e:
+    description: end-to-end tests against the built app
+    image: cypress/included:13.15.0
+    deps: [build]
+    needs: [db]
+    src: [cypress, cypress.config.ts]
+    timeout: 20m
+    cmds: [cypress run]
+
+  ci:
+    description: everything a pull request must pass
+    deps: [lint, test, build]
+```
+
+How it behaves:
+
+* Commands run with `/bin/sh` in the image, in the build file's directory; relative
+  paths work as on the host. Alpine images have no bash: use a Debian-based image
+  and `shell: bash` for bash scripts.
+* A container task sees its `src`, its `mounts`, and the sources and outputs of its
+  dependencies. Its outputs are what it declares in `generates`; other files it
+  writes inside the container are discarded. `src` and `mounts` are mounted
+  read-write, so a command writing into a source folder changes the checkout and
+  the task's own inputs — keep outputs out of source folders.
+* A task reaches a service by its name on the service's container port (`db:5432`).
+  Without a `healthcheck`, a task may start before the service accepts connections.
+* `$NAME` in `image`, `src`, `generates`, `mounts` and service images is replaced
+  with the build-file or task `envs` value. In `cmds`, the shell expands it at run
+  time from the declared `envs`.
+* A dependency whose dependants are all cache hits is skipped. Request a task by
+  name (or use `--no-skip-deps`) when CI needs its outputs in the workspace.
+
+Every key, including references, includes, labels and caches, is listed in the
+[build file reference](/docs/build-file/reference).
+
+## Hermetic tasks
+
+The cache replays a task's first result for as long as its declared inputs stay
+the same. Keep each task's result a function of those inputs:
+
+* Every file a command reads is in `src` or in a dependency's `generates`.
+* `mounts` hold caches and tooling only (`~/.npm`, the docker socket): their
+  contents are not part of the key.
+* Images are pinned to the CI's toolchain version, ideally by digest
+  (`node:24-alpine@sha256:…`); a moving tag reuses results built with the old image.
+* Dependencies are installed from a lockfile in `src`, at pinned versions.
+* Build stamps — dates, `git describe`, `$GITHUB_SHA`, build numbers — live in a
+  small final task with `cache: none` that reads the cached outputs. Inside a
+  cached task they either change the key on every commit or go stale.
+* Credentials are declared only on the tasks that use them: env values are part
+  of the key, so a rotated token rebuilds every task declaring it.
+* Publishing, deploying and anything with external side effects stays in CI, or
+  runs as a task with `cache: none` on trusted refs only.
+
+The full list of what the cache can't see is in
+[caching limitations](/docs/task/caching#limitations-what-the-cache-cant-see).
+
+## Compose test stacks
+
+Integration and e2e suites often start a whole `docker-compose.yml`: a database,
+a queue, object storage, a stub of an external API, and the app built from the
+repository. Each compose service becomes a hammerkit service; the test runner
+becomes a task that `needs` them:
+
+| Compose | Hammerkit |
+|---|---|
+| `image:` | `image`, pinned by the digest of the multi-arch index (`docker buildx imagetools inspect`), so every machine pulls its native platform |
+| `environment:` | `envs` |
+| `command:` | `cmd` (replaces the image's `CMD`; split into words, quotes group them; with `shell: sh` it runs through the shell) |
+| `working_dir:`, or the image's `WORKDIR` when the command relies on it | `workdir` |
+| `volumes:` with a config file | `mounts` (`./config.json:/etc/app/config.json`) |
+| `volumes:` with data | `volumes`, or nothing: a test stack usually starts empty |
+| `depends_on: { condition: service_healthy }` | `needs` plus a `healthcheck` on the needed service |
+| `healthcheck: test:` | `healthcheck: cmd:` (`CMD-SHELL` checks need `shell: sh` on the service) |
+| `healthcheck: start_period`, `retries` | `healthcheck: timeout:` (default `20s`) |
+| `ports:` | only for reaching the service from your host; tasks use `name:containerPort` |
+| a `build:` of the app under test | a service on the toolchain image with `deps: [install, build]`, running the built app |
+| a one-shot setup container (`createbuckets`, `rs.initiate`, migrations) | a task named by the service's [`init`](/docs/service/container#init): runs after the healthcheck passed, and the service is ready for anything needing it only once it succeeded |
+
+Things that behave differently from Compose:
+
+* **A service's working directory is the project directory**, not the image's
+  `WORKDIR`, so its `src` and dependency outputs are found by relative paths. An
+  image whose command relies on its own directory needs `workdir: /app`.
+* **`cmd` and `healthcheck.cmd` are not run by a shell** unless the service sets
+  `shell: sh`. Pipes, `&&` and variable expansion need it.
+* **Healthchecks start one second after the container, as the user of its main
+  process,** and repeat about once a second. Use `127.0.0.1` in HTTP probes:
+  `localhost` may resolve to `::1` while the server listens on IPv4 only.
+* **A healthcheck that hasn't passed after `timeout` (default `20s`) fails the
+  run**, naming the check. Give slow starters (Elasticsearch, a JVM app) a longer
+  `timeout`, and get each service healthy with `hammerkit up` first, watching its
+  log.
+* **Setup goes into an `init` task, written to succeed when run again.** Services
+  are recreated on every run (unless kept up with `hammerkit up --daemon`), so the
+  init runs again too: `mc mb --ignore-existing`, "initiate the replica set unless
+  it exists".
+* **A name resolves only for direct `needs`.** A container reaches the services
+  it lists itself, not the ones those need. When a service hands out another
+  service's address (an object store's presigned URLs, a callback URL), every
+  consumer of that address needs that service too: the test task, and a renderer
+  downloading from it.
+* **A service reaches itself by its name** (it is the container's hostname), so
+  software that advertises its own address (a MongoDB replica-set member
+  `mongodb:27017`, Kafka) advertises the service name.
+
+Run several targets against one stack instead of one stack per target. Where the
+old pipeline started a Compose project per tenant or test target, keep one database,
+queue and storage service and give each target its own database name, key
+prefix, vhost or bucket. Only the parts that really differ become one service per
+target (`api-a`, `api-b`), and the test tasks per target run in parallel because
+nothing orders them.
+
+For a fast loop while iterating, keep the stack up and narrow the run.
+`hammerkit up --daemon -f stack=e2e` starts the labelled services once, and a task
+that needs them reuses the running containers. A spec filter with a default
+(`SPEC: ${E2E_SPEC:-e2e/**/*.cy.ts}`) runs one test:
+`E2E_SPEC=e2e/login.cy.ts hammerkit run e2e-a`. Services that stay up keep their
+data, so reset the target's database, prefix or bucket at the start of the test
+task.
+
+The same services can replace a Compose file for local development: publish the
+ports the app on the host uses, give data a named `volume`, and start them with
+`hammerkit up --daemon`. Values only some machines have (a secret file path, a
+public origin) get a default (`${GEMINI_KEY_FILE:-/dev/null}`), so one build file
+serves laptops, workspaces and CI.
+
+## CI template: GitHub Actions
+
+```yaml title=".github/workflows/ci.yml"
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write          # the remote cache lives in GHCR
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install -g hammerkit@1.9.0          # pin the version
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: hammerkit cache pull --remote shared
+      - run: hammerkit run ci
+      - run: hammerkit cache push --remote shared
+        if: github.ref == 'refs/heads/main'          # only trusted refs write
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist                                 # exported by the build task
+```
+
+Notes:
+
+* Container tasks need a Docker daemon that can bind-mount the checkout. GitHub's
+  Ubuntu runners have one. On other providers, mount the host's Docker socket; a
+  Docker-in-Docker daemon must see the checkout at the same path.
+* Without a remote cache, drop the login, pull and push lines: the run still
+  works, it just starts cold on every runner. See
+  [caching strategy in CI](/docs/guides/ci-caching) for the alternatives.
+* Pull requests from forks get read-only credentials; set
+  `HAMMERKIT_CACHE_READ_ONLY=1` there. Who should write to a shared cache is
+  covered in [agents, workspaces and CI](/docs/guides/agents-and-ci#who-may-write-to-the-cache).
+
+## Commands
+
+| Command | Use |
+|---|---|
+| `hammerkit run <task>` | run a task and its dependencies (`hammerkit <task>` is the same) |
+| `hammerkit run -f key=value` | run every task with a label (`-e` excludes) |
+| `hammerkit run <task> --dry-run` | the plan with predicted cache hits and misses, running nothing |
+| `hammerkit explain <task>` | why a task is a cache hit or miss |
+| `hammerkit validate` | check the build file |
+| `hammerkit ls` | list tasks and services as hammerkit resolved them |
+| `hammerkit cache pull` / `push --remote <name>` | move cache entries for the current commit |
+| `hammerkit clean` | remove outputs and local cache state |
+
+`hammerkit run` exits non-zero when a task fails. In CI it logs line by line;
+`--summary-json` prints a machine-readable summary.

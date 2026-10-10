@@ -1,0 +1,16 @@
+# RabbitMQ's entrypoint drops to user `rabbitmq`. Its CLI, run as root before
+# the server, creates the Erlang cookie as root and locks the server out. The
+# healthcheck runs as the main process's user, so it works.
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-alpine
+    healthcheck:
+      cmd: rabbitmq-diagnostics -q check_port_connectivity
+
+tasks:
+  check:
+    image: alpine:3.21
+    needs: [rabbitmq]
+    cmds:
+      - nc -z rabbitmq 5672
+      - echo rabbitmq ready

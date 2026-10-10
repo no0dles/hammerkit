@@ -1,0 +1,109 @@
+name: docker-publish
+# Publishes the multi-arch image no0dles/hammerkit. Each platform builds on a
+# native runner — building arm64 under QEMU on an x64 runner took hours — and a
+# final job joins both digests into one tag.
+on:
+  # from the release workflow (push.yaml)
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      latest:
+        required: true
+        type: boolean
+  # by hand, to (re)publish the image of an existing release tag
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish, e.g. v1.7.0'
+        required: true
+        type: string
+      latest:
+        description: 'Also move :latest (stable releases only)'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  IMAGE: no0dles/hammerkit
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # a dispatch builds the given tag; a release call builds its own ref
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: no0dles
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: no0dles
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Tag the multi-platform image
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          TAG_INPUT: ${{ inputs.tag }}
+          LATEST: ${{ inputs.latest }}
+        run: |
+          version="${VERSION_INPUT:-${TAG_INPUT#v}}"
+          tags=(-t "$IMAGE:$version")
+          if [ "$LATEST" = "true" ]; then
+            tags+=(-t "$IMAGE:latest")
+          fi
+          sources=()
+          for digest in *; do
+            sources+=("$IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "$IMAGE:$version"

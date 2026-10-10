@@ -12,7 +12,7 @@
               "number"
             ]
           },
-          "description": "Environment values for the current build task\nhttps://no0dles.gitbook.io/hammerkit/build-file/environment-variables"
+          "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
         },
         "tasks": {
           "type": "object",
@@ -61,7 +61,7 @@
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
-                    "description": "Environment values for the current build task\nhttps://no0dles.gitbook.io/hammerkit/build-file/environment-variables"
+                    "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
                   },
                   "labels": {
                     "type": "object",
@@ -141,7 +141,15 @@
                           "type": "object",
                           "properties": {
                             "export": {
-                              "type": "boolean"
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "string",
+                                  "const": "always"
+                                }
+                              ]
                             },
                             "resetOnChange": {
                               "type": "boolean"
@@ -151,6 +159,9 @@
                             },
                             "name": {
                               "type": "string"
+                            },
+                            "readOnly": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -163,6 +174,39 @@
                   },
                   "shell": {
                     "type": "string"
+                  },
+                  "continuous": {
+                    "type": "boolean"
+                  },
+                  "timeout": {
+                    "type": "string"
+                  },
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "pattern": "^(env|file):.+$"
+                        },
+                        "env": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "cache": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "from"
+                      ],
+                      "additionalProperties": false,
+                      "description": "secret from env:NAME or file:path, injected as env or a read-only file"
+                    }
                   },
                   "image": {
                     "type": "string"
@@ -216,6 +260,15 @@
                   "shell": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
                   },
+                  "continuous": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/continuous"
+                  },
+                  "timeout": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "secrets": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets"
+                  },
                   "platform": {
                     "type": "object",
                     "properties": {
@@ -268,7 +321,7 @@
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
-                    "description": "Environment values for the current build task\nhttps://no0dles.gitbook.io/hammerkit/build-file/environment-variables"
+                    "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
                   },
                   "mounts": {
                     "type": "array",
@@ -297,6 +350,12 @@
                   "cmd": {
                     "type": "string"
                   },
+                  "workdir": {
+                    "type": "string"
+                  },
+                  "shell": {
+                    "type": "string"
+                  },
                   "volumes": {
                     "type": "array",
                     "items": {
@@ -314,17 +373,29 @@
                     "properties": {
                       "cmd": {
                         "type": "string"
+                      },
+                      "timeout": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                       }
                     },
                     "required": [
                       "cmd"
                     ],
                     "additionalProperties": false
+                  },
+                  "init": {
+                    "type": "string",
+                    "description": "task run once the service is healthy, before dependents start"
+                  },
+                  "secrets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets/items"
+                    }
                   }
                 },
                 "required": [
-                  "image",
-                  "ports"
+                  "image"
                 ],
                 "additionalProperties": false,
                 "description": "container service"
@@ -420,18 +491,11 @@
                       "kubeconfig": {
                         "type": "string"
                       },
-                      "ingresses": {
+                      "httpRoutes": {
                         "type": "array",
                         "items": {
                           "type": "object",
                           "properties": {
-                            "kind": {
-                              "type": "string",
-                              "enum": [
-                                "ingress",
-                                "httproute"
-                              ]
-                            },
                             "host": {
                               "type": "string"
                             },
@@ -453,10 +517,14 @@
                           },
                           "required": [
                             "host",
-                            "service"
+                            "service",
+                            "gateway"
                           ],
                           "additionalProperties": false
                         }
+                      },
+                      "ingresses": {
+                        "not": {}
                       }
                     },
                     "required": [
@@ -545,8 +613,44 @@
                       "bucket"
                     ],
                     "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "registry"
+                      },
+                      "repository": {
+                        "type": "string"
+                      },
+                      "insecure": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "repository"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
+              },
+              "retention": {
+                "type": "object",
+                "properties": {
+                  "maxAge": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "maxSize": {
+                    "type": "string"
+                  },
+                  "keepPerTask": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -561,7 +665,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Build file with support for containerization\nhttps://no0dles.gitbook.io/hammerkit/build-file"
+      "description": "Build file with support for containerization\nhttps://hammerkit.dev/docs/build-file"
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

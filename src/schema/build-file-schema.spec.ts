@@ -66,4 +66,29 @@ describe('buildFileSchema', () => {
       expect(result.success).toBe(true)
     })
   })
+
+  describe('kubernetes environment routes', () => {
+    const environment = (kubernetes: { [key: string]: unknown }) =>
+      parse({ environments: { staging: { kubernetes: { context: 'cluster', ...kubernetes } } } })
+
+    it('accepts a Gateway API route', async () => {
+      const result = await environment({
+        httpRoutes: [{ host: 'api.example.com', service: 'api', servicePort: 3000, path: '/', gateway: 'web' }],
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects a route without a gateway', async () => {
+      const result = await environment({ httpRoutes: [{ host: 'api.example.com', service: 'api' }] })
+      expect(result.success).toBe(false)
+    })
+
+    // Ingress support was removed in favour of the Gateway API; a build file
+    // still declaring ingresses must fail instead of losing its routes silently.
+    it('rejects ingresses and points to httpRoutes', async () => {
+      const result = await environment({ ingresses: [{ host: 'api.example.com', service: 'api' }] })
+      expect(result.success).toBe(false)
+      expect(JSON.stringify(result.success ? [] : result.error.issues)).toContain('httpRoutes')
+    })
+  })
 })

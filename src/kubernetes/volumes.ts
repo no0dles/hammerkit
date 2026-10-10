@@ -1,7 +1,6 @@
 import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { basename, dirname } from 'path'
-import { V1Volume } from '@kubernetes/client-node/dist/gen/model/v1Volume'
-import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMount'
+import { V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
 import { WorkItem } from '../planner/work-item'
 
@@ -45,7 +44,14 @@ export async function getKubernetesPersistence(
     }
   } else {
     for (const volume of work.data.volumes) {
-      appendVolume(volume.inherited ?? work, persistence, volume.containerPath, null, false, !!volume.inherited)
+      appendVolume(
+        volume.inherited ?? work,
+        persistence,
+        volume.containerPath,
+        null,
+        false,
+        !!volume.inherited || volume.readOnly
+      )
     }
   }
 

@@ -1,0 +1,158 @@
+---
+title: "Java"
+description: "Download dependencies, test and package a Maven project in containers, with the download cached by the POM."
+---
+This tutorial downloads the dependencies and plugins of a small Maven project
+once, then runs `mvn test` and `mvn package` against them offline, each in a
+`maven:3.9-eclipse-temurin-21` container and each skipped when its inputs haven't
+changed. You need [hammerkit and Docker](/docs/installation); neither a JDK nor
+Maven has to be installed on your machine.
+
+The finished project is
+[`examples/tutorial-java`](https://github.com/no0dles/hammerkit/tree/master/examples/tutorial-java).
+
+## The project
+
+```txt
+tutorial-java/
+├── pom.xml
+└── src/
+    ├── main/java/dev/hammerkit/greet/Greet.java
+    └── test/java/dev/hammerkit/greet/GreetTest.java
+```
+
+<include cwd lang="xml" meta='title="pom.xml"'>../examples/tutorial-java/pom.xml</include>
+
+Besides JUnit, the POM pins three things so that everything a build needs can be
+downloaded up front. Surefire, Maven's test runner, normally downloads its JUnit
+provider and picks a JUnit launcher only when the tests start. Declaring both
+moves them into the POM. `go-offline` downloads dependencies declared on plugins
+only from `maven-dependency-plugin` 3.9.0 on, so the POM pins that version too.
+
+<include cwd lang="java" meta='title="src/main/java/dev/hammerkit/greet/Greet.java"'>../examples/tutorial-java/src/main/java/dev/hammerkit/greet/Greet.java</include>
+
+<include cwd lang="java" meta='title="src/test/java/dev/hammerkit/greet/GreetTest.java"'>../examples/tutorial-java/src/test/java/dev/hammerkit/greet/GreetTest.java</include>
+
+## 1. Download dependencies
+
+A task names the image it runs in, the files it reads (`src`) and the files it
+produces (`generates`). The `deps` task downloads every dependency and plugin the
+POM names into a local repository in the project:
+
+```yaml title=".hammerkit.yaml"
+envs:
+  # flags for every mvn call: no progress noise, and the local repository in
+  # the project, where the deps task keeps it as its output
+  MAVEN_ARGS: --batch-mode -Dmaven.repo.local=.m2
+
+tasks:
+  deps:
+    description: download dependencies and plugins
+    image: maven:3.9-eclipse-temurin-21
+    src: [pom.xml]
+    generates: [.m2]
+    cmds:
+      - mvn dependency:go-offline
+```
+
+```bash
+hammerkit deps
+```
+
+Run it again and hammerkit skips it: `pom.xml` is unchanged. Only a dependency
+change downloads again.
+
+`MAVEN_ARGS` is read by every `mvn` call. It moves the local repository from
+`~/.m2/repository` into the project, where `deps` can keep it as a task output.
+
+## 2. Test and package
+
+Both tasks depend on `deps`, which mounts its `.m2` into their containers:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  test:
+    description: compile and run the unit tests
+    image: maven:3.9-eclipse-temurin-21
+    deps: [deps]
+    src: [src]
+    cmds:
+      - mvn --offline test
+
+  package:
+    description: build the jar
+    image: maven:3.9-eclipse-temurin-21
+    deps: [deps]
+    src: [src]
+    generates:
+      - path: target
+        export: true
+    cmds:
+      - mvn --offline package -DskipTests
+```
+
+Neither lists `pom.xml`: a task also sees the sources of the tasks it depends on,
+and a change to them reruns it, so editing the POM reruns `deps`, `test` and
+`package`. `--offline` keeps Maven from reaching the network, so an artifact
+missing from `deps`' output fails the build instead of being downloaded on the
+side.
+
+A container task's outputs stay in a volume hammerkit manages; `export: true` also
+copies `target` into your project, so the jar is at `target/greet-1.0.0.jar`.
+`-DskipTests` doesn't skip any checking: `test` runs the tests, and `ci` below
+requires both.
+
+`test` and `package` don't depend on each other, so they run in parallel.
+
+## 3. One task for CI
+
+A task without `cmds` groups other tasks. `ci` names everything a change has to
+pass. The complete build file:
+
+<include cwd lang="yaml" meta='title=".hammerkit.yaml"'>../examples/tutorial-java/.hammerkit.yaml</include>
+
+```bash
+hammerkit run ci
+```
+
+```txt
+Summary:
+  ci       executed   34.1s
+  deps     executed   31.8s
+  package  executed   33.9s
+  test     executed   34.1s
+  4 executed, 0 cached (0% cache hit), 34.2s total
+```
+
+Run it again without changing anything:
+
+```txt
+Summary:
+  ci       cached     17ms
+  deps     skipped    0ms
+  package  cached     0ms
+  test     cached     0ms
+  0 executed, 3 cached, 1 skipped (100% cache hit), 34ms total
+```
+
+`deps` is skipped: every task that needs it was a cache hit, so the repository
+isn't needed either. Edit a file in `src` and `test` and `package` run again,
+against the artifacts `deps` already has.
+
+Ignore what hammerkit and Maven write into the project:
+
+<include cwd lang="txt" meta='title=".gitignore"'>../examples/tutorial-java/.gitignore</include>
+
+## Run it in CI
+
+CI runs the same command: [install hammerkit](/docs/installation#in-ci) and run
+`hammerkit run ci`. A fresh runner starts with an empty cache; to reuse what your
+laptop or the previous run already built, share the cache as described in
+[caching in CI](/docs/guides/ci-caching).
+
+## Next steps
+
+* Tests that need a database: start it as a [service](/docs/service) and let the
+  task [`need`](/docs/task/needs) it, see [services & networking](/docs/guides/services-networking).
+* Several modules in one repository: [monorepos](/docs/guides/monorepo).
+* A task reruns and you don't know why: [`hammerkit explain`](/docs/cli/explain).

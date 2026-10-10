@@ -2,7 +2,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
-import { V1Pod } from '@kubernetes/client-node'
+import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
 import { create } from 'tar'
@@ -15,7 +15,7 @@ import { getErrorMessage } from '../log'
 import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
-import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMount'
+import { Readable } from 'stream'
 
 // A previous run that crashed between creating an upload/download pod and its
 // `finally` cleanup leaves a pod behind under the same deterministic name. apply()
@@ -24,7 +24,7 @@ import { V1VolumeMount } from '@kubernetes/client-node/dist/gen/model/v1VolumeMo
 // and wait for it to disappear before scheduling a fresh one.
 async function removeStalePod(instance: KubernetesInstance, namespace: string, name: string): Promise<void> {
   try {
-    await instance.coreApi.deleteNamespacedPod(name, namespace, undefined, undefined, 0)
+    await instance.coreApi.deleteNamespacedPod({ name, namespace, gracePeriodSeconds: 0 })
   } catch (e) {
     if (statusCodeOf(e) === 404) {
       return
@@ -34,7 +34,7 @@ async function removeStalePod(instance: KubernetesInstance, namespace: string, n
 
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
-      await instance.coreApi.readNamespacedPod(name, namespace)
+      await instance.coreApi.readNamespacedPod({ name, namespace })
     } catch (e) {
       if (statusCodeOf(e) === 404) {
         return
@@ -120,7 +120,7 @@ export async function getPodForPersistence(
     await fn(name)
   } finally {
     service.status.console('stdout', `delete pod ${name}`)
-    await instance.coreApi.deleteNamespacedPod(name, env.namespace)
+    await instance.coreApi.deleteNamespacedPod({ name, namespace: env.namespace })
   }
 }
 
@@ -152,14 +152,16 @@ export async function ensurePersistentData(
       }
 
       const fileItem = basename(source.localPath)
-      const data = create(
-        {
-          cwd: dirname(source.localPath),
-          filter(path: string): boolean {
-            return source.matcher(path, source.localPath)
+      const data = Readable.from(
+        create(
+          {
+            cwd: dirname(source.localPath),
+            filter(path: string): boolean {
+              return source.matcher(path, source.localPath)
+            },
           },
-        },
-        [fileItem]
+          [fileItem]
+        )
       )
 
       service.status.console('stdout', `upload ${source.localPath}`)

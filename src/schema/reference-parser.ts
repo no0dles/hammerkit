@@ -11,6 +11,7 @@ import { BuildFileEnvironmentSchema } from './build-file-environment-schema'
 import { BuildFileContainerTaskSchema } from './build-file-container-task-schema'
 import { BuildFileCacheSchema } from './cache-schema'
 import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
+import { findProjectRoot } from '../planner/project-root'
 
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
@@ -19,6 +20,8 @@ export interface ReferencedContext {
   environments: { [key: string]: ReferenceEnvironment }
   envFiles: { [key: string]: { [key: string]: string } }
   caches: CacheCatalog
+  // anchor for machine-independent cache identity, see findProjectRoot
+  projectRoot: string
 }
 
 export interface ReferencedFileContext {
@@ -59,6 +62,7 @@ export interface ReferenceService {
   schema: BuildFileServiceSchema
   deps: ReferenceTaskLink[]
   needs: ReferenceServiceLink[]
+  init: ReferenceTaskLink | null
   cwd: string
   relativeName: string
   envs: { [key: string]: string }
@@ -89,6 +93,7 @@ export async function parseReferences(
     envFiles: {},
     environments: {},
     caches: {},
+    projectRoot: await findProjectRoot(mainScope.cwd, environment),
   }
 
   for (const file of Object.values(ctx.files)) {
@@ -150,6 +155,7 @@ export async function parseReferences(
           scope: file,
           needs: [],
           deps: [],
+          init: null,
           envs: serviceEnvs,
         }
       }
@@ -165,6 +171,7 @@ export async function parseReferences(
   for (const service of Object.values(reference.services)) {
     resolveDeps(reference, service, service.scope, service.schema)
     resolveNeeds(reference, service, service.scope, service.schema)
+    resolveInit(reference, service)
   }
 
   reference.caches = withBuiltinCaches(declaredCaches)
@@ -182,6 +189,7 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
 
   task.schema.shell = task.schema.shell ?? extend.schema.shell
   task.schema.cache = task.schema.cache ?? extend.schema.cache
+  task.schema.timeout = task.schema.timeout ?? extend.schema.timeout
 
   task.schema.cmds = extendArray(task.schema.cmds, extend.schema.cmds)
   task.schema.src = extendArray(task.schema.src, extend.schema.src)
@@ -241,6 +249,19 @@ function resolveDeps(
       cwd: depTask.type === 'include' ? taskOrService.cwd : depTask.task.cwd,
       relativeName: depName,
     })
+  }
+}
+
+function resolveInit(reference: ReferencedContext, service: ReferenceService) {
+  if (isBuildFileKubernetesServiceSchema(service.schema) || !service.schema.init) {
+    return
+  }
+  const initTask = findTask(reference, service.scope, service.schema.init, null)
+  service.init = {
+    task: initTask.task,
+    type: initTask.type,
+    cwd: initTask.type === 'include' ? service.cwd : initTask.task.cwd,
+    relativeName: service.schema.init,
   }
 }
 
