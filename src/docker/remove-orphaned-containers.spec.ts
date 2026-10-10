@@ -1,6 +1,12 @@
 import { hostname } from 'os'
 import { ContainerInfo } from 'dockerode'
-import { isOrphanedContainer, isProcessAlive } from './remove-orphaned-containers'
+import Dockerode from 'dockerode'
+import {
+  isDockerUnreachable,
+  isOrphanedContainer,
+  isProcessAlive,
+  removeOrphanedContainers,
+} from './remove-orphaned-containers'
 
 function container(state: string, labels: { [key: string]: string }): ContainerInfo {
   return { Id: 'cid', State: state, Labels: { app: 'hammerkit', ...labels } } as unknown as ContainerInfo
@@ -46,5 +52,30 @@ describe('isOrphanedContainer', () => {
 describe('isProcessAlive', () => {
   it('reports this process as alive', () => {
     expect(isProcessAlive(process.pid)).toBe(true)
+  })
+})
+
+describe('removeOrphanedContainers without a daemon', () => {
+  function docker(error: any): Dockerode {
+    return { listContainers: () => Promise.reject(error) } as unknown as Dockerode
+  }
+
+  it('removes nothing when no daemon listens on the socket or pipe', async () => {
+    const missing = Object.assign(new Error('connect ENOENT //./pipe/docker_engine'), {
+      code: 'ENOENT',
+      syscall: 'connect',
+    })
+    const refused = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED', syscall: 'connect' })
+    expect(await removeOrphanedContainers(docker(missing))).toEqual([])
+    expect(await removeOrphanedContainers(docker(refused))).toEqual([])
+  })
+
+  it('still fails on errors that are not a missing daemon', async () => {
+    const denied = Object.assign(new Error('connect EACCES /var/run/docker.sock'), {
+      code: 'EACCES',
+      syscall: 'connect',
+    })
+    await expect(removeOrphanedContainers(docker(denied))).rejects.toThrow('EACCES')
+    expect(isDockerUnreachable(new Error('boom'))).toBe(false)
   })
 })

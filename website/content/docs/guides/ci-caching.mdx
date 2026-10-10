@@ -125,11 +125,13 @@ jobs:
 
 Hammerkit builds and tests itself this way. The repository's
 [`.hammerkit.yaml`](https://github.com/no0dles/hammerkit/blob/master/.hammerkit.yaml)
-declares `lint`, `build`, `test` and `test:integration` plus a `ci` cache on a GHCR
+declares `lint`, `build`, `test`, and the integration suite as `test:docker` and
+`test:kubernetes` (`test:integration` runs both) plus a `ci` cache on a GHCR
 repository, and each workflow job does the same three things: `cache pull`, `run`,
-`cache push`. A push whose tree was already checked or tested skips the work —
-including the Kubernetes cluster the integration suite needs, which the workflow
-only starts when `hammerkit explain` reports a miss. Every cache step may fail
+`cache push`. The two integration tasks run as parallel jobs, so the Kubernetes
+cluster is only started for the one that needs it. A push whose tree was already
+checked or tested skips the work — including that cluster, which the workflow only
+starts when `hammerkit explain` reports a miss. Every cache step may fail
 without failing the job, so an unreachable registry just means a cold run. A test
 that is flaky is a cached pass once it passes, so a run can be forced to ignore the
 cache: start the workflow by hand, or put `[no-cache]` in the head commit message.
