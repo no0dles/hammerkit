@@ -1,3 +1,10 @@
+# [1.18.0](https://github.com/no0dles/hammerkit/compare/v1.17.0...v1.18.0) (2026-10-10)
+
+
+### Features
+
+* explain --definition shows a task's resolved definition and where it came from ([#65](https://github.com/no0dles/hammerkit/issues/65)) ([55ab065](https://github.com/no0dles/hammerkit/commit/55ab06582ce802133e469b55e7bb71a740b87869))
+
 # [1.17.0](https://github.com/no0dles/hammerkit/compare/v1.16.0...v1.17.0) (2026-10-10)
 
 
