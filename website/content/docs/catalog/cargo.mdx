@@ -5,7 +5,7 @@ description: "Build and test a Rust crate or workspace, with the cargo registry 
 Build and test a Rust crate or workspace, with the cargo registry kept on the host.
 `build` compiles into `target`, `test` runs the tests after it. Both are skipped while
 the `.rs` files and `Cargo.toml`/`Cargo.lock` are unchanged, and downloaded crates are
-kept in `~/.cargo`, so they are not fetched again.
+kept in `.cargo` of your home directory, so they are not fetched again.
 
 ```yaml title=".hammerkit.yaml"
 includes:

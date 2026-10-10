@@ -5,7 +5,7 @@ description: "Build and test a Go module, with the module cache kept on the host
 Build and test a Go module, with the module cache kept on the host.
 `build` compiles the packages into `bin`, `test` runs their tests. Both are skipped
 while the `.go` files and the `go.*` files are unchanged, and downloaded modules are
-kept in `~/go/pkg/mod`, so they are not fetched again.
+kept in `go/pkg/mod` of your home directory, so they are not fetched again.
 
 ```yaml title=".hammerkit.yaml"
 includes:

@@ -15,7 +15,7 @@ tasks:
       - '**/*.go'
     generates: [bin]
     mounts:
-      - ~/go/pkg/mod:/go/pkg/mod
+      - $PWD/go/pkg/mod:/go/pkg/mod
     cmds:
       - mkdir -p bin
       - go build -o bin/ ${PACKAGES}
@@ -29,6 +29,6 @@ tasks:
       - 'go.*'
       - '**/*.go'
     mounts:
-      - ~/go/pkg/mod:/go/pkg/mod
+      - $PWD/go/pkg/mod:/go/pkg/mod
     cmds:
       - go test ${PACKAGES}
