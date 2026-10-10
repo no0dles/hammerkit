@@ -1,3 +1,10 @@
+## [1.13.1](https://github.com/no0dles/hammerkit/compare/v1.13.0...v1.13.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* clean without a Docker daemon ([#57](https://github.com/no0dles/hammerkit/issues/57)) ([6fd2be4](https://github.com/no0dles/hammerkit/commit/6fd2be4c12a5fb1993d538723e68bf4106d8b88f))
+
 # [1.13.0](https://github.com/no0dles/hammerkit/compare/v1.12.0...v1.13.0) (2026-10-10)
 
 
