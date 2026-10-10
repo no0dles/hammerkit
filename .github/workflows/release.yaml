@@ -1,0 +1,77 @@
+name: release
+# Releases follow the commit messages on master (Conventional Commits, see
+# docs/contribution/publish): fix/perf make a patch, feat a minor. release-please
+# keeps one "chore: release x.y.z" pull request up to date with the version bump
+# and the changelog; merging it tags vX.Y.Z and creates the GitHub release, and
+# push.yaml then publishes npm, Docker Hub and the binaries as it always did.
+#
+# Optional repository settings:
+#   secret   RELEASE_PLEASE_TOKEN  a PAT (or app token) so the release pull request
+#                                  runs the build/test checks; without it the
+#                                  default token is used and the PR has no checks
+#   variable RELEASE_AUTO_MERGE    'true' merges the release PR on its own when it
+#                                  is a patch or minor. A major one never is.
+on:
+  push:
+    branches:
+      - master
+concurrency:
+  group: release
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # tags and releases
+      pull-requests: write # the release pull request
+      actions: write # starts push.yaml for the new tag
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+      HAS_PAT: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Update the release pull request, or release when it was merged
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      # A merge made with the default token does not start this workflow again,
+      # so a release PR merged here is released by the second pass below.
+      - name: Merge a patch or minor release pull request
+        id: merge
+        if: steps.release.outputs.prs_created == 'true' && vars.RELEASE_AUTO_MERGE == 'true'
+        continue-on-error: true
+        env:
+          PR: ${{ steps.release.outputs.pr }}
+        run: |
+          number=$(jq -r '.number' <<< "$PR")
+          title=$(jq -r '.title' <<< "$PR")
+          current=$(jq -r '.["."]' .release-please-manifest.json)
+          next=${title##* }
+          if [ "${next%%.*}" != "${current%%.*}" ]; then
+            echo "release $next is a new major version, leaving PR #$number for a manual merge"
+            exit 0
+          fi
+          gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --squash
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+      - name: Release the merged pull request
+        id: second
+        if: steps.merge.outputs.merged == 'true'
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ env.GH_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-pull-request: true
+      # workflow_dispatch is the one event the default token may start. The tag is
+      # the ref, so push.yaml reads the version from it exactly as for a pushed tag.
+      # A tag created with RELEASE_PLEASE_TOKEN starts push.yaml by itself.
+      - name: Publish npm, Docker and the binaries
+        if: env.HAS_PAT != 'true' && (steps.release.outputs.release_created == 'true' || steps.second.outputs.release_created == 'true')
+        env:
+          TAG: ${{ steps.release.outputs.tag_name || steps.second.outputs.tag_name }}
+        run: gh workflow run push.yaml --repo "$GITHUB_REPOSITORY" --ref "$TAG"

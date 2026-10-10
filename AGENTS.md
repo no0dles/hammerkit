@@ -92,4 +92,5 @@ Each task/service is bound to a runtime: `local`, `docker`, or `kubernetes` (see
 - Prettier: no semicolons, single quotes, 120 cols, 2-space tabs, trailing commas `es5`.
 - ESLint: `no-console: error` — never write to `console.*` in `src/` (the `Environment` carries `stdout`/`stderr`/`console`/`status` writables; route output through those).
 - TS strict mode is on; `@typescript-eslint/no-explicit-any` is **off**, so `any` is permitted where useful.
+- Commit and PR titles are [Conventional Commits](https://www.conventionalcommits.org/) (`feat:` minor, `fix:`/`perf:` patch, `docs:`/`test:`/`ci:`/`chore:`/`refactor:` no release); the squash-merge title is what release-please reads. Never bump `version` in `package.json`, edit `CHANGELOG.md` or push a `v*` tag — the release PR does it ([release procedure](website/content/docs/contribution/publish.mdx)). No `!` or `BREAKING CHANGE:` markers: a major is released on request with a `Release-As: N.0.0` footer.
 - Library consumers import from `src/index.ts` → `dist/index.js`; keep that surface stable.
