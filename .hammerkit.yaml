@@ -76,6 +76,15 @@ tasks:
 
   test:integration:
     description: the whole suite, including docker and kubernetes specs
+    deps: [test:docker, test:kubernetes]
+
+  # The suite is split in two so CI runs the halves side by side and starts a
+  # cluster only for the second. The split is by file name: the specs that need a
+  # cluster are the ones named below (requiresKubernetes), everything else needs at
+  # most Docker. A cluster spec missing from the list runs in `test:docker`, where
+  # HAMMERKIT_FULL_INTEGRATION makes its missing CLUSTER_NAME fail instead of pass.
+  test:docker:
+    description: the integration suite without the specs that need a Kubernetes cluster
     deps: [install]
     src:
       - src
@@ -85,7 +94,35 @@ tasks:
       - vitest.config.ts
     generates:
       # restored on a cache hit, so the coverage upload still has its report
-      - coverage
+      - coverage/docker
+    envs:
+      CI: ${CI:-}
+      GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
+      VERBOSE: ${VERBOSE:-}
+      HOME: ${HOME:-}
+      LINUX_CONTAINERS: ${LINUX_CONTAINERS:-}
+      REGISTRY: ${REGISTRY:-}
+      HAMMERKIT_FULL_INTEGRATION: ${HAMMERKIT_FULL_INTEGRATION:-}
+      HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+    cmds:
+      - >-
+        node_modules/.bin/vitest run --mode integration --no-file-parallelism
+        --coverage.reportsDirectory=coverage/docker
+        --exclude 'src/testing/integration/kubernetes*'
+        --exclude 'src/testing/integration/k8s-*'
+        --exclude src/testing/integration/environment.spec.ts
+
+  test:kubernetes:
+    description: the integration specs that need a Kubernetes cluster
+    deps: [install]
+    src:
+      - src
+      - examples
+      - scripts
+      - tsconfig.json
+      - vitest.config.ts
+    generates:
+      - coverage/kubernetes
     envs:
       CI: ${CI:-}
       GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
@@ -93,8 +130,11 @@ tasks:
       HOME: ${HOME:-}
       LINUX_CONTAINERS: ${LINUX_CONTAINERS:-}
       CLUSTER_NAME: ${CLUSTER_NAME:-}
-      REGISTRY: ${REGISTRY:-}
       HAMMERKIT_FULL_INTEGRATION: ${HAMMERKIT_FULL_INTEGRATION:-}
       HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
     cmds:
-      - node_modules/.bin/vitest run --mode integration --no-file-parallelism
+      - >-
+        node_modules/.bin/vitest run --mode integration --no-file-parallelism
+        --coverage.reportsDirectory=coverage/kubernetes
+        src/testing/integration/kubernetes src/testing/integration/k8s-
+        src/testing/integration/environment.spec.ts
