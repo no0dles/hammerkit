@@ -51,4 +51,25 @@ describe('getContainerBinds', () => {
       { localPath: 'hammerkit-obj', containerPath: join(root, 'Greet', 'obj'), readOnly: false },
     ])
   })
+
+  it('binds generated files at their own path and keeps the first bind per container path', () => {
+    const binds = getContainerBinds(
+      task([join(root, 'src')], {
+        mounts: [{ localPath: join(root, '.cache'), containerPath: join(root, 'out'), readOnly: false }],
+        generates: [
+          { path: join(root, 'out'), volumeName: 'hammerkit-out', isFile: false },
+          { path: join(root, 'dist.txt'), volumeName: 'hammerkit-dist', isFile: true },
+        ],
+      })
+    )
+    expect(binds).toEqual([
+      { localPath: join(root, '.cache'), containerPath: join(root, 'out'), readOnly: false },
+      { localPath: join(root, 'src'), containerPath: join(root, 'src'), readOnly: false },
+      { localPath: join(root, 'dist.txt'), containerPath: join(root, 'dist.txt'), readOnly: false },
+    ])
+  })
+
+  it('returns no binds for an empty task', () => {
+    expect(getContainerBinds(task([]))).toEqual([])
+  })
 })

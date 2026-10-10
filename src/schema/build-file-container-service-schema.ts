@@ -4,6 +4,7 @@ import { buildFileNeedSchema } from './build-file-need-schema'
 import { labelsSchema } from './labels-schema'
 import { buildFileServiceContainerHealthcheck } from './build-file-service-container-healthcheck'
 import { buildFileSecretSchema } from './build-file-secret-schema'
+import { resourcesSchema } from './resources-schema'
 
 export const buildFileContainerServiceSchema = object({
   image: string(),
@@ -33,6 +34,7 @@ export const buildFileContainerServiceSchema = object({
   // passed; the service counts as ready for dependents only after it succeeded
   init: string().describe('task run once the service is healthy, before dependents start').optional(),
   secrets: array(buildFileSecretSchema).optional(),
+  resources: resourcesSchema.optional(),
 })
   .strict()
   .describe('container service')

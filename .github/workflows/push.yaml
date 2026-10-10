@@ -3,6 +3,10 @@ on:
   push:
     tags:
       - v*
+  # started by release.yaml for the tag release-please just created (a tag made
+  # with the default workflow token does not trigger the push event above), and
+  # by hand to re-run a publish: run it from the v* tag, not from a branch
+  workflow_dispatch:
 jobs:
   version:
     runs-on: ubuntu-latest
@@ -14,6 +18,10 @@ jobs:
       - name: Resolve version from tag
         id: version
         run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::run this workflow from a v* tag, not from $GITHUB_REF"
+            exit 1
+          fi
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$VERSION" == *-* ]]; then
@@ -66,18 +74,30 @@ jobs:
           "$RCODESIGN" sign hammerkit-macos-arm64
           "$RCODESIGN" sign hammerkit-macos-x64
       - name: Create release
+        # release.yaml has already created the release (with its notes) by the
+        # time this runs; a tag pushed by hand has none yet. Either way the
+        # binaries end up on it.
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ needs.version.outputs.version }}" \
-            ${{ needs.version.outputs.prerelease == 'true' && '--prerelease' || '--latest' }} \
-            hammerkit-linux-arm64 \
-            hammerkit-linux-x64 \
-            hammerkit-macos-arm64 \
-            hammerkit-macos-x64 \
-            hammerkit-win-arm64.exe \
+          assets=(
+            hammerkit-linux-arm64
+            hammerkit-linux-x64
+            hammerkit-macos-arm64
+            hammerkit-macos-x64
+            hammerkit-win-arm64.exe
             hammerkit-win-x64.exe
+          )
+          if [ "$PRERELEASE" = "true" ]; then channel=--prerelease; else channel=--latest; fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            gh release edit "$TAG" --title "$VERSION" "$channel"
+          else
+            gh release create "$TAG" --title "$VERSION" "$channel" "${assets[@]}"
+          fi
 
   npm:
     needs: version
@@ -102,3 +122,37 @@ jobs:
         # auth comes from the OIDC trusted publisher configured on npmjs.com;
         # no NPM_TOKEN needed, and provenance is attached automatically
         run: npm publish --tag "${{ needs.version.outputs.npm_tag }}"
+
+  homebrew:
+    # Regenerates Formula/hammerkit.rb in the tap from the checksums of the
+    # binaries on the release. Needs a token that can push to the tap (the
+    # default one is limited to this repository): without the secret the job does
+    # nothing and the tap is updated by hand.
+    needs: [version, binaries]
+    if: needs.version.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Update the Homebrew tap
+        if: env.TAP_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
+            --pattern 'hammerkit-macos-*' --pattern 'hammerkit-linux-*'
+          sha() { sha256sum "$GITHUB_WORKSPACE/assets/$1" | cut -d' ' -f1; }
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/no0dles/homebrew-hammerkit" tap
+          cd tap
+          sed -e "s/{{VERSION}}/$TAG/g" \
+              -e "s/{{MACOS-ARM64-SHA256}}/$(sha hammerkit-macos-arm64)/" \
+              -e "s/{{MACOS-AMD64-SHA256}}/$(sha hammerkit-macos-x64)/" \
+              -e "s/{{LINUX-ARM64-SHA256}}/$(sha hammerkit-linux-arm64)/" \
+              -e "s/{{LINUX-AMD64-SHA256}}/$(sha hammerkit-linux-x64)/" \
+              hammerkit.rb.tmpl > Formula/hammerkit.rb
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Formula/hammerkit.rb
+          git commit -m "hammerkit $TAG"
+          git push

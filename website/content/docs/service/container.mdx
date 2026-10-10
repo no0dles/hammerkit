@@ -241,6 +241,24 @@ Credentials reach a service through `secrets`, as an environment variable or a
 read-only file, without being written to the build file or hammerkit's logs; its
 `init` gets them too. See [secrets](/docs/task/secrets).
 
+## Resources [#resources]
+
+`resources` limits a service's container like a [task's](/docs/task#resources), and
+`cpus`/`memory` or `requests`/`limits` work the same. A service holds its requests for
+as long as it runs, so the tasks of the run share what is left, and `up` fails up
+front when the services together request more than the host has (`--skip-resource-check`
+starts anyway). On Kubernetes the deployment's container gets the same requests and
+limits. A running service whose resources changed is recreated.
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    resources:
+      cpus: 500m
+      memory: 1Gi
+```
+
 ## Mounts
 Mounts can be used to pass local files into the container.
 They are meant for local configuration and settings files. Append `:ro` to mount

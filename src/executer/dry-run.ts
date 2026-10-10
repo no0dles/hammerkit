@@ -14,6 +14,8 @@ export interface DryRunEntry {
   taskName: string
   status: ExplainStatus
   causes: ExplainCause[]
+  // declared resources a local task runs without
+  unenforcedResources?: true
 }
 
 export interface DryRunPlan {
@@ -70,6 +72,7 @@ export async function planDryRun(
       taskName: task.name,
       status: explanation?.status ?? 'miss',
       causes: explanation?.causes ?? [],
+      ...(task.data.type === 'local-task' && task.data.resources ? { unenforcedResources: true as const } : {}),
     })
   }
   return { entries, cycle: null }
@@ -89,6 +92,7 @@ export function printDryRun(environment: Environment, plan: DryRunPlan): void {
           ? colors.grey('uncacheable')
           : colors.yellow('cache miss')
     const causes = entry.causes.length > 0 ? colors.grey(` (${entry.causes.map(describeCause).join(', ')})`) : ''
-    environment.stdout.write(`  ${index + 1}. ${entry.taskName}: ${label}${causes}\n`)
+    const resources = entry.unenforcedResources ? colors.grey(' [resources not enforced for a local task]') : ''
+    environment.stdout.write(`  ${index + 1}. ${entry.taskName}: ${label}${causes}${resources}\n`)
   })
 }

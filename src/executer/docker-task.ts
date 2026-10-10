@@ -20,6 +20,7 @@ import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getOutputsToReset } from '../planner/utils/get-outputs-to-reset'
 import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { removeContainerTaskState, writeContainerTaskState } from './container-task-state'
+import { DockerResources, resolveDockerResources } from './docker-resources'
 
 export function getNeedsNetwork(serviceContainers: { [key: string]: ServiceDns }, needs: WorkItemNeed[]) {
   const links: string[] = []
@@ -45,7 +46,8 @@ export function buildCreateOptions(
   stateKey: string,
   serviceContainers: { [key: string]: ServiceDns },
   environment: Environment,
-  secrets: ContainerSecrets
+  secrets: ContainerSecrets,
+  resources: DockerResources = {}
 ): ContainerCreateOptions {
   const network = getNeedsNetwork(serviceContainers, item.needs)
   const binds = getContainerBinds(item)
@@ -78,6 +80,7 @@ export function buildCreateOptions(
       ExtraHosts: network.hosts,
       Links: network.links,
       AutoRemove: true,
+      ...resources,
     },
   }
 }
@@ -111,7 +114,15 @@ export async function dockerTask(
 
     const serviceContainers = getServiceContainers(item.needs)
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
-    const containerOptions = buildCreateOptions(item, options.stateKey, serviceContainers, environment, secrets)
+    const resources = await resolveDockerResources(docker, item.data.resources, item.status)
+    const containerOptions = buildCreateOptions(
+      item,
+      options.stateKey,
+      serviceContainers,
+      environment,
+      secrets,
+      resources
+    )
     printContainerOptions(item.status, containerOptions)
 
     const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {

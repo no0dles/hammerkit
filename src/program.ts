@@ -520,7 +520,15 @@ export async function getProgram(
       .description('start services(s)')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
-      .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
+      .addOption(
+        new Option(
+          '-c, --concurrency <number>',
+          'parallel worker count (default 4, unbounded when every task and service requests cpus and memory)'
+        ).argParser(parseInt)
+      )
+      .addOption(
+        new Option('--skip-resource-check', 'start even when a task with its services requests more than the host has')
+      )
       .addOption(new Option('-w, --watch', 'watch tasks').default(false))
       .addOption(new Option('-d, --daemon', 'run services in background').default(false))
       .addOption(
@@ -557,7 +565,8 @@ export async function getProgram(
           const result = await cli.runUp({
             cacheDefault: options.cache,
             watch: options.watch,
-            workers: options.concurrency,
+            workers: options.concurrency ?? cli.defaultWorkers(),
+            resourceCheck: !options.skipResourceCheck,
             logMode: options.log,
             daemon: options.daemon,
             wait: options.wait,
@@ -610,7 +619,15 @@ export async function getProgram(
       .description('execute task')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
-      .addOption(new Option('-c, --concurrency <number>', 'parallel worker count').argParser(parseInt).default(4))
+      .addOption(
+        new Option(
+          '-c, --concurrency <number>',
+          'parallel worker count (default 4, unbounded when every task and service requests cpus and memory)'
+        ).argParser(parseInt)
+      )
+      .addOption(
+        new Option('--skip-resource-check', 'start even when a task with its services requests more than the host has')
+      )
       .addOption(new Option('-w, --watch', 'watch tasks').default(false))
       .addOption(new Option('--env <name>', 'environment'))
       .addOption(
@@ -674,7 +691,8 @@ export async function getProgram(
           const result = await cli.runExec({
             cacheDefault: options.cache,
             watch: options.watch,
-            workers: options.concurrency,
+            workers: options.concurrency ?? cli.defaultWorkers(),
+            resourceCheck: !options.skipResourceCheck,
             logMode: options.log,
             explain: options.explain,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),

@@ -11,6 +11,13 @@ import { validate } from './planner/validate'
 import { WorkTree } from './planner/work-tree'
 import { Environment } from './executer/environment'
 import { ProcessManager } from './executer/process-manager'
+import {
+  findOversizedWork,
+  getResourceCapacity,
+  requestsEverything,
+  ResourceBudget,
+  ResourceCapacity,
+} from './executer/resource-budget'
 import { updateServiceStatus } from './service/update-service-status'
 import { WorkItem, WorkItemState } from './planner/work-item'
 import { WorkService } from './planner/work-service'
@@ -59,6 +66,8 @@ export interface CliExecOptions {
   // `up --daemon` returns once services are healthy (ready) or once their
   // containers started (start); services others need are always awaited
   wait: 'ready' | 'start'
+  // refuse to start a run whose requests can never fit the host (default)
+  resourceCheck: boolean
 }
 
 export interface CliPackageOptions {
@@ -97,7 +106,6 @@ export class Cli {
   ) {}
 
   setup(type: ExecuteKind, options?: Partial<CliExecOptions>): CliExecResult {
-    const processManager = new ProcessManager(options?.workers ?? 0)
     const logMode: LogMode = options?.logMode ?? (isCI ? 'live' : 'interactive')
 
     const workTree = resetWorkTree(this.workTree, type)
@@ -115,6 +123,15 @@ export class Cli {
       start: async () => {
         checkForLoop(workTree)
 
+        const capacity = hasError(workTree) ? null : await getResourceCapacity(workTree, this.environment)
+        if (capacity && type !== 'down' && (options?.resourceCheck ?? true)) {
+          rejectOversizedWork(workTree, capacity, type === 'up')
+        }
+        const processManager = new ProcessManager(
+          options?.workers ?? 0,
+          capacity ? new ResourceBudget(capacity, workTree.environment) : null
+        )
+
         if (!hasError(workTree)) {
           await updateServiceStatus(workTree)
 
@@ -131,6 +148,7 @@ export class Cli {
             timeout: options?.timeout ?? null,
             skipDeps: options?.skipDeps ?? true,
             wait: options?.wait ?? 'ready',
+            resourceCheck: options?.resourceCheck ?? true,
           })
         }
 
@@ -141,6 +159,12 @@ export class Cli {
       },
     }
   }
+  // The worker count when none is given: 4, or unbounded when every task and
+  // service requests cpus and memory, so the requests alone bound the run.
+  defaultWorkers(): number {
+    return requestsEverything(this.workTree) ? 0 : 4
+  }
+
   up(options?: Partial<CliExecOptions>): CliExecResult {
     return this.setup('up', options)
   }
@@ -264,4 +288,12 @@ export class Cli {
 
 export function getCli(workTree: WorkTree, environment: Environment): Cli {
   return new Cli(workTree, environment)
+}
+
+// Fails the run before anything starts when a task, with the services it
+// needs, requests more than the host has: it could never run.
+function rejectOversizedWork(workTree: WorkTree, capacity: ResourceCapacity, up: boolean) {
+  for (const { item, message } of findOversizedWork(workTree, capacity, up)) {
+    item.state.set({ type: 'error', errorMessage: `${message} (--skip-resource-check runs anyway)`, stateKey: null })
+  }
 }

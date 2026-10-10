@@ -1,4 +1,4 @@
-import { formatDuration, parseDuration, parseSize } from './units'
+import { formatDuration, parseCpus, parseDuration, parseSize } from './units'
 
 describe('parseDuration', () => {
   it.each([
@@ -47,4 +47,25 @@ describe('parseSize', () => {
   it.each(['', 'Gi', '5 Gi', '-1Gi', '5GB', '5gi'])('rejects %j', (value) => {
     expect(() => parseSize(value)).toThrow(/size/)
   })
+})
+
+describe('parseCpus', () => {
+  it.each<[string | number, number]>([
+    [2, 2],
+    [0.5, 0.5],
+    ['2', 2],
+    ['1.5', 1.5],
+    ['500m', 0.5],
+    ['1m', 0.001],
+    ['2500m', 2.5],
+  ])('parses %j', (value, expected) => {
+    expect(parseCpus(value)).toBe(expected)
+  })
+
+  it.each<string | number>(['', '0', 0, '0m', '-1', -1, '0.0001', '1.5m', '2 cores', 'm', '1Gi'])(
+    'rejects %j',
+    (value) => {
+      expect(() => parseCpus(value)).toThrow(/cpus/)
+    }
+  )
 })

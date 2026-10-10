@@ -53,6 +53,10 @@ export async function* validate(workTree: WorkTree, context: Environment): Async
       yield { type: 'warn', message: `missing description`, item: task }
     }
 
+    if (task.type === 'local-task' && task.resources) {
+      yield { type: 'warn', message: 'resources are not enforced for a local task', item: task }
+    }
+
     if ((!task.cmds || task.cmds.length === 0) && (!item.deps || item.deps.length === 0)) {
       yield { type: 'warn', message: `task is empty`, item: task }
     }
