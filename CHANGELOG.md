@@ -1,3 +1,10 @@
+# [1.19.0](https://github.com/no0dles/hammerkit/compare/v1.18.0...v1.19.0) (2026-10-10)
+
+
+### Features
+
+* add pip, go and cargo to the catalog ([#68](https://github.com/no0dles/hammerkit/issues/68)) ([f0c466a](https://github.com/no0dles/hammerkit/commit/f0c466ae394806772c13ec1abb2085fbb4fa6717))
+
 # [1.18.0](https://github.com/no0dles/hammerkit/compare/v1.17.0...v1.18.0) (2026-10-10)
 
 
