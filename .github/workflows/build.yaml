@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - '**'
+  # a retry that ignores the shared cache, see .github/actions/hammerkit
+  workflow_dispatch:
 # A newer push to the same branch supersedes a running check; master keeps every
 # run so its history stays complete.
 concurrency:
@@ -11,28 +13,31 @@ concurrency:
 jobs:
   npm-package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # the shared build cache lives in GHCR
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Setup node
-        uses: actions/setup-node@v4
+      - name: Set up hammerkit and the shared cache
+        uses: ./.github/actions/hammerkit
         with:
-          node-version: '24'
-          cache: 'npm'
-      - name: Install npm packages
-        run: npm ci
-      - name: Check prettier
-        run: node_modules/.bin/prettier --check 'src/**'
-      - name: Check eslint
-        run: npm run lint
-      - name: Build source code
-        run: npm run build
+          tasks: check
+      # install, prettier, eslint and tsc, skipped when the tree was already
+      # checked (see .hammerkit.yaml); dist is restored on a hit
+      - name: Check and build
+        run: hammerkit run check --no-summary
+      - name: Share the results
+        uses: ./.github/actions/hammerkit-push
+        with:
+          tasks: check
       # The published package is an allowlist (`files` in package.json): install
       # the packed tarball like a user would and run it, so a missing file fails
-      # here instead of after a release.
+      # here instead of after a release. --ignore-scripts: on a cache hit there is
+      # no node_modules for prepack's tsc, and dist is already restored.
       - name: Smoke test the packed package
         run: |
-          npm pack --pack-destination "$RUNNER_TEMP"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
           npm install -g "$RUNNER_TEMP"/hammerkit-*.tgz
           cd "$RUNNER_TEMP"
           printf 'tasks:\n  hello:\n    src: [in.txt]\n    cmds: [cat in.txt]\n' > .hammerkit.yaml

@@ -11,3 +11,4 @@ logs
 .claude/worktrees
 .stryker-tmp
 reports
+.hammerkit

@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - '**'
+  # a retry that ignores the shared cache, see .github/actions/hammerkit
+  workflow_dispatch:
 # A newer push to the same branch supersedes a running check; master keeps every
 # run so its history stays complete.
 concurrency:
@@ -110,6 +112,9 @@ jobs:
     name: integration (ubuntu-latest)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write # the shared build cache lives in GHCR
     env:
       LINUX_CONTAINERS: 'true'
       CLUSTER_NAME: hammerkit-ci
@@ -123,14 +128,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Setup node
-        uses: actions/setup-node@v4
+      - name: Set up hammerkit and the shared cache
+        uses: ./.github/actions/hammerkit
         with:
-          node-version: '24'
-          cache: 'npm'
+          tasks: test:integration
+      # The suite is a hammerkit task (see .hammerkit.yaml): when this tree was
+      # already tested green, the pull above restored its result, and the
+      # cluster below is not worth starting. Without a reachable cache this is
+      # always a miss, so the job runs as it always did.
+      # `explain --check` exits 1 for a miss, and for a hammerkit too old to know
+      # the flag, so the cluster is started whenever in doubt.
+      - name: Plan
+        id: plan
+        run: |
+          if hammerkit explain test:integration --check; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
       # A current Kubernetes: the Gateway API CRDs below need 1.31+ (their CEL
       # validations use isIP). Pinned by digest, as kind recommends.
       - name: Create kind cluster
+        if: steps.plan.outputs.hit != 'true'
         uses: helm/kind-action@v1.15.0
         with:
           cluster_name: hammerkit-ci
@@ -139,21 +158,28 @@ jobs:
       # context (`context: process.env.CLUSTER_NAME`). kind names the context
       # `kind-<cluster>`, so rename it to match what the specs ask for.
       - name: Name the kube context after CLUSTER_NAME
+        if: steps.plan.outputs.hit != 'true'
         run: kubectl config rename-context "kind-${CLUSTER_NAME}" "${CLUSTER_NAME}"
       # Services are exposed through Gateway API HTTPRoutes, a CRD kind does not ship
       # with; environment.spec.ts creates and removes one.
       - name: Install the Gateway API CRDs
+        if: steps.plan.outputs.hit != 'true'
         run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
       # docker-package-registry.spec.ts only probes an externally provided REGISTRY
       # for liveness (it never manages one), so stand up a registry on localhost:5000.
       - name: Start local registry
+        if: steps.plan.outputs.hit != 'true'
         run: docker run -d --restart=always -p 5000:5000 --name registry registry:2
-      - name: Install npm packages
-        run: npm ci
-      # Serialize: one single-node kind cluster on a 4-vCPU runner, so running
-      # suites one at a time avoids scheduling/volume races.
+      # Serialize (inside the task): one single-node kind cluster on a 4-vCPU
+      # runner, so running suites one at a time avoids scheduling/volume races.
+      # HAMMERKIT_TEST_RUN_ID is not passed on: hammerkit hands a task only the
+      # variables it declares, and a per-run value would defeat the cache.
       - name: Run integration tests
-        run: npm run test:integration -- --no-file-parallelism
+        run: hammerkit run test:integration --no-summary
+      - name: Share the result
+        uses: ./.github/actions/hammerkit-push
+        with:
+          tasks: test:integration
       # Single coverage source for Codacy. This job runs on every push (PRs
       # included), so coverage shows up on PRs. No master-only gate. Integration mode is a superset of the
       # unit suite (see vitest.config.ts), so this one lcov is a complete report —

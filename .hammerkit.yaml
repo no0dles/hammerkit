@@ -1,0 +1,100 @@
+# Hammerkit builds and tests itself with hammerkit. CI (.github/workflows) runs
+# these tasks with a pinned, published hammerkit, so a change under test can't
+# break the tool running it. A task whose sources are unchanged is skipped: in
+# CI its result comes from the `ci` cache, so a commit whose tree was already
+# tested (a merge of a green branch, a docs-only push) skips its tests.
+#
+# Locally everything stays on the default machine cache; `ci` is only touched
+# by `hammerkit cache pull|push --remote ci`.
+
+caches:
+  ci:
+    method: checksum
+    backend:
+      type: registry
+      repository: ghcr.io/no0dles/hammerkit-cache
+
+tasks:
+  install:
+    description: install npm dependencies
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    # never shipped through the cache: node_modules is large and npm's own cache
+    # (setup-node) restores it faster. It runs only when a task that needs it misses.
+    cache: none
+    cmds:
+      - npm ci
+
+  check:
+    description: what the build workflow gates on
+    deps: [lint, build]
+
+  lint:
+    description: check formatting and lint
+    deps: [install]
+    src:
+      - src
+      - .eslintrc
+      - .eslintignore
+      - .prettierrc
+    cmds:
+      - node_modules/.bin/prettier --check "src/**"
+      - node_modules/.bin/eslint . --ext .ts
+
+  build:
+    description: compile typescript to dist
+    deps: [install]
+    src:
+      - src
+      - tsconfig.json
+    generates:
+      - dist
+    cmds:
+      - node_modules/.bin/tsc -b tsconfig.json
+
+  test:
+    description: unit tests, no docker or kubernetes needed
+    deps: [install]
+    src:
+      - src
+      - examples
+      - tsconfig.json
+      - vitest.config.ts
+    envs:
+      # the flags the specs and vitest read; part of the cache key, so a run
+      # with other flags never reuses this result
+      CI: ${CI:-}
+      GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
+      VERBOSE: ${VERBOSE:-}
+      HOME: ${HOME:-}
+      APPDATA: ${APPDATA:-}
+    cmds:
+      - node_modules/.bin/vitest run
+
+  test:integration:
+    description: the whole suite, including docker and kubernetes specs
+    deps: [install]
+    src:
+      - src
+      - examples
+      - scripts
+      - tsconfig.json
+      - vitest.config.ts
+    generates:
+      # restored on a cache hit, so the coverage upload still has its report
+      - coverage
+    envs:
+      CI: ${CI:-}
+      GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
+      VERBOSE: ${VERBOSE:-}
+      HOME: ${HOME:-}
+      LINUX_CONTAINERS: ${LINUX_CONTAINERS:-}
+      CLUSTER_NAME: ${CLUSTER_NAME:-}
+      REGISTRY: ${REGISTRY:-}
+      HAMMERKIT_FULL_INTEGRATION: ${HAMMERKIT_FULL_INTEGRATION:-}
+      HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+    cmds:
+      - node_modules/.bin/vitest run --mode integration --no-file-parallelism
