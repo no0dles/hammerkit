@@ -6,6 +6,7 @@ import { buildFileTaskSchema } from './build-file-task-schema'
 import { labelsSchema } from './labels-schema'
 import { buildFileCacheSchema } from './cache-schema'
 import { buildFileIncludeSchema } from './build-file-include-schema'
+import { buildFileSecretAccountsSchema, buildFileSecretProvidersSchema } from './build-file-secret-provider-schema'
 
 export const buildFileSchema = object({
   envs: envsSchema.optional(),
@@ -15,6 +16,8 @@ export const buildFileSchema = object({
   includes: record(buildFileIncludeSchema).optional(),
   environments: record(buildFileEnvironmentSchema).optional(),
   caches: record(buildFileCacheSchema).optional(),
+  secretProviders: buildFileSecretProvidersSchema.optional(),
+  secretAccounts: buildFileSecretAccountsSchema.optional(),
   labels: labelsSchema.optional(),
 })
   .strict()

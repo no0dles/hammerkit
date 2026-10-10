@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { getSecretName } from './work-secret'
+import { describeSecretSource, getSecretName } from './work-secret'
 import { WorkItem } from './work-item'
 import { ContainerWorkService, isContainerWorkService } from './work-service'
 
@@ -25,7 +25,11 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
     src: service.src.map((s) => s.absolutePath),
     healthcheck: service.healthcheck?.cmd.cmd ?? null,
     // where secrets go, never their values: a rotated value needs a `down`
-    secrets: service.secrets.map((s) => `${s.source.type}:${getSecretName(s)}`),
+    secrets: service.secrets.map((s) =>
+      s.source.type === 'provider'
+        ? `provider:${getSecretName(s)}:${describeSecretSource(s)}`
+        : `${s.source.type}:${getSecretName(s)}`
+    ),
     // the init task's id covers its image, commands, envs and mounts: a changed
     // init recreates the service, so it runs again
     init: service.init ? service.init.task.id() : null,

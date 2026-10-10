@@ -86,7 +86,15 @@ function parseTask(
     shell: task.schema.shell ? templateValue(task.schema.shell, envs) : '/bin/sh',
     continuous: task.schema.continuous ?? false,
     timeout: task.schema.timeout ? parseDuration(task.schema.timeout) : null,
-    secrets: parseWorkSecrets(cwd, context.projectRoot, task.schema.secrets, envs, environment),
+    secrets: parseWorkSecrets(
+      cwd,
+      context.projectRoot,
+      task.schema.secrets,
+      envs,
+      environment,
+      context.secrets,
+      task.schema.account
+    ),
     resources: parseWorkResources(task.schema.resources),
   }
 

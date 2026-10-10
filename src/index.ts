@@ -3,6 +3,7 @@
 import { consoleContext } from './log'
 import { getFileContext } from './file/get-file-context'
 import { statusConsole } from './planner/work-item-status'
+import { createSecretRegistry } from './utils/redact'
 import { emptyWritable } from './utils/empty-writable'
 import { runProgram } from './run-program'
 import { abortOnSignals } from './utils/abort-on-signals'
@@ -23,6 +24,8 @@ process.on('beforeExit', () => {
   }
 })
 
+const secrets = createSecretRegistry()
+
 runProgram(
   {
     cwd: process.cwd(),
@@ -30,7 +33,8 @@ runProgram(
     processEnvs: process.env,
     file: getFileContext(process.cwd()),
     console: consoleContext(process.stdout),
-    status: statusConsole(emptyWritable()),
+    status: statusConsole(emptyWritable(), secrets),
+    secrets,
     stdout: process.stdout,
     stderr: process.stderr,
     stdoutColumns: process.stdout.columns,

@@ -3,6 +3,7 @@ import { FileContext } from '../file/file-context'
 import { join } from 'path'
 import { getFileContext } from '../file/get-file-context'
 import { statusConsole } from '../planner/work-item-status'
+import { createSecretRegistry } from '../utils/redact'
 import { Environment } from '../executer/environment'
 import { createCli } from '../program'
 import { TestSuiteSetup } from './test-suite-setup'
@@ -48,13 +49,15 @@ export class ExampleTestSuite implements TestSuite {
     }
 
     const statusStream = memoryStream()
+    const secrets = createSecretRegistry()
     const environment: Environment = {
       processEnvs: { ...process.env, ...(scope.envs ?? {}) },
       abortCtrl: new AbortController(),
       cwd: this.path,
       file: this.file,
       console: consoleContext(emptyStream()),
-      status: statusConsole(statusStream.stream),
+      status: statusConsole(statusStream.stream, secrets),
+      secrets,
       stdout: emptyStream(),
       stderr: emptyStream(),
       stdoutColumns: 80,
@@ -80,7 +83,7 @@ export class ExampleTestSuite implements TestSuite {
     await cli.clean({ cache: true })
 
     // reset cli clean stats
-    environment.status = statusConsole(statusStream.stream)
+    environment.status = statusConsole(statusStream.stream, secrets)
 
     return {
       cli,
