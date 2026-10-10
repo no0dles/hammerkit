@@ -1,17 +1,18 @@
-import { z, object, record, string } from 'zod'
+import { z, object, record } from 'zod'
 import { envsSchema } from './envs-schema'
 import { buildFileServiceSchema } from './build-file-service-schema'
 import { buildFileEnvironmentSchema } from './build-file-environment-schema'
 import { buildFileTaskSchema } from './build-file-task-schema'
 import { labelsSchema } from './labels-schema'
 import { buildFileCacheSchema } from './cache-schema'
+import { buildFileIncludeSchema } from './build-file-include-schema'
 
 export const buildFileSchema = object({
   envs: envsSchema.optional(),
   tasks: record(buildFileTaskSchema).optional(),
   services: record(buildFileServiceSchema).optional(),
-  references: record(string()).optional(),
-  includes: record(string()).optional(),
+  references: record(buildFileIncludeSchema).optional(),
+  includes: record(buildFileIncludeSchema).optional(),
   environments: record(buildFileEnvironmentSchema).optional(),
   caches: record(buildFileCacheSchema).optional(),
   labels: labelsSchema.optional(),

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../executer/environment-mock'
 import { createParseContext } from './schema-parser'
 import { ParseError } from './parse-error'
+import { createGitRepo, GitRepo, isolateHammerkitHome } from '../testing/git-repo'
 
 describe('createParseContext', () => {
   let scratch: string
@@ -91,5 +92,150 @@ describe('createParseContext', () => {
     // parsed ParseScope (the second appendBuildFile hits the ctx.files cache).
     expect(scope.references['a'].scope).toBe(scope.references['b'].scope)
     expect(Object.keys(ctx.files)).toHaveLength(2) // root + sub (sub cached on second visit)
+  })
+
+  describe('git sources', () => {
+    let repo: GitRepo
+    let home: ReturnType<typeof isolateHammerkitHome>
+
+    beforeEach(() => {
+      home = isolateHammerkitHome()
+      repo = createGitRepo()
+    })
+    afterEach(() => {
+      repo.remove()
+      home.restore()
+    })
+
+    const task = (name: string) => `tasks:\n  ${name}:\n    cmds:\n      - echo ${name}\n`
+    const root = () => join(scratch, '.hammerkit.yaml')
+
+    it('includes a build file from a git repository at a subpath', async () => {
+      repo.commit({ 'catalog/npm/build.yaml': task('install') })
+      writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    ref: main\n    path: catalog/npm\n`)
+
+      const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+      const include = scope.references['npm']
+      expect(include.type).toBe('include')
+      expect(include.scope.schema.tasks?.install).toBeDefined()
+      // an include runs where it is included, not in the cached checkout
+      expect(include.scope.cwd).toBe(scratch)
+      expect(include.scope.remote?.git).toBe(repo.url)
+    })
+
+    it('references a build file from a git repository, running in its checkout', async () => {
+      repo.commit({ '.hammerkit.yaml': task('lib') })
+      writeFileSync(root(), `references:\n  lib:\n    git: ${repo.url}\n`)
+
+      const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+      const reference = scope.references['lib']
+      expect(reference.type).toBe('reference')
+      expect(reference.scope.schema.tasks?.lib).toBeDefined()
+      expect(reference.scope.cwd).toBe(reference.scope.remote?.root)
+    })
+
+    it('resolves a remote file’s own relative includes and references within the same checkout', async () => {
+      repo.commit({
+        'catalog/tsc/build.yaml': `includes:\n  npm: ../npm/build.yaml\nreferences:\n  extra: ../extra\n${task(
+          'build'
+        )}`,
+        'catalog/npm/build.yaml': task('install'),
+        'catalog/extra/.hammerkit.yaml': task('extra'),
+      })
+      writeFileSync(root(), `includes:\n  tsc:\n    git: ${repo.url}\n    path: catalog/tsc\n`)
+
+      const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+      const tsc = scope.references['tsc'].scope
+      expect(tsc.references['npm'].scope.schema.tasks?.install).toBeDefined()
+      expect(tsc.references['extra'].scope.schema.tasks?.extra).toBeDefined()
+      expect(tsc.references['npm'].scope.remote?.commit).toBe(tsc.remote?.commit)
+    })
+
+    it('rejects a remote file whose relative path leaves its repository', async () => {
+      repo.commit({ 'build.yaml': `includes:\n  escape: ../../outside.yaml\n` })
+      writeFileSync(root(), `includes:\n  remote:\n    git: ${repo.url}\n`)
+
+      await expect(createParseContext(root(), environmentMock(scratch))).rejects.toThrow(/points outside/)
+    })
+
+    it('rejects a subpath that leaves the repository', async () => {
+      repo.commit({ 'build.yaml': task('x') })
+      writeFileSync(root(), `includes:\n  remote:\n    git: ${repo.url}\n    path: ../..\n`)
+
+      await expect(createParseContext(root(), environmentMock(scratch))).rejects.toThrow(/points outside/)
+    })
+
+    it('rejects unknown fields and option-like values in a git source', async () => {
+      writeFileSync(root(), `includes:\n  remote:\n    git: ${repo.url}\n    branch: main\n`)
+      await expect(createParseContext(root(), environmentMock(scratch))).rejects.toBeInstanceOf(ParseError)
+
+      writeFileSync(root(), `includes:\n  remote:\n    git: --upload-pack=touch\n`)
+      await expect(createParseContext(root(), environmentMock(scratch))).rejects.toBeInstanceOf(ParseError)
+
+      writeFileSync(root(), `includes:\n  remote:\n    git: ${repo.url}\n    ref: --all\n`)
+      await expect(createParseContext(root(), environmentMock(scratch))).rejects.toBeInstanceOf(ParseError)
+    })
+
+    describe('with', () => {
+      const entry = 'envs:\n  NODE_VERSION: 22\n  MODE: fast\n' + task('install')
+
+      it('replaces the declared envs of the included file and keeps the other defaults', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: 24\n`)
+
+        const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+        expect(scope.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: 24, MODE: 'fast' })
+      })
+
+      it('names the unknown input and lists the declared ones', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSON: 24\n`)
+
+        await expect(createParseContext(root(), environmentMock(scratch))).rejects.toThrow(
+          /unknown input NODE_VERSON for npm .*available inputs: NODE_VERSION, MODE/
+        )
+      })
+
+      it('says so when the included file declares no inputs', async () => {
+        repo.commit({ 'build.yaml': task('install') })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: 24\n`)
+
+        await expect(createParseContext(root(), environmentMock(scratch))).rejects.toThrow(/declares no inputs/)
+      })
+
+      it('keeps one file included twice with different inputs apart', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(
+          root(),
+          [
+            'includes:',
+            '  node22:',
+            `    git: ${repo.url}`,
+            '  node24:',
+            `    git: ${repo.url}`,
+            '    with:',
+            '      NODE_VERSION: 24',
+            '',
+          ].join('\n')
+        )
+
+        const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+        expect(scope.references['node22'].scope.schema.envs?.NODE_VERSION).toBe(22)
+        expect(scope.references['node24'].scope.schema.envs?.NODE_VERSION).toBe(24)
+        expect(scope.references['node24'].scope.namePrefix).toBe('node24')
+      })
+
+      it('rejects a non-scalar input value', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: [24]\n`)
+
+        await expect(createParseContext(root(), environmentMock(scratch))).rejects.toBeInstanceOf(ParseError)
+      })
+    })
   })
 })

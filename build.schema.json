@@ -501,13 +501,44 @@
         "references": {
           "type": "object",
           "additionalProperties": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "git": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Git repository URL or path"
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Branch, tag or commit SHA, the repository HEAD when omitted"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Build file or directory within the repository"
+                  },
+                  "with": {
+                    "$ref": "#/definitions/hammerkit/properties/envs",
+                    "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
+                  }
+                },
+                "required": [
+                  "git"
+                ],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "includes": {
           "type": "object",
           "additionalProperties": {
-            "type": "string"
+            "$ref": "#/definitions/hammerkit/properties/references/additionalProperties"
           }
         },
         "environments": {
