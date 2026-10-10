@@ -1,5 +1,12 @@
 import { ApiException } from '@kubernetes/client-node'
-import { awaitDeployRunningState, awaitRunningState, deleteJob } from './await-running-state'
+import {
+  awaitDeployRunningState,
+  awaitJobCompletion,
+  awaitRunningState,
+  deleteJob,
+  deleteJobAndWait,
+} from './await-running-state'
+import { AbortError } from '../executer/abort'
 import { KubernetesInstance } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
@@ -133,5 +140,64 @@ describe('deleteJob', () => {
     const instance = { batchApi: { deleteNamespacedJob } } as unknown as KubernetesInstance
 
     await expect(deleteJob(instance, env, 'job')).rejects.toThrow()
+  })
+})
+
+describe('awaitJobCompletion', () => {
+  it('polls the job until it succeeded', async () => {
+    const readNamespacedJobStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ status: {} })
+      .mockResolvedValueOnce({ status: { succeeded: 1 } })
+    const instance = { batchApi: { readNamespacedJobStatus } } as unknown as KubernetesInstance
+
+    await awaitJobCompletion(instance, env, 'job', new AbortController().signal, 0)
+
+    expect(readNamespacedJobStatus).toHaveBeenCalledTimes(2)
+    expect(readNamespacedJobStatus).toHaveBeenCalledWith({ name: 'job', namespace: 'demo' })
+  })
+
+  it('fails with the message of the failed condition', async () => {
+    const readNamespacedJobStatus = vi.fn().mockResolvedValue({
+      status: { conditions: [{ type: 'Failed', status: 'True', message: 'BackoffLimitExceeded' }] },
+    })
+    const instance = { batchApi: { readNamespacedJobStatus } } as unknown as KubernetesInstance
+
+    await expect(awaitJobCompletion(instance, env, 'job', new AbortController().signal, 0)).rejects.toThrow(
+      'job job failed: BackoffLimitExceeded'
+    )
+  })
+
+  it('deletes the job and throws once aborted', async () => {
+    const deleteNamespacedJob = vi.fn().mockResolvedValue({})
+    const readNamespacedJobStatus = vi.fn()
+    const instance = { batchApi: { deleteNamespacedJob, readNamespacedJobStatus } } as unknown as KubernetesInstance
+    const abort = new AbortController()
+    abort.abort()
+
+    await expect(awaitJobCompletion(instance, env, 'job', abort.signal, 0)).rejects.toBeInstanceOf(AbortError)
+    expect(deleteNamespacedJob).toHaveBeenCalledTimes(1)
+    expect(readNamespacedJobStatus).not.toHaveBeenCalled()
+  })
+})
+
+describe('deleteJobAndWait', () => {
+  it('waits until the job is gone', async () => {
+    const deleteNamespacedJob = vi.fn().mockResolvedValue({})
+    const readNamespacedJob = vi.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(httpError(404))
+    const instance = { batchApi: { deleteNamespacedJob, readNamespacedJob } } as unknown as KubernetesInstance
+
+    await deleteJobAndWait(instance, env, 'job', new AbortController().signal, 0)
+
+    expect(deleteNamespacedJob).toHaveBeenCalledTimes(1)
+    expect(readNamespacedJob).toHaveBeenCalledTimes(2)
+  })
+
+  it('rethrows errors other than not found', async () => {
+    const deleteNamespacedJob = vi.fn().mockResolvedValue({})
+    const readNamespacedJob = vi.fn().mockRejectedValue(httpError(500))
+    const instance = { batchApi: { deleteNamespacedJob, readNamespacedJob } } as unknown as KubernetesInstance
+
+    await expect(deleteJobAndWait(instance, env, 'job', new AbortController().signal, 0)).rejects.toThrow()
   })
 })
