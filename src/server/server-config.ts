@@ -12,6 +12,72 @@ export const serverPlatformSchema = z
   })
   .strict()
 
+// The issuer is compared with the `iss` of a token as written, and its keys are
+// fetched from it, so it has to be https (http only for local testing).
+const issuerUrlSchema = z.string().refine((value) => {
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === 'https:' ||
+      (url.protocol === 'http:' && LOOPBACK_HOSTS.includes(url.hostname.replace(/^\[|\]$/g, '')))
+    )
+  } catch {
+    return false
+  }
+}, 'issuer must be an https url (http only for localhost)')
+
+export const issuerSchema = z
+  .object({
+    issuer: issuerUrlSchema,
+    audience: z.string().min(1),
+    // the claim listing the groups of the caller
+    groupsClaim: z.string().min(1).default('groups'),
+  })
+  .strict()
+
+// Who: the person or client (`subject`), everyone in a group of an issuer
+// (`group`), or any token of an issuer whose claims match (`claims`, for CI jobs:
+// repository, ref, environment). Only validated token claims are matched.
+export const entitlementSchema = z
+  .object({
+    subject: z
+      .object({ iss: z.string().min(1), sub: z.string().min(1) })
+      .strict()
+      .optional(),
+    group: z
+      .object({ iss: z.string().min(1), name: z.string().min(1) })
+      .strict()
+      .optional(),
+    claims: z
+      .object({ iss: z.string().min(1), match: z.record(z.string()) })
+      .strict()
+      .optional(),
+    accounts: z.array(z.string().min(1)).min(1),
+    // the account used when the caller names none; one of accounts
+    default: z.string().min(1).optional(),
+    // where the code may come from: the caller's working tree or a git ref
+    source: z
+      .array(z.enum(['upload', 'ref']))
+      .min(1)
+      .optional(),
+  })
+  .strict()
+  .superRefine((entitlement, ctx) => {
+    const who = [entitlement.subject, entitlement.group, entitlement.claims].filter((w) => w !== undefined)
+    if (who.length !== 1) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'name exactly one of subject, group or claims' })
+    }
+    if (entitlement.claims && Object.keys(entitlement.claims.match).length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['claims', 'match'], message: 'match at least one claim' })
+    }
+    if (entitlement.default && !entitlement.accounts.includes(entitlement.default)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['default'], message: 'default has to be one of accounts' })
+    }
+  })
+
+export type Issuer = z.infer<typeof issuerSchema>
+export type Entitlement = z.infer<typeof entitlementSchema>
+
 // The server config is written by an operator and reviewed like code, so a typo
 // is an error and not a silently ignored key.
 export const serverConfigSchema = z
@@ -33,9 +99,9 @@ export const serverConfigSchema = z
     behindTlsProxy: z.boolean().default(false),
     // the OAuth issuers whose tokens the server accepts, and the audience those
     // tokens have to carry
-    issuers: z
-      .array(z.object({ issuer: z.string().url(), audience: z.string().min(1) }).strict())
-      .min(1, 'at least one issuer is needed, OAuth is the only way to call the server'),
+    issuers: z.array(issuerSchema).min(1, 'at least one issuer is needed, OAuth is the only way to call the server'),
+    // who may use which service account; default deny, so no entry means no account
+    entitlements: z.array(entitlementSchema).default([]),
     backend: z
       .object({
         type: z.literal('host'),
@@ -47,6 +113,17 @@ export const serverConfigSchema = z
   })
   .strict()
   .superRefine((config, ctx) => {
+    const issuers = config.issuers.map((i) => i.issuer)
+    config.entitlements.forEach((entitlement, index) => {
+      const iss = (entitlement.subject ?? entitlement.group ?? entitlement.claims)?.iss
+      if (iss && !issuers.includes(iss)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['entitlements', index],
+          message: `issuer ${iss} is not one of the accepted issuers`,
+        })
+      }
+    })
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

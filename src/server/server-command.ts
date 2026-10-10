@@ -17,7 +17,9 @@ export function registerServerCommand(program: Command, environment: Environment
           throw new Error('pass the server config with --config or HAMMERKIT_SERVER_CONFIG')
         }
         const config = await readServerConfig(environment, options.config)
-        const server = await startServer(config, environment)
+        const server = await startServer(config, environment, {
+          log: (line) => environment.stdout.write(`${line}\n`),
+        })
         environment.stdout.write(`hammerkit server listening on ${server.url}\n`)
 
         await new Promise<void>((resolve) => {
