@@ -9,7 +9,9 @@ inputs:
     description: tasks whose cache entries to pull
     required: true
   version:
-    description: published hammerkit used to build this repository
+    description: >
+      published hammerkit used to build this repository; at least the release that
+      has `explain --check`, which the integration job uses to skip its cluster
     default: '1.11.3'
 runs:
   using: composite
