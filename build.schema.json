@@ -521,6 +521,10 @@
                   "path": {
                     "type": "string",
                     "description": "Build file or directory within the repository"
+                  },
+                  "with": {
+                    "$ref": "#/definitions/hammerkit/properties/envs",
+                    "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
                   }
                 },
                 "required": [

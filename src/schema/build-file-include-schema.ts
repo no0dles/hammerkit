@@ -1,4 +1,5 @@
 import { z, object, string, union } from 'zod'
+import { envsSchema } from './envs-schema'
 
 // A repo URL or ref starting with `-` would be read by git as an option
 // (`--upload-pack=…` runs a command), so neither may.
@@ -17,6 +18,8 @@ export const buildFileGitSourceSchema = object({
     .describe('Branch, tag or commit SHA, the repository HEAD when omitted'),
   // subpath of the build file or its directory within the repository
   path: string().optional().describe('Build file or directory within the repository'),
+  // overrides for the top-level `envs` the included file declares as its inputs
+  with: envsSchema.optional(),
 }).strict()
 
 // A string is a local path; an object is a git source (ADR-0004).

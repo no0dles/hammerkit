@@ -6,6 +6,7 @@ import { dirname, join } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
 import { ParseError } from './parse-error'
 import { BuildFileIncludeSchema, isGitSource } from './build-file-include-schema'
+import { BuildFileSchema } from './build-file-schema'
 import { isWithin, ResolvedGitSource, resolveGitSource } from '../includes/resolve-git-source'
 
 export async function createParseContext(
@@ -27,10 +28,12 @@ export async function appendBuildFile(
   environment: Environment,
   fileName: string,
   namePrefix: string[],
-  remote?: ResolvedGitSource
+  remote?: ResolvedGitSource,
+  inputs?: BuildFileEnvs
 ): Promise<ParseScope> {
   const relativeName = namePrefix.join(':')
-  const key = `${cwd}:${fileName}`
+  // the same file included with other inputs is another set of tasks
+  const key = inputs ? `${cwd}:${fileName}:${JSON.stringify(inputs)}` : `${cwd}:${fileName}`
   if (ctx.files[key]) {
     return ctx.files[key]
   }
@@ -41,7 +44,7 @@ export async function appendBuildFile(
     const scope: ParseScope = {
       fileName,
       cwd,
-      schema: result.data,
+      schema: inputs ? applyInputs(result.data, inputs, namePrefix, fileName) : result.data,
       namePrefix: relativeName,
       remote,
       references: {},
@@ -63,7 +66,8 @@ export async function appendBuildFile(
           environment,
           target.fileName,
           [...namePrefix, referenceName],
-          target.remote
+          target.remote,
+          target.inputs
         )
         if (scope.references[referenceName]) {
           throw new Error(referenceName + ' already exists')
@@ -86,7 +90,8 @@ export async function appendBuildFile(
           environment,
           target.fileName,
           [...namePrefix, includeName],
-          target.remote
+          target.remote,
+          target.inputs
         )
         if (scope.references[includeName]) {
           throw new Error(includeName + ' already exists')
@@ -109,14 +114,14 @@ async function locateInclude(
   include: BuildFileIncludeSchema,
   base: string,
   environment: Environment
-): Promise<{ fileName: string; remote?: ResolvedGitSource }> {
+): Promise<{ fileName: string; remote?: ResolvedGitSource; inputs?: BuildFileEnvs }> {
   if (isGitSource(include)) {
     const remote = await resolveGitSource(include, environment)
     const path = join(remote.root, include.path ?? '')
     if (!isWithin(remote.root, path)) {
       throw new Error(`${include.path} in ${include.git} points outside the repository`)
     }
-    return { fileName: await getBuildFilename(path, environment), remote }
+    return { fileName: await getBuildFilename(path, environment), remote, inputs: include.with }
   }
 
   const path = join(base, include)
@@ -124,4 +129,25 @@ async function locateInclude(
     throw new Error(`${include} in ${scope.fileName} points outside ${scope.remote.git}`)
   }
   return { fileName: await getBuildFilename(path, environment), remote: scope.remote }
+}
+
+type BuildFileEnvs = NonNullable<BuildFileSchema['envs']>
+
+// The top-level `envs` of an included file are its inputs: it declares each one
+// with a default, and `with` replaces the default. A name the file does not
+// declare is rejected, so a typo cannot silently do nothing.
+function applyInputs(
+  schema: BuildFileSchema,
+  inputs: BuildFileEnvs,
+  namePrefix: string[],
+  fileName: string
+): BuildFileSchema {
+  const declared = Object.keys(schema.envs ?? {})
+  for (const name of Object.keys(inputs)) {
+    if (!declared.includes(name)) {
+      const available = declared.length > 0 ? `available inputs: ${declared.join(', ')}` : 'it declares no inputs'
+      throw new Error(`unknown input ${name} for ${namePrefix.join(':')} (${fileName}), ${available}`)
+    }
+  }
+  return { ...schema, envs: { ...schema.envs, ...inputs } }
 }

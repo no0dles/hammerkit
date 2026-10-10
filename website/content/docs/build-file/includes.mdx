@@ -76,10 +76,47 @@ tasks:
 | `git` | Repository URL or path. Required. |
 | `ref` | Branch, tag or commit SHA. The repository's `HEAD` when left out. |
 | `path` | Build file, or a directory holding one, inside the repository. The repository root when left out. |
+| `with` | Values for the inputs of the included file, see below. |
 
 A plain string stays a local path, exactly as before. Prefer `includes` for shared task
 definitions: they run in your directory, while a git `reference` runs inside the cached
 checkout.
+
+### Inputs
+
+An included file declares its inputs as ordinary top-level `envs`, each with a default,
+and uses them in its tasks. `with` replaces the defaults for one include:
+
+```yaml title="build.npm.yaml (in the repository)"
+envs:
+  NODE_VERSION: 22
+
+tasks:
+  ci:
+    image: node:$NODE_VERSION-alpine
+    cmds:
+      - npm ci
+    src:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+```
+
+```yaml title=".hammerkit.yaml"
+includes:
+  npm:
+    git: https://github.com/no0dles/hammerkit.git
+    path: best-practices/build.npm.yaml
+    with:
+      NODE_VERSION: 24
+```
+
+A name the included file does not declare is an error that lists the declared inputs, so a
+typo cannot silently do nothing. Values are strings or numbers. As for any build file, an
+environment variable of the same name (or one from a `.env` file) wins over `with`, which
+lets CI override an input from outside. The same file included under two names with
+different inputs gives two independent sets of tasks.
 
 ### Caching and offline use
 

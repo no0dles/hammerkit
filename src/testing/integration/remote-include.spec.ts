@@ -72,4 +72,38 @@ describe('remote include', () => {
       )
     })
   })
+
+  it('passes inputs to the included file with `with`', async () => {
+    repo.commit({
+      'catalog/hello/build.yaml': [
+        'envs:',
+        '  WHO: world',
+        'tasks:',
+        '  write:',
+        '    cmds:',
+        '      - echo hello $WHO > hello.txt',
+        '',
+      ].join('\n'),
+    })
+    const files = {
+      '.hammerkit.yaml': [
+        'includes:',
+        '  hello:',
+        `    git: ${repo.url}`,
+        '    path: catalog/hello',
+        '    with:',
+        '      WHO: hammerkit',
+        '',
+      ].join('\n'),
+    }
+    await createTestCase('remote-include-with', files).setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {
+        taskName: 'hello:write',
+        environmentName: null,
+      })
+      await expectSuccessfulResult(await cli.runExec(), environment)
+
+      expect(await environment.file.read(join(cwd, 'hello.txt'))).toBe('hello hammerkit\n')
+    })
+  })
 })

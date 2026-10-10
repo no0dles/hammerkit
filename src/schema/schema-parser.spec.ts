@@ -178,5 +178,64 @@ describe('createParseContext', () => {
       writeFileSync(root(), `includes:\n  remote:\n    git: ${repo.url}\n    ref: --all\n`)
       await expect(createParseContext(root(), environmentMock(scratch))).rejects.toBeInstanceOf(ParseError)
     })
+
+    describe('with', () => {
+      const entry = 'envs:\n  NODE_VERSION: 22\n  MODE: fast\n' + task('install')
+
+      it('replaces the declared envs of the included file and keeps the other defaults', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: 24\n`)
+
+        const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+        expect(scope.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: 24, MODE: 'fast' })
+      })
+
+      it('names the unknown input and lists the declared ones', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSON: 24\n`)
+
+        await expect(createParseContext(root(), environmentMock(scratch))).rejects.toThrow(
+          /unknown input NODE_VERSON for npm .*available inputs: NODE_VERSION, MODE/
+        )
+      })
+
+      it('says so when the included file declares no inputs', async () => {
+        repo.commit({ 'build.yaml': task('install') })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: 24\n`)
+
+        await expect(createParseContext(root(), environmentMock(scratch))).rejects.toThrow(/declares no inputs/)
+      })
+
+      it('keeps one file included twice with different inputs apart', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(
+          root(),
+          [
+            'includes:',
+            '  node22:',
+            `    git: ${repo.url}`,
+            '  node24:',
+            `    git: ${repo.url}`,
+            '    with:',
+            '      NODE_VERSION: 24',
+            '',
+          ].join('\n')
+        )
+
+        const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+        expect(scope.references['node22'].scope.schema.envs?.NODE_VERSION).toBe(22)
+        expect(scope.references['node24'].scope.schema.envs?.NODE_VERSION).toBe(24)
+        expect(scope.references['node24'].scope.namePrefix).toBe('node24')
+      })
+
+      it('rejects a non-scalar input value', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(root(), `includes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: [24]\n`)
+
+        await expect(createParseContext(root(), environmentMock(scratch))).rejects.toBeInstanceOf(ParseError)
+      })
+    })
   })
 })
