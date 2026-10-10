@@ -1,3 +1,10 @@
+# [1.16.0](https://github.com/no0dles/hammerkit/compare/v1.15.0...v1.16.0) (2026-10-10)
+
+
+### Features
+
+* add a catalog of tested tasks with npm, yarn and pnpm install ([#63](https://github.com/no0dles/hammerkit/issues/63)) ([62992f8](https://github.com/no0dles/hammerkit/commit/62992f8328aa239130ed03ed46a713a5dc380c9f))
+
 # [1.15.0](https://github.com/no0dles/hammerkit/compare/v1.14.1...v1.15.0) (2026-10-10)
 
 
