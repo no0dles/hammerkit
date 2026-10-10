@@ -98,6 +98,26 @@ describe('program commands (fast)', () => {
     await t.shell([HK, 'explain'])
   })
 
+  it('explain --check fails while a task would be a cache miss', async () => {
+    const t = createTestCase('cmd-explain-check', {
+      '.hammerkit.yaml': {
+        tasks: { build: { cmds: ['node -e 0'], src: ['input.txt'] } },
+      },
+      // unique content: the machine-wide default cache may already hold this task from an earlier run
+      'input.txt': `${Date.now()}-${Math.random()}\n`,
+    })
+    await expect(t.shell([HK, 'explain', '--check'])).rejects.toThrow('would be a cache miss')
+  })
+
+  it('explain --check passes when no task would be a cache miss', async () => {
+    const t = createTestCase('cmd-explain-check-uncacheable', {
+      '.hammerkit.yaml': {
+        tasks: { build: { cmds: ['node -e 0'], cache: 'none' } },
+      },
+    })
+    await t.shell([HK, 'explain', '--check'])
+  })
+
   it('init writes a default .hammerkit.yaml when none exists', async () => {
     // empty fixture so getBuildFilename finds nothing; only the `init` command is registered then
     const t = createTestCase('cmd-init', {})
