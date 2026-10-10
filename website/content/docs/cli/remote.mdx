@@ -1,0 +1,68 @@
+---
+title: "Remote"
+description: "Register the servers hammerkit can send runs to and choose the default location."
+---
+<Callout type="warn">
+
+Experimental. This page covers the host-side registry only. Sending a run to a
+server (`--on`, the task `runner:` field, `remote login`) arrives in follow-up
+releases, see the [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
+
+</Callout>
+
+`remote` manages the list of hammerkit servers your machine knows about. Each one
+is registered under a short name, which later features (`--on <name>`, a task's
+`runner:`) refer to instead of a URL.
+
+```bash
+hammerkit remote add build https://build.example.com --issuer https://login.example.com
+hammerkit remote list
+hammerkit remote use build
+hammerkit remote remove build
+```
+
+The commands only touch your host config, so they work with or without a build file
+in the working directory.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `remote add <name> <url> --issuer <url>` | Register a server. `--issuer` is the OAuth issuer the server accepts tokens from. |
+| `remote list` | Show the registered servers and which one is the default. |
+| `remote use <location>` | Set the default location: `local`, `auto` or a registered name. |
+| `remote remove <name>` | Forget a server. If it was the default, runs are local again. |
+
+Re-running `remote add` with the same values changes nothing. To point an existing
+name at a different server pass `--force`, so a typo can't silently redirect your
+runs.
+
+`local` and `auto` are reserved and can't be used as server names.
+
+## Host config
+
+Registrations live in `~/.hammerkit/config.yaml`. Set `HAMMERKIT_CONFIG` to use a
+different file.
+
+```yaml
+servers:
+  build:
+    url: https://build.example.com
+    issuer: https://login.example.com
+run:
+  on: build
+```
+
+<Callout type="info">
+
+The config is deliberately not part of the project's build file. A checked-in file
+naming a server URL could redirect your source code and OAuth tokens, so the
+decision of where to send work stays on the machine.
+
+</Callout>
+
+## URLs
+
+Server URLs must use `https`. Plain `http` is accepted only for `localhost`,
+`127.0.0.1` and `[::1]`, for local testing. URLs with credentials, a query string
+or a fragment are rejected, and a trailing slash is dropped.
