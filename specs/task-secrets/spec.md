@@ -102,6 +102,6 @@ On Kubernetes, secrets map to a Secret resource consumed via env or volume and a
 - Docker: `env` targets are container env; `file:` sources are bind-mounted `:ro`; `env:` sources with a `path` target are written to an owner-only file in hammerkit's data directory, mounted `:ro` and removed with the container (a daemon service keeps it until `down`).
 - Kubernetes: one Secret per task or service, referenced via `secretKeyRef` / a read-only `subPath` mount; a task's Secret is deleted after it ran, a service's on stop (FR-005).
 - Local tasks take `env` targets only.
-- Redaction: every value hammerkit reads is masked as `***` in all status and console output it writes, per line for multi-line values; values under four characters are not masked (FR-004).
+- Redaction: every value hammerkit reads is registered in the run's `SecretRegistry` (`Environment.secrets`, one per run, never global) and masked as `***` in all status and console output it writes, per line for multi-line values, together with its base64 (any alignment, URL-safe too), hex, URL-encoded and JSON-escaped forms; values under four characters are not masked, nor derived base64/hex forms under eight (FR-004).
 - Cache: secrets stay out of the description by default; `cache: true` adds `name=sha256:<salted digest>`, with file targets named project-relative so the key matches across checkouts (FR-007, FR-007a).
 - The service definition hash (recreate on `up`) covers secret declarations, never values: a rotated value needs `down`.

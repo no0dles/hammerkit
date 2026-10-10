@@ -7,7 +7,6 @@ import { normalizePath } from './utils/normalize-path'
 import { templateValue } from './utils/template-value'
 import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { portablePath } from './utils/portable-path'
-import { registerSecretValue } from '../utils/redact'
 
 export type WorkSecretSource = { type: 'env'; name: string } | { type: 'file'; path: string }
 export type WorkSecretTarget = { type: 'env'; name: string } | { type: 'file'; path: string }
@@ -62,14 +61,14 @@ function readSecretValueSync(secret: WorkSecret, environment: Environment): stri
     if (value === undefined || value === null) {
       throw new Error(`secret ${getSecretName(secret)}: environment variable ${secret.source.name} is not set`)
     }
-    registerSecretValue(value)
+    environment.secrets.register(value)
     return value
   }
   if (!existsSync(secret.source.path)) {
     throw new Error(`secret ${getSecretName(secret)}: file ${secret.source.path} does not exist`)
   }
   const value = readFileSync(secret.source.path, 'utf8')
-  registerSecretValue(value)
+  environment.secrets.register(value)
   return value
 }
 
@@ -81,14 +80,14 @@ export async function resolveSecretValue(secret: WorkSecret, environment: Enviro
     if (value === undefined || value === null) {
       throw new Error(`secret ${getSecretName(secret)}: environment variable ${secret.source.name} is not set`)
     }
-    registerSecretValue(value)
+    environment.secrets.register(value)
     return value
   }
   if (!(await environment.file.exists(secret.source.path))) {
     throw new Error(`secret ${getSecretName(secret)}: file ${secret.source.path} does not exist`)
   }
   const value = await environment.file.read(secret.source.path)
-  registerSecretValue(value)
+  environment.secrets.register(value)
   return value
 }
 
