@@ -3,6 +3,7 @@ import { createCli } from '../program'
 import { join } from 'path'
 import { WorkScope } from '../executer/work-scope'
 import { Cli } from '../cli'
+import { ParseError } from './parse-error'
 
 // Drive the full parse pipeline (schema-parser -> parseReferences -> getWorkContext)
 // over an in-memory build file and assert on the resulting work tree. This exercises
@@ -153,6 +154,152 @@ describe('reference-parser', () => {
           'extends itself'
         )
       })
+    })
+  })
+
+  describe('extend', () => {
+    async function withFiles(files: { [fileName: string]: any }, fn: (cwd: string, run: () => Promise<Cli>) => void) {
+      await createTestCase('reference-parser-extend', files).setup(async (cwd, environment) => {
+        await fn(cwd, () => createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'build' }))
+      })
+    }
+
+    const base = {
+      envs: { NODE_VERSION: 22, MODE: 'fast' },
+      tasks: {
+        install: { cmds: ['npm ci'] },
+        build: { deps: ['install'], src: ['package.json'], cmds: ['npm run build'], envs: { CI: 'true' } },
+      },
+    }
+
+    it('carries the top-level envs of the base build file, the consumer winning', async () => {
+      await withFiles(
+        {
+          'base.yaml': base,
+          '.hammerkit.yaml': {
+            includes: { base: 'base.yaml' },
+            tasks: { build: { extend: 'base:build', envs: { MODE: 'slow' } } },
+          },
+        },
+        async (_cwd, run) => {
+          const build = (await run()).task('build')
+          expect(build.data.envs.variables).toEqual({ NODE_VERSION: '22', MODE: 'slow', CI: 'true' })
+        }
+      )
+    })
+
+    it('adds to deps, src and cmds of the base by default', async () => {
+      await withFiles(
+        {
+          'base.yaml': base,
+          '.hammerkit.yaml': {
+            includes: { base: 'base.yaml' },
+            tasks: {
+              own: { cmds: ['echo own'] },
+              build: { extend: 'base:build', deps: ['own'], src: ['tsconfig.json'], cmds: ['echo done'] },
+            },
+          },
+        },
+        async (_cwd, run) => {
+          const build = (await run()).task('build')
+          expect(build.deps.map((d) => d.name).sort()).toEqual(['base:install', 'own'])
+          expect(build.data.src.map((s) => s.source)).toEqual(['package.json', 'tsconfig.json'])
+          expect(build.data.cmds.map((c) => c.cmd)).toEqual(['npm run build', 'echo done'])
+        }
+      )
+    })
+
+    it('does not inherit what reset names', async () => {
+      await withFiles(
+        {
+          'base.yaml': base,
+          '.hammerkit.yaml': {
+            includes: { base: 'base.yaml' },
+            tasks: {
+              own: { cmds: ['echo own'] },
+              build: {
+                extend: 'base:build',
+                reset: ['deps', 'src', 'cmds', 'envs'],
+                deps: ['own'],
+                src: ['tsconfig.json'],
+                cmds: ['echo done'],
+              },
+            },
+          },
+        },
+        async (_cwd, run) => {
+          const build = (await run()).task('build')
+          expect(build.deps.map((d) => d.name)).toEqual(['own'])
+          expect(build.data.src.map((s) => s.source)).toEqual(['tsconfig.json'])
+          expect(build.data.cmds.map((c) => c.cmd)).toEqual(['echo done'])
+          expect(build.data.envs.variables).toEqual({})
+        }
+      )
+    })
+
+    it('resets labels, generates, needs and mounts', async () => {
+      await withFiles(
+        {
+          '.hammerkit.yaml': {
+            services: { db: { image: 'postgres', ports: [] } },
+            tasks: {
+              base: {
+                image: 'node',
+                labels: { team: 'a' },
+                generates: ['dist'],
+                mounts: ['$PWD/.cache:/cache'],
+                needs: ['db'],
+                cmds: ['x'],
+              },
+              build: { extend: 'base', reset: ['labels', 'generates', 'mounts', 'needs'] },
+            },
+          },
+        },
+        async (_cwd, run) => {
+          const build = (await run()).task('build')
+          expect(build.needs).toEqual([])
+          expect(build.data.generates).toEqual([])
+          expect(build.data.labels).toEqual({})
+          expect(build.data.type === 'container-task' && build.data.mounts).toEqual([])
+        }
+      )
+    })
+
+    it('does not pass on to a third task what the middle one reset', async () => {
+      await withFiles(
+        {
+          '.hammerkit.yaml': {
+            tasks: {
+              first: { cmds: ['first'] },
+              second: { cmds: ['second'] },
+              a: { deps: ['first'], cmds: ['a'] },
+              b: { extend: 'a', reset: ['deps'], deps: ['second'] },
+              build: { extend: 'b', cmds: ['build'] },
+            },
+          },
+        },
+        async (_cwd, run) => {
+          expect((await run()).task('build').deps.map((d) => d.name)).toEqual(['second'])
+        }
+      )
+    })
+
+    it('throws when reset is set without extend', async () => {
+      await withFiles(
+        { '.hammerkit.yaml': { tasks: { build: { cmds: ['x'], reset: ['deps'] } } } },
+        async (_cwd, run) => {
+          await expect(run()).rejects.toThrow('task build sets reset without extend')
+        }
+      )
+    })
+
+    it('rejects a property that cannot be reset', async () => {
+      await withFiles(
+        { '.hammerkit.yaml': { tasks: { a: { cmds: ['x'] }, build: { extend: 'a', reset: ['image'] } } } },
+        async (_cwd, run) => {
+          await expect(run()).rejects.toBeInstanceOf(ParseError)
+        }
+      )
     })
   })
 })

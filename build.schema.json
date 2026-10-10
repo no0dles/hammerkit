@@ -59,6 +59,22 @@
                   "extend": {
                     "type": "string"
                   },
+                  "reset": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "deps",
+                        "needs",
+                        "src",
+                        "generates",
+                        "cmds",
+                        "mounts",
+                        "envs",
+                        "labels"
+                      ]
+                    }
+                  },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
                     "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
@@ -269,6 +285,9 @@
                   },
                   "extend": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/extend"
+                  },
+                  "reset": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
                   },
                   "envs": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
