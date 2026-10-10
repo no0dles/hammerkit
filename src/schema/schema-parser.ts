@@ -5,16 +5,18 @@ import { ParseContext, ParseScope } from './parse-context'
 import { dirname, join } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
 import { ParseError } from './parse-error'
-import { BuildFileIncludeSchema, isGitSource } from './build-file-include-schema'
+import { BuildFileGitSourceSchema, BuildFileIncludeSchema, isGitSource } from './build-file-include-schema'
 import { BuildFileSchema } from './build-file-schema'
-import { isWithin, ResolvedGitSource, resolveGitSource } from '../includes/resolve-git-source'
+import { isWithin, refreshGitSource, ResolvedGitSource, resolveGitSource } from '../includes/resolve-git-source'
 
 export async function createParseContext(
   fileName: string,
-  environment: Environment
+  environment: Environment,
+  options?: { refresh?: boolean }
 ): Promise<{ ctx: ParseContext; scope: ParseScope }> {
   const ctx: ParseContext = {
     files: {},
+    refreshed: options?.refresh ? new Map() : undefined,
   }
 
   const scope = await appendBuildFile(dirname(fileName), ctx, environment, fileName, [])
@@ -54,6 +56,7 @@ export async function appendBuildFile(
     if (scope.schema.references) {
       for (const referenceName of Object.keys(scope.schema.references)) {
         const target = await locateInclude(
+          ctx,
           scope,
           scope.schema.references[referenceName],
           // a remote file's paths resolve within its repository
@@ -79,6 +82,7 @@ export async function appendBuildFile(
     if (scope.schema.includes) {
       for (const includeName of Object.keys(scope.schema.includes)) {
         const target = await locateInclude(
+          ctx,
           scope,
           scope.schema.includes[includeName],
           dirname(scope.fileName),
@@ -110,13 +114,14 @@ export async function appendBuildFile(
 // into the include cache. Inside a cached checkout a local path may not leave it:
 // a remote file contributes definitions from its own repository only.
 async function locateInclude(
+  ctx: ParseContext,
   scope: ParseScope,
   include: BuildFileIncludeSchema,
   base: string,
   environment: Environment
 ): Promise<{ fileName: string; remote?: ResolvedGitSource; inputs?: BuildFileEnvs }> {
   if (isGitSource(include)) {
-    const remote = await resolveGitSource(include, environment)
+    const remote = await resolveRemote(ctx, include, environment)
     const path = join(remote.root, include.path ?? '')
     if (!isWithin(remote.root, path)) {
       throw new Error(`${include.path} in ${include.git} points outside the repository`)
@@ -129,6 +134,20 @@ async function locateInclude(
     throw new Error(`${include} in ${scope.fileName} points outside ${scope.remote.git}`)
   }
   return { fileName: await getBuildFilename(path, environment), remote: scope.remote }
+}
+
+// `includes pull` fetches each source once, however often the build files name it.
+async function resolveRemote(
+  ctx: ParseContext,
+  source: BuildFileGitSourceSchema,
+  environment: Environment
+): Promise<ResolvedGitSource> {
+  const key = `${source.git}\n${source.ref ?? ''}`
+  if (!ctx.refreshed || ctx.refreshed.has(key)) {
+    return resolveGitSource(source, environment)
+  }
+  ctx.refreshed.set(key, await refreshGitSource(source, environment))
+  return resolveGitSource(source, environment)
 }
 
 type BuildFileEnvs = NonNullable<BuildFileSchema['envs']>

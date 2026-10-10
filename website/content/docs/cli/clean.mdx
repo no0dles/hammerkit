@@ -25,6 +25,11 @@ hammerkit clean --cache
 This forces the next run to rebuild from scratch instead of restoring a result
 from the backend. See [caches](/docs/build-file/caches) for how backends work.
 
+It also removes the cached checkouts of
+[remote includes](/docs/build-file/includes#include-from-a-git-repository) in
+`~/.hammerkit/includes`, which are shared by all your projects, so the next run fetches them
+again. To update them without removing anything, use [`includes pull`](/docs/cli/includes).
+
 <Callout type="info">
 
 `--filter`/`--exclude` label options apply to `clean` as well, so you can clean a

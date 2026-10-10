@@ -1,0 +1,28 @@
+---
+title: "Includes"
+description: "Fetch the git repositories of remote includes again to pick up new commits."
+---
+`hammerkit includes pull` fetches every [git repository](/docs/build-file/includes#include-from-a-git-repository)
+named by `includes` and `references` again and replaces the cached copy with the current
+commit of its `ref`. It executes no task.
+
+```
+hammerkit includes pull
+```
+
+A remote include is fetched once and then read from `~/.hammerkit/includes` on every run,
+so a branch or tag does not change underneath you. Use `pull` when you want the update.
+The command follows the includes of remote files too, fetches a repository named several
+times once, and prints what happened to each:
+
+```
+https://github.com/no0dles/hammerkit.git at v1.16.0: up to date at 7b183f08ebed
+https://github.com/acme/build-files.git at main: 4e1c0a77d2b9 -> c9f03b1e5a68
+```
+
+- A **branch** or **tag** moves to the commit it points to now.
+- A **commit SHA** never changes, so it is not fetched again and shows as `pinned`.
+- A repository that cannot be reached fails the command and keeps the cached copy.
+
+To forget every cached remote include instead, so the next run fetches it again, use
+[`hammerkit clean --cache`](/docs/cli/clean#clearing-stored-cache-results).

@@ -1,4 +1,5 @@
 import { Environment } from './environment'
+import { purgeGitSources } from '../includes/resolve-git-source'
 import { removeOrphanedContainers } from '../docker/remove-orphaned-containers'
 import { getContainerCli } from './execute-docker'
 import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
@@ -110,6 +111,11 @@ export async function cleanCache(
     if (options?.cache) {
       await service.data.caching.backend.clear(service.id(), environment)
     }
+  }
+
+  if (options?.cache) {
+    // cached remote includes are kept like stored results, so they go with them
+    await purgeGitSources()
   }
 
   if (workTree.environment.type === 'docker') {

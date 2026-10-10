@@ -372,6 +372,41 @@ export async function getProgram(
         }
       })
 
+    program
+      .command('includes')
+      .description('manage remote includes (includes pull)')
+      .command('pull')
+      .description('fetch the git repositories of remote includes again, picking up new commits of branches and tags')
+      .action(async () => {
+        try {
+          const { ctx } = await createParseContext(fileName, environment, { refresh: true })
+          const refreshed = [...(ctx.refreshed?.values() ?? [])]
+          for (const source of refreshed) {
+            const name = `${source.git} at ${source.ref ?? 'HEAD'}`
+            const commit = source.commit.slice(0, 12)
+            if (source.pinned) {
+              environment.stdout.write(`${name}: pinned to ${commit}\n`)
+            } else if (source.previous === source.commit) {
+              environment.stdout.write(`${name}: up to date at ${commit}\n`)
+            } else if (source.previous === null) {
+              environment.stdout.write(`${name}: fetched ${commit}\n`)
+            } else {
+              environment.stdout.write(`${name}: ${source.previous.slice(0, 12)} -> ${commit}\n`)
+            }
+          }
+          if (refreshed.length === 0) {
+            environment.stdout.write('no remote includes\n')
+          }
+        } catch (e) {
+          if (e instanceof CommanderError) {
+            throw e
+          }
+
+          environment.console.error(getErrorMessage(e))
+          program.error('Includes pull was not successful', { exitCode: 1 })
+        }
+      })
+
     const cacheCommand = program.command('cache').description('inspect, prune and move cache entries')
     for (const direction of ['pull', 'push'] as const) {
       cacheCommand
