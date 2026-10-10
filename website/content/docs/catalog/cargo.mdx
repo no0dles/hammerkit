@@ -1,0 +1,40 @@
+---
+title: "cargo"
+description: "Build and test a Rust crate or workspace, with the cargo registry kept on the host."
+---
+Build and test a Rust crate or workspace, with the cargo registry kept on the host.
+`build` compiles into `target`, `test` runs the tests after it. Both are skipped while
+the `.rs` files and `Cargo.toml`/`Cargo.lock` are unchanged, and downloaded crates are
+kept in `~/.cargo`, so they are not fetched again.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  cargo:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.19.0
+    path: catalog/cargo
+    with:
+      CARGO_ARGS: --locked --workspace
+
+tasks:
+  check:
+    deps: [cargo:test]
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `build` | Build the crate into `target`. | every `Cargo.toml`, `Cargo.lock`, every `.rs` file | `target` |
+| `test` | Run the tests of the crate. | every `Cargo.toml`, `Cargo.lock`, every `.rs` file | |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `RUST_VERSION` | `1.90` | Tag of the `rust` image the tasks run in. The image is `rust:<RUST_VERSION>-slim`. Quote it in `with` (`'1.90'`), or YAML reads it as a number. |
+| `CARGO_ARGS` | `--locked` | Arguments for `cargo build` and `cargo test`, for example `--locked --workspace`. |
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/cargo/build.yaml"'>../catalog/cargo/build.yaml</include>

@@ -1,0 +1,34 @@
+# Builds and tests a Go module with the module cache kept on the host.
+envs:
+  # tag of the golang image the tasks run in, quoted so 1.30 stays 1.30
+  GO_VERSION: '1.25'
+  # the packages to build and test
+  PACKAGES: ./...
+
+tasks:
+  build:
+    description: build the packages into bin
+    image: golang:${GO_VERSION}-alpine
+    src:
+      # go.mod, and go.sum, go.work and go.work.sum where the module has them
+      - 'go.*'
+      - '**/*.go'
+    generates: [bin]
+    mounts:
+      - ~/go/pkg/mod:/go/pkg/mod
+    cmds:
+      - mkdir -p bin
+      - go build -o bin/ ${PACKAGES}
+
+  test:
+    description: run the tests of the packages
+    image: golang:${GO_VERSION}-alpine
+    deps: [build]
+    src:
+      # go.mod, and go.sum, go.work and go.work.sum where the module has them
+      - 'go.*'
+      - '**/*.go'
+    mounts:
+      - ~/go/pkg/mod:/go/pkg/mod
+    cmds:
+      - go test ${PACKAGES}
