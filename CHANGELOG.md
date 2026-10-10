@@ -1,3 +1,10 @@
+# [1.15.0](https://github.com/no0dles/hammerkit/compare/v1.14.1...v1.15.0) (2026-10-10)
+
+
+### Features
+
+* extend carries the base file's envs and can reset inherited values ([#62](https://github.com/no0dles/hammerkit/issues/62)) ([e02216e](https://github.com/no0dles/hammerkit/commit/e02216eb3419fabcb9e9a7778638c49ede4f3643))
+
 ## [1.14.1](https://github.com/no0dles/hammerkit/compare/v1.14.0...v1.14.1) (2026-10-10)
 
 
