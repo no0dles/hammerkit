@@ -7,6 +7,7 @@ import { Environment } from '../executer/environment'
 import { readServerConfig, serverConfigSchema } from './server-config'
 import { DISCOVERY_PATH, RunningServer, SERVER_PROTOCOL, startServer } from './server'
 import { getVersion } from '../version'
+import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 
 const minimal = `
 listen: { port: 0 }
@@ -118,10 +119,10 @@ describe('server', () => {
     })
   })
 
-  it('answers the health check, and nothing else without a token', async () => {
+  it('answers the health check, and refuses everything else without a token', async () => {
     await withServer('server-routes', minimal, async (server) => {
       expect(await (await fetch(`${server.url}/healthz`)).json()).toEqual({ status: 'ok' })
-      expect((await fetch(`${server.url}/runs`)).status).toBe(404)
+      expect((await fetch(`${server.url}/runs`)).status).toBe(401)
       const post = await fetch(`${server.url}${DISCOVERY_PATH}`, { method: 'POST' })
       expect(post.status).toBe(405)
       expect(post.headers.get('allow')).toBe('GET, HEAD')
@@ -135,6 +136,144 @@ describe('server', () => {
         await expect(startServer(await readServerConfig(env, file), env)).rejects.toThrow('EADDRINUSE')
       })
     })
+  })
+})
+
+describe('server authentication', () => {
+  const policy = `
+entitlements:
+  - subject: { iss: ISSUER, sub: alice }
+    accounts: [op-payments-dev]
+    default: op-payments-dev
+  - group: { iss: ISSUER, name: eng-web }
+    accounts: [op-web-dev]
+`
+
+  async function withIssuer(
+    name: string,
+    fn: (server: RunningServer, token: (claims?: Record<string, unknown>) => string, log: string[]) => Promise<void>
+  ): Promise<void> {
+    const key = createTestKey('ES256', 'k1')
+    const idp = await startTestIssuer([key])
+    try {
+      const yaml = `listen: { port: 0 }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
+        /ISSUER/g,
+        `"${idp.url}"`
+      )}`
+      await withServerConfig(name, yaml, async (env, file) => {
+        const log: string[] = []
+        const server = await startServer(await readServerConfig(env, file), env, { log: (line) => log.push(line) })
+        try {
+          const token = (claims: Record<string, unknown> = {}) =>
+            signToken(key, {
+              iss: idp.url,
+              sub: 'alice',
+              aud: 'hammerkit',
+              exp: Math.floor(Date.now() / 1000) + 300,
+              ...claims,
+            })
+          await fn(server, token, log)
+        } finally {
+          await server.close()
+        }
+      })
+    } finally {
+      await idp.close()
+    }
+  }
+
+  const me = (server: RunningServer, token?: string) =>
+    fetch(`${server.url}/v1/me`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+
+  it('tells a caller which accounts the token entitles them to', async () => {
+    await withIssuer('server-me', async (server, token, log) => {
+      const response = await me(server, token({ groups: ['eng-web'] }))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        sub: 'alice',
+        accounts: ['op-payments-dev', 'op-web-dev'],
+        default: 'op-payments-dev',
+      })
+      expect(log.join('\n')).toMatch(
+        /grant iss=\S+ sub=alice accounts=\[op-payments-dev,op-web-dev\] entitlements=\[0,1\]/
+      )
+    })
+  })
+
+  it('gives a caller without an entitlement no account', async () => {
+    await withIssuer('server-me-denied', async (server, token) => {
+      const response = await me(server, token({ sub: 'bob' }))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ sub: 'bob', accounts: [], default: null })
+    })
+  })
+
+  it('refuses a missing, malformed or invalid token without saying why', async () => {
+    await withIssuer('server-me-refused', async (server, token, log) => {
+      for (const candidate of [undefined, 'garbage', token({ exp: 1 }), token({ aud: 'other' })]) {
+        const response = await me(server, candidate)
+        expect(response.status).toBe(401)
+        expect(response.headers.get('www-authenticate')).toBe('Bearer error="invalid_token"')
+        expect(await response.json()).toEqual({ error: 'invalid token' })
+      }
+      expect(log.filter((l) => l.startsWith('deny'))).toHaveLength(4)
+      expect(log.join('\n')).toContain('token expired')
+    })
+  })
+
+  it('still serves the discovery document without a token', async () => {
+    await withIssuer('server-open-discovery', async (server) => {
+      expect((await fetch(`${server.url}${DISCOVERY_PATH}`)).status).toBe(200)
+    })
+  })
+
+  it('answers 404 for an unknown path once the caller is known', async () => {
+    await withIssuer('server-unknown-path', async (server, token) => {
+      const response = await fetch(`${server.url}/v1/nothing`, { headers: { authorization: `Bearer ${token()}` } })
+      expect(response.status).toBe(404)
+    })
+  })
+})
+
+describe('server config policy', () => {
+  const base = { issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }] }
+
+  it('takes an entitlement for one subject, group or claims', () => {
+    const entitlements = [
+      { subject: { iss: 'https://idp.corp', sub: 'alice' }, accounts: ['a'], default: 'a' },
+      { group: { iss: 'https://idp.corp', name: 'eng' }, accounts: ['a', 'b'], source: ['ref'] },
+      { claims: { iss: 'https://idp.corp', match: { repository: 'corp/x' } }, accounts: ['c'] },
+    ]
+    expect(serverConfigSchema.safeParse({ ...base, entitlements }).success).toBe(true)
+  })
+
+  it.each([
+    ['nobody', { accounts: ['a'] }],
+    [
+      'two kinds of caller',
+      {
+        subject: { iss: 'https://idp.corp', sub: 'a' },
+        group: { iss: 'https://idp.corp', name: 'g' },
+        accounts: ['a'],
+      },
+    ],
+    ['no accounts', { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: [] }],
+    [
+      'a default outside the accounts',
+      { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: ['a'], default: 'b' },
+    ],
+    ['claims that match anything', { claims: { iss: 'https://idp.corp', match: {} }, accounts: ['a'] }],
+    ['an issuer that is not accepted', { subject: { iss: 'https://other', sub: 'a' }, accounts: ['a'] }],
+  ])('rejects %s', (_name, entitlement) => {
+    expect(serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] }).success).toBe(false)
+  })
+
+  it('accepts issuers over https, and http only on loopback', () => {
+    const parse = (issuer: string) => serverConfigSchema.safeParse({ issuers: [{ issuer, audience: 'hammerkit' }] })
+    expect(parse('https://idp.corp').success).toBe(true)
+    expect(parse('http://127.0.0.1:9000').success).toBe(true)
+    expect(parse('http://idp.corp').success).toBe(false)
+    expect(parse('idp.corp').success).toBe(false)
   })
 })
 

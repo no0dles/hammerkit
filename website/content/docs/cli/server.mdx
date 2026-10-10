@@ -4,8 +4,9 @@ description: "Run this machine as a hammerkit server that remote runs can be sen
 ---
 <Callout type="warn">
 
-Experimental. The server answers a discovery request today. Accepting runs,
-OAuth sign-in and the entitlement policy arrive in follow-up releases, see the
+Experimental. The server checks OAuth tokens and tells a caller which service
+accounts they have. Accepting runs and `remote login` arrive in follow-up
+releases, see the
 [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
 
 </Callout>
@@ -36,6 +37,18 @@ tls:
 issuers:
   - issuer: https://login.example.com
     audience: hammerkit
+    groupsClaim: groups   # default
+entitlements:
+  - subject: { iss: https://login.example.com, sub: 4f1c2b }
+    accounts: [op-payments-dev]
+    default: op-payments-dev
+  - group: { iss: https://login.example.com, name: eng-web }
+    accounts: [op-web-dev]
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository: corp/payments, ref: refs/heads/main }
+    accounts: [op-payments-ci]
+    source: [ref]
 backend:
   type: host
   platform: { os: macos, arch: arm64 }   # detected when left out
@@ -46,11 +59,54 @@ backend:
 | `listen` | Interface and port. Port `0` picks a free one. |
 | `tls` | Certificate and key to serve https. |
 | `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
-| `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry. At least one: OAuth is the only way to call the server. |
+| `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). |
+| `entitlements` | Who may use which service account, see [below](#entitlements). |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
 
 Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
 Anywhere else the config needs `tls`, or `behindTlsProxy: true`.
+
+## Authentication
+
+Every call except discovery and the health check carries an OAuth access token as
+`Authorization: Bearer <token>`. The server fetches the issuer's keys from its
+OpenID discovery document and accepts a token only when
+
+* it is signed with `RS256`, `RS384`, `RS512`, `PS256`, `ES256`, `ES384` or `ES512`
+  (never `none` or a shared secret),
+* its `iss` is one of the configured issuers and its `aud` contains the configured
+  audience,
+* it has not expired and is already valid (a minute of clock skew is allowed), and
+* it has a `sub`.
+
+Keys are cached for ten minutes, and fetched again, at most once a minute, when a
+token names a key the server does not know yet, so a rotation needs no restart. A
+refused token only gets `401 invalid token`; the reason goes to the server's log.
+
+### Entitlements
+
+An entitlement says which service accounts a caller may use. The server matches
+the validated claims of the token only, never anything the caller sends along.
+
+| Who | Matches |
+| --- | --- |
+| `subject: {iss, sub}` | exactly that person or client |
+| `group: {iss, name}` | every caller of that issuer whose groups claim lists the name |
+| `claims: {iss, match}` | every token of that issuer whose string claims equal all of `match`, for CI jobs (repository, ref, environment) |
+
+A caller gets the accounts of all entitlements that match, and none when no entry
+matches. `default` names the account used when a run names none, and has to be one
+of `accounts`; with a single account that account is the default. `source` limits
+where the code may come from, `upload` for the caller's working tree and `ref` for
+a git ref the server checks out itself; a caller matching several entitlements
+gets only what all of them allow. Every grant is written to the log with issuer,
+subject, accounts and the entitlements that matched.
+
+`GET /v1/me` returns the identity and the accounts of the caller:
+
+```json
+{ "iss": "https://login.example.com", "sub": "4f1c2b", "accounts": ["op-payments-dev"], "default": "op-payments-dev" }
+```
 
 ## Discovery
 
@@ -68,4 +124,4 @@ client can check it before signing in:
 ```
 
 `GET /healthz` answers `{"status":"ok"}` for a load balancer or a process manager.
-Every other path is `404` until runs are supported.
+Every other path needs a token, and is `404` until runs are supported.
