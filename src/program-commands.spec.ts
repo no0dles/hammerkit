@@ -101,7 +101,7 @@ describe('program commands (fast)', () => {
   it('explain --check fails while a task would be a cache miss and passes once it is cached', async () => {
     const t = createTestCase('cmd-explain-check', {
       '.hammerkit.yaml': {
-        tasks: { build: { cmds: ['true'], src: ['input.txt'] } },
+        tasks: { build: { cmds: ['node -e 0'], src: ['input.txt'] } },
       },
       'input.txt': 'x\n',
     })
