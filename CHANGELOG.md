@@ -1,3 +1,10 @@
+# [1.17.0](https://github.com/no0dles/hammerkit/compare/v1.16.0...v1.17.0) (2026-10-10)
+
+
+### Features
+
+* includes pull refreshes remote includes, clean --cache purges them ([#64](https://github.com/no0dles/hammerkit/issues/64)) ([a76ae0e](https://github.com/no0dles/hammerkit/commit/a76ae0e694e7bd7fe92a51db39f91d22d7adb9af))
+
 # [1.16.0](https://github.com/no0dles/hammerkit/compare/v1.15.0...v1.16.0) (2026-10-10)
 
 
