@@ -100,18 +100,23 @@ jobs:
             logs
             temp
 
-  # Full container + Kubernetes integration on a hosted Linux runner. ubuntu-latest
-  # ships a native, running Docker daemon, so the whole integration suite runs here
-  # on GitHub-hosted infrastructure. A throwaway kind cluster supplies Kubernetes and a registry:2
-  # container satisfies REGISTRY for the docker package-push spec. The k8s specs pull
-  # public images (node/postgres) straight from Docker Hub, so no containerd registry
-  # mirror is needed. HAMMERKIT_FULL_INTEGRATION makes the linux-container and k8s
+  # Full container + Kubernetes integration on hosted Linux runners, in two jobs
+  # that run side by side (the matrix below): `docker` runs every spec that needs
+  # only a Docker daemon plus a registry:2 container for the package-push spec, and
+  # `kubernetes` runs the specs that need a cluster (a throwaway kind cluster), so
+  # the cluster is only started where it is used. Each suite is one hammerkit task
+  # (see .hammerkit.yaml), cached on its own. ubuntu-latest ships a native, running
+  # Docker daemon. HAMMERKIT_FULL_INTEGRATION makes the linux-container and k8s
   # gates assert rather than no-op; requiresWindowsContainers is unused, so leaving
   # WINDOWS_CONTAINERS unset does not fail anything (see src/testing/requires-*).
   linux-integration:
-    name: integration (ubuntu-latest)
+    name: integration ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [docker, kubernetes]
     permissions:
       contents: read
       packages: write # the shared build cache lives in GHCR
@@ -125,23 +130,36 @@ jobs:
       # the cluster still costs time; keep a generous per-spec ceiling
       HAMMERKIT_TEST_TIMEOUT: '600000'
       VERBOSE: 'true'
+      # Docker Hub rate-limits anonymous pulls per runner IP, which hosted runners
+      # share. With the secret set, the daemon's pulls are authenticated.
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
       - name: Set up hammerkit and the shared cache
         uses: ./.github/actions/hammerkit
         with:
-          tasks: test:integration
-      # The suite is a hammerkit task (see .hammerkit.yaml): when this tree was
-      # already tested green, the pull above restored its result, and the
-      # cluster below is not worth starting. Without a reachable cache this is
-      # always a miss, so the job runs as it always did.
+          tasks: test:${{ matrix.suite }}
+      # hammerkit reads the credentials `docker login` stores when it pulls an image.
+      # Without the secret (forks, or not set up) the login is skipped and pulls
+      # stay anonymous, as before.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_TOKEN != ''
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      # The suite is a hammerkit task: when this tree was already tested green, the
+      # pull above restored its result, and the cluster and registry below are not
+      # worth starting. Without a reachable cache this is always a miss, so the job
+      # runs as it always did.
       # `explain --check` exits 1 for a miss, and for a hammerkit too old to know
-      # the flag, so the cluster is started whenever in doubt.
+      # the flag, so they are started whenever in doubt.
       - name: Plan
         id: plan
         run: |
-          if hammerkit explain test:integration --check; then
+          if hammerkit explain test:${{ matrix.suite }} --check; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "hit=false" >> "$GITHUB_OUTPUT"
@@ -149,7 +167,7 @@ jobs:
       # A current Kubernetes: the Gateway API CRDs below need 1.31+ (their CEL
       # validations use isIP). Pinned by digest, as kind recommends.
       - name: Create kind cluster
-        if: steps.plan.outputs.hit != 'true'
+        if: matrix.suite == 'kubernetes' && steps.plan.outputs.hit != 'true'
         uses: helm/kind-action@v1.15.0
         with:
           cluster_name: hammerkit-ci
@@ -158,43 +176,67 @@ jobs:
       # context (`context: process.env.CLUSTER_NAME`). kind names the context
       # `kind-<cluster>`, so rename it to match what the specs ask for.
       - name: Name the kube context after CLUSTER_NAME
-        if: steps.plan.outputs.hit != 'true'
+        if: matrix.suite == 'kubernetes' && steps.plan.outputs.hit != 'true'
         run: kubectl config rename-context "kind-${CLUSTER_NAME}" "${CLUSTER_NAME}"
       # Services are exposed through Gateway API HTTPRoutes, a CRD kind does not ship
       # with; environment.spec.ts creates and removes one.
       - name: Install the Gateway API CRDs
-        if: steps.plan.outputs.hit != 'true'
+        if: matrix.suite == 'kubernetes' && steps.plan.outputs.hit != 'true'
         run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
       # docker-package-registry.spec.ts only probes an externally provided REGISTRY
       # for liveness (it never manages one), so stand up a registry on localhost:5000.
       - name: Start local registry
-        if: steps.plan.outputs.hit != 'true'
+        if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
         run: docker run -d --restart=always -p 5000:5000 --name registry registry:2
       # Serialize (inside the task): one single-node kind cluster on a 4-vCPU
       # runner, so running suites one at a time avoids scheduling/volume races.
       # HAMMERKIT_TEST_RUN_ID is not passed on: hammerkit hands a task only the
       # variables it declares, and a per-run value would defeat the cache.
       - name: Run integration tests
-        run: hammerkit run test:integration --no-summary
+        run: hammerkit run test:${{ matrix.suite }} --no-summary
       - name: Share the result
         uses: ./.github/actions/hammerkit-push
         with:
-          tasks: test:integration
-      # Single coverage source for Codacy. This job runs on every push (PRs
-      # included), so coverage shows up on PRs. No master-only gate. Integration mode is a superset of the
-      # unit suite (see vitest.config.ts), so this one lcov is a complete report —
-      # the fast unit/error-path specs and the container/k8s path are both included.
+          tasks: test:${{ matrix.suite }}
+      # The coverage job below merges the reports of both suites.
+      - name: Keep the coverage report
+        uses: actions/upload-artifact@v5
+        with:
+          name: coverage-${{ matrix.suite }}
+          path: coverage/${{ matrix.suite }}/lcov.info
+      - name: Archive logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: linux-integration-logs-${{ matrix.suite }}
+          path: |
+            logs
+            temp
+
+  # The single coverage source for Codacy, and the one check that stands for the
+  # integration suite (the name is unchanged from when it was a single job, so a
+  # required check keeps working). It runs on every push, PRs included, so coverage
+  # shows up on PRs. Integration mode is a superset of the unit suite (see
+  # vitest.config.ts): the docker suite carries the fast unit and error-path specs,
+  # the kubernetes suite the cluster path, and Codacy gets both reports in one upload.
+  integration-result:
+    name: integration (ubuntu-latest)
+    needs: linux-integration
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Both suites passed
+        if: needs.linux-integration.result != 'success'
+        run: |
+          echo "::error::the integration suites finished as ${{ needs.linux-integration.result }}"
+          exit 1
+      - name: Download the coverage reports
+        uses: actions/download-artifact@v5
+        with:
+          pattern: coverage-*
       - name: Upload coverage
         continue-on-error: true
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage/lcov.info
-      - name: Archive logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v5
-        with:
-          name: linux-integration-logs
-          path: |
-            logs
-            temp
+          coverage-reports: coverage-docker/lcov.info,coverage-kubernetes/lcov.info

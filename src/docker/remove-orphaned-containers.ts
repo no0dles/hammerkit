@@ -39,8 +39,25 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+// No daemon listens on the socket or named pipe (ENOENT, or ECONNREFUSED for a
+// socket nothing serves). Other failures, such as a permission error, are real.
+export function isDockerUnreachable(e: any): boolean {
+  return e?.syscall === 'connect' && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')
+}
+
+// Without a Docker daemon there is no container left behind, so a machine that
+// has none (a Windows runner without containers, a laptop with Docker stopped)
+// cleans without error.
 export async function removeOrphanedContainers(docker: Dockerode): Promise<string[]> {
-  const containers = await docker.listContainers({ all: true, filters: { label: ['app=hammerkit'] } })
+  let containers: ContainerInfo[]
+  try {
+    containers = await docker.listContainers({ all: true, filters: { label: ['app=hammerkit'] } })
+  } catch (e) {
+    if (isDockerUnreachable(e)) {
+      return []
+    }
+    throw e
+  }
   const orphaned = containers.filter((c) => isOrphanedContainer(c, isProcessAlive))
   for (const container of orphaned) {
     await removeContainer(docker.getContainer(container.Id))
