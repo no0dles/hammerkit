@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - '**'
+  # a retry that ignores the shared cache, see .github/actions/hammerkit
+  workflow_dispatch:
 # A newer push to the same branch supersedes a running check; master keeps every
 # run so its history stays complete.
 concurrency:

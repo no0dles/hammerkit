@@ -23,7 +23,22 @@ runs:
     - name: Install hammerkit
       shell: bash
       run: npm install -g "hammerkit@${{ inputs.version }}"
+    # A flaky test that passed once is a cached pass. To retry for real, put
+    # [no-cache] in the head commit message, or run the workflow by hand
+    # (workflow_dispatch): the job then neither pulls nor pushes, so every task runs
+    # and the shared cache is left as it was.
+    - name: Decide whether to bypass the cache
+      shell: bash
+      env:
+        COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+      run: |
+        if [ "$DISPATCH" = true ] || [[ "$COMMIT_MESSAGE" == *"[no-cache]"* ]]; then
+          echo "HAMMERKIT_CACHE_BYPASS=1" >> "$GITHUB_ENV"
+          echo "::notice::cache bypassed, every task runs"
+        fi
     - name: Log in to the cache registry
+      if: env.HAMMERKIT_CACHE_BYPASS != '1'
       continue-on-error: true
       uses: docker/login-action@v3
       with:
@@ -31,6 +46,7 @@ runs:
         username: ${{ github.actor }}
         password: ${{ github.token }}
     - name: Pull cached results
+      if: env.HAMMERKIT_CACHE_BYPASS != '1'
       continue-on-error: true
       shell: bash
       run: |
