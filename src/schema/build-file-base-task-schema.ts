@@ -7,6 +7,7 @@ import { buildFileTaskCommandSchema } from './build-file-task-command-schema'
 import { buildFileVolumeSchema } from './build-file-volume-schema'
 import { durationSchema } from './duration-schema'
 import { buildFileSecretSchema } from './build-file-secret-schema'
+import { resourcesSchema } from './resources-schema'
 
 export const buildFileBaseTaskSchema = object({
   deps: array(string()).optional(),
@@ -27,4 +28,6 @@ export const buildFileBaseTaskSchema = object({
   // runs longer. Does not affect the cache key (ADR-0002).
   timeout: durationSchema.optional(),
   secrets: array(buildFileSecretSchema).optional(),
+  // CPU and memory limits of the container; a local task is not limited
+  resources: resourcesSchema.optional(),
 })

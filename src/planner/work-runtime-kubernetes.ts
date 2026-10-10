@@ -28,6 +28,7 @@ import { getVersion } from '../version'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
+import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 
 async function listJobNames(
@@ -133,6 +134,7 @@ export function kubernetesTaskRuntime(
                     ],
                     name: `cmd-${++i}`,
                     volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
+                    ...getKubernetesResources(task.data.resources),
                   },
                 ],
                 volumes: [...persistence.volumes, ...secrets.volumes],

@@ -37,6 +37,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       continuous: false,
       timeout: null,
       secrets: [],
+      resources: null,
       caching: {
         name: 'none',
         method: 'none',

@@ -41,6 +41,7 @@ A task is built from a small, fixed set of fields:
 | `labels` | Group/filter tasks (see [labels](/docs/labels)). |
 | `cache` | The [caching](/docs/task/caching) method/backend for this task. |
 | `timeout` | Maximum execution time, e.g. `10m` (see [timeouts](#timeouts)). |
+| `resources` | CPU and memory limits of the container (see [resources](#resources)). |
 
 ## Source files (`src`)
 Tasks that depend on input files should declare them under `src`.
@@ -161,3 +162,32 @@ To give every task a default, pass `--timeout` to [`run`](/docs/cli/execute) or
 ```bash
 hammerkit run --timeout 30m
 ```
+
+## Resources
+A heavy build step can take every core and all the memory of the machine it runs
+on. Declare `resources` and hammerkit limits the task's container to them.
+
+```yaml
+tasks:
+  build:
+    image: node:22
+    resources:
+      cpus: 2
+      memory: 4Gi
+    cmds:
+      - npm run build
+```
+
+Both fields are optional and use Kubernetes notation: `cpus` as cores (`2`, `0.5`)
+or millicores (`500m`), `memory` with a `Ki`/`Mi`/`Gi`/`Ti` suffix (at least `6Mi`).
+On Docker they become the container's CPU and memory limits; on Kubernetes the job
+container requests and is limited to the same values. A task that exceeds its memory
+limit is killed by the runtime and fails.
+
+`cpus` above what the Docker host has runs the container without a CPU limit, with a
+warning, as such a limit would limit nothing. On Kubernetes a request beyond what any
+node offers leaves the pod Pending.
+
+A local task can declare `resources` too, but nothing enforces them;
+[`validate`](/docs/cli/validate) and `run --dry-run` say so. Resources are not part
+of the task's cache key: changing them does not rebuild the task.
