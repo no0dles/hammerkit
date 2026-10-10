@@ -1,3 +1,10 @@
+# [1.13.0](https://github.com/no0dles/hammerkit/compare/v1.12.0...v1.13.0) (2026-10-10)
+
+
+### Features
+
+* **cli:** explain --check exits 1 when a task would be a cache miss ([#56](https://github.com/no0dles/hammerkit/issues/56)) ([e137189](https://github.com/no0dles/hammerkit/commit/e137189a13ec4f707d827f06300e6b2f4e5ab5db))
+
 # [1.12.0](https://github.com/no0dles/hammerkit/compare/v1.11.3...v1.12.0) (2026-10-10)
 
 
