@@ -1,3 +1,10 @@
+## [1.21.2](https://github.com/no0dles/hammerkit/compare/v1.21.1...v1.21.2) (2026-10-11)
+
+
+### Bug Fixes
+
+* restore transitive dependencies when a dependent task re-runs ([#79](https://github.com/no0dles/hammerkit/issues/79)) ([3932a8b](https://github.com/no0dles/hammerkit/commit/3932a8b8d56d53db9bb0f9258df42894ab2f8d61))
+
 ## [1.21.1](https://github.com/no0dles/hammerkit/compare/v1.21.0...v1.21.1) (2026-10-11)
 
 
