@@ -78,6 +78,8 @@ export interface PlanOptions {
   scope?: WorkScope
   // set on a server
   policy?: PlanPolicy
+  // refuse git includes: reading them would make the machine fetch from the network
+  noRemote?: boolean
 }
 
 // 40 (sha-1) or 64 (sha-256) hex digits
@@ -86,7 +88,7 @@ const COMMIT_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/i
 // A hash alone can only name what is inside the bundle, so everything a build
 // file pulls in from elsewhere has to be pinned: a git include needs a commit
 // and a remote that is not a path on the server.
-function findLooseIncludes(bundle: Bundle): string[] {
+function findLooseIncludes(bundle: Bundle, noRemote = false): string[] {
   const problems: string[] = []
   for (const [path, content] of Object.entries(bundle.files)) {
     if (!/\.ya?ml$/i.test(path)) {
@@ -102,6 +104,12 @@ function findLooseIncludes(bundle: Bundle): string[] {
       for (const [name, include] of Object.entries(document?.[block] ?? {})) {
         const source = include as { git?: unknown; ref?: unknown }
         if (!source || typeof source !== 'object' || source.git === undefined) {
+          continue
+        }
+        if (noRemote) {
+          problems.push(
+            `${path}: ${block}.${name}: a proposal may not include from git, the server would fetch it before anybody approved it`
+          )
           continue
         }
         if (typeof source.git !== 'string' || !/^(https:\/\/|ssh:\/\/|git@[\w.-]+:)/.test(source.git)) {
@@ -319,7 +327,7 @@ export async function planBundle(
   environment: Environment,
   options: PlanOptions = {}
 ): Promise<InspectedBundle> {
-  const problems = [...findLooseIncludes(bundle), ...(options.policy ? findHostProblems(bundle) : [])]
+  const problems = [...findLooseIncludes(bundle, options.noRemote), ...(options.policy ? findHostProblems(bundle) : [])]
   if (problems.length > 0) {
     throw new DefinitionError(problems.join('\n'))
   }

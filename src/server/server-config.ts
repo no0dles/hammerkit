@@ -213,6 +213,9 @@ export const serverConfigSchema = z
         timeout: duration.default('1h'),
         // runs waiting at the same time, more are refused
         maxWaiting: z.number().int().min(1).default(100),
+        // after a version was rejected, who proposed it can not propose that build
+        // file again, and nobody that version, for this long
+        cooldown: duration.default('10m'),
       })
       .strict()
       .default({}),

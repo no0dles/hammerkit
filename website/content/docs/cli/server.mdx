@@ -77,6 +77,7 @@ runtimes: [docker]   # what tasks may run on, docker by default
 approvals:
   timeout: 1h        # default
   maxWaiting: 100    # default
+  cooldown: 10m      # default, a rejected version can not be proposed again before
 storage:
   directory: /var/lib/hammerkit   # default ~/.hammerkit/server
 runs:
@@ -105,7 +106,7 @@ backend:
 | `secretProviders` | The commands that read secrets, the same as the `secretProviders` of a build file, see [Secret providers](/docs/task/secret-providers). A published build file can not declare them, only the operator does. |
 | `accounts` | The service accounts a secret can be read as, each with the environment that makes the provider command act as that account, see [below](#accounts). |
 | `entitlements` | Who may use or request which service account, and what they may do with build files, see [below](#entitlements). |
-| `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
+| `approvals` | How long a requested run waits for its approval (`timeout`), how many may wait (`maxWaiting`) and how long a rejected proposal has to be waited out (`cooldown`), see [Approvals](#approvals) and [Proposing a version](#proposing-a-version). |
 | `sources` | The repositories a run with `source: ref` may get its code from, see [Repositories](#repositories). |
 | `runtimes` | What tasks may run on: `docker` (containers, the default) and `local` (commands on this machine as the user of the server, which have to be allowed by name). A build file with a task on a runtime that is not listed is refused when it is published or proposed, see [What a build file may not do](#what-a-build-file-may-not-do). The server logs a warning at startup when `local` is allowed. |
 | `storage` | Where the server keeps what must survive a restart: the published build files and the records of the runs (`records/`). Runs work in `runs/` below it while they run. |
@@ -284,6 +285,8 @@ answers `200` and changes nothing (the first publish answers `201`).
 | `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each, the tasks and services it has and what each task works on (`inputs`). |
 | `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
 | `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
+| `POST /v1/definitions/<name>/<hash>/yank` | Pull a version back, see [Yanking](#yanking-a-version). The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/definitions/<name>/<hash>/unyank` | Let a yanked version go on. Needs `builds: publish`. |
 
 Reading needs a token and at least one service account or `builds` level. Versions are kept in the `storage` directory and survive a restart.
 
@@ -381,7 +384,7 @@ runs.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v1/proposals` | The proposals the caller made or may see, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, the `accounts` and the `missing` ones, `plan`, `base` (the latest version it would follow) and whether the caller `canDecide`. |
+| `GET /v1/proposals` | The proposals the caller made or may see, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, the `accounts` and the `missing` ones, `plan`, `base` (the latest version when it was proposed, the one it follows), `latest`, `stale` and whether the caller `canDecide`. |
 | `GET /v1/proposals/<name>/<hash>` | One of them. |
 | `GET /v1/proposals/<name>/<hash>/files` | Its files, to read what would be published. |
 | `POST /v1/proposals/<name>/<hash>/approve` | Publish it. The body is optional: `{ "reason": "..." }`. |
@@ -394,9 +397,41 @@ requested run does, and `approvals.maxWaiting` limits the proposals that wait (`
 Proposals are kept in memory, unlike runs: after a restart the proposer proposes again. Each
 proposal and decision is logged with who made it.
 
+**Only while it follows the latest.** A proposal records the latest version when it is
+made (`base`). If another version of the build file is published before it is decided, it
+is `stale`: it can only be rejected, approving answers `409`, because publishing it would
+put an old file in front of newer work for everyone who runs `latest`. The proposer
+proposes again on top of the new version.
+
+**No git includes.** A proposal is read before anybody approved it. A bundle that
+includes from git would make the server fetch from the network for a caller who may
+only propose, so a proposal with `includes` or `references` from git is refused
+(`400`). Whoever may publish can use them.
+
+**Cooldown.** After a rejection, the proposer can not propose that build file again,
+and nobody that version, for `approvals.cooldown` (default `10m`): `429`, with the time
+left. A proposal that only ran out of time does not start one. It keeps the people who
+decide from being asked again and again; like the proposals it is forgotten by a restart.
+
 A proposal approves a new version of the build file, not the code its commands run:
 `npm test` still executes the files a run brings. Production accounts stay behind
 [`request`](#approvals) and `source: [ref]`.
+
+### Yanking a version
+
+A published version is never changed, but one can be pulled back when it should not run
+any more (it leaks a token, it deploys to the wrong place). `POST
+/v1/definitions/<name>/<hash>/yank` is open to whoever has `builds: publish`, and to
+whoever `use`s an account the version works with: the people who answer for what runs
+as that account do not have to wait for a publisher. The body may carry a `reason`, up
+to 500 characters.
+
+A yanked version is not `latest` any more, a run that names it is refused with `409`
+and the reason, and a run that was accepted before, and still waits for an approval or in
+the queue, fails when it would start. Runs that already execute are not stopped; cancel
+them. The version and its files stay on the server for the record, and the version lists
+show who yanked it and why. `unyank` lets it go on, and needs `builds: publish`. Both are
+logged with who did it, and a yank survives a restart.
 
 ## Source files
 

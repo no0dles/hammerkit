@@ -5,7 +5,7 @@ import { DefinitionError, DefinitionStore } from './definitions'
 import { readJson, send } from './http'
 import { Principal, quote } from './oauth'
 import { canUse, getGrant, Grant, mayPublish } from './policy'
-import { Proposal, ProposalRegistry } from './proposals'
+import { Proposal, ProposalRegistry, StaleProposalError } from './proposals'
 import { definitionName, ServerConfig } from './server-config'
 
 const decisionSchema = z.object({ reason: z.string().max(500).optional() }).strict()
@@ -20,13 +20,19 @@ export const mayApprove = (grant: Grant, proposal: Proposal): boolean =>
 // What the caller is shown of a proposal: what it is, who proposed it and the
 // version it would replace, so the files can be compared.
 function toView(store: DefinitionStore, proposal: Proposal, principal: Principal, grant: Grant) {
+  const latest = store.find(proposal.name, 'latest')?.hash ?? null
+  const stale = proposal.state === 'waiting' && latest !== proposal.base
   return {
     ...proposal,
-    base: store.find(proposal.name, 'latest')?.hash ?? null,
+    // the version it follows is fixed when it is proposed; if another one was
+    // published since, it can only be rejected
+    latest,
+    stale,
     mine: same(proposal.proposedBy, principal),
     // approving needs the permission to publish, the accounts the proposer lacked, and
     // somebody else's proposal
-    canDecide: proposal.state === 'waiting' && mayApprove(grant, proposal) && !same(proposal.proposedBy, principal),
+    canDecide:
+      proposal.state === 'waiting' && !stale && mayApprove(grant, proposal) && !same(proposal.proposedBy, principal),
   }
 }
 
@@ -119,6 +125,11 @@ export async function handleProposals(
       (proposed) => mayApprove(grant, proposed),
       async (bundle) => {
         const proposed = proposals.get(name, hash)
+        // looked at again here, just before it is published
+        const latest = store.find(name, 'latest')?.hash ?? null
+        if (proposed && latest !== proposed.base) {
+          throw new StaleProposalError(proposed.base, latest)
+        }
         await store.publish(name, bundle, proposed?.proposedBy ?? principal, principal)
       },
       body.data.reason
@@ -142,6 +153,11 @@ export async function handleProposals(
         send(res, 404, { error: 'not found' })
     }
   } catch (e) {
+    if (e instanceof StaleProposalError) {
+      log(`${action} proposal=${name}@${hash} iss=${principal.iss} sub=${principal.sub} result=stale`)
+      send(res, 409, { error: e.message })
+      return true
+    }
     if (e instanceof DefinitionError) {
       send(res, 400, { error: `the build file does not load: ${e.message}` })
       return true

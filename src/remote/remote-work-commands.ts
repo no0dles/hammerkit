@@ -42,6 +42,8 @@ interface ProposalView {
   missing: string[]
   plan?: Record<string, PlanView>
   base: string | null
+  latest: string | null
+  stale: boolean
   mine: boolean
   canDecide: boolean
 }
@@ -262,6 +264,11 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           for (const line of flagLines(proposal)) {
             environment.stdout.write(`${line}\n`)
           }
+          if (proposal.stale) {
+            environment.stdout.write(
+              `  stale: ${printable(proposal.name)} has a newer version, reject it and propose again on top of it\n`
+            )
+          }
           if (proposal.state === 'waiting') {
             environment.stdout.write(`  decide before ${printable(proposal.expiresAt)}\n`)
           } else if (proposal.reason) {
@@ -302,10 +309,47 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         environment.stdout.write(
           base ? `compared with ${printable(view.base)}\n` : 'no version is published yet, everything is new\n'
         )
+        if (view.stale) {
+          environment.stdout.write(
+            `warning: ${printable(proposal.name)} has a newer version (${printable(
+              view.latest
+            )}), this can only be rejected\n`
+          )
+        }
         const lines = diffBundles(base, proposed)
         environment.stdout.write(lines.length > 0 ? `${lines.join('\n')}\n` : 'the files are the same\n')
       })
     )
+
+  for (const action of ['yank', 'unyank'] as const) {
+    remote
+      .command(`${action} <version> [server]`)
+      .description(
+        action === 'yank'
+          ? 'pull a published version (name@hash) back: no run starts from it and it is not latest'
+          : 'let a yanked version (name@hash) go on'
+      )
+      .addOption(new Option('--reason <text>', 'why, shown to whoever tries to run it').argParser((value) => value))
+      .action(
+        guarded(`Remote ${action} was not successful`, async (target: string, name: string | undefined, options) => {
+          const version = parseProposal(target)
+          if (!version) {
+            throw new Error(`${printable(target)} is not a version, name it like payments@sha256:...`)
+          }
+          const { name: serverName, server, token } = await connect(name)
+          await callServer(
+            server,
+            token,
+            'POST',
+            `/v1/definitions/${encodeURIComponent(version.name)}/${version.hash}/${action}`,
+            options.reason ? { reason: options.reason } : undefined
+          )
+          environment.stdout.write(
+            `${action === 'yank' ? 'yanked' : 'let go on'} ${printable(target)} on ${serverName}\n`
+          )
+        })
+      )
+  }
 
   for (const action of ['approve', 'reject'] as const) {
     remote

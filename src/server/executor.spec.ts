@@ -351,6 +351,14 @@ describe('HostExecutor', () => {
     ).rejects.toThrow('could not start')
   })
 
+  it('fails a run whose version was yanked after the run was accepted', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo published]\n' })
+    await store.yank('payments', hash, alice, { reason: 'leaks a token' })
+    const { events, error } = await execute(run(hash))
+    expect(error?.message).toContain('was yanked: leaks a token')
+    expect(events).toEqual([])
+  })
+
   it('fails when the build file is no longer on the server', async () => {
     const { error } = await execute(run('0'.repeat(64)))
     expect(error?.message).toContain('no longer on this server')

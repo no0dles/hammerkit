@@ -25,6 +25,8 @@ export interface DefinitionVersion {
   plan?: Record<string, TaskPlan>
   // every account the version uses
   accounts?: string[]
+  // pulled back: no run starts from it, and it is not `latest`, but it stays for the record
+  yanked?: { at: string; by: { iss: string; sub: string }; reason?: string }
 }
 
 export { DefinitionError, inspectBundle } from './plan'
@@ -73,10 +75,48 @@ export class DefinitionStore {
     return this.has(name) ? [...(this.versions.get(name) as DefinitionVersion[])] : []
   }
 
-  // a hash, or `latest` for the version published last
+  // a hash, or `latest` for the version published last that is not yanked
   find(name: string, hash: string): DefinitionVersion | undefined {
     const versions = this.list(name)
-    return hash === 'latest' ? versions[0] : versions.find((v) => v.hash === hash)
+    return hash === 'latest' ? versions.find((v) => !v.yanked) : versions.find((v) => v.hash === hash)
+  }
+
+  /**
+   * Pulls a version back (or, with `undo`, lets it go on). The version is rewritten in
+   * place, its files stay: a run that was started from it has them.
+   */
+  async yank(
+    name: string,
+    hash: string,
+    by: { iss: string; sub: string },
+    options: { reason?: string; undo?: boolean } = {}
+  ): Promise<DefinitionVersion | undefined> {
+    const version = this.versions.get(name)?.find((v) => v.hash === hash)
+    if (!version || Boolean(version.yanked) === !options.undo) {
+      return version
+    }
+    const bundle = await this.files(version)
+    if (!bundle) {
+      return version
+    }
+    const next: DefinitionVersion = { ...version }
+    if (options.undo) {
+      delete next.yanked
+    } else {
+      next.yanked = {
+        at: new Date(this.now()).toISOString(),
+        by: { iss: by.iss, sub: by.sub },
+        ...(options.reason ? { reason: options.reason } : {}),
+      }
+    }
+    const file = this.file(name, hash)
+    const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
+    await writeFile(temporary, JSON.stringify({ version: next, bundle }), { flag: 'wx' })
+    await rename(temporary, file)
+    // the same object, so whoever holds the version sees it
+    Object.keys(version).forEach((key) => delete (version as any)[key])
+    Object.assign(version, next)
+    return version
   }
 
   async files(version: DefinitionVersion): Promise<Bundle | undefined> {
@@ -92,7 +132,9 @@ export class DefinitionStore {
   async prepare(
     name: string,
     bundle: Bundle,
-    publisher: { iss: string; sub: string }
+    publisher: { iss: string; sub: string },
+    // a proposal is read before anybody trusts it: it may not make the server fetch
+    options: { noRemote?: boolean } = {}
   ): Promise<{ version: DefinitionVersion; existing?: DefinitionVersion }> {
     const hash = hashBundle(bundle)
     const existing = this.find(name, hash)
@@ -101,6 +143,7 @@ export class DefinitionStore {
     }
     const { tasks, services, inputs, plan, accounts } = await planBundle(bundle, this.environment, {
       policy: this.options.policy,
+      noRemote: options.noRemote,
     })
     return {
       version: {

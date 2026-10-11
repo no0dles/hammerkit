@@ -38,6 +38,10 @@ entitlements:
     accounts: { op-payments-ci: use }
     repos: [github.com/corp/*]
     builds: run
+  - subject: { iss: ISSUER, sub: dave }
+    accounts: { op-payments-dev: use }
+    repos: [github.com/corp/*]
+    builds: run
 `
 
 // the responses of this api are json
@@ -649,7 +653,7 @@ describe('runs api', () => {
       expect(api.server.reload(next)).toEqual({ restart: ['approvals'] })
       expect((await api.submit(request, 'carol')).status).toBe(403)
       expect((await api.submit(request)).status).toBe(202)
-      expect(api.log.join('\n')).toContain('reloaded 2 entitlements, restart for: approvals')
+      expect(api.log.join('\n')).toContain('reloaded 3 entitlements, restart for: approvals')
 
       const wrong = {
         ...next,
@@ -657,6 +661,53 @@ describe('runs api', () => {
       }
       expect(() => api.server.reload(wrong)).toThrow(/no account op-unknown/)
       expect((await api.submit(request)).status).toBe(202)
+    })
+  })
+
+  it('pulls a version back for who publishes it or uses its accounts, and no run starts from it', async () => {
+    await withApi('runs-api-yank', done, async (api) => {
+      const hash = request.definition.hash
+      const path = (action: string) => `/v1/definitions/payments/${hash}/${action}`
+      // dave uses an account, but not one of this version
+      expect((await api.call('POST', path('yank'), { sub: 'dave' })).status).toBe(403)
+      expect((await api.call('POST', path('yank'), { sub: 'nobody' })).status).toBe(404)
+      expect(
+        (await api.call('POST', `/v1/definitions/payments/sha256:${'0'.repeat(64)}/yank`, { sub: 'bob' })).status
+      ).toBe(404)
+
+      // carol uses op-payments-ci, which the version works with
+      const yanked = await api.call('POST', path('yank'), { sub: 'carol', body: { reason: 'leaks a token' } })
+      expect(yanked.status).toBe(200)
+      expect(await yanked.json()).toMatchObject({
+        hash,
+        yanked: { by: { sub: 'carol' }, reason: 'leaks a token', at: expect.any(String) },
+      })
+      expect(api.log.join('\n')).toContain(`yank payments@${hash}`)
+
+      const refused = await api.submit(request, 'carol')
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toContain('was yanked: leaks a token')
+      // it is not latest any more, the version stays for the record
+      expect((await api.call('GET', '/v1/definitions/payments/latest', { sub: 'bob' })).status).toBe(404)
+      expect((await api.submit({ ...request, definition: { name: 'payments', hash: 'latest' } })).status).toBe(400)
+      const versions = await (await api.call('GET', '/v1/definitions/payments', { sub: 'bob' })).json()
+      expect(versions.versions[0].yanked.reason).toBe('leaks a token')
+
+      // letting it go on is for who publishes
+      expect((await api.call('POST', path('unyank'), { sub: 'carol' })).status).toBe(403)
+      const back = await api.call('POST', path('unyank'), { sub: 'bob' })
+      expect(back.status).toBe(200)
+      expect((await back.json()).yanked).toBeUndefined()
+      expect((await api.submit(request, 'carol')).status).toBe(202)
+    })
+  })
+
+  it('keeps a yanked version over a restart', async () => {
+    await withApi('runs-api-yank-restart', done, async (api) => {
+      const hash = request.definition.hash
+      await api.call('POST', `/v1/definitions/payments/${hash}/yank`, { sub: 'bob' })
+      await api.restart()
+      expect((await api.submit(request, 'carol')).status).toBe(409)
     })
   })
 

@@ -1,7 +1,7 @@
 import { vi } from 'vitest'
 import { Bundle } from '../remote/bundle'
 import { DefinitionVersion } from './definitions'
-import { ProposalError, ProposalRegistry } from './proposals'
+import { CooldownError, ProposalError, ProposalRegistry } from './proposals'
 
 const version = (hash = 'sha256:' + 'a'.repeat(64)): DefinitionVersion => ({
   name: 'payments',
@@ -152,6 +152,39 @@ describe('ProposalRegistry', () => {
     registry.propose(version(hash('d')), bundle, person('agent'))
     expect(registry.get('payments', hash('a'))).toBeUndefined()
     expect(registry.get('payments', hash('b'))?.state).toBe('rejected')
+    registry.close()
+  })
+
+  describe('cooldown', () => {
+    const hash = (c: string) => 'sha256:' + c.repeat(64)
+    const reject = (registry: ProposalRegistry, h: string) =>
+      registry.decide(person('dev'), 'payments', h, 'rejected', may(true), async () => {})
+
+    it('keeps who was turned down, and nobody the same version, from proposing again at once', async () => {
+      let now = Date.parse('2026-01-01T00:00:00Z')
+      const registry = new ProposalRegistry({ cooldown: 600_000, now: () => now })
+      registry.propose(version(hash('a')), bundle, person('agent'))
+      await reject(registry, hash('a'))
+
+      now += 60_000
+      expect(() => registry.propose(version(hash('a')), bundle, person('agent'))).toThrow(CooldownError)
+      expect(() => registry.propose(version(hash('b')), bundle, person('agent'))).toThrow(/propose again in 9m/)
+      // somebody else with another version is not held back, nor is the same version of another build file
+      expect(() => registry.propose(version(hash('b')), bundle, person('other'))).not.toThrow()
+      expect(() => registry.propose(version(hash('a')), bundle, person('other'))).toThrow(CooldownError)
+      expect(() => registry.propose({ ...version(hash('c')), name: 'billing' }, bundle, person('agent'))).not.toThrow()
+
+      now += 600_000
+      expect(() => registry.propose(version(hash('a')), bundle, person('agent'))).not.toThrow()
+      registry.close()
+    })
+  })
+
+  it('remembers the version a proposal follows', () => {
+    const registry = new ProposalRegistry()
+    const { proposal } = registry.propose(version(), bundle, person('agent'), [], 'sha256:' + 'f'.repeat(64))
+    expect(proposal.base).toBe('sha256:' + 'f'.repeat(64))
+    expect(registry.propose(version('sha256:' + 'b'.repeat(64)), bundle, person('agent')).proposal.base).toBeNull()
     registry.close()
   })
 

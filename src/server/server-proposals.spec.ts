@@ -195,7 +195,7 @@ describe('proposals api', () => {
     })
   })
 
-  it('drops a rejected version with the reason, and lets it be proposed again', async () => {
+  it('drops a rejected version with the reason, and asks to wait before it is proposed again', async () => {
     await withApi('proposals-api-reject', '', async (api) => {
       const proposal = await (await api.put('agent', 'payments', files)).json()
       const rejected = await api.call('POST', path(proposal.hash, '/reject'), { body: { reason: 'not like this' } })
@@ -203,7 +203,80 @@ describe('proposals api', () => {
       expect(await rejected.json()).toMatchObject({ state: 'rejected', reason: 'not like this' })
       expect((await api.call('GET', '/v1/definitions/payments/latest')).status).toBe(404)
       expect((await api.call('POST', path(proposal.hash, '/reject'))).status).toBe(409)
+
+      // the same version, and any other by the same caller, has to wait
+      const again = await api.put('agent', 'payments', files)
+      expect(again.status).toBe(429)
+      expect((await again.json()).error).toMatch(/rejected, propose again in \d+m/)
+      expect((await api.put('agent', 'payments', changed)).status).toBe(429)
+      // others, and other build files, do not
+      expect((await api.put('agent', 'billing', files)).status).toBe(202)
+    })
+  })
+
+  it('lets a rejected version be proposed again once the cooldown is over', async () => {
+    await withApi('proposals-api-cooldown', 'approvals:\n  cooldown: 1s\n', async (api) => {
+      const proposal = await (await api.put('agent', 'payments', files)).json()
+      await api.call('POST', path(proposal.hash, '/reject'))
+      expect((await api.put('agent', 'payments', files)).status).toBe(429)
+      await sleep(1200)
       expect((await api.put('agent', 'payments', files)).status).toBe(202)
+    })
+  })
+
+  it('does not count a proposal that ran out of time as a rejection', async () => {
+    await withApi('proposals-api-expired', 'approvals:\n  timeout: 1s\n', async (api) => {
+      await api.put('agent', 'payments', files)
+      await sleep(1200)
+      expect((await api.put('agent', 'payments', files)).status).toBe(202)
+    })
+  })
+
+  it('approves only while the version it follows is still the latest', async () => {
+    await withApi('proposals-api-stale', '', async (api) => {
+      const first = await (await api.put('dev', 'payments', files)).json()
+      const proposal = await (await api.put('agent', 'payments', changed)).json()
+      expect(proposal.base).toBe(first.hash)
+      expect(await (await api.call('GET', path(proposal.hash))).json()).toMatchObject({ stale: false, canDecide: true })
+
+      // somebody publishes in the meantime
+      const newer = await (
+        await api.put('dev', 'payments', { '.hammerkit.yaml': 'tasks:\n  other:\n    cmds: [echo other]\n' })
+      ).json()
+      const seen = await (await api.call('GET', path(proposal.hash))).json()
+      expect(seen).toMatchObject({ base: first.hash, latest: newer.hash, stale: true, canDecide: false })
+
+      const approved = await api.call('POST', path(proposal.hash, '/approve'))
+      expect(approved.status).toBe(409)
+      expect((await approved.json()).error).toContain('changed since this was proposed')
+      expect((await (await api.call('GET', '/v1/definitions/payments/latest')).json()).hash).toBe(newer.hash)
+      // it can still be turned down
+      expect((await api.call('POST', path(proposal.hash, '/reject'))).status).toBe(200)
+    })
+  })
+
+  it('does not approve a first version when another one was published first', async () => {
+    await withApi('proposals-api-stale-first', '', async (api) => {
+      const proposal = await (await api.put('agent', 'payments', changed)).json()
+      expect(proposal.base).toBeNull()
+      await api.put('dev', 'payments', files)
+      expect((await api.call('POST', path(proposal.hash, '/approve'))).status).toBe(409)
+    })
+  })
+
+  it('does not fetch what a proposal includes from git before it is approved', async () => {
+    await withApi('proposals-api-git', '', async (api) => {
+      const git = {
+        '.hammerkit.yaml': `includes:\n  lib:\n    git: https://example.invalid/lib.git\n    ref: ${'a'.repeat(
+          40
+        )}\ntasks:\n  build:\n    cmds: [echo build]\n`,
+      }
+      const response = await api.put('agent', 'payments', git)
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toContain('a proposal may not include from git')
+      // somebody who may publish is trusted to
+      const published = await api.put('dev', 'payments', git)
+      expect((await published.json()).error ?? '').not.toContain('a proposal may not include from git')
     })
   })
 

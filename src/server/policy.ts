@@ -52,6 +52,13 @@ export function canUse(grant: Grant, account: string): boolean {
   return grant.accounts[account] === 'use'
 }
 
+// Pulling a version back is a safe thing to do, so it is open to who publishes the build
+// file, and to who uses an account the version works with: they are the ones who
+// answer for what runs as it.
+export function mayYank(grant: Grant, version: { accounts?: string[] }): boolean {
+  return mayPublish(grant) || (version.accounts ?? []).some((account) => canUse(grant, account))
+}
+
 export function usedAccounts(grant: Grant): string[] {
   return Object.keys(grant.accounts).filter((account) => grant.accounts[account] === 'use')
 }

@@ -1,6 +1,7 @@
 import { Bundle } from '../remote/bundle'
 import { DefinitionVersion, TaskPlan } from './definitions'
 import { Principal } from './oauth'
+import { formatDuration } from '../utils/units'
 
 type Identity = { iss: string; sub: string }
 
@@ -20,6 +21,10 @@ export interface Proposal {
   // besides being allowed to publish
   missing: string[]
   plan: Record<string, TaskPlan>
+  // the version that was the latest when it was proposed: the one it follows. It is
+  // approved only while that is still the latest, else it would put old work in front
+  // of newer
+  base: string | null
   proposedBy: Identity
   createdAt: string
   // the proposal expires if it still waits then
@@ -37,7 +42,29 @@ export type ProposalDecision =
   | { status: 'own-proposal' }
   | { status: 'not-waiting'; state: ProposalState }
 
-export class ProposalError extends Error {}
+export class ProposalError extends Error {
+  // what the caller is told
+  status: number = 503
+}
+
+// The caller proposes too soon after a rejection
+export class CooldownError extends ProposalError {
+  status = 429
+}
+
+// The build file moved on since the proposal was made
+export class StaleProposalError extends Error {
+  constructor(
+    readonly base: string | null,
+    readonly latest: string | null
+  ) {
+    super(
+      `the build file changed since this was proposed (it follows ${base ?? 'nothing'}, the latest is ${
+        latest ?? 'nothing'
+      }), propose it again on top of the latest`
+    )
+  }
+}
 
 interface Entry {
   proposal: Proposal
@@ -53,6 +80,9 @@ export interface ProposalOptions {
   timeout?: number
   // decided proposals that are kept to be looked at
   keep?: number
+  // after a rejection, the same caller can not propose the same name, nor anybody the
+  // same version, for this long (ms), so the people who decide are not asked again and again
+  cooldown?: number
   now?: () => number
 }
 
@@ -63,6 +93,7 @@ export class ProposalRegistry {
   private readonly maxWaiting: number
   private readonly timeout: number
   private readonly keep: number
+  private readonly cooldown: number
   private readonly now: () => number
   private closed = false
 
@@ -70,6 +101,7 @@ export class ProposalRegistry {
     this.maxWaiting = options.maxWaiting ?? 100
     this.timeout = options.timeout ?? 60 * 60 * 1000
     this.keep = options.keep ?? 100
+    this.cooldown = options.cooldown ?? 0
     this.now = options.now ?? Date.now
   }
 
@@ -78,7 +110,8 @@ export class ProposalRegistry {
     version: DefinitionVersion,
     bundle: Bundle,
     proposer: Pick<Principal, 'iss' | 'sub'>,
-    missing: string[] = []
+    missing: string[] = [],
+    base: string | null = null
   ): { proposal: Proposal; created: boolean } {
     if (this.closed) {
       throw new ProposalError('the server is shutting down')
@@ -88,6 +121,7 @@ export class ProposalRegistry {
     if (existing && existing.proposal.state === 'waiting') {
       return { proposal: { ...existing.proposal }, created: false }
     }
+    this.checkCooldown(version, proposer)
     if (this.waiting().length >= this.maxWaiting) {
       throw new ProposalError('too many build file versions are waiting for an approval')
     }
@@ -100,6 +134,7 @@ export class ProposalRegistry {
       accounts: version.accounts ?? [],
       missing,
       plan: version.plan ?? {},
+      base,
       proposedBy: { iss: proposer.iss, sub: proposer.sub },
       createdAt: new Date(this.now()).toISOString(),
       expiresAt: new Date(this.now() + this.timeout).toISOString(),
@@ -192,6 +227,27 @@ export class ProposalRegistry {
       entry.proposal.reason = reason
     }
     entry.bundle = undefined
+  }
+
+  // A rejection is a no; a proposal that only ran out of time is not.
+  private checkCooldown(version: DefinitionVersion, proposer: Pick<Principal, 'iss' | 'sub'>): void {
+    if (this.cooldown <= 0) {
+      return
+    }
+    for (const { proposal } of this.entries.values()) {
+      if (proposal.state !== 'rejected' || proposal.name !== version.name) {
+        continue
+      }
+      const left = Date.parse(proposal.decidedAt ?? '') + this.cooldown - this.now()
+      const sameVersion = proposal.hash === version.hash
+      const sameProposer = proposal.proposedBy.iss === proposer.iss && proposal.proposedBy.sub === proposer.sub
+      if (left > 0 && (sameVersion || sameProposer)) {
+        throw new CooldownError(
+          `${sameVersion ? 'this version was' : 'a version of this build file by you was'} rejected, ` +
+            `propose again in ${formatDuration(Math.ceil(left / 1000) * 1000)}`
+        )
+      }
+    }
   }
 
   private evict(): void {

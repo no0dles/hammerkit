@@ -46,6 +46,8 @@ so they work with or without a build file in the working directory.
 | `remote proposals [server]` | List the proposed versions of build files you made or may approve, see [Proposing](#proposing-a-version). |
 | `remote diff <name@hash> [server]` | Show what a proposed version changes. |
 | `remote approve <run or name@hash> [server]` | Let a run go ahead, or publish a proposed version. `--reason <text>` is optional. |
+| `remote yank <name@hash> [server]` | Pull a published version back: no run starts from it and it is not `latest`. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
+| `remote unyank <name@hash> [server]` | Let a yanked version go on. Needs `builds: publish`. |
 | `remote reject <run or name@hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
@@ -145,7 +147,10 @@ The diff shows the lines that changed with two lines around them, in full and wi
 control characters replaced by `?`, so nothing hides in it. It shows the files of the
 bundle, not what the commands in them do. `remote reject` drops the proposal, with a
 `--reason` the one who proposed it reads in `remote proposals`. Nobody approves their
-own proposal, and what you may not decide does not exist for you.
+own proposal, and what you may not decide does not exist for you. A proposal is `stale`
+when another version was published since: `remote proposals` and `remote diff` say so,
+and it can only be rejected, then proposed again on top of the new version. After a
+rejection you can not propose that build file again for ten minutes (`approvals.cooldown`).
 
 ## Approving runs
 

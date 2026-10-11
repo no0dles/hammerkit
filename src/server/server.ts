@@ -217,6 +217,14 @@ async function submitRun(
     send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
     return
   }
+  if (version.yanked) {
+    send(res, 409, {
+      error: `${version.name} at ${version.hash} was yanked${
+        version.yanked.reason ? `: ${version.yanked.reason}` : ''
+      }`,
+    })
+    return
+  }
   const known = [...version.tasks, ...version.services]
   const unknown = request.tasks.filter((task) => !known.includes(task))
   if (unknown.length > 0) {
@@ -456,6 +464,7 @@ export async function startServer(
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),
+    cooldown: parseDuration(config.approvals.cooldown),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
     handle(config, registry, definitions, proposals, sources, planning, repos, verifier, log, req, res).catch((e) => {

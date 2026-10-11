@@ -196,6 +196,15 @@ describe('remote publish', () => {
       await h.run('remote', 'login', 'build')
       const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0]
       expect(await h.run('remote', 'approve', `payments@${hash}`, 'build')).toContain('it is published')
+
+      // and pulls it back, which refuses runs of it until it is let go on
+      expect(await h.run('remote', 'yank', `payments@${hash}`, 'build', '--reason', 'leaks')).toContain(
+        `yanked payments@${hash} on build`
+      )
+      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(404)
+      expect(await h.run('remote', 'unyank', `payments@${hash}`, 'build')).toContain('let go on')
+      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(200)
+      await expect(h.run('remote', 'yank', 'payments', 'build')).rejects.toThrow('is not a version')
     })
   })
 

@@ -81,6 +81,14 @@ export class HostExecutor implements RunExecutor {
     if (!version || !bundle) {
       throw new Error(`the build file ${run.definition.name} at ${run.definition.hash} is no longer on this server`)
     }
+    // pulled back after the run was accepted, while it waited for an approval or in the queue
+    if (version.yanked) {
+      throw new Error(
+        `the build file ${run.definition.name} at ${run.definition.hash} was yanked${
+          version.yanked.reason ? `: ${version.yanked.reason}` : ''
+        }`
+      )
+    }
     if (run.source.type !== 'ref') {
       throw new Error('runs from an upload are not supported by this server yet, use a git ref')
     }
