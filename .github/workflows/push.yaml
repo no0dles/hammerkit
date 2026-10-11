@@ -74,9 +74,10 @@ jobs:
           "$RCODESIGN" sign hammerkit-macos-arm64
           "$RCODESIGN" sign hammerkit-macos-x64
       - name: Create release
-        # release.yaml has already created the release (with its notes) by the
-        # time this runs; a tag pushed by hand has none yet. Either way the
-        # binaries end up on it.
+        # The release is created here, with its binaries, in one step: the
+        # repository's releases are immutable, so assets can't be added to one
+        # that is already published. Notes are the tag's CHANGELOG.md section
+        # (release.yaml writes it); a hand-pushed tag without one gets generated notes.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -92,12 +93,9 @@ jobs:
             hammerkit-win-x64.exe
           )
           if [ "$PRERELEASE" = "true" ]; then channel=--prerelease; else channel=--latest; fi
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "${assets[@]}" --clobber
-            gh release edit "$TAG" --title "$VERSION" "$channel"
-          else
-            gh release create "$TAG" --title "$VERSION" "$channel" "${assets[@]}"
-          fi
+          awk -v v="[$VERSION]" 'index($0, v) && /^#/ { p = 1; next } /^#+ \[/ { p = 0 } p' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ -s "$RUNNER_TEMP/notes.md" ]; then notes=(--notes-file "$RUNNER_TEMP/notes.md"); else notes=(--generate-notes); fi
+          gh release create "$TAG" --title "$VERSION" "$channel" "${notes[@]}" "${assets[@]}"
 
   npm:
     needs: version

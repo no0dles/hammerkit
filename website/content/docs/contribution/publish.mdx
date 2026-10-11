@@ -27,9 +27,10 @@ AI agents working in this repository ask first and never add the marker themselv
 
 1. bumps `package.json` and `package-lock.json` and adds the section to `CHANGELOG.md`, in a
    `chore(release): x.y.z [skip ci]` commit on master,
-2. tags `vX.Y.Z` and creates the GitHub release with the notes,
-3. starts the publish workflow (`.github/workflows/push.yaml`) for the tag: binaries on the
-   release, the Docker Hub image and npm. For a stable release it then regenerates the
+2. tags `vX.Y.Z`,
+3. starts the publish workflow (`.github/workflows/push.yaml`) for the tag: it creates the GitHub
+   release with the changelog section as notes and the binaries attached, publishes the Docker
+   Hub image and publishes to npm. For a stable release it then regenerates the
    formula in the [Homebrew tap](https://github.com/no0dles/homebrew-hammerkit) from the
    binaries' checksums and pushes it to the tap's `main`.
 
@@ -39,7 +40,8 @@ AI agents working in this repository ask first and never add the marker themselv
 * The Homebrew step needs the secret `HOMEBREW_TAP_TOKEN`, a fine-grained token with *Contents:
   write* on `no0dles/homebrew-hammerkit` only. Without it the step is skipped and the formula is
   updated by hand (`hammerkit.rb.tmpl` in the tap lists the placeholders).
-* If publishing fails, fix the cause and re-run it from the tag: *Actions → publish → Run
-  workflow*, choosing the `vX.Y.Z` tag as the ref.
+* The repository's releases are immutable, so the release is created together with its binaries
+  and cannot be edited afterwards. If publishing fails before the release exists, fix the cause and
+  re-run it from the tag: *Actions → publish → Run workflow*, choosing the `vX.Y.Z` tag as the ref.
 * A prerelease (`1.12.0-alpha.0`) is still cut by hand with `npm version prerelease --preid alpha`
   and `git push origin --follow-tags`; the npm dist-tag follows the preid.
