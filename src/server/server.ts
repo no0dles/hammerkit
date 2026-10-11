@@ -7,16 +7,8 @@ import { detectPlatform, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { getGrant, maySeeDefinitions } from './policy'
-import {
-  isFinal,
-  RUN_ID_PATTERN,
-  RunError,
-  RunExecutor,
-  Run,
-  RunRegistry,
-  StoredEvent,
-  unavailableExecutor,
-} from './runs'
+import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, StoredEvent } from './runs'
+import { HostExecutor } from './executor'
 import { runRequestSchema } from './run-request'
 import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
@@ -327,8 +319,16 @@ export async function startServer(
     environment
   )
   await definitions.load()
+  const executor =
+    options.executor ??
+    new HostExecutor({
+      config,
+      definitions,
+      environment,
+      directory: join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'runs'),
+    })
   const registry = new RunRegistry({
-    executor: options.executor ?? unavailableExecutor,
+    executor,
     maxConcurrent: config.runs.maxConcurrent,
     keep: config.runs.keep,
     maxWaiting: config.approvals.maxWaiting,

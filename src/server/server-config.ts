@@ -169,6 +169,21 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
+    // where a run gets its code from: the repository of each build file, by its name.
+    // The caller names a branch, tag or commit of it, never a repository.
+    sources: z
+      .record(
+        definitionName,
+        z
+          .object({
+            git: z
+              .string()
+              .min(1)
+              .refine((value) => !value.startsWith('-'), 'a repository can not look like an option'),
+          })
+          .strict()
+      )
+      .default({}),
     // where the server keeps what must survive a restart: the published build files
     storage: z
       .object({ directory: z.string().min(1).optional() })

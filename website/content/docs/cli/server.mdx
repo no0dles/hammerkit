@@ -55,6 +55,8 @@ entitlements:
       match: { repository: corp/payments, ref: refs/heads/main }
     accounts: [op-payments-ci]
     source: [ref]
+sources:
+  payments: { git: git@github.com:corp/payments.git }   # where the code of a run comes from
 approvals:
   timeout: 1h        # default
   maxWaiting: 100    # default
@@ -76,7 +78,8 @@ backend:
 | `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
 | `entitlements` | Who may use which service account, see [below](#entitlements). |
 | `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
-| `storage` | Where the server keeps what must survive a restart: the published build files. |
+| `sources` | The repository of each published build file, by its name. A run with `source: ref` gets its code from there, see [Executing a run](#executing-a-run). Credentials are those of the git configuration of the user the server runs as. |
+| `storage` | Where the server keeps what must survive a restart: the published build files. Runs work in `runs/` below it while they run. |
 | `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
 
@@ -319,9 +322,36 @@ and `log` (a line of a task's output). A run that
 produces more than 5000 events is cut off with one `truncated` event, the state
 changes are always kept.
 
-> This server cannot execute runs yet: until a backend is wired in, an accepted run
-> fails at once with the reason `this server has no backend that can execute runs
-> yet`. What exists is the part around it, authorization, queueing, state and events.
+### Executing a run
+
+The server runs the tasks of an accepted run on its own machine, with the same engine
+as `hammerkit run`, so the `local` and `docker` runtimes and the task cache work as
+they do there:
+
+1. It fetches the `ref` (a branch, tag or commit) of the repository the operator set
+   in `sources.<build file name>.git`, into a directory made for the run. The caller
+   names a ref, never a repository, and a ref that is not a plain branch, tag or
+   commit name is refused.
+2. It writes the files of the published version over the checkout, so the tasks are
+   the published ones whatever the build file in the repository says.
+3. It runs the tasks in the order they were named (or the ones the labels select),
+   stopping at the first one that fails, and reports each task and its output as
+   events.
+4. It removes the directory, whether the run succeeded, failed or was cancelled.
+
+The tasks only see the tools to find docker and the network (`PATH`, `HOME`,
+`DOCKER_HOST`, proxy settings and the like) from the environment of the server, not
+the rest of it, so the secrets the operator gave the server stay with the server.
+The local task cache is shared by all runs: a task is keyed by its definition and its
+sources, not by where the checkout is.
+
+A run fails with the reason when the server has no `sources` entry for its build file,
+when the ref can not be fetched, or when it comes from an `upload`: uploads are not
+supported by the executor yet, use `source: ref`. Cancelling a run stops the fetch or
+the running task.
+
+> Service accounts are only checked against the entitlements for now: the executor
+> does not resolve the secrets of an account yet.
 
 ## Approvals
 

@@ -1,5 +1,7 @@
 import { join } from 'path'
-import { writeFileSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { readServerConfig } from './server-config'
@@ -34,7 +36,12 @@ interface Api {
   submit: (body: unknown, sub?: string) => Promise<JsonResponse>
 }
 
-async function withApi(name: string, executor: RunExecutor | undefined, fn: (api: Api) => Promise<void>) {
+async function withApi(
+  name: string,
+  executor: RunExecutor | undefined,
+  fn: (api: Api) => Promise<void>,
+  extraConfig = ''
+) {
   const key = createTestKey('ES256', 'k1')
   const idp = await startTestIssuer([key])
   try {
@@ -44,7 +51,10 @@ async function withApi(name: string, executor: RunExecutor | undefined, fn: (api
         file,
         `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
           join(cwd, 'server-data')
-        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
+        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
+          /ISSUER/g,
+          `"${idp.url}"`
+        )}${extraConfig}`
       )
       const log: string[] = []
       const server = await startServer(await readServerConfig(env, file), env, {
@@ -346,12 +356,46 @@ describe('runs api', () => {
     })
   })
 
-  it('records a run the server cannot execute yet as failed, with the reason', async () => {
-    await withApi('runs-api-no-backend', undefined, async (api) => {
+  it('fails a run with the reason when the server has no repository for the build file', async () => {
+    await withApi('runs-api-no-source', undefined, async (api) => {
       const run = await (await api.submit(request)).json()
       const failed = await untilState(api, run.id, ['failed'])
-      expect(failed.error).toBe('this server has no backend that can execute runs yet')
+      expect(failed.error).toContain('sources.payments.git')
     })
+  })
+
+  it('runs a task from a git ref of the repository of the server and streams it', async () => {
+    const repository = mkdtempSync(join(tmpdir(), 'hammerkit-api-repository-'))
+    try {
+      const git = (...args: string[]) =>
+        execFileSync(
+          'git',
+          ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args],
+          { cwd: repository }
+        )
+      git('init', '--quiet', '--initial-branch=main')
+      writeFileSync(join(repository, 'input.txt'), 'from-the-ref')
+      git('add', '.')
+      git('commit', '--quiet', '-m', 'one')
+      await withApi(
+        'runs-api-git',
+        undefined,
+        async (api) => {
+          const published = await api.call('PUT', '/v1/definitions/payments', {
+            body: { files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' } },
+          })
+          const hash = (await published.json()).hash
+          const run = await (await api.submit({ ...request, definition: { name: 'payments', hash } })).json()
+          expect((await untilState(api, run.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+          const events = await readEvents(await api.call('GET', `/v1/runs/${run.id}/events`))
+          expect(events.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
+          expect(events.some((e) => e.event === 'task' && e.data.state === 'succeeded')).toBe(true)
+        },
+        `sources:\n  payments: { git: ${JSON.stringify(repository)} }\n`
+      )
+    } finally {
+      rmSync(repository, { recursive: true, force: true })
+    }
   })
 
   it('answers 404 or 405 for what is not a run call', async () => {
