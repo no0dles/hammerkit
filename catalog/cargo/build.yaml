@@ -16,8 +16,8 @@ tasks:
       - '**/*.rs'
     generates: [target]
     mounts:
-      - ~/.cargo/registry:/usr/local/cargo/registry
-      - ~/.cargo/git:/usr/local/cargo/git
+      - $PWD/.cargo/registry:/usr/local/cargo/registry
+      - $PWD/.cargo/git:/usr/local/cargo/git
     cmds:
       - cargo build ${CARGO_ARGS}
 
@@ -31,7 +31,7 @@ tasks:
       - '**/Cargo.toml'
       - '**/*.rs'
     mounts:
-      - ~/.cargo/registry:/usr/local/cargo/registry
-      - ~/.cargo/git:/usr/local/cargo/git
+      - $PWD/.cargo/registry:/usr/local/cargo/registry
+      - $PWD/.cargo/git:/usr/local/cargo/git
     cmds:
       - cargo test ${CARGO_ARGS}

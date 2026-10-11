@@ -52,6 +52,15 @@ describe('catalog', () => {
       }
     })
 
+    it('mounts host caches from the home directory with $PWD, which ~ does not mean', () => {
+      const tasks = Object.values(buildFileSchema.parse(readYaml(buildFile)).tasks ?? {})
+      for (const task of tasks) {
+        for (const mount of 'mounts' in task ? task.mounts ?? [] : []) {
+          expect(mount).not.toMatch(/^~/)
+        }
+      }
+    })
+
     it('has a fixture that includes the entry from git and runs verify', () => {
       const consumer = buildFileSchema.parse(readYaml(fixture))
       const include = consumer.includes?.[entry]
