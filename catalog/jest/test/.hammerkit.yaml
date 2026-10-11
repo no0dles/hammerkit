@@ -1,0 +1,27 @@
+# Consumes the jest entry the way a project would, with the npm entry installing the
+# dependencies it needs. The catalog spec replaces CATALOG_URL with a git repository
+# holding this catalog.
+includes:
+  npm:
+    git: CATALOG_URL
+    path: catalog/npm
+    with:
+      NODE_VERSION: 22
+  jest:
+    git: CATALOG_URL
+    path: catalog/jest
+    with:
+      NODE_VERSION: 22
+
+tasks:
+  test:
+    extend: jest:test
+    deps: [npm:install]
+
+  verify:
+    description: the tests ran and left a coverage report
+    image: node:22-alpine
+    src: [package.json]
+    deps: [test]
+    cmds:
+      - test -d coverage

@@ -19,8 +19,7 @@
     "logs",
     "reports",
     "docs",
-    "specs",
-    "best-practices"
+    "specs"
   ],
   "concurrency": 2,
   "reporters": [

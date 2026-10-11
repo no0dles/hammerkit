@@ -1,0 +1,15 @@
+# Lints a project with ESLint. The project's own dependencies must be installed first, see the
+# page of this entry.
+envs:
+  # tag of the node image eslint runs in
+  NODE_VERSION: 24
+  # folder with the sources to lint, relative to the working directory
+  SOURCE_DIR: src
+
+tasks:
+  check:
+    description: lint the sources with eslint
+    image: node:${NODE_VERSION}-alpine
+    src: [package.json, 'eslint.config.*', '${SOURCE_DIR}']
+    cmds:
+      - node_modules/.bin/eslint ${SOURCE_DIR}

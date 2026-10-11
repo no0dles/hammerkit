@@ -1,0 +1,5 @@
+apiVersion: v2
+name: hello
+description: A chart for the catalog test
+version: 0.1.0
+appVersion: '1.0.0'

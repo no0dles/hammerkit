@@ -23,7 +23,6 @@ import { createCli } from '../program'
 const repoRoot = join(__dirname, '..', '..')
 // the pages of hammerkit.dev
 const docsDir = join(repoRoot, 'website', 'content', 'docs')
-const bestPracticesDir = join(repoRoot, 'best-practices')
 
 // Top-level keys the build-file schema understands. Mirrors buildFileSchema's
 // shape; kept here only to classify "is this block a hammerkit build file at all".
@@ -357,26 +356,5 @@ describe('landing page snippets', () => {
         }
       }
     )
-  })
-})
-
-describe('best-practices build configs', () => {
-  const files = readdirSync(bestPracticesDir)
-    .filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'))
-    .sort()
-
-  it('finds the best-practices templates', () => {
-    expect(files.length).toBeGreaterThanOrEqual(7)
-  })
-
-  it.each(files)('%s is a valid build file', async (name) => {
-    const parsed = yamlParse(readFileSync(join(bestPracticesDir, name), 'utf8'))
-    const result = await buildFileSchema.safeParseAsync(parsed)
-    if (!result.success) {
-      throw new Error(
-        `best-practices/${name} fails the build-file schema:\n` +
-          result.error.issues.map((iss) => `  - ${iss.path.join('.')}: ${iss.message}`).join('\n')
-      )
-    }
   })
 })

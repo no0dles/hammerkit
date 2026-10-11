@@ -1,0 +1,27 @@
+# Consumes the tsc entry the way a project would, with the npm entry installing the
+# dependencies it needs. The catalog spec replaces CATALOG_URL with a git repository
+# holding this catalog.
+includes:
+  npm:
+    git: CATALOG_URL
+    path: catalog/npm
+    with:
+      NODE_VERSION: 22
+  tsc:
+    git: CATALOG_URL
+    path: catalog/tsc
+    with:
+      NODE_VERSION: 22
+
+tasks:
+  build:
+    extend: tsc:build
+    deps: [npm:install]
+
+  verify:
+    description: the compiled program runs
+    image: node:22-alpine
+    src: [package.json]
+    deps: [build]
+    cmds:
+      - node dist/index.js | grep -q "hello catalog"
