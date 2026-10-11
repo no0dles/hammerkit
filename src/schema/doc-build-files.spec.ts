@@ -38,6 +38,7 @@ const KNOWN_TOP_KEYS = new Set([
   'secretProviders',
   'secretAccounts',
   'labels',
+  'runner',
 ])
 
 // A doc block can declare itself intentionally invalid by putting this comment

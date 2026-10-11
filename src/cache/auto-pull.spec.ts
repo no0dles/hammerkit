@@ -81,6 +81,7 @@ describe('checkCacheState auto-pull', () => {
         timeout: null,
         secrets: [],
         resources: null,
+        runner: null,
         caching: resolved,
         description: null,
         scope: {} as any,
