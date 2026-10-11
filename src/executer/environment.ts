@@ -2,6 +2,7 @@ import { FileContext } from '../file/file-context'
 import { ConsoleContext } from '../console/console-context'
 import { StatusConsole } from '../planner/work-item-status'
 import { Writable } from 'stream'
+import { SecretRegistry } from '../utils/redact'
 
 export interface Environment {
   processEnvs: { [key: string]: string | undefined }
@@ -13,4 +14,6 @@ export interface Environment {
   stdout: Writable
   stderr: Writable
   stdoutColumns: number
+  // the secret values this run has read, masked in all it logs
+  secrets: SecretRegistry
 }

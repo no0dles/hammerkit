@@ -104,6 +104,13 @@ tasks:
       REGISTRY: ${REGISTRY:-}
       HAMMERKIT_FULL_INTEGRATION: ${HAMMERKIT_FULL_INTEGRATION:-}
       HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+      # secrets-gsm.spec.ts: the demo project and the paths of two key files (never the keys)
+      GCP_PROJECT: ${GCP_PROJECT:-}
+      GSM_TEST_CREDENTIALS: ${GSM_TEST_CREDENTIALS:-}
+      GSM_OTHER_CREDENTIALS: ${GSM_OTHER_CREDENTIALS:-}
+      # secrets-1password.spec.ts: the paths of two files with service account tokens (never the tokens)
+      OP_TEST_TOKEN_FILE: ${OP_TEST_TOKEN_FILE:-}
+      OP_OTHER_TOKEN_FILE: ${OP_OTHER_TOKEN_FILE:-}
     cmds:
       - >-
         node_modules/.bin/vitest run --mode integration --no-file-parallelism

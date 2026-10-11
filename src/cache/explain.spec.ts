@@ -236,13 +236,13 @@ describe('cache explain (fast)', () => {
 
       // first run: never cached → the miss cause is reported inline
       const status1 = memoryStream()
-      environment.status = statusConsole(status1.stream)
+      environment.status = statusConsole(status1.stream, environment.secrets)
       await runProgram(environment, ['hammerkit', 'run', '--explain'], true)
       expect(status1.read()).toContain('cache miss')
 
       // second run: now a cache hit → no miss reason
       const status2 = memoryStream()
-      environment.status = statusConsole(status2.stream)
+      environment.status = statusConsole(status2.stream, environment.secrets)
       await runProgram(environment, ['hammerkit', 'run', '--explain'], true)
       expect(status2.read()).not.toContain('cache miss')
     })

@@ -1,0 +1,102 @@
+# Playground for secret providers against Google Secret Manager (secret hammerkit-playground).
+# Everything here is local tasks, no Docker needed (the `container` task is optional).
+# Setup and what to look for: README.md. src/testing/integration/secrets-gsm.spec.ts runs it in CI.
+
+secretProviders:
+  gsm:
+    # the CLI documented in the secret providers page; --secret={{ref}} keeps a ref from becoming an option
+    command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}', '--project=${GCP_PROJECT}']
+    env:
+      # an empty config directory: proves no personal `gcloud auth login` is used and gcloud runs without HOME
+      CLOUDSDK_CONFIG: '${PLAYGROUND_GCLOUD_CONFIG}'
+
+secretAccounts:
+  test: # default: the service account that may read the playground secret
+    default: true
+    providers:
+      gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '${GSM_TEST_CREDENTIALS}' } }
+  other: # optional second service account, to see `account:` switch identities
+    providers:
+      gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '${GSM_OTHER_CREDENTIALS}' } }
+  nobody: # its variable is never set: the secret must fail closed, not fall back to a login
+    providers:
+      gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: '${GSM_NOBODY_CREDENTIALS}' } }
+
+tasks:
+  show:
+    description: reads the secret as the default account; the value must appear masked
+    cmds:
+      - 'echo "length: ${#SECRET}"'
+      - 'echo "value:  $SECRET"'
+    secrets:
+      - from: gsm:hammerkit-playground
+        env: SECRET
+
+  encodings:
+    description: prints the value base64, hex and URL-encoded; all must be masked
+    cmds:
+      - 'printf %s "$SECRET" | base64'
+      - 'printf %s "$SECRET" | od -An -tx1 | tr -d " \n"; echo'
+      - 'echo "plain: $SECRET"'
+    secrets:
+      - from: gsm:hammerkit-playground
+        env: SECRET
+
+  as-other:
+    description: same secret as the `other` service account (needs GSM_OTHER_CREDENTIALS); expected to be denied, other may only read hammerkit-playground-other
+    account: other
+    cmds:
+      - 'echo "as other: $SECRET"'
+    secrets:
+      - from: gsm:hammerkit-playground
+        env: SECRET
+
+  other-secret:
+    description: the secret the `other` account may read; shows `account:` switching identities
+    account: other
+    cmds:
+      - 'echo "other: $SECRET"'
+    secrets:
+      - from: gsm:hammerkit-playground-other
+        env: SECRET
+
+  fail-closed:
+    description: must FAIL naming account nobody and GSM_NOBODY_CREDENTIALS, and never read the secret with your own login
+    cmds:
+      - 'echo "this must not run"'
+    secrets:
+      - from: gsm:hammerkit-playground
+        env: SECRET
+        account: nobody
+
+  missing:
+    description: must FAIL naming the secret, provider and account (no such secret)
+    cmds:
+      - 'echo "this must not run"'
+    secrets:
+      - from: 'gsm:hammerkit-playground-does-not-exist'
+        env: SECRET
+
+  keyed:
+    description: cache-affecting; a new secret version gives a new task id (see README, `explain`)
+    src: [playground.txt]
+    generates:
+      - path: keyed.out
+    cmds:
+      - 'echo "built with a secret of length ${#SECRET}" > keyed.out'
+    secrets:
+      - from: gsm:hammerkit-playground
+        env: SECRET
+        cache: true
+
+  container:
+    description: optional, needs Docker; hands the value to a container as env and as a read-only file
+    image: alpine:3.21
+    cmds:
+      - 'echo "env:  $SECRET"'
+      - 'echo "file: $(cat /run/secrets/value)"'
+    secrets:
+      - from: gsm:hammerkit-playground
+        env: SECRET
+      - from: gsm:hammerkit-playground
+        path: /run/secrets/value

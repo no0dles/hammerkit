@@ -129,7 +129,15 @@ function parseService(
       caching,
       // set once the service is planned, see appendServiceInit
       init: null,
-      secrets: parseWorkSecrets(service.cwd, context.projectRoot, service.schema.secrets, envs, environment),
+      secrets: parseWorkSecrets(
+        service.cwd,
+        context.projectRoot,
+        service.schema.secrets,
+        envs,
+        environment,
+        context.secrets,
+        service.schema.account
+      ),
       resources: parseWorkResources(service.schema.resources),
     }
   }
