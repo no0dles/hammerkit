@@ -14,7 +14,7 @@ includes:
     ref: v1.20.0
     path: catalog/dotnet
     with:
-      DOTNET_VERSION: '9.0'
+      DOTNET_VERSION: '10.0'
       PROJECT: tests/Hello.Tests
 
 tasks:
@@ -43,7 +43,7 @@ case, for example `dotnet artifacts/bin/Hello/release/Hello.dll`.
 
 | Input | Default | Meaning |
 |---|---|---|
-| `DOTNET_VERSION` | `10.0` | Tag of the `mcr.microsoft.com/dotnet/sdk` image the tasks run in. Quote it in `with` (`'9.0'`), or YAML reads it as the number 9. |
+| `DOTNET_VERSION` | `10.0` | Tag of the `mcr.microsoft.com/dotnet/sdk` image the tasks run in. Quote it in `with` (`'10.0'`), or YAML reads it as the number 10. |
 | `PROJECT` | `.` | The project or solution to build and test. |
 | `SOURCES` | `{src/**,tests/**,Directory.*,global.json,nuget.config}` | A glob of the files the tasks read: the code under `src` and `tests`, and the shared build files at the root. Replace it when your projects live elsewhere, for example `{app/**,Directory.*}`. |
 | `CONFIGURATION` | `Release` | The build configuration. |
