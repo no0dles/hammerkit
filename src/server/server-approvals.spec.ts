@@ -90,7 +90,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
         file,
         `runs: { env: { allow: ${JSON.stringify(
           HOST_ENV_ALLOW
-        )} } }\nlisten: { port: 0 }\nstorage: { directory: ${JSON.stringify(
+        )} } }\nruntimes: [docker, local]\nlisten: { port: 0 }\nstorage: { directory: ${JSON.stringify(
           join(cwd, 'server-data')
         )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${(
           entitlements +

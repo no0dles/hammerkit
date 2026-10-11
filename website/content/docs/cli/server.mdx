@@ -73,6 +73,7 @@ sources:                            # the repositories a run may get its code fr
     secret: { from: 'gsm:github-readonly-token', account: scm-read }
   - match: gitlab.corp.com/platform/**   # a group with its subgroups
     secret: { from: 'gsm:gitlab-group-token', account: scm-read, username: oauth2 }
+runtimes: [docker]   # what tasks may run on, docker by default
 approvals:
   timeout: 1h        # default
   maxWaiting: 100    # default
@@ -100,6 +101,7 @@ backend:
 | `entitlements` | Who may use or request which service account, and what they may do with build files, see [below](#entitlements). |
 | `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
 | `sources` | The repositories a run with `source: ref` may get its code from, see [Repositories](#repositories). |
+| `runtimes` | What tasks may run on: `docker` (containers, the default) and `local` (commands on this machine as the user of the server, which have to be allowed by name). A build file with a task on a runtime that is not listed is refused when it is published or proposed, see [What a build file may not do](#what-a-build-file-may-not-do). The server logs a warning at startup when `local` is allowed. |
 | `storage` | Where the server keeps what must survive a restart: the published build files. Runs work in `runs/` below it while they run. |
 | `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. `env.allow` lists the variables of the server process that a run, its provider commands and the git fetch can see, and `env.set` adds fixed values; nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
@@ -326,6 +328,23 @@ message lists the accounts that exist.
 approved by somebody who may publish and who uses the accounts the proposer lacks. So
 one person can not publish a task that reads the production key for somebody else to
 run without a second pair of eyes.
+
+**What a build file may not do.** A build file is written by whoever publishes it and runs
+with what the operator gave the server, so a bundle is refused (`400`, naming the file and
+task) when it
+
+* names `environments`: the docker host or Kubernetes cluster is the server's to choose,
+* has a service for Kubernetes (`selector`, `kubeconfig` or `context`),
+* names a cache backend other than the server's own (`s3`, `registry`, or a `path`),
+* mounts a path outside of the bundle into a container, such as the docker socket, `/etc`
+  or a home directory,
+* has a task on a runtime that `runtimes` does not allow,
+* declares `secretProviders` or `secretAccounts`, reads a `file:` secret, reads an `env:`
+  secret the server does not list in `runs.env.allow`, or reads a secret as the account
+  that reads repositories (see [Accounts](#accounts) and [Repositories](#repositories)).
+
+Without this a task with no secrets would still reach what the operator's machine can: a
+published file would be enough to send a run, or the cache, to a host of its choosing.
 
 ### Proposing a version
 
@@ -554,25 +573,38 @@ names no branch.
 
 The server runs the tasks of an accepted run on its own machine, with the same engine
 as `hammerkit run`, so the `local` and `docker` runtimes and the task cache work as
-they do there:
+they do there. Each run executes in a process of its own (`hammerkit server-run`, started
+by the server):
 
 1. It fetches the ref of the repository, as pinned to its commit when the run was
    submitted (see [Repositories](#repositories)), into a directory made for the run. A ref
    that is not a plain branch, tag or commit name is refused.
 2. It writes the files of the published version over the checkout, so the tasks are
-   the published ones whatever the build file in the repository says.
-3. It runs the tasks in the order they were named (or the ones the labels select),
-   stopping at the first one that fails, and reports each task and its output as
-   events.
+   the published ones whatever the build file in the repository says. A file that would
+   land in `.git` (in any spelling a case-insensitive file system reads as that) or
+   behind a symbolic link of the checkout is refused.
+3. It starts the process of the run in the checkout and runs the tasks in the order they
+   were named (or the ones the labels select), stopping at the first one that fails, and
+   reports each task and its output as events. Cancelling the run stops the process with
+   `SIGTERM`, so the engine stops its tasks and removes its containers, and kills it after
+   15 seconds.
 4. It removes the directory, whether the run succeeded, failed or was cancelled.
 
-The tasks, the git fetch and the provider commands only see the variables of the server
-that `runs.env.allow` lists, plus `runs.env.set`; the rest of the server's environment
-stays with the server. The local task cache is shared by all runs: a task is keyed by its definition and its
-sources, not by where the checkout is.
+The process starts with an environment the server builds, not with its own: the variables
+`runs.env.allow` lists, plus `runs.env.set`, and a `HOME` that is an empty directory of the
+run's alone. So what the engine reads of its process (the docker host, registry logins in
+the home directory, cloud credentials) is what the operator gave runs and nothing else; a
+private registry needs `DOCKER_CONFIG` in the allowlist, pointing to a login the operator
+chose for runs. Tasks do not get the environment of the process either, only their own
+`envs` and the secrets they declare.
+
+The task cache is kept below the server's `storage` directory, one cache for the runs of
+a repository and one per caller for uploads. A run from an upload can therefore not leave
+an entry that a run from a reviewed repository finds. A task is keyed by its definition
+and its sources, not by where the checkout is.
 
 A run fails with the reason when the server does not list the repository, when the ref
-can not be fetched or has moved, or when it comes from an `upload`: uploads are not
+can not be fetched or has moved, when it comes from an `upload`: uploads are not
 supported by the executor yet, use `source: ref`. Cancelling a run stops the fetch or
 the running task.
 
@@ -580,6 +612,15 @@ Before it starts, the executor derives the accounts of the run again from the pi
 files with the run's environment, and fails the run if it would use one it was not
 admitted for. The secrets of the tasks are read as the accounts of the server config, by
 the provider commands, and a secret of any other account is refused when it is fetched.
+
+**One server is one trust level.** The process of a run is not a sandbox. It runs as the user
+of the server, a `local` task reads everything that user can read, and a container task can
+use the docker daemon the server is configured for. Accounts keep credentials apart (a task
+only reads the secrets of the accounts its run was admitted for), but they do not keep code
+apart on one machine. Do not mix production and untrusted agents on one server: run
+them on different servers, each with the accounts of its own level, and with `local` only on
+a server whose users you trust with the machine. The storage directory and the other runs of
+a server are inside what a `local` task can read.
 
 ## Approvals
 

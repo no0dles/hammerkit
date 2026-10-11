@@ -68,6 +68,8 @@ export interface PlanPolicy {
   envs: string[]
   // the accounts that only the server uses, such as the one that reads repositories
   reserved?: string[]
+  // what tasks may run on; every runtime when left out
+  runtimes?: ('docker' | 'local')[]
 }
 
 export interface PlanOptions {
@@ -108,6 +110,48 @@ function findLooseIncludes(bundle: Bundle): string[] {
         if (typeof source.ref !== 'string' || !COMMIT_PATTERN.test(source.ref)) {
           problems.push(`${path}: ${block}.${name}: pin ref to a commit, a branch or tag can move`)
         }
+      }
+    }
+  }
+  return problems
+}
+
+// What a build file may not name on a server: the places it would run or store things
+// are the operator's. The docker host, a Kubernetes cluster and a remote cache are
+// credentials of the machine, not of the build file, and a project file that could carry
+// them could send runs, or the cache, anywhere.
+function findHostProblems(bundle: Bundle): string[] {
+  const problems: string[] = []
+  for (const [path, content] of Object.entries(bundle.files)) {
+    if (!/\.ya?ml$/i.test(path)) {
+      continue
+    }
+    let document: any
+    try {
+      document = parse(content)
+    } catch {
+      continue // reported when the bundle is parsed
+    }
+    if (!document || typeof document !== 'object') {
+      continue
+    }
+    if (document.environments && Object.keys(document.environments).length > 0) {
+      problems.push(
+        `${path}: environments pick a docker host or a Kubernetes cluster, which are the server's to choose, remove them`
+      )
+    }
+    for (const [name, cache] of Object.entries<any>(document.caches ?? {})) {
+      if (cache?.backend?.type !== 'local' || cache.backend.path !== undefined) {
+        problems.push(`${path}: caches.${name}: a server keeps its own cache, a build file names no backend or path`)
+      }
+    }
+    for (const [name, service] of Object.entries<any>(document.services ?? {})) {
+      if (
+        service &&
+        typeof service === 'object' &&
+        ('selector' in service || 'kubeconfig' in service || 'context' in service)
+      ) {
+        problems.push(`${path}: services.${name}: Kubernetes services are not supported on a server`)
       }
     }
   }
@@ -174,9 +218,26 @@ function describeSecret(secret: WorkSecret): { from: string; account: string | n
 // What a server refuses to publish. A secret that reads a file or a variable of the
 // server has no account, so nothing would stand between the build file and the
 // operator's own credentials.
-function findPolicyProblems(items: Item[], policy: PlanPolicy): string[] {
+function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): string[] {
   const problems: string[] = []
   for (const item of items) {
+    const runtime = item.data.type === 'local-task' ? 'local' : 'docker'
+    if (policy.runtimes && !policy.runtimes.includes(runtime)) {
+      problems.push(
+        `${
+          item.name
+        }: runs on the ${runtime} runtime, which this server does not allow (runtimes: ${policy.runtimes.join(', ')})`
+      )
+    }
+    const data = item.data
+    if (isContainerWorkTask(data) || isContainerWorkService(data)) {
+      for (const mount of data.mounts) {
+        // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
+        if (insideBundle(root, data.cwd, mount.localPath).length === 0) {
+          problems.push(`${item.name}: mounts ${mount.localPath}, which is outside of the bundle`)
+        }
+      }
+    }
     for (const secret of secretsOf(item)) {
       const source = secret.source
       if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
@@ -258,7 +319,7 @@ export async function planBundle(
   environment: Environment,
   options: PlanOptions = {}
 ): Promise<InspectedBundle> {
-  const problems = findLooseIncludes(bundle)
+  const problems = [...findLooseIncludes(bundle), ...(options.policy ? findHostProblems(bundle) : [])]
   if (problems.length > 0) {
     throw new DefinitionError(problems.join('\n'))
   }
@@ -279,7 +340,7 @@ export async function planBundle(
       const workTree = getWorkContext(context, options.scope ?? { environmentName: null }, inspected)
       const items = itemsOf(workTree)
       if (options.policy) {
-        const policyProblems = findPolicyProblems(items, options.policy)
+        const policyProblems = findPolicyProblems(items, options.policy, directory)
         if (policyProblems.length > 0) {
           throw new DefinitionError(policyProblems.join('\n'))
         }

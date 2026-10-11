@@ -12,7 +12,12 @@ export function getCacheStatsFile(cacheId: string): string {
   return join(getCacheDirectory(cacheId), 'stats.json')
 }
 
+// `HAMMERKIT_DIR` puts hammerkit's directory (the cache) elsewhere than below the home directory;
+// a server uses it to keep the caches of runs apart.
 export function getHammerkitDirectory(): string {
+  if (process.env.HAMMERKIT_DIR) {
+    return process.env.HAMMERKIT_DIR
+  }
   if (process.platform === 'win32') {
     return join(process.env.APPDATA as string, 'hammerkit')
   } else if (process.platform === 'darwin') {

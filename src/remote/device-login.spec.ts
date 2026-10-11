@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { HOST_RUNS_YAML } from '../testing/host-env'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer, TestDeviceFlow, TestIssuer, TestKey } from '../testing/test-issuer'
@@ -40,7 +41,7 @@ async function withLogin(
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }
+        `${HOST_RUNS_YAML}listen: { port: 0 }
 issuers:
   - issuer: "${idp.url}"
     audience: hammerkit

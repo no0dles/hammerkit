@@ -140,6 +140,53 @@ tasks:
     )
   })
 
+  it('refuses a task whose runtime the server does not allow', async () => {
+    const yaml = 'tasks:\n  a:\n    cmds: [echo]\n  b:\n    image: node:22\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, runtimes: ['docker'] } })).rejects.toThrow(
+      'a: runs on the local runtime, which this server does not allow (runtimes: docker)'
+    )
+    await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, runtimes: ['local'] } })).rejects.toThrow(
+      'b: runs on the docker runtime'
+    )
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, runtimes: ['docker', 'local'] } })
+    ).resolves.toMatchObject({ tasks: ['a', 'b'] })
+  })
+
+  it('refuses what points a build file at the host, a cluster or a remote cache', async () => {
+    const refuse = async (yaml: string, message: string | RegExp) =>
+      expect(planBundle(bundle(yaml), hosted, { policy })).rejects.toThrow(message)
+    await refuse(
+      'environments:\n  prod: { docker: { host: "tcp://evil:2375" } }\ntasks:\n  a:\n    cmds: [echo]\n',
+      /environments pick a docker host or a Kubernetes cluster/
+    )
+    await refuse(
+      'caches:\n  shared: { method: checksum, backend: { type: s3, bucket: b } }\ntasks:\n  a:\n    cmds: [echo]\n',
+      /caches.shared: a server keeps its own cache/
+    )
+    await refuse(
+      'caches:\n  shared: { method: checksum, backend: { type: local, path: /etc } }\ntasks:\n  a:\n    cmds: [echo]\n',
+      /caches.shared/
+    )
+    await refuse(
+      'services:\n  api:\n    kubeconfig: /home/x/.kube/config\n    selector: { app: api }\n    ports: [80]\ntasks:\n  a:\n    cmds: [echo]\n',
+      /services.api: Kubernetes services are not supported on a server/
+    )
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    mounts: ["/var/run/docker.sock:/var/run/docker.sock"]\n    cmds: [echo]\n',
+      'a: mounts /var/run/docker.sock, which is outside of the bundle'
+    )
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    mounts: ["../outside:/x"]\n    cmds: [echo]\n',
+      /a: mounts .*outside, which is outside of the bundle/
+    )
+  })
+
+  it('takes mounts inside the bundle', async () => {
+    const yaml = 'tasks:\n  a:\n    image: alpine\n    mounts: ["./cache:/cache"]\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(yaml), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
+  })
+
   it('refuses an account the server keeps for itself', async () => {
     const yaml = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
     await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, reserved: ['ci'] } })).rejects.toThrow(

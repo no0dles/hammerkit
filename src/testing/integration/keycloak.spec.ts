@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { HOST_RUNS_YAML } from '../host-env'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../test-case'
 import { requiresLinuxContainers } from '../requires-linux-containers'
@@ -43,7 +44,7 @@ describe('hammerkit server against Keycloak', () => {
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }
+        `${HOST_RUNS_YAML}listen: { port: 0 }
 issuers:
   - issuer: "${keycloak.issuer}"
     audience: ${KEYCLOAK_AUDIENCE}

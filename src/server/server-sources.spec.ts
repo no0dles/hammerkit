@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { HOST_RUNS_YAML } from '../testing/host-env'
 import { join } from 'path'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
@@ -41,9 +42,9 @@ async function withApi(name: string, fn: (api: Api) => Promise<void>) {
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(join(cwd, 'data'))} }\nissuers:\n  - { issuer: "${
-          idp.url
-        }", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
+        `${HOST_RUNS_YAML}listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
+          join(cwd, 'data')
+        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
       )
       const log: string[] = []
       const server = await startServer(await readServerConfig(env, file), env, { log: (line) => log.push(line) })

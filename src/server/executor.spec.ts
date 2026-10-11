@@ -1,16 +1,17 @@
 import { execFileSync } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor } from './executor'
+import { HostExecutor, HostExecutorOptions } from './executor'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
 import { runEnvironment } from './run-environment'
 import { Run, RunEventData } from './runs'
 import { RepoAccess } from './repo-access'
+import { TEST_WORKER } from '../testing/worker'
 import { ServerConfig, serverConfigSchema } from './server-config'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -27,6 +28,7 @@ describe('HostExecutor', () => {
   let repository: string
   let store: DefinitionStore
   let executor: HostExecutor
+  let options: HostExecutorOptions
   let runs: string
   let commit: string
 
@@ -92,20 +94,20 @@ describe('HostExecutor', () => {
     git(repository, 'add', '.')
     git(repository, 'commit', '--quiet', '-m', 'one')
     commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
-    const environment = environmentMock(root)
     const serverConfig = config()
     const serverEnvs = { ...process.env, SECRET_OF_SERVER: 'x' }
     const hosted = planning(serverConfig, serverEnvs)
     store = new DefinitionStore(join(root, 'definitions'), hosted.environment, { policy: hosted.policy })
     await store.load()
-    executor = new HostExecutor({
-      config: serverConfig,
+    options = {
       definitions: store,
-      environment: { ...environment, processEnvs: serverEnvs },
       planning: hosted,
       repos: new RepoAccess(serverConfig, hosted.environment, { url: () => repository }),
       directory: runs,
-    })
+      cache: join(root, 'cache'),
+      worker: TEST_WORKER,
+    }
+    executor = new HostExecutor(options)
   })
 
   afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -234,12 +236,12 @@ describe('HostExecutor', () => {
       runs: { env: { allow: HOST_ENV_ALLOW } },
     })
     const other = new HostExecutor({
-      config: bare,
       definitions: store,
-      environment: environmentMock(root),
       planning: planning(bare, process.env),
       repos: new RepoAccess(bare, planning(bare, process.env).environment, { url: () => repository }),
       directory: runs,
+      cache: join(root, 'cache'),
+      worker: TEST_WORKER,
     })
     await expect(
       other.execute(run(hash), { emit: () => undefined, signal: new AbortController().signal })
@@ -273,6 +275,80 @@ describe('HostExecutor', () => {
     })
     const { error } = await execute(run(hash))
     expect(error?.message).toContain('can not be written')
+  })
+
+  it.each(['.GIT/hooks/post-checkout', '.git./config', '.Git/config', 'GIT~1/config', 'sub/.git/config'])(
+    'does not write %s into the git directory, however the file system spells it',
+    async (path) => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n', [path]: 'evil' })
+      const { error } = await execute(run(hash))
+      expect(error?.message).toContain('can not be written')
+    }
+  )
+
+  it('does not follow a link of the source out of it', async () => {
+    const outside = join(root, 'outside')
+    mkdirSync(outside)
+    symlinkSync(outside, join(repository, 'link'))
+    symlinkSync(join(outside, 'target.txt'), join(repository, 'file-link'))
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'links')
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+    for (const path of ['link/payload.txt', 'file-link']) {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n', [path]: 'evil' })
+      const { error } = await execute(run(hash))
+      expect(error?.message).toContain('can not be written')
+    }
+    expect(readdirSync(outside)).toEqual([])
+  })
+
+  it('starts the process of the run with the listed variables, a home directory of its own and a cache by repository', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    // a process that tells what it was started with
+    const script = [
+      'const env = process.env',
+      'const seen = { home: env.HOME, dir: env.HAMMERKIT_DIR, server: env.SECRET_OF_SERVER, path: Boolean(env.PATH), cwd: process.cwd() }',
+      'console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: JSON.stringify(seen) } }))',
+      'console.log(JSON.stringify({ kind: "result", ok: true }))',
+    ].join(';')
+    const telling = new HostExecutor({ ...options, worker: [process.execPath, '-e', script] })
+    const events: RunEventData[] = []
+    await telling.execute(run(hash), { emit: (e) => events.push(e), signal: new AbortController().signal })
+    const seen = JSON.parse((events.find((e) => e.type === 'log' && e.task === 't') as { text: string }).text)
+    expect(seen.home).toBe(join(runs, 'run_test', 'home'))
+    expect(seen.home).not.toBe(process.env.HOME)
+    expect(seen.dir.startsWith(join(root, 'cache'))).toBe(true)
+    expect(seen.dir).toMatch(/ref-[0-9a-f]{24}$/)
+    expect(seen.path).toBe(true)
+    // what the operator did not list stays with the server
+    expect(seen.server).toBeUndefined()
+    expect(seen.cwd).toContain(join('run_test', 'source'))
+
+    // the cache directory of the process is below the server's, one for each repository
+    const spaces = () => readdirSync(join(root, 'cache'))
+    expect(spaces()).toHaveLength(1)
+    await execute(run(hash))
+    expect(spaces()).toHaveLength(1)
+    await execute(run(hash, { source: { type: 'ref', repo: 'git.test/corp/other', ref: 'main', commit } }))
+    expect(spaces()).toHaveLength(2)
+    expect(spaces().every((name) => name.startsWith('ref-'))).toBe(true)
+  })
+
+  it('says when the process of the run dies, or can not start', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    const crashing = new HostExecutor({
+      ...options,
+      worker: [process.execPath, '-e', 'console.error("boom"); process.exit(3)'],
+    })
+    const died = await crashing
+      .execute(run(hash), { emit: () => undefined, signal: new AbortController().signal })
+      .catch((e: Error) => e)
+    expect((died as Error).message).toBe('the process of the run stopped (code 3): boom')
+
+    const missing = new HostExecutor({ ...options, worker: [join(root, 'no-such-program')] })
+    await expect(
+      missing.execute(run(hash), { emit: () => undefined, signal: new AbortController().signal })
+    ).rejects.toThrow('could not start')
   })
 
   it('fails when the build file is no longer on the server', async () => {

@@ -7,10 +7,11 @@ import { Environment } from '../executer/environment'
 import { readServerConfig, serverConfigSchema } from './server-config'
 import { DISCOVERY_PATH, RunningServer, SERVER_PROTOCOL, startServer } from './server'
 import { getVersion } from '../version'
+import { HOST_ENV_YAML } from '../testing/host-env'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 
 const minimal = `
-listen: { port: 0 }
+${HOST_ENV_YAML}listen: { port: 0 }
 issuers:
   - { issuer: https://idp.corp, audience: hammerkit }
 `
@@ -129,6 +130,38 @@ describe('server', () => {
     })
   })
 
+  it('refuses to start when the allowlist hides PATH from the tasks', async () => {
+    const hidden = minimal.replace(/runs:.*\n/, '')
+    await withServerConfig('server-no-path', hidden, async (env, file) => {
+      await expect(startServer(await readServerConfig(env, file), env)).rejects.toThrow(
+        'runs.env.allow has no PATH, tasks could not find their tools'
+      )
+    })
+    // a fixed PATH is as good
+    await withServer(
+      'server-fixed-path',
+      hidden.replace('issuers:', 'runs: { env: { set: { PATH: /usr/bin } } }\nissuers:'),
+      async (server) => {
+        expect(server.url).toMatch(/^http/)
+      }
+    )
+  })
+
+  it('warns when the local runtime is allowed, and says nothing otherwise', async () => {
+    const lines: string[] = []
+    await withServerConfig('server-warn-local', `${minimal}runtimes: [docker, local]\n`, async (env, file) => {
+      const server = await startServer(await readServerConfig(env, file), env, { log: (line) => lines.push(line) })
+      await server.close()
+    })
+    expect(lines.join('\n')).toContain('the local runtime is allowed')
+    const quiet: string[] = []
+    await withServerConfig('server-no-warn', minimal, async (env, file) => {
+      const server = await startServer(await readServerConfig(env, file), env, { log: (line) => quiet.push(line) })
+      await server.close()
+    })
+    expect(quiet).toEqual([])
+  })
+
   it('refuses to start on a port that is taken', async () => {
     await withServer('server-port-taken', minimal, async (server) => {
       const port = Number(new URL(server.url).port)
@@ -161,10 +194,9 @@ entitlements:
     const key = createTestKey('ES256', 'k1')
     const idp = await startTestIssuer([key])
     try {
-      const yaml = `listen: { port: 0 }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
-        /ISSUER/g,
-        `"${idp.url}"`
-      )}`
+      const yaml = `${HOST_ENV_YAML}listen: { port: 0 }\nissuers:\n  - { issuer: "${
+        idp.url
+      }", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
       await withServerConfig(name, yaml, async (env, file) => {
         const log: string[] = []
         const server = await startServer(await readServerConfig(env, file), env, { log: (line) => log.push(line) })

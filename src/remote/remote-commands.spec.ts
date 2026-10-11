@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { HOST_RUNS_YAML } from '../testing/host-env'
 import { readFileSync, writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
@@ -112,7 +113,7 @@ describe('remote login, accounts and logout', () => {
         const serverFile = join(environment.cwd, 'server.yaml')
         writeFileSync(
           serverFile,
-          `listen: { port: 0 }
+          `${HOST_RUNS_YAML}listen: { port: 0 }
 storage: { directory: ${JSON.stringify(join(environment.cwd, 'server-data'))} }
 issuers:
   - { issuer: "${idp.url}", audience: hammerkit, clientId: hammerkit-cli }

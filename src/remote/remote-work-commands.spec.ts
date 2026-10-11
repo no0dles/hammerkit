@@ -51,6 +51,7 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
         serverFile,
         [
           `runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }`,
+          'runtimes: [docker, local]',
           'listen: { port: 0 }',
           `storage: { directory: ${JSON.stringify(join(cwd, 'server-data'))} }`,
           'issuers:',

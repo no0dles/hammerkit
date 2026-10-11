@@ -55,6 +55,8 @@ export interface ServerOptions extends TokenVerifierOptions {
   log?: (line: string) => void
   // carries out the runs; without one, runs are accepted and fail with a reason
   executor?: RunExecutor
+  // the command that starts the process of a run; `hammerkit server-run` of this build by default
+  worker?: string[]
   // how repositories are located and resolved, for tests
   repos?: RepoAccessOptions
 }
@@ -382,10 +384,22 @@ export async function startServer(
   environment: Environment,
   options: ServerOptions = {}
 ): Promise<RunningServer> {
+  // tasks find their tools through PATH, a server that hides it would fail every run
+  if (!config.runs.env.allow.some((name) => name.toUpperCase() === 'PATH') && !('PATH' in config.runs.env.set)) {
+    throw new Error(
+      'runs.env.allow has no PATH, tasks could not find their tools: add PATH (and on Windows SystemRoot, ComSpec, PATHEXT and TEMP)'
+    )
+  }
   const verifier = new TokenVerifier(config.issuers, options)
   const write = options.log ?? (() => undefined)
   // request urls and subjects come from callers: no control characters, so no forged log lines
   const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
+  if (config.runtimes.includes('local')) {
+    log(
+      'warning: the local runtime is allowed, local tasks run as the user of this server and read all it can read; ' +
+        'an account is then an approval class, not a credential boundary'
+    )
+  }
   // build files are read, planned and run as the server's runs see the world: the
   // operator's accounts and the allowlisted environment, nothing of the server's own
   const planning: PlanContext = {
@@ -394,26 +408,25 @@ export async function startServer(
       processEnvs: runEnvironment(config, environment.processEnvs),
       hosted: { catalog: getSecretCatalog(config) },
     },
-    policy: { envs: config.runs.env.allow, reserved: getSourceAccounts(config) },
+    policy: { envs: config.runs.env.allow, reserved: getSourceAccounts(config), runtimes: config.runtimes },
   }
-  const definitions = new DefinitionStore(
-    join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'definitions'),
-    planning.environment,
-    { policy: planning.policy }
-  )
+  const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')
+  const definitions = new DefinitionStore(join(storage, 'definitions'), planning.environment, {
+    policy: planning.policy,
+  })
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
   const executor =
     options.executor ??
     new HostExecutor({
-      config,
       definitions,
-      environment,
       planning,
       repos,
-      directory: join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'runs'),
+      directory: join(storage, 'runs'),
+      cache: join(storage, 'cache'),
+      worker: options.worker,
     })
-  const sources = new SourceStore(join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'sources'))
+  const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({
     executor,
     maxConcurrent: config.runs.maxConcurrent,

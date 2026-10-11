@@ -25,3 +25,10 @@ export const HOST_ENV_ALLOW = [
   // powershell is very slow to start without it
   'PSModulePath',
 ]
+
+// The `runs` of a test server's config: tasks find their tools.
+export const HOST_ENV_YAML = `runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }\n`
+
+// And the `runtimes`: local tasks (a command without an image) are allowed, as an
+// operator who wants them says so.
+export const HOST_RUNS_YAML = `${HOST_ENV_YAML}runtimes: [docker, local]\n`

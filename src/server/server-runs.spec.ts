@@ -8,6 +8,7 @@ import { createTestKey, signToken, startTestIssuer } from '../testing/test-issue
 import { readServerConfig } from './server-config'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { COMMIT, REPO, SOURCES_YAML, fakeRepos } from '../testing/repos'
+import { TEST_WORKER } from '../testing/worker'
 import { RepoAccessOptions } from './repo-access'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
@@ -16,6 +17,7 @@ import { RunningServer, startServer } from './server'
 // carol only runs what needs no credentials of prod
 const policy = `
 runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }
+runtimes: [docker, local]
 secretProviders:
   echo: { command: [${JSON.stringify(process.execPath)}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }
 accounts:
@@ -82,6 +84,7 @@ async function withApi(
         log: (line) => log.push(line),
         executor,
         repos,
+        worker: TEST_WORKER,
       })
       const token = (sub = 'alice') =>
         signToken(key, { iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })

@@ -221,6 +221,13 @@ export const serverConfigSchema = z
     // account of the operator. The caller names a repository and a ref in the request,
     // never a url.
     sources: z.array(sourceSchema).default([]),
+    // what tasks may run on: containers, and the local runtime that runs commands on
+    // this machine as the user of the server. Local tasks read the whole file system of that
+    // user, so they have to be allowed by name.
+    runtimes: z
+      .array(z.enum(['docker', 'local']))
+      .min(1)
+      .default(['docker']),
     // where the server keeps what must survive a restart: the published build files
     storage: z
       .object({ directory: z.string().min(1).optional() })

@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { HOST_RUNS_YAML } from '../testing/host-env'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
@@ -64,7 +65,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
+        `${HOST_RUNS_YAML}listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
           join(cwd, 'server-data')
         )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${entitlements.replace(
           /ISSUER/g,

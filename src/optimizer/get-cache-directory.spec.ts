@@ -53,6 +53,15 @@ describe('cache directory helpers', () => {
       })
     })
 
+    it('uses HAMMERKIT_DIR when it is set, on every platform', () => {
+      for (const platform of ['win32', 'darwin', 'linux'] as const) {
+        withPlatform(platform, { HAMMERKIT_DIR: join('elsewhere', 'cache'), HOME: '/home/x', APPDATA: 'C:\\x' }, () => {
+          expect(getHammerkitDirectory()).toBe(join('elsewhere', 'cache'))
+          expect(getCacheDirectory('abc')).toBe(join('elsewhere', 'cache', 'cache', 'abc'))
+        })
+      }
+    })
+
     it('uses ~/.hammerkit on Linux', () => {
       withPlatform('linux', { HOME: '/home/x' }, () => {
         expect(getHammerkitDirectory()).toBe(join('/home/x', '.hammerkit'))
