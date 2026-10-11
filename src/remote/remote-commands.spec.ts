@@ -113,7 +113,7 @@ describe('remote login, accounts and logout', () => {
         writeFileSync(
           serverFile,
           `listen: { port: 0 }
-storage: { directory: "${join(environment.cwd, 'server-data')}" }
+storage: { directory: ${JSON.stringify(join(environment.cwd, 'server-data'))} }
 issuers:
   - { issuer: "${idp.url}", audience: hammerkit, clientId: hammerkit-cli }
 entitlements:

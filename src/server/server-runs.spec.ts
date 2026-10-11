@@ -42,9 +42,9 @@ async function withApi(name: string, executor: RunExecutor | undefined, fn: (api
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }\nstorage: { directory: "${join(cwd, 'server-data')}" }\nissuers:\n  - { issuer: "${
-          idp.url
-        }", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
+        `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
+          join(cwd, 'server-data')
+        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
       )
       const log: string[] = []
       const server = await startServer(await readServerConfig(env, file), env, {

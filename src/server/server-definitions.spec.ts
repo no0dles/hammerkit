@@ -37,7 +37,7 @@ async function withApi(
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }\nstorage: { directory: "${join(cwd, 'data')}" }\nissuers:\n  - { issuer: "${
+        `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(join(cwd, 'data'))} }\nissuers:\n  - { issuer: "${
           idp.url
         }", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
       )
