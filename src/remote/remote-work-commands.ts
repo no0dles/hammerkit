@@ -4,7 +4,9 @@ import { Environment } from '../executer/environment'
 import { getAccessToken } from './credentials'
 import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
+import { Bundle, HASH_PATTERN } from './bundle'
 import { callServer, printable } from './server-client'
+import { diffBundles } from './text-diff'
 
 export interface WorkCommandContext {
   environment: Environment
@@ -20,6 +22,33 @@ interface PublishedVersion {
   created: boolean
   tasks: string[]
   services: string[]
+  // set when the version is only proposed
+  state?: string
+  expiresAt?: string
+}
+
+interface ProposalView {
+  name: string
+  hash: string
+  state: string
+  proposedBy: { iss: string; sub: string }
+  createdAt: string
+  expiresAt: string
+  decidedBy?: { sub: string }
+  reason?: string
+  tasks: string[]
+  services: string[]
+  base: string | null
+  mine: boolean
+  canDecide: boolean
+}
+
+const PROPOSAL_NAME = /^([a-z0-9][a-z0-9._-]{0,63})@(sha256:[0-9a-f]{64})$/i
+
+// A proposed version is named like `payments@sha256:...`
+function parseProposal(value: string): { name: string; hash: string } | undefined {
+  const match = PROPOSAL_NAME.exec(value)
+  return match && HASH_PATTERN.test(match[2]) ? { name: match[1], hash: match[2] } : undefined
 }
 
 interface ApprovalView {
@@ -82,13 +111,22 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         )
         const version = answer.body
         const files = Object.keys(bundle.files).length
+        const proposed = answer.status === 202
+        const verb = proposed ? 'proposed' : answer.status === 201 ? 'published' : 'already published'
         environment.stdout.write(
-          `${answer.status === 201 ? 'published' : 'already published'} ${definition} to ${serverName}: ${printable(
-            version.hash
-          )} (${files} ${files === 1 ? 'file' : 'files'})\n`
+          `${verb} ${definition} to ${serverName}: ${printable(version.hash)} (${files} ${
+            files === 1 ? 'file' : 'files'
+          })\n`
         )
         const names = [...(version.tasks ?? []), ...(version.services ?? [])]
         environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+        if (proposed) {
+          environment.stdout.write(
+            `it can not run before somebody who may publish ${printable(definition)} approves it, until ${printable(
+              version.expiresAt
+            )}\n`
+          )
+        }
       })
     )
 
@@ -112,32 +150,110 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       })
     )
 
+  remote
+    .command('proposals [server]')
+    .description('list the proposed versions of build files you made or may approve')
+    .action(
+      guarded('Remote proposals was not successful', async (name: string | undefined) => {
+        const { name: serverName, server, token } = await connect(name)
+        const { body } = await callServer<{ proposals: ProposalView[] }>(server, token, 'GET', '/v1/proposals')
+        if (body.proposals.length === 0) {
+          environment.stdout.write(`${serverName}: no proposed versions\n`)
+          return
+        }
+        environment.stdout.write(`${serverName}: ${body.proposals.length} proposed\n`)
+        for (const proposal of body.proposals) {
+          const who = proposal.mine ? 'you' : printable(proposal.proposedBy.sub)
+          const state = proposal.canDecide ? colors.bold('waits for your approval') : printable(proposal.state)
+          environment.stdout.write(
+            `${colors.bold(`${printable(proposal.name)}@${printable(proposal.hash)}`)}  proposed by ${who}, ${state}\n`
+          )
+          const names = [...proposal.tasks, ...proposal.services]
+          environment.stdout.write(`  tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+          if (proposal.state === 'waiting') {
+            environment.stdout.write(`  decide before ${printable(proposal.expiresAt)}\n`)
+          } else if (proposal.reason) {
+            environment.stdout.write(`  ${printable(proposal.state)}: ${printable(proposal.reason)}\n`)
+          }
+        }
+      })
+    )
+
+  remote
+    .command('diff <proposal> [server]')
+    .description('show what a proposed version (name@hash) changes against the version it follows')
+    .action(
+      guarded('Remote diff was not successful', async (target: string, name: string | undefined) => {
+        const proposal = parseProposal(target)
+        if (!proposal) {
+          throw new Error(`${printable(target)} is not a proposal, list them with: hammerkit remote proposals`)
+        }
+        const { name: serverName, server, token } = await connect(name)
+        const path = `/v1/proposals/${encodeURIComponent(proposal.name)}/${proposal.hash}`
+        const view = (await callServer<ProposalView>(server, token, 'GET', path)).body
+        const proposed = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
+        const base = view.base
+          ? (
+              await callServer<Bundle>(
+                server,
+                token,
+                'GET',
+                `/v1/definitions/${encodeURIComponent(proposal.name)}/${view.base}/files`
+              )
+            ).body
+          : undefined
+        environment.stdout.write(
+          `${printable(proposal.name)}@${printable(proposal.hash)} on ${serverName}, proposed by ${printable(
+            view.proposedBy.sub
+          )} (${printable(view.proposedBy.iss)})\n`
+        )
+        environment.stdout.write(
+          base ? `compared with ${printable(view.base)}\n` : 'no version is published yet, everything is new\n'
+        )
+        const lines = diffBundles(base, proposed)
+        environment.stdout.write(lines.length > 0 ? `${lines.join('\n')}\n` : 'the files are the same\n')
+      })
+    )
+
   for (const action of ['approve', 'reject'] as const) {
     remote
-      .command(`${action} <run> [server]`)
+      .command(`${action} <target> [server]`)
       .description(
         action === 'approve'
-          ? 'let a run that waits for your approval go ahead'
-          : 'end a run that waits for your approval'
+          ? 'let a run (run_...) or a proposed version (name@hash) that waits for your approval go ahead'
+          : 'end a run (run_...) or drop a proposed version (name@hash) that waits for your approval'
       )
-      .addOption(new Option('--reason <text>', 'why, shown to who asked for the run').argParser((value) => value))
+      .addOption(new Option('--reason <text>', 'why, shown to who asked').argParser((value) => value))
       .action(
-        guarded(`Remote ${action} was not successful`, async (run: string, name: string | undefined, options) => {
-          if (!RUN_ID.test(run)) {
-            throw new Error(`${printable(run)} is not a run id, list them with: hammerkit remote approvals`)
+        guarded(`Remote ${action} was not successful`, async (target: string, name: string | undefined, options) => {
+          const proposal = parseProposal(target)
+          if (!proposal && !RUN_ID.test(target)) {
+            throw new Error(
+              `${printable(
+                target
+              )} is not a run id or a proposed version, list them with: hammerkit remote approvals or remote proposals`
+            )
           }
           const { name: serverName, server, token } = await connect(name)
-          const { body } = await callServer<ApprovalView>(
+          const path = proposal
+            ? `/v1/proposals/${encodeURIComponent(proposal.name)}/${proposal.hash}/${action}`
+            : `/v1/approvals/${target}/${action}`
+          const { body } = await callServer<{ state: string }>(
             server,
             token,
             'POST',
-            `/v1/approvals/${run}/${action}`,
+            path,
             options.reason ? { reason: options.reason } : undefined
           )
+          const rejected = body.state === 'rejected'
           environment.stdout.write(
-            body.state === 'rejected'
-              ? `rejected ${run} on ${serverName}\n`
-              : `approved ${run} on ${serverName}, it is queued\n`
+            proposal
+              ? rejected
+                ? `rejected ${target} on ${serverName}\n`
+                : `approved ${target} on ${serverName}, it is published\n`
+              : rejected
+                ? `rejected ${target} on ${serverName}\n`
+                : `approved ${target} on ${serverName}, it is queued\n`
           )
         })
       )
