@@ -13,6 +13,13 @@ function getStopTimeout(): number {
   return getEnvironmentConfig('HAMMERKIT_STOP_TIMEOUT_MS', 10000)
 }
 
+// powershell takes about half a minute to start when it has to work out its module
+// path itself, so the one of the process is passed on
+function shellEnvs(windows: boolean, environment: Environment): { [key: string]: string } {
+  const value = environment.processEnvs['PSModulePath']
+  return windows && value !== undefined ? { PSModulePath: value } : {}
+}
+
 export async function executeCommand(
   status: StatusScopedConsole,
   abortSignal: AbortSignal,
@@ -24,7 +31,7 @@ export async function executeCommand(
   const windows = platform() === 'win32'
   return new Promise<number>((resolve, reject) => {
     const ps = spawn(command, {
-      env: { ...envs, PATH: environment.processEnvs['PATH'] },
+      env: { ...envs, ...shellEnvs(windows, environment), PATH: environment.processEnvs['PATH'] },
       cwd,
       shell: windows ? 'powershell.exe' : true,
       // its own process group, so an abort reaches every process the command
