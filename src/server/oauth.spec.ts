@@ -75,12 +75,12 @@ describe('TokenVerifier', () => {
 
   it('rejects an EC token against an RSA key', async () => {
     const ec = createTestKey('ES256', 'k1')
-    await expect(verifier().verify(signToken(ec, claims()))).rejects.toThrow('has no EC key k1')
+    await expect(verifier().verify(signToken(ec, claims()))).rejects.toThrow('has no EC key "k1"')
   })
 
   it('rejects an issuer that is not configured', async () => {
     await expect(verifier().verify(signToken(key, claims({ iss: 'https://evil.example' })))).rejects.toThrow(
-      'issuer https://evil.example is not accepted'
+      'issuer "https://evil.example" is not accepted'
     )
   })
 
@@ -126,7 +126,7 @@ describe('TokenVerifier', () => {
       // the issuer rotates; right after loading, an unknown kid is not refetched
       const rotated = createTestKey('RS256', 'new')
       idp.keys = [rotated]
-      await expect(v.verify(signToken(rotated, { ...claims(), iss: idp.url }))).rejects.toThrow('no RSA key new')
+      await expect(v.verify(signToken(rotated, { ...claims(), iss: idp.url }))).rejects.toThrow('no RSA key "new"')
       expect(idp.fetches.jwks).toBe(1)
 
       now += 2 * 60 * 1000
@@ -145,7 +145,7 @@ describe('TokenVerifier', () => {
       fetch: (async (url: string) =>
         new Response(JSON.stringify({ issuer: 'https://other.example', jwks_uri: `${url}/jwks` }))) as typeof fetch,
     })
-    await expect(v.verify(signToken(key, claims()))).rejects.toThrow('issuer metadata names https://other.example')
+    await expect(v.verify(signToken(key, claims()))).rejects.toThrow('issuer metadata names "https://other.example"')
   })
 
   it('refuses keys that are not served over https', async () => {
@@ -163,5 +163,61 @@ describe('TokenVerifier', () => {
       fetch: (async () => new Response('{}', { status: 503 })) as typeof fetch,
     })
     await expect(v.verify(signToken(key, claims()))).rejects.toThrow('answered 503')
+  })
+
+  it('quotes what a token says, so it can not forge a log line', async () => {
+    const forged = 'x\n2026 grant iss=https://idp.example sub=admin'
+    const error = await verifier()
+      .verify(signToken(key, { ...claims(), iss: forged }))
+      .catch((e) => e)
+    expect(error.message).not.toContain('\n')
+    expect(error.message).toContain('\\n2026 grant')
+  })
+
+  it('loads the keys once for concurrent requests', async () => {
+    const idp = await startTestIssuer([createTestKey('RS256', 'k')])
+    try {
+      const v = new TokenVerifier([{ issuer: idp.url, audience: 'hammerkit', groupsClaim: 'groups' }], {
+        now: () => NOW,
+      })
+      const token = signToken(idp.keys[0], { ...claims(), iss: idp.url })
+      await Promise.all(Array.from({ length: 10 }, () => v.verify(token)))
+      expect(idp.fetches.metadata).toBe(1)
+      expect(idp.fetches.jwks).toBe(1)
+    } finally {
+      await idp.close()
+    }
+  })
+
+  it('leaves a failing issuer alone for a while, and keeps using old keys while it is down', async () => {
+    let now = NOW
+    let down = false
+    let calls = 0
+    const v = new TokenVerifier([{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups' }], {
+      now: () => now,
+      fetch: (async (url: string, init?: RequestInit) => {
+        calls++
+        if (down) {
+          return new Response('{}', { status: 503 })
+        }
+        return fetch(url, init)
+      }) as typeof fetch,
+    })
+    const token = () => signToken(key, { ...claims(), exp: now / 1000 + 300 })
+    await v.verify(token())
+    expect(calls).toBe(2)
+
+    // the ttl is over and the issuer is down: the old keys still work
+    down = true
+    now += 11 * 60 * 1000
+    expect((await v.verify(token())).sub).toBe('alice')
+    expect(calls).toBe(3)
+    // and it is not asked again right away
+    await v.verify(token())
+    expect(calls).toBe(3)
+
+    // after a long outage the keys are no longer trusted
+    now += 2 * 60 * 60 * 1000
+    await expect(v.verify(token())).rejects.toThrow('answered 503')
   })
 })

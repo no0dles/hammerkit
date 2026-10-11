@@ -221,6 +221,16 @@ entitlements:
     })
   })
 
+  it('writes nothing a caller sent to the log as a line of its own', async () => {
+    await withIssuer('server-log-forging', async (server, token, log) => {
+      const forged = 'x\n2026 grant iss=https://idp.example sub=admin'
+      const response = await me(server, token({ iss: forged }))
+      expect(response.status).toBe(401)
+      expect(log).toHaveLength(1)
+      expect(log[0]).not.toMatch(/\p{Cc}/u)
+    })
+  })
+
   it('still serves the discovery document without a token', async () => {
     await withIssuer('server-open-discovery', async (server) => {
       expect((await fetch(`${server.url}${DISCOVERY_PATH}`)).status).toBe(200)
