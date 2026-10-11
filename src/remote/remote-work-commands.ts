@@ -40,6 +40,7 @@ interface ProposalView {
   services: string[]
   accounts: string[]
   missing: string[]
+  plan?: Record<string, PlanView>
   base: string | null
   mine: boolean
   canDecide: boolean
@@ -63,7 +64,24 @@ interface ApprovalView {
   source: { type: string; ref?: string; snapshot?: string }
   options: Record<string, unknown>
   approvals?: { account: string; expiresAt: string; approvedBy?: { sub: string } }[]
+  plan?: Record<string, PlanView>
   state: string
+}
+
+// what a task or service does, see the plan of a version on the server
+interface PlanView {
+  kind: 'task' | 'service'
+  runtime: string
+  image?: string
+  cmds: string[]
+  deps: string[]
+  needs: string[]
+  accounts: string[]
+  secrets: { from: string; account: string | null; target: string }[]
+  mounts: string[]
+  ports: string[]
+  generates: string[]
+  flags: string[]
 }
 
 const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
@@ -91,8 +109,42 @@ function describe(run: ApprovalView): string[] {
             : 'waits for somebody who uses it to approve'
         }`
     ),
+    ...flagLines(run),
     `  decide before ${printable(run.approvals?.[0]?.expiresAt ?? '-')}`,
   ]
+}
+
+// What to look at first, one line.
+function flagLines(run: { plan?: Record<string, PlanView> }): string[] {
+  const flagged = Object.entries(run.plan ?? {}).filter(([, entry]) => entry.flags.length > 0)
+  return flagged.length > 0
+    ? [
+        `  look at: ${flagged
+          .map(([name, entry]) => `${printable(name)} (${entry.flags.map(printable).join(', ')})`)
+          .join(', ')}`,
+      ]
+    : []
+}
+
+// The tasks and services the run executes and what each does, never a secret's value.
+function describePlan(plan: Record<string, PlanView>): string[] {
+  return Object.entries(plan).flatMap(([name, entry]) => [
+    `  ${colors.bold(printable(name))}  ${entry.kind}, ${printable(entry.runtime)}${
+      entry.image ? ` ${printable(entry.image)}` : ''
+    }${entry.flags.length > 0 ? `  [${entry.flags.map(printable).join(', ')}]` : ''}`,
+    ...entry.cmds.map((cmd) => `    $ ${printable(cmd)}`),
+    ...(entry.deps.length > 0 ? [`    after: ${entry.deps.map(printable).join(', ')}`] : []),
+    ...(entry.needs.length > 0 ? [`    needs: ${entry.needs.map(printable).join(', ')}`] : []),
+    ...entry.secrets.map(
+      (secret) =>
+        `    secret ${printable(secret.from)}${secret.account ? ` as ${printable(secret.account)}` : ''} -> ${printable(
+          secret.target
+        )}`
+    ),
+    ...(entry.mounts.length > 0 ? [`    mounts: ${entry.mounts.map(printable).join(', ')}`] : []),
+    ...(entry.ports.length > 0 ? [`    ports: ${entry.ports.map(printable).join(', ')}`] : []),
+    ...(entry.generates.length > 0 ? [`    generates: ${entry.generates.map(printable).join(', ')}`] : []),
+  ])
 }
 
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
@@ -160,6 +212,25 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
 
   remote
+    .command('show <run> [server]')
+    .description('show a run that waits for your approval in full: the commands, secrets and accounts of its tasks')
+    .action(
+      guarded('Remote show was not successful', async (run: string, name: string | undefined) => {
+        if (!RUN_ID.test(run)) {
+          throw new Error(`${printable(run)} is not a run id, list them with: hammerkit remote approvals`)
+        }
+        const { server, token } = await connect(name)
+        const view = (await callServer<ApprovalView>(server, token, 'GET', `/v1/approvals/${run}`)).body
+        for (const line of describe(view)) {
+          environment.stdout.write(`${line}\n`)
+        }
+        environment.stdout.write(
+          view.plan ? `${describePlan(view.plan).join('\n')}\n` : 'the server did not record what its tasks do\n'
+        )
+      })
+    )
+
+  remote
     .command('proposals [server]')
     .description('list the proposed versions of build files you made or may approve')
     .action(
@@ -187,6 +258,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
                   : ''
               }\n`
             )
+          }
+          for (const line of flagLines(proposal)) {
+            environment.stdout.write(`${line}\n`)
           }
           if (proposal.state === 'waiting') {
             environment.stdout.write(`  decide before ${printable(proposal.expiresAt)}\n`)

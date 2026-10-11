@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 import { Principal } from './oauth'
 import type { RunOptions } from './run-request'
+import type { TaskPlan } from './plan'
 
 export type RunState =
   | 'awaiting-approval'
@@ -41,6 +42,9 @@ export interface RunSpec {
   // the accounts the run uses: the ones its secrets are read as, derived from the
   // published build file and never requested
   accounts: string[]
+  // what the tasks and services of the run do, with their dependencies, for who
+  // decides about it; read from the pinned files when the run was submitted
+  plan?: Record<string, TaskPlan>
   source: RunSource
   // the settings of `hammerkit run` the caller chose, see run-request.ts
   options: RunOptions
@@ -118,6 +122,8 @@ interface Entry {
   timer?: NodeJS.Timeout
 }
 
+type AccountCheck = (account: string) => boolean
+
 export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
 
 // Where runs are kept while the server is up. Everything is scoped to the
@@ -179,8 +185,10 @@ export class RunRegistry {
     return accepted
   }
 
-  get(owner: Pick<Principal, 'iss' | 'sub'>, id: string): Run | undefined {
-    const entry = this.find(owner, id)
+  // `canUse` also lets who uses an account the run needed approved read it: they
+  // decided about it, so they may follow it and stop it.
+  get(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Run | undefined {
+    const entry = this.find(owner, id, canUse)
     return entry ? this.copy(entry.run) : undefined
   }
 
@@ -193,8 +201,8 @@ export class RunRegistry {
   }
 
   // A queued run is cancelled at once; a running one when its executor stops.
-  cancel(owner: Pick<Principal, 'iss' | 'sub'>, id: string): Run | undefined {
-    const entry = this.find(owner, id)
+  cancel(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Run | undefined {
+    const entry = this.find(owner, id, canUse)
     if (!entry) {
       return undefined
     }
@@ -219,7 +227,7 @@ export class RunRegistry {
 
   // One run that waits (or waited), if `canDecide` says the decider uses one of the
   // accounts it still needs approved.
-  getForApproval(id: string, canDecide: (account: string) => boolean): Run | undefined {
+  getForApproval(id: string, canDecide: AccountCheck): Run | undefined {
     const entry = this.entries.get(id)
     if (!entry || !this.mayDecide(entry, canDecide)) {
       return undefined
@@ -234,7 +242,7 @@ export class RunRegistry {
     decider: Pick<Principal, 'iss' | 'sub'>,
     id: string,
     outcome: 'approved' | 'rejected',
-    canDecide: (account: string) => boolean,
+    canDecide: AccountCheck,
     reason?: string
   ): DecisionResult {
     const entry = this.entries.get(id)
@@ -284,9 +292,10 @@ export class RunRegistry {
     owner: Pick<Principal, 'iss' | 'sub'>,
     id: string,
     after: number,
-    listener: (event: StoredEvent) => void
+    listener: (event: StoredEvent) => void,
+    canUse?: AccountCheck
   ): { events: StoredEvent[]; finished: boolean; stop: () => void } | undefined {
-    const entry = this.find(owner, id)
+    const entry = this.find(owner, id, canUse)
     if (!entry) {
       return undefined
     }
@@ -319,13 +328,13 @@ export class RunRegistry {
     }
   }
 
-  private find(owner: Pick<Principal, 'iss' | 'sub'>, id: string): Entry | undefined {
+  private find(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Entry | undefined {
     const entry = this.entries.get(id)
-    return entry && this.owns(owner, entry) ? entry : undefined
+    return entry && (this.owns(owner, entry) || (canUse && this.mayDecide(entry, canUse))) ? entry : undefined
   }
 
   // Whoever uses an account the run needed approved is to see it and decide.
-  private mayDecide(entry: Entry, canDecide: (account: string) => boolean): boolean {
+  private mayDecide(entry: Entry, canDecide: AccountCheck): boolean {
     return (entry.run.approvals ?? []).some((approval) => canDecide(approval.account))
   }
 

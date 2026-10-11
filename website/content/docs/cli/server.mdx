@@ -576,6 +576,12 @@ approvals:
 * A caller approves what they have access to, and nobody approves their own run. A
   caller who uses none of the accounts that wait sees nothing of the run. Approvers see
   the published build files, so they can read what they approve, and nothing more.
+* The approver is shown what to decide on: the tasks and services the run executes
+  with their dependencies as `plan` (commands, image, the secrets and the account each
+  is read as, mounts, ports and the `flags` to look at first, never a value), the
+  accounts, the version, the source and the options. Who uses an account a run needed
+  approved may also read that run (`GET /v1/runs/<id>` and its events) and cancel it;
+  `GET /v1/runs` stays the caller's own.
 * What an approval cannot cover is what the code does: pinning commands does not pin the
   code they run, so an account that matters should also be limited to `source: [ref]`
   and `refs`.

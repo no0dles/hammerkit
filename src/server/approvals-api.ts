@@ -19,6 +19,7 @@ function toApprovalView(run: Run) {
     definition: run.definition,
     tasks: run.tasks,
     accounts: run.accounts,
+    plan: run.plan,
     source: run.source,
     options: run.options,
     approvals: run.approvals,

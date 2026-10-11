@@ -208,6 +208,17 @@ describe('approvals api', () => {
         source: { type: 'ref', ref: 'main' },
       })
 
+      // with what the tasks do: the commands, the secrets and the account they are read as
+      expect(list.approvals[0].plan).toMatchObject({
+        build: { cmds: ['echo build'], accounts: [] },
+        deploy: {
+          cmds: ['echo deploy'],
+          deps: ['build'],
+          accounts: ['op-payments-prod'],
+          secrets: [{ from: 'echo:kube', account: 'op-payments-prod', target: 'KUBE_TOKEN' }],
+        },
+      })
+
       const approved = await api.approve(run.id, 'dave', MANAGERS)
       expect(approved.status).toBe(200)
       expect((await approved.json()).approvals[0].approvedBy.sub).toBe('dave')
@@ -315,8 +326,33 @@ describe('approvals api', () => {
         expect((await (await api.call('GET', '/v1/approvals', { sub })).json()).approvals).toEqual([])
       }
       expect((await api.call('GET', `/v1/approvals/${run.id}`, { sub: 'dave', groups: MANAGERS })).status).toBe(200)
-      expect((await api.call('GET', `/v1/runs/${run.id}`, { sub: 'dave', groups: MANAGERS })).status).toBe(404)
+      // who uses the account may follow the run, nobody else may
+      expect((await api.call('GET', `/v1/runs/${run.id}`, { sub: 'dave', groups: MANAGERS })).status).toBe(200)
+      for (const sub of ['bob', 'mallory', 'dba']) {
+        expect((await api.call('GET', `/v1/runs/${run.id}`, { sub })).status).toBe(404)
+        expect((await api.call('GET', `/v1/runs/${run.id}/events`, { sub })).status).toBe(404)
+        expect((await api.call('POST', `/v1/runs/${run.id}/cancel`, { sub })).status).toBe(404)
+      }
       await sleep(30)
+      expect(api.executed).toEqual([])
+    })
+  })
+
+  it('lets who uses the account of a run follow it and stop it', async () => {
+    await withApi('approvals-api-follow', '', async (api) => {
+      const run = await (await api.run(['deploy'], 'alice')).json()
+      const seen = await api.call('GET', `/v1/runs/${run.id}`, { sub: 'dave', groups: MANAGERS })
+      expect((await seen.json()).accounts).toEqual(['op-payments-prod'])
+
+      const cancelled = await api.call('POST', `/v1/runs/${run.id}/cancel`, { sub: 'dave', groups: MANAGERS })
+      expect(cancelled.status).toBe(200)
+      expect((await cancelled.json()).state).toBe('cancelled')
+      const events = await (
+        await api.call('GET', `/v1/runs/${run.id}/events`, { sub: 'dave', groups: MANAGERS })
+      ).text()
+      expect(events).toContain('event: state')
+      // the list stays the caller's own
+      expect((await (await api.call('GET', '/v1/runs', { sub: 'dave', groups: MANAGERS })).json()).runs).toEqual([])
       expect(api.executed).toEqual([])
     })
   })

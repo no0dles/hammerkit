@@ -224,6 +224,14 @@ describe('remote approvals', () => {
       expect(listing).toContain('accounts: op-payments-prod, source ref main')
       expect(listing).toContain('op-payments-prod: waits for somebody who uses it to approve')
 
+      const shown = await h.run('remote', 'show', run.id, 'build')
+      expect(shown).toContain('task, local  [local-task]')
+      expect(shown).toContain('$ echo deploy')
+      expect(shown).toContain('after: build')
+      expect(shown).toContain('secret echo:kube as op-payments-prod -> KUBE_TOKEN')
+      expect(shown).not.toContain('KUBE_TOKEN=')
+      await expect(h.run('remote', 'show', 'nope', 'build')).rejects.toThrow('is not a run id')
+
       expect(await h.run('remote', 'approve', run.id, 'build')).toContain(`approved ${run.id} on build, it is queued`)
       expect(await h.run('remote', 'approvals', 'build')).toContain('no runs wait for your approval')
       for (let i = 0; i < 100 && h.executed.length === 0; i++) {

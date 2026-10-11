@@ -6,7 +6,7 @@ import { getVersion } from '../version'
 import { detectPlatform, getSecretCatalog, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { decideRun, getGrant, mayRun } from './policy'
+import { canUse, decideRun, getGrant, mayRun } from './policy'
 import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, StoredEvent } from './runs'
 import { HostExecutor } from './executor'
 import { PlanContext, planRun } from './run-plan'
@@ -61,6 +61,7 @@ const HEARTBEAT_MS = 15_000
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
 function streamEvents(
   registry: RunRegistry,
+  config: ServerConfig,
   principal: Principal,
   id: string,
   req: IncomingMessage,
@@ -70,12 +71,18 @@ function streamEvents(
   const after = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0)
   const write = (event: StoredEvent) =>
     res.write(`id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-  const watch = registry.watch(principal, id, Number.isFinite(after) && after > 0 ? after : 0, (event) => {
-    write(event)
-    if (event.type === 'state' && isFinal(event.state)) {
-      end()
-    }
-  })
+  const watch = registry.watch(
+    principal,
+    id,
+    Number.isFinite(after) && after > 0 ? after : 0,
+    (event) => {
+      write(event)
+      if (event.type === 'state' && isFinal(event.state)) {
+        end()
+      }
+    },
+    accountsOf(config, principal)
+  )
   if (!watch) {
     send(res, 404, { error: 'not found' })
     return
@@ -133,18 +140,24 @@ async function handleRuns(
       send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
       return true
     }
-    const run = registry.cancel(principal, id)
+    const run = registry.cancel(principal, id, accountsOf(config, principal))
     log(`cancel iss=${principal.iss} sub=${principal.sub} run=${id} found=${Boolean(run)}`)
     run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
   } else if (method !== 'GET') {
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
-    streamEvents(registry, principal, id, req, res, url)
+    streamEvents(registry, config, principal, id, req, res, url)
   } else {
-    const run = registry.get(principal, id)
+    const run = registry.get(principal, id, accountsOf(config, principal))
     run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
   }
   return true
+}
+
+// The accounts the caller uses: who approves a run on them follows and stops it.
+function accountsOf(config: ServerConfig, principal: Principal): (account: string) => boolean {
+  const grant = getGrant(config.entitlements, principal)
+  return (account) => canUse(grant, account)
 }
 
 function toRunResponse(run: Run): Omit<Run, 'owner'> {
@@ -240,6 +253,7 @@ async function submitRun(
         definition: { name: version.name, hash: version.hash },
         tasks: request.tasks,
         accounts: planned.accounts,
+        plan: planned.plan,
         source: request.source,
         options: request.options,
       },
