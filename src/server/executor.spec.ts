@@ -10,9 +10,11 @@ import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
 import { runEnvironment } from './run-environment'
 import { Run, RunEventData } from './runs'
+import { RepoAccess } from './repo-access'
 import { ServerConfig, serverConfigSchema } from './server-config'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
+const REPO = 'git.test/corp/payments'
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], {
@@ -26,12 +28,13 @@ describe('HostExecutor', () => {
   let store: DefinitionStore
   let executor: HostExecutor
   let runs: string
+  let commit: string
 
   const config = (): ServerConfig =>
     serverConfigSchema.parse({
       issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
       runs: { env: { allow: HOST_ENV_ALLOW } },
-      sources: { payments: { git: repository } },
+      sources: [{ match: 'git.test/corp/*' }],
       secretProviders: {
         echo: { command: [process.execPath, '-e', 'process.stdout.write(process.argv[1])', '{{ref}}'] },
       },
@@ -63,7 +66,7 @@ describe('HostExecutor', () => {
     definition: { name: 'payments', hash },
     tasks: ['build'],
     accounts: [],
-    source: { type: 'ref', ref: 'main' },
+    source: { type: 'ref', repo: REPO, ref: 'main', commit },
     options: {},
     ...patch,
   })
@@ -88,6 +91,7 @@ describe('HostExecutor', () => {
     writeFileSync(join(repository, 'input.txt'), 'hello')
     git(repository, 'add', '.')
     git(repository, 'commit', '--quiet', '-m', 'one')
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
     const environment = environmentMock(root)
     const serverConfig = config()
     const serverEnvs = { ...process.env, SECRET_OF_SERVER: 'x' }
@@ -99,6 +103,7 @@ describe('HostExecutor', () => {
       definitions: store,
       environment: { ...environment, processEnvs: serverEnvs },
       planning: hosted,
+      repos: new RepoAccess(serverConfig, hosted.environment, { url: () => repository }),
       directory: runs,
     })
   })
@@ -222,7 +227,7 @@ describe('HostExecutor', () => {
     expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
 
-  it('fails with the reason when the server has no repository for the build file', async () => {
+  it('fails with the reason when the server does not list the repository', async () => {
     const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
     const bare = serverConfigSchema.parse({
       issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -233,11 +238,12 @@ describe('HostExecutor', () => {
       definitions: store,
       environment: environmentMock(root),
       planning: planning(bare, process.env),
+      repos: new RepoAccess(bare, planning(bare, process.env).environment, { url: () => repository }),
       directory: runs,
     })
     await expect(
       other.execute(run(hash), { emit: () => undefined, signal: new AbortController().signal })
-    ).rejects.toThrow('sources.payments.git')
+    ).rejects.toThrow('can not read git.test/corp/payments')
   })
 
   it('refuses a run from an upload, there is nothing to take the files from yet', async () => {
@@ -248,8 +254,16 @@ describe('HostExecutor', () => {
 
   it('fails when the ref does not exist', async () => {
     const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
-    const { error } = await execute(run(hash, { source: { type: 'ref', ref: 'missing' } }))
+    const { error } = await execute(run(hash, { source: { type: 'ref', repo: REPO, ref: 'missing', commit } }))
     expect(error?.message).toContain('unable to fetch')
+  })
+
+  it('fails when the ref moved since the run was submitted', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    writeFileSync(join(repository, 'input.txt'), 'changed')
+    git(repository, 'commit', '--quiet', '-am', 'two')
+    const { error } = await execute(run(hash))
+    expect(error?.message).toContain(`the run was submitted for ${commit}`)
   })
 
   it('does not write a published file into the git directory of the source', async () => {

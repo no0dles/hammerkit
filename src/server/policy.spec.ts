@@ -139,7 +139,7 @@ describe('decideRun', () => {
   }
   const grantOf = (accounts: Grant['accounts'], builds: Grant['builds'] = 'run'): Grant => ({
     accounts,
-    repos: [],
+    repos: ['github.com/corp/*'],
     builds,
     matched: [0],
   })
@@ -147,8 +147,9 @@ describe('decideRun', () => {
     grant: grantOf({ ci: 'use', dev: 'use', prod: 'request' }),
     accounts: [],
     catalog,
-    source: { type: 'ref', ref: 'main' },
+    source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'main' },
     approvable: () => true,
+    readable: () => true,
     ...over,
   })
   const refuse = (status: number, error: RegExp) => ({ type: 'refuse', status, error: expect.stringMatching(error) })
@@ -176,22 +177,22 @@ describe('decideRun', () => {
     ],
     [
       'a branch the account allows',
-      { accounts: ['prod'], source: { type: 'ref', ref: 'release/1.2' } },
+      { accounts: ['prod'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'release/1.2' } },
       { type: 'approval', accounts: ['prod'] },
     ],
     [
       'a branch the account does not allow',
-      { accounts: ['prod'], source: { type: 'ref', ref: 'feature' } },
+      { accounts: ['prod'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'feature' } },
       refuse(403, /only used by runs from main, release\/\*/),
     ],
     [
       'a commit names no branch, so an account with refs refuses it',
-      { accounts: ['prod'], source: { type: 'ref', ref: 'a'.repeat(40) } },
+      { accounts: ['prod'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'a'.repeat(40) } },
       refuse(403, /only used by runs from/),
     ],
     [
       'a commit is fine for an account without refs',
-      { accounts: ['dev'], source: { type: 'ref', ref: 'a'.repeat(40) } },
+      { accounts: ['dev'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'a'.repeat(40) } },
       { type: 'run' },
     ],
     [
@@ -211,7 +212,7 @@ describe('decideRun', () => {
         grant: grantOf({ prod: 'use' }),
         accounts: ['prod'],
         catalog: { prod: { providers: {}, source: ['upload'] } },
-        source: { type: 'ref', ref: 'main' },
+        source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'main' },
       })
     )
     expect(decision).toEqual(refuse(403, /not used by runs from ref/))

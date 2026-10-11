@@ -32,7 +32,12 @@ export interface RunApproval {
   approvedAt?: string
 }
 
-export type RunSource = { type: 'ref'; ref: string } | { type: 'upload'; snapshot: string }
+// A ref run names a repository (`host/path`) and a branch, tag or commit of it, and is
+// pinned to the commit the ref pointed to when it was submitted, so what is approved is
+// what runs.
+export type RunSource =
+  | { type: 'ref'; repo: string; ref: string; commit: string }
+  | { type: 'upload'; snapshot: string }
 
 export interface RunSpec {
   // the version of the published build file the run executes

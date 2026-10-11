@@ -148,6 +148,26 @@ export const entitlementSchema = z
     }
   })
 
+// A repository the server can read: `github.com/corp/*` for an organisation,
+// `gitlab.corp.com/platform/**` for a group with its subgroups. The credential is a
+// secret of a provider, read as `account`, and handed to git for that fetch only.
+export const sourceSchema = z
+  .object({
+    match: repoPatternSchema,
+    secret: z
+      .object({
+        from: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'expected provider:reference'),
+        account: accountNameSchema,
+        // the user name of the basic authentication the token is sent with
+        username: z.string().min(1).default('x-access-token'),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+
+export type Source = z.infer<typeof sourceSchema>
+
 const duration = z.string().refine((value) => {
   try {
     return parseDuration(value) > 0
@@ -196,21 +216,11 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
-    // where a run gets its code from: the repository of each build file, by its name.
-    // The caller names a branch, tag or commit of it, never a repository.
-    sources: z
-      .record(
-        definitionName,
-        z
-          .object({
-            git: z
-              .string()
-              .min(1)
-              .refine((value) => !value.startsWith('-'), 'a repository can not look like an option'),
-          })
-          .strict()
-      )
-      .default({}),
+    // the repositories a run may get its code from, as patterns of `host/path`, and
+    // the secret that reads them: a token in a secret provider, read as a service
+    // account of the operator. The caller names a repository and a ref in the request,
+    // never a url.
+    sources: z.array(sourceSchema).default([]),
     // where the server keeps what must survive a restart: the published build files
     storage: z
       .object({ directory: z.string().min(1).optional() })
@@ -285,6 +295,46 @@ export const serverConfigSchema = z
         }
       }
     })
+    config.sources.forEach((source, index) => {
+      if (!source.secret) {
+        return
+      }
+      const { from, account } = source.secret
+      const kind = from.substring(0, from.indexOf(':'))
+      const where = ['sources', index, 'secret'] as (string | number)[]
+      if (!config.accounts[account]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'account'],
+          message: `unknown account ${account}`,
+        })
+      } else if (!config.accounts[account].providers[kind]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'from'],
+          message: `account ${account} has no credentials for the provider ${kind}`,
+        })
+      }
+      if (!config.secretProviders[kind]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'from'],
+          message: `secret provider ${kind} is not declared in secretProviders`,
+        })
+      }
+    })
+    const readers = getSourceAccounts(config)
+    config.entitlements.forEach((entitlement, index) => {
+      for (const account of Object.keys(entitlement.accounts)) {
+        if (readers.includes(account)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['entitlements', index, 'accounts', account],
+            message: `the account ${account} reads the sources, no entitlement may name it`,
+          })
+        }
+      }
+    })
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -295,6 +345,11 @@ export const serverConfigSchema = z
   })
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>
+
+// The accounts that read repositories: no caller uses them and no build file names them.
+export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string[] {
+  return [...new Set(config.sources.flatMap((source) => (source.secret ? [source.secret.account] : [])))]
+}
 export type ServerPlatform = z.infer<typeof serverPlatformSchema>
 
 export async function readServerConfig(environment: Environment, path: string): Promise<ServerConfig> {

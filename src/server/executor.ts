@@ -10,12 +10,13 @@ import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
-import { createSecretRegistry } from '../utils/redact'
+import { createSecretRegistry, SecretRegistry } from '../utils/redact'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { DefinitionStore } from './definitions'
 import { checkoutRef } from './git-checkout'
+import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
 import { ServerConfig } from './server-config'
 import { getRunScopes, PlanContext, planRun } from './run-plan'
@@ -30,6 +31,8 @@ export interface HostExecutorOptions {
   environment: Environment
   // how build files are read: the environment of a run, the accounts of the operator
   planning: PlanContext
+  // the repositories runs get their code from
+  repos: RepoAccess
   // where the working directory of each run is made
   directory: string
 }
@@ -47,7 +50,7 @@ export class HostExecutor implements RunExecutor {
   constructor(private readonly options: HostExecutorOptions) {}
 
   async execute(run: Run, context: RunContext): Promise<void> {
-    const { definitions, config, planning } = this.options
+    const { definitions, planning, repos } = this.options
     const version = definitions.find(run.definition.name, run.definition.hash)
     const bundle = version ? await definitions.files(version) : undefined
     if (!version || !bundle) {
@@ -56,12 +59,9 @@ export class HostExecutor implements RunExecutor {
     if (run.source.type !== 'ref') {
       throw new Error('runs from an upload are not supported by this server yet, use a git ref')
     }
-    const repository = config.sources[run.definition.name]?.git
-    if (!repository) {
-      throw new Error(
-        `this server has no repository for ${run.definition.name} to run ${run.source.ref} from, ` +
-          `the operator sets sources.${run.definition.name}.git`
-      )
+    const { repo, ref, commit: pinned } = run.source
+    if (!repos.readable(repo)) {
+      throw new Error(`this server can not read ${repo}, the operator lists it in sources`)
     }
 
     // what was approved is what runs: the accounts are read again from the files with
@@ -79,16 +79,26 @@ export class HostExecutor implements RunExecutor {
     }
     context.signal.addEventListener('abort', abort, { once: true })
 
+    const secrets = createSecretRegistry()
     const root = join(this.options.directory, run.id)
     const checkout = join(root, 'source')
     try {
       const passed = planning.environment.processEnvs
-      const commit = await checkoutRef(repository, run.source.ref, checkout, passed, abortCtrl.signal)
-      context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${commit}` })
+      // the token of the repository is masked in all this run logs, and reaches git only
+      const credentials = await repos.credentials(repo)
+      credentials.values.forEach((value) => secrets.register(value))
+      let commit: string
+      try {
+        commit = await checkoutRef(repos.url(repo), ref, checkout, credentials.env, abortCtrl.signal, pinned)
+      } catch (e) {
+        throw repos.scrub(e, credentials.values)
+      }
+      context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
       await this.writeBundle(checkout, bundle.files)
       await this.runTasks(
         run,
         context,
+        secrets,
         join(checkout, version.entry),
         checkout,
         passed,
@@ -117,13 +127,13 @@ export class HostExecutor implements RunExecutor {
   private async runTasks(
     run: Run,
     context: RunContext,
+    secrets: SecretRegistry,
     entry: string,
     cwd: string,
     passed: { [key: string]: string | undefined },
     hosted: HostedPolicy,
     abortCtrl: AbortController
   ): Promise<void> {
-    const secrets = createSecretRegistry()
     const status = statusConsole(emptyWritable(), secrets)
     // what the engine would print to a terminal is not wanted, its status console
     // is what is streamed: it is redacted with the secrets of this run

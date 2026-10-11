@@ -352,6 +352,55 @@ describe('server config policy', () => {
     expect(serverConfigSchema.safeParse(good).success).toBe(true)
   })
 
+  describe('sources', () => {
+    const withProviders = {
+      ...base,
+      secretProviders: { gsm: { command: ['gcloud', '{{ref}}'] } },
+      accounts: { 'scm-read': { providers: { gsm: { env: {} } } }, a: {} },
+    }
+    const secret = { from: 'gsm:github-token', account: 'scm-read' }
+
+    it('takes patterns of repositories with the secret that reads them', () => {
+      const parsed = serverConfigSchema.safeParse({
+        ...withProviders,
+        sources: [
+          { match: 'github.com/corp/*', secret },
+          { match: 'gitlab.corp.com/platform/**', secret: { ...secret, username: 'oauth2' } },
+          { match: 'github.com/public/*' },
+        ],
+      })
+      expect(parsed.success).toBe(true)
+      expect(parsed.success && parsed.data.sources[0].secret?.username).toBe('x-access-token')
+    })
+
+    it.each([
+      ['a url', [{ match: 'https://user:pw@github.com/corp/x' }]],
+      ['a name without a path', [{ match: 'payments' }]],
+      ['a map per build file, as before', { payments: { git: 'git@github.com:corp/payments.git' } }],
+      ['an account that does not exist', [{ match: 'github.com/corp/*', secret: { ...secret, account: 'nope' } }]],
+      [
+        'an account without credentials for the provider',
+        [{ match: 'github.com/corp/*', secret: { ...secret, account: 'a' } }],
+      ],
+      ['a provider that is not declared', [{ match: 'github.com/corp/*', secret: { ...secret, from: 'op:x' } }]],
+      ['a secret without a provider', [{ match: 'github.com/corp/*', secret: { ...secret, from: 'token' } }]],
+    ])('rejects %s', (_name, sources) => {
+      expect(serverConfigSchema.safeParse({ ...withProviders, sources }).success).toBe(false)
+    })
+
+    it('keeps the account that reads repositories away from entitlements', () => {
+      const result = serverConfigSchema.safeParse({
+        ...withProviders,
+        sources: [{ match: 'github.com/corp/*', secret }],
+        entitlements: [{ subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: { 'scm-read': 'use' } }],
+      })
+      expect(result.success).toBe(false)
+      expect(JSON.stringify(result.success ? '' : result.error.issues)).toContain(
+        'the account scm-read reads the sources, no entitlement may name it'
+      )
+    })
+  })
+
   it('only restricts refs for an account that takes nothing but a ref', () => {
     const account = (a: object) => serverConfigSchema.safeParse({ ...base, accounts: { a } }).success
     expect(account({ source: ['ref'], refs: ['main', 'release/*'] })).toBe(true)

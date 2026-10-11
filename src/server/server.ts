@@ -3,11 +3,13 @@ import { createServer as createHttpsServer } from 'https'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, getSecretCatalog, ServerConfig } from './server-config'
+import { detectPlatform, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, getGrant, mayRun } from './policy'
-import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, StoredEvent } from './runs'
+import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSource, StoredEvent } from './runs'
+import { RefError } from './git-checkout'
+import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
 import { PlanContext, planRun } from './run-plan'
 import { runEnvironment } from './run-environment'
@@ -53,6 +55,8 @@ export interface ServerOptions extends TokenVerifierOptions {
   log?: (line: string) => void
   // carries out the runs; without one, runs are accepted and fail with a reason
   executor?: RunExecutor
+  // how repositories are located and resolved, for tests
+  repos?: RepoAccessOptions
 }
 
 const HEARTBEAT_MS = 15_000
@@ -111,6 +115,7 @@ async function handleRuns(
   definitions: DefinitionStore,
   sources: SourceStore,
   planning: PlanContext,
+  repos: RepoAccess,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -127,7 +132,7 @@ async function handleRuns(
     if (method === 'GET') {
       send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
     } else if (method === 'POST') {
-      await submitRun(config, registry, definitions, sources, planning, log, principal, req, res)
+      await submitRun(config, registry, definitions, sources, planning, repos, log, principal, req, res)
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -172,6 +177,7 @@ async function submitRun(
   definitions: DefinitionStore,
   sources: SourceStore,
   planning: PlanContext,
+  repos: RepoAccess,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -237,8 +243,12 @@ async function submitRun(
     grant,
     accounts: planned.accounts,
     catalog: config.accounts,
-    source: request.source.type === 'ref' ? { type: 'ref', ref: request.source.ref } : { type: 'upload' },
+    source:
+      request.source.type === 'ref'
+        ? { type: 'ref', repo: request.source.repo, ref: request.source.ref }
+        : { type: 'upload' },
     approvable: (account) => config.entitlements.some((entitlement) => entitlement.accounts[account] === 'use'),
+    readable: (repo) => repos.readable(repo),
   })
   if (decision.type === 'refuse') {
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${decision.error}`)
@@ -246,6 +256,23 @@ async function submitRun(
     return
   }
   const approvals = decision.type === 'approval' ? decision.accounts : []
+  // the ref is pinned now: the approver sees the commit, and the run executes that one
+  let source: RunSource
+  if (request.source.type === 'ref') {
+    try {
+      const commit = await repos.resolve(request.source.repo, request.source.ref)
+      source = { type: 'ref', repo: request.source.repo, ref: request.source.ref, commit }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${message}`)
+      send(res, e instanceof RefError ? 400 : 502, {
+        error: e instanceof RefError ? message : `could not resolve ${request.source.ref}: ${message}`,
+      })
+      return
+    }
+  } else {
+    source = request.source
+  }
   try {
     const run = registry.submit(
       principal,
@@ -254,7 +281,7 @@ async function submitRun(
         tasks: request.tasks,
         accounts: planned.accounts,
         plan: planned.plan,
-        source: request.source,
+        source,
         options: request.options,
       },
       approvals
@@ -307,6 +334,7 @@ async function handle(
   proposals: ProposalRegistry,
   sources: SourceStore,
   planning: PlanContext,
+  repos: RepoAccess,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -337,7 +365,7 @@ async function handle(
   if (await handleSources(config, sources, log, principal, req, res, url)) {
     return
   }
-  if (await handleRuns(config, registry, definitions, sources, planning, log, principal, req, res, url)) {
+  if (await handleRuns(config, registry, definitions, sources, planning, repos, log, principal, req, res, url)) {
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -366,7 +394,7 @@ export async function startServer(
       processEnvs: runEnvironment(config, environment.processEnvs),
       hosted: { catalog: getSecretCatalog(config) },
     },
-    policy: { envs: config.runs.env.allow },
+    policy: { envs: config.runs.env.allow, reserved: getSourceAccounts(config) },
   }
   const definitions = new DefinitionStore(
     join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'definitions'),
@@ -374,6 +402,7 @@ export async function startServer(
     { policy: planning.policy }
   )
   await definitions.load()
+  const repos = new RepoAccess(config, planning.environment, options.repos)
   const executor =
     options.executor ??
     new HostExecutor({
@@ -381,6 +410,7 @@ export async function startServer(
       definitions,
       environment,
       planning,
+      repos,
       directory: join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'runs'),
     })
   const sources = new SourceStore(join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'sources'))
@@ -396,7 +426,7 @@ export async function startServer(
     timeout: parseDuration(config.approvals.timeout),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, definitions, proposals, sources, planning, verifier, log, req, res).catch((e) => {
+    handle(config, registry, definitions, proposals, sources, planning, repos, verifier, log, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return

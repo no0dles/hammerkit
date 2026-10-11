@@ -7,6 +7,8 @@ import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { readServerConfig } from './server-config'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { COMMIT, REPO, SOURCES_YAML, fakeRepos } from '../testing/repos'
+import { RepoAccessOptions } from './repo-access'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
 
@@ -23,12 +25,15 @@ accounts:
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { op-payments-dev: use, op-payments-ci: use, op-payments-prod: request }
+    repos: [github.com/corp/*]
     builds: run
   - subject: { iss: ISSUER, sub: bob }
     accounts: { op-payments-dev: use, op-payments-ci: use, op-payments-prod: use }
+    repos: [github.com/corp/*, gitlab.corp.com/**]
     builds: publish
   - subject: { iss: ISSUER, sub: carol }
     accounts: { op-payments-ci: use }
+    repos: [github.com/corp/*]
     builds: run
 `
 
@@ -53,7 +58,8 @@ async function withApi(
   name: string,
   executor: RunExecutor | undefined,
   fn: (api: Api) => Promise<void>,
-  extraConfig = ''
+  extraConfig = '',
+  repos: RepoAccessOptions = fakeRepos
 ) {
   const key = createTestKey('ES256', 'k1')
   const idp = await startTestIssuer([key])
@@ -67,7 +73,7 @@ async function withApi(
         )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
           /ISSUER/g,
           `"${idp.url}"`
-        )}${extraConfig}`
+        )}${SOURCES_YAML}${extraConfig}`
       )
       const log: string[] = []
       // the tools a run needs to find, git and the shell, come from the environment of the server
@@ -75,6 +81,7 @@ async function withApi(
       const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
         log: (line) => log.push(line),
         executor,
+        repos,
       })
       const token = (sub = 'alice') =>
         signToken(key, { iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
@@ -136,7 +143,7 @@ const bundle = {
 const request = {
   definition: { name: 'payments', hash: 'latest' },
   tasks: ['build'],
-  source: { type: 'ref', ref: 'main' },
+  source: { type: 'ref', repo: REPO, ref: 'main' },
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -273,19 +280,19 @@ describe('runs api', () => {
   it('refuses a run of an account from a ref it does not allow', async () => {
     await withApi('runs-api-refs', done, async (api) => {
       const feature = await api.submit(
-        { ...request, tasks: ['deploy'], source: { type: 'ref', ref: 'feature' } },
+        { ...request, tasks: ['deploy'], source: { type: 'ref', repo: REPO, ref: 'feature' } },
         'bob'
       )
       expect(feature.status).toBe(403)
       expect((await feature.json()).error).toContain('only used by runs from main, release/*')
       const release = await api.submit(
-        { ...request, tasks: ['deploy'], source: { type: 'ref', ref: 'release/1.2' } },
+        { ...request, tasks: ['deploy'], source: { type: 'ref', repo: REPO, ref: 'release/1.2' } },
         'bob'
       )
       expect(release.status).toBe(202)
       // a commit names no branch
       const commit = await api.submit(
-        { ...request, tasks: ['deploy'], source: { type: 'ref', ref: 'a'.repeat(40) } },
+        { ...request, tasks: ['deploy'], source: { type: 'ref', repo: REPO, ref: 'a'.repeat(40) } },
         'bob'
       )
       expect(commit.status).toBe(403)
@@ -476,11 +483,38 @@ describe('runs api', () => {
     })
   })
 
-  it('fails a run with the reason when the server has no repository for the build file', async () => {
-    await withApi('runs-api-no-source', undefined, async (api) => {
+  it('refuses a repository the caller does not list, or the server can not read, before anything is queued', async () => {
+    await withApi('runs-api-repos', undefined, async (api) => {
+      const other = { ...request, source: { type: 'ref', repo: 'github.com/other/tool', ref: 'main' } }
+      const refused = await api.submit(other)
+      expect(refused.status).toBe(403)
+      expect((await refused.json()).error).toContain('you may not run from github.com/other/tool')
+
+      // bob may name any gitlab repository, but this server is configured for github only
+      const gitlab = { ...request, source: { type: 'ref', repo: 'gitlab.corp.com/a/b/c', ref: 'main' } }
+      const unreadable = await api.submit(gitlab, 'bob')
+      expect(unreadable.status).toBe(400)
+      expect((await unreadable.json()).error).toContain('this server can not read gitlab.corp.com/a/b/c')
+      expect((await (await api.call('GET', '/v1/runs')).json()).runs).toEqual([])
+    })
+  })
+
+  it('pins the ref to a commit when the run is submitted, or says why it can not', async () => {
+    await withApi('runs-api-pin', undefined, async (api) => {
       const run = await (await api.submit(request)).json()
-      const failed = await untilState(api, run.id, ['failed'])
-      expect(failed.error).toContain('sources.payments.git')
+      expect(run.source).toEqual({ type: 'ref', repo: REPO, ref: 'main', commit: COMMIT })
+
+      const missing = await api.submit({ ...request, source: { type: 'ref', repo: REPO, ref: 'missing' } })
+      expect(missing.status).toBe(400)
+      expect((await missing.json()).error).toContain('there is no branch or tag missing')
+      const both = await api.submit({ ...request, source: { type: 'ref', repo: REPO, ref: 'both' } })
+      expect((await both.json()).error).toContain('both a branch and a tag')
+
+      // a url is not a repository, however it is written
+      for (const repo of ['https://user:pw@github.com/corp/x', 'github.com/corp/../x', 'file:///etc', '-x/y']) {
+        const bad = await api.submit({ ...request, source: { type: 'ref', repo, ref: 'main' } })
+        expect(bad.status).toBe(400)
+      }
     })
   })
 
@@ -512,7 +546,8 @@ describe('runs api', () => {
           expect(events.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
           expect(events.some((e) => e.event === 'task' && e.data.state === 'succeeded')).toBe(true)
         },
-        `sources:\n  payments: { git: ${JSON.stringify(repository)} }\n`
+        '',
+        { url: () => repository }
       )
     } finally {
       rmSync(repository, { recursive: true, force: true })

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { parseDuration } from '../utils/units'
 import { HASH_PATTERN } from '../remote/bundle'
 import { definitionName } from './server-config'
+import { normalizeRepo } from './repo'
 
 const name = z.string().min(1).max(200)
 
@@ -52,7 +53,25 @@ export const runRequestSchema = z
     // the options can select tasks instead
     tasks: z.array(name).max(100).default([]),
     source: z.discriminatedUnion('type', [
-      z.object({ type: z.literal('ref'), ref: name }).strict(),
+      z
+        .object({
+          type: z.literal('ref'),
+          // `host/path`, such as github.com/corp/payments; the server reads it from its own
+          // sources, a url is never taken from a request
+          repo: z.string().transform((value, ctx) => {
+            const repo = normalizeRepo(value)
+            if (!repo) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'expected a repository like github.com/corp/payments',
+              })
+              return z.NEVER
+            }
+            return repo
+          }),
+          ref: name,
+        })
+        .strict(),
       // the name of a tree announced with POST /v1/sources
       z.object({ type: z.literal('upload'), snapshot: z.string().regex(HASH_PATTERN) }).strict(),
     ]),

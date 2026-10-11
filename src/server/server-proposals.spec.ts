@@ -3,6 +3,7 @@ import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { readServerConfig } from './server-config'
+import { REPO, SOURCES_YAML, fakeRepos } from '../testing/repos'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
 
@@ -20,17 +21,22 @@ accounts:
 entitlements:
   - subject: { iss: ISSUER, sub: agent }
     accounts: { dev-key: use }
+    repos: [github.com/corp/*]
     builds: propose
   - subject: { iss: ISSUER, sub: dev }
     accounts: { dev-key: use }
+    repos: [github.com/corp/*]
     builds: publish
   - subject: { iss: ISSUER, sub: ops }
+    repos: [github.com/corp/*]
     builds: publish
   - subject: { iss: ISSUER, sub: lead }
     accounts: { dev-key: use, prod-key: use }
+    repos: [github.com/corp/*]
     builds: publish
   - subject: { iss: ISSUER, sub: viewer }
     accounts: { dev-key: use }
+    repos: [github.com/corp/*]
     builds: run
 `
 
@@ -63,7 +69,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
         )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${entitlements.replace(
           /ISSUER/g,
           `"${idp.url}"`
-        )}${extra}`
+        )}${SOURCES_YAML}${extra}`
       )
       const log: string[] = []
       const executed: string[] = []
@@ -75,6 +81,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
       const server = await startServer(await readServerConfig(env, file), env, {
         log: (line) => log.push(line),
         executor,
+        repos: fakeRepos,
       })
       const token = (sub: string) =>
         signToken(key, { iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
@@ -130,7 +137,7 @@ describe('proposals api', () => {
         body: {
           definition: { name: 'payments', hash: proposal.hash },
           tasks: ['build'],
-          source: { type: 'ref', ref: 'main' },
+          source: { type: 'ref', repo: REPO, ref: 'main' },
         },
       })
       expect(run.status).toBe(400)
@@ -161,7 +168,7 @@ describe('proposals api', () => {
         body: {
           definition: { name: 'payments', hash: proposal.hash },
           tasks: ['build'],
-          source: { type: 'ref', ref: 'main' },
+          source: { type: 'ref', repo: REPO, ref: 'main' },
         },
       })
       expect(started.status).toBe(202)

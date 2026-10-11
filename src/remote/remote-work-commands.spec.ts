@@ -6,6 +6,7 @@ import { runProgram } from '../run-program'
 import { createTestKey, signToken, startTestIssuer, TestDeviceFlow } from '../testing/test-issuer'
 import { readServerConfig } from '../server/server-config'
 import { startServer } from '../server/server'
+import { REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 
@@ -61,22 +62,29 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           'accounts:',
           '  op-payments-dev: { providers: { echo: { env: {} } } }',
           '  op-payments-prod: { providers: { echo: { env: {} } } }',
+          'sources:',
+          '  - match: github.com/corp/*',
           'entitlements:',
           // alice runs: the dev account is hers, the production one she asks for
           `  - subject: { iss: "${idp.url}", sub: alice }`,
           '    accounts: { op-payments-dev: use, op-payments-prod: request }',
+          '    repos: [github.com/corp/payments]',
           '    builds: run',
           `  - subject: { iss: "${idp.url}", sub: carol }`,
           '    accounts: { op-payments-prod: request }',
+          '    repos: [github.com/corp/payments]',
           '    builds: run',
           // bob publishes, as he uses every account the build file names, and approves for prod
           `  - subject: { iss: "${idp.url}", sub: bob }`,
           '    accounts: { op-payments-dev: use, op-payments-prod: use }',
+          '    repos: [github.com/corp/payments]',
           '    builds: publish',
           // dana may publish, but does not use the production account
           `  - subject: { iss: "${idp.url}", sub: dana }`,
+          '    repos: [github.com/corp/payments]',
           '    builds: publish',
           `  - subject: { iss: "${idp.url}", sub: agent }`,
+          '    repos: [github.com/corp/payments]',
           '    builds: propose',
           '',
         ].join('\n')
@@ -92,7 +100,10 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           executed.push(run.tasks.join(','))
         },
       }
-      const server = await startServer(await readServerConfig(environment, serverFile), environment, { executor })
+      const server = await startServer(await readServerConfig(environment, serverFile), environment, {
+        executor,
+        repos: fakeRepos,
+      })
       try {
         const run = async (...args: string[]) => {
           const out = memoryStream()
@@ -126,7 +137,7 @@ async function submit(h: Harness, sub: string, task: string) {
   const response = await h.call(sub, 'POST', '/v1/runs', {
     definition: { name: 'payments' },
     tasks: [task],
-    source: { type: 'ref', ref: 'main' },
+    source: { type: 'ref', repo: REPO, ref: 'main' },
   })
   expect(response.status).toBe(202)
   return response.body as { id: string; state: string }

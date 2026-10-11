@@ -52,6 +52,9 @@ accounts:                           # the service accounts a secret can be read 
     providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-prod.json } } }
     source: [ref]                   # only from reviewed code
     refs: [main, 'release/*']       # and only from these branches
+  scm-read:                         # reads the repositories, no entitlement may name it
+    description: Read-only access to source repositories
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/scm-read.json } } }
 entitlements:
   - subject: { iss: https://login.example.com, sub: 4f1c2b }
     accounts: { op-payments-dev: use, op-payments-prod: request }
@@ -65,8 +68,11 @@ entitlements:
     accounts: { op-payments-dev: use }
     repos: [github.com/corp/payments]
     builds: publish
-sources:
-  payments: { git: git@github.com:corp/payments.git }   # where the code of a run comes from
+sources:                            # the repositories a run may get its code from
+  - match: github.com/corp/*        # an organisation
+    secret: { from: 'gsm:github-readonly-token', account: scm-read }
+  - match: gitlab.corp.com/platform/**   # a group with its subgroups
+    secret: { from: 'gsm:gitlab-group-token', account: scm-read, username: oauth2 }
 approvals:
   timeout: 1h        # default
   maxWaiting: 100    # default
@@ -93,7 +99,7 @@ backend:
 | `accounts` | The service accounts a secret can be read as, each with the environment that makes the provider command act as that account, see [below](#accounts). |
 | `entitlements` | Who may use or request which service account, and what they may do with build files, see [below](#entitlements). |
 | `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
-| `sources` | The repository of each published build file, by its name. A run with `source: ref` gets its code from there, see [Executing a run](#executing-a-run). Credentials are those of the git configuration of the user the server runs as. |
+| `sources` | The repositories a run with `source: ref` may get its code from, see [Repositories](#repositories). |
 | `storage` | Where the server keeps what must survive a restart: the published build files. Runs work in `runs/` below it while they run. |
 | `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. `env.allow` lists the variables of the server process that a run, its provider commands and the git fetch can see, and `env.set` adds fixed values; nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
@@ -474,8 +480,8 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
   the pinned version, and the answer lists them as `accounts`. A caller who has no
   level on one of them gets `403` naming the account, one who may only `request` it
   gets a run in `awaiting-approval`, and a caller without `builds` level may not run.
-* `source` says where the code comes from: `{ "type": "ref", "ref": "..." }` for a git
-  ref the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
+* `source` says where the code comes from: `{ "type": "ref", "repo": "github.com/corp/payments", "ref": "main" }`
+  for a branch or tag of a repository (or a full commit hash) that the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
   for the caller's working tree, announced and sent beforehand, see [Source
   files](#source-files). A snapshot that is unknown, or that still lacks files, is
   `400`. The kinds the accounts of the run list in `source` (and, for `refs`, the
@@ -504,16 +510,55 @@ and `log` (a line of a task's output). A run that
 produces more than 5000 events is cut off with one `truncated` event, the state
 changes are always kept.
 
+### Repositories
+
+A run from a `ref` names a repository and a ref in its request. The repository is written
+`host/path`, such as `github.com/corp/payments` or `gitlab.corp.com/platform/team/tool`;
+the server builds the address from it (`https://host/path.git`), a url, a port or
+credentials in the request are refused with `400`. Two lists decide whether it may be
+used, and a run needs both:
+
+1. **The caller's `repos`**, the patterns of their entitlements added up
+   ([Entitlements](#entitlements)). A repository outside of them is `403 you may not run
+   from <repo>` at submit, before anything is approved or queued. A caller without `repos`
+   can not start runs from a ref.
+2. **The server's `sources`**, the repositories it can read at all. `match` is a pattern
+   (`github.com/corp/payments` exactly, `github.com/corp/*` for one level,
+   `gitlab.corp.com/platform/**` for a group with its subgroups, which covers GitLab
+   subgroups) and the first source that matches decides. A repository none covers is
+   `400 this server can not read <repo>`.
+
+Both lists use the same patterns, host names and paths are compared in lower case.
+
+**The credential** is a secret of a secret provider, read as a service account of the
+operator, like the secrets of a task: `secret.from` is `provider:reference`, `account` is
+the account it is read as, and `username` (default `x-access-token`) is the user name of
+the basic authentication the token is sent with. A provider command can mint a
+short-lived token, for example of a GitHub App; it is read again after a minute. A source
+without a `secret` is read anonymously. The token goes to git for that one fetch through
+the environment of the git process, scoped to the host of the repository, so it is never
+an argument, never written to `.git/config` or the checkout, never in the environment of a
+task, and masked in the logs of the run. The account that reads repositories is the
+server's own: no entitlement may name it and no build file may use it for a secret.
+
+**Pinning.** The server resolves the ref when the run is submitted, with `git ls-remote`:
+`refs/heads/<ref>`, else `refs/tags/<ref>` (an annotated tag to its commit). A name that is
+both a branch and a tag, or neither, is `400`, a repository it can not reach is `502`. The
+run stores the repository, the ref and the `commit`, and the approver sees them. The
+executor fetches the ref and fails the run if it no longer points to that commit, so a
+branch that moved after the approval does not run other code than the one approved. A
+40-digit commit hash is taken as it is; an account with `refs` refuses one, because it
+names no branch.
+
 ### Executing a run
 
 The server runs the tasks of an accepted run on its own machine, with the same engine
 as `hammerkit run`, so the `local` and `docker` runtimes and the task cache work as
 they do there:
 
-1. It fetches the `ref` (a branch, tag or commit) of the repository the operator set
-   in `sources.<build file name>.git`, into a directory made for the run. The caller
-   names a ref, never a repository, and a ref that is not a plain branch, tag or
-   commit name is refused.
+1. It fetches the ref of the repository, as pinned to its commit when the run was
+   submitted (see [Repositories](#repositories)), into a directory made for the run. A ref
+   that is not a plain branch, tag or commit name is refused.
 2. It writes the files of the published version over the checkout, so the tasks are
    the published ones whatever the build file in the repository says.
 3. It runs the tasks in the order they were named (or the ones the labels select),
@@ -526,8 +571,8 @@ that `runs.env.allow` lists, plus `runs.env.set`; the rest of the server's envir
 stays with the server. The local task cache is shared by all runs: a task is keyed by its definition and its
 sources, not by where the checkout is.
 
-A run fails with the reason when the server has no `sources` entry for its build file,
-when the ref can not be fetched, or when it comes from an `upload`: uploads are not
+A run fails with the reason when the server does not list the repository, when the ref
+can not be fetched or has moved, or when it comes from an `upload`: uploads are not
 supported by the executor yet, use `source: ref`. Cancelling a run stops the fetch or
 the running task.
 

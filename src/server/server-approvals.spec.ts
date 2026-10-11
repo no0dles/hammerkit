@@ -4,6 +4,7 @@ import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { readServerConfig } from './server-config'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { REPO, SOURCES_YAML, fakeRepos } from '../testing/repos'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
 
@@ -39,12 +40,15 @@ accounts:
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { op-payments-dev: use, op-payments-prod: request, op-payments-db: request }
+    repos: [github.com/corp/*]
     builds: run
   - subject: { iss: ISSUER, sub: erin }
     accounts: { op-payments-prod: request }
+    repos: [github.com/corp/*]
     builds: run
   - subject: { iss: ISSUER, sub: carol }
     accounts: { op-payments-dev: use, op-payments-prod: use, op-payments-db: use }
+    repos: [github.com/corp/*]
     builds: publish
   - group: { iss: ISSUER, name: release-managers }
     accounts: { op-payments-prod: use }
@@ -52,6 +56,7 @@ entitlements:
     accounts: { op-payments-db: use }
   - subject: { iss: ISSUER, sub: bob }
     accounts: { op-payments-dev: use }
+    repos: [github.com/corp/*]
     builds: run
 `
 
@@ -87,10 +92,11 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
           HOST_ENV_ALLOW
         )} } }\nlisten: { port: 0 }\nstorage: { directory: ${JSON.stringify(
           join(cwd, 'server-data')
-        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${(entitlements + approvals(extra)).replace(
-          /ISSUER/g,
-          `"${idp.url}"`
-        )}`
+        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${(
+          entitlements +
+          SOURCES_YAML +
+          approvals(extra)
+        ).replace(/ISSUER/g, `"${idp.url}"`)}`
       )
       const log: string[] = []
       const executed: string[] = []
@@ -102,6 +108,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
       const server = await startServer(await readServerConfig(env, file), env, {
         log: (line) => log.push(line),
         executor,
+        repos: fakeRepos,
       })
       const token = (sub: string, groups: string[] = []) =>
         signToken(key, { iss: idp.url, sub, groups, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
@@ -134,7 +141,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
               body: {
                 definition: { name: 'payments', hash: extra.hash ?? hash },
                 tasks,
-                source: { type: 'ref', ref: 'main' },
+                source: { type: 'ref', repo: REPO, ref: 'main' },
               },
             }),
           approve: (id, sub, groups) => call('POST', `/v1/approvals/${id}/approve`, { sub, groups }),
@@ -205,7 +212,7 @@ describe('approvals api', () => {
         definition: run.definition,
         tasks: ['deploy'],
         accounts: ['op-payments-prod'],
-        source: { type: 'ref', ref: 'main' },
+        source: { type: 'ref', repo: REPO, ref: 'main' },
       })
 
       // with what the tasks do: the commands, the secrets and the account they are read as

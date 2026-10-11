@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { checkoutRef, isValidRef } from './git-checkout'
+import { checkoutRef, isValidRef, RefError, resolveRef } from './git-checkout'
 
 const env = { PATH: process.env.PATH, HOME: process.env.HOME }
 
@@ -84,6 +84,18 @@ describe('checkoutRef', () => {
     expect(existsSync(join(root, 'pwned'))).toBe(false)
   })
 
+  it('fails when the ref moved from the commit the run was submitted for', async () => {
+    const signal = new AbortController().signal
+    const submitted = commit
+    writeFileSync(join(repository, 'a.txt'), 'three')
+    git(repository, 'commit', '--quiet', '-am', 'three')
+    await expect(checkoutRef(repository, 'main', join(root, 'm'), env, signal, submitted)).rejects.toThrow(
+      `the run was submitted for ${submitted}`
+    )
+    const now = git(repository, 'rev-parse', 'HEAD').trim()
+    expect(await checkoutRef(repository, 'main', join(root, 'n'), env, signal, now)).toBe(now)
+  })
+
   it('does not run a command through a transport', async () => {
     const signal = new AbortController().signal
     await expect(
@@ -96,5 +108,57 @@ describe('checkoutRef', () => {
     const abort = new AbortController()
     abort.abort()
     await expect(checkoutRef(repository, 'main', join(root, 'w'), env, abort.signal)).rejects.toThrow('cancelled')
+  })
+})
+
+describe('resolveRef', () => {
+  let root: string
+  let repository: string
+  let commit: string
+  const signal = new AbortController().signal
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'hammerkit-resolve-'))
+    repository = join(root, 'repository')
+    git(root, 'init', '--quiet', '--initial-branch=main', repository)
+    writeFileSync(join(repository, 'a.txt'), 'one')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '--quiet', '-m', 'one')
+    commit = git(repository, 'rev-parse', 'HEAD').trim()
+  })
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('answers the commit of a branch, a tag and an annotated tag', async () => {
+    git(repository, 'branch', 'release/1.2')
+    git(repository, 'tag', 'v1')
+    git(repository, 'tag', '-a', 'v2', '-m', 'annotated')
+    expect(await resolveRef(repository, 'main', env, signal)).toBe(commit)
+    expect(await resolveRef(repository, 'release/1.2', env, signal)).toBe(commit)
+    expect(await resolveRef(repository, 'v1', env, signal)).toBe(commit)
+    // the commit of the tag, not the tag object
+    expect(await resolveRef(repository, 'v2', env, signal)).toBe(commit)
+  })
+
+  it('takes a full commit as it is and does not ask the repository', async () => {
+    expect(await resolveRef(join(root, 'nowhere'), commit.toUpperCase(), env, signal)).toBe(commit)
+  })
+
+  it('says when there is no such ref, or when the name is a branch and a tag', async () => {
+    await expect(resolveRef(repository, 'nope', env, signal)).rejects.toThrow('there is no branch or tag nope')
+    git(repository, 'tag', 'main')
+    const error = await resolveRef(repository, 'main', env, signal).catch((e) => e)
+    expect(error).toBeInstanceOf(RefError)
+    expect(error.message).toContain('both a branch and a tag')
+  })
+
+  it('does not let a ref pass as an option or a pattern', async () => {
+    for (const ref of ['--upload-pack=sh', '-x', 'a..b', 'refs/heads/*']) {
+      await expect(resolveRef(repository, ref, env, signal)).rejects.toBeInstanceOf(RefError)
+    }
+  })
+
+  it('says when the repository can not be read', async () => {
+    await expect(resolveRef(join(root, 'nowhere'), 'main', env, signal)).rejects.toThrow('unable to fetch')
   })
 })

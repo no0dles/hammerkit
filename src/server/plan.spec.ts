@@ -140,6 +140,13 @@ tasks:
     )
   })
 
+  it('refuses an account the server keeps for itself', async () => {
+    const yaml = 'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, reserved: ['ci'] } })).rejects.toThrow(
+      'a: the secret X is read as ci, which the server uses to read repositories'
+    )
+  })
+
   it('refuses secrets that read a file, or a variable the server does not list', async () => {
     const file = 'tasks:\n  a:\n    secrets:\n      - { from: "file:~/.ssh/id_rsa", env: KEY }\n    cmds: [echo]\n'
     await expect(planBundle(bundle(file), hosted, { policy })).rejects.toThrow(

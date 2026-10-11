@@ -1,6 +1,6 @@
 import { Account, AccountLevel, BuildsLevel, Entitlement, Who } from './server-config'
 import { Principal } from './oauth'
-import { matchesRef } from './repo'
+import { matchesAnyRepo, matchesRef } from './repo'
 
 export interface Grant {
   // the accounts the caller has and how; `use` wins over `request` when two
@@ -88,7 +88,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   return { accounts, repos, builds, matched }
 }
 
-export type SubmittedSource = { type: 'ref'; ref: string } | { type: 'upload' }
+export type SubmittedSource = { type: 'ref'; repo: string; ref: string } | { type: 'upload' }
 
 export interface RunDecisionInput {
   grant: Grant
@@ -99,20 +99,22 @@ export interface RunDecisionInput {
   source: SubmittedSource
   // whether anyone could approve a request on the account
   approvable: (account: string) => boolean
+  // whether the server can read a repository at all
+  readable: (repo: string) => boolean
 }
 
 export type RunDecision =
   | { type: 'run' }
   // the accounts the caller may only request, which somebody who uses them approves
   | { type: 'approval'; accounts: string[] }
-  | { type: 'refuse'; status: 403 | 409 | 501; error: string }
+  | { type: 'refuse'; status: 400 | 403 | 409 | 501; error: string }
 
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/i
 
 // The single place that decides what happens to a run that was submitted: it
 // starts, waits for an approval, or is refused with the reason.
 export function decideRun(input: RunDecisionInput): RunDecision {
-  const { grant, accounts, catalog, source, approvable } = input
+  const { grant, accounts, catalog, source, approvable, readable } = input
   if (!mayRun(grant)) {
     return { type: 'refuse', status: 403, error: 'you are not entitled to run anything on this server' }
   }
@@ -122,6 +124,20 @@ export function decideRun(input: RunDecisionInput): RunDecision {
       status: 501,
       error: 'runs from an upload are not supported by this server yet, use a git ref',
     }
+  }
+  // the caller's own list first: what they may not name is not told whether the server can read it
+  if (!matchesAnyRepo(grant.repos, source.repo)) {
+    return {
+      type: 'refuse',
+      status: 403,
+      error:
+        grant.repos.length > 0
+          ? `you may not run from ${source.repo}, your repositories are ${grant.repos.join(', ')}`
+          : `you may not run from ${source.repo}, no entitlement of yours lists a repository`,
+    }
+  }
+  if (!readable(source.repo)) {
+    return { type: 'refuse', status: 400, error: `this server can not read ${source.repo}` }
   }
   const request: string[] = []
   for (const account of accounts) {

@@ -66,6 +66,8 @@ export interface InspectedBundle {
 export interface PlanPolicy {
   // the variables of the server an `env:NAME` secret may read
   envs: string[]
+  // the accounts that only the server uses, such as the one that reads repositories
+  reserved?: string[]
 }
 
 export interface PlanOptions {
@@ -177,7 +179,13 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy): string[] {
   for (const item of items) {
     for (const secret of secretsOf(item)) {
       const source = secret.source
-      if (source.type === 'file') {
+      if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
+        problems.push(
+          `${item.name}: the secret ${describeSecret(secret).target} is read as ${
+            source.account
+          }, which the server uses to read repositories`
+        )
+      } else if (source.type === 'file') {
         problems.push(`${item.name}: a secret can not read a file of the server (file:), use a secret provider`)
       } else if (source.type === 'env' && !policy.envs.includes(source.name)) {
         problems.push(
