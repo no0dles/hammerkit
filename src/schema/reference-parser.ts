@@ -12,6 +12,7 @@ import { BuildFileContainerTaskSchema } from './build-file-container-task-schema
 import { BuildFileCacheSchema } from './cache-schema'
 import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
 import { findProjectRoot } from '../planner/project-root'
+import { collectSecretCatalog, emptySecretCatalog, SecretCatalog } from '../secrets/secret-catalog'
 
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
@@ -20,6 +21,7 @@ export interface ReferencedContext {
   environments: { [key: string]: ReferenceEnvironment }
   envFiles: { [key: string]: { [key: string]: string } }
   caches: CacheCatalog
+  secrets: SecretCatalog
   // anchor for machine-independent cache identity, see findProjectRoot
   projectRoot: string
 }
@@ -97,6 +99,7 @@ export async function parseReferences(
     envFiles: {},
     environments: {},
     caches: {},
+    secrets: emptySecretCatalog(),
     projectRoot: await findProjectRoot(mainScope.cwd, environment),
   }
 
@@ -179,6 +182,7 @@ export async function parseReferences(
   }
 
   reference.caches = withBuiltinCaches(declaredCaches)
+  reference.secrets = collectSecretCatalog(Object.values(ctx.files), environment, reference)
 
   return reference
 }

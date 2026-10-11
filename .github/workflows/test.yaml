@@ -133,6 +133,9 @@ jobs:
       # Docker Hub rate-limits anonymous pulls per runner IP, which hosted runners
       # share. With the secret set, the daemon's pulls are authenticated.
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      # secrets-gsm.spec.ts reads a demo Secret Manager project, see examples/secrets-gsm
+      # (a project id is no secret, but it is accepted as one too)
+      GCP_PROJECT: ${{ vars.GCP_PROJECT || secrets.GCP_PROJECT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -150,6 +153,19 @@ jobs:
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
+      # The key files for secrets-gsm.spec.ts. Unset secrets (forks) give empty files,
+      # which fail the spec rather than skip it: the check must not pass unnoticed.
+      - name: Write the Secret Manager test credentials
+        if: matrix.suite == 'docker'
+        env:
+          GSM_TEST_CREDENTIALS_JSON: ${{ secrets.GSM_TEST_CREDENTIALS_JSON }}
+          GSM_OTHER_CREDENTIALS_JSON: ${{ secrets.GSM_OTHER_CREDENTIALS_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$GSM_TEST_CREDENTIALS_JSON" > "$RUNNER_TEMP/gsm-reader.json"
+          printf '%s' "$GSM_OTHER_CREDENTIALS_JSON" > "$RUNNER_TEMP/gsm-other.json"
+          echo "GSM_TEST_CREDENTIALS=$RUNNER_TEMP/gsm-reader.json" >> "$GITHUB_ENV"
+          echo "GSM_OTHER_CREDENTIALS=$RUNNER_TEMP/gsm-other.json" >> "$GITHUB_ENV"
       # The suite is a hammerkit task: when this tree was already tested green, the
       # pull above restored its result, and the cluster and registry below are not
       # worth starting. Without a reachable cache this is always a miss, so the job

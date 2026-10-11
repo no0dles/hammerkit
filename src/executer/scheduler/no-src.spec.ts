@@ -71,7 +71,7 @@ describe('tasks without src', () => {
       'input.txt': 'x\n',
     }).setup(async (cwd, environment) => {
       const status = memoryStream()
-      environment.status = statusConsole(status.stream)
+      environment.status = statusConsole(status.stream, environment.secrets)
       const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
       await cli.clean({ cache: true })
       expect((await cli.runExec()).success).toBe(true)
@@ -119,7 +119,7 @@ describe('tasks without src', () => {
       'input.txt': 'x\n',
     }).setup(async (cwd, environment) => {
       const status = memoryStream()
-      environment.status = statusConsole(status.stream)
+      environment.status = statusConsole(status.stream, environment.secrets)
       const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'e2e' })
       await cli.clean({ cache: true })
       expect((await cli.runExec()).success).toBe(true)

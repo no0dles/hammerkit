@@ -4,6 +4,7 @@ import { getFileContext } from '../file/get-file-context'
 import { Environment } from '../executer/environment'
 import { consoleContext } from '../log'
 import { statusConsole } from '../planner/work-item-status'
+import { createSecretRegistry } from '../utils/redact'
 import { createCli } from '../program'
 import { stringify as yamlSerialize } from 'yaml'
 import { runProgram } from '../run-program'
@@ -33,6 +34,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
       const file = getFileContext(path)
 
       const statusStream = memoryStream()
+      const secrets = createSecretRegistry()
       try {
         await file.remove(path)
         await file.createDirectory(path)
@@ -43,7 +45,8 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
           cwd: path,
           file,
           console: consoleContext(emptyStream()),
-          status: statusConsole(statusStream.stream),
+          status: statusConsole(statusStream.stream, secrets),
+          secrets,
           stdout: emptyStream(),
           stderr: emptyStream(),
           stdoutColumns: 80,
