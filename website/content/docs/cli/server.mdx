@@ -274,22 +274,26 @@ changes are always kept.
 
 ## Approvals
 
-Some tasks should not run because one identity asked for it: a deploy to production, a
-task with access to customer data. A rule in the server config marks them, and a run
-that falls under it waits in state `awaiting-approval` until somebody else approves
-it. The rules are the operator's, next to the entitlements, so neither the one who
-runs work nor the one who publishes a build file can lift them.
+Some work should not happen because one identity asked for it: a deploy with the
+production key, a task with access to customer data. A rule in the server config marks
+it, and a run that falls under it waits in state `awaiting-approval` until somebody
+else approves it. The rules are the operator's, next to the entitlements, so neither
+the one who runs work nor the one who publishes a build file can lift them.
 
 ```yaml
 approvals:
   timeout: 1h        # how long a run waits, default 1h
   maxWaiting: 100    # runs waiting at the same time, default 100
   rules:
+    - name: production key
+      accounts: [op-payments-prod]
+      approvers:
+        - group: { iss: https://login.example.com, name: release-managers }
+        - subject: { iss: https://login.example.com, sub: 4f1c2b }
     - name: production
       labels: { env: production }
       approvers:
         - group: { iss: https://login.example.com, name: release-managers }
-        - subject: { iss: https://login.example.com, sub: 4f1c2b }
     - name: customer-data
       tasks: ["export:*", migrate]
       approvers:
@@ -298,17 +302,26 @@ approvals:
             match: { role: dba }
 ```
 
-* A rule has a unique `name`, the `tasks` it applies to (names, where `*` stands for
-  any characters) and/or the `labels` (a key with a value or a list of values, any of
-  which matches), and `approvers` written like the *who* of an entitlement: a
-  `subject`, a `group` or `claims` of an issuer the server accepts.
-* A run falls under a rule when a task it executes matches. That includes everything
-  the named tasks need first (dependencies, needed services), so a harmless name
-  that depends on a deploy is held too. A run that names no task and selects by
-  labels may execute any task, so any rule of the build file applies.
-* A build file can only make this stricter: labelling its tasks brings them under a
-  rule that names the label, and no label or rename lifts a rule that names a task.
-  What counts is the version the run is pinned to, as it was published.
+* A rule has a unique `name`, what it applies to and its `approvers`, written like the
+  *who* of an entitlement: a `subject`, a `group` or `claims` of an issuer the server
+  accepts. It applies to a run when any of these match: `accounts` (the service
+  account the run uses, `*` stands for any characters), `tasks` (names, same
+  wildcard) or `labels` (a key with a value or a list of values, any of which matches).
+* For tasks and labels, a run falls under a rule when a task it executes matches. That
+  includes everything the named tasks need first (dependencies, needed services),
+  so a harmless name that depends on a deploy is held too. A run that names no task
+  and selects by labels may execute any task, so any rule of the build file applies.
+* **Guard a credential with `accounts`.** The account of a run is chosen in its request
+  and checked against the caller's [entitlements](#entitlements); nothing in a build
+  file can change it, so every run with the production key is held, whatever its
+  tasks are called or labelled.
+* Rules on `tasks` and `labels` go by what the build file says. Whoever may
+  [publish](#build-files) that build file can rename a task or drop a label in a new
+  version, and a run of it then falls out of the rule. These rules are as strong as
+  the `publish` permission is narrow: use them where the publishers are as trusted as
+  the approvers (CI on the main branch publishes, everyone else only runs), for
+  example to ask for a second look at a kind of task, and never as the only guard of
+  a credential.
 * A run under several rules needs one approval per rule. An approver counts for
   every rule of the run they are an approver of, so one person can be enough.
   Rules whose approvers do not overlap need one person each.

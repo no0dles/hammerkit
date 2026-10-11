@@ -112,21 +112,31 @@ const duration = z.string().refine((value) => {
   }
 }, 'expected a duration like 30m, 1h or 1d')
 
-// A run that touches what a rule names waits until one of the rule's approvers,
-// who is not the caller, approves it. Tasks are matched by name (`*` stands for
-// any characters) and labels by key and value; the tasks a run needs first count
-// too. A build file can label its tasks to fall under a rule, but it can't lift a
-// rule that names a task, so what is published can only tighten.
+// A run that falls under a rule waits until one of the rule's approvers, who is
+// not the caller, approves it. A rule applies when the run uses one of its
+// `accounts`, or executes a task that matches `tasks` (names, `*` stands for any
+// characters) or `labels` (a key with one of the values); the tasks a run needs
+// first count too.
+//
+// Only `accounts` can be relied on to guard a credential: the account of a run is
+// chosen in its request and checked against the caller's entitlements, nothing in
+// a build file can change it. Task names and labels come from the build file, so
+// whoever may publish it can rename a task or drop a label and fall out of the
+// rule; those rules are as strong as who holds that `publish` permission.
 export const approvalRuleSchema = z
   .object({
     // shown to the caller and the approvers, and unique
     name: z.string().min(1).max(100),
+    accounts: z.array(z.string().min(1)).min(1).optional(),
     tasks: z.array(z.string().min(1)).min(1).optional(),
     labels: z.record(z.union([z.string(), z.array(z.string()).min(1)])).optional(),
     approvers: z.array(whoSchema).min(1),
   })
   .strict()
-  .refine((rule) => rule.tasks !== undefined || rule.labels !== undefined, 'name the tasks or labels it applies to')
+  .refine(
+    (rule) => rule.accounts !== undefined || rule.tasks !== undefined || rule.labels !== undefined,
+    'name the accounts, tasks or labels it applies to'
+  )
 
 export type Issuer = z.infer<typeof issuerSchema>
 export type ApprovalRule = z.infer<typeof approvalRuleSchema>

@@ -26,7 +26,8 @@ const files = {
 const entitlements = `
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-payments-dev]
+    accounts: [op-payments-dev, op-payments-prod]
+    default: op-payments-dev
     publish: [payments]
   - subject: { iss: ISSUER, sub: carol }
     accounts: [op-payments-dev]
@@ -44,6 +45,10 @@ ${extra}  rules:
       tasks: ["rel*"]
       approvers:
         - subject: { iss: ISSUER, sub: bob }
+    - name: prod key
+      accounts: [op-payments-prod]
+      approvers:
+        - group: { iss: ISSUER, name: release-managers }
 `
 
 interface JsonResponse extends Response {
@@ -59,7 +64,7 @@ interface Api {
     path: string,
     options?: { sub?: string | null; groups?: string[]; body?: unknown; headers?: Record<string, string> }
   ) => Promise<JsonResponse>
-  run: (tasks: string[], sub?: string) => Promise<JsonResponse>
+  run: (tasks: string[], sub?: string, extra?: { account?: string; hash?: string }) => Promise<JsonResponse>
   approve: (id: string, sub: string, groups?: string[]) => Promise<JsonResponse>
   reject: (id: string, sub: string, reason?: string) => Promise<JsonResponse>
 }
@@ -115,10 +120,15 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
           log,
           executed,
           call,
-          run: (tasks, sub) =>
+          run: (tasks, sub, extra = {}) =>
             call('POST', '/v1/runs', {
               sub,
-              body: { definition: { name: 'payments', hash }, tasks, source: { type: 'ref', ref: 'main' } },
+              body: {
+                definition: { name: 'payments', hash: extra.hash ?? hash },
+                tasks,
+                ...(extra.account ? { account: extra.account } : {}),
+                source: { type: 'ref', ref: 'main' },
+              },
             }),
           approve: (id, sub, groups) => call('POST', `/v1/approvals/${id}/approve`, { sub, groups }),
           reject: (id, sub, reason) =>
@@ -256,6 +266,36 @@ describe('approvals api', () => {
       )
       await sleep(30)
       expect(api.executed).toEqual([])
+    })
+  })
+
+  it('holds the runs of an account however the build file is changed, which tasks and labels are not safe against', async () => {
+    await withApi('approvals-api-account', '', async (api) => {
+      // alice may publish the build file, so she can drop the label and rename the task
+      const changed = {
+        '.hammerkit.yaml': files['.hammerkit.yaml']
+          .replace(/deploy/g, 'ship')
+          .replace(/ {4}labels:\n {6}env: production\n/, ''),
+      }
+      expect(changed['.hammerkit.yaml']).not.toContain('production')
+      const published = await api.call('PUT', '/v1/definitions/payments', { body: { files: changed } })
+      expect(published.status).toBe(201)
+      const hash = (await published.json()).hash
+
+      // with the dev key the changed task runs without a second pair of eyes
+      const free = await (await api.run(['ship'], 'alice', { hash })).json()
+      expect(free.state).toBe('queued')
+      // the production key is what the rule is about, and it is not in the build file
+      const held = await (await api.run(['ship'], 'alice', { hash, account: 'op-payments-prod' })).json()
+      expect(held.state).toBe('awaiting-approval')
+      expect(held.approval.rules.map((r: { name: string }) => r.name)).toEqual(['prod key'])
+      // even a task that is nothing special
+      const build = await (await api.run(['build'], 'alice', { hash, account: 'op-payments-prod' })).json()
+      expect(build.state).toBe('awaiting-approval')
+
+      expect((await api.approve(held.id, 'alice')).status).toBe(404)
+      expect((await api.approve(held.id, 'dave', ['release-managers'])).status).toBe(200)
+      await untilState(api, held.id, ['succeeded'])
     })
   })
 

@@ -37,15 +37,25 @@ function labelled(rule: ApprovalRule, labels: { [key: string]: string[] }): bool
   )
 }
 
-// The rules a run falls under, by their position in the config.
-export function rulesFor(rules: ApprovalRule[], graph: DefinitionGraph, tasks: string[]): number[] {
+// The rules a run falls under, by their position in the config: it uses one of the
+// accounts of a rule, or executes a task it names or labels.
+export function rulesFor(
+  rules: ApprovalRule[],
+  graph: DefinitionGraph,
+  tasks: string[],
+  account: string | null
+): number[] {
   const executed = executedBy(graph, tasks)
   const matched: number[] = []
   rules.forEach((rule, index) => {
-    const hit = executed.some(
-      (name) =>
-        (rule.tasks ?? []).some((pattern) => matchesPattern(pattern, name)) || labelled(rule, graph[name]?.labels ?? {})
-    )
+    const usesAccount = account !== null && (rule.accounts ?? []).some((pattern) => matchesPattern(pattern, account))
+    const hit =
+      usesAccount ||
+      executed.some(
+        (name) =>
+          (rule.tasks ?? []).some((pattern) => matchesPattern(pattern, name)) ||
+          labelled(rule, graph[name]?.labels ?? {})
+      )
     if (hit) {
       matched.push(index)
     }

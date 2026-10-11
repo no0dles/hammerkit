@@ -198,7 +198,7 @@ async function submitRun(
     send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
-  const rules = rulesFor(config.approvals.rules, version.graph, request.tasks)
+  const rules = rulesFor(config.approvals.rules, version.graph, request.tasks, account)
   try {
     const run = registry.submit(
       principal,

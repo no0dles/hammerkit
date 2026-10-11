@@ -59,29 +59,48 @@ describe('executedBy', () => {
 
 describe('rulesFor', () => {
   it('finds nothing for a run that touches no rule', () => {
-    expect(rulesFor(rules, graph, ['build'])).toEqual([])
-    expect(rulesFor(rules, graph, ['deploy:dev'])).toEqual([1])
-    expect(rulesFor([], graph, ['release'])).toEqual([])
+    expect(rulesFor(rules, graph, ['build'], null)).toEqual([])
+    expect(rulesFor(rules, graph, ['deploy:dev'], null)).toEqual([1])
+    expect(rulesFor([], graph, ['release'], null)).toEqual([])
   })
 
   it('matches tasks by name and by label', () => {
-    expect(rulesFor(rules, graph, ['deploy:prod'])).toEqual([0, 1, 2])
-    expect(rulesFor(rules, graph, ['db'])).toEqual([2])
+    expect(rulesFor(rules, graph, ['deploy:prod'], null)).toEqual([0, 1, 2])
+    expect(rulesFor(rules, graph, ['db'], null)).toEqual([2])
   })
 
   it('counts what a task needs first, so a harmless name does not hide a rule', () => {
-    expect(rulesFor(rules, graph, ['release'])).toEqual([0, 1, 2])
+    expect(rulesFor(rules, graph, ['release'], null)).toEqual([0, 1, 2])
   })
 
   it('applies to every task when the run selects by labels', () => {
-    expect(rulesFor(rules, graph, [])).toEqual([0, 1, 2])
+    expect(rulesFor(rules, graph, [], null)).toEqual([0, 1, 2])
   })
 
-  it('lets a build file only add to the rules: a label can fall under one, none lifts one', () => {
-    const labelled = { ...graph, build: { kind: 'task' as const, labels: { env: ['production'] }, depends: [] } }
-    expect(rulesFor(rules, labelled, ['build'])).toEqual([0])
-    const unlabelled = { ...graph, 'deploy:prod': { kind: 'task' as const, labels: {}, depends: [] } }
-    expect(rulesFor(rules, unlabelled, ['deploy:prod'])).toEqual([1])
+  it('holds every run of an account, whatever the build file says about its tasks', () => {
+    const guarded: ApprovalRule[] = [
+      ...rules,
+      { name: 'prod key', accounts: ['op-prod-*'], approvers: [{ subject: { iss: IDP, sub: 'bob' } }] },
+    ]
+    expect(rulesFor(guarded, graph, ['build'], 'op-prod-deploy')).toEqual([3])
+    expect(rulesFor(guarded, graph, ['build'], 'op-dev')).toEqual([])
+    expect(rulesFor(guarded, graph, ['build'], null)).toEqual([])
+    expect(rulesFor(guarded, graph, [], 'op-prod-deploy')).toEqual([0, 1, 2, 3])
+  })
+
+  it('does not hold a task a build file labels differently or renames: only an account is out of its reach', () => {
+    const unlabelled = { ...graph, 'deploy:prod': { kind: 'task' as const, labels: {}, depends: ['test', 'db'] } }
+    // dropping the label takes the label rule away from the task
+    expect(rulesFor(rules, unlabelled, ['deploy:prod'], null)).toEqual([1, 2])
+    // and so does a name the rules do not know
+    const renamed = { ...graph, ship: { kind: 'task' as const, labels: {}, depends: ['test'] } }
+    expect(rulesFor(rules, renamed, ['ship'], null)).toEqual([])
+    // the account of the run is not in the build file
+    const guarded: ApprovalRule[] = [
+      { name: 'prod key', accounts: ['op-prod'], approvers: [{ subject: { iss: IDP, sub: 'bob' } }] },
+    ]
+    expect(rulesFor(guarded, renamed, ['ship'], 'op-prod')).toEqual([0])
+    expect(rulesFor(guarded, unlabelled, ['deploy:prod'], 'op-prod')).toEqual([0])
   })
 })
 
@@ -111,7 +130,10 @@ describe('approval config', () => {
   })
 
   it.each([
-    [{ rules: [{ name: 'a', approvers: [{ subject: { iss: IDP, sub: 'bob' } }] }] }, 'name the tasks or labels'],
+    [
+      { rules: [{ name: 'a', approvers: [{ subject: { iss: IDP, sub: 'bob' } }] }] },
+      'name the accounts, tasks or labels',
+    ],
     [{ rules: [{ name: 'a', tasks: ['x'], approvers: [] }] }, 'approvers'],
     [{ rules: [{ name: 'a', tasks: ['x'], approvers: [{}] }] }, 'exactly one of subject, group or claims'],
     [
