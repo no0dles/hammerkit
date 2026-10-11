@@ -1,3 +1,10 @@
+## [1.21.1](https://github.com/no0dles/hammerkit/compare/v1.21.0...v1.21.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* let fetch set content-length for registry blob uploads ([#77](https://github.com/no0dles/hammerkit/issues/77)) ([98c66f7](https://github.com/no0dles/hammerkit/commit/98c66f7f42647ebaf09517ade9f24ce2a9f11f02))
+
 # [1.21.0](https://github.com/no0dles/hammerkit/compare/v1.20.0...v1.21.0) (2026-10-11)
 
 
