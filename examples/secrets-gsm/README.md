@@ -84,7 +84,7 @@ and `hk --verbose run show` logs `secret hammerkit-playground via gsm/test` once
 
 The `test:docker` task of the repository build file runs the spec. Set on the GitHub repository:
 
-- variable `GCP_PROJECT`: the demo project id
+- variable `GCP_PROJECT` (or a secret of that name): the demo project id
 - secret `GSM_TEST_CREDENTIALS_JSON`: the contents of `reader.json`
 - secret `GSM_OTHER_CREDENTIALS_JSON`: the contents of `other.json`
 

@@ -134,7 +134,8 @@ jobs:
       # share. With the secret set, the daemon's pulls are authenticated.
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       # secrets-gsm.spec.ts reads a demo Secret Manager project, see examples/secrets-gsm
-      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      # (a project id is no secret, but it is accepted as one too)
+      GCP_PROJECT: ${{ vars.GCP_PROJECT || secrets.GCP_PROJECT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
