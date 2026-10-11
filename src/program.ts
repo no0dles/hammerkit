@@ -24,6 +24,7 @@ import { getVersion } from './version'
 import { CACHE_READ_ONLY_ENV, isCacheReadOnly } from './cache/read-only'
 import { formatDuration, formatSize, parseDuration, parseSize } from './utils/units'
 import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
+import { registerRemoteCommands } from './remote/remote-commands'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
@@ -119,6 +120,7 @@ export async function getProgram(
   argv: string[]
 ): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
+  registerRemoteCommands(program, environment)
 
   const parsed = parseSetArguments(argv)
   const args = parsed.args
