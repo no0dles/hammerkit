@@ -1,0 +1,17 @@
+# Consumes the docker entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog. Docker needs a daemon
+# and a registry, so the spec validates this file and does not run verify.
+includes:
+  docker:
+    git: CATALOG_URL
+    path: catalog/docker
+    with:
+      IMAGE: ghcr.io/acme/hello
+      IMAGE_TAG: ci
+
+tasks:
+  verify:
+    description: the built image runs
+    deps: [docker:build]
+    cmds:
+      - docker run --rm ghcr.io/acme/hello:ci | grep -q "hello catalog"

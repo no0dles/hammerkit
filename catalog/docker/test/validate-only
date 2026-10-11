@@ -1,0 +1,1 @@
+build and publish need a Docker daemon, and publish needs a registry login, so the catalog spec only validates this entry.

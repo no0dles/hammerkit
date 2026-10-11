@@ -36,6 +36,8 @@ describe('catalog', () => {
     const buildFile = join(catalogDir, entry, 'build.yaml')
     const fixture = join(catalogDir, entry, 'test', '.hammerkit.yaml')
     const page = join(docsDir, `${entry}.mdx`)
+    // an entry that needs a daemon or credentials is validated, not run
+    const validateOnly = existsSync(join(catalogDir, entry, 'test', 'validate-only'))
 
     it('is a valid build file', () => {
       const result = buildFileSchema.safeParse(readYaml(buildFile))
@@ -46,6 +48,11 @@ describe('catalog', () => {
       const tasks = Object.entries(buildFileSchema.parse(readYaml(buildFile)).tasks ?? {})
       expect(tasks.length).toBeGreaterThan(0)
       for (const [name, task] of tasks) {
+        if (validateOnly) {
+          // local tasks that call a tool on the machine, which has no image to pin
+          expect({ name, image: 'image' in task ? task.image : null }).toEqual({ name, image: null })
+          continue
+        }
         const image = 'image' in task ? task.image : null
         expect({ name, image }).toEqual({ name, image: expect.stringMatching(/:[^:]+$/) })
         expect(image).not.toMatch(/:latest$/)

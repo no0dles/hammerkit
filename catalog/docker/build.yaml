@@ -1,0 +1,23 @@
+# Builds a Docker image with the Docker of the machine running hammerkit, and pushes it.
+envs:
+  # the image name, including the registry (ghcr.io/acme/app)
+  IMAGE: app
+  # the tag of the image
+  IMAGE_TAG: dev
+  # the Dockerfile to build, relative to the working directory
+  DOCKERFILE: Dockerfile
+  # the build context, relative to the working directory
+  CONTEXT: .
+  # the platforms to push, comma separated
+  PLATFORMS: linux/amd64
+
+tasks:
+  build:
+    description: build the image into the local Docker
+    cmds:
+      - docker build --file ${DOCKERFILE} --tag ${IMAGE}:${IMAGE_TAG} ${CONTEXT}
+
+  publish:
+    description: build the image and push it to its registry
+    cmds:
+      - docker buildx build --file ${DOCKERFILE} --platform ${PLATFORMS} --tag ${IMAGE}:${IMAGE_TAG} --push ${CONTEXT}
