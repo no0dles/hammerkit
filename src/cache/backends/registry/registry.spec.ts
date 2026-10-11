@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { delimiter, join } from 'path'
 import { parseRegistryReference } from './registry-reference'
-import { parseChallenge, RegistryClient } from './registry-client'
+import { digestBuffer, digestFile, parseChallenge, RegistryClient } from './registry-client'
 import { resolveRegistryCredentials } from './registry-credentials'
 import { getTokenScope } from './registry-client'
 import { entryTag } from '../registry-cache-backend'
@@ -178,6 +178,99 @@ describe('RegistryClient bearer auth', () => {
     expect(tokenRequests).toHaveLength(1)
     expect(tokenRequests[0]).toContain('scope=repository%3Aorg%2Fcache%3Apull%2Cpush')
     expect(tokenRequests[0]).toContain(`Basic ${Buffer.from('me:pw').toString('base64')}`)
+  })
+})
+
+// A blob upload against a fake registry that, like registry:2 and GHCR, wants a
+// monolithic PUT with a Content-Length and verifies the digest. A hand-written
+// `content-length` header is rejected by the undici that serves `fetch` on some
+// Node versions (`invalid content-length header`), notably once the kubernetes
+// client has installed its own undici as the global dispatcher, which hammerkit
+// always does at runtime. So the test loads it too, and the content-length must
+// come from fetch.
+describe('RegistryClient blob upload', () => {
+  let server: Server
+  let port: number
+  let dir: string
+  const uploaded = new Map<string, Buffer>()
+  const putHeaders: IncomingMessage['headers'][] = []
+
+  beforeAll(async () => {
+    await import('@kubernetes/client-node')
+    server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`)
+      if (req.headers.authorization === undefined) {
+        res.writeHead(401, { 'www-authenticate': 'Basic realm="fake"' })
+        res.end()
+        return
+      }
+      const chunks: Buffer[] = []
+      req.on('data', (chunk) => chunks.push(chunk))
+      req.on('end', () => {
+        if (req.method === 'HEAD') {
+          res.writeHead(uploaded.has(url.pathname.split('/blobs/')[1]) ? 200 : 404)
+        } else if (req.method === 'POST') {
+          res.writeHead(202, { location: '/v2/org/cache/blobs/uploads/session' })
+        } else if (req.method === 'PUT') {
+          putHeaders.push(req.headers)
+          const body = Buffer.concat(chunks)
+          const digest = url.searchParams.get('digest') ?? ''
+          if (digestBuffer(body).digest !== digest) {
+            res.writeHead(400)
+          } else {
+            uploaded.set(digest, body)
+            res.writeHead(201)
+          }
+        } else {
+          res.writeHead(404)
+        }
+        res.end()
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    port = (server.address() as AddressInfo).port
+    dir = mkdtempSync(join(tmpdir(), 'hammerkit-registry-upload-'))
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({ auths: { [`127.0.0.1:${port}`]: { auth: Buffer.from('me:pw').toString('base64') } } })
+    )
+  })
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function createClient(): RegistryClient {
+    const environment: Environment = {
+      ...environmentMock(dir),
+      file: getFileContext(dir),
+      processEnvs: { DOCKER_CONFIG: dir },
+    }
+    return new RegistryClient(parseRegistryReference(`127.0.0.1:${port}/org/cache`), environment)
+  }
+
+  it('uploads a file with its size as content-length', async () => {
+    const file = join(dir, 'layer.tar')
+    const content = Buffer.from('layer content '.repeat(10000))
+    writeFileSync(file, content)
+    const { digest, size } = await digestFile(file)
+
+    await createClient().uploadBlob(digest, { file })
+
+    expect(uploaded.get(digest)?.equals(content)).toBe(true)
+    expect(putHeaders[putHeaders.length - 1]['content-length']).toBe(`${size}`)
+    expect(putHeaders[putHeaders.length - 1]['transfer-encoding']).toBeUndefined()
+  })
+
+  it('uploads a buffer with its size as content-length', async () => {
+    const buffer = Buffer.from(JSON.stringify({ config: true }))
+    const { digest, size } = digestBuffer(buffer)
+
+    await createClient().uploadBlob(digest, { buffer })
+
+    expect(uploaded.get(digest)?.equals(buffer)).toBe(true)
+    expect(putHeaders[putHeaders.length - 1]['content-length']).toBe(`${size}`)
   })
 })
 

@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { createReadStream, createWriteStream } from 'fs'
+import { createReadStream, createWriteStream, openAsBlob } from 'fs'
 import { stat } from 'fs/promises'
 import { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
@@ -136,28 +136,27 @@ export class RegistryClient {
     return true
   }
 
-  // Send a request, performing the auth handshake once on a 401. `body` is a
-  // factory because a streamed body cannot be replayed after the challenge.
+  // Send a request, performing the auth handshake once on a 401. A string,
+  // buffer or blob body is replayable and fetch derives its content-length;
+  // never set that header by hand, the undici that serves `fetch` rejects it
+  // on some Node versions.
   async request(
     method: string,
     urlOrPath: string,
     init: {
       headers?: { [key: string]: string }
-      body?: () => string | Buffer | Readable
+      body?: () => string | Buffer | Blob
       redirect?: 'follow' | 'manual'
     } = {}
   ): Promise<Response> {
     const url = urlOrPath.startsWith('http') ? urlOrPath : this.url(urlOrPath)
-    const send = () => {
-      const body = init.body?.()
-      return fetch(url, {
+    const send = () =>
+      fetch(url, {
         method,
         headers: { ...(init.headers ?? {}), ...(this.authorization ? { authorization: this.authorization } : {}) },
-        body: body instanceof Readable ? (Readable.toWeb(body) as ReadableStream) : body,
+        body: init.body?.(),
         redirect: init.redirect ?? 'follow',
-        ...(body instanceof Readable ? { duplex: 'half' } : {}),
-      } as RequestInit)
-    }
+      })
     let response = await send()
     if (response.status === 401 && (await this.authenticate(response.headers.get('www-authenticate')))) {
       await response.body?.cancel()
@@ -275,8 +274,10 @@ export class RegistryClient {
   }
 
   // Upload a blob from a buffer or a file (monolithic upload: POST to open the
-  // session, PUT the content with its digest to commit it).
-  async uploadBlob(digest: string, size: number, content: { buffer: Buffer } | { file: string }): Promise<void> {
+  // session, PUT the content with its digest to commit it). A file is sent as a
+  // blob backed by the file, so it is read lazily and fetch sends its size as
+  // the content-length.
+  async uploadBlob(digest: string, content: { buffer: Buffer } | { file: string }): Promise<void> {
     if (await this.blobExists(digest)) {
       return
     }
@@ -290,9 +291,10 @@ export class RegistryClient {
     }
     const uploadUrl = new URL(location, this.url(''))
     uploadUrl.searchParams.set('digest', digest)
+    const body = 'buffer' in content ? content.buffer : await openAsBlob(content.file)
     const response = await this.request('PUT', uploadUrl.toString(), {
-      headers: { 'content-type': 'application/octet-stream', 'content-length': `${size}` },
-      body: () => ('buffer' in content ? content.buffer : createReadStream(content.file)),
+      headers: { 'content-type': 'application/octet-stream' },
+      body: () => body,
     })
     if (response.status !== 201) {
       return this.fail(response, `uploading blob ${digest}`)
