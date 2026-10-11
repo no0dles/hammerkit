@@ -58,6 +58,11 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'server config (hammerkit server --config), not a build file',
   },
   {
+    file: join('cli', 'server.mdx'),
+    snippet: 'customer-data',
+    reason: 'approval rules of the server config (hammerkit server --config), not a build file',
+  },
+  {
     file: join('cli', 'remote.mdx'),
     snippet: 'issuer: https://login.example.com',
     reason: 'host config (~/.hammerkit/config.yaml), not a build file',

@@ -93,4 +93,9 @@ describe('getGrant', () => {
       maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['x'] }], alice))
     ).toBe(true)
   })
+
+  it('shows them to an approver as well, who needs no account for it', () => {
+    expect(maySeeDefinitions(getGrant([], alice), true)).toBe(true)
+    expect(maySeeDefinitions(getGrant([], alice), false)).toBe(false)
+  })
 })

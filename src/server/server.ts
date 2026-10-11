@@ -7,11 +7,23 @@ import { detectPlatform, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { getGrant, maySeeDefinitions } from './policy'
-import { RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, StoredEvent, unavailableExecutor } from './runs'
+import {
+  isFinal,
+  RUN_ID_PATTERN,
+  RunError,
+  RunExecutor,
+  Run,
+  RunRegistry,
+  StoredEvent,
+  unavailableExecutor,
+} from './runs'
 import { runRequestSchema } from './run-request'
 import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
 import { handleDefinitions } from './definitions-api'
+import { handleApprovals } from './approvals-api'
+import { approvesAnything, rulesFor } from './approvals'
+import { parseDuration } from '../utils/units'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 
@@ -62,7 +74,7 @@ function streamEvents(
     res.write(`id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
   const watch = registry.watch(principal, id, Number.isFinite(after) && after > 0 ? after : 0, (event) => {
     write(event)
-    if (event.type === 'state' && event.state !== 'queued' && event.state !== 'running') {
+    if (event.type === 'state' && isFinal(event.state)) {
       end()
     }
   })
@@ -186,18 +198,23 @@ async function submitRun(
     send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
+  const rules = rulesFor(config.approvals.rules, version.graph, request.tasks)
   try {
-    const run = registry.submit(principal, {
-      definition: { name: version.name, hash: version.hash },
-      tasks: request.tasks,
-      account,
-      source: request.source,
-      options: request.options,
-    })
+    const run = registry.submit(
+      principal,
+      {
+        definition: { name: version.name, hash: version.hash },
+        tasks: request.tasks,
+        account,
+        source: request.source,
+        options: request.options,
+      },
+      rules.map((index) => ({ index, name: config.approvals.rules[index].name }))
+    )
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} account=${account ?? '-'} source=${
         run.source.type
-      } tasks=${run.tasks.length}`
+      } tasks=${run.tasks.length}${rules.length > 0 ? ` approval=[${rules.join(',')}]` : ''}`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {
@@ -273,6 +290,7 @@ async function handle(
       accounts: grant.accounts,
       default: grant.default,
       publish: grant.publish,
+      approver: approvesAnything(config.approvals.rules, principal),
     })
     return
   }
@@ -280,6 +298,9 @@ async function handle(
     return
   }
   if (await handleRuns(config, registry, definitions, log, principal, req, res, url)) {
+    return
+  }
+  if (await handleApprovals(config, registry, log, principal, req, res, url)) {
     return
   }
   send(res, 404, { error: 'not found' })
@@ -303,6 +324,8 @@ export async function startServer(
     executor: options.executor ?? unavailableExecutor,
     maxConcurrent: config.runs.maxConcurrent,
     keep: config.runs.keep,
+    maxWaiting: config.approvals.maxWaiting,
+    approvalTimeout: parseDuration(config.approvals.timeout),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
     handle(config, registry, definitions, verifier, log, req, res).catch((e) => {

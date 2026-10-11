@@ -169,6 +169,9 @@ export function registerRemoteCommands(program: Command, environment: Environmen
         if (me.publish && me.publish.length > 0) {
           environment.stdout.write(`may publish build files: ${me.publish.join(', ')}\n`)
         }
+        if (me.approver) {
+          environment.stdout.write('may approve runs that fall under an approval rule\n')
+        }
       })
     )
 }

@@ -1,4 +1,4 @@
-import { Entitlement } from './server-config'
+import { Entitlement, Who } from './server-config'
 import { Principal } from './oauth'
 
 export interface Grant {
@@ -15,7 +15,7 @@ export interface Grant {
   matched: number[]
 }
 
-function matches(entitlement: Entitlement, principal: Principal): boolean {
+export function matches(entitlement: Who, principal: Principal): boolean {
   if (entitlement.subject) {
     return entitlement.subject.iss === principal.iss && entitlement.subject.sub === principal.sub
   }
@@ -37,8 +37,9 @@ export function mayPublish(grant: Grant, name: string): boolean {
 
 // A caller who can neither run nor publish anything sees nothing of the server's
 // build files either.
-export function maySeeDefinitions(grant: Grant): boolean {
-  return grant.accounts.length > 0 || grant.publish.length > 0
+// Approvers see them too: they have to know what they approve.
+export function maySeeDefinitions(grant: Grant, approver = false): boolean {
+  return approver || grant.accounts.length > 0 || grant.publish.length > 0
 }
 
 // Default deny: a caller without a matching entitlement gets no account.

@@ -121,6 +121,11 @@ entitlements:
     accounts: [op-payments-dev, op-web-dev]
     default: op-payments-dev
     publish: [payments]
+approvals:
+  rules:
+    - name: production
+      tasks: [deploy]
+      approvers: [{ subject: { iss: "${idp.url}", sub: alice } }]
 `
         )
         const credentials = join(environment.cwd, 'credentials.json')
@@ -153,6 +158,7 @@ entitlements:
       expect(accounts).toMatch(/op-payments-dev.*\(default\)/)
       expect(accounts).toContain('op-web-dev')
       expect(accounts).toContain('may publish build files: payments')
+      expect(accounts).toContain('may approve runs that fall under an approval rule')
 
       expect(await run('remote', 'logout', 'build')).toContain('signed out of build')
       expect(await run('remote', 'logout', 'build')).toContain('not signed in to build')

@@ -54,6 +54,14 @@ entitlements:
       match: { repository: corp/payments, ref: refs/heads/main }
     accounts: [op-payments-ci]
     source: [ref]
+approvals:
+  timeout: 1h        # default
+  maxWaiting: 100    # default
+  rules:
+    - name: production
+      labels: { env: production }
+      approvers:
+        - group: { iss: https://login.example.com, name: release-managers }
 storage:
   directory: /var/lib/hammerkit   # default ~/.hammerkit/server
 runs:
@@ -71,6 +79,7 @@ backend:
 | `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
 | `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
 | `entitlements` | Who may use which service account, see [below](#entitlements). |
+| `approvals` | Runs that need a second person's approval before they execute, see [Approvals](#approvals). |
 | `storage` | Where the server keeps what must survive a restart: the published build files. |
 | `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
@@ -203,10 +212,10 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 
 | Call | What it does |
 | --- | --- |
-| `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`. |
+| `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`, or `awaiting-approval` when it falls under an [approval rule](#approvals). |
 | `GET /v1/runs` | The caller's runs, newest first. |
-| `GET /v1/runs/<id>` | One run: `state` is `queued`, `running`, `succeeded`, `failed` or `cancelled`, a failed run has an `error`. |
-| `POST /v1/runs/<id>/cancel` | Cancel a run: a queued one at once, a running one when its tasks have stopped. |
+| `GET /v1/runs/<id>` | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. |
+| `POST /v1/runs/<id>/cancel` | Cancel a run: one that is queued or waits for an approval at once, a running one when its tasks have stopped. |
 | `GET /v1/runs/<id>/events` | The run's events as server-sent events, see below. |
 
 ```json
@@ -253,14 +262,76 @@ The events carry the sequence number as their `id`, so a client that lost the
 connection continues with the `Last-Event-ID` header (or `?after=<n>`) and misses
 nothing. The stream replays what happened and then follows the run until it is over;
 a finished run's events are replayed and the stream ends. Event types are `state`
-(`queued`, `running` and the final state, with the `error` of a failed run), `task`
-(a task started or finished) and `log` (a line of a task's output). A run that
+(`awaiting-approval`, `queued`, `running` and the final state, with the `error` of a failed run), `approval`
+(who approved or rejected the run, for which rules), `task` (a task started or finished)
+and `log` (a line of a task's output). A run that
 produces more than 5000 events is cut off with one `truncated` event, the state
 changes are always kept.
 
 > This server cannot execute runs yet: until a backend is wired in, an accepted run
 > fails at once with the reason `this server has no backend that can execute runs
 > yet`. What exists is the part around it, authorization, queueing, state and events.
+
+## Approvals
+
+Some tasks should not run because one identity asked for it: a deploy to production, a
+task with access to customer data. A rule in the server config marks them, and a run
+that falls under it waits in state `awaiting-approval` until somebody else approves
+it. The rules are the operator's, next to the entitlements, so neither the one who
+runs work nor the one who publishes a build file can lift them.
+
+```yaml
+approvals:
+  timeout: 1h        # how long a run waits, default 1h
+  maxWaiting: 100    # runs waiting at the same time, default 100
+  rules:
+    - name: production
+      labels: { env: production }
+      approvers:
+        - group: { iss: https://login.example.com, name: release-managers }
+        - subject: { iss: https://login.example.com, sub: 4f1c2b }
+    - name: customer-data
+      tasks: ["export:*", migrate]
+      approvers:
+        - claims:
+            iss: https://login.example.com
+            match: { role: dba }
+```
+
+* A rule has a unique `name`, the `tasks` it applies to (names, where `*` stands for
+  any characters) and/or the `labels` (a key with a value or a list of values, any of
+  which matches), and `approvers` written like the *who* of an entitlement: a
+  `subject`, a `group` or `claims` of an issuer the server accepts.
+* A run falls under a rule when a task it executes matches. That includes everything
+  the named tasks need first (dependencies, needed services), so a harmless name
+  that depends on a deploy is held too. A run that names no task and selects by
+  labels may execute any task, so any rule of the build file applies.
+* A build file can only make this stricter: labelling its tasks brings them under a
+  rule that names the label, and no label or rename lifts a rule that names a task.
+  What counts is the version the run is pinned to, as it was published.
+* A run under several rules needs one approval per rule. An approver counts for
+  every rule of the run they are an approver of, so one person can be enough.
+  Rules whose approvers do not overlap need one person each.
+* Nobody approves their own run, whatever they are entitled to. An approver does not
+  need an account; they see the build files, so they can read what they approve, and
+  nothing more.
+* A run that is not fully approved within `timeout` is rejected, and so is one an
+  approver rejects. More than `maxWaiting` waiting runs are refused with `503`. A
+  run that waits is cancelled when the server stops, like every other.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/approvals` | The runs waiting for an approval the caller can give, with who asked, the build file version, tasks, account, source and options. |
+| `GET /v1/approvals/<id>` | One of them. |
+| `POST /v1/approvals/<id>/approve` | Approve for the caller's rules. The run is queued once every rule is approved. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/approvals/<id>/reject` | End the run; the reason (up to 500 characters) becomes its `error`. |
+
+What a caller may not approve does not exist for them (`404`). Their own run is the
+exception, `403` says why it is not theirs to decide, and a run that is no longer
+waiting is `409`. Each call is logged with who decided and the result, and the
+decision is an event of the run, so the one who asked sees who approved it.
+`GET /v1/me` tells whether the caller is an approver, and `hammerkit remote accounts`
+shows it. The command line has no approval commands yet.
 
 ## Discovery
 

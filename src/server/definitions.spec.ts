@@ -36,6 +36,35 @@ describe('inspectBundle', () => {
     expect(inspected.services).toEqual([])
   })
 
+  it('keeps what each task is labelled with and needs first, services included', async () => {
+    const inspected = await inspectBundle(
+      bundle({
+        '.hammerkit.yaml': `labels:
+  team: payments
+tasks:
+  build:
+    cmds: [echo build]
+  deploy:
+    deps: [build]
+    needs: [db]
+    labels:
+      env: production
+    cmds: [echo deploy]
+services:
+  db:
+    image: postgres:16
+    deps: [build]
+`,
+      }),
+      environment
+    )
+    expect(inspected.graph).toEqual({
+      build: { kind: 'task', labels: { team: ['payments'] }, depends: [] },
+      deploy: { kind: 'task', labels: { team: ['payments'], env: ['production'] }, depends: ['build', 'db'] },
+      db: { kind: 'service', labels: { team: ['payments'] }, depends: ['build'] },
+    })
+  })
+
   it('refuses a build file that does not load, without telling where the server keeps it', async () => {
     await expect(inspectBundle(bundle({ '.hammerkit.yaml': 'tasks: [' }), environment)).rejects.toThrow(DefinitionError)
     const error = await inspectBundle(bundle({ '.hammerkit.yaml': 'tasks:\n  a:\n    nope: 1\n' }), environment).catch(
@@ -165,6 +194,18 @@ describe('DefinitionStore', () => {
     expect(restarted.find('payments', 'latest')).toEqual(version)
     expect(await restarted.files(version)).toEqual(bundle())
     await store().load() // an empty directory is fine too
+  })
+
+  it('reads the graph again of a version stored without one, so no rule skips it', async () => {
+    const first = store()
+    const { version } = await first.publish('payments', bundle(), alice)
+    const file = join(directory, 'payments', `${version.hash.slice('sha256:'.length)}.json`)
+    const { graph, ...old } = version
+    void graph
+    writeFileSync(file, JSON.stringify({ version: old, bundle: bundle() }))
+    const restarted = store()
+    await restarted.load()
+    expect(restarted.find('payments', 'latest')?.graph).toEqual(version.graph)
   })
 
   it('does not publish a build file that does not load', async () => {
