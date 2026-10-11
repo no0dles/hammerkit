@@ -204,7 +204,10 @@
                       "properties": {
                         "from": {
                           "type": "string",
-                          "pattern": "^(env|file):.+$"
+                          "pattern": "^[A-Za-z][A-Za-z0-9_-]*:.+$"
+                        },
+                        "account": {
+                          "type": "string"
                         },
                         "env": {
                           "type": "string",
@@ -221,8 +224,11 @@
                         "from"
                       ],
                       "additionalProperties": false,
-                      "description": "secret from env:NAME or file:path, injected as env or a read-only file"
+                      "description": "secret from env:NAME, file:path or <provider>:<ref>, injected as env or a read-only file"
                     }
+                  },
+                  "account": {
+                    "type": "string"
                   },
                   "resources": {
                     "type": "object",
@@ -318,6 +324,9 @@
                   },
                   "secrets": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets"
+                  },
+                  "account": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/account"
                   },
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources"
@@ -445,6 +454,9 @@
                     "items": {
                       "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets/items"
                     }
+                  },
+                  "account": {
+                    "type": "string"
                   },
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources",
@@ -746,6 +758,74 @@
               "backend"
             ],
             "additionalProperties": false
+          }
+        },
+        "secretProviders": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "description": "command and arguments, no shell; {{ref}} is replaced by the secret reference"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "static environment of the command, next to PATH and the account env"
+              },
+              "timeout": {
+                "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout",
+                "description": "how long the command may run, 30s when omitted"
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "additionalProperties": false,
+            "description": "secret provider, a command that prints the secret to stdout"
+          }
+        },
+        "secretAccounts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "default": {
+                "type": "boolean",
+                "description": "the account for secrets and tasks that name none"
+              },
+              "providers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "env": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "env"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "per provider, the environment that makes its command act as this account"
+              }
+            },
+            "required": [
+              "providers"
+            ],
+            "additionalProperties": false,
+            "description": "service account the secret providers are read as"
           }
         },
         "labels": {

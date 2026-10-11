@@ -34,6 +34,8 @@ export const buildFileContainerServiceSchema = object({
   // passed; the service counts as ready for dependents only after it succeeded
   init: string().describe('task run once the service is healthy, before dependents start').optional(),
   secrets: array(buildFileSecretSchema).optional(),
+  // the service account its provider secrets are read as, unless a secret names one
+  account: string().optional(),
   resources: resourcesSchema.optional(),
 })
   .strict()

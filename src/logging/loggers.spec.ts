@@ -7,6 +7,7 @@ import { WorkItemState } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { WorkService } from '../planner/work-service'
 import { statusConsole } from '../planner/work-item-status'
+import { createSecretRegistry } from '../utils/redact'
 import { SchedulerResult } from '../executer/scheduler/scheduler-result'
 import { Environment } from '../executer/environment'
 
@@ -37,6 +38,7 @@ function makeEnv(stdout: Writable = noopStream()): Environment {
     abortCtrl: new AbortController(),
     console: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), log: vi.fn() } as any,
     status: statusConsole(noopStream()),
+    secrets: createSecretRegistry(),
     stdout,
     stderr: noopStream(),
     stdoutColumns: 80,

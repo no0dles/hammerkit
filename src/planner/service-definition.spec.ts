@@ -51,6 +51,22 @@ describe('service definition hash', () => {
     expect(getServiceDefinitionHash(service('db', { secrets: [secret('PGPASSWORD', 'a')] } as any))).not.toEqual(base)
   })
 
+  it('changes with the provider, reference and account of a provider secret', () => {
+    const secret = (provider: string, ref: string, account: string) => ({
+      source: { type: 'provider', provider, ref, account },
+      target: { type: 'env', name: 'POSTGRES_PASSWORD' },
+      cache: false,
+      digest: () => 'x',
+    })
+    const hash = (provider: string, ref: string, account: string) =>
+      getServiceDefinitionHash(service('db', { secrets: [secret(provider, ref, account)] } as any))
+    const base = hash('gsm', 'db-password', 'test')
+    expect(hash('gsm', 'db-password', 'test')).toEqual(base)
+    expect(hash('op', 'db-password', 'test')).not.toEqual(base)
+    expect(hash('gsm', 'other-password', 'test')).not.toEqual(base)
+    expect(hash('gsm', 'db-password', 'deploy')).not.toEqual(base)
+  })
+
   it('changes for a dependent when a service it needs changes', () => {
     const api = (db: WorkItem<ContainerWorkService>) => getServiceDefinitionHash(service('api', {}, [db]))
     expect(api(service('db', {}))).toEqual(api(service('db', {})))

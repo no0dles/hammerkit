@@ -35,6 +35,8 @@ const KNOWN_TOP_KEYS = new Set([
   'includes',
   'environments',
   'caches',
+  'secretProviders',
+  'secretAccounts',
   'labels',
 ])
 
@@ -75,11 +77,6 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     file: join('guides', 'migrate-ci', 'agent-guide.mdx'),
     snippet: 'docker/login-action@v3',
     reason: 'GitHub Actions workflow template for the CI migration guide, not a hammerkit build file',
-  },
-  {
-    file: join('contribution', 'secret-managers.mdx'),
-    snippet: 'secret://vault',
-    reason: 'design-doc proposal for an unimplemented secrets: provider; not valid against the current schema',
   },
 ]
 

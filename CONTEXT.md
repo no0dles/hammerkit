@@ -49,5 +49,13 @@ _Avoid_: remote import, url include (there is no HTTP transport)
 ### Secrets
 
 **Secret**:
-A credential injected into a task/service at runtime from a host env var or file — referenced (never embedded) in the build file and redacted from logs. By default a secret does **not** affect cache identity; it is marked cache-affecting (opt-in) when its value determines output, contributing a salted value digest — never the plaintext — to the task id.
+A credential injected into a task/service at runtime from a host env var, a file or a **Secret provider** — referenced (never embedded) in the build file and redacted from logs. By default a secret does **not** affect cache identity; it is marked cache-affecting (opt-in) when its value determines output, contributing a salted value digest — never the plaintext — to the task id.
 _Avoid_: credential, env (a `Secret` is distinct from a plain `env`, which is stored in plaintext and always cache-affecting)
+
+**Secret provider**:
+A command that prints a secret's value (`from: <provider>:<ref>`), declared in `secretProviders:` and read as a **Secret account**. It holds no credential and knows no vendor: Google Secret Manager and 1Password are recipes in a shared build file.
+_Avoid_: secret manager backend, plugin
+
+**Secret account**:
+A service account a provider is read as: per provider, the environment that makes its command act as that account, with values pointing at host variables that hold the credential. A secret takes its own account, else its task's or service's, else the default. Never a person's login.
+_Avoid_: identity, user

@@ -5,7 +5,7 @@ import { Writable } from 'stream'
 import { WorkService } from './work-service'
 import { WorkTask } from './work-task'
 import { BufferContext } from '../utils/buffer-context'
-import { redact } from '../utils/redact'
+import { createSecretRegistry, SecretRegistry } from '../utils/redact'
 
 export type WorkItemLogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type ConsoleType = 'stdout' | 'stderr'
@@ -69,14 +69,15 @@ export interface StatusScopedConsole {
   logs(): Generator<ConsoleMessage>
 }
 
-export function statusConsole(writable: Writable): StatusConsole {
+// `secrets` is the registry of the run (its Environment) whose output this console shows.
+export function statusConsole(writable: Writable, secrets: SecretRegistry = createSecretRegistry()): StatusConsole {
   const statusBuffer = new BufferContext<StatusMessage>(StatusBufferMax)
   const consoleBuffer = new BufferContext<ConsoleMessage>(ConsoleBufferMax)
 
   const emit = emitter<Message>()
 
   function addMessage(context: LogContext, unredacted: Message) {
-    const message = { ...unredacted, message: redact(unredacted.message) }
+    const message = { ...unredacted, message: secrets.redact(unredacted.message) }
     emit.emit(message)
     writable.write(JSON.stringify({ context, message }) + '\n')
     if (message.type === 'console') {
