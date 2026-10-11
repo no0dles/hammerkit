@@ -38,6 +38,8 @@ interface ProposalView {
   reason?: string
   tasks: string[]
   services: string[]
+  accounts: string[]
+  missing: string[]
   base: string | null
   mine: boolean
   canDecide: boolean
@@ -57,10 +59,10 @@ interface ApprovalView {
   createdAt: string
   definition: { name: string; hash: string }
   tasks: string[]
-  account: string | null
+  accounts: string[]
   source: { type: string; ref?: string; snapshot?: string }
   options: Record<string, unknown>
-  approval?: { expiresAt: string; approvedBy?: { sub: string } }
+  approvals?: { account: string; expiresAt: string; approvedBy?: { sub: string } }[]
   state: string
 }
 
@@ -78,11 +80,18 @@ function describe(run: ApprovalView): string[] {
     )})`,
     `  ${printable(run.definition.name)} ${printable(run.definition.hash)}`,
     `  tasks: ${run.tasks.length > 0 ? run.tasks.map(printable).join(', ') : 'selected by labels'}`,
-    `  account ${run.account === null ? 'none' : printable(run.account)}, source ${printable(source)}${
-      options ? `, ${printable(options)}` : ''
-    }`,
-    `  needs the approval of an admin of ${run.account === null ? 'none' : printable(run.account)}`,
-    `  decide before ${printable(run.approval?.expiresAt ?? '-')}`,
+    `  accounts: ${run.accounts.length > 0 ? run.accounts.map(printable).join(', ') : 'none'}, source ${printable(
+      source
+    )}${options ? `, ${printable(options)}` : ''}`,
+    ...(run.approvals ?? []).map(
+      (approval) =>
+        `  ${printable(approval.account)}: ${
+          approval.approvedBy
+            ? `approved by ${printable(approval.approvedBy.sub)}`
+            : 'waits for somebody who uses it to approve'
+        }`
+    ),
+    `  decide before ${printable(run.approvals?.[0]?.expiresAt ?? '-')}`,
   ]
 }
 
@@ -170,6 +179,15 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           )
           const names = [...proposal.tasks, ...proposal.services]
           environment.stdout.write(`  tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+          if (proposal.accounts.length > 0) {
+            environment.stdout.write(
+              `  accounts: ${proposal.accounts.map(printable).join(', ')}${
+                proposal.missing.length > 0
+                  ? `, the proposer does not use ${proposal.missing.map(printable).join(', ')}`
+                  : ''
+              }\n`
+            )
+          }
           if (proposal.state === 'waiting') {
             environment.stdout.write(`  decide before ${printable(proposal.expiresAt)}\n`)
           } else if (proposal.reason) {

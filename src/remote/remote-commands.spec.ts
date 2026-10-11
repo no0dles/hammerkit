@@ -116,13 +116,17 @@ describe('remote login, accounts and logout', () => {
 storage: { directory: ${JSON.stringify(join(environment.cwd, 'server-data'))} }
 issuers:
   - { issuer: "${idp.url}", audience: hammerkit, clientId: hammerkit-cli }
+secretProviders:
+  echo: { command: [echo, "{{ref}}"] }
+accounts:
+  op-payments-dev: { description: payments, providers: { echo: { env: {} } } }
+  op-web-dev: { providers: { echo: { env: {} } } }
+  op-payments-prod: { providers: { echo: { env: {} } }, source: [ref], refs: [main] }
 entitlements:
   - subject: { iss: "${idp.url}", sub: alice }
-    accounts: [op-payments-dev, op-web-dev]
-    default: op-payments-dev
-    request: [op-payments-prod]
-    publish: [payments]
-    propose: [web]
+    accounts: { op-payments-dev: use, op-web-dev: use, op-payments-prod: request }
+    repos: [github.com/corp/payments]
+    builds: propose
 `
         )
         const credentials = join(environment.cwd, 'credentials.json')
@@ -147,16 +151,17 @@ entitlements:
       expect(out).toContain('To sign in, open')
       expect(out).toContain('enter the code ABCD-EFGH')
       expect(out).toContain('signed in to build as alice')
-      expect(out).toContain('service accounts: op-payments-dev, op-web-dev')
+      expect(out).toContain('service accounts: op-payments-dev (use), op-payments-prod (request), op-web-dev (use)')
       expect(readFileSync(credentials, 'utf8')).not.toContain('never-stored')
 
       const accounts = await run('remote', 'accounts', 'build')
       expect(accounts).toContain(`build: alice (${issuer})`)
-      expect(accounts).toMatch(/op-payments-dev.*\(default\)/)
-      expect(accounts).toContain('op-web-dev')
-      expect(accounts).toContain('may publish build files: payments')
-      expect(accounts).toContain('may propose build files, which need an approval: web')
-      expect(accounts).toContain('may request runs, which an admin approves: op-payments-prod')
+      expect(accounts).toContain('op-payments-dev')
+      expect(accounts).toContain('use  payments  from upload, ref')
+      expect(accounts).toContain('use  from upload, ref')
+      expect(accounts).toContain('request, somebody who uses it approves  from ref')
+      expect(accounts).toContain('you may propose build files, which somebody who publishes approves')
+      expect(accounts).toContain('repositories: github.com/corp/payments')
 
       expect(await run('remote', 'logout', 'build')).toContain('signed out of build')
       expect(await run('remote', 'logout', 'build')).toContain('not signed in to build')

@@ -46,9 +46,13 @@ issuers:
     audience: hammerkit
     ${options.clientId === false ? '' : 'clientId: hammerkit-cli'}
     scope: "${options.scope ?? 'openid api://hammerkit/.default'}"
+secretProviders:
+  echo: { command: [echo, "{{ref}}"] }
+accounts:
+  op-payments-dev: { providers: { echo: { env: {} } } }
 entitlements:
   - subject: { iss: "${idp.url}", sub: alice }
-    accounts: [op-payments-dev]
+    accounts: { op-payments-dev: use }
 `
       )
       const server = await startServer(await readServerConfig(env, file), env)
@@ -89,7 +93,7 @@ describe('deviceLogin', () => {
       expect(result.expiresAt).toBeGreaterThan(Date.now() + 3000 * 1000)
 
       const me = await getMe(setup.host, result.accessToken)
-      expect(me).toMatchObject({ sub: 'alice', accounts: ['op-payments-dev'], default: 'op-payments-dev' })
+      expect(me).toMatchObject({ sub: 'alice', accounts: [{ name: 'op-payments-dev', level: 'use' }] })
     })
   })
 

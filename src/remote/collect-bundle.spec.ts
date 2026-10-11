@@ -95,7 +95,7 @@ describe('collectBundle', () => {
             `  - { issuer: "${idp.url}", audience: hammerkit }`,
             'entitlements:',
             `  - subject: { iss: "${idp.url}", sub: alice }`,
-            "    publish: ['*']",
+            '    builds: publish',
             '',
           ].join('\n')
         )

@@ -6,15 +6,19 @@ import { createTestKey, signToken, startTestIssuer } from '../testing/test-issue
 import { readServerConfig } from './server-config'
 import { RunningServer, startServer } from './server'
 
+// carol uses an account but may not run anything, so she has nothing to upload for
 const policy = `
+accounts:
+  op-dev: {}
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-dev]
+    accounts: { op-dev: use }
+    builds: run
   - subject: { iss: ISSUER, sub: bob }
-    accounts: [op-dev]
+    accounts: { op-dev: use }
+    builds: run
   - subject: { iss: ISSUER, sub: carol }
-    accounts: [op-dev]
-    source: [ref]
+    accounts: { op-dev: use }
 `
 
 interface JsonResponse extends Response {

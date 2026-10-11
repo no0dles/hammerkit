@@ -7,14 +7,18 @@ import { readServerConfig } from './server-config'
 import { RunningServer, startServer } from './server'
 
 const policy = `
+accounts:
+  op-payments-dev: {}
+  op-web-dev: {}
 entitlements:
   - subject: { iss: ISSUER, sub: ci }
-    publish: ['*']
+    builds: publish
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-payments-dev]
-    publish: [payments]
+    accounts: { op-payments-dev: use }
+    builds: publish
   - subject: { iss: ISSUER, sub: bob }
-    accounts: [op-web-dev]
+    accounts: { op-web-dev: use }
+    builds: run
 `
 
 interface JsonResponse extends Response {
@@ -108,6 +112,11 @@ describe('definitions api', () => {
           build: { src: [], mounts: [], deps: [], needs: [] },
           test: { src: [], mounts: [], deps: [], needs: [] },
         },
+        accounts: [],
+        plan: {
+          build: { kind: 'task', runtime: 'local', cmds: ['echo build'], accounts: [], flags: ['local-task'] },
+          test: { kind: 'task', runtime: 'local', cmds: ['echo test'], accounts: [], flags: ['local-task'] },
+        },
         created: true,
         publishedBy: { sub: 'alice' },
       })
@@ -120,16 +129,16 @@ describe('definitions api', () => {
     })
   })
 
-  it('lets only who has the permission publish, and only the build files it names', async () => {
+  it('lets only who has a builds level publish, under any name', async () => {
     await withApi('definitions-api-permission', async (api) => {
       // running something is not publishing it
       const bob = await api.call('PUT', '/v1/definitions/web', 'bob', bundle)
       expect(bob.status).toBe(403)
-      expect((await bob.json()).error).toBe('you may not publish web')
-      expect((await api.call('PUT', '/v1/definitions/web', 'alice', bundle)).status).toBe(403)
+      expect((await bob.json()).error).toBe('you may not publish web, it needs builds: propose or publish')
       expect((await api.call('PUT', '/v1/definitions/payments', 'nobody', bundle)).status).toBe(403)
-      expect((await api.call('PUT', '/v1/definitions/web', 'ci', bundle)).status).toBe(201)
-      expect((await api.call('PUT', '/v1/definitions/payments', 'ci', bundle)).status).toBe(201)
+      // names are free: they are the publisher's choice, not the operator's
+      expect((await api.call('PUT', '/v1/definitions/web', 'alice', bundle)).status).toBe(201)
+      expect((await api.call('PUT', '/v1/definitions/anything-else', 'ci', bundle)).status).toBe(201)
       expect(api.log.join('\n')).toContain('refuse publish')
     })
   })
@@ -206,10 +215,11 @@ describe('definitions api', () => {
     })
   })
 
-  it('tells a caller what they may publish', async () => {
+  it('tells a caller what they may do with the build files', async () => {
     await withApi('definitions-api-me', async (api) => {
-      expect((await (await api.call('GET', '/v1/me', 'alice')).json()).publish).toEqual(['payments'])
-      expect((await (await api.call('GET', '/v1/me', 'bob')).json()).publish).toEqual([])
+      expect((await (await api.call('GET', '/v1/me', 'alice')).json()).builds).toBe('publish')
+      expect((await (await api.call('GET', '/v1/me', 'bob')).json()).builds).toBe('run')
+      expect((await (await api.call('GET', '/v1/me', 'nobody')).json()).builds).toBeNull()
     })
   })
 })

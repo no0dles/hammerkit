@@ -4,8 +4,9 @@ description: "Run this machine as a hammerkit server that remote runs can be sen
 ---
 <Callout type="warn">
 
-Experimental. The server checks OAuth tokens and tells a caller which service
-accounts they have. Accepting runs arrives in a follow-up release, see the
+Experimental. The server checks OAuth tokens, keeps published build files and runs
+their tasks for callers who are entitled to. The config and the API can still change
+between releases, see the
 [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
 
 </Callout>
@@ -39,22 +40,31 @@ issuers:
     groupsClaim: groups   # default
     clientId: hammerkit-cli
     scope: openid api://hammerkit/.default
+secretProviders:                    # the commands that read secrets, see Secret providers
+  gsm:
+    command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}']
+accounts:                           # the service accounts a secret can be read as
+  op-payments-dev:
+    description: Payments, test secrets
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-dev.json } } }
+  op-payments-prod:
+    description: Payments, production
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-prod.json } } }
+    source: [ref]                   # only from reviewed code
+    refs: [main, 'release/*']       # and only from these branches
 entitlements:
   - subject: { iss: https://login.example.com, sub: 4f1c2b }
-    accounts: [op-payments-dev]
-    request: [op-payments-prod]
-    default: op-payments-dev
-  - group: { iss: https://login.example.com, name: eng-web }
-    accounts: [op-web-dev]
+    accounts: { op-payments-dev: use, op-payments-prod: request }
+    builds: run
+  - group: { iss: https://login.example.com, name: release-managers }
+    accounts: { op-payments-prod: use }
+    builds: publish
   - claims:
       iss: https://token.actions.githubusercontent.com
       match: { repository: corp/payments, ref: refs/heads/main }
-    publish: [payments]
-  - claims:
-      iss: https://token.actions.githubusercontent.com
-      match: { repository: corp/payments, ref: refs/heads/main }
-    accounts: [op-payments-ci]
-    source: [ref]
+    accounts: { op-payments-dev: use }
+    repos: [github.com/corp/payments]
+    builds: publish
 sources:
   payments: { git: git@github.com:corp/payments.git }   # where the code of a run comes from
 approvals:
@@ -65,6 +75,9 @@ storage:
 runs:
   maxConcurrent: 4   # default
   keep: 200          # default
+  env:
+    allow: [PATH, HOME, DOCKER_HOST]   # the only variables of the server a run sees, none by default
+    set: { CI: 'true' }
 backend:
   type: host
   platform: { os: macos, arch: arm64 }   # detected when left out
@@ -76,11 +89,13 @@ backend:
 | `tls` | Certificate and key to serve https. |
 | `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
 | `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
-| `entitlements` | Who may use which service account, see [below](#entitlements). |
+| `secretProviders` | The commands that read secrets, the same as the `secretProviders` of a build file, see [Secret providers](/docs/task/secret-providers). A published build file can not declare them, only the operator does. |
+| `accounts` | The service accounts a secret can be read as, each with the environment that makes the provider command act as that account, see [below](#accounts). |
+| `entitlements` | Who may use or request which service account, and what they may do with build files, see [below](#entitlements). |
 | `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
 | `sources` | The repository of each published build file, by its name. A run with `source: ref` gets its code from there, see [Executing a run](#executing-a-run). Credentials are those of the git configuration of the user the server runs as. |
 | `storage` | Where the server keeps what must survive a restart: the published build files. Runs work in `runs/` below it while they run. |
-| `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. |
+| `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. `env.allow` lists the variables of the server process that a run, its provider commands and the git fetch can see, and `env.set` adds fixed values; nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
 
 Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
@@ -116,10 +131,49 @@ Two things the server does not check, so set them up on the identity provider:
   that `email` needs `email_verified`; match on `sub`, a group or a claim the
   provider controls.
 
+### Accounts
+
+A service account is a name the operator defines. The secrets in a published build
+file say which account each is read as (`account:` on the secret), and the server
+derives from that which accounts a run uses: a task without secrets uses none and holds
+no credentials. Nothing in a run request, no default and no `account` on a task or
+service chooses one, so the person who asks for a run cannot pick the account they
+prefer.
+
+```yaml
+tasks:
+  test:
+    cmds: [npm test]            # no secrets, no account
+  deploy:
+    secrets:
+      - from: gsm:kube-token
+        account: op-payments-prod
+        env: KUBE_TOKEN
+    cmds: [./deploy.sh]
+```
+
+An account has a `description`, the `providers` environment that makes each secret
+provider command act as the account (the credentials are files and variables of the
+operator's machine, they never reach the config), and optionally
+
+* `source`: where the code of a run using the account may come from, `upload` for
+  the caller's working tree and `ref` for a git ref. Both when left out.
+* `refs`: the branches or tags (`release/*` matches one level) such a run may start
+  from. It needs `source: [ref]`, and a bare commit is refused because it names no
+  branch.
+
+Because the account is chosen by the published file, a server applies stricter rules
+to secrets than a local run does: a provider secret names its account (`account:`
+is required, a task's `account:` and `default: true` are not used), `file:` secrets
+are refused, and an `env:` secret may only read a variable listed in `runs.env.allow`.
+A build file that declares `secretProviders` or `secretAccounts` is refused, and so is
+a project `.env` file read: the operator's providers and accounts are the only ones.
+
 ### Entitlements
 
-An entitlement says which service accounts a caller may use. The server matches
-the validated claims of the token only, never anything the caller sends along.
+An entitlement says which service accounts a caller may use, and what they may do
+with build files. The server matches the validated claims of the token only, never
+anything the caller sends along.
 
 | Who | Matches |
 | --- | --- |
@@ -127,41 +181,47 @@ the validated claims of the token only, never anything the caller sends along.
 | `group: {iss, name}` | every caller of that issuer whose groups claim lists the name |
 | `claims: {iss, match}` | every token of that issuer whose string claims equal all of `match`, for CI jobs (repository, ref, environment) |
 
-A caller gets the accounts of all entitlements that match, and none when no entry
-matches. A caller with no account and nothing to publish can do nothing on the
+A caller gets what all entitlements that match give, and nothing when no entry
+matches. Every account that an entitlement names has to be defined under `accounts`,
+a typo stops the server at startup.
+
+`accounts` maps an account to a level:
+
+* `use` runs on the account at once and approves the runs others request on it.
+* `request` lets the caller ask for runs on the account. Such a run waits until
+  somebody who may `use` the account approves it, see [Approvals](#approvals).
+
+When several entitlements give a level for the same account, `use` wins. `builds` is
+what the caller may do with [build files](#build-files), one level that includes the
+lower ones:
+
+| `builds` | May |
+| --- | --- |
+| `run` | start runs of published build files. Without a level nothing runs, an account alone does not allow it. |
+| `propose` | also send new versions, which somebody who may publish approves, see [Proposing a version](#proposing-a-version). |
+| `publish` | also publish new versions of any build file. Who defines the work does not have to be who runs it. |
+
+Build files are named by whoever publishes them, so the config never lists names.
+`repos` lists the repositories (`github.com/corp/payments`, `github.com/corp/*` for
+one level, `gitlab.corp.com/platform/**` for a group with its subgroups) the caller
+may name in a run from a git ref; the union of the matching entitlements applies.
+Every grant is written to the log with issuer, subject, accounts and the entitlements
+that matched. A caller with no account and no `builds` level can do nothing on the
 server, they are not even shown which build files exist.
 
-An account is given in one of two modes:
-
-* `accounts` makes the caller **admin** of the account: they run on it at once and
-  approve the runs others request on it.
-* `request` lets the caller ask for runs on the account. Such a run waits until an
-  admin of the account approves it, see [Approvals](#approvals).
-
-When entitlements give both for the same account, admin wins. `default` names the
-account used when a run names none, and has to be one of `accounts` or `request`;
-with a single account that account is the default. `source` limits
-where the code may come from, `upload` for the caller's working tree and `ref` for
-a git ref the server checks out itself; a caller matching several entitlements
-gets only what all of them allow. Every grant is written to the log with issuer,
-subject, accounts and the entitlements that matched.
-
-`publish` lists the names of the [build files](#build-files) the caller may publish,
-or `*` for any. It is a permission of its own: who defines the work does not have to
-be who runs it, for example a CI job on the main branch publishes and everyone else
-only runs. `propose` is the lower mode of `publish`, see [Proposing a version](#proposing-a-version). An entitlement needs at least one of `accounts`, `request`, `publish` and `propose`.
-
-`GET /v1/me` returns the identity and what the caller may use:
+`GET /v1/me` returns the identity and what the caller may use, and `GET /v1/accounts`
+the accounts they have a level on, with their description and the sources they allow:
 
 ```json
 {
   "iss": "https://login.example.com",
   "sub": "4f1c2b",
-  "accounts": ["op-payments-dev"],
-  "request": ["op-payments-prod"],
-  "default": "op-payments-dev",
-  "publish": [],
-  "propose": []
+  "accounts": [
+    { "name": "op-payments-dev", "level": "use" },
+    { "name": "op-payments-prod", "level": "request" }
+  ],
+  "repos": ["github.com/corp/payments"],
+  "builds": "run"
 }
 ```
 
@@ -205,14 +265,13 @@ answers `200` and changes nothing (the first publish answers `201`).
 
 | Call | What it does |
 | --- | --- |
-| `PUT /v1/definitions/<name>` | Publish a bundle. Needs the `publish` permission for that name, else `403`. With only `propose` it is a [proposal](#proposing-a-version) and answers `202`. |
+| `PUT /v1/definitions/<name>` | Publish a bundle. Needs `builds: publish`, else `403`. With `builds: propose`, or when the bundle names accounts the caller does not `use`, it is a [proposal](#proposing-a-version) and answers `202`. |
 | `GET /v1/definitions` | The names with their latest version. |
 | `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each, the tasks and services it has and what each task works on (`inputs`). |
 | `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
 | `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
 
-Reading needs a token and at least one service account, `publish` or `propose`
-permission. Versions are kept in the `storage` directory and survive a restart.
+Reading needs a token and at least one service account or `builds` level. Versions are kept in the `storage` directory and survive a restart.
 
 **Inputs.** A version lists, for every task, what it works on, so a client knows
 which of its files a run needs without planning the build file itself:
@@ -232,44 +291,77 @@ files, and a path outside of it is left out because it cannot be sent. What a ta
 inherits from its dependencies is listed with those. Versions published before this
 was recorded have no `inputs`.
 
+**Plan and accounts.** A version also carries a `plan`, what each task and service
+does as the engine reads it, and the `accounts` its secrets are read as. A reviewer
+or an agent sees `deploy` uses `op-payments-prod` before anything runs:
+
+```json
+"accounts": ["op-payments-prod"],
+"plan": {
+  "deploy": {
+    "kind": "task", "runtime": "docker", "image": "node:22",
+    "cmds": ["./deploy.sh"], "deps": [], "needs": [],
+    "accounts": ["op-payments-prod"],
+    "secrets": [{ "from": "gsm:kube-token", "account": "op-payments-prod", "target": "KUBE_TOKEN" }],
+    "mounts": [], "ports": [], "generates": [],
+    "flags": ["local-task"]
+  }
+}
+```
+
+The plan never holds a value of a secret, only where it is read from. `flags` are what a
+reviewer looks at first: `local-task` (it runs on the host, not in a container),
+`host-port` (it binds a port of the host) and `remote-include` (it includes a file from
+git). A bundle that names an account the server does not define is refused and the
+message lists the accounts that exist.
+
+**Publishing and accounts.** A bundle that uses an account the publisher does not
+`use` becomes a [proposal](#proposing-a-version) even for `builds: publish`, and is
+approved by somebody who may publish and who uses the accounts the proposer lacks. So
+one person can not publish a task that reads the production key for somebody else to
+run without a second pair of eyes.
+
 ### Proposing a version
 
 Who defines the work decides what runs, so a new version of a build file can wait for
-a second pair of eyes. `propose` on an entitlement is the lower mode of `publish`,
-like `request` is the lower mode of `accounts`:
+a second pair of eyes. `builds: propose` is the lower level of `publish`, like
+`request` is the lower level of `use`:
 
 ```yaml
 entitlements:
   - group: { iss: https://login.example.com, name: platform }
-    publish: [payments]
+    accounts: { op-payments-prod: use }
+    builds: publish
   - claims:
       iss: https://login.example.com
       match: { client: coding-agent }
-    propose: [payments]
+    builds: propose
 ```
 
-A caller who may only propose a name sends the same `PUT`. The server reads the
-bundle as it does for a publish and refuses one that does not load, then keeps it as
-a **proposal** (`202`). It is not a version: it can not be run, `latest` does not
-change and the build files are not listed with it. Someone who may `publish` that
-name, and did not propose it, approves it, and only then it is published, as
-the proposer's version with the approver recorded as `approvedBy`. That is the version
-runs refer to by hash, so what was approved is what runs. Where a caller may both
-publish and propose a name, publishing wins.
+A caller who may only propose sends the same `PUT`. The server reads the bundle as it
+does for a publish and refuses one that does not load, then keeps it as a
+**proposal** (`202`). A publish also ends up here when the bundle names accounts the
+publisher does not `use` (`missing` lists them). It is not a version: it can not be
+run, `latest` does not change and the build files are not listed with it. Someone who
+may `publish`, uses the accounts in `missing`, and did not propose it, approves it,
+and only then it is published, as the proposer's version with the approver recorded as
+`approvedBy`. That is the version runs refer to by hash, so what was approved is what
+runs.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v1/proposals` | The proposals the caller made or may decide, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, `base` (the latest version it would follow) and whether the caller `canDecide`. |
+| `GET /v1/proposals` | The proposals the caller made or may see, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, the `accounts` and the `missing` ones, `plan`, `base` (the latest version it would follow) and whether the caller `canDecide`. |
 | `GET /v1/proposals/<name>/<hash>` | One of them. |
 | `GET /v1/proposals/<name>/<hash>/files` | Its files, to read what would be published. |
 | `POST /v1/proposals/<name>/<hash>/approve` | Publish it. The body is optional: `{ "reason": "..." }`. |
 | `POST /v1/proposals/<name>/<hash>/reject` | Drop it; the reason (up to 500 characters) is kept with it. |
 
-What the caller neither proposed nor may decide does not exist for them (`404`), and
-one that is decided or expired is `409`. A proposal expires after the `approvals.timeout`
-like a requested run does, and `approvals.maxWaiting` limits the proposals that wait
-(`503`). Proposals are kept in memory: after a restart the proposer proposes again.
-Each proposal and decision is logged with who made it.
+A proposal is visible to its proposer and to everyone who may publish; what the caller
+neither proposed nor may decide does not exist for them (`404`), and one that is
+decided or expired is `409`. A proposal expires after the `approvals.timeout` like a
+requested run does, and `approvals.maxWaiting` limits the proposals that wait (`503`).
+Proposals are kept in memory: after a restart the proposer proposes again. Each
+proposal and decision is logged with who made it.
 
 A proposal approves a new version of the build file, not the code its commands run:
 `npm test` still executes the files a run brings. Production accounts stay behind
@@ -340,8 +432,8 @@ one it used last and `GET /v1/sources/<snapshot>` says it is complete.
   `.kube/`. Secrets belong in a secret provider; there is no override.
 * **Quota.** A caller may keep 4 GiB; a file that would go over is `413`. Nothing
   is removed on its own, a caller deletes what they no longer need.
-* **Who may.** Callers who can run something and whose entitlements allow `upload`
-  as a `source`; others get `403`.
+* **Who may.** Callers with a `builds` level; others get `403`. An account can
+  further restrict its `source`.
 
 Paths are relative to the root of the project, forward slashes, nothing that climbs
 out; `inputs` of a [build file version](#build-files) say which files a run needs.
@@ -365,7 +457,6 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 {
   "definition": { "name": "payments", "hash": "sha256:9f2c..." },
   "tasks": ["build", "test"],
-  "account": "op-payments-dev",
   "source": { "type": "ref", "ref": "refs/heads/main" },
   "options": { "env": "staging", "cache": "checksum", "timeout": "30m" }
 }
@@ -378,16 +469,17 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 * `tasks` are task names as on the command line, up to 100. A task the build file
   does not have is `400`. Instead of names, labels in `options.filter` can select
   the tasks.
-* `account` is the service account the run uses. It has to be one of the caller's
-  [entitlements](#entitlements), and defaults to the caller's default account; a
-  caller who may only publish runs without one. Naming an account they may not use
-  is `403`, and a caller with no entitlement at all may not run.
+* There is no account in the request. The run uses the accounts of the secrets of the
+  tasks it executes, with their dependencies and the services they need, derived from
+  the pinned version, and the answer lists them as `accounts`. A caller who has no
+  level on one of them gets `403` naming the account, one who may only `request` it
+  gets a run in `awaiting-approval`, and a caller without `builds` level may not run.
 * `source` says where the code comes from: `{ "type": "ref", "ref": "..." }` for a git
   ref the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
   for the caller's working tree, announced and sent beforehand, see [Source
   files](#source-files). A snapshot that is unknown, or that still lacks files, is
-  `400`. The kinds an entitlement lists in `source` are the only ones allowed,
-  anything else is `403`.
+  `400`. The kinds the accounts of the run list in `source` (and, for `refs`, the
+  branches) are the only ones allowed, anything else is `403`.
 * `options` are the settings of `hammerkit run` that make sense on a server, all
   optional: `env`, `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
   `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
@@ -400,7 +492,7 @@ fetched by the server. An `upload` refers to a snapshot of the working tree that
 sent separately, so the request stays small however large the project is.
 
 The body is JSON up to 64 KiB, and unknown fields are rejected. Each submitted run is
-logged with who submitted it, the account and the source.
+logged with who submitted it, the accounts and the source.
 
 The events carry the sequence number as their `id`, so a client that lost the
 connection continues with the `Last-Event-ID` header (or `?after=<n>`) and misses
@@ -429,10 +521,9 @@ they do there:
    events.
 4. It removes the directory, whether the run succeeded, failed or was cancelled.
 
-The tasks only see the tools to find docker and the network (`PATH`, `HOME`,
-`DOCKER_HOST`, proxy settings and the like) from the environment of the server, not
-the rest of it, so the secrets the operator gave the server stay with the server.
-The local task cache is shared by all runs: a task is keyed by its definition and its
+The tasks, the git fetch and the provider commands only see the variables of the server
+that `runs.env.allow` lists, plus `runs.env.set`; the rest of the server's environment
+stays with the server. The local task cache is shared by all runs: a task is keyed by its definition and its
 sources, not by where the checkout is.
 
 A run fails with the reason when the server has no `sources` entry for its build file,
@@ -440,58 +531,66 @@ when the ref can not be fetched, or when it comes from an `upload`: uploads are 
 supported by the executor yet, use `source: ref`. Cancelling a run stops the fetch or
 the running task.
 
-> Service accounts are only checked against the entitlements for now: the executor
-> does not resolve the secrets of an account yet.
+Before it starts, the executor derives the accounts of the run again from the pinned
+files with the run's environment, and fails the run if it would use one it was not
+admitted for. The secrets of the tasks are read as the accounts of the server config, by
+the provider commands, and a secret of any other account is refused when it is fetched.
 
 ## Approvals
 
 Some work should not happen because one identity asked for it: a deploy with the
 production key, a task with access to customer data. Access to a service account comes
-in two modes for that, see [Entitlements](#entitlements). Whoever is **admin** of an
+at two levels for that, see [Entitlements](#entitlements). Whoever may **use** an
 account runs on it directly. Whoever may only **request** it can ask for a run, which
-waits in state `awaiting-approval` until an admin of that account approves it. This
-suits an agent or a developer who proposes a deployment and a person who confirms it.
+waits in state `awaiting-approval` until somebody who may use that account approves it.
+This suits an agent or a developer who proposes a deployment and a person who confirms
+it.
 
 ```yaml
 entitlements:
   - group: { iss: https://login.example.com, name: release-managers }
-    accounts: [op-payments-prod]
+    accounts: { op-payments-prod: use }
   - group: { iss: https://login.example.com, name: eng-payments }
-    accounts: [op-payments-dev]
-    request: [op-payments-prod]
+    accounts: { op-payments-dev: use, op-payments-prod: request }
+    builds: run
 approvals:
   timeout: 1h        # how long a run waits, default 1h
   maxWaiting: 100    # runs waiting at the same time, default 100
 ```
 
-* The mode belongs to the account of the run, which is chosen in its request and
-  checked against the caller's entitlements. Nothing in a build file can change it, so
-  every requested run with the production key is held, whatever its tasks are called
-  or labelled, and whoever may [publish](#build-files) cannot lift it.
-* A caller approves what they have access to: admin of the account the run uses.
-  Admin of another account sees nothing of it. An admin does not need `request`,
-  their own runs on the account start at once, and nobody approves their own run.
-  Approvers see the published build files, so they can read what they approve, and
-  nothing more.
-* One approval is enough. A run nobody approves within `timeout` is rejected, and so
-  is one an admin rejects. More than `maxWaiting` waiting runs are refused with `503`.
-  A run that waits is cancelled when the server stops, like every other.
-* A run without a service account is not held. What an approval cannot cover is what
-  the code does: pinning commands does not pin the code they run, so an account that
-  matters should also be limited to `source: [ref]`.
+* The accounts of a run are derived from the secrets of the published, hash-pinned
+  build file, see [Accounts](#accounts). Nothing in the request can change them, so
+  every run that reads a production secret as a requester is held, whatever its tasks
+  are called or labelled, and whoever may [publish](#build-files) cannot lift it.
+* A run needs an approval for the accounts the caller can only request, the others
+  they use. `deploy` waits for `op-payments-prod` while `test` in the same run does not.
+* An approver covers every account they may `use`. A run that waits for accounts A and
+  B is released as soon as the approvals cover both: one person who uses both is
+  enough, otherwise two approve, one per account. Each account has its entry in the
+  run's `approvals`, with who approved it. They share one expiry: a run that nobody
+  covers within `timeout` is rejected, and so is one that any covering approver
+  rejects. More than `maxWaiting` waiting runs are refused with `503`. A run that waits
+  is cancelled when the server stops, like every other.
+* A request for an account that nobody may use is refused at once (`409 nobody can
+  approve <account>`) and not left to expire.
+* A caller approves what they have access to, and nobody approves their own run. A
+  caller who uses none of the accounts that wait sees nothing of the run. Approvers see
+  the published build files, so they can read what they approve, and nothing more.
+* What an approval cannot cover is what the code does: pinning commands does not pin the
+  code they run, so an account that matters should also be limited to `source: [ref]`
+  and `refs`.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v1/approvals` | The runs waiting for an approval the caller can give, with who asked, the build file version, tasks, account, source and options. |
+| `GET /v1/approvals` | The runs waiting for an approval the caller can give, with who asked, the build file version, tasks, accounts, source and options. |
 | `GET /v1/approvals/<id>` | One of them. |
-| `POST /v1/approvals/<id>/approve` | Approve the run, which is queued. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/approvals/<id>/approve` | Approve the accounts the caller uses; the run is queued when all are covered (`already-approved` is `409`). The body is optional: `{ "reason": "..." }`. |
 | `POST /v1/approvals/<id>/reject` | End the run; the reason (up to 500 characters) becomes its `error`. |
 
 What a caller may not approve does not exist for them (`404`), and a run that is no
 longer waiting is `409`. Each call is logged with who decided and the result, and the
 decision is an event of the run, so the one who asked sees who approved it.
-`GET /v1/me` tells which accounts the caller is admin of and which they may request,
-and `hammerkit remote accounts` shows it. The command line has [`remote approvals`, `approve` and `reject`](/docs/cli/remote#approving-runs).
+`hammerkit remote accounts` shows the caller's levels. The command line has [`remote approvals`, `approve` and `reject`](/docs/cli/remote#approving-runs).
 
 ## Discovery
 

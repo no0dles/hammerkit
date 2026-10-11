@@ -20,10 +20,12 @@ export function isFinal(state: RunState): boolean {
 
 type Identity = { iss: string; sub: string }
 
-// A run that was requested, not started by an admin of its account, waits for
-// one admin of that account to approve it.
+// A run that uses accounts its owner may only request waits for somebody who may
+// use each of them. One entry per account, one expiry for the run: it is
+// rejected if it still waits then. An approver covers every account they use, so
+// one person is enough when they use all of them.
 export interface RunApproval {
-  // the run is rejected if it still waits then
+  account: string
   expiresAt: string
   approvedBy?: Identity
   approvedAt?: string
@@ -36,8 +38,9 @@ export interface RunSpec {
   definition: { name: string; hash: string }
   // the tasks to run, by their name in the build file
   tasks: string[]
-  // the service account the run uses, null for none
-  account: string | null
+  // the accounts the run uses: the ones its secrets are read as, derived from the
+  // published build file and never requested
+  accounts: string[]
   source: RunSource
   // the settings of `hammerkit run` the caller chose, see run-request.ts
   options: RunOptions
@@ -47,7 +50,7 @@ export interface Run extends RunSpec {
   id: string
   // who submitted it: only they see it
   owner: { iss: string; sub: string }
-  approval?: RunApproval
+  approvals?: RunApproval[]
   state: RunState
   createdAt: string
   startedAt?: string
@@ -64,7 +67,7 @@ export type RunEventData =
 export type RunEvent =
   | RunEventData
   | { type: 'state'; state: RunState; error?: string }
-  | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; reason?: string }
+  | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; accounts: string[]; reason?: string }
   | { type: 'truncated' }
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
@@ -99,10 +102,12 @@ export interface RunRegistryOptions {
 
 export type DecisionResult =
   | { status: 'ok'; run: Run }
-  // not a run of the caller's to see, or not on an account they are admin of
+  // not a run of the caller's to see, or none of the accounts waiting for an approval is one they use
   | { status: 'not-found' }
   | { status: 'own-run' }
   | { status: 'not-waiting'; state: RunState }
+  // an approval of accounts that are all approved already: the run waits for others
+  | { status: 'already-approved' }
 
 interface Entry {
   run: Run
@@ -139,12 +144,13 @@ export class RunRegistry {
     this.now = options.now ?? Date.now
   }
 
-  // A run that needs an approval waits for it, the others are queued at once.
-  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, needsApproval = false): Run {
+  // A run that needs approvals (for the accounts named) waits for them, the others
+  // are queued at once.
+  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, approvalAccounts: string[] = []): Run {
     if (this.closed) {
       throw new RunError('the server is shutting down')
     }
-    const waiting = needsApproval
+    const waiting = approvalAccounts.length > 0
     if (waiting && this.waiting().length >= this.maxWaiting) {
       throw new RunError('too many runs are waiting for an approval')
     }
@@ -159,9 +165,8 @@ export class RunRegistry {
     this.entries.set(run.id, entry)
     this.record(entry, { type: 'state', state: run.state })
     if (waiting) {
-      run.approval = {
-        expiresAt: new Date(this.now() + this.approvalTimeout).toISOString(),
-      }
+      const expiresAt = new Date(this.now() + this.approvalTimeout).toISOString()
+      run.approvals = approvalAccounts.map((account) => ({ account, expiresAt }))
       entry.timer = setTimeout(() => this.expire(entry), this.approvalTimeout)
       entry.timer.unref()
     } else {
@@ -212,9 +217,9 @@ export class RunRegistry {
       .map((entry) => this.copy(entry.run))
   }
 
-  // One run that waits (or waited), if `canDecide` says the decider is admin of
-  // its account.
-  getForApproval(id: string, canDecide: (account: string | null) => boolean): Run | undefined {
+  // One run that waits (or waited), if `canDecide` says the decider uses one of the
+  // accounts it still needs approved.
+  getForApproval(id: string, canDecide: (account: string) => boolean): Run | undefined {
     const entry = this.entries.get(id)
     if (!entry || !this.mayDecide(entry, canDecide)) {
       return undefined
@@ -222,12 +227,14 @@ export class RunRegistry {
     return this.copy(entry.run)
   }
 
-  // An approval queues the run, a rejection ends it. Nobody decides on their own run.
+  // An approval covers the accounts the approver uses; the run is queued when all
+  // of its accounts are covered. A rejection by anybody who covers one of them ends
+  // it. Nobody decides on their own run.
   decide(
     decider: Pick<Principal, 'iss' | 'sub'>,
     id: string,
     outcome: 'approved' | 'rejected',
-    canDecide: (account: string | null) => boolean,
+    canDecide: (account: string) => boolean,
     reason?: string
   ): DecisionResult {
     const entry = this.entries.get(id)
@@ -237,17 +244,31 @@ export class RunRegistry {
     if (this.owns(decider, entry)) {
       return { status: 'own-run' }
     }
-    if (entry.run.state !== 'awaiting-approval' || !entry.run.approval) {
+    if (entry.run.state !== 'awaiting-approval' || !entry.run.approvals) {
       return { status: 'not-waiting', state: entry.run.state }
     }
     const by = { iss: decider.iss, sub: decider.sub }
-    this.record(entry, { type: 'approval', outcome, by, ...(reason ? { reason } : {}) })
+    const covered = entry.run.approvals.filter((approval) => !approval.approvedBy && canDecide(approval.account))
+    if (outcome === 'approved' && covered.length === 0) {
+      return { status: 'already-approved' }
+    }
+    const accounts = entry.run.approvals
+      .filter((approval) => canDecide(approval.account))
+      .map((approval) => approval.account)
+    this.record(entry, { type: 'approval', outcome, by, accounts, ...(reason ? { reason } : {}) })
     if (outcome === 'rejected') {
       this.finish(entry, 'rejected', `rejected by ${by.sub}${reason ? `: ${reason}` : ''}`)
       return { status: 'ok', run: this.copy(entry.run) }
     }
-    entry.run.approval.approvedBy = by
-    entry.run.approval.approvedAt = this.timestamp()
+    const approvedAt = this.timestamp()
+    for (const approval of covered) {
+      approval.approvedBy = by
+      approval.approvedAt = approvedAt
+    }
+    if (entry.run.approvals.some((approval) => !approval.approvedBy)) {
+      // some accounts still wait for somebody who uses them
+      return { status: 'ok', run: this.copy(entry.run) }
+    }
     this.clearTimer(entry)
     entry.run.state = 'queued'
     this.record(entry, { type: 'state', state: 'queued' })
@@ -303,8 +324,9 @@ export class RunRegistry {
     return entry && this.owns(owner, entry) ? entry : undefined
   }
 
-  private mayDecide(entry: Entry, canDecide: (account: string | null) => boolean): boolean {
-    return entry.run.approval !== undefined && canDecide(entry.run.account)
+  // Whoever uses an account the run needed approved is to see it and decide.
+  private mayDecide(entry: Entry, canDecide: (account: string) => boolean): boolean {
+    return (entry.run.approvals ?? []).some((approval) => canDecide(approval.account))
   }
 
   private expire(entry: Entry): void {
@@ -332,7 +354,8 @@ export class RunRegistry {
       source: { ...run.source },
       options: JSON.parse(JSON.stringify(run.options)),
       owner: { ...run.owner },
-      ...(run.approval ? { approval: JSON.parse(JSON.stringify(run.approval)) } : {}),
+      accounts: [...run.accounts],
+      ...(run.approvals ? { approvals: JSON.parse(JSON.stringify(run.approvals)) } : {}),
     }
   }
 

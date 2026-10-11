@@ -6,19 +6,30 @@ import { tmpdir } from 'os'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { readServerConfig } from './server-config'
-import { passedEnvironment } from './executor'
+import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
 
+// alice requests runs on prod, which bob approves; bob publishes the build files,
+// carol only runs what needs no credentials of prod
 const policy = `
+runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }
+secretProviders:
+  echo: { command: [${JSON.stringify(process.execPath)}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }
+accounts:
+  op-payments-dev: { providers: { echo: { env: {} } } }
+  op-payments-ci: { providers: { echo: { env: {} } } }
+  op-payments-prod: { providers: { echo: { env: {} } }, source: [ref], refs: [main, "release/*"] }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-payments-dev, op-payments-ci]
-    default: op-payments-dev
-    publish: [payments]
+    accounts: { op-payments-dev: use, op-payments-ci: use, op-payments-prod: request }
+    builds: run
+  - subject: { iss: ISSUER, sub: bob }
+    accounts: { op-payments-dev: use, op-payments-ci: use, op-payments-prod: use }
+    builds: publish
   - subject: { iss: ISSUER, sub: carol }
-    accounts: [op-payments-ci]
-    source: [ref]
+    accounts: { op-payments-ci: use }
+    builds: run
 `
 
 // the responses of this api are json
@@ -60,7 +71,7 @@ async function withApi(
       )
       const log: string[] = []
       // the tools a run needs to find, git and the shell, come from the environment of the server
-      const serverEnv = { ...env, processEnvs: { ...env.processEnvs, ...passedEnvironment(process.env) } }
+      const serverEnv = { ...env, processEnvs: { ...process.env } }
       const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
         log: (line) => log.push(line),
         executor,
@@ -79,9 +90,11 @@ async function withApi(
         }) as Promise<JsonResponse>
       const submit = (body: unknown, sub?: string) => call('POST', '/v1/runs', { body, sub })
       try {
-        const published = await call('PUT', '/v1/definitions/payments', { body: bundle })
+        const published = await call('PUT', '/v1/definitions/payments', { body: bundle, sub: 'bob' })
         if (published.status !== 201) {
-          throw new Error(`could not publish the build file: ${published.status}`)
+          throw new Error(
+            `could not publish the build file: ${published.status} ${JSON.stringify(await published.json())}`
+          )
         }
         request.definition.hash = (await published.json()).hash
         await fn({ server, log, token, call, submit })
@@ -96,7 +109,27 @@ async function withApi(
 
 const bundle = {
   files: {
-    '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo build]\n  test:\n    cmds: [echo test]\n',
+    '.hammerkit.yaml': [
+      'tasks:',
+      '  build:',
+      '    cmds: [echo build]',
+      '  test:',
+      '    cmds: [echo test]',
+      '  integration:',
+      '    labels: { group: slow }',
+      '    deps: [ci-secret]',
+      '    cmds: [echo integration]',
+      '  ci-secret:',
+      '    secrets:',
+      '      - { from: "echo:ci", account: op-payments-ci, env: TOKEN }',
+      '    cmds: [echo ci]',
+      '  deploy:',
+      '    deps: [build]',
+      '    secrets:',
+      '      - { from: "echo:prod", account: op-payments-prod, env: KUBE_TOKEN }',
+      '    cmds: [echo deploy]',
+      '',
+    ].join('\n'),
   },
 }
 // the hash is filled in once the build file is published
@@ -160,7 +193,7 @@ describe('runs api', () => {
     })
   })
 
-  it('accepts a run for the default account, executes it and shows its state', async () => {
+  it('accepts a run that needs no account, executes it and shows its state', async () => {
     await withApi('runs-api-submit', done, async (api) => {
       const response = await api.submit(request)
       expect(response.status).toBe(202)
@@ -169,42 +202,103 @@ describe('runs api', () => {
         definition: { name: 'payments', hash: expect.stringMatching(/^sha256:/) },
         state: 'queued',
         tasks: ['build'],
-        account: 'op-payments-dev',
+        accounts: [],
         source: request.source,
       })
+      expect(run.approvals).toBeUndefined()
       expect(run.owner).toBeUndefined()
       expect(run.id).toMatch(/^run_/)
 
       const finished = await untilState(api, run.id, ['succeeded', 'failed'])
       expect(finished.state).toBe('succeeded')
       expect(api.log.join('\n')).toMatch(
-        new RegExp(`run ${run.id} iss=\\S+ sub=alice account=op-payments-dev source=ref tasks=1`)
+        new RegExp(`run ${run.id} iss=\\S+ sub=alice accounts=\\[\\] source=ref tasks=1`)
       )
       const list = await (await api.call('GET', '/v1/runs')).json()
       expect(list.runs.map((r: { id: string }) => r.id)).toEqual([run.id])
     })
   })
 
-  it('lets a caller pick any of their accounts, and refuses the others', async () => {
+  it('derives the accounts of a run from the secrets of what it executes', async () => {
     await withApi('runs-api-accounts', done, async (api) => {
-      const ci = await api.submit({ ...request, account: 'op-payments-ci' })
+      const ci = await api.submit({ ...request, tasks: ['ci-secret'] })
       expect(ci.status).toBe(202)
-      expect((await ci.json()).account).toBe('op-payments-ci')
+      expect(await ci.json()).toMatchObject({ accounts: ['op-payments-ci'], state: 'queued' })
 
-      const other = await api.submit({ ...request, account: 'op-prod-deploy' })
-      expect(other.status).toBe(403)
-      expect(await other.json()).toEqual({ error: 'you may not use the service account op-prod-deploy' })
+      // the dependencies and the tasks a label selects count, not only the ones named
+      const labelled = await api.submit({
+        definition: request.definition,
+        source: request.source,
+        options: { filter: ['group=slow'] },
+      })
+      expect((await labelled.json()).accounts).toEqual(['op-payments-ci'])
+      const nothing = await api.submit({ ...request, tasks: ['build', 'test'] })
+      expect((await nothing.json()).accounts).toEqual([])
+    })
+  })
+
+  it('holds a run on an account the caller can only request, and shows who may approve', async () => {
+    await withApi('runs-api-request', done, async (api) => {
+      const response = await api.submit({ ...request, tasks: ['deploy'] })
+      expect(response.status).toBe(202)
+      const run = await response.json()
+      expect(run).toMatchObject({
+        state: 'awaiting-approval',
+        accounts: ['op-payments-prod'],
+        approvals: [{ account: 'op-payments-prod', expiresAt: expect.any(String) }],
+      })
+      expect(api.log.join('\n')).toContain('accounts=[op-payments-prod] source=ref tasks=1 approval=[op-payments-prod]')
+      // bob uses prod and approves; the account is read from the files, not from the request
+      expect((await api.call('POST', `/v1/approvals/${run.id}/approve`, { sub: 'bob' })).status).toBe(200)
+      expect((await untilState(api, run.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+    })
+  })
+
+  it('refuses an account the caller has no level on, naming it', async () => {
+    await withApi('runs-api-no-level', done, async (api) => {
+      const refused = await api.submit({ ...request, tasks: ['deploy'] }, 'carol')
+      expect(refused.status).toBe(403)
+      expect((await refused.json()).error).toContain('you may not use the account op-payments-prod')
       expect(api.log.join('\n')).toContain('refuse run')
+      // what needs no account still runs for her
+      expect((await api.submit({ ...request, tasks: ['build'] }, 'carol')).status).toBe(202)
 
-      // a caller without any entitlement may not run, nor name an account
-      expect((await api.submit({ ...request, account: 'op-payments-dev' }, 'mallory')).status).toBe(403)
+      // a caller without any entitlement may not run at all
       const none = await api.submit(request, 'mallory')
       expect(none.status).toBe(403)
       expect((await none.json()).error).toContain('not entitled')
     })
   })
 
-  it('only takes the kind of source the entitlement allows', async () => {
+  it('refuses a run of an account from a ref it does not allow', async () => {
+    await withApi('runs-api-refs', done, async (api) => {
+      const feature = await api.submit(
+        { ...request, tasks: ['deploy'], source: { type: 'ref', ref: 'feature' } },
+        'bob'
+      )
+      expect(feature.status).toBe(403)
+      expect((await feature.json()).error).toContain('only used by runs from main, release/*')
+      const release = await api.submit(
+        { ...request, tasks: ['deploy'], source: { type: 'ref', ref: 'release/1.2' } },
+        'bob'
+      )
+      expect(release.status).toBe(202)
+      // a commit names no branch
+      const commit = await api.submit(
+        { ...request, tasks: ['deploy'], source: { type: 'ref', ref: 'a'.repeat(40) } },
+        'bob'
+      )
+      expect(commit.status).toBe(403)
+    })
+  })
+
+  it('does not take an account in the request', async () => {
+    await withApi('runs-api-no-account-field', done, async (api) => {
+      expect((await api.submit({ ...request, account: 'op-payments-dev' })).status).toBe(400)
+    })
+  })
+
+  it('does not run from an upload yet, and says so at once', async () => {
     await withApi('runs-api-source', done, async (api) => {
       const content = 'hello'
       const sha256 = createHash('sha256').update(content).digest('hex')
@@ -221,14 +315,12 @@ describe('runs api', () => {
         headers: { authorization: `Bearer ${api.token('alice')}` },
         body: content,
       })
-      expect((await api.submit(upload, 'alice')).status).toBe(202)
+      const complete = await api.submit(upload, 'alice')
+      expect(complete.status).toBe(501)
+      expect((await complete.json()).error).toContain('upload')
       const unknown = await api.submit({ ...request, source: { type: 'upload', snapshot: `sha256:${'0'.repeat(64)}` } })
       expect(unknown.status).toBe(400)
       expect((await unknown.json()).error).toContain('not known')
-      const refused = await api.submit(upload, 'carol')
-      expect(refused.status).toBe(403)
-      expect((await refused.json()).error).toContain('runs from upload are not allowed')
-      expect((await api.submit(request, 'carol')).status).toBe(202)
     })
   })
 
@@ -270,9 +362,9 @@ describe('runs api', () => {
       expect(missing.status).toBe(400)
       expect((await missing.json()).error).toContain('there is no build file payments')
       expect((await api.submit({ ...request, definition: { name: 'web' } })).status).toBe(400)
-      const unknown = await api.submit({ ...request, tasks: ['build', 'deploy', 'rm-rf'] })
+      const unknown = await api.submit({ ...request, tasks: ['build', 'nope', 'rm-rf'] })
       expect(unknown.status).toBe(400)
-      expect((await unknown.json()).error).toBe('payments has no task "deploy", "rm-rf"')
+      expect((await unknown.json()).error).toBe('payments has no task "nope", "rm-rf"')
       expect((await api.submit({ ...request, definition: { name: 'payments', hash: 'v2' } })).status).toBe(400)
     })
   })
@@ -281,7 +373,7 @@ describe('runs api', () => {
     await withApi('runs-api-options', done, async (api) => {
       const options = {
         env: 'staging',
-        filter: ['unit'],
+        filter: ['group=unit'],
         exclude: ['slow'],
         cache: 'none',
         cacheReadOnly: true,
@@ -295,8 +387,13 @@ describe('runs api', () => {
       expect((await (await api.submit(request)).json()).options).toEqual({})
       // labels can select the tasks instead of names
       expect(
-        (await api.submit({ definition: request.definition, source: request.source, options: { filter: ['unit'] } }))
-          .status
+        (
+          await api.submit({
+            definition: request.definition,
+            source: request.source,
+            options: { filter: ['group=unit'] },
+          })
+        ).status
       ).toBe(202)
     })
   })
@@ -405,6 +502,7 @@ describe('runs api', () => {
         undefined,
         async (api) => {
           const published = await api.call('PUT', '/v1/definitions/payments', {
+            sub: 'bob',
             body: { files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' } },
           })
           const hash = (await published.json()).hash

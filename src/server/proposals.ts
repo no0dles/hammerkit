@@ -1,5 +1,5 @@
 import { Bundle } from '../remote/bundle'
-import { DefinitionVersion } from './definitions'
+import { DefinitionVersion, TaskPlan } from './definitions'
 import { Principal } from './oauth'
 
 type Identity = { iss: string; sub: string }
@@ -14,6 +14,12 @@ export interface Proposal {
   entry: string
   tasks: string[]
   services: string[]
+  // every account the version uses
+  accounts: string[]
+  // the ones the proposer does not use: whoever approves has to use all of them,
+  // besides being allowed to publish
+  missing: string[]
+  plan: Record<string, TaskPlan>
   proposedBy: Identity
   createdAt: string
   // the proposal expires if it still waits then
@@ -71,7 +77,8 @@ export class ProposalRegistry {
   propose(
     version: DefinitionVersion,
     bundle: Bundle,
-    proposer: Pick<Principal, 'iss' | 'sub'>
+    proposer: Pick<Principal, 'iss' | 'sub'>,
+    missing: string[] = []
   ): { proposal: Proposal; created: boolean } {
     if (this.closed) {
       throw new ProposalError('the server is shutting down')
@@ -90,6 +97,9 @@ export class ProposalRegistry {
       entry: version.entry,
       tasks: version.tasks,
       services: version.services,
+      accounts: version.accounts ?? [],
+      missing,
+      plan: version.plan ?? {},
       proposedBy: { iss: proposer.iss, sub: proposer.sub },
       createdAt: new Date(this.now()).toISOString(),
       expiresAt: new Date(this.now() + this.timeout).toISOString(),
@@ -131,12 +141,12 @@ export class ProposalRegistry {
     name: string,
     hash: string,
     outcome: 'approved' | 'rejected',
-    mayDecide: (name: string) => boolean,
+    mayDecide: (proposal: Proposal) => boolean,
     publish: (bundle: Bundle) => Promise<void>,
     reason?: string
   ): Promise<ProposalDecision> {
     const entry = this.entries.get(this.key(name, hash))
-    if (!entry || !mayDecide(name)) {
+    if (!entry || !mayDecide(entry.proposal)) {
       return { status: 'not-found' }
     }
     if (entry.proposal.proposedBy.iss === decider.iss && entry.proposal.proposedBy.sub === decider.sub) {

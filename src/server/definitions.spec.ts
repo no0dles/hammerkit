@@ -133,7 +133,7 @@ describe('DefinitionStore', () => {
   })
   afterEach(() => rmSync(directory, { recursive: true, force: true }))
 
-  const store = () => new DefinitionStore(directory, environment, () => clock)
+  const store = () => new DefinitionStore(directory, environment, { now: () => clock })
 
   it('keeps what is published under the hash of its files', async () => {
     const s = store()

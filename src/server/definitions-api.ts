@@ -3,7 +3,7 @@ import { bundleSchema, HASH_PATTERN, MAX_BUNDLE_BYTES } from '../remote/bundle'
 import { DefinitionError, DefinitionStore } from './definitions'
 import { readJson, send } from './http'
 import { Principal } from './oauth'
-import { getGrant, mayPropose, mayPublish, maySeeDefinitions } from './policy'
+import { canUse, getGrant, mayPropose, mayPublish, maySeeDefinitions } from './policy'
 import { ProposalError, ProposalRegistry } from './proposals'
 import { definitionName, ServerConfig } from './server-config'
 
@@ -94,10 +94,9 @@ async function publish(
   res: ServerResponse
 ): Promise<void> {
   const grant = getGrant(config.entitlements, principal)
-  const direct = mayPublish(grant, name)
-  if (!direct && !mayPropose(grant, name)) {
-    log(`refuse publish iss=${principal.iss} sub=${principal.sub}: build file ${name} is not granted`)
-    send(res, 403, { error: `you may not publish ${name}` })
+  if (!mayPublish(grant) && !mayPropose(grant)) {
+    log(`refuse publish iss=${principal.iss} sub=${principal.sub}: no builds permission`)
+    send(res, 403, { error: `you may not publish ${name}, it needs builds: propose or publish` })
     return
   }
   const parsed = bundleSchema.safeParse(await readJson(req, MAX_PUBLISH_BYTES))
@@ -107,26 +106,31 @@ async function publish(
     return
   }
   try {
-    if (!direct) {
-      // a version can't run before it is approved, but it has to load, as it would
-      // have when published, so the approver is not asked about a broken one
-      const { version, existing } = await store.prepare(name, parsed.data, principal)
-      if (existing) {
-        send(res, 200, { ...existing, created: false })
-        return
-      }
-      const { proposal, created } = proposals.propose(version, parsed.data, principal)
+    // a version can't run before it is approved, but it has to load, as it would
+    // have when published, so the approver is not asked about a broken one
+    const { version, existing } = await store.prepare(name, parsed.data, principal)
+    if (existing) {
+      send(res, 200, { ...existing, created: false })
+      return
+    }
+    // a version that names an account is published by somebody who uses it; anyone
+    // else proposes it, and somebody who does approves it (four eyes)
+    const missing = (version.accounts ?? []).filter((account) => !canUse(grant, account))
+    if (!mayPublish(grant) || missing.length > 0) {
+      const { proposal, created } = proposals.propose(version, parsed.data, principal, missing)
       log(
-        `propose ${name} ${proposal.hash} iss=${principal.iss} sub=${principal.sub} created=${created} tasks=${proposal.tasks.length}`
+        `propose ${name} ${proposal.hash} iss=${principal.iss} sub=${principal.sub} created=${created} tasks=${
+          proposal.tasks.length
+        } missing=[${missing.join(',')}]`
       )
       send(res, created ? 202 : 200, { ...proposal, created })
       return
     }
-    const { version, created } = await store.publish(name, parsed.data, principal)
+    const { version: published, created } = await store.publish(name, parsed.data, principal)
     log(
-      `publish ${name} ${version.hash} iss=${principal.iss} sub=${principal.sub} created=${created} tasks=${version.tasks.length}`
+      `publish ${name} ${published.hash} iss=${principal.iss} sub=${principal.sub} created=${created} tasks=${published.tasks.length}`
     )
-    send(res, created ? 201 : 200, { ...version, created })
+    send(res, created ? 201 : 200, { ...published, created })
   } catch (e) {
     if (e instanceof DefinitionError) {
       log(`refuse publish iss=${principal.iss} sub=${principal.sub}: ${name} does not load`)

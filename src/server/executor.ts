@@ -1,80 +1,35 @@
 import { mkdir, rm, writeFile } from 'fs/promises'
 import { dirname, join, resolve } from 'path'
-import { Environment } from '../executer/environment'
+import { Environment, HostedPolicy } from '../executer/environment'
 import { CliExecOptions, getCli } from '../cli'
 import { getFileContext } from '../file/get-file-context'
 import { consoleContext } from '../log'
 import { isWithin } from '../includes/resolve-git-source'
-import { LabelValues } from '../executer/label-values'
-import { WorkScope } from '../executer/work-scope'
-import { parseLabelArguments } from '../parser/parse-label-arguments'
 import { createParseContext } from '../schema/schema-parser'
 import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { createSecretRegistry } from '../utils/redact'
+import { SecretCatalog } from '../secrets/secret-catalog'
 import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { DefinitionStore } from './definitions'
 import { checkoutRef } from './git-checkout'
 import { Run, RunContext, RunExecutor } from './runs'
 import { ServerConfig } from './server-config'
-
-// What a task on the server sees of the server's own environment: the tools it
-// needs to find and reach docker, nothing the operator keeps there for the server.
-const PASSED_ENVS = [
-  'PATH',
-  'HOME',
-  'LANG',
-  'LC_ALL',
-  'TMPDIR',
-  'DOCKER_HOST',
-  'DOCKER_CONFIG',
-  'SSL_CERT_FILE',
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'NO_PROXY',
-  'http_proxy',
-  'https_proxy',
-  'no_proxy',
-  'SSH_AUTH_SOCK',
-  // Windows: without these powershell and git can not find their profile
-  'SystemRoot',
-  'SystemDrive',
-  'windir',
-  'ComSpec',
-  'PATHEXT',
-  'USERPROFILE',
-  'APPDATA',
-  'LOCALAPPDATA',
-  'TEMP',
-  'TMP',
-  'ProgramData',
-  'ProgramFiles',
-  'ProgramFiles(x86)',
-  // powershell is very slow to start without it
-  'PSModulePath',
-]
+import { getRunScopes, PlanContext, planRun } from './run-plan'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
 
-export function passedEnvironment(envs: { [key: string]: string | undefined }): { [key: string]: string | undefined } {
-  const passed: { [key: string]: string | undefined } = {}
-  for (const name of PASSED_ENVS) {
-    if (envs[name] !== undefined) {
-      passed[name] = envs[name]
-    }
-  }
-  return passed
-}
-
 export interface HostExecutorOptions {
   config: ServerConfig
   definitions: DefinitionStore
-  // the server's own environment: where it runs and what it passes on
+  // the server's own environment: where it runs
   environment: Environment
+  // how build files are read: the environment of a run, the accounts of the operator
+  planning: PlanContext
   // where the working directory of each run is made
   directory: string
 }
@@ -92,7 +47,7 @@ export class HostExecutor implements RunExecutor {
   constructor(private readonly options: HostExecutorOptions) {}
 
   async execute(run: Run, context: RunContext): Promise<void> {
-    const { definitions, config, environment } = this.options
+    const { definitions, config, planning } = this.options
     const version = definitions.find(run.definition.name, run.definition.hash)
     const bundle = version ? await definitions.files(version) : undefined
     if (!version || !bundle) {
@@ -109,6 +64,14 @@ export class HostExecutor implements RunExecutor {
       )
     }
 
+    // what was approved is what runs: the accounts are read again from the files with
+    // the environment of the run, and the run may use no more than it was admitted for
+    const planned = await planRun(bundle, run, planning.environment, planning.policy)
+    const extra = planned.accounts.filter((account) => !run.accounts.includes(account))
+    if (extra.length > 0) {
+      throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
+    }
+
     const abortCtrl = new AbortController()
     const abort = () => abortCtrl.abort()
     if (context.signal.aborted) {
@@ -119,11 +82,19 @@ export class HostExecutor implements RunExecutor {
     const root = join(this.options.directory, run.id)
     const checkout = join(root, 'source')
     try {
-      const passed = passedEnvironment(environment.processEnvs)
+      const passed = planning.environment.processEnvs
       const commit = await checkoutRef(repository, run.source.ref, checkout, passed, abortCtrl.signal)
       context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${commit}` })
       await this.writeBundle(checkout, bundle.files)
-      await this.runTasks(run, context, join(checkout, version.entry), checkout, passed, abortCtrl)
+      await this.runTasks(
+        run,
+        context,
+        join(checkout, version.entry),
+        checkout,
+        passed,
+        { catalog: planning.environment.hosted?.catalog as SecretCatalog, accounts: run.accounts },
+        abortCtrl
+      )
     } finally {
       context.signal.removeEventListener('abort', abort)
       await rm(root, { recursive: true, force: true })
@@ -149,6 +120,7 @@ export class HostExecutor implements RunExecutor {
     entry: string,
     cwd: string,
     passed: { [key: string]: string | undefined },
+    hosted: HostedPolicy,
     abortCtrl: AbortController
   ): Promise<void> {
     const secrets = createSecretRegistry()
@@ -157,6 +129,7 @@ export class HostExecutor implements RunExecutor {
     // is what is streamed: it is redacted with the secrets of this run
     const environment: Environment = {
       processEnvs: passed,
+      hosted,
       abortCtrl,
       cwd,
       file: getFileContext(cwd),
@@ -194,23 +167,7 @@ export class HostExecutor implements RunExecutor {
         timeout: options.timeout ? parseDuration(options.timeout) : null,
         skipDeps: options.skipDeps !== false,
       }
-      // the tasks in the order they were named; by labels when none is
-      const scopes: { name: string; scope: WorkScope }[] =
-        run.tasks.length > 0
-          ? run.tasks.map((task) => ({
-              name: task,
-              scope: { taskName: task, environmentName: options.env ?? null },
-            }))
-          : [
-              {
-                name: 'labels',
-                scope: {
-                  filterLabels: labels(options.filter),
-                  excludeLabels: labels(options.exclude),
-                  environmentName: options.env ?? null,
-                },
-              },
-            ]
+      const scopes = getRunScopes(run.tasks, options)
 
       for (const { name, scope } of scopes) {
         const { ctx, scope: parsed } = await createParseContext(entry, environment)
@@ -236,10 +193,6 @@ export class HostExecutor implements RunExecutor {
       listener.close()
     }
   }
-}
-
-function labels(values: string[] | undefined): LabelValues | undefined {
-  return values && values.length > 0 ? parseLabelArguments(values) : undefined
 }
 
 // A task event when a task has moved on since the last look.

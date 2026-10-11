@@ -1,11 +1,11 @@
 # 0009: Remote runs go through a scheduler service that only speaks OAuth
 
-Remote compute is a **server** (`hammerkit` run in server mode) that callers reach over HTTPS and authenticate against with **OAuth/OIDC, and nothing else**. A developer's machine, an agent sandbox or a CI job holds a server URL and a short-lived OAuth token: no ssh key, no kubeconfig, no registry login, no secret-manager credential. The server keeps the policy (who may run which tasks, with which service accounts), orchestrates the graph with the existing engine and runs tasks on its own backend: the machine it runs on (docker and local tools), or a Kubernetes cluster (Jobs on node pools chosen by node selector).
+Remote compute is a **server** (`hammerkit` run in server mode) that callers reach over HTTPS and authenticate against with **OAuth/OIDC, and nothing else**. A developer's machine, an agent sandbox or a CI job holds a server URL and a short-lived OAuth token: no ssh key, no kubeconfig, no registry login, no secret-manager credential. The server keeps the policy (who may use or request which service accounts, and who may run, propose or publish build files; the accounts a run uses are those of the secrets in the published, hash-pinned build file), orchestrates the graph with the existing engine and runs tasks on its own backend: the machine it runs on (docker and local tools), or a Kubernetes cluster (Jobs on node pools chosen by node selector).
 
 Two further rules come with it:
 
 - **The project file never names a destination, only a logical runner name.** The name is resolved through the machine's host config (`servers`), written by `hammerkit remote add`. A build file that could carry a URL could send a developer's source and OAuth login to a server of its choosing.
-- **The machine that executes a task holds the secret-manager credentials and resolves its secrets itself.** Callers send references, never values; callers are mapped to the service accounts they may use by an entitlement table on the server, keyed on token issuer and `sub`.
+- **The machine that executes a task holds the secret-manager credentials and resolves its secrets itself.** Callers send references, never values; callers are mapped to the service accounts they may use or request by an entitlement table on the server, keyed on token issuer and `sub`.
 
 The full design is in [specs/remote-compute](../../specs/remote-compute/spec.md).
 

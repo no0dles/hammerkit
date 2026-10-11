@@ -9,20 +9,29 @@ import { RunningServer, startServer } from './server'
 const files = { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo build]\n' }
 const changed = { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo build]\n  deploy:\n    cmds: [echo deploy]\n' }
 
-// the agent may propose, dev publishes and so approves, ops publishes something else
+// the agent may propose, dev publishes and so approves; ops publishes as well, but
+// does not use the dev key. lead uses both keys, viewer can only run
 const entitlements = `
+secretProviders:
+  echo: { command: [echo, "{{ref}}"] }
+accounts:
+  dev-key: { providers: { echo: { env: {} } } }
+  prod-key: { providers: { echo: { env: {} } } }
 entitlements:
   - subject: { iss: ISSUER, sub: agent }
-    accounts: [dev-key]
-    propose: [payments]
+    accounts: { dev-key: use }
+    builds: propose
   - subject: { iss: ISSUER, sub: dev }
-    accounts: [dev-key]
-    publish: [payments]
+    accounts: { dev-key: use }
+    builds: publish
   - subject: { iss: ISSUER, sub: ops }
-    publish: [other]
-  - subject: { iss: ISSUER, sub: both }
-    publish: [payments]
-    propose: ["*"]
+    builds: publish
+  - subject: { iss: ISSUER, sub: lead }
+    accounts: { dev-key: use, prod-key: use }
+    builds: publish
+  - subject: { iss: ISSUER, sub: viewer }
+    accounts: { dev-key: use }
+    builds: run
 `
 
 interface JsonResponse extends Response {
@@ -121,7 +130,6 @@ describe('proposals api', () => {
         body: {
           definition: { name: 'payments', hash: proposal.hash },
           tasks: ['build'],
-          account: 'dev-key',
           source: { type: 'ref', ref: 'main' },
         },
       })
@@ -153,7 +161,6 @@ describe('proposals api', () => {
         body: {
           definition: { name: 'payments', hash: proposal.hash },
           tasks: ['build'],
-          account: 'dev-key',
           source: { type: 'ref', ref: 'main' },
         },
       })
@@ -201,12 +208,12 @@ describe('proposals api', () => {
       expect(own.proposals[0]).toMatchObject({ mine: true, canDecide: false })
       expect((await api.call('GET', path(proposal.hash, '/files'), { sub: 'agent' })).status).toBe(200)
 
-      // the proposer decides nothing, and neither does who may publish something else
-      for (const sub of ['agent', 'ops', 'mallory']) {
+      // the proposer decides nothing, and neither does who may not publish
+      for (const sub of ['agent', 'viewer', 'mallory']) {
         expect((await api.call('POST', path(proposal.hash, '/approve'), { sub })).status).toBe(404)
         expect((await api.call('POST', path(proposal.hash, '/reject'), { sub })).status).toBe(404)
       }
-      for (const sub of ['ops', 'mallory']) {
+      for (const sub of ['viewer', 'mallory']) {
         expect((await (await api.call('GET', '/v1/proposals', { sub })).json()).proposals).toEqual([])
         expect((await api.call('GET', path(proposal.hash), { sub })).status).toBe(404)
         expect((await api.call('GET', path(proposal.hash, '/files'), { sub })).status).toBe(404)
@@ -216,21 +223,22 @@ describe('proposals api', () => {
     })
   })
 
-  it('publishes at once for who may publish, whatever else they may propose', async () => {
+  it('publishes at once for who may publish, under any name', async () => {
     await withApi('proposals-api-direct', '', async (api) => {
       expect((await api.put('dev', 'payments', files)).status).toBe(201)
-      expect((await api.put('both', 'payments', changed)).status).toBe(201)
-      // proposing another name is a proposal
-      const other = await api.put('both', 'newthing', files)
+      expect((await api.put('dev', 'payments', changed)).status).toBe(201)
+      expect((await api.put('dev', 'newthing', files)).status).toBe(201)
+      // proposing is for who may only propose, under any name
+      const other = await api.put('agent', 'newthing', changed)
       expect(other.status).toBe(202)
-      expect((await other.json()).proposedBy.sub).toBe('both')
+      expect((await other.json()).proposedBy.sub).toBe('agent')
       expect((await api.call('GET', '/v1/proposals', { sub: 'ops' })).status).toBe(200)
     })
   })
 
   it('refuses what is neither published nor proposed by the caller', async () => {
     await withApi('proposals-api-refused', '', async (api) => {
-      const refused = await api.put('agent', 'other', files)
+      const refused = await api.put('viewer', 'other', files)
       expect(refused.status).toBe(403)
       expect((await api.put('mallory', 'payments', files)).status).toBe(403)
       expect((await api.call('GET', '/v1/proposals', { sub: 'mallory' })).status).toBe(200)
@@ -275,11 +283,90 @@ describe('proposals api', () => {
     })
   })
 
-  it('tells what the caller may propose', async () => {
+  it('tells what the caller may do with the build files', async () => {
     await withApi('proposals-api-me', '', async (api) => {
       const me = await (await api.call('GET', '/v1/me', { sub: 'agent' })).json()
-      expect(me).toMatchObject({ propose: ['payments'], publish: [] })
+      expect(me).toMatchObject({ builds: 'propose' })
       expect((await api.call('GET', '/v1/definitions', { sub: 'agent' })).status).toBe(200)
+    })
+  })
+
+  describe('a version that names accounts', () => {
+    const deploy = {
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  deploy:',
+        '    secrets:',
+        '      - { from: "echo:kube", account: prod-key, env: KUBE_TOKEN }',
+        '    cmds: [echo deploy]',
+        '',
+      ].join('\n'),
+    }
+
+    it('is published at once by somebody who uses all of them', async () => {
+      await withApi('proposals-api-accounts-direct', '', async (api) => {
+        const published = await api.put('lead', 'payments', deploy)
+        expect(published.status).toBe(201)
+        expect(await published.json()).toMatchObject({ accounts: ['prod-key'] })
+      })
+    })
+
+    it('is only proposed when the publisher does not use one, even though they may publish', async () => {
+      await withApi('proposals-api-accounts-missing', '', async (api) => {
+        const response = await api.put('dev', 'payments', deploy)
+        expect(response.status).toBe(202)
+        const proposal = await response.json()
+        expect(proposal).toMatchObject({
+          state: 'waiting',
+          accounts: ['prod-key'],
+          missing: ['prod-key'],
+          proposedBy: { sub: 'dev' },
+          plan: { deploy: { accounts: ['prod-key'], secrets: [{ from: 'echo:kube', account: 'prod-key' }] } },
+        })
+        expect(api.log.join('\n')).toContain('missing=[prod-key]')
+        expect((await api.call('GET', '/v1/definitions/payments/latest', { sub: 'dev' })).status).toBe(404)
+
+        // ops may publish but does not use the key, so they see it and can not decide
+        const seen = await (await api.call('GET', path(proposal.hash), { sub: 'ops' })).json()
+        expect(seen).toMatchObject({ canDecide: false })
+        expect((await api.call('POST', path(proposal.hash, '/approve'), { sub: 'ops' })).status).toBe(404)
+        // nor can the proposer
+        expect((await api.call('POST', path(proposal.hash, '/approve'), { sub: 'dev' })).status).toBe(404)
+
+        // lead uses the key and publishes: four eyes
+        const lead = await (await api.call('GET', path(proposal.hash), { sub: 'lead' })).json()
+        expect(lead).toMatchObject({ canDecide: true })
+        const approved = await api.call('POST', path(proposal.hash, '/approve'), { sub: 'lead' })
+        expect(approved.status).toBe(200)
+        const latest = await (await api.call('GET', '/v1/definitions/payments/latest', { sub: 'lead' })).json()
+        expect(latest).toMatchObject({
+          hash: proposal.hash,
+          publishedBy: { sub: 'dev' },
+          approvedBy: { sub: 'lead' },
+          accounts: ['prod-key'],
+        })
+      })
+    })
+
+    it('is proposed by who may only propose, and approved by somebody who also uses what the proposer lacked', async () => {
+      await withApi('proposals-api-accounts-propose', '', async (api) => {
+        const proposal = await (await api.put('agent', 'payments', deploy)).json()
+        expect(proposal).toMatchObject({ missing: ['prod-key'] })
+        expect((await api.call('POST', path(proposal.hash, '/approve'), { sub: 'dev' })).status).toBe(404)
+        expect((await api.call('POST', path(proposal.hash, '/approve'), { sub: 'lead' })).status).toBe(200)
+      })
+    })
+
+    it('is refused when the server has no such account, listing the ones it has', async () => {
+      await withApi('proposals-api-accounts-unknown', '', async (api) => {
+        const response = await api.put('lead', 'payments', {
+          '.hammerkit.yaml': deploy['.hammerkit.yaml'].replace('prod-key', 'staging-key'),
+        })
+        expect(response.status).toBe(400)
+        expect((await response.json()).error).toContain(
+          'unknown secret account staging-key, declared: dev-key, prod-key'
+        )
+      })
     })
   })
 

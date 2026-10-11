@@ -141,12 +141,17 @@ describe('server', () => {
 
 describe('server authentication', () => {
   const policy = `
+accounts:
+  op-payments-dev: { description: "Payments, test secrets" }
+  op-payments-prod: {}
+  op-web-dev: {}
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-payments-dev]
-    default: op-payments-dev
+    accounts: { op-payments-dev: use, op-payments-prod: request }
+    repos: [github.com/corp/payments]
+    builds: run
   - group: { iss: ISSUER, name: eng-web }
-    accounts: [op-web-dev]
+    accounts: { op-web-dev: use }
 `
 
   async function withIssuer(
@@ -189,14 +194,51 @@ entitlements:
     await withIssuer('server-me', async (server, token, log) => {
       const response = await me(server, token({ groups: ['eng-web'] }))
       expect(response.status).toBe(200)
-      expect(await response.json()).toMatchObject({
+      expect(await response.json()).toEqual({
+        iss: expect.stringMatching(/^http/),
         sub: 'alice',
-        accounts: ['op-payments-dev', 'op-web-dev'],
-        default: 'op-payments-dev',
+        accounts: [
+          { name: 'op-payments-dev', level: 'use' },
+          { name: 'op-payments-prod', level: 'request' },
+          { name: 'op-web-dev', level: 'use' },
+        ],
+        repos: ['github.com/corp/payments'],
+        builds: 'run',
       })
       expect(log.join('\n')).toMatch(
-        /grant iss=\S+ sub=alice accounts=\[op-payments-dev,op-web-dev\] entitlements=\[0,1\]/
+        /grant iss=\S+ sub=alice accounts=\[op-payments-dev:use,op-payments-prod:request,op-web-dev:use\] entitlements=\[0,1\]/
       )
+    })
+  })
+
+  it('lists the accounts of the caller with their level and what the operator says about them', async () => {
+    await withIssuer('server-accounts', async (server, token) => {
+      const response = await fetch(`${server.url}/v1/accounts`, {
+        headers: { authorization: `Bearer ${token({ groups: ['eng-web'] })}` },
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({
+        accounts: [
+          {
+            name: 'op-payments-dev',
+            description: 'Payments, test secrets',
+            level: 'use',
+            sources: ['upload', 'ref'],
+          },
+          { name: 'op-payments-prod', level: 'request', sources: ['upload', 'ref'] },
+          { name: 'op-web-dev', level: 'use', sources: ['upload', 'ref'] },
+        ],
+      })
+      // only what the caller has: nobody else's accounts are listed
+      const bob = await fetch(`${server.url}/v1/accounts`, {
+        headers: { authorization: `Bearer ${token({ sub: 'bob' })}` },
+      })
+      expect(await bob.json()).toEqual({ accounts: [] })
+      const wrong = await fetch(`${server.url}/v1/accounts`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token()}` },
+      })
+      expect(wrong.status).toBe(405)
     })
   })
 
@@ -204,7 +246,7 @@ entitlements:
     await withIssuer('server-me-denied', async (server, token) => {
       const response = await me(server, token({ sub: 'bob' }))
       expect(response.status).toBe(200)
-      expect(await response.json()).toMatchObject({ sub: 'bob', accounts: [], default: null })
+      expect(await response.json()).toMatchObject({ sub: 'bob', accounts: [], repos: [], builds: null })
     })
   })
 
@@ -246,36 +288,75 @@ entitlements:
 })
 
 describe('server config policy', () => {
-  const base = { issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }] }
+  const base = {
+    issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+    accounts: { a: {}, b: {}, c: {} },
+  }
 
   it('takes an entitlement for one subject, group or claims', () => {
     const entitlements = [
-      { subject: { iss: 'https://idp.corp', sub: 'alice' }, accounts: ['a'], default: 'a' },
-      { group: { iss: 'https://idp.corp', name: 'eng' }, accounts: ['a', 'b'], source: ['ref'] },
-      { claims: { iss: 'https://idp.corp', match: { repository: 'corp/x' } }, accounts: ['c'] },
+      { subject: { iss: 'https://idp.corp', sub: 'alice' }, accounts: { a: 'use' }, builds: 'publish' },
+      {
+        group: { iss: 'https://idp.corp', name: 'eng' },
+        accounts: { a: 'use', b: 'request' },
+        repos: ['github.com/corp/*', 'gitlab.corp.com/platform/**'],
+      },
+      { claims: { iss: 'https://idp.corp', match: { repository: 'corp/x' } }, accounts: { c: 'use' } },
+      { subject: { iss: 'https://idp.corp', sub: 'agent' }, builds: 'propose' },
     ]
     expect(serverConfigSchema.safeParse({ ...base, entitlements }).success).toBe(true)
   })
 
   it.each([
-    ['nobody', { accounts: ['a'] }],
+    ['nobody', { accounts: { a: 'use' } }],
     [
       'two kinds of caller',
       {
         subject: { iss: 'https://idp.corp', sub: 'a' },
         group: { iss: 'https://idp.corp', name: 'g' },
-        accounts: ['a'],
+        accounts: { a: 'use' },
       },
     ],
-    ['no accounts', { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: [] }],
+    ['no accounts and no builds level', { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: {} }],
+    ['an account that is not defined', { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: { typo: 'use' } }],
+    ['a level that does not exist', { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: { a: 'admin' } }],
+    ['an old account list', { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: ['a'] }],
+    ['an old default', { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: { a: 'use' }, default: 'a' }],
+    ['names of build files', { subject: { iss: 'https://idp.corp', sub: 'a' }, publish: ['payments'] }],
+    ['a builds level that does not exist', { subject: { iss: 'https://idp.corp', sub: 'a' }, builds: 'admin' }],
     [
-      'a default outside the accounts',
-      { subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: ['a'], default: 'b' },
+      'a repo that is not host/path',
+      { subject: { iss: 'https://idp.corp', sub: 'a' }, builds: 'run', repos: ['corp'] },
     ],
-    ['claims that match anything', { claims: { iss: 'https://idp.corp', match: {} }, accounts: ['a'] }],
-    ['an issuer that is not accepted', { subject: { iss: 'https://other', sub: 'a' }, accounts: ['a'] }],
+    ['claims that match anything', { claims: { iss: 'https://idp.corp', match: {} }, accounts: { a: 'use' } }],
+    ['an issuer that is not accepted', { subject: { iss: 'https://other', sub: 'a' }, accounts: { a: 'use' } }],
   ])('rejects %s', (_name, entitlement) => {
     expect(serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] }).success).toBe(false)
+  })
+
+  it('names the account that is not defined, and the ones that are', () => {
+    const result = serverConfigSchema.safeParse({
+      ...base,
+      entitlements: [{ subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: { typo: 'use' } }],
+    })
+    expect(result.success).toBe(false)
+    expect(JSON.stringify(result.success ? '' : result.error.issues)).toContain(
+      'unknown account typo, accounts: a, b, c'
+    )
+  })
+
+  it('checks that the providers an account is read with are declared', () => {
+    const bad = { ...base, accounts: { a: { providers: { gsm: { env: {} } } } } }
+    expect(serverConfigSchema.safeParse(bad).success).toBe(false)
+    const good = { ...bad, secretProviders: { gsm: { command: ['gcloud', '{{ref}}'] } } }
+    expect(serverConfigSchema.safeParse(good).success).toBe(true)
+  })
+
+  it('only restricts refs for an account that takes nothing but a ref', () => {
+    const account = (a: object) => serverConfigSchema.safeParse({ ...base, accounts: { a } }).success
+    expect(account({ source: ['ref'], refs: ['main', 'release/*'] })).toBe(true)
+    expect(account({ refs: ['main'] })).toBe(false)
+    expect(account({ source: ['upload', 'ref'], refs: ['main'] })).toBe(false)
   })
 
   it('accepts issuers over https, and http only on loopback', () => {

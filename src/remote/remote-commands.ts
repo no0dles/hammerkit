@@ -14,7 +14,7 @@ import {
 } from './host-config'
 import { deviceLogin } from './device-login'
 import { getAccessToken, removeToken, saveToken } from './credentials'
-import { getMe } from './server-client'
+import { callServer, getMe, printable } from './server-client'
 import { registerWorkCommands } from './remote-work-commands'
 
 // Host-level commands: they only touch the machine's config file, so they work
@@ -131,7 +131,7 @@ export function registerRemoteCommands(program: Command, environment: Environmen
           environment.stdout.write(`signed in to ${name} as ${me.sub}\n`)
           environment.stdout.write(
             me.accounts.length > 0
-              ? `service accounts: ${me.accounts.join(', ')}\n`
+              ? `service accounts: ${me.accounts.map((a) => `${printable(a.name)} (${a.level})`).join(', ')}\n`
               : 'you have no service accounts on this server\n'
           )
         } catch (e) {
@@ -160,21 +160,31 @@ export function registerRemoteCommands(program: Command, environment: Environmen
         const chosen = await getServer(name)
         const token = await getAccessToken(environment, chosen.name, chosen.server)
         const me = await getMe(chosen.server, token)
-        environment.stdout.write(`${chosen.name}: ${me.sub} (${me.iss})\n`)
-        if (me.accounts.length === 0 && !(me.request && me.request.length > 0)) {
+        const { body } = await callServer<{
+          accounts: { name: string; description?: string; level: 'use' | 'request'; sources: string[] }[]
+        }>(chosen.server, token, 'GET', '/v1/accounts')
+        environment.stdout.write(`${chosen.name}: ${printable(me.sub)} (${printable(me.iss)})\n`)
+        if (body.accounts.length === 0) {
           environment.stdout.write('no service accounts\n')
         }
-        for (const account of me.accounts) {
-          environment.stdout.write(`${account}${account === me.default ? colors.green(' (default)') : ''}\n`)
+        for (const account of body.accounts) {
+          const level = account.level === 'use' ? 'use' : 'request, somebody who uses it approves'
+          environment.stdout.write(
+            `${colors.bold(printable(account.name))}  ${level}${
+              account.description ? `  ${printable(account.description)}` : ''
+            }  from ${account.sources.map(printable).join(', ')}\n`
+          )
         }
-        if (me.publish && me.publish.length > 0) {
-          environment.stdout.write(`may publish build files: ${me.publish.join(', ')}\n`)
+        if (me.builds) {
+          const may = {
+            run: 'run published build files',
+            propose: 'propose build files, which somebody who publishes approves',
+            publish: 'publish build files',
+          }[me.builds]
+          environment.stdout.write(`you may ${may}\n`)
         }
-        if (me.propose && me.propose.length > 0) {
-          environment.stdout.write(`may propose build files, which need an approval: ${me.propose.join(', ')}\n`)
-        }
-        if (me.request && me.request.length > 0) {
-          environment.stdout.write(`may request runs, which an admin approves: ${me.request.join(', ')}\n`)
+        if (me.repos.length > 0) {
+          environment.stdout.write(`repositories: ${me.repos.map(printable).join(', ')}\n`)
         }
       })
     )

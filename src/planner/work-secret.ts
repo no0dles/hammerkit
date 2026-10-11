@@ -104,9 +104,15 @@ function parseSecretSource(
   if (providerRef.length === 0 || providerRef.startsWith('-')) {
     throw new Error(`${label}: a reference for ${kind} must not be empty or start with -`)
   }
-  const accountName = secret.account ?? taskAccount ?? Object.values(catalog.accounts).find((a) => a.default)?.name
+  const accountName = catalog.explicitAccounts
+    ? secret.account
+    : secret.account ?? taskAccount ?? Object.values(catalog.accounts).find((a) => a.default)?.name
   if (!accountName) {
-    throw new Error(`${label}: ${kind}:${providerRef} needs an account, and none is named or marked default: true`)
+    throw new Error(
+      catalog.explicitAccounts
+        ? `${label}: ${kind}:${providerRef} needs account: on the secret, a server uses neither a task's account nor a default`
+        : `${label}: ${kind}:${providerRef} needs an account, and none is named or marked default: true`
+    )
   }
   const account = catalog.accounts[accountName]
   if (!account) {

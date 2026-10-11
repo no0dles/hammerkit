@@ -3,12 +3,15 @@ import { createServer as createHttpsServer } from 'https'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, ServerConfig } from './server-config'
+import { detectPlatform, getSecretCatalog, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { getGrant, maySeeDefinitions } from './policy'
+import { decideRun, getGrant, mayRun } from './policy'
 import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, StoredEvent } from './runs'
 import { HostExecutor } from './executor'
+import { PlanContext, planRun } from './run-plan'
+import { runEnvironment } from './run-environment'
+import { handleAccounts } from './accounts-api'
 import { runRequestSchema } from './run-request'
 import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
@@ -100,6 +103,7 @@ async function handleRuns(
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  planning: PlanContext,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -116,7 +120,7 @@ async function handleRuns(
     if (method === 'GET') {
       send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
     } else if (method === 'POST') {
-      await submitRun(config, registry, definitions, sources, log, principal, req, res)
+      await submitRun(config, registry, definitions, sources, planning, log, principal, req, res)
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -154,6 +158,7 @@ async function submitRun(
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  planning: PlanContext,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -167,21 +172,21 @@ async function submitRun(
   }
   const request = parsed.data
   const grant = getGrant(config.entitlements, principal)
-  const account = request.account ?? grant.default
   // what the caller may not do is said plainly: they already know who they are
-  if (account !== null && !grant.accounts.includes(account) && !grant.request.includes(account)) {
-    log(`refuse run iss=${principal.iss} sub=${principal.sub}: service account ${quote(account)} is not granted`)
-    send(res, 403, { error: `you may not use the service account ${account}` })
-    return
-  }
-  if (!grant.source.includes(request.source.type)) {
-    log(`refuse run iss=${principal.iss} sub=${principal.sub}: source ${request.source.type} is not granted`)
-    send(res, 403, { error: `runs from ${request.source.type} are not allowed for you` })
-    return
-  }
-  if (!maySeeDefinitions(grant)) {
+  if (!mayRun(grant)) {
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: no entitlement`)
     send(res, 403, { error: 'you are not entitled to run anything on this server' })
+    return
+  }
+  const version = definitions.find(request.definition.name, request.definition.hash)
+  if (!version) {
+    send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
+    return
+  }
+  const known = [...version.tasks, ...version.services]
+  const unknown = request.tasks.filter((task) => !known.includes(task))
+  if (unknown.length > 0) {
+    send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
   if (request.source.type === 'upload') {
@@ -200,35 +205,50 @@ async function submitRun(
       return
     }
   }
-  const version = definitions.find(request.definition.name, request.definition.hash)
-  if (!version) {
-    send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
+  // the accounts of a run are read from the files it is pinned to, with the engine
+  const bundle = version.plan ? await definitions.files(version) : undefined
+  if (!version.plan || !bundle) {
+    send(res, 409, {
+      error: `${version.name} at ${version.hash} was published before accounts were recorded, publish it again`,
+    })
     return
   }
-  const known = [...version.tasks, ...version.services]
-  const unknown = request.tasks.filter((task) => !known.includes(task))
-  if (unknown.length > 0) {
-    send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
+  let planned
+  try {
+    planned = await planRun(bundle, request, planning.environment, planning.policy)
+  } catch (e) {
+    send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
     return
   }
-  // asking for an account is not using it: an admin of it has to approve
-  const needsApproval = account !== null && !grant.accounts.includes(account)
+  const decision = decideRun({
+    grant,
+    accounts: planned.accounts,
+    catalog: config.accounts,
+    source: request.source.type === 'ref' ? { type: 'ref', ref: request.source.ref } : { type: 'upload' },
+    approvable: (account) => config.entitlements.some((entitlement) => entitlement.accounts[account] === 'use'),
+  })
+  if (decision.type === 'refuse') {
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${decision.error}`)
+    send(res, decision.status, { error: decision.error })
+    return
+  }
+  const approvals = decision.type === 'approval' ? decision.accounts : []
   try {
     const run = registry.submit(
       principal,
       {
         definition: { name: version.name, hash: version.hash },
         tasks: request.tasks,
-        account,
+        accounts: planned.accounts,
         source: request.source,
         options: request.options,
       },
-      needsApproval
+      approvals
     )
     log(
-      `run ${run.id} iss=${principal.iss} sub=${principal.sub} account=${account ?? '-'} source=${
+      `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
         run.source.type
-      } tasks=${run.tasks.length}${needsApproval ? ' approval=required' : ''}`
+      } tasks=${run.tasks.length}${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {
@@ -272,6 +292,7 @@ async function handle(
   definitions: DefinitionStore,
   proposals: ProposalRegistry,
   sources: SourceStore,
+  planning: PlanContext,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -293,22 +314,7 @@ async function handle(
     return
   }
 
-  if (path === '/v1/me' && req.method === 'GET') {
-    const grant = getGrant(config.entitlements, principal)
-    log(
-      `grant iss=${principal.iss} sub=${principal.sub} accounts=[${grant.accounts.join(
-        ','
-      )}] entitlements=[${grant.matched.join(',')}]`
-    )
-    send(res, 200, {
-      iss: principal.iss,
-      sub: principal.sub,
-      accounts: grant.accounts,
-      default: grant.default,
-      request: grant.request,
-      publish: grant.publish,
-      propose: grant.propose,
-    })
+  if (await handleAccounts(config, log, principal, req, res, url)) {
     return
   }
   if (await handleDefinitions(config, definitions, proposals, log, principal, req, res, url)) {
@@ -317,7 +323,7 @@ async function handle(
   if (await handleSources(config, sources, log, principal, req, res, url)) {
     return
   }
-  if (await handleRuns(config, registry, definitions, sources, log, principal, req, res, url)) {
+  if (await handleRuns(config, registry, definitions, sources, planning, log, principal, req, res, url)) {
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -338,9 +344,20 @@ export async function startServer(
   const write = options.log ?? (() => undefined)
   // request urls and subjects come from callers: no control characters, so no forged log lines
   const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
+  // build files are read, planned and run as the server's runs see the world: the
+  // operator's accounts and the allowlisted environment, nothing of the server's own
+  const planning: PlanContext = {
+    environment: {
+      ...environment,
+      processEnvs: runEnvironment(config, environment.processEnvs),
+      hosted: { catalog: getSecretCatalog(config) },
+    },
+    policy: { envs: config.runs.env.allow },
+  }
   const definitions = new DefinitionStore(
     join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'definitions'),
-    environment
+    planning.environment,
+    { policy: planning.policy }
   )
   await definitions.load()
   const executor =
@@ -349,6 +366,7 @@ export async function startServer(
       config,
       definitions,
       environment,
+      planning,
       directory: join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'runs'),
     })
   const sources = new SourceStore(join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'sources'))
@@ -364,7 +382,7 @@ export async function startServer(
     timeout: parseDuration(config.approvals.timeout),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, definitions, proposals, sources, verifier, log, req, res).catch((e) => {
+    handle(config, registry, definitions, proposals, sources, planning, verifier, log, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return

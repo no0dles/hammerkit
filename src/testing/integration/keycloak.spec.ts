@@ -49,9 +49,13 @@ issuers:
     audience: ${KEYCLOAK_AUDIENCE}
     clientId: ${KEYCLOAK_CLIENT}
     scope: openid
+secretProviders:
+  echo: { command: [echo, "{{ref}}"] }
+accounts:
+  op-web-dev: { providers: { echo: { env: {} } } }
 entitlements:
   - group: { iss: "${keycloak.issuer}", name: ${KEYCLOAK_USER.group} }
-    accounts: [op-web-dev]
+    accounts: { op-web-dev: use }
 `
       )
       const server = await startServer(await readServerConfig(environment, file), environment)
@@ -91,8 +95,7 @@ entitlements:
         expect(response.status).toBe(200)
         expect(await response.json()).toMatchObject({
           iss: keycloak.issuer,
-          accounts: ['op-web-dev'],
-          default: 'op-web-dev',
+          accounts: [{ name: 'op-web-dev', level: 'use' }],
         })
       })
     }),
@@ -134,7 +137,7 @@ entitlements:
         await approved
 
         const me = await getMe(host, result.accessToken)
-        expect(me).toMatchObject({ iss: keycloak.issuer, accounts: ['op-web-dev'] })
+        expect(me).toMatchObject({ iss: keycloak.issuer, accounts: [{ name: 'op-web-dev', level: 'use' }] })
         expect(result.expiresAt).toBeGreaterThan(Date.now())
       })
     }),

@@ -4,7 +4,11 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, passedEnvironment } from './executor'
+import { HostExecutor } from './executor'
+import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { getSecretCatalog } from './server-config'
+import { PlanContext } from './run-plan'
+import { runEnvironment } from './run-environment'
 import { Run, RunEventData } from './runs'
 import { ServerConfig, serverConfigSchema } from './server-config'
 
@@ -16,19 +20,6 @@ function git(cwd: string, ...args: string[]): void {
   })
 }
 
-describe('passedEnvironment', () => {
-  it('passes the tools to find docker and nothing the operator keeps for the server', () => {
-    expect(
-      passedEnvironment({
-        PATH: '/bin',
-        DOCKER_HOST: 'unix:///x',
-        DATABASE_PASSWORD: 'secret',
-        OAUTH_CLIENT_SECRET: 'x',
-      })
-    ).toEqual({ PATH: '/bin', DOCKER_HOST: 'unix:///x' })
-  })
-})
-
 describe('HostExecutor', () => {
   let root: string
   let repository: string
@@ -39,8 +30,25 @@ describe('HostExecutor', () => {
   const config = (): ServerConfig =>
     serverConfigSchema.parse({
       issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+      runs: { env: { allow: HOST_ENV_ALLOW } },
       sources: { payments: { git: repository } },
+      secretProviders: {
+        echo: { command: [process.execPath, '-e', 'process.stdout.write(process.argv[1])', '{{ref}}'] },
+      },
+      accounts: {
+        ci: { providers: { echo: { env: {} } } },
+        prod: { providers: { echo: { env: {} } } },
+      },
     })
+
+  const planning = (serverConfig: ServerConfig, envs: { [key: string]: string | undefined }): PlanContext => ({
+    environment: {
+      ...environmentMock(root),
+      processEnvs: runEnvironment(serverConfig, envs),
+      hosted: { catalog: getSecretCatalog(serverConfig) },
+    },
+    policy: { envs: serverConfig.runs.env.allow },
+  })
 
   async function publish(files: { [path: string]: string }): Promise<string> {
     const { version } = await store.publish('payments', { entry: '.hammerkit.yaml', files }, alice)
@@ -54,7 +62,7 @@ describe('HostExecutor', () => {
     createdAt: new Date().toISOString(),
     definition: { name: 'payments', hash },
     tasks: ['build'],
-    account: null,
+    accounts: [],
     source: { type: 'ref', ref: 'main' },
     options: {},
     ...patch,
@@ -81,15 +89,16 @@ describe('HostExecutor', () => {
     git(repository, 'add', '.')
     git(repository, 'commit', '--quiet', '-m', 'one')
     const environment = environmentMock(root)
-    store = new DefinitionStore(join(root, 'definitions'), environment)
+    const serverConfig = config()
+    const serverEnvs = { ...process.env, SECRET_OF_SERVER: 'x' }
+    const hosted = planning(serverConfig, serverEnvs)
+    store = new DefinitionStore(join(root, 'definitions'), hosted.environment, { policy: hosted.policy })
     await store.load()
     executor = new HostExecutor({
-      config: config(),
+      config: serverConfig,
       definitions: store,
-      environment: {
-        ...environment,
-        processEnvs: { ...passedEnvironment(process.env), SECRET_OF_SERVER: 'x' },
-      },
+      environment: { ...environment, processEnvs: serverEnvs },
+      planning: hosted,
       directory: runs,
     })
   })
@@ -119,6 +128,43 @@ describe('HostExecutor', () => {
     const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
     expect(text).toContain('[]')
     expect(text).not.toContain('[x]')
+  })
+
+  it('reads the secrets of a task as the account the run was admitted for, and masks them', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    secrets:',
+        '      - { from: "echo:the-token-value", account: ci, env: TOKEN }',
+        '    cmds:',
+        '      - echo "token=$TOKEN"',
+        '',
+      ].join('\n'),
+    })
+    const { events, error } = await execute(run(hash, { accounts: ['ci'] }))
+    expect(error).toBeUndefined()
+    const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+    expect(text).toContain('token=')
+    expect(text).not.toContain('the-token-value')
+    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+  })
+
+  it('refuses a run that would use an account it was not admitted for, before anything starts', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    secrets:',
+        '      - { from: "echo:x", account: prod, env: TOKEN }',
+        '    cmds: [echo started]',
+        '',
+      ].join('\n'),
+    })
+    const { events, error } = await execute(run(hash, { accounts: ['ci'] }))
+    expect(error?.message).toBe('the run would use prod, which it was not admitted for')
+    expect(events).toEqual([])
+    expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
 
   it('fails the run when a task fails, with the task and its output', async () => {
@@ -178,10 +224,15 @@ describe('HostExecutor', () => {
 
   it('fails with the reason when the server has no repository for the build file', async () => {
     const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    const bare = serverConfigSchema.parse({
+      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+      runs: { env: { allow: HOST_ENV_ALLOW } },
+    })
     const other = new HostExecutor({
-      config: serverConfigSchema.parse({ issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }] }),
+      config: bare,
       definitions: store,
       environment: environmentMock(root),
+      planning: planning(bare, process.env),
       directory: runs,
     })
     await expect(
