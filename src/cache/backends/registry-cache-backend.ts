@@ -105,8 +105,8 @@ export function createRegistryCacheBackend(spec: RegistryCacheBackendSpec): Cach
         )
         const configDigest = digestBuffer(config)
 
-        await registry.uploadBlob(layer.digest, layer.size, { file: layerFile })
-        await registry.uploadBlob(configDigest.digest, configDigest.size, { buffer: config })
+        await registry.uploadBlob(layer.digest, { file: layerFile })
+        await registry.uploadBlob(configDigest.digest, { buffer: config })
 
         const manifest: ImageManifest = {
           schemaVersion: 2,
