@@ -12,7 +12,8 @@ import { createTestCase } from '../test-case'
  * repository that holds the catalog, with its fixture project's inputs. The
  * fixture's `verify` task depends on the entry's tasks and checks their result,
  * so a passing run means the entry works; a second run must then come entirely
- * from the cache. Self-discovering over catalog/*.
+ * from the cache. Self-discovering over catalog/*. An entry that needs a daemon or
+ * credentials (docker) has a `test/validate-only` file and is only validated.
  */
 
 const catalogDir = join(__dirname, '..', '..', '..', 'catalog')
@@ -51,10 +52,35 @@ describe.each(entries)('catalog %s', (entry) => {
     home.restore()
   })
 
+  it('validates an entry that cannot run in the catalog spec', async () => {
+    const fixture = readFiles(join(catalogDir, entry, 'test'))
+    if (!('validate-only' in fixture)) {
+      return
+    }
+    fixture['.hammerkit.yaml'] = fixture['.hammerkit.yaml'].split('CATALOG_URL').join(repo.url)
+
+    await createTestCase(`catalog-${entry}-validate`, fixture).setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {
+        taskName: 'verify',
+        environmentName: null,
+      })
+      const errors: string[] = []
+      for await (const validation of cli.validate()) {
+        if (validation.type === 'error') {
+          errors.push(`${validation.item.name} ${validation.message}`)
+        }
+      }
+      expect(errors).toEqual([])
+    })
+  })
+
   it(
     'runs verify, then again entirely from the cache',
     requiresLinuxContainers(async () => {
       const fixture = readFiles(join(catalogDir, entry, 'test'))
+      if ('validate-only' in fixture) {
+        return
+      }
       fixture['.hammerkit.yaml'] = fixture['.hammerkit.yaml'].split('CATALOG_URL').join(repo.url)
 
       await createTestCase(`catalog-${entry}`, fixture).setup(async (cwd, environment) => {

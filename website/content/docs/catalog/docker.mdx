@@ -1,0 +1,52 @@
+---
+title: "docker"
+description: "Build a Docker image from a Dockerfile and push it, using the Docker of the machine hammerkit runs on."
+---
+Build a Docker image from a Dockerfile and push it, using the Docker of the machine
+hammerkit runs on. `build` builds the image into the local Docker, `publish` builds it
+and pushes it to its registry. Both are local tasks that call `docker`, so Docker has to
+be installed and running where you run hammerkit.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  docker:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.21.0
+    path: catalog/docker
+    with:
+      IMAGE: ghcr.io/acme/hello
+      IMAGE_TAG: ${VERSION:-dev}
+
+tasks:
+  release:
+    deps: [docker:publish]
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `build` | Build the image and tag it `IMAGE:IMAGE_TAG` in the local Docker. | | the image |
+| `publish` | Build the image for `PLATFORMS` and push it. | | the image in its registry |
+
+Neither task declares `src` or `generates`, so both run every time. The image lives in
+Docker, not in a folder hammerkit can check, and Docker's own layer cache makes a rebuild
+of an unchanged context fast.
+
+`publish` does not log in. Log in before you run it, with `docker login` or your CI's
+login step, preferably with a short-lived token of a service account rather than a
+personal login. The credentials stay in Docker's config and never reach the build file.
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `IMAGE` | `app` | The image name, including the registry (`ghcr.io/acme/app`). |
+| `IMAGE_TAG` | `dev` | The tag of the image. Take it from the environment with `${VERSION:-dev}` in `with`, as above, and run `VERSION=1.0.0 hammerkit release`. |
+| `DOCKERFILE` | `Dockerfile` | The Dockerfile to build, relative to the working directory. |
+| `CONTEXT` | `.` | The build context, relative to the working directory. |
+| `PLATFORMS` | `linux/amd64` | The platforms `publish` builds, comma separated, for example `linux/amd64,linux/arm64`. More than one needs a builder that supports multi-platform images. |
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/docker/build.yaml"'>../catalog/docker/build.yaml</include>
