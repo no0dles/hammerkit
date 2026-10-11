@@ -89,6 +89,24 @@ The server holds the build file; a run names a published build file and the task
 - Local, unpublished build files are not run on a server: a developer who wants to try a change publishes it (with a publish permission for a name of their own).
 - Limit: pinning the commands does not pin the code they run. `npm test` still executes the files a run brings, so production accounts stay on `source: ref` and behind `request`, and new versions of a build file get approved (see Approvals).
 
+## Source files and sandboxes
+
+**Upload (built).** A run from `source: upload` names a **snapshot**: the hash of a manifest of paths, content digests and modes. The client announces the manifest (`POST /v1/sources`), the server answers which digests it lacks, the client sends those (`PUT /v1/sources/blobs/<sha256>`), and a run is accepted only for a complete snapshot. So a second run after one edited file moves that file only, and an unchanged tree moves nothing.
+
+- Which files: the published version lists, per task, the `src` patterns, mounts, `deps` and `needs` (`inputs`), relative to the bundle root, so a client computes the set from the tasks it asks for without planning the build file itself (the laptop does not plan under v2).
+- Content is kept per caller and never shared between callers: a shared store would answer "I have this file" to anybody and show what others work on.
+- Files that look like credentials (`.env`, `.npmrc`, keys, `.git/`, `.ssh/`, `.aws/`) are refused even when a `src` pattern reaches them. Secrets go through secret providers; there is no override.
+- Limits are part of the API from the start: 20,000 files, 32 MiB per file, 1 GiB per tree, 4 GiB per caller, nothing evicted on its own.
+- Not built: the client that walks the tree and sends the delta, `ref` plus a delta for tracked files, and the matcher with `!` exclusions on the Kubernetes upload path (a `// TODO` in `src/kubernetes/volumes.ts`).
+
+**Sandbox (design, not built).** The caller passes a git repository and a ref; the server fetches it into a directory it owns, which belongs to that caller and is not shared. Runs name the sandbox as their source and their tasks execute in that directory, authorized by the service account of the task as for any run. A sandbox stays until it is deleted; quotas limit what a caller keeps, nothing expires.
+
+- Creating one is a fetch, not a run: no container, no slot of the run ledger.
+- One run at a time per sandbox. The fetch credential is a service account's (named at creation), resolved by the server and never left in the checkout (no token in `.git/config`).
+- `source` on entitlements gains `sandbox` next to `ref` and `upload`: a sandbox can hold any local change, so production accounts do not list it.
+- A caller with no local files (an agent without a machine) needs typed file operations on the sandbox (tree, read, search, edit, diff); shell-like commands are a published build file's task that mounts the sandbox, not an API of their own.
+- Host mode keeps a sandbox as a directory. In Kubernetes mode it is a PVC attached to a task or service only while it runs: idle costs storage, not CPU or memory, `ReadWriteOnce` lets pods on one node share it, and a `ResourceQuota` on storage in the caller's namespace is the quota. Both are two implementations of one interface (create, attach, delete, usage), so the host version does not bake in a path on the server's disk.
+
 ## Approvals
 
 - A service account is given to a caller in one of two modes in the entitlements (Pascal's model): `accounts` makes them **admin** (runs on it at once, approves the runs others request on it), `request` lets them ask for runs on it, which wait until an admin of that account approves. Admin wins where both are given. The same shape serves a person who is not trusted with a key yet and an agent that proposes a deployment for a person to confirm.
@@ -159,11 +177,12 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
 | B0 | This foundation: ADR-0008, this spec, the host config and `remote add / list / use / remove`. |
-| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); the run registry with `POST /v1/runs`, cancellation and event streaming (done); published build files, versioned by hash, with their own `publish` permission, which runs refer to (done); approval of runs requested on an account, over the API (done); `remote publish` and `remote approvals|approve|reject` (done); build file proposals over the API and `remote proposals|diff` (done); the executor on the existing engine for runs from a git ref, with the repository of each build file in the server config (done); then file snapshots, `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
-| B2 | Kubernetes backend: Jobs on node pools, namespace per user, in-cluster secret path, log streaming, upload dedupe, backend-side cache push. |
+>>>>>>> origin/release/remote-secrets
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 
 ## Open questions
+
+- Sandboxes: whether execution includes arbitrary commands or tasks only; whether the published build file or the sandbox's own `.hammerkit.yaml` runs (the first keeps task definitions out of an agent's reach and is the default); how the fetch credential is chosen.
 
 - The command that hosts the server is `hammerkit server` (a top-level `hammerkit serve` would shadow a documented task example). Open for Pascal to rename before the release.
 - The discovery document format served by a server for `remote add`.

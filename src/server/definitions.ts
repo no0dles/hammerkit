@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { dirname, join, resolve } from 'path'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'path'
 import { randomBytes } from 'crypto'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
@@ -9,6 +9,8 @@ import { getFileContext } from '../file/get-file-context'
 import { isWithin } from '../includes/resolve-git-source'
 import { createParseContext } from '../schema/schema-parser'
 import { parseReferences } from '../schema/reference-parser'
+import { getWorkContext } from '../schema/work-scope-parser'
+import { isContainerWorkTask } from '../planner/work-task'
 import { Bundle, hashBundle, HASH_PATTERN } from '../remote/bundle'
 import { getErrorMessage } from '../log'
 
@@ -24,6 +26,28 @@ export interface DefinitionVersion {
   // what a run can ask for
   tasks: string[]
   services: string[]
+  // what each task works on, so a client knows which of its files to send;
+  // versions published before this was recorded have none
+  inputs?: Record<string, DefinitionInputs>
+}
+
+// The files a task reads and the tasks and services it waits for. Paths are
+// relative to the root of the bundle, which is where the project's files go as
+// well; what lies outside of it cannot be sent and is left out.
+export interface DefinitionInputs {
+  // the `src` patterns as the build file writes them (environment variables are
+  // not substituted), `!` exclusions are kept
+  src: string[]
+  // host paths mounted into the container
+  mounts: string[]
+  deps: string[]
+  needs: string[]
+}
+
+export interface InspectedBundle {
+  tasks: string[]
+  services: string[]
+  inputs: Record<string, DefinitionInputs>
 }
 
 export class DefinitionError extends Error {}
@@ -87,13 +111,25 @@ function confined(files: FileContext, root: string): FileContext {
   }
 }
 
+// A path of a task, written relative to the root of the bundle with forward
+// slashes. A leading `!` (an exclusion) is kept. Nothing is returned for a path
+// outside of the bundle.
+function insideBundle(root: string, cwd: string, path: string): string[] {
+  const negated = path.startsWith('!')
+  const absolute = resolve(cwd, negated ? path.slice(1) : path)
+  const inside = relative(root, absolute)
+  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
+    return []
+  }
+  const portable = inside.split(sep).join(posix.sep)
+  // a pattern keeps its glob characters, `resolve` only normalizes separators
+  return [`${negated ? '!' : ''}${portable === '' ? '.' : portable}`]
+}
+
 // Writes the bundle into a directory of its own and reads it the way a run
 // would, so a build file that doesn't parse is refused when it is published, not
 // when somebody wants to run it.
-export async function inspectBundle(
-  bundle: Bundle,
-  environment: Environment
-): Promise<{ tasks: string[]; services: string[] }> {
+export async function inspectBundle(bundle: Bundle, environment: Environment): Promise<InspectedBundle> {
   const problems = findLooseIncludes(bundle)
   if (problems.length > 0) {
     throw new DefinitionError(problems.join('\n'))
@@ -112,7 +148,26 @@ export async function inspectBundle(
     try {
       const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected)
       const context = await parseReferences(ctx, scope, inspected)
-      return { tasks: Object.keys(context.tasks).sort(), services: Object.keys(context.services).sort() }
+      const workTree = getWorkContext(context, { environmentName: null }, inspected)
+      const inputs: Record<string, DefinitionInputs> = {}
+      for (const item of Object.values(workTree.tasks)) {
+        inputs[item.name] = {
+          // the sources a task inherits from its dependencies belong to those
+          src: item.data.src
+            .filter((source) => source.inherited === null)
+            .flatMap((source) => insideBundle(directory, item.data.cwd, source.source)),
+          mounts: isContainerWorkTask(item.data)
+            ? item.data.mounts.flatMap((mount) => insideBundle(directory, item.data.cwd, mount.localPath))
+            : [],
+          deps: item.deps.map((dep) => dep.name).sort(),
+          needs: item.needs.map((need) => need.name).sort(),
+        }
+      }
+      return {
+        tasks: Object.keys(context.tasks).sort(),
+        services: Object.keys(context.services).sort(),
+        inputs: Object.fromEntries(Object.entries(inputs).sort(([a], [b]) => (a < b ? -1 : 1))),
+      }
     } catch (e) {
       throw new DefinitionError(getErrorMessage(e).split(directory).join('.'))
     }
@@ -185,7 +240,7 @@ export class DefinitionStore {
     if (existing) {
       return { version: existing, existing }
     }
-    const { tasks, services } = await inspectBundle(bundle, this.environment)
+    const { tasks, services, inputs } = await inspectBundle(bundle, this.environment)
     return {
       version: {
         name,
@@ -195,6 +250,7 @@ export class DefinitionStore {
         publishedBy: { iss: publisher.iss, sub: publisher.sub },
         tasks,
         services,
+        inputs,
       },
     }
   }

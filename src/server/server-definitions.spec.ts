@@ -104,6 +104,10 @@ describe('definitions api', () => {
         entry: '.hammerkit.yaml',
         tasks: ['build', 'test'],
         services: [],
+        inputs: {
+          build: { src: [], mounts: [], deps: [], needs: [] },
+          test: { src: [], mounts: [], deps: [], needs: [] },
+        },
         created: true,
         publishedBy: { sub: 'alice' },
       })
