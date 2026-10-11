@@ -105,7 +105,9 @@ const request = {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function untilState(api: Api, id: string, states: string[], sub?: string) {
-  for (let i = 0; i < 100; i++) {
+  // a run from a git ref fetches a checkout and starts a shell, which takes seconds on Windows
+  const until = Date.now() + 30_000
+  while (Date.now() < until) {
     const run = await (await api.call('GET', `/v1/runs/${id}`, { sub })).json()
     if (states.includes(run.state)) {
       return run
