@@ -126,6 +126,9 @@ hammerkit remote use <local|auto|name>             # default location
 hammerkit remote remove <name>
 hammerkit remote login <name>                      # phase B1, OAuth sign-in
 hammerkit remote accounts [name]                   # phase B1, service accounts assigned to me
+hammerkit remote publish <definition> [server]     # phase B1, publish the build file as a bundle
+hammerkit remote approvals [server]                # phase B1, runs waiting for my approval
+hammerkit remote approve|reject <run> [server]
 ```
 
 Registering a name again with another URL or issuer needs `--force`. `remote add` stores no credential. `remote login` checks the registered issuer against the server's discovery document, so `--issuer` is an assertion the server has to confirm before any identity provider is contacted. Login is the OAuth device grant with the client the server publishes; one short-lived access token is stored per server in `credentials.json` (mode 0600), bound to the URL and issuer, and no refresh token is kept (an OS keychain with refresh is a later option). The client, audience and scope a login asks for are pinned in the host config at the first login (or by `remote add`), a server that later offers others is refused, and the token is checked for issuer and audience before it is sent to the server, so a hostile server can't turn `remote login` into a device-code phish for another service.
@@ -155,7 +158,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
 | B0 | This foundation: ADR-0008, this spec, the host config and `remote add / list / use / remove`. |
-| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); the run registry with `POST /v1/runs`, cancellation and event streaming (done, the executor behind it follows); published build files, versioned by hash, with their own `publish` permission, which runs refer to (done); approval of runs requested on an account, over the API (done); then `remote approvals` commands, file snapshots and ref checkout, the executor on the existing engine, `hammerkit remote publish` and `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
+| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); the run registry with `POST /v1/runs`, cancellation and event streaming (done, the executor behind it follows); published build files, versioned by hash, with their own `publish` permission, which runs refer to (done); approval of runs requested on an account, over the API (done); `remote publish` and `remote approvals|approve|reject` (done); then file snapshots and ref checkout, the executor on the existing engine, `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
 | B2 | Kubernetes backend: Jobs on node pools, namespace per user, in-cluster secret path, log streaming, upload dedupe, backend-side cache push. |
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 

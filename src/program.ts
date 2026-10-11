@@ -121,7 +121,6 @@ export async function getProgram(
   argv: string[]
 ): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
-  registerRemoteCommands(program, environment)
   registerServerCommand(program, environment)
 
   const parsed = parseSetArguments(argv)
@@ -134,6 +133,7 @@ export async function getProgram(
   if (fileIndex >= 0) {
     args.splice(fileIndex, 2)
   }
+  registerRemoteCommands(program, environment, fileName)
 
   if (await environment.file.exists(fileName)) {
     program

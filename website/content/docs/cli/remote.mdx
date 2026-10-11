@@ -18,13 +18,16 @@ is registered under a short name, which later features (`--on <name>`, a task's
 hammerkit remote add build https://build.example.com --issuer https://login.example.com
 hammerkit remote login build
 hammerkit remote accounts build
+hammerkit remote publish payments build
+hammerkit remote approvals build
+hammerkit remote approve run_Qx3k9ZpL2mW7vN4a build
 hammerkit remote list
 hammerkit remote use build
 hammerkit remote remove build
 ```
 
-The commands only touch your host config, so they work with or without a build file
-in the working directory.
+Except for `publish`, the commands only touch your host config and talk to the server,
+so they work with or without a build file in the working directory.
 
 ## Commands
 
@@ -37,6 +40,10 @@ in the working directory.
 | `remote login <name>` | Sign in to the server with your identity provider. |
 | `remote logout <name>` | Forget the sign-in. |
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
+| `remote publish <definition> [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes under a name, see [Publishing](#publishing-a-build-file). |
+| `remote approvals [server]` | List the runs that wait for your approval. |
+| `remote approve <run> [server]` | Let a run go ahead. `--reason <text>` is optional. |
+| `remote reject <run> [server]` | End a run. `--reason <text>` is shown to who asked for it. |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
 name at a different server pass `--force`, so a typo can't silently redirect your
@@ -71,6 +78,54 @@ decision of where to send work stays on the machine.
 Server URLs must use `https`. Plain `http` is accepted only for `localhost`,
 `127.0.0.1` and `[::1]`, for local testing. URLs with credentials, a query string
 or a fragment are rejected, and a trailing slash is dropped.
+
+## Publishing a build file
+
+A server runs published build files, it does not take task definitions from the one
+who runs them. `remote publish` sends yours:
+
+```
+$ hammerkit remote publish payments build
+published payments to build: sha256:9f2c61d0... (3 files)
+tasks and services: build, deploy, more:lint
+```
+
+It reads the build file with the parser of a run and sends it together with every
+local file it includes or references, as text. That is the bundle, up to 200 files
+and 1 MiB. Includes have to be below the directory of the build file, because a
+server could not reproduce anything else; git includes are not sent, the server
+fetches them and wants them pinned to a commit. The version printed is the hash of
+the bundle, computed here the same way the server computes it, so the same files
+always have the same version. Publishing what a server already has says `already
+published` and changes nothing.
+
+You need the `publish` permission for that name on the server, see
+[entitlements](/docs/cli/server#entitlements). Without a server name the default
+server is used, and `--file <path>` publishes another build file.
+
+## Approving runs
+
+A run on a service account that its caller may only
+[request](/docs/cli/server#approvals) waits for an admin of that account to approve
+it. If you are an admin of the account:
+
+```
+$ hammerkit remote approvals build
+build: 1 waiting for your approval
+run_Qx3k9ZpL2mW7vN4a  requested by 4f1c2b (https://login.example.com)
+  payments sha256:9f2c61d0...
+  tasks: deploy
+  account op-payments-prod, source ref refs/heads/main, env=staging
+  needs the approval of an admin of op-payments-prod
+  decide before 2026-10-11T10:41:00.000Z
+$ hammerkit remote approve run_Qx3k9ZpL2mW7vN4a build
+approved run_Qx3k9ZpL2mW7vN4a on build, it is queued
+```
+
+What you see is what the decision rests on: who asked, which version of which build
+file, the tasks, the service account and where the code comes from. The version is
+the one the run is pinned to, so what you approve is what runs. You see the runs on
+the accounts you are admin of, and no others.
 
 ## Signing in
 

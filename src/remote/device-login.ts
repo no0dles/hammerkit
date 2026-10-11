@@ -1,5 +1,5 @@
 import { HostServer } from './host-config'
-import { getDiscovery, ServerError } from './server-client'
+import { getDiscovery, printable, ServerError } from './server-client'
 
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
 const DEFAULT_INTERVAL_SECONDS = 5
@@ -22,14 +22,6 @@ export interface DeviceLoginResult {
   expiresAt: number
   // what the sign-in asked for, to be pinned for the next one
   pinned: { clientId: string; audience: string; scope: string }
-}
-
-// Text from the server or the identity provider is shown to the user: no
-// control characters, so it can't rewrite the terminal.
-function printable(value: unknown): string {
-  return String(value)
-    .replace(/\p{Cc}/gu, '?')
-    .slice(0, 300)
 }
 
 const isLoopbackHost = (hostname: string) => ['localhost', '127.0.0.1', '[::1]'].includes(hostname)
