@@ -21,6 +21,7 @@
     "dist",
     "temp",
     "examples",
+    "catalog",
     "website",
     "vitest.config.ts"
   ]

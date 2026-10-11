@@ -47,6 +47,15 @@ so every package of a monorepo can include the same entry.
 | [cargo](/docs/catalog/cargo) | Build and test a Rust crate or workspace. |
 | [dotnet](/docs/catalog/dotnet) | Build and test a .NET project or solution. |
 | [docker](/docs/catalog/docker) | Build a Docker image and push it. |
+| [tsc](/docs/catalog/tsc) | Compile a TypeScript project with `tsc`. |
+| [eslint](/docs/catalog/eslint) | Lint a project with ESLint. |
+| [prettier](/docs/catalog/prettier) | Check the formatting of a project with Prettier. |
+| [jest](/docs/catalog/jest) | Run the tests of a project with Jest. |
+| [helm](/docs/catalog/helm) | Lint and package a Helm chart. |
+
+The Node tools (tsc, eslint, prettier, jest) run from `node_modules`, so they do not install
+anything themselves: your task `extend`s the entry's task and adds the install of your
+package manager as a dependency. Each of their pages shows it.
 
 ## Versions
 

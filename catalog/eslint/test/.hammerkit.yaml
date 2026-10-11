@@ -1,0 +1,27 @@
+# Consumes the eslint entry the way a project would, with the npm entry installing the
+# dependencies it needs. The catalog spec replaces CATALOG_URL with a git repository
+# holding this catalog.
+includes:
+  npm:
+    git: CATALOG_URL
+    path: catalog/npm
+    with:
+      NODE_VERSION: 22
+  eslint:
+    git: CATALOG_URL
+    path: catalog/eslint
+    with:
+      NODE_VERSION: 22
+
+tasks:
+  lint:
+    extend: eslint:check
+    deps: [npm:install]
+
+  verify:
+    description: the sources passed the lint
+    image: node:22-alpine
+    src: [package.json]
+    deps: [lint]
+    cmds:
+      - echo lint passed

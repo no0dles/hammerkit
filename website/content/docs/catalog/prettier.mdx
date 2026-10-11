@@ -1,0 +1,57 @@
+---
+title: "prettier"
+description: "Check the formatting of a project with Prettier."
+---
+Check the formatting of a project with Prettier. The task runs in a `node` container and is skipped when the sources and the Prettier configuration are unchanged.
+
+## Install first
+
+The task runs the tool from `node_modules`, and a container task only sees the files it
+declares and the outputs of its dependencies, so the install must be a dependency. Include
+the entry of your package manager ([npm](/docs/catalog/npm), [yarn](/docs/catalog/yarn) or
+[pnpm](/docs/catalog/pnpm)) and `extend` the task to add it, which works with any of them
+and keeps the entry free of a package manager:
+
+```yaml title=".hammerkit.yaml"
+includes:
+  npm:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.22.0
+    path: catalog/npm
+  prettier:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.22.0
+    path: catalog/prettier
+
+tasks:
+  format:
+    extend: prettier:check
+    deps: [npm:install]
+```
+
+`extend` keeps the entry's image, sources and commands and adds the dependency
+(see [extending](/docs/task/extending)).
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `check` | Check the formatting of the sources with prettier. | `package.json`, `.prettierrc*`, `SOURCE_DIR` | nothing |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `NODE_VERSION` | `24` | Tag of the `node` image the task runs in, e.g. `22` or `24`. The image is `node:<NODE_VERSION>-alpine`. |
+| `SOURCE_DIR` | `src` | Folder with the sources to check, relative to the working directory. |
+
+## Writing the formatting
+
+The entry only checks. A task that rewrites its own sources cannot be cached, so there is no
+`--write` task; run `npx prettier --write` on your machine when you want one. The
+configuration is read from a `.prettierrc*` file; a project that keeps it in `package.json`
+needs no extra step, because that file is read too.
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/prettier/build.yaml"'>../catalog/prettier/build.yaml</include>

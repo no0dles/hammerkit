@@ -1,0 +1,55 @@
+---
+title: "jest"
+description: "Run the tests of a project with Jest."
+---
+Run the tests of a project with Jest. The task runs in a `node` container, keeps the coverage report as its result, and is skipped when the sources and the Jest configuration are unchanged.
+
+## Install first
+
+The task runs the tool from `node_modules`, and a container task only sees the files it
+declares and the outputs of its dependencies, so the install must be a dependency. Include
+the entry of your package manager ([npm](/docs/catalog/npm), [yarn](/docs/catalog/yarn) or
+[pnpm](/docs/catalog/pnpm)) and `extend` the task to add it, which works with any of them
+and keeps the entry free of a package manager:
+
+```yaml title=".hammerkit.yaml"
+includes:
+  npm:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.22.0
+    path: catalog/npm
+  jest:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.22.0
+    path: catalog/jest
+
+tasks:
+  test:
+    extend: jest:test
+    deps: [npm:install]
+```
+
+`extend` keeps the entry's image, sources and commands and adds the dependency
+(see [extending](/docs/task/extending)).
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `test` | Run the tests with jest and collect coverage. | `package.json`, `jest.config.*`, `SOURCE_DIR` | `coverage` |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `NODE_VERSION` | `24` | Tag of the `node` image the task runs in, e.g. `22` or `24`. The image is `node:<NODE_VERSION>-alpine`. |
+| `SOURCE_DIR` | `src` | Folder with the sources and their tests, relative to the working directory. |
+
+## Another layout
+
+Tests that live outside `SOURCE_DIR` are added to the task's `src` when it extends, for
+example `src: [tests]`.
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/jest/build.yaml"'>../catalog/jest/build.yaml</include>

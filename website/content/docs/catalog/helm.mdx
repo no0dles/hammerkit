@@ -1,0 +1,41 @@
+---
+title: "helm"
+description: "Lint and package a Helm chart."
+---
+Lint and package a Helm chart. The tasks run in an `alpine/helm` container, need no cluster, and are skipped when the chart is unchanged.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  helm:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.22.0
+    path: catalog/helm
+
+tasks:
+  chart:
+    deps: [helm:lint, helm:package]
+```
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `lint` | Lint the chart with helm lint. | `CHART_DIR` | nothing |
+| `package` | Package the chart into dist. | `CHART_DIR` | `dist` |
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `HELM_VERSION` | `4.3.0` | Tag of the `alpine/helm` image the tasks run in, e.g. `3.19.5` or `4.3.0`. |
+| `CHART_DIR` | `chart` | Folder of the chart (with its `Chart.yaml`), relative to the working directory. |
+
+## Talking to a cluster
+
+The entry does not install or inspect releases, because that depends on a cluster and its
+credentials and cannot be cached. Run `helm upgrade` from a task of your own, or in your
+deploy pipeline.
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/helm/build.yaml"'>../catalog/helm/build.yaml</include>
