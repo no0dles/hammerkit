@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { readServerConfig } from './server-config'
+import { passedEnvironment } from './executor'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
 
@@ -58,7 +59,9 @@ async function withApi(
         )}${extraConfig}`
       )
       const log: string[] = []
-      const server = await startServer(await readServerConfig(env, file), env, {
+      // the tools a run needs to find, git and the shell, come from the environment of the server
+      const serverEnv = { ...env, processEnvs: { ...env.processEnvs, ...passedEnvironment(process.env) } }
+      const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
         log: (line) => log.push(line),
         executor,
       })
