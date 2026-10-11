@@ -1,3 +1,10 @@
+# [1.24.0](https://github.com/no0dles/hammerkit/compare/v1.23.0...v1.24.0) (2026-10-11)
+
+
+### Features
+
+* remote compute server with OAuth, published build files and approvals ([#84](https://github.com/no0dles/hammerkit/issues/84)) ([8e6b382](https://github.com/no0dles/hammerkit/commit/8e6b38212499f634e48fe251cf8c534c6bfcd19a))
+
 # [1.23.0](https://github.com/no0dles/hammerkit/compare/v1.22.0...v1.23.0) (2026-10-11)
 
 
