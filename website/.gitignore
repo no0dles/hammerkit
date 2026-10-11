@@ -24,3 +24,5 @@ yarn-error.log*
 .env*.local
 .vercel
 next-env.d.ts
+# generated from ../CHANGELOG.md by scripts/changelog.mjs
+/content/changelog/auto-*.mdx

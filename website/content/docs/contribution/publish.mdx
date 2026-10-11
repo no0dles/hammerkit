@@ -32,7 +32,12 @@ AI agents working in this repository ask first and never add the marker themselv
    release with the changelog section as notes and the binaries attached, publishes the Docker
    Hub image and publishes to npm. For a stable release it then regenerates the
    formula in the [Homebrew tap](https://github.com/no0dles/homebrew-hammerkit) from the
-   binaries' checksums and pushes it to the tap's `main`.
+   binaries' checksums and pushes it to the tap's `main`,
+4. starts the website workflow (`.github/workflows/website.yaml`) on master, which rebuilds
+   [hammerkit.dev](https://hammerkit.dev). Its [changelog](/changelog) page is generated from
+   `CHANGELOG.md` (`website/scripts/changelog.mjs`), so it lists the new release without further
+   work. Releases before 1.12 have hand-written entries in `website/content/changelog`, which win
+   over a generated one for the same version.
 
 ## Setup and recovery
 

@@ -1,0 +1,35 @@
+---
+title: "Changelog 1.11.0"
+version: "1.11.0"
+date: "2026-10-04"
+---
+## Upgrade notes
+- **A service's `init` names a task.** `init` is a task reference (`name` or
+  `prefix:name`, as in `deps`) instead of an inline block. The init task has
+  everything a task has (deps, envs, secrets, mounts, extend, local tasks) and shows
+  in the run like any task.
+
+## Added
+- **Service `init`:** a one-shot task that runs once the service passed its
+  healthcheck and before anything needing it starts. It reaches the service by name,
+  fails the service when it fails or exceeds its timeout (`init.timeout`,
+  `HAMMERKIT_INIT_TIMEOUT`, 5 minutes), and runs on every start.
+- **`secrets` for tasks and services**, sourced from `env:NAME` or `file:path` and
+  injected as an environment variable or a read-only file. Values are read when the
+  item starts, never planned, cached or logged, and every value hammerkit read is
+  masked in its output. `cache: true` adds a salted, checkout-independent digest to
+  the cache key.
+- A service's container is named after the service, so it resolves its own name.
+- Mounts and volumes take `:ro` (`readOnly: true` for object volumes).
+- `export: always` copies a failing task's outputs to the host too, so test reports
+  and videos survive a failed run.
+- `--set NAME=value` on every command supplies `$NAME` and `${NAME}` ahead of the
+  shell and `.env` files.
+- `up --daemon --wait start` returns once the containers started, without waiting for
+  the healthchecks of services nothing else in the run needs.
+
+## Changed
+- Host ports of a service are published on `hammerkit up`, and during `run` only when
+  a local task needs the service, so two runs on one host don't collide on a port.
+- Service containers carry a hash of their definition: `up` and `run` recreate a
+  running service whose definition changed instead of reusing it.

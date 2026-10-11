@@ -6,12 +6,15 @@ on:
       - 'website/**'
       # the tutorials embed these files
       - 'examples/tutorial-*/**'
+      # the changelog page is built from it
+      - 'CHANGELOG.md'
       - '.github/workflows/website.yaml'
   pull_request:
     paths:
       - 'website/**'
       # the tutorials embed these files
       - 'examples/tutorial-*/**'
+      - 'CHANGELOG.md'
       - '.github/workflows/website.yaml'
   workflow_dispatch:
 # a newer push to the same ref supersedes a running build
@@ -29,9 +32,6 @@ jobs:
         working-directory: website
     steps:
       - uses: actions/checkout@v5
-        with:
-          # the changelog dates come from the release tags
-          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
