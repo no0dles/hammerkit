@@ -108,7 +108,9 @@ export async function startServer(
   options: ServerOptions = {}
 ): Promise<RunningServer> {
   const verifier = new TokenVerifier(config.issuers, options)
-  const log = options.log ?? (() => undefined)
+  const write = options.log ?? (() => undefined)
+  // request urls and subjects come from callers: no control characters, so no forged log lines
+  const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
   const listener = (req: IncomingMessage, res: ServerResponse) => {
     handle(config, verifier, log, req, res).catch((e) => {
       log(`error ${req.method} ${req.url}: ${e instanceof Error ? e.message : String(e)}`)

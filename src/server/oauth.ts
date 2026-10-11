@@ -14,6 +14,12 @@ export interface Principal {
 // The reason is for the operator's log, never for the caller.
 export class TokenError extends Error {}
 
+// Values from a token are written to the operator's log before the signature
+// is checked, so they are quoted and cut: they can't start a log line of their own.
+export function quote(value: unknown): string {
+  return JSON.stringify(String(value).slice(0, 80))
+}
+
 type Algorithm = { hash: string; kty: 'RSA' | 'EC'; crv?: string; pss?: boolean }
 
 // Asymmetric algorithms only: there is no shared secret, and `none` and HS*
@@ -33,6 +39,10 @@ const KEYS_TTL_MS = 10 * 60 * 1000
 // an unknown kid refreshes the keys, but not more often than this
 const REFRESH_COOLDOWN_MS = 60 * 1000
 const FETCH_TIMEOUT_MS = 5000
+// after a failed load the issuer is left alone for this long, instead of being hit by every request
+const FAILURE_BACKOFF_MS = 10 * 1000
+// keys that could not be refreshed are still used for this long past their TTL, so a short IdP outage does not lock everyone out
+const STALE_KEYS_MS = 60 * 60 * 1000
 
 interface IssuerKeys {
   keys: JsonWebKey[]
@@ -46,6 +56,8 @@ export interface TokenVerifierOptions {
 
 export class TokenVerifier {
   private readonly keys = new Map<string, IssuerKeys>()
+  private readonly loading = new Map<string, Promise<IssuerKeys>>()
+  private readonly failures = new Map<string, { at: number; error: unknown }>()
   private readonly fetchJson: (url: string) => Promise<unknown>
   private readonly now: () => number
 
@@ -74,11 +86,11 @@ export class TokenVerifier {
 
     const algorithm = typeof header.alg === 'string' ? ALGORITHMS[header.alg] : undefined
     if (!algorithm) {
-      throw new TokenError(`algorithm ${String(header.alg)} is not accepted`)
+      throw new TokenError(`algorithm ${quote(header.alg)} is not accepted`)
     }
     const issuer = this.issuers.find((i) => i.issuer === payload.iss)
     if (!issuer) {
-      throw new TokenError(`issuer ${String(payload.iss)} is not accepted`)
+      throw new TokenError(`issuer ${quote(payload.iss)} is not accepted`)
     }
 
     const jwk = await this.findKey(issuer, algorithm, typeof header.kid === 'string' ? header.kid : undefined)
@@ -133,28 +145,68 @@ export class TokenVerifier {
   private async findKey(issuer: Issuer, algorithm: Algorithm, kid: string | undefined): Promise<JsonWebKey> {
     const known = this.keys.get(issuer.issuer)
     const stale = !known || this.now() - known.loadedAt > KEYS_TTL_MS
-    let loaded = stale ? await this.loadKeys(issuer) : known
+    let loaded: IssuerKeys
+    if (stale) {
+      try {
+        loaded = await this.loadKeys(issuer)
+      } catch (e) {
+        if (!known || this.now() - known.loadedAt > KEYS_TTL_MS + STALE_KEYS_MS) {
+          throw e
+        }
+        loaded = known
+      }
+    } else {
+      loaded = known
+    }
     let jwk = pickKey(loaded.keys, algorithm, kid)
     if (!jwk && !stale && this.now() - loaded.loadedAt > REFRESH_COOLDOWN_MS) {
       // the issuer may have rotated its keys since they were cached
-      loaded = await this.loadKeys(issuer)
-      jwk = pickKey(loaded.keys, algorithm, kid)
+      try {
+        loaded = await this.loadKeys(issuer)
+        jwk = pickKey(loaded.keys, algorithm, kid)
+      } catch {
+        // keep the cached keys: the token simply has no key we know
+      }
     }
     if (!jwk) {
-      throw new TokenError(`issuer has no ${algorithm.kty} key${kid ? ` ${kid}` : ''}`)
+      throw new TokenError(`issuer has no ${algorithm.kty} key${kid ? ` ${quote(kid)}` : ''}`)
     }
     return jwk
   }
 
-  private async loadKeys(issuer: Issuer): Promise<IssuerKeys> {
+  // One load per issuer at a time, and none right after a failed one.
+  private loadKeys(issuer: Issuer): Promise<IssuerKeys> {
+    const running = this.loading.get(issuer.issuer)
+    if (running) {
+      return running
+    }
+    const failure = this.failures.get(issuer.issuer)
+    if (failure && this.now() - failure.at < FAILURE_BACKOFF_MS) {
+      return Promise.reject(failure.error)
+    }
+    const load = this.fetchKeys(issuer)
+      .then((loaded) => {
+        this.failures.delete(issuer.issuer)
+        return loaded
+      })
+      .catch((error) => {
+        this.failures.set(issuer.issuer, { at: this.now(), error })
+        throw error
+      })
+      .finally(() => this.loading.delete(issuer.issuer))
+    this.loading.set(issuer.issuer, load)
+    return load
+  }
+
+  private async fetchKeys(issuer: Issuer): Promise<IssuerKeys> {
     const base = issuer.issuer.replace(/\/+$/, '')
     const metadata = (await this.fetchJson(`${base}/.well-known/openid-configuration`)) as Record<string, unknown>
     if (metadata.issuer !== issuer.issuer) {
-      throw new TokenError(`issuer metadata names ${String(metadata.issuer)}`)
+      throw new TokenError(`issuer metadata names ${quote(metadata.issuer)}`)
     }
     const jwksUri = typeof metadata.jwks_uri === 'string' ? metadata.jwks_uri : ''
     if (!isSecureUrl(jwksUri)) {
-      throw new TokenError(`jwks_uri ${jwksUri} is not https`)
+      throw new TokenError(`jwks_uri ${quote(jwksUri)} is not https`)
     }
     const jwks = (await this.fetchJson(jwksUri)) as { keys?: JsonWebKey[] }
     const loaded = { keys: Array.isArray(jwks.keys) ? jwks.keys : [], loadedAt: this.now() }
