@@ -1,3 +1,10 @@
+# [1.21.0](https://github.com/no0dles/hammerkit/compare/v1.20.0...v1.21.0) (2026-10-11)
+
+
+### Features
+
+* add docker to the catalog ([#75](https://github.com/no0dles/hammerkit/issues/75)) ([1a642d8](https://github.com/no0dles/hammerkit/commit/1a642d87e0bc3e3d2b66c347d0f1d0154f11ae2d))
+
 # [1.20.0](https://github.com/no0dles/hammerkit/compare/v1.19.1...v1.20.0) (2026-10-11)
 
 
