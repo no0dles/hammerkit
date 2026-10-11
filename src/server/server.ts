@@ -24,6 +24,8 @@ import { handleDefinitions } from './definitions-api'
 import { handleApprovals } from './approvals-api'
 import { handleProposals } from './proposals-api'
 import { ProposalRegistry } from './proposals'
+import { SourceStore } from './sources'
+import { handleSources } from './sources-api'
 import { parseDuration } from '../utils/units'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
@@ -105,6 +107,7 @@ async function handleRuns(
   config: ServerConfig,
   registry: RunRegistry,
   definitions: DefinitionStore,
+  sources: SourceStore,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -121,7 +124,7 @@ async function handleRuns(
     if (method === 'GET') {
       send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
     } else if (method === 'POST') {
-      await submitRun(config, registry, definitions, log, principal, req, res)
+      await submitRun(config, registry, definitions, sources, log, principal, req, res)
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -158,6 +161,7 @@ async function submitRun(
   config: ServerConfig,
   registry: RunRegistry,
   definitions: DefinitionStore,
+  sources: SourceStore,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -187,6 +191,22 @@ async function submitRun(
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: no entitlement`)
     send(res, 403, { error: 'you are not entitled to run anything on this server' })
     return
+  }
+  if (request.source.type === 'upload') {
+    // a run starts from files the server has all of, never from a half-sent tree
+    const tree = await sources.get(principal, request.source.snapshot)
+    if (!tree) {
+      send(res, 400, {
+        error: `the files ${request.source.snapshot} are not known, announce them with POST /v1/sources`,
+      })
+      return
+    }
+    if (tree.missing.length > 0) {
+      send(res, 400, {
+        error: `the files ${tree.snapshot} are not complete, ${tree.missing.length} of them still have to be sent`,
+      })
+      return
+    }
   }
   const version = definitions.find(request.definition.name, request.definition.hash)
   if (!version) {
@@ -259,6 +279,7 @@ async function handle(
   registry: RunRegistry,
   definitions: DefinitionStore,
   proposals: ProposalRegistry,
+  sources: SourceStore,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -301,7 +322,10 @@ async function handle(
   if (await handleDefinitions(config, definitions, proposals, log, principal, req, res, url)) {
     return
   }
-  if (await handleRuns(config, registry, definitions, log, principal, req, res, url)) {
+  if (await handleSources(config, sources, log, principal, req, res, url)) {
+    return
+  }
+  if (await handleRuns(config, registry, definitions, sources, log, principal, req, res, url)) {
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -327,6 +351,7 @@ export async function startServer(
     environment
   )
   await definitions.load()
+  const sources = new SourceStore(join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'sources'))
   const registry = new RunRegistry({
     executor: options.executor ?? unavailableExecutor,
     maxConcurrent: config.runs.maxConcurrent,
@@ -339,7 +364,7 @@ export async function startServer(
     timeout: parseDuration(config.approvals.timeout),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, definitions, proposals, verifier, log, req, res).catch((e) => {
+    handle(config, registry, definitions, proposals, sources, verifier, log, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return
