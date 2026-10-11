@@ -88,7 +88,7 @@ describe('HostExecutor', () => {
       definitions: store,
       environment: {
         ...environment,
-        processEnvs: { PATH: process.env.PATH, HOME: process.env.HOME, SECRET_OF_SERVER: 'x' },
+        processEnvs: { ...passedEnvironment(process.env), SECRET_OF_SERVER: 'x' },
       },
       directory: runs,
     })

@@ -39,6 +39,20 @@ const PASSED_ENVS = [
   'https_proxy',
   'no_proxy',
   'SSH_AUTH_SOCK',
+  // Windows: without these powershell and git can not start or find their profile
+  'SystemRoot',
+  'SystemDrive',
+  'windir',
+  'ComSpec',
+  'PATHEXT',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'TEMP',
+  'TMP',
+  'ProgramData',
+  'ProgramFiles',
+  'ProgramFiles(x86)',
 ]
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
