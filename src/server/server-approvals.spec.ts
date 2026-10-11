@@ -10,46 +10,34 @@ const files = {
   '.hammerkit.yaml': `tasks:
   build:
     cmds: [echo build]
-  lint:
-    cmds: [echo lint]
   deploy:
     deps: [build]
-    labels:
-      env: production
     cmds: [echo deploy]
-  release:
-    deps: [deploy]
-    cmds: [echo release]
 `,
 }
 
+// alice and erin may use the dev key themselves and ask for the prod key, which
+// carol and the release managers hold as admins; bob is admin of dev only
 const entitlements = `
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-payments-dev, op-payments-prod]
+    accounts: [op-payments-dev]
+    request: [op-payments-prod]
     default: op-payments-dev
     publish: [payments]
+  - subject: { iss: ISSUER, sub: erin }
+    request: [op-payments-prod]
+    default: op-payments-prod
   - subject: { iss: ISSUER, sub: carol }
+    accounts: [op-payments-dev, op-payments-prod]
+    default: op-payments-dev
+  - group: { iss: ISSUER, name: release-managers }
+    accounts: [op-payments-prod]
+  - subject: { iss: ISSUER, sub: bob }
     accounts: [op-payments-dev]
 `
 
-const approvals = (extra = '') => `
-approvals:
-${extra}  rules:
-    - name: production
-      labels: { env: production }
-      approvers:
-        - group: { iss: ISSUER, name: release-managers }
-        - subject: { iss: ISSUER, sub: carol }
-    - name: releases
-      tasks: ["rel*"]
-      approvers:
-        - subject: { iss: ISSUER, sub: bob }
-    - name: prod key
-      accounts: [op-payments-prod]
-      approvers:
-        - group: { iss: ISSUER, name: release-managers }
-`
+const approvals = (extra = '') => (extra ? `\napprovals:\n${extra}` : '')
 
 interface JsonResponse extends Response {
   json(): Promise<any>
@@ -156,8 +144,11 @@ async function untilState(api: Api, id: string, states: string[], sub = 'alice')
   throw new Error(`run ${id} never reached ${states}`)
 }
 
+const PROD = { account: 'op-payments-prod' }
+const MANAGERS = ['release-managers']
+
 describe('approvals api', () => {
-  it('runs what falls under no rule at once', async () => {
+  it('runs on an account the caller is admin of at once', async () => {
     await withApi('approvals-api-free', '', async (api) => {
       const run = await (await api.run(['build'])).json()
       expect(run.state).toBe('queued')
@@ -165,69 +156,63 @@ describe('approvals api', () => {
       expect((await untilState(api, run.id, ['succeeded'])).state).toBe('succeeded')
       expect(api.executed).toEqual(['build'])
       expect(api.log.join('\n')).not.toContain('approval=')
+
+      // carol is admin of the production account, nobody has to agree
+      const carol = await (await api.run(['deploy'], 'carol', PROD)).json()
+      expect(carol.state).toBe('queued')
     })
   })
 
-  it('holds a run under a rule until an approver lets it go', async () => {
+  it('holds a run on a requested account until an admin of it lets it go', async () => {
     await withApi('approvals-api-approve', '', async (api) => {
-      const response = await api.run(['deploy'])
+      const response = await api.run(['deploy'], 'alice', PROD)
       expect(response.status).toBe(202)
       const run = await response.json()
-      expect(run).toMatchObject({ state: 'awaiting-approval', tasks: ['deploy'] })
-      expect(run.approval.rules).toEqual([{ index: 0, name: 'production' }])
-      expect(api.log.join('\n')).toContain('approval=[0]')
+      expect(run).toMatchObject({ state: 'awaiting-approval', tasks: ['deploy'], account: 'op-payments-prod' })
+      expect(api.log.join('\n')).toContain('approval=required')
       await sleep(30)
       expect(api.executed).toEqual([])
 
-      // the group of release managers sees it, with what to decide on
-      const list = await (await api.call('GET', '/v1/approvals', { sub: 'dave', groups: ['release-managers'] })).json()
+      // the release managers see it, with what to decide on
+      const list = await (await api.call('GET', '/v1/approvals', { sub: 'dave', groups: MANAGERS })).json()
       expect(list.approvals).toHaveLength(1)
       expect(list.approvals[0]).toMatchObject({
         id: run.id,
         requestedBy: { sub: 'alice' },
         definition: run.definition,
         tasks: ['deploy'],
-        account: 'op-payments-dev',
+        account: 'op-payments-prod',
         source: { type: 'ref', ref: 'main' },
       })
 
-      const approved = await api.approve(run.id, 'dave', ['release-managers'])
+      const approved = await api.approve(run.id, 'dave', MANAGERS)
       expect(approved.status).toBe(200)
-      expect((await approved.json()).approval.rules[0].approvedBy.sub).toBe('dave')
+      expect((await approved.json()).approval.approvedBy.sub).toBe('dave')
       const finished = await untilState(api, run.id, ['succeeded'])
-      expect(finished.approval.rules[0]).toMatchObject({ name: 'production', approvedBy: { sub: 'dave' } })
+      expect(finished.approval).toMatchObject({ approvedBy: { sub: 'dave' } })
       expect(api.executed).toEqual(['deploy'])
       expect(api.log.join('\n')).toMatch(new RegExp(`approve run=${run.id} iss=\\S+ sub=dave result=ok`))
 
       // gone from the list, and decided once
-      const after = await (await api.call('GET', '/v1/approvals', { sub: 'dave', groups: ['release-managers'] })).json()
+      const after = await (await api.call('GET', '/v1/approvals', { sub: 'dave', groups: MANAGERS })).json()
       expect(after.approvals).toEqual([])
-      expect((await api.approve(run.id, 'dave', ['release-managers'])).status).toBe(409)
+      expect((await api.approve(run.id, 'dave', MANAGERS)).status).toBe(409)
     })
   })
 
-  it('counts what a task needs first, and wants every rule approved', async () => {
-    await withApi('approvals-api-both', '', async (api) => {
-      const run = await (await api.run(['release'])).json()
-      expect(run.approval.rules.map((r: { name: string }) => r.name)).toEqual(['production', 'releases'])
-
-      const first = await (await api.approve(run.id, 'carol')).json()
-      expect(first.state).toBe('awaiting-approval')
-      // carol's rule is done, so the run is bob's alone now
-      expect((await api.call('GET', '/v1/approvals', { sub: 'carol' })).status).toBe(200)
-      expect((await (await api.call('GET', '/v1/approvals', { sub: 'carol' })).json()).approvals).toEqual([])
-      await sleep(30)
-      expect(api.executed).toEqual([])
-
-      expect((await api.approve(run.id, 'bob')).status).toBe(200)
-      await untilState(api, run.id, ['succeeded'])
-      expect(api.executed).toEqual(['release'])
+  it('holds a caller who has no admin access at all', async () => {
+    await withApi('approvals-api-request-only', '', async (api) => {
+      // erin has the production account as her default, and nothing else
+      const run = await (await api.run(['build'], 'erin')).json()
+      expect(run).toMatchObject({ state: 'awaiting-approval', account: 'op-payments-prod' })
+      expect((await api.approve(run.id, 'carol')).status).toBe(200)
+      await untilState(api, run.id, ['succeeded'], 'erin')
     })
   })
 
-  it('lets an approver reject with a reason, which the caller sees', async () => {
+  it('lets an admin reject with a reason, which the caller sees', async () => {
     await withApi('approvals-api-reject', '', async (api) => {
-      const run = await (await api.run(['deploy'])).json()
+      const run = await (await api.run(['deploy'], 'alice', PROD)).json()
       const rejected = await api.reject(run.id, 'carol', 'not on a friday')
       expect(rejected.status).toBe(200)
       expect((await rejected.json()).state).toBe('rejected')
@@ -242,90 +227,85 @@ describe('approvals api', () => {
     })
   })
 
-  it('does not let a caller approve their own run, and does not show it to others', async () => {
+  it('shows a run only to the admins of its account', async () => {
     await withApi('approvals-api-own', '', async (api) => {
-      // carol may run and approve, but not both for the same run
-      const run = await (await api.run(['deploy'], 'carol')).json()
-      const own = await api.approve(run.id, 'carol')
-      expect(own.status).toBe(403)
-      expect((await own.json()).error).toContain('somebody else')
-      expect((await api.reject(run.id, 'carol')).status).toBe(403)
-      expect((await (await api.call('GET', '/v1/approvals', { sub: 'carol' })).json()).approvals).toEqual([])
+      const run = await (await api.run(['deploy'], 'alice', PROD)).json()
 
-      // who approves nothing finds nothing, not even that it exists
-      expect((await api.approve(run.id, 'mallory')).status).toBe(404)
-      expect((await api.approve(run.id, 'bob')).status).toBe(404)
-      expect((await api.call('GET', `/v1/approvals/${run.id}`, { sub: 'mallory' })).status).toBe(404)
-      expect((await (await api.call('GET', '/v1/approvals', { sub: 'mallory' })).json()).approvals).toEqual([])
-      expect((await api.call('GET', `/v1/approvals/${run.id}`, { sub: 'bob' })).status).toBe(404)
-      expect(
-        (await api.call('GET', `/v1/approvals/${run.id}`, { sub: 'dave', groups: ['release-managers'] })).status
-      ).toBe(200)
-      expect((await api.call('GET', `/v1/runs/${run.id}`, { sub: 'dave', groups: ['release-managers'] })).status).toBe(
-        404
-      )
+      // the caller asked for it, she does not decide on it
+      expect((await api.approve(run.id, 'alice')).status).toBe(404)
+      expect((await (await api.call('GET', '/v1/approvals', { sub: 'alice' })).json()).approvals).toEqual([])
+      // admin of the dev key is not admin of the prod key; who is nothing finds nothing
+      for (const sub of ['bob', 'mallory']) {
+        expect((await api.approve(run.id, sub)).status).toBe(404)
+        expect((await api.reject(run.id, sub)).status).toBe(404)
+        expect((await api.call('GET', `/v1/approvals/${run.id}`, { sub })).status).toBe(404)
+        expect((await (await api.call('GET', '/v1/approvals', { sub })).json()).approvals).toEqual([])
+      }
+      expect((await api.call('GET', `/v1/approvals/${run.id}`, { sub: 'dave', groups: MANAGERS })).status).toBe(200)
+      expect((await api.call('GET', `/v1/runs/${run.id}`, { sub: 'dave', groups: MANAGERS })).status).toBe(404)
       await sleep(30)
       expect(api.executed).toEqual([])
     })
   })
 
-  it('holds the runs of an account however the build file is changed, which tasks and labels are not safe against', async () => {
-    await withApi('approvals-api-account', '', async (api) => {
-      // alice may publish the build file, so she can drop the label and rename the task
-      const changed = {
-        '.hammerkit.yaml': files['.hammerkit.yaml']
-          .replace(/deploy/g, 'ship')
-          .replace(/ {4}labels:\n {6}env: production\n/, ''),
-      }
-      expect(changed['.hammerkit.yaml']).not.toContain('production')
+  it('does not let a requester use an account they only asked for, whatever the build file says', async () => {
+    await withApi('approvals-api-build-file', '', async (api) => {
+      // alice may publish the build file and rename every task, the account is
+      // not in it and is checked on the request alone
+      const changed = { '.hammerkit.yaml': files['.hammerkit.yaml'].replace(/deploy/g, 'ship') }
       const published = await api.call('PUT', '/v1/definitions/payments', { body: { files: changed } })
       expect(published.status).toBe(201)
       const hash = (await published.json()).hash
 
-      // with the dev key the changed task runs without a second pair of eyes
       const free = await (await api.run(['ship'], 'alice', { hash })).json()
       expect(free.state).toBe('queued')
-      // the production key is what the rule is about, and it is not in the build file
-      const held = await (await api.run(['ship'], 'alice', { hash, account: 'op-payments-prod' })).json()
+      const held = await (await api.run(['ship'], 'alice', { hash, ...PROD })).json()
       expect(held.state).toBe('awaiting-approval')
-      expect(held.approval.rules.map((r: { name: string }) => r.name)).toEqual(['prod key'])
-      // even a task that is nothing special
-      const build = await (await api.run(['build'], 'alice', { hash, account: 'op-payments-prod' })).json()
+      const build = await (await api.run(['build'], 'alice', { hash, ...PROD })).json()
       expect(build.state).toBe('awaiting-approval')
-
       expect((await api.approve(held.id, 'alice')).status).toBe(404)
-      expect((await api.approve(held.id, 'dave', ['release-managers'])).status).toBe(200)
+      expect((await api.approve(held.id, 'dave', MANAGERS)).status).toBe(200)
       await untilState(api, held.id, ['succeeded'])
+    })
+  })
+
+  it('refuses an account the caller neither uses nor may request', async () => {
+    await withApi('approvals-api-unknown', '', async (api) => {
+      const response = await api.run(['build'], 'bob', PROD)
+      expect(response.status).toBe(403)
+      expect((await response.json()).error).toContain('op-payments-prod')
     })
   })
 
   it('lets the caller withdraw a run that waits', async () => {
     await withApi('approvals-api-withdraw', '', async (api) => {
-      const run = await (await api.run(['deploy'])).json()
+      const run = await (await api.run(['deploy'], 'alice', PROD)).json()
       const cancelled = await api.call('POST', `/v1/runs/${run.id}/cancel`)
       expect((await cancelled.json()).state).toBe('cancelled')
       expect((await api.approve(run.id, 'carol')).status).toBe(409)
     })
   })
 
-  it('shows approvers the build files they decide on, and tells who they are', async () => {
+  it('tells who may do what, and shows the build files to those who decide on them', async () => {
     await withApi('approvals-api-visibility', '', async (api) => {
       const me = (sub: string) => api.call('GET', '/v1/me', { sub }).then((r) => r.json())
-      expect((await me('bob')).approver).toBe(true)
-      expect((await me('alice')).approver).toBe(false)
-      expect((await me('mallory')).approver).toBe(false)
-      expect((await api.call('GET', '/v1/definitions', { sub: 'bob' })).status).toBe(200)
-      expect((await api.call('GET', '/v1/definitions/payments/latest/files', { sub: 'bob' })).status).toBe(200)
+      expect(await me('alice')).toMatchObject({ accounts: ['op-payments-dev'], request: ['op-payments-prod'] })
+      expect(await me('erin')).toMatchObject({
+        accounts: [],
+        request: ['op-payments-prod'],
+        default: 'op-payments-prod',
+      })
+      expect((await me('carol')).request).toEqual([])
+      expect((await api.call('GET', '/v1/definitions', { sub: 'erin' })).status).toBe(200)
+      expect((await api.call('GET', '/v1/definitions/payments/latest/files', { sub: 'carol' })).status).toBe(200)
       expect((await api.call('GET', '/v1/definitions', { sub: 'mallory' })).status).toBe(404)
-      // approving is not running: an approver without an account can't submit
-      expect((await api.run(['build'], 'bob')).status).toBe(403)
     })
   })
 
   it('refuses more waiting runs than the limit', async () => {
     await withApi('approvals-api-limit', '  maxWaiting: 1\n', async (api) => {
-      expect((await api.run(['deploy'])).status).toBe(202)
-      const more = await api.run(['deploy'])
+      expect((await api.run(['deploy'], 'alice', PROD)).status).toBe(202)
+      const more = await api.run(['deploy'], 'alice', PROD)
       expect(more.status).toBe(503)
       expect((await more.json()).error).toContain('too many runs are waiting')
       expect((await api.run(['build'])).status).toBe(202)
@@ -334,7 +314,7 @@ describe('approvals api', () => {
 
   it('rejects a run nobody approves within the timeout', async () => {
     await withApi('approvals-api-timeout', '  timeout: 1s\n', async (api) => {
-      const run = await (await api.run(['deploy'])).json()
+      const run = await (await api.run(['deploy'], 'alice', PROD)).json()
       const rejected = await untilState(api, run.id, ['rejected'])
       expect(rejected.error).toBe('nobody approved it in time')
       expect(api.executed).toEqual([])
@@ -343,7 +323,7 @@ describe('approvals api', () => {
 
   it('answers what is not an approval call', async () => {
     await withApi('approvals-api-routes', '', async (api) => {
-      const run = await (await api.run(['deploy'])).json()
+      const run = await (await api.run(['deploy'], 'alice', PROD)).json()
       const as = { sub: 'carol' }
       expect((await api.call('GET', '/v1/approvals', { sub: null })).status).toBe(401)
       expect((await api.call('POST', '/v1/approvals', as)).status).toBe(405)

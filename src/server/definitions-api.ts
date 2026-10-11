@@ -3,7 +3,6 @@ import { bundleSchema, HASH_PATTERN, MAX_BUNDLE_BYTES } from '../remote/bundle'
 import { DefinitionError, DefinitionStore } from './definitions'
 import { readJson, send } from './http'
 import { Principal } from './oauth'
-import { approvesAnything } from './approvals'
 import { getGrant, mayPublish, maySeeDefinitions } from './policy'
 import { definitionName, ServerConfig } from './server-config'
 
@@ -49,7 +48,7 @@ export async function handleDefinitions(
     return true
   }
   // what the caller may not see does not exist for them
-  if (!maySeeDefinitions(grant, approvesAnything(config.approvals.rules, principal))) {
+  if (!maySeeDefinitions(grant)) {
     send(res, 404, { error: 'not found' })
     return true
   }

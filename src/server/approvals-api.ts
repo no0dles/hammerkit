@@ -1,8 +1,8 @@
 import { IncomingMessage, ServerResponse } from 'http'
 import { z } from 'zod'
-import { isApprover } from './approvals'
 import { readJson, send } from './http'
 import { Principal, quote } from './oauth'
+import { getGrant, isAdmin } from './policy'
 import { RUN_ID_PATTERN, Run, RunRegistry } from './runs'
 import { ServerConfig } from './server-config'
 
@@ -26,7 +26,8 @@ function toApprovalView(run: Run) {
 }
 
 /**
- * The runs waiting for an approval:
+ * The runs waiting for an approval, which an admin of the service account they
+ * use gives:
  *
  *   GET  /v1/approvals                  the runs the caller may approve
  *   GET  /v1/approvals/<id>             one of them
@@ -50,8 +51,8 @@ export async function handleApprovals(
     return false
   }
   const [, id, action] = match
-  const rules = config.approvals.rules
-  const canDecide = (index: number) => isApprover(rules[index], principal)
+  const grant = getGrant(config.entitlements, principal)
+  const canDecide = (account: string | null) => isAdmin(grant, account)
 
   if (!id) {
     if (req.method !== 'GET') {
@@ -60,11 +61,7 @@ export async function handleApprovals(
     }
     const open = registry
       .waiting()
-      .filter(
-        (run) =>
-          !(run.owner.iss === principal.iss && run.owner.sub === principal.sub) &&
-          run.approval?.rules.some((rule) => !rule.approvedBy && canDecide(rule.index))
-      )
+      .filter((run) => !(run.owner.iss === principal.iss && run.owner.sub === principal.sub) && canDecide(run.account))
     send(res, 200, { approvals: open.map(toApprovalView) })
     return true
   }
@@ -77,7 +74,7 @@ export async function handleApprovals(
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
       return true
     }
-    const run = registry.getForApproval(principal, id, canDecide)
+    const run = registry.getForApproval(id, canDecide)
     run ? send(res, 200, toApprovalView(run)) : send(res, 404, { error: 'not found' })
     return true
   }

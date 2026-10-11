@@ -160,7 +160,7 @@ export function registerRemoteCommands(program: Command, environment: Environmen
         const token = await getAccessToken(environment, chosen.name, chosen.server)
         const me = await getMe(chosen.server, token)
         environment.stdout.write(`${chosen.name}: ${me.sub} (${me.iss})\n`)
-        if (me.accounts.length === 0) {
+        if (me.accounts.length === 0 && !(me.request && me.request.length > 0)) {
           environment.stdout.write('no service accounts\n')
         }
         for (const account of me.accounts) {
@@ -169,8 +169,8 @@ export function registerRemoteCommands(program: Command, environment: Environmen
         if (me.publish && me.publish.length > 0) {
           environment.stdout.write(`may publish build files: ${me.publish.join(', ')}\n`)
         }
-        if (me.approver) {
-          environment.stdout.write('may approve runs that fall under an approval rule\n')
+        if (me.request && me.request.length > 0) {
+          environment.stdout.write(`may request runs, which an admin approves: ${me.request.join(', ')}\n`)
         }
       })
     )

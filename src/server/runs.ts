@@ -20,11 +20,13 @@ export function isFinal(state: RunState): boolean {
 
 type Identity = { iss: string; sub: string }
 
-// What a run waits for: one approval per rule it falls under, see approvals.ts.
+// A run that was requested, not started by an admin of its account, waits for
+// one admin of that account to approve it.
 export interface RunApproval {
-  rules: { index: number; name: string; approvedBy?: Identity; approvedAt?: string }[]
   // the run is rejected if it still waits then
   expiresAt: string
+  approvedBy?: Identity
+  approvedAt?: string
 }
 
 export type RunSource = { type: 'ref'; ref: string } | { type: 'upload'; snapshot: string }
@@ -62,7 +64,7 @@ export type RunEventData =
 export type RunEvent =
   | RunEventData
   | { type: 'state'; state: RunState; error?: string }
-  | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; rules: string[]; reason?: string }
+  | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; reason?: string }
   | { type: 'truncated' }
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
@@ -97,7 +99,7 @@ export interface RunRegistryOptions {
 
 export type DecisionResult =
   | { status: 'ok'; run: Run }
-  // not a run of the caller's to see, or none of its rules are theirs
+  // not a run of the caller's to see, or not on an account they are admin of
   | { status: 'not-found' }
   | { status: 'own-run' }
   | { status: 'not-waiting'; state: RunState }
@@ -137,13 +139,12 @@ export class RunRegistry {
     this.now = options.now ?? Date.now
   }
 
-  // A run that falls under approval rules (`approval`) waits until each of them
-  // is approved, the others are queued at once.
-  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, approval?: { index: number; name: string }[]): Run {
+  // A run that needs an approval waits for it, the others are queued at once.
+  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, needsApproval = false): Run {
     if (this.closed) {
       throw new RunError('the server is shutting down')
     }
-    const waiting = approval !== undefined && approval.length > 0
+    const waiting = needsApproval
     if (waiting && this.waiting().length >= this.maxWaiting) {
       throw new RunError('too many runs are waiting for an approval')
     }
@@ -159,7 +160,6 @@ export class RunRegistry {
     this.record(entry, { type: 'state', state: run.state })
     if (waiting) {
       run.approval = {
-        rules: approval.map(({ index, name }) => ({ index, name })),
         expiresAt: new Date(this.now() + this.approvalTimeout).toISOString(),
       }
       entry.timer = setTimeout(() => this.expire(entry), this.approvalTimeout)
@@ -212,13 +212,9 @@ export class RunRegistry {
       .map((entry) => this.copy(entry.run))
   }
 
-  // One run that waits (or waited), if `canDecide` says the decider is an
-  // approver of one of its rules.
-  getForApproval(
-    decider: Pick<Principal, 'iss' | 'sub'>,
-    id: string,
-    canDecide: (rule: number) => boolean
-  ): Run | undefined {
+  // One run that waits (or waited), if `canDecide` says the decider is admin of
+  // its account.
+  getForApproval(id: string, canDecide: (account: string | null) => boolean): Run | undefined {
     const entry = this.entries.get(id)
     if (!entry || !this.mayDecide(entry, canDecide)) {
       return undefined
@@ -226,14 +222,12 @@ export class RunRegistry {
     return this.copy(entry.run)
   }
 
-  // An approval counts for the rules of the run the decider is an approver of;
-  // the run is queued when none is left. A rejection ends the run. Nobody decides
-  // on their own run.
+  // An approval queues the run, a rejection ends it. Nobody decides on their own run.
   decide(
     decider: Pick<Principal, 'iss' | 'sub'>,
     id: string,
     outcome: 'approved' | 'rejected',
-    canDecide: (rule: number) => boolean,
+    canDecide: (account: string | null) => boolean,
     reason?: string
   ): DecisionResult {
     const entry = this.entries.get(id)
@@ -247,35 +241,20 @@ export class RunRegistry {
       return { status: 'not-waiting', state: entry.run.state }
     }
     const by = { iss: decider.iss, sub: decider.sub }
-    const open = entry.run.approval.rules.filter((rule) => !rule.approvedBy && canDecide(rule.index))
-    if (open.length === 0) {
-      return { status: 'not-waiting', state: entry.run.state }
-    }
-    this.record(entry, {
-      type: 'approval',
-      outcome,
-      by,
-      rules: open.map((rule) => rule.name),
-      ...(reason ? { reason } : {}),
-    })
+    this.record(entry, { type: 'approval', outcome, by, ...(reason ? { reason } : {}) })
     if (outcome === 'rejected') {
       this.finish(entry, 'rejected', `rejected by ${by.sub}${reason ? `: ${reason}` : ''}`)
       return { status: 'ok', run: this.copy(entry.run) }
     }
-    for (const rule of open) {
-      rule.approvedBy = by
-      rule.approvedAt = this.timestamp()
-    }
-    if (entry.run.approval.rules.every((rule) => rule.approvedBy)) {
-      this.clearTimer(entry)
-      entry.run.state = 'queued'
-      this.record(entry, { type: 'state', state: 'queued' })
-      this.queue.push(entry)
-      const approved = this.copy(entry.run)
-      this.dispatch()
-      return { status: 'ok', run: approved }
-    }
-    return { status: 'ok', run: this.copy(entry.run) }
+    entry.run.approval.approvedBy = by
+    entry.run.approval.approvedAt = this.timestamp()
+    this.clearTimer(entry)
+    entry.run.state = 'queued'
+    this.record(entry, { type: 'state', state: 'queued' })
+    this.queue.push(entry)
+    const approved = this.copy(entry.run)
+    this.dispatch()
+    return { status: 'ok', run: approved }
   }
 
   // The events after `after` (0 for all), and a way to follow new ones. The
@@ -324,8 +303,8 @@ export class RunRegistry {
     return entry && this.owns(owner, entry) ? entry : undefined
   }
 
-  private mayDecide(entry: Entry, canDecide: (rule: number) => boolean): boolean {
-    return (entry.run.approval?.rules ?? []).some((rule) => canDecide(rule.index))
+  private mayDecide(entry: Entry, canDecide: (account: string | null) => boolean): boolean {
+    return entry.run.approval !== undefined && canDecide(entry.run.account)
   }
 
   private expire(entry: Entry): void {

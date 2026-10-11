@@ -2,7 +2,11 @@ import { Entitlement, Who } from './server-config'
 import { Principal } from './oauth'
 
 export interface Grant {
+  // admin: the accounts the caller runs on at once and approves runs for
   accounts: string[]
+  // the accounts the caller may request runs on, which an admin of the account
+  // has to approve; never one the caller is admin of
+  request: string[]
   // the account used when a run names none: the first default of a matching
   // entitlement among the accounts the caller has, else the only account
   default: string | null
@@ -36,16 +40,21 @@ export function mayPublish(grant: Grant, name: string): boolean {
 }
 
 // A caller who can neither run nor publish anything sees nothing of the server's
-// build files either.
-// Approvers see them too: they have to know what they approve.
-export function maySeeDefinitions(grant: Grant, approver = false): boolean {
-  return approver || grant.accounts.length > 0 || grant.publish.length > 0
+// build files either. Admins see them, they have to know what they approve.
+export function maySeeDefinitions(grant: Grant): boolean {
+  return grant.accounts.length > 0 || grant.request.length > 0 || grant.publish.length > 0
+}
+
+// Admin of an account decides about the runs on it.
+export function isAdmin(grant: Grant, account: string | null): boolean {
+  return account !== null && grant.accounts.includes(account)
 }
 
 // Default deny: a caller without a matching entitlement gets no account.
 export function getGrant(entitlements: Entitlement[], principal: Principal): Grant {
   const matched: number[] = []
   const accounts: string[] = []
+  const requested: string[] = []
   const publish: string[] = []
   let defaultAccount: string | null = null
   let source: ('upload' | 'ref')[] | null = null
@@ -60,6 +69,11 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
         accounts.push(account)
       }
     }
+    for (const account of entitlement.request ?? []) {
+      if (!requested.includes(account)) {
+        requested.push(account)
+      }
+    }
     for (const name of entitlement.publish ?? []) {
       if (!publish.includes(name)) {
         publish.push(name)
@@ -71,10 +85,14 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     }
   })
 
+  // admin wins over request when two entitlements give both
+  const request = requested.filter((account) => !accounts.includes(account))
+  const usable = [...accounts, ...request]
   return {
     accounts,
+    request,
     publish,
-    default: defaultAccount ?? (accounts.length === 1 ? accounts[0] : null),
+    default: defaultAccount ?? (usable.length === 1 ? usable[0] : null),
     source: source ?? ['upload', 'ref'],
     matched,
   }
