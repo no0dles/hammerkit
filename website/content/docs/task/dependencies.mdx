@@ -42,6 +42,11 @@ dependencies are skipped. A service's dependency runs once the service starts,
 so when every task needing the service is a cache hit, neither the service nor
 its dependencies run. Under `up` and in watch mode everything runs.
 
+A task that has to run restores its whole dependency chain, not only its direct
+dependencies. With `install` ← `build` ← `test`, a changed `test` runs against a
+cached `build`, and `install` is still restored from the cache (shown as `cached`)
+because `test` may need its outputs, for example `node_modules`, at run time.
+
 <Callout type="info">
 
 A skipped dependency leaves no outputs in the workspace. If you need them — for

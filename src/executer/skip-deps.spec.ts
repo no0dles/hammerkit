@@ -4,6 +4,7 @@ import { createCli } from '../program'
 import { runProgram } from '../run-program'
 import { Environment } from './environment'
 import { memoryStream } from '../testing/test-streams'
+import { stringify as yamlSerialize } from 'yaml'
 
 // A dependency that was not requested only runs when a task needing it has to
 // execute. When every task needing it is a cache hit, it is skipped: a cached
@@ -109,6 +110,85 @@ describe('skipping dependencies of cached tasks', () => {
         build: 'executed',
         prepare: 'executed',
       })
+    })
+  })
+  // `install` holds the outputs `test` needs at run time, `build` sits between
+  // them. When only `test` misses the cache, `build` is a hit and `install`
+  // would be skipped, yet `test` needs it: skipping only applies when nothing
+  // downstream, however far, has to run.
+  describe('transitive dependencies', () => {
+    function chain(sharedCache: string, testCmd: string) {
+      return {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          caches: { default: { method: 'checksum', backend: { type: 'local', path: sharedCache } } },
+          tasks: {
+            install: {
+              src: ['lock.txt'],
+              generates: ['modules'],
+              cmds: ['echo install >> runs.log', 'mkdir -p modules', 'echo pkg > modules/pkg.txt'],
+            },
+            build: { deps: ['install'], src: ['b.txt'], cmds: ['echo build >> runs.log'] },
+            test: { deps: ['build'], src: ['t.txt'], cmds: [testCmd] },
+          },
+        },
+        'lock.txt': 'lock\n',
+        'b.txt': 'b\n',
+        't.txt': 't\n',
+      }
+    }
+
+    itExceptWindows('restores a transitive dependency when the task needing it runs', async () => {
+      const shared = join(tempRoot, 'skip-deps-transitive-shared')
+      await createTestCase('skip-deps-transitive', chain(shared, 'cat modules/pkg.txt >> runs.log')).setup(
+        async (cwd, environment) => {
+          await environment.file.remove(shared)
+          expect(await summaryOf(environment, ['test'])).toEqual({
+            test: 'executed',
+            build: 'executed',
+            install: 'executed',
+          })
+          expect(await runs(environment, cwd)).toEqual(['install', 'build', 'pkg'])
+
+          // node_modules is gone and only the key of test changes
+          await environment.file.remove(join(cwd, 'modules'))
+          await environment.file.writeFile(
+            join(cwd, '.hammerkit.yaml'),
+            yamlSerialize(chain(shared, 'cat modules/pkg.txt >> runs.log && echo again >> runs.log')['.hammerkit.yaml'])
+          )
+
+          expect(await summaryOf(environment, ['test'])).toEqual({
+            test: 'executed',
+            build: 'cached',
+            install: 'cached',
+          })
+          expect(await environment.file.exists(join(cwd, 'modules', 'pkg.txt'))).toBe(true)
+          expect((await runs(environment, cwd)).slice(3)).toEqual(['pkg', 'again'])
+        }
+      )
+    })
+
+    itExceptWindows('still skips the transitive dependency when the task needing it is cached', async () => {
+      const shared = join(tempRoot, 'skip-deps-transitive-cached-shared')
+      await createTestCase('skip-deps-transitive-cached', chain(shared, 'cat modules/pkg.txt >> runs.log')).setup(
+        async (cwd, environment) => {
+          await environment.file.remove(shared)
+          expect(await summaryOf(environment, ['test'])).toEqual({
+            test: 'executed',
+            build: 'executed',
+            install: 'executed',
+          })
+
+          await environment.file.remove(join(cwd, 'modules'))
+
+          expect(await summaryOf(environment, ['test'])).toEqual({
+            test: 'cached',
+            build: 'skipped',
+            install: 'skipped',
+          })
+          expect(await environment.file.exists(join(cwd, 'modules'))).toBe(false)
+        }
+      )
     })
   })
 })

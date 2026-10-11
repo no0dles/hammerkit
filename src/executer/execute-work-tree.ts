@@ -5,7 +5,7 @@ import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-wor
 import { executeWorkService, stopService } from './execute-work-service'
 import { executeWorkTask } from './execute-work-task'
 import { executeInitTask, findInitOf } from './execute-init-task'
-import { Dependent } from './await-completed-dependencies'
+import { Dependent, transitiveDeps } from './await-completed-dependencies'
 
 export async function executeWorkTree(work: WorkTree, environment: Environment, options: CliExecOptions) {
   const itemPromises: Promise<void>[] = []
@@ -74,9 +74,13 @@ function skippableDependents(work: WorkTree, options: CliExecOptions): Map<strin
       result.set(task.name, [])
     }
   }
+  // A dependent also needs everything its dependencies need: a cached `build`
+  // does not restore the `install` a re-running `test` uses at run time. So a
+  // task is a dependent of its whole dependency closure, requested tasks
+  // included in the walk (they are cached or run on their own).
   const items: Dependent[] = [...iterateWorkTasks(work), ...iterateWorkServices(work)]
   for (const item of items) {
-    for (const dep of item.deps) {
+    for (const dep of transitiveDeps(item.deps)) {
       if (work.requested.includes(dep.name)) {
         continue
       }
