@@ -163,7 +163,9 @@ describe('secrets from Google Secret Manager', () => {
       await run(gsm, 'missing', (state, logs) => {
         expect(state.type).toEqual('error')
         expect(state.errorMessage).toContain('gsm:hammerkit-playground-does-not-exist as test')
-        expect(state.errorMessage).toMatch(/NOT_FOUND|not found/i)
+        // for an account without access to the project's secrets, Secret Manager answers a missing
+        // secret with PERMISSION_DENIED "(or it may not exist)", not with NOT_FOUND
+        expect(state.errorMessage).toMatch(/NOT_FOUND|PERMISSION_DENIED/)
         expect(logs).not.toContain('this must not run')
       })
     }),
