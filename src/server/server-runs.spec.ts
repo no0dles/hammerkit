@@ -10,13 +10,14 @@ import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { COMMIT, REPO, SOURCES_YAML, fakeRepos } from '../testing/repos'
 import { TEST_WORKER } from '../testing/worker'
 import { RepoAccessOptions } from './repo-access'
+import { Environment } from '../executer/environment'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
 
 // alice requests runs on prod, which bob approves; bob publishes the build files,
 // carol only runs what needs no credentials of prod
 const policy = `
-runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }
+runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} }, RUNS }
 runtimes: [docker, local]
 secretProviders:
   echo: { command: [${JSON.stringify(process.execPath)}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }
@@ -46,6 +47,11 @@ interface JsonResponse extends Response {
 
 interface Api {
   server: RunningServer
+  // the config the server was started with, to read it again
+  env: Environment
+  file: string
+  // stops the server and starts it again on the same storage
+  restart: (executor?: RunExecutor) => Promise<void>
   log: string[]
   token: (sub?: string) => string
   call: (
@@ -61,7 +67,9 @@ async function withApi(
   executor: RunExecutor | undefined,
   fn: (api: Api) => Promise<void>,
   extraConfig = '',
-  repos: RepoAccessOptions = fakeRepos
+  repos: RepoAccessOptions = fakeRepos,
+  // more keys of `runs`, as the inside of a yaml flow mapping
+  runs = ''
 ) {
   const key = createTestKey('ES256', 'k1')
   const idp = await startTestIssuer([key])
@@ -72,22 +80,24 @@ async function withApi(
         file,
         `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
           join(cwd, 'server-data')
-        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
-          /ISSUER/g,
-          `"${idp.url}"`
-        )}${SOURCES_YAML}${extraConfig}`
+        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy
+          .replace(/ISSUER/g, `"${idp.url}"`)
+          .replace('RUNS', runs)}${SOURCES_YAML}${extraConfig}`
       )
       const log: string[] = []
       // the tools a run needs to find, git and the shell, come from the environment of the server
       const serverEnv = { ...env, processEnvs: { ...process.env } }
-      const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
-        log: (line) => log.push(line),
-        executor,
-        repos,
-        worker: TEST_WORKER,
-      })
+      const start = async (executor: RunExecutor | undefined) =>
+        startServer(await readServerConfig(serverEnv, file), serverEnv, {
+          log: (line) => log.push(line),
+          executor,
+          repos,
+          worker: TEST_WORKER,
+        })
+      let server = await start(executor)
       const token = (sub = 'alice') =>
         signToken(key, { iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
+      // the url changes with the port of a new start
       const call: Api['call'] = (method, path, options = {}) =>
         fetch(`${server.url}${path}`, {
           method,
@@ -107,7 +117,21 @@ async function withApi(
           )
         }
         request.definition.hash = (await published.json()).hash
-        await fn({ server, log, token, call, submit })
+        await fn({
+          get server() {
+            return server
+          },
+          env: serverEnv,
+          file,
+          restart: async (next) => {
+            await server.close()
+            server = await start(next)
+          },
+          log,
+          token,
+          call,
+          submit,
+        })
       } finally {
         await server.close()
       }
@@ -555,6 +579,85 @@ describe('runs api', () => {
     } finally {
       rmSync(repository, { recursive: true, force: true })
     }
+  })
+
+  it('answers 429 to a caller over their limits, and still takes the runs of others', async () => {
+    const { executor } = gated()
+    await withApi(
+      'runs-api-limits',
+      executor,
+      async (api) => {
+        expect((await api.submit({ ...request, tasks: ['deploy'] })).status).toBe(202)
+        const over = await api.submit({ ...request, tasks: ['deploy'] })
+        expect(over.status).toBe(429)
+        expect((await over.json()).error).toContain('1 runs waiting for an approval')
+        // bob uses prod, so his run needs no approval
+        expect((await api.submit(request, 'bob')).status).toBe(202)
+      },
+      '',
+      fakeRepos,
+      'limits: { waiting: 1 }'
+    )
+  })
+
+  it('stops a run that takes longer than the maximum', async () => {
+    await withApi(
+      'runs-api-duration',
+      gated().executor,
+      async (api) => {
+        const run = await (await api.submit(request)).json()
+        const ended = await untilState(api, run.id, ['failed'])
+        expect(ended.error).toMatch(/took longer than 1s and was stopped/)
+      },
+      '',
+      fakeRepos,
+      'maxDuration: 1s'
+    )
+  })
+
+  it('keeps its runs over a restart, the waiting ones wait on', async () => {
+    await withApi('runs-api-restart', done, async (api) => {
+      const finished = await (await api.submit(request)).json()
+      await untilState(api, finished.id, ['succeeded'])
+      const waiting = await (await api.submit({ ...request, tasks: ['deploy'] })).json()
+
+      await api.restart(gated().executor)
+
+      const kept = await (await api.call('GET', `/v1/runs/${finished.id}`)).json()
+      expect(kept).toMatchObject({ state: 'succeeded', tasks: ['build'] })
+      const events = await readEvents(await api.call('GET', `/v1/runs/${finished.id}/events`))
+      expect(events.map((e) => e.event)).toContain('task')
+      const held = await (await api.call('GET', `/v1/runs/${waiting.id}`)).json()
+      expect(held.state).toBe('awaiting-approval')
+      // and it can still be approved
+      expect((await api.call('POST', `/v1/approvals/${waiting.id}/approve`, { sub: 'bob' })).status).toBe(200)
+      expect((await untilState(api, waiting.id, ['running'])).state).toBe('running')
+    })
+  })
+
+  it('reads the entitlements again on a reload, and keeps the old ones when the new are wrong', async () => {
+    await withApi('runs-api-reload', done, async (api) => {
+      expect((await api.submit(request, 'carol')).status).toBe(202)
+      const config = await readServerConfig(api.env, api.file)
+
+      // carol loses her entitlement, and something that needs a restart changes
+      const next = {
+        ...config,
+        entitlements: config.entitlements.filter((e) => e.subject?.sub !== 'carol'),
+        approvals: { ...config.approvals, maxWaiting: 7 },
+      }
+      expect(api.server.reload(next)).toEqual({ restart: ['approvals'] })
+      expect((await api.submit(request, 'carol')).status).toBe(403)
+      expect((await api.submit(request)).status).toBe(202)
+      expect(api.log.join('\n')).toContain('reloaded 2 entitlements, restart for: approvals')
+
+      const wrong = {
+        ...next,
+        entitlements: [{ ...next.entitlements[0], accounts: { 'op-unknown': 'use' as const } }],
+      }
+      expect(() => api.server.reload(wrong)).toThrow(/no account op-unknown/)
+      expect((await api.submit(request)).status).toBe(202)
+    })
   })
 
   it('answers 404 or 405 for what is not a run call', async () => {

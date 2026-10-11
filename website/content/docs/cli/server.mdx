@@ -82,6 +82,12 @@ storage:
 runs:
   maxConcurrent: 4   # default
   keep: 200          # default
+  limits:            # per caller (issuer and subject), 429 over it
+    waiting: 10      # default, runs that wait for an approval
+    queued: 20       # default, runs that wait for a free place
+    running: 2       # default, runs that execute at once, the others wait in the queue
+  maxDuration: 1h    # default, a longer run is stopped and fails
+  maxLogBytes: 1048576   # default, log output kept per run
   env:
     allow: [PATH, HOME, DOCKER_HOST]   # the only variables of the server a run sees, none by default
     set: { CI: 'true' }
@@ -102,8 +108,8 @@ backend:
 | `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
 | `sources` | The repositories a run with `source: ref` may get its code from, see [Repositories](#repositories). |
 | `runtimes` | What tasks may run on: `docker` (containers, the default) and `local` (commands on this machine as the user of the server, which have to be allowed by name). A build file with a task on a runtime that is not listed is refused when it is published or proposed, see [What a build file may not do](#what-a-build-file-may-not-do). The server logs a warning at startup when `local` is allowed. |
-| `storage` | Where the server keeps what must survive a restart: the published build files. Runs work in `runs/` below it while they run. |
-| `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. `env.allow` lists the variables of the server process that a run, its provider commands and the git fetch can see, and `env.set` adds fixed values; nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
+| `storage` | Where the server keeps what must survive a restart: the published build files and the records of the runs (`records/`). Runs work in `runs/` below it while they run. |
+| `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. `limits` is what one caller may have at a time, see [Limits and restarts](#limits-and-restarts). `maxDuration` stops a run that executes longer, and `maxLogBytes` cuts off the log of a run that says more. `env.allow` lists the variables of the server process that a run, its provider commands and the git fetch can see, and `env.set` adds fixed values; nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
 
 Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
@@ -385,7 +391,7 @@ A proposal is visible to its proposer and to everyone who may publish; what the 
 neither proposed nor may decide does not exist for them (`404`), and one that is
 decided or expired is `409`. A proposal expires after the `approvals.timeout` like a
 requested run does, and `approvals.maxWaiting` limits the proposals that wait (`503`).
-Proposals are kept in memory: after a restart the proposer proposes again. Each
+Proposals are kept in memory, unlike runs: after a restart the proposer proposes again. Each
 proposal and decision is logged with who made it.
 
 A proposal approves a new version of the build file, not the code its commands run:
@@ -465,8 +471,9 @@ out; `inputs` of a [build file version](#build-files) say which files a run need
 
 ## Runs
 
-A run is a request to execute tasks of a published [build file](#build-files). The server keeps the runs in
-memory, so they are gone after a restart. Every call needs a token, and a run can be
+A run is a request to execute tasks of a published [build file](#build-files). The server writes every run
+down in `storage` (`records/`, readable by the user of the server only), so a restart keeps them with their
+logs, see [Limits and restarts](#limits-and-restarts). Every call needs a token, and a run can be
 seen and cancelled only by the caller that submitted it: for anyone else its id is
 `404`, the same as an id that does not exist.
 
@@ -621,6 +628,32 @@ apart on one machine. Do not mix production and untrusted agents on one server: 
 them on different servers, each with the accounts of its own level, and with `local` only on
 a server whose users you trust with the machine. The storage directory and the other runs of
 a server are inside what a `local` task can read.
+
+
+### Limits and restarts
+
+One caller can not take the machine. Per caller (issuer and subject) the server counts the runs that wait
+for an approval (`runs.limits.waiting`) and the runs in the queue (`runs.limits.queued`); a submit over
+either is answered `429` and says which. At most `runs.limits.running` runs of one caller execute at the
+same time, and the next run in the queue whose caller has a place left starts first, so one caller with
+many runs does not keep the others waiting. A run that executes longer than `runs.maxDuration` is stopped
+and fails with that reason. The log of a run is cut off at `runs.maxLogBytes` with a `truncated` event;
+the state changes are always kept.
+
+Runs are written down when their state changes. On start the server takes them back:
+
+* finished runs keep their state, events and logs;
+* runs that wait for an approval wait on, for the time that was left, and are rejected when it has passed;
+* runs that were queued or running when the server stopped have failed with it: `the server stopped while
+  the run was running, submit it again`.
+
+A graceful stop (SIGTERM) leaves the waiting runs waiting, and cancels the queued and running ones.
+
+`kill -HUP <pid>` reads the config file again and takes over its `entitlements`: who may use which account,
+which repositories and which build files changes for the next request, no restart and no run is touched.
+Entitlements that name an account or issuer the running server does not have are refused and the old ones
+stay. Everything else (accounts, issuers, providers, sources, limits) is read at start only, the server says
+which keys of the file differ and need a restart. SIGHUP is not available on Windows.
 
 ## Approvals
 

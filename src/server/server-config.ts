@@ -240,6 +240,27 @@ export const serverConfigSchema = z
         maxConcurrent: z.number().int().min(1).default(4),
         // finished runs that are kept for their state and logs
         keep: z.number().int().min(1).default(200),
+        // what one caller (issuer and subject) may have at a time, so a single
+        // caller can not take the whole machine; over it a request gets 429
+        limits: z
+          .object({
+            // runs that wait for an approval
+            waiting: z.number().int().min(1).default(10),
+            // runs that wait in the queue for a free place
+            queued: z.number().int().min(1).default(20),
+            // runs that execute at the same time, the others wait in the queue
+            running: z.number().int().min(1).default(2),
+          })
+          .strict()
+          .default({}),
+        // a run that executes longer is stopped and fails
+        maxDuration: duration.default('1h'),
+        // log output kept per run; the rest is cut off
+        maxLogBytes: z
+          .number()
+          .int()
+          .min(1024)
+          .default(1024 * 1024),
         // the environment of a run: the variables of the server process that tasks
         // (and the git fetch) can see. Nothing else of the server's environment
         // is passed on, so there is no list built in; an operator names what the

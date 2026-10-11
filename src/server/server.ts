@@ -7,6 +7,7 @@ import { detectPlatform, getSecretCatalog, getSourceAccounts, ServerConfig } fro
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, getGrant, mayRun } from './policy'
+import { FileRunStore } from './run-store'
 import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSource, StoredEvent } from './runs'
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
@@ -45,9 +46,21 @@ export function getDiscoveryDocument(config: ServerConfig): DiscoveryDocument {
   }
 }
 
+export interface ReloadResult {
+  // the keys of the new config that differ and need a restart to take effect
+  restart: string[]
+}
+
 export interface RunningServer {
   url: string
   close(): Promise<void>
+  /**
+   * Takes over the entitlements of a new config, for the next request. Nothing else is
+   * reloaded: the accounts, issuers, providers and sources are in use by runs, and a
+   * changed one is reported in `restart`. Throws, and keeps the entitlements, when
+   * the new ones name an account or an issuer this server does not have.
+   */
+  reload(next: ServerConfig): ReloadResult
 }
 
 export interface ServerOptions extends TokenVerifierOptions {
@@ -296,7 +309,7 @@ async function submitRun(
     send(res, 202, toRunResponse(run))
   } catch (e) {
     if (e instanceof RunError) {
-      send(res, 503, { error: e.message })
+      send(res, e.status, { error: e.message })
       return
     }
     throw e
@@ -433,7 +446,13 @@ export async function startServer(
     keep: config.runs.keep,
     maxWaiting: config.approvals.maxWaiting,
     approvalTimeout: parseDuration(config.approvals.timeout),
+    limits: config.runs.limits,
+    maxDuration: parseDuration(config.runs.maxDuration),
+    maxLogBytes: config.runs.maxLogBytes,
+    store: new FileRunStore(join(storage, 'records')),
+    log,
   })
+  await registry.restore()
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),
@@ -475,6 +494,33 @@ export async function startServer(
   const host = address.family === 'IPv6' ? `[${address.address}]` : address.address
   return {
     url: `${config.tls ? 'https' : 'http'}://${host}:${address.port}`,
+    reload: (next) => {
+      const readers = getSourceAccounts(config)
+      next.entitlements.forEach((entitlement, index) => {
+        const iss = (entitlement.subject ?? entitlement.group ?? entitlement.claims)?.iss
+        if (iss && !config.issuers.some((issuer) => issuer.issuer === iss)) {
+          throw new Error(`entitlements.${index}: issuer ${iss} is not accepted by the running server`)
+        }
+        for (const account of Object.keys(entitlement.accounts)) {
+          if (!config.accounts[account] || readers.includes(account)) {
+            throw new Error(`entitlements.${index}: the running server has no account ${account} to give`)
+          }
+        }
+      })
+      const restart = Object.keys(next).filter(
+        (key) =>
+          key !== 'entitlements' &&
+          JSON.stringify(next[key as keyof ServerConfig]) !== JSON.stringify(config[key as keyof ServerConfig])
+      )
+      // every request reads the entitlements of this object
+      config.entitlements = next.entitlements
+      log(
+        `reloaded ${next.entitlements.length} entitlements${
+          restart.length > 0 ? `, restart for: ${restart.join(', ')}` : ''
+        }`
+      )
+      return { restart }
+    },
     close: async () => {
       proposals.close()
       await registry.close()
