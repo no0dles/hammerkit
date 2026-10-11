@@ -1,4 +1,4 @@
-# 0008: Remote runs go through a scheduler service that only speaks OAuth
+# 0009: Remote runs go through a scheduler service that only speaks OAuth
 
 Remote compute is a **server** (`hammerkit` run in server mode) that callers reach over HTTPS and authenticate against with **OAuth/OIDC, and nothing else**. A developer's machine, an agent sandbox or a CI job holds a server URL and a short-lived OAuth token: no ssh key, no kubeconfig, no registry login, no secret-manager credential. The server keeps the policy (who may run which tasks, with which service accounts), orchestrates the graph with the existing engine and runs tasks on its own backend: the machine it runs on (docker and local tools), or a Kubernetes cluster (Jobs on node pools chosen by node selector).
 

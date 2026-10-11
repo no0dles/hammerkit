@@ -1,0 +1,16 @@
+# Runs the tests of a project with Jest. The project's own dependencies must be installed
+# first, see the page of this entry.
+envs:
+  # tag of the node image jest runs in
+  NODE_VERSION: 24
+  # folder with the sources and their tests, relative to the working directory
+  SOURCE_DIR: src
+
+tasks:
+  test:
+    description: run the tests with jest and collect coverage
+    image: node:${NODE_VERSION}-alpine
+    src: [package.json, 'jest.config.*', '${SOURCE_DIR}']
+    generates: [coverage]
+    cmds:
+      - node_modules/.bin/jest --ci --coverage

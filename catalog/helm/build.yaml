@@ -1,0 +1,22 @@
+# Lints and packages a Helm chart. Nothing here talks to a cluster.
+envs:
+  # tag of the alpine/helm image helm runs in
+  HELM_VERSION: 4.3.0
+  # folder of the chart, relative to the working directory
+  CHART_DIR: chart
+
+tasks:
+  lint:
+    description: lint the chart with helm lint
+    image: alpine/helm:${HELM_VERSION}
+    src: ['${CHART_DIR}']
+    cmds:
+      - helm lint ${CHART_DIR}
+
+  package:
+    description: package the chart into dist
+    image: alpine/helm:${HELM_VERSION}
+    src: ['${CHART_DIR}']
+    generates: [dist]
+    cmds:
+      - helm package ${CHART_DIR} --destination dist

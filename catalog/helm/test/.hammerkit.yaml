@@ -1,0 +1,17 @@
+# Consumes the helm entry the way a project would. The catalog spec replaces
+# CATALOG_URL with a git repository holding this catalog.
+includes:
+  helm:
+    git: CATALOG_URL
+    path: catalog/helm
+    with:
+      CHART_DIR: chart
+
+tasks:
+  verify:
+    description: the chart is linted and packaged
+    image: alpine:3.22
+    src: [chart]
+    deps: [helm:lint, helm:package]
+    cmds:
+      - test -f dist/hello-0.1.0.tgz

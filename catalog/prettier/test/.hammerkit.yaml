@@ -1,0 +1,27 @@
+# Consumes the prettier entry the way a project would, with the npm entry installing the
+# dependencies it needs. The catalog spec replaces CATALOG_URL with a git repository
+# holding this catalog.
+includes:
+  npm:
+    git: CATALOG_URL
+    path: catalog/npm
+    with:
+      NODE_VERSION: 22
+  prettier:
+    git: CATALOG_URL
+    path: catalog/prettier
+    with:
+      NODE_VERSION: 22
+
+tasks:
+  format:
+    extend: prettier:check
+    deps: [npm:install]
+
+  verify:
+    description: the sources are formatted
+    image: node:22-alpine
+    src: [package.json]
+    deps: [format]
+    cmds:
+      - echo format passed

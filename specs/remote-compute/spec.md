@@ -1,6 +1,6 @@
 # Feature Specification: Remote Compute
 
-**Status**: Draft, implementation in progress (ADR-0008). Delivered in phases; later phases are marked.
+**Status**: Draft, implementation in progress (ADR-0009). Delivered in phases; later phases are marked.
 
 **Input**: run tasks on machines the team operates, so a laptop or a coding agent keeps working locally while heavy or platform-specific work runs elsewhere, with outputs staying on the remote until someone asks for them, and with authorization decided by OAuth alone.
 
@@ -176,7 +176,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 | Phase | Content |
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
-| B0 | This foundation: ADR-0008, this spec, the host config and `remote add / list / use / remove`. |
+| B0 | This foundation: ADR-0009, this spec, the host config and `remote add / list / use / remove`. |
 >>>>>>> origin/release/remote-secrets
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 

@@ -1,0 +1,18 @@
+# Compiles a TypeScript project with tsc. The project's own dependencies must be installed
+# first, see the page of this entry.
+envs:
+  # tag of the node image tsc runs in
+  NODE_VERSION: 24
+  # folder with the TypeScript sources, relative to the working directory
+  SOURCE_DIR: src
+  # folder tsc writes to, the outDir of the tsconfig.json
+  OUTPUT_DIR: dist
+
+tasks:
+  build:
+    description: compile the project with tsc
+    image: node:${NODE_VERSION}-alpine
+    src: [package.json, tsconfig.json, '${SOURCE_DIR}']
+    generates: ['${OUTPUT_DIR}']
+    cmds:
+      - node_modules/.bin/tsc

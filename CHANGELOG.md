@@ -1,3 +1,10 @@
+# [1.22.0](https://github.com/no0dles/hammerkit/compare/v1.21.2...v1.22.0) (2026-10-11)
+
+
+### Features
+
+* add tsc, eslint, prettier, jest and helm to the catalog and remove best-practices ([#88](https://github.com/no0dles/hammerkit/issues/88)) ([88661dd](https://github.com/no0dles/hammerkit/commit/88661dd8c8f735433c3da0e14b21349b7fcd2092))
+
 ## [1.21.2](https://github.com/no0dles/hammerkit/compare/v1.21.1...v1.21.2) (2026-10-11)
 
 

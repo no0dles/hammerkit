@@ -1,0 +1,15 @@
+# Checks the formatting of a project with Prettier. The project's own dependencies must be
+# installed first, see the page of this entry.
+envs:
+  # tag of the node image prettier runs in
+  NODE_VERSION: 24
+  # folder with the sources to check, relative to the working directory
+  SOURCE_DIR: src
+
+tasks:
+  check:
+    description: check the formatting of the sources with prettier
+    image: node:${NODE_VERSION}-alpine
+    src: [package.json, '.prettierrc*', '${SOURCE_DIR}']
+    cmds:
+      - node_modules/.bin/prettier --check ${SOURCE_DIR}

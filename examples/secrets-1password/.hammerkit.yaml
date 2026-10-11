@@ -1,0 +1,102 @@
+# Playground for secret providers against 1Password (item playground of the vault hammerkit-demo).
+# Everything here is local tasks, no Docker needed (the `container` task is optional).
+# Setup and what to look for: README.md. src/testing/integration/secrets-1password.spec.ts runs it in CI.
+
+secretProviders:
+  op:
+    # the CLI documented in the secret providers page; --no-newline keeps the value verbatim
+    command: [op, read, --no-newline, '{{ref}}']
+    env:
+      # an empty config directory: proves no signed-in `op` session or desktop app is used
+      OP_CONFIG_DIR: '${PLAYGROUND_OP_CONFIG}'
+
+secretAccounts:
+  test: # default: the service account that may read the vault hammerkit-demo
+    default: true
+    providers:
+      op: { env: { OP_SERVICE_ACCOUNT_TOKEN: '${OP_TEST_TOKEN}' } }
+  other: # optional second service account, to see `account:` switch identities
+    providers:
+      op: { env: { OP_SERVICE_ACCOUNT_TOKEN: '${OP_OTHER_TOKEN}' } }
+  nobody: # its variable is never set: the secret must fail closed, not fall back to a login
+    providers:
+      op: { env: { OP_SERVICE_ACCOUNT_TOKEN: '${OP_NOBODY_TOKEN}' } }
+
+tasks:
+  show:
+    description: reads the secret as the default account; the value must appear masked
+    cmds:
+      - 'echo "length: ${#SECRET}"'
+      - 'echo "value:  $SECRET"'
+    secrets:
+      - from: op:op://hammerkit-demo/playground/password
+        env: SECRET
+
+  encodings:
+    description: prints the value base64, hex and URL-encoded; all must be masked
+    cmds:
+      - 'printf %s "$SECRET" | base64'
+      - 'printf %s "$SECRET" | od -An -tx1 | tr -d " \n"; echo'
+      - 'echo "plain: $SECRET"'
+    secrets:
+      - from: op:op://hammerkit-demo/playground/password
+        env: SECRET
+
+  as-other:
+    description: same secret as the `other` service account (needs OP_OTHER_TOKEN); expected to be denied, other may only read the vault hammerkit-demo-other
+    account: other
+    cmds:
+      - 'echo "as other: $SECRET"'
+    secrets:
+      - from: op:op://hammerkit-demo/playground/password
+        env: SECRET
+
+  other-secret:
+    description: the secret the `other` account may read; shows `account:` switching identities
+    account: other
+    cmds:
+      - 'echo "other: $SECRET"'
+    secrets:
+      - from: op:op://hammerkit-demo-other/playground/password
+        env: SECRET
+
+  fail-closed:
+    description: must FAIL naming account nobody and OP_NOBODY_TOKEN, and never read the secret with your own login
+    cmds:
+      - 'echo "this must not run"'
+    secrets:
+      - from: op:op://hammerkit-demo/playground/password
+        env: SECRET
+        account: nobody
+
+  missing:
+    description: must FAIL naming the secret, provider and account (no such item)
+    cmds:
+      - 'echo "this must not run"'
+    secrets:
+      - from: 'op:op://hammerkit-demo/does-not-exist/password'
+        env: SECRET
+
+  keyed:
+    description: cache-affecting; a new value gives a new task id (see README, `explain`)
+    src: [playground.txt]
+    generates:
+      - path: keyed.out
+    cmds:
+      - 'echo "built with a secret of length ${#SECRET}" > keyed.out'
+    secrets:
+      - from: op:op://hammerkit-demo/playground/password
+        env: SECRET
+        cache: true
+
+  container:
+    description: optional, needs Docker; hands the value to a container as env and as a read-only file
+    image: alpine:3.21
+    cmds:
+      - 'echo "env:  $SECRET"'
+      - 'echo "file: $(cat /run/secrets/value)"'
+    secrets:
+      - from: op:op://hammerkit-demo/playground/password
+        env: SECRET
+      - from: op:op://hammerkit-demo/playground/password
+        path: /run/secrets/value

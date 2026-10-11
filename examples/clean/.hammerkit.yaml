@@ -9,7 +9,8 @@ services:
     volumes:
       - "postgres-db:/var/lib/postgresql/data"
     healthcheck:
-      cmd: "pg_isready -U postgres"
+      # probe over TCP: during first-time init the image runs a temporary server that only listens on the unix socket
+      cmd: "pg_isready -h 127.0.0.1 -U postgres"
 
 tasks:
   example:service:
