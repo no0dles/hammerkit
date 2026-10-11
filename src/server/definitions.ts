@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { randomBytes } from 'crypto'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
@@ -66,7 +66,7 @@ function findLooseIncludes(bundle: Bundle): string[] {
 // the server is not its business (a missing file is "not there", not an error).
 function confined(files: FileContext, root: string): FileContext {
   const check = (path: string) => {
-    if (!isWithin(root, join(root, path))) {
+    if (!isWithin(root, resolve(root, path))) {
       throw new DefinitionError(`${path} is outside of the bundle`)
     }
   }
@@ -80,7 +80,7 @@ function confined(files: FileContext, root: string): FileContext {
     readStream: guarded(files.readStream),
     listFiles: guarded(files.listFiles),
     stats: guarded(files.stats),
-    exists: async (path: string) => isWithin(root, join(root, path)) && files.exists(path),
+    exists: async (path: string) => isWithin(root, resolve(root, path)) && files.exists(path),
     watch: files.watch,
   }
 }
