@@ -1,0 +1,58 @@
+---
+title: "dotnet"
+description: "Build and test a .NET project or solution, with the NuGet package cache kept on the host."
+---
+Build and test a .NET project or solution, with the NuGet package cache kept on the host.
+`build` compiles into `artifacts`, `test` runs the tests after it. Both are skipped while
+the files they read are unchanged, and downloaded packages are kept in `.nuget/packages`
+of your home directory, so they are not fetched again.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  dotnet:
+    git: https://github.com/no0dles/hammerkit.git
+    ref: v1.20.0
+    path: catalog/dotnet
+    with:
+      DOTNET_VERSION: '10.0'
+      PROJECT: tests/Hello.Tests
+
+tasks:
+  check:
+    deps: [dotnet:test]
+```
+
+`PROJECT` names what `dotnet build` and `dotnet test` take: a project, a solution, or
+`.` for the one in the directory. Pointing it at the test project builds the app it
+references as well.
+
+## Tasks
+
+| Task | What it does | Reads | Produces |
+|---|---|---|---|
+| `build` | Build the project, restoring its packages first. | the files matched by `SOURCES` | `artifacts` |
+| `test` | Run the tests of the project without building again. | the files matched by `SOURCES` | |
+
+The tasks pass `-p:UseArtifactsOutput=true`, so `bin` and `obj` go to `artifacts/` at
+the root instead of into the project folders. The project folders are the tasks'
+inputs: build output written into them would change the inputs, and the next run would
+miss the cache. A built app is in `artifacts/bin/<project>/<configuration>/`, in lower
+case, for example `dotnet artifacts/bin/Hello/release/Hello.dll`.
+
+## Inputs
+
+| Input | Default | Meaning |
+|---|---|---|
+| `DOTNET_VERSION` | `10.0` | Tag of the `mcr.microsoft.com/dotnet/sdk` image the tasks run in. Quote it in `with` (`'10.0'`), or YAML reads it as the number 10. |
+| `PROJECT` | `.` | The project or solution to build and test. |
+| `SOURCES` | `{src/**,tests/**,Directory.*,global.json,nuget.config}` | A glob of the files the tasks read: the code under `src` and `tests`, and the shared build files at the root. Replace it when your projects live elsewhere, for example `{app/**,Directory.*}`. |
+| `CONFIGURATION` | `Release` | The build configuration. |
+
+Packages are restored from the sources in your `nuget.config` and are not locked. The
+[.NET tutorial](/docs/tutorials/dotnet) shows a build file that restores in its own task
+with `--locked-mode`, for projects that want the restore to fail when a lock file no
+longer matches.
+
+## The entry
+
+<include cwd lang="yaml" meta='title="catalog/dotnet/build.yaml"'>../catalog/dotnet/build.yaml</include>

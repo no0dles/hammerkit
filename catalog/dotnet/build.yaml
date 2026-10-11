@@ -1,0 +1,40 @@
+# Builds and tests a .NET solution with the NuGet package cache kept on the host.
+envs:
+  # tag of the SDK image the tasks run in, quoted so 10.0 stays 10.0
+  DOTNET_VERSION: '10.0'
+  # the project or solution to build and test, as `dotnet build` takes it
+  PROJECT: .
+  # a glob of the files the tasks read: the projects and their code, plus the shared
+  # build files at the root (Directory.Build.props, global.json, nuget.config)
+  SOURCES: '{src/**,tests/**,Directory.*,global.json,nuget.config}'
+  # the build configuration
+  CONFIGURATION: Release
+
+tasks:
+  build:
+    description: build the project into artifacts
+    image: mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}
+    src:
+      - '${SOURCES}'
+    generates: [artifacts]
+    mounts:
+      - $PWD/.nuget/packages:/nuget/packages
+    envs:
+      NUGET_PACKAGES: /nuget/packages
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    cmds:
+      - dotnet build ${PROJECT} --configuration ${CONFIGURATION} -p:UseArtifactsOutput=true -p:ArtifactsPath=$PWD/artifacts --disable-build-servers
+
+  test:
+    description: run the tests of the project
+    image: mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}
+    deps: [build]
+    src:
+      - '${SOURCES}'
+    mounts:
+      - $PWD/.nuget/packages:/nuget/packages
+    envs:
+      NUGET_PACKAGES: /nuget/packages
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    cmds:
+      - dotnet test ${PROJECT} --configuration ${CONFIGURATION} --no-build -p:UseArtifactsOutput=true -p:ArtifactsPath=$PWD/artifacts --disable-build-servers
