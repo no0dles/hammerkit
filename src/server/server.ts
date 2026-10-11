@@ -4,29 +4,24 @@ import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
 import { detectPlatform, ServerConfig } from './server-config'
+import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { getGrant } from './policy'
 
-// Bumped when a client could no longer talk to an older or newer server.
-export const SERVER_PROTOCOL = 1
-export const DISCOVERY_PATH = '/.well-known/hammerkit'
-
-export interface DiscoveryDocument {
-  name: 'hammerkit'
-  version: string
-  protocol: number
-  // OAuth issuers whose tokens the server accepts: public OIDC metadata that
-  // `remote add` compares with the issuer given on the command line
-  issuers: string[]
-  backend: { type: 'host'; platform: { os: string; arch: string } }
-}
+export { DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
+export type { DiscoveredIssuer, DiscoveryDocument } from './discovery'
 
 export function getDiscoveryDocument(config: ServerConfig): DiscoveryDocument {
   return {
     name: 'hammerkit',
     version: getVersion(),
     protocol: SERVER_PROTOCOL,
-    issuers: config.issuers.map((i) => i.issuer),
+    issuers: config.issuers.map((i) => ({
+      issuer: i.issuer,
+      audience: i.audience,
+      ...(i.clientId ? { clientId: i.clientId } : {}),
+      scope: i.scope,
+    })),
     backend: { type: config.backend.type, platform: config.backend.platform ?? detectPlatform() },
   }
 }

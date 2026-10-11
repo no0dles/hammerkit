@@ -104,7 +104,7 @@ describe('server', () => {
           name: 'hammerkit',
           version: getVersion(),
           protocol: SERVER_PROTOCOL,
-          issuers: ['https://idp.corp'],
+          issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit', scope: 'openid' }],
           backend: { type: 'host', platform: { os: 'macos', arch: 'arm64' } },
         })
       }

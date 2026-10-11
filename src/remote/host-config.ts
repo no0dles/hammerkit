@@ -9,10 +9,24 @@ export const RESERVED_SERVER_NAMES = ['local', 'auto']
 
 const serverNamePattern = /^[a-z0-9][a-z0-9._-]*$/i
 
+const checked = (what: string) => (value: string, ctx: z.RefinementCtx) => {
+  try {
+    normalizeServerUrl(value, what)
+  } catch (e) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: (e as Error).message })
+  }
+}
+
+// `clientId`, `audience` and `scope` are what a login asks the identity provider
+// for. They are pinned the first time a login happens (or given to `remote add`),
+// so a server can't change them later, see device-login.ts.
 export const hostServerSchema = z
   .object({
-    url: z.string(),
-    issuer: z.string(),
+    url: z.string().superRefine(checked('url')),
+    issuer: z.string().superRefine(checked('issuer')),
+    clientId: z.string().min(1).optional(),
+    audience: z.string().min(1).optional(),
+    scope: z.string().min(1).optional(),
   })
   .strict()
 
@@ -27,6 +41,11 @@ export const hostConfigSchema = z
 
 export type HostServer = z.infer<typeof hostServerSchema>
 export type HostConfig = z.infer<typeof hostConfigSchema>
+
+// Names like "constructor" must not find inherited members.
+export function hasServer(servers: Record<string, HostServer>, name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(servers, name)
+}
 
 export function getHostConfigPath(environment: Environment): string {
   return environment.processEnvs.HAMMERKIT_CONFIG ?? join(getHammerkitDirectory(), 'config.yaml')
@@ -76,6 +95,8 @@ function isLoopback(hostname: string): boolean {
 // A server receives the source of a run and the caller's OAuth token, so it must
 // be reached over https; plain http is only for a server on this machine. The
 // result has no trailing slash, so one server has one spelling.
+// An issuer is compared as a string with the `iss` of tokens, so it keeps the
+// spelling it was given (some providers end it with a slash, some don't).
 export function normalizeServerUrl(value: string, what = 'url'): string {
   let url: URL
   try {
@@ -92,13 +113,18 @@ export function normalizeServerUrl(value: string, what = 'url'): string {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback(url.hostname))) {
     throw new Error(`the ${what} must use https (http is only allowed for localhost), got "${value}"`)
   }
-  return url.toString().replace(/\/+$/, '')
+  return what === 'issuer' ? value : url.toString().replace(/\/+$/, '')
 }
 
 export interface AddServerOptions {
   issuer: string
+  clientId?: string
+  audience?: string
+  scope?: string
   force?: boolean
 }
+
+const PINNED = ['clientId', 'audience', 'scope'] as const
 
 export async function addServer(
   environment: Environment,
@@ -111,9 +137,16 @@ export async function addServer(
     url: normalizeServerUrl(url),
     issuer: normalizeServerUrl(options.issuer, 'issuer'),
   }
+  for (const key of PINNED) {
+    if (options[key]) {
+      server[key] = options[key]
+    }
+  }
   const config = await readHostConfig(environment)
-  const existing = config.servers[name]
-  if (existing && (existing.url !== server.url || existing.issuer !== server.issuer) && !options.force) {
+  const existing = hasServer(config.servers, name) ? config.servers[name] : undefined
+  const changed = (a: HostServer, b: HostServer) =>
+    a.url !== b.url || a.issuer !== b.issuer || PINNED.some((key) => a[key] !== b[key])
+  if (existing && changed(existing, server) && !options.force) {
     throw new Error(
       `server "${name}" is already registered as ${existing.url} (issuer ${existing.issuer}); ` +
         `use --force to point it somewhere else`
@@ -126,7 +159,7 @@ export async function addServer(
 
 export async function removeServer(environment: Environment, name: string): Promise<{ resetDefault: boolean }> {
   const config = await readHostConfig(environment)
-  if (!(name in config.servers)) {
+  if (!hasServer(config.servers, name)) {
     throw new Error(`server "${name}" is not registered`)
   }
   delete config.servers[name]
@@ -140,9 +173,24 @@ export async function removeServer(environment: Environment, name: string): Prom
 
 export async function setDefaultLocation(environment: Environment, on: string): Promise<void> {
   const config = await readHostConfig(environment)
-  if (!RESERVED_SERVER_NAMES.includes(on) && !(on in config.servers)) {
+  if (!RESERVED_SERVER_NAMES.includes(on) && !hasServer(config.servers, on)) {
     throw new Error(`server "${on}" is not registered; add it with: hammerkit remote add ${on} <url> --issuer <url>`)
   }
   config.run.on = on
+  await writeHostConfig(environment, config)
+}
+
+// Remember what the first login asked the identity provider for; later logins
+// have to ask for the same.
+export async function pinLogin(
+  environment: Environment,
+  name: string,
+  pins: Pick<HostServer, 'clientId' | 'audience' | 'scope'>
+): Promise<void> {
+  const config = await readHostConfig(environment)
+  if (!hasServer(config.servers, name)) {
+    return
+  }
+  Object.assign(config.servers[name], pins)
   await writeHostConfig(environment, config)
 }

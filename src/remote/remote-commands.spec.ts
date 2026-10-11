@@ -1,9 +1,12 @@
 import { join } from 'path'
-import { readFileSync } from 'fs'
+import { readFileSync, writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { Environment } from '../executer/environment'
+import { createTestKey, signToken, startTestIssuer, TestDeviceFlow } from '../testing/test-issuer'
+import { readServerConfig } from '../server/server-config'
+import { startServer } from '../server/server'
 
 const HK = 'hammerkit'
 
@@ -88,5 +91,100 @@ describe('remote commands', () => {
         expect(out.read()).toContain('no servers registered')
       }
     )
+  })
+})
+
+describe('remote login, accounts and logout', () => {
+  async function withServerAndIdp(
+    name: string,
+    fn: (
+      run: (...args: string[]) => Promise<string>,
+      setup: { url: string; issuer: string; credentials: string }
+    ) => Promise<void>
+  ) {
+    const key = createTestKey('ES256', 'k1')
+    const flow: TestDeviceFlow = { clientId: 'hammerkit-cli', interval: 0, token: () => '' }
+    const idp = await startTestIssuer([key], flow)
+    flow.token = () =>
+      signToken(key, { iss: idp.url, sub: 'alice', aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 3600 })
+    try {
+      await withConfig(name, async (run, _configFile, environment) => {
+        const serverFile = join(environment.cwd, 'server.yaml')
+        writeFileSync(
+          serverFile,
+          `listen: { port: 0 }
+issuers:
+  - { issuer: "${idp.url}", audience: hammerkit, clientId: hammerkit-cli }
+entitlements:
+  - subject: { iss: "${idp.url}", sub: alice }
+    accounts: [op-payments-dev, op-web-dev]
+    default: op-payments-dev
+`
+        )
+        const credentials = join(environment.cwd, 'credentials.json')
+        environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_CREDENTIALS: credentials }
+        const server = await startServer(await readServerConfig(environment, serverFile), environment)
+        try {
+          await fn(run, { url: server.url, issuer: idp.url, credentials })
+        } finally {
+          await server.close()
+        }
+      })
+    } finally {
+      await idp.close()
+    }
+  }
+
+  it('signs in, shows the accounts and signs out again', async () => {
+    await withServerAndIdp('remote-login-flow', async (run, { url, issuer, credentials }) => {
+      await run('remote', 'add', 'build', url, '--issuer', issuer)
+
+      const out = await run('remote', 'login', 'build')
+      expect(out).toContain('To sign in, open')
+      expect(out).toContain('enter the code ABCD-EFGH')
+      expect(out).toContain('signed in to build as alice')
+      expect(out).toContain('service accounts: op-payments-dev, op-web-dev')
+      expect(readFileSync(credentials, 'utf8')).not.toContain('never-stored')
+
+      const accounts = await run('remote', 'accounts', 'build')
+      expect(accounts).toContain(`build: alice (${issuer})`)
+      expect(accounts).toMatch(/op-payments-dev.*\(default\)/)
+      expect(accounts).toContain('op-web-dev')
+
+      expect(await run('remote', 'logout', 'build')).toContain('signed out of build')
+      expect(await run('remote', 'logout', 'build')).toContain('not signed in to build')
+    })
+  })
+
+  it('uses the default server when accounts gets no name', async () => {
+    await withServerAndIdp('remote-accounts-default', async (run, { url, issuer }) => {
+      await run('remote', 'add', 'build', url, '--issuer', issuer)
+      await run('remote', 'login', 'build')
+      await run('remote', 'use', 'build')
+      expect(await run('remote', 'accounts')).toContain('build: alice')
+    })
+  })
+
+  it.each([
+    [['remote', 'login', 'nope'], 'server nope is not registered'],
+    [['remote', 'accounts', 'nope'], 'server nope is not registered'],
+    [['remote', 'accounts'], 'name a server'],
+  ])('fails on %j', async (args, message) => {
+    await withConfig('remote-login-errors', async (run) => {
+      let error: unknown
+      try {
+        await run(...args)
+      } catch (e) {
+        error = e
+      }
+      expect(String((error as Error)?.message ?? error)).toContain(message)
+    })
+  })
+
+  it('asks to sign in when there is no token for accounts', async () => {
+    await withServerAndIdp('remote-accounts-signed-out', async (run, { url, issuer }) => {
+      await run('remote', 'add', 'build', url, '--issuer', issuer)
+      await expect(run('remote', 'accounts', 'build')).rejects.toThrow('not signed in to build')
+    })
   })
 })
