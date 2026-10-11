@@ -11,6 +11,7 @@ entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: [op-payments-dev, op-payments-ci]
     default: op-payments-dev
+    publish: [payments]
   - subject: { iss: ISSUER, sub: carol }
     accounts: [op-payments-ci]
     source: [ref]
@@ -41,10 +42,9 @@ async function withApi(name: string, executor: RunExecutor | undefined, fn: (api
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
-          /ISSUER/g,
-          `"${idp.url}"`
-        )}`
+        `listen: { port: 0 }\nstorage: { directory: "${join(cwd, 'server-data')}" }\nissuers:\n  - { issuer: "${
+          idp.url
+        }", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
       )
       const log: string[] = []
       const server = await startServer(await readServerConfig(env, file), env, {
@@ -65,6 +65,11 @@ async function withApi(name: string, executor: RunExecutor | undefined, fn: (api
         }) as Promise<JsonResponse>
       const submit = (body: unknown, sub?: string) => call('POST', '/v1/runs', { body, sub })
       try {
+        const published = await call('PUT', '/v1/definitions/payments', { body: bundle })
+        if (published.status !== 201) {
+          throw new Error(`could not publish the build file: ${published.status}`)
+        }
+        request.definition.hash = (await published.json()).hash
         await fn({ server, log, token, call, submit })
       } finally {
         await server.close()
@@ -75,7 +80,17 @@ async function withApi(name: string, executor: RunExecutor | undefined, fn: (api
   }
 }
 
-const request = { tasks: ['build'], source: { type: 'ref', ref: 'main' } }
+const bundle = {
+  files: {
+    '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo build]\n  test:\n    cmds: [echo test]\n',
+  },
+}
+// the hash is filled in once the build file is published
+const request = {
+  definition: { name: 'payments', hash: 'latest' },
+  tasks: ['build'],
+  source: { type: 'ref', ref: 'main' },
+}
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function untilState(api: Api, id: string, states: string[], sub?: string) {
@@ -135,6 +150,7 @@ describe('runs api', () => {
       expect(response.status).toBe(202)
       const run = await response.json()
       expect(run).toMatchObject({
+        definition: { name: 'payments', hash: expect.stringMatching(/^sha256:/) },
         state: 'queued',
         tasks: ['build'],
         account: 'op-payments-dev',
@@ -164,11 +180,11 @@ describe('runs api', () => {
       expect(await other.json()).toEqual({ error: 'you may not use the service account op-prod-deploy' })
       expect(api.log.join('\n')).toContain('refuse run')
 
-      // a caller without any entitlement has no account, and may not name one
+      // a caller without any entitlement may not run, nor name an account
       expect((await api.submit({ ...request, account: 'op-payments-dev' }, 'mallory')).status).toBe(403)
       const none = await api.submit(request, 'mallory')
-      expect(none.status).toBe(202)
-      expect((await none.json()).account).toBeNull()
+      expect(none.status).toBe(403)
+      expect((await none.json()).error).toContain('not entitled')
     })
   })
 
@@ -188,7 +204,7 @@ describe('runs api', () => {
       const post = (body: unknown, headers?: Record<string, string>) => api.call('POST', '/v1/runs', { body, headers })
       expect((await post({ ...request, tasks: [] })).status).toBe(400)
       expect((await post({ ...request, extra: 1 })).status).toBe(400)
-      expect((await post({ tasks: ['build'] })).status).toBe(400)
+      expect((await post({ tasks: ['build'], source: request.source })).status).toBe(400)
       expect((await post({ ...request, source: { type: 'path', path: '/etc' } })).status).toBe(400)
       expect((await post({ ...request, tasks: [''] })).status).toBe(400)
 
@@ -207,10 +223,30 @@ describe('runs api', () => {
     })
   })
 
+  it('pins the version of the build file a run uses', async () => {
+    await withApi('runs-api-definition', done, async (api) => {
+      const latest = await api.submit({ ...request, definition: { name: 'payments' } })
+      const run = await latest.json()
+      expect(run.definition).toEqual({ name: 'payments', hash: request.definition.hash })
+
+      // a hash that was never published, a name that doesn't exist, a task the build file doesn't have
+      const missing = await api.submit({
+        ...request,
+        definition: { name: 'payments', hash: `sha256:${'0'.repeat(64)}` },
+      })
+      expect(missing.status).toBe(400)
+      expect((await missing.json()).error).toContain('there is no build file payments')
+      expect((await api.submit({ ...request, definition: { name: 'web' } })).status).toBe(400)
+      const unknown = await api.submit({ ...request, tasks: ['build', 'deploy', 'rm-rf'] })
+      expect(unknown.status).toBe(400)
+      expect((await unknown.json()).error).toBe('payments has no task "deploy", "rm-rf"')
+      expect((await api.submit({ ...request, definition: { name: 'payments', hash: 'v2' } })).status).toBe(400)
+    })
+  })
+
   it('takes the settings of a run and keeps them with it', async () => {
     await withApi('runs-api-options', done, async (api) => {
       const options = {
-        file: 'ci/hammerkit.yaml',
         env: 'staging',
         filter: ['unit'],
         exclude: ['slow'],
@@ -225,17 +261,17 @@ describe('runs api', () => {
       // without any, the run has none and the server decides
       expect((await (await api.submit(request)).json()).options).toEqual({})
       // labels can select the tasks instead of names
-      expect((await api.submit({ source: request.source, options: { filter: ['unit'] } })).status).toBe(202)
+      expect(
+        (await api.submit({ definition: request.definition, source: request.source, options: { filter: ['unit'] } }))
+          .status
+      ).toBe(202)
     })
   })
 
   it('rejects settings that are not for a server or not safe', async () => {
     await withApi('runs-api-bad-options', done, async (api) => {
       for (const options of [
-        { file: '/etc/hammerkit.yaml' },
-        { file: '../outside.yaml' },
-        { file: 'a/../../b.yaml' },
-        { file: 'a\\b.yaml' },
+        { file: 'ci/hammerkit.yaml' },
         { cache: 'forever' },
         { timeout: 'soon' },
         { watch: true },
@@ -246,7 +282,7 @@ describe('runs api', () => {
         expect([JSON.stringify(options), response.status]).toEqual([JSON.stringify(options), 400])
       }
       // neither a task nor a label to select them
-      expect((await api.submit({ source: request.source })).status).toBe(400)
+      expect((await api.submit({ definition: request.definition, source: request.source })).status).toBe(400)
     })
   })
 

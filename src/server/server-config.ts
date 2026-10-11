@@ -41,6 +41,11 @@ export const issuerSchema = z
   })
   .strict()
 
+// What a published build file is called: the project, as a build file author names it.
+export const definitionName = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i, 'use letters, digits, ".", "_" and "-", starting with a letter or digit')
+
 // Who: the person or client (`subject`), everyone in a group of an issuer
 // (`group`), or any token of an issuer whose claims match (`claims`, for CI jobs:
 // repository, ref, environment). Only validated token claims are matched.
@@ -58,7 +63,10 @@ export const entitlementSchema = z
       .object({ iss: z.string().min(1), match: z.record(z.string()) })
       .strict()
       .optional(),
-    accounts: z.array(z.string().min(1)).min(1),
+    accounts: z.array(z.string().min(1)).default([]),
+    // the build files (by name) the caller may publish, `*` for any; a separate
+    // permission from running them, so who defines work and who runs it can differ
+    publish: z.array(z.union([z.literal('*'), definitionName])).optional(),
     // the account used when the caller names none; one of accounts
     default: z.string().min(1).optional(),
     // where the code may come from: the caller's working tree or a git ref
@@ -75,6 +83,9 @@ export const entitlementSchema = z
     }
     if (entitlement.claims && Object.keys(entitlement.claims.match).length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['claims', 'match'], message: 'match at least one claim' })
+    }
+    if (entitlement.accounts.length === 0 && (entitlement.publish ?? []).length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'name accounts to use, or build files to publish' })
     }
     if (entitlement.default && !entitlement.accounts.includes(entitlement.default)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['default'], message: 'default has to be one of accounts' })
@@ -109,6 +120,11 @@ export const serverConfigSchema = z
     // who may use which service account; default deny, so no entry means no account
     entitlements: z.array(entitlementSchema).default([]),
     // limits of the run registry
+    // where the server keeps what must survive a restart: the published build files
+    storage: z
+      .object({ directory: z.string().min(1).optional() })
+      .strict()
+      .default({}),
     runs: z
       .object({
         // runs that execute at the same time, the others wait in queue

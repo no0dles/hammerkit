@@ -113,12 +113,14 @@ describe('remote login, accounts and logout', () => {
         writeFileSync(
           serverFile,
           `listen: { port: 0 }
+storage: { directory: "${join(environment.cwd, 'server-data')}" }
 issuers:
   - { issuer: "${idp.url}", audience: hammerkit, clientId: hammerkit-cli }
 entitlements:
   - subject: { iss: "${idp.url}", sub: alice }
     accounts: [op-payments-dev, op-web-dev]
     default: op-payments-dev
+    publish: [payments]
 `
         )
         const credentials = join(environment.cwd, 'credentials.json')
@@ -150,6 +152,7 @@ entitlements:
       expect(accounts).toContain(`build: alice (${issuer})`)
       expect(accounts).toMatch(/op-payments-dev.*\(default\)/)
       expect(accounts).toContain('op-web-dev')
+      expect(accounts).toContain('may publish build files: payments')
 
       expect(await run('remote', 'logout', 'build')).toContain('signed out of build')
       expect(await run('remote', 'logout', 'build')).toContain('not signed in to build')

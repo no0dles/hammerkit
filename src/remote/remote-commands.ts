@@ -166,6 +166,9 @@ export function registerRemoteCommands(program: Command, environment: Environmen
         for (const account of me.accounts) {
           environment.stdout.write(`${account}${account === me.default ? colors.green(' (default)') : ''}\n`)
         }
+        if (me.publish && me.publish.length > 0) {
+          environment.stdout.write(`may publish build files: ${me.publish.join(', ')}\n`)
+        }
       })
     )
 }

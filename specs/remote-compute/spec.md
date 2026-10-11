@@ -79,6 +79,16 @@ backend:
 
 The machine that executes a task holds the secret-manager credentials and resolves secrets itself with the same code path a local run uses. Callers send references only. Values live in memory or a 0700 tmpfs for the task's duration and are removed on every exit path; logs are redacted before they leave the executing side. Because the server plans remote runs with the credentials in place, ids of tasks with `cache: true` secrets are known without anything crossing the wire but a salted digest.
 
+## Published build files
+
+The server holds the build file; a run names a published build file and the tasks to execute, it does not bring task definitions. So an agent that may run work cannot change what a task does, and a task that needs a second person's approval can be marked as such by whoever owns the server (approvals are the next step).
+
+- A **bundle** is the entry file and every file it includes, as text (200 files, 1 MiB), published with `PUT /v1/definitions/<name>`. `publish: [names | '*']` on an entitlement is a separate permission from `accounts`, so who defines work and who runs it differ by configuration (CI on main publishes, agents run).
+- The **version** is the sha-256 of the bundle (entry and every path with the hash of its content, paths sorted), computed identically by server and client. Versions are immutable and kept on disk; publishing the same files again changes nothing; `latest` is the one published last. A run pins the hash it was started with.
+- A bundle is read on publish in a directory of its own, so a build file that does not load, includes something outside of the bundle or an unpinned or local git include is refused then. The hash can only vouch for what is inside the bundle.
+- Local, unpublished build files are not run on a server: a developer who wants to try a change publishes it (with a publish permission for a name of their own).
+- Limit: pinning the commands does not pin the code they run. `npm test` still executes the files a run brings, so production accounts stay on `source: ref` and, later, approval.
+
 ## Placement and the runner
 
 - `platform: { os, arch }` and `resources` on a task select the pool or machine; unconstrained tasks use the backend's default.
@@ -136,7 +146,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
 | B0 | This foundation: ADR-0008, this spec, the host config and `remote add / list / use / remove`. |
-| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); the run registry with `POST /v1/runs`, cancellation and event streaming (done, the executor behind it follows); then snapshot upload and ref checkout, the executor on the existing engine, `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
+| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); the run registry with `POST /v1/runs`, cancellation and event streaming (done, the executor behind it follows); published build files, versioned by hash, with their own `publish` permission, which runs refer to (done); then approvals for tasks that need a second person, file snapshots and ref checkout, the executor on the existing engine, `hammerkit remote publish` and `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
 | B2 | Kubernetes backend: Jobs on node pools, namespace per user, in-cluster secret path, log streaming, upload dedupe, backend-side cache push. |
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 

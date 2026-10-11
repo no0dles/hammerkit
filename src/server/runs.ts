@@ -9,6 +9,8 @@ const FINAL_STATES: RunState[] = ['succeeded', 'failed', 'cancelled']
 export type RunSource = { type: 'ref'; ref: string } | { type: 'upload'; snapshot: string }
 
 export interface RunSpec {
+  // the version of the published build file the run executes
+  definition: { name: string; hash: string }
   // the tasks to run, by their name in the build file
   tasks: string[]
   // the service account the run uses, null for none
@@ -193,6 +195,7 @@ export class RunRegistry {
     return {
       ...run,
       tasks: [...run.tasks],
+      definition: { ...run.definition },
       source: { ...run.source },
       options: JSON.parse(JSON.stringify(run.options)),
       owner: { ...run.owner },

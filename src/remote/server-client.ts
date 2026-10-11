@@ -40,6 +40,8 @@ export interface MeResponse {
   sub: string
   accounts: string[]
   default: string | null
+  // the build files the caller may publish, `*` for any
+  publish?: string[]
 }
 
 export async function getMe(server: HostServer, token: string): Promise<MeResponse> {
