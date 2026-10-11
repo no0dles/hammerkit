@@ -81,13 +81,22 @@ The machine that executes a task holds the secret-manager credentials and resolv
 
 ## Published build files
 
-The server holds the build file; a run names a published build file and the tasks to execute, it does not bring task definitions. So an agent that may run work cannot change what a task does, and a task that needs a second person's approval can be marked as such by whoever owns the server (approvals are the next step).
+The server holds the build file; a run names a published build file and the tasks to execute, it does not bring task definitions. So an agent that may run work cannot change what a task does, and what needs a second person's approval is decided by the access mode of the account, which the operator sets (see Approvals).
 
 - A **bundle** is the entry file and every file it includes, as text (200 files, 1 MiB), published with `PUT /v1/definitions/<name>`. `publish: [names | '*']` on an entitlement is a separate permission from `accounts`, so who defines work and who runs it differ by configuration (CI on main publishes, agents run).
 - The **version** is the sha-256 of the bundle (entry and every path with the hash of its content, paths sorted), computed identically by server and client. Versions are immutable and kept on disk; publishing the same files again changes nothing; `latest` is the one published last. A run pins the hash it was started with.
 - A bundle is read on publish in a directory of its own, so a build file that does not load, includes something outside of the bundle or an unpinned or local git include is refused then. The hash can only vouch for what is inside the bundle.
 - Local, unpublished build files are not run on a server: a developer who wants to try a change publishes it (with a publish permission for a name of their own).
-- Limit: pinning the commands does not pin the code they run. `npm test` still executes the files a run brings, so production accounts stay on `source: ref` and, later, approval.
+- Limit: pinning the commands does not pin the code they run. `npm test` still executes the files a run brings, so production accounts stay on `source: ref` and behind `request`, and new versions of a build file get approved (see Approvals).
+
+## Approvals
+
+- A service account is given to a caller in one of two modes in the entitlements (Pascal's model): `accounts` makes them **admin** (runs on it at once, approves the runs others request on it), `request` lets them ask for runs on it, which wait until an admin of that account approves. Admin wins where both are given. The same shape serves a person who is not trusted with a key yet and an agent that proposes a deployment for a person to confirm.
+- The mode is decided on the account of the run, chosen in the request and checked against the entitlements; nothing in a build file changes it, so it holds however a task is named or labelled. (Found in review: earlier rules on task names and labels could be dodged by whoever may publish, and were removed.)
+- A requested run waits in `awaiting-approval`: one approval by an admin of its account, never the one who asked. A rejection, or the timeout, ends it as `rejected`. Waiting runs are limited. `GET /v1/approvals`, `POST /v1/approvals/<id>/approve|reject`; the decision is an event of the run. A caller only sees and decides what they are admin of.
+- Admins read the published build files, so they can read what they approve.
+- Build file changes get the same treatment in the next step: `propose` next to `publish`, a proposed version cannot run until someone with `publish` for that name approves it.
+- This is meant to be the mechanism the secrets design reuses for the step-up approval of `reveal`: an approval is a decision by a different identity on one pinned request.
 
 ## Placement and the runner
 
@@ -146,7 +155,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
 | B0 | This foundation: ADR-0008, this spec, the host config and `remote add / list / use / remove`. |
-| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); the run registry with `POST /v1/runs`, cancellation and event streaming (done, the executor behind it follows); published build files, versioned by hash, with their own `publish` permission, which runs refer to (done); then approvals for tasks that need a second person, file snapshots and ref checkout, the executor on the existing engine, `hammerkit remote publish` and `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
+| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); the run registry with `POST /v1/runs`, cancellation and event streaming (done, the executor behind it follows); published build files, versioned by hash, with their own `publish` permission, which runs refer to (done); approval of runs requested on an account, over the API (done); then `remote approvals` commands, file snapshots and ref checkout, the executor on the existing engine, `hammerkit remote publish` and `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
 | B2 | Kubernetes backend: Jobs on node pools, namespace per user, in-cluster secret path, log streaming, upload dedupe, backend-side cache push. |
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 

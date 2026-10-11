@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
+import { parseDuration } from '../utils/units'
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1']
 
@@ -46,28 +47,48 @@ export const definitionName = z
   .string()
   .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i, 'use letters, digits, ".", "_" and "-", starting with a letter or digit')
 
+const subjectSchema = z.object({ iss: z.string().min(1), sub: z.string().min(1) }).strict()
+const groupSchema = z.object({ iss: z.string().min(1), name: z.string().min(1) }).strict()
+const claimsSchema = z.object({ iss: z.string().min(1), match: z.record(z.string()) }).strict()
+
 // Who: the person or client (`subject`), everyone in a group of an issuer
 // (`group`), or any token of an issuer whose claims match (`claims`, for CI jobs:
 // repository, ref, environment). Only validated token claims are matched.
+const whoShape = {
+  subject: subjectSchema.optional(),
+  group: groupSchema.optional(),
+  claims: claimsSchema.optional(),
+}
+
+function checkWho(who: Who, ctx: z.RefinementCtx) {
+  const named = [who.subject, who.group, who.claims].filter((w) => w !== undefined)
+  if (named.length !== 1) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'name exactly one of subject, group or claims' })
+  }
+  if (who.claims && Object.keys(who.claims.match).length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['claims', 'match'], message: 'match at least one claim' })
+  }
+}
+
+export interface Who {
+  subject?: z.infer<typeof subjectSchema>
+  group?: z.infer<typeof groupSchema>
+  claims?: z.infer<typeof claimsSchema>
+}
+
 export const entitlementSchema = z
   .object({
-    subject: z
-      .object({ iss: z.string().min(1), sub: z.string().min(1) })
-      .strict()
-      .optional(),
-    group: z
-      .object({ iss: z.string().min(1), name: z.string().min(1) })
-      .strict()
-      .optional(),
-    claims: z
-      .object({ iss: z.string().min(1), match: z.record(z.string()) })
-      .strict()
-      .optional(),
+    ...whoShape,
+    // admin: runs on these accounts at once, and approves the runs others
+    // request on them
     accounts: z.array(z.string().min(1)).default([]),
+    // may request runs on these accounts, which wait until an admin of the account
+    // (someone with it in `accounts`) approves them
+    request: z.array(z.string().min(1)).optional(),
     // the build files (by name) the caller may publish, `*` for any; a separate
     // permission from running them, so who defines work and who runs it can differ
     publish: z.array(z.union([z.literal('*'), definitionName])).optional(),
-    // the account used when the caller names none; one of accounts
+    // the account used when the caller names none; one of accounts or request
     default: z.string().min(1).optional(),
     // where the code may come from: the caller's working tree or a git ref
     source: z
@@ -77,20 +98,36 @@ export const entitlementSchema = z
   })
   .strict()
   .superRefine((entitlement, ctx) => {
-    const who = [entitlement.subject, entitlement.group, entitlement.claims].filter((w) => w !== undefined)
-    if (who.length !== 1) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'name exactly one of subject, group or claims' })
+    checkWho(entitlement, ctx)
+    if (
+      entitlement.accounts.length === 0 &&
+      (entitlement.request ?? []).length === 0 &&
+      (entitlement.publish ?? []).length === 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'name accounts to use or request, or build files to publish',
+      })
     }
-    if (entitlement.claims && Object.keys(entitlement.claims.match).length === 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['claims', 'match'], message: 'match at least one claim' })
-    }
-    if (entitlement.accounts.length === 0 && (entitlement.publish ?? []).length === 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'name accounts to use, or build files to publish' })
-    }
-    if (entitlement.default && !entitlement.accounts.includes(entitlement.default)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['default'], message: 'default has to be one of accounts' })
+    if (
+      entitlement.default &&
+      ![...entitlement.accounts, ...(entitlement.request ?? [])].includes(entitlement.default)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['default'],
+        message: 'default has to be one of accounts or request',
+      })
     }
   })
+
+const duration = z.string().refine((value) => {
+  try {
+    return parseDuration(value) > 0
+  } catch {
+    return false
+  }
+}, 'expected a duration like 30m, 1h or 1d')
 
 export type Issuer = z.infer<typeof issuerSchema>
 export type Entitlement = z.infer<typeof entitlementSchema>
@@ -119,12 +156,21 @@ export const serverConfigSchema = z
     issuers: z.array(issuerSchema).min(1, 'at least one issuer is needed, OAuth is the only way to call the server'),
     // who may use which service account; default deny, so no entry means no account
     entitlements: z.array(entitlementSchema).default([]),
-    // limits of the run registry
+    approvals: z
+      .object({
+        // how long a run waits for its approval before it is rejected
+        timeout: duration.default('1h'),
+        // runs waiting at the same time, more are refused
+        maxWaiting: z.number().int().min(1).default(100),
+      })
+      .strict()
+      .default({}),
     // where the server keeps what must survive a restart: the published build files
     storage: z
       .object({ directory: z.string().min(1).optional() })
       .strict()
       .default({}),
+    // limits of the run registry
     runs: z
       .object({
         // runs that execute at the same time, the others wait in queue

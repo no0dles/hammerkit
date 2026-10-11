@@ -179,3 +179,149 @@ describe('RunRegistry', () => {
     expect(() => registry.submit(alice, spec)).toThrow('shutting down')
   })
 })
+
+describe('RunRegistry approvals', () => {
+  // the account is what an admin is admin of; the server decides that from the grants
+  const prod = { ...spec, account: 'prod' }
+  const may = (who: string) => (account: string | null) => who === 'ops' && account === 'prod'
+  const person = (sub: string) => ({ iss: 'https://idp.corp', sub })
+
+  it('holds a run that needs an approval and does not execute it', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, prod, true)
+    await tick()
+    expect(pending).toHaveLength(0)
+    expect(run.state).toBe('awaiting-approval')
+    expect(new Date(run.approval?.expiresAt as string).getTime()).toBeGreaterThan(Date.now())
+    expect(registry.get(alice, run.id)?.state).toBe('awaiting-approval')
+    expect(registry.waiting().map((r) => r.id)).toEqual([run.id])
+    await registry.close()
+  })
+
+  it('queues the run once an admin approved it, and says who did', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, prod, true)
+
+    expect(registry.decide(person('dev'), run.id, 'approved', may('dev'))).toEqual({ status: 'not-found' })
+    await tick()
+    expect(pending).toHaveLength(0)
+
+    const result = registry.decide(person('ops'), run.id, 'approved', may('ops'))
+    expect(result).toMatchObject({ status: 'ok', run: { state: 'queued' } })
+    await tick()
+    expect(pending).toHaveLength(1)
+    expect(registry.get(alice, run.id)?.approval?.approvedBy).toEqual(person('ops'))
+    expect(registry.waiting()).toEqual([])
+    pending[0].resolve()
+    await tick()
+    expect(registry.get(alice, run.id)?.state).toBe('succeeded')
+    const watch = registry.watch(alice, run.id, 0, () => undefined)
+    expect(watch?.events.map((e) => (e.type === 'state' ? e.state : e.type))).toEqual([
+      'awaiting-approval',
+      'approval',
+      'queued',
+      'running',
+      'succeeded',
+    ])
+    // decided once
+    expect(registry.decide(person('ops'), run.id, 'rejected', may('ops'))).toEqual({
+      status: 'not-waiting',
+      state: 'succeeded',
+    })
+  })
+
+  it('ends the run when an admin rejects it, with their reason', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, prod, true)
+    const result = registry.decide(person('ops'), run.id, 'rejected', may('ops'), 'not on a friday')
+    expect(result).toMatchObject({
+      status: 'ok',
+      run: { state: 'rejected', error: 'rejected by ops: not on a friday' },
+    })
+    await tick()
+    expect(pending).toHaveLength(0)
+    expect(registry.waiting()).toEqual([])
+    const watch = registry.watch(alice, run.id, 0, () => undefined)
+    expect(watch?.finished).toBe(true)
+    expect(watch?.events.find((e) => e.type === 'approval')).toMatchObject({
+      outcome: 'rejected',
+      by: person('ops'),
+      reason: 'not on a friday',
+    })
+    expect(registry.decide(person('ops'), run.id, 'approved', may('ops'))).toEqual({
+      status: 'not-waiting',
+      state: 'rejected',
+    })
+  })
+
+  it('does not let anyone decide on their own run, and shows it to admins of the account only', () => {
+    const registry = new RunRegistry({ executor: unavailableExecutor })
+    const run = registry.submit(person('ops'), prod, true)
+    expect(registry.decide(person('ops'), run.id, 'approved', may('ops'))).toEqual({ status: 'own-run' })
+    expect(registry.decide(person('mallory'), run.id, 'approved', may('mallory'))).toEqual({ status: 'not-found' })
+    expect(registry.decide(person('ops'), 'run_unknown', 'approved', may('ops'))).toEqual({ status: 'not-found' })
+    expect(registry.getForApproval(run.id, may('mallory'))).toBeUndefined()
+    expect(registry.getForApproval(run.id, may('ops'))?.id).toBe(run.id)
+    expect(registry.get(person('ops'), run.id)?.state).toBe('awaiting-approval')
+    expect(registry.get(person('mallory'), run.id)).toBeUndefined()
+    expect(registry.get(person('ops'), run.id)?.approval?.approvedBy).toBeUndefined()
+  })
+
+  it('does not let an admin of another account decide', () => {
+    const registry = new RunRegistry({ executor: unavailableExecutor })
+    const run = registry.submit(alice, { ...prod, account: 'dev' }, true)
+    expect(registry.decide(person('ops'), run.id, 'approved', may('ops'))).toEqual({ status: 'not-found' })
+    expect(registry.getForApproval(run.id, may('ops'))).toBeUndefined()
+  })
+
+  it('rejects a run nobody approved in time', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, approvalTimeout: 20 })
+    const run = registry.submit(alice, prod, true)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'rejected', error: 'nobody approved it in time' })
+    expect(pending).toHaveLength(0)
+    expect(registry.decide(person('ops'), run.id, 'approved', may('ops'))).toMatchObject({ status: 'not-waiting' })
+  })
+
+  it('does not reject a run that was approved before its time ran out', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, approvalTimeout: 40 })
+    const run = registry.submit(alice, prod, true)
+    registry.decide(person('ops'), run.id, 'approved', may('ops'))
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(registry.get(alice, run.id)?.state).toBe('running')
+    pending[0].resolve()
+    await tick()
+  })
+
+  it('lets the caller withdraw a run that waits', () => {
+    const registry = new RunRegistry({ executor: unavailableExecutor })
+    const run = registry.submit(alice, prod, true)
+    expect(registry.cancel(alice, run.id)?.state).toBe('cancelled')
+    expect(registry.waiting()).toEqual([])
+    expect(registry.decide(person('ops'), run.id, 'approved', may('ops'))).toMatchObject({ status: 'not-waiting' })
+  })
+
+  it('only holds so many runs, the others are refused', async () => {
+    const registry = new RunRegistry({ executor: unavailableExecutor, maxWaiting: 2 })
+    const first = registry.submit(alice, prod, true)
+    registry.submit(alice, prod, true)
+    expect(() => registry.submit(alice, prod, true)).toThrow('too many runs are waiting for an approval')
+    // runs that need none are not held, and a decided one makes room
+    expect(registry.submit(alice, spec).state).toBe('queued')
+    registry.cancel(alice, first.id)
+    expect(registry.submit(alice, prod, true).state).toBe('awaiting-approval')
+    await registry.close()
+  })
+
+  it('cancels the runs that wait when it is closed', async () => {
+    const registry = new RunRegistry({ executor: unavailableExecutor })
+    const run = registry.submit(alice, prod, true)
+    await registry.close()
+    expect(registry.get(alice, run.id)?.state).toBe('cancelled')
+  })
+})

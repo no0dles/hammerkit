@@ -42,6 +42,7 @@ issuers:
 entitlements:
   - subject: { iss: https://login.example.com, sub: 4f1c2b }
     accounts: [op-payments-dev]
+    request: [op-payments-prod]
     default: op-payments-dev
   - group: { iss: https://login.example.com, name: eng-web }
     accounts: [op-web-dev]
@@ -54,6 +55,9 @@ entitlements:
       match: { repository: corp/payments, ref: refs/heads/main }
     accounts: [op-payments-ci]
     source: [ref]
+approvals:
+  timeout: 1h        # default
+  maxWaiting: 100    # default
 storage:
   directory: /var/lib/hammerkit   # default ~/.hammerkit/server
 runs:
@@ -71,6 +75,7 @@ backend:
 | `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
 | `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
 | `entitlements` | Who may use which service account, see [below](#entitlements). |
+| `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
 | `storage` | Where the server keeps what must survive a restart: the published build files. |
 | `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
@@ -121,8 +126,18 @@ the validated claims of the token only, never anything the caller sends along.
 
 A caller gets the accounts of all entitlements that match, and none when no entry
 matches. A caller with no account and nothing to publish can do nothing on the
-server, they are not even shown which build files exist. `default` names the account used when a run names none, and has to be one
-of `accounts`; with a single account that account is the default. `source` limits
+server, they are not even shown which build files exist.
+
+An account is given in one of two modes:
+
+* `accounts` makes the caller **admin** of the account: they run on it at once and
+  approve the runs others request on it.
+* `request` lets the caller ask for runs on the account. Such a run waits until an
+  admin of the account approves it, see [Approvals](#approvals).
+
+When entitlements give both for the same account, admin wins. `default` names the
+account used when a run names none, and has to be one of `accounts` or `request`;
+with a single account that account is the default. `source` limits
 where the code may come from, `upload` for the caller's working tree and `ref` for
 a git ref the server checks out itself; a caller matching several entitlements
 gets only what all of them allow. Every grant is written to the log with issuer,
@@ -131,7 +146,7 @@ subject, accounts and the entitlements that matched.
 `publish` lists the names of the [build files](#build-files) the caller may publish,
 or `*` for any. It is a permission of its own: who defines the work does not have to
 be who runs it, for example a CI job on the main branch publishes and everyone else
-only runs. An entitlement needs `accounts`, `publish` or both.
+only runs. An entitlement needs `accounts`, `request`, `publish` or any of them.
 
 `GET /v1/me` returns the identity and what the caller may use:
 
@@ -140,6 +155,7 @@ only runs. An entitlement needs `accounts`, `publish` or both.
   "iss": "https://login.example.com",
   "sub": "4f1c2b",
   "accounts": ["op-payments-dev"],
+  "request": ["op-payments-prod"],
   "default": "op-payments-dev",
   "publish": []
 }
@@ -203,10 +219,10 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 
 | Call | What it does |
 | --- | --- |
-| `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`. |
+| `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`, or `awaiting-approval` when the caller only has the account on [`request`](#approvals). |
 | `GET /v1/runs` | The caller's runs, newest first. |
-| `GET /v1/runs/<id>` | One run: `state` is `queued`, `running`, `succeeded`, `failed` or `cancelled`, a failed run has an `error`. |
-| `POST /v1/runs/<id>/cancel` | Cancel a run: a queued one at once, a running one when its tasks have stopped. |
+| `GET /v1/runs/<id>` | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. |
+| `POST /v1/runs/<id>/cancel` | Cancel a run: one that is queued or waits for an approval at once, a running one when its tasks have stopped. |
 | `GET /v1/runs/<id>/events` | The run's events as server-sent events, see below. |
 
 ```json
@@ -253,14 +269,65 @@ The events carry the sequence number as their `id`, so a client that lost the
 connection continues with the `Last-Event-ID` header (or `?after=<n>`) and misses
 nothing. The stream replays what happened and then follows the run until it is over;
 a finished run's events are replayed and the stream ends. Event types are `state`
-(`queued`, `running` and the final state, with the `error` of a failed run), `task`
-(a task started or finished) and `log` (a line of a task's output). A run that
+(`awaiting-approval`, `queued`, `running` and the final state, with the `error` of a failed run), `approval`
+(who approved or rejected the run), `task` (a task started or finished)
+and `log` (a line of a task's output). A run that
 produces more than 5000 events is cut off with one `truncated` event, the state
 changes are always kept.
 
 > This server cannot execute runs yet: until a backend is wired in, an accepted run
 > fails at once with the reason `this server has no backend that can execute runs
 > yet`. What exists is the part around it, authorization, queueing, state and events.
+
+## Approvals
+
+Some work should not happen because one identity asked for it: a deploy with the
+production key, a task with access to customer data. Access to a service account comes
+in two modes for that, see [Entitlements](#entitlements). Whoever is **admin** of an
+account runs on it directly. Whoever may only **request** it can ask for a run, which
+waits in state `awaiting-approval` until an admin of that account approves it. This
+suits an agent or a developer who proposes a deployment and a person who confirms it.
+
+```yaml
+entitlements:
+  - group: { iss: https://login.example.com, name: release-managers }
+    accounts: [op-payments-prod]
+  - group: { iss: https://login.example.com, name: eng-payments }
+    accounts: [op-payments-dev]
+    request: [op-payments-prod]
+approvals:
+  timeout: 1h        # how long a run waits, default 1h
+  maxWaiting: 100    # runs waiting at the same time, default 100
+```
+
+* The mode belongs to the account of the run, which is chosen in its request and
+  checked against the caller's entitlements. Nothing in a build file can change it, so
+  every requested run with the production key is held, whatever its tasks are called
+  or labelled, and whoever may [publish](#build-files) cannot lift it.
+* A caller approves what they have access to: admin of the account the run uses.
+  Admin of another account sees nothing of it. An admin does not need `request`,
+  their own runs on the account start at once, and nobody approves their own run.
+  Approvers see the published build files, so they can read what they approve, and
+  nothing more.
+* One approval is enough. A run nobody approves within `timeout` is rejected, and so
+  is one an admin rejects. More than `maxWaiting` waiting runs are refused with `503`.
+  A run that waits is cancelled when the server stops, like every other.
+* A run without a service account is not held. What an approval cannot cover is what
+  the code does: pinning commands does not pin the code they run, so an account that
+  matters should also be limited to `source: [ref]`.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/approvals` | The runs waiting for an approval the caller can give, with who asked, the build file version, tasks, account, source and options. |
+| `GET /v1/approvals/<id>` | One of them. |
+| `POST /v1/approvals/<id>/approve` | Approve the run, which is queued. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/approvals/<id>/reject` | End the run; the reason (up to 500 characters) becomes its `error`. |
+
+What a caller may not approve does not exist for them (`404`), and a run that is no
+longer waiting is `409`. Each call is logged with who decided and the result, and the
+decision is an event of the run, so the one who asked sees who approved it.
+`GET /v1/me` tells which accounts the caller is admin of and which they may request,
+and `hammerkit remote accounts` shows it. The command line has no approval commands yet.
 
 ## Discovery
 

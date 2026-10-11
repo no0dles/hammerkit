@@ -42,6 +42,8 @@ export interface MeResponse {
   default: string | null
   // the build files the caller may publish, `*` for any
   publish?: string[]
+  // the accounts the caller may request runs on, an admin of the account approves them
+  request?: string[]
 }
 
 export async function getMe(server: HostServer, token: string): Promise<MeResponse> {

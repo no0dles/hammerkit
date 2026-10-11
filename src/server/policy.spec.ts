@@ -1,4 +1,4 @@
-import { getGrant, mayPublish, maySeeDefinitions } from './policy'
+import { getGrant, isAdmin, mayPublish, maySeeDefinitions } from './policy'
 import { Principal } from './oauth'
 import { Entitlement } from './server-config'
 
@@ -20,7 +20,14 @@ const entitlements: Entitlement[] = [
 describe('getGrant', () => {
   it('denies by default', () => {
     const grant = getGrant(entitlements, { iss: IDP, sub: 'bob', groups: [], claims: {} })
-    expect(grant).toEqual({ accounts: [], publish: [], default: null, source: ['upload', 'ref'], matched: [] })
+    expect(grant).toEqual({
+      accounts: [],
+      request: [],
+      publish: [],
+      default: null,
+      source: ['upload', 'ref'],
+      matched: [],
+    })
     expect(getGrant([], alice).accounts).toEqual([])
   })
 
@@ -92,5 +99,40 @@ describe('getGrant', () => {
     expect(
       maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['x'] }], alice))
     ).toBe(true)
+  })
+
+  it('shows them to somebody who may only request runs', () => {
+    expect(
+      maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], request: ['a'] }], alice))
+    ).toBe(true)
+  })
+})
+
+describe('request and admin', () => {
+  const bob: Principal = { iss: IDP, sub: 'bob', groups: ['devs', 'ops'], claims: {} }
+  const both: Entitlement[] = [
+    { group: { iss: IDP, name: 'devs' }, accounts: [], request: ['prod', 'dev'], default: 'prod' },
+    { group: { iss: IDP, name: 'ops' }, accounts: ['prod'] },
+  ]
+
+  it('keeps the two modes apart', () => {
+    const grant = getGrant([both[0]], bob)
+    expect(grant.accounts).toEqual([])
+    expect(grant.request).toEqual(['prod', 'dev'])
+    expect(grant.default).toBe('prod')
+    expect(isAdmin(grant, 'prod')).toBe(false)
+  })
+
+  it('lets admin win where an account is given in both', () => {
+    const grant = getGrant(both, bob)
+    expect(grant.accounts).toEqual(['prod'])
+    expect(grant.request).toEqual(['dev'])
+    expect(isAdmin(grant, 'prod')).toBe(true)
+    expect(isAdmin(grant, 'dev')).toBe(false)
+    expect(isAdmin(grant, null)).toBe(false)
+  })
+
+  it('takes the only account as default whichever the mode', () => {
+    expect(getGrant([{ subject: { iss: IDP, sub: 'bob' }, accounts: [], request: ['prod'] }], bob).default).toBe('prod')
   })
 })
