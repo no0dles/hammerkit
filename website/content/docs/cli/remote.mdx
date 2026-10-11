@@ -4,9 +4,9 @@ description: "Register the servers hammerkit can send runs to and choose the def
 ---
 <Callout type="warn">
 
-Experimental. This page covers the host-side registry only. Sending a run to a
-server (`--on`, the task `runner:` field, `remote login`) arrives in follow-up
-releases, see the [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
+Experimental. This page covers the registry and signing in. Sending a run to a
+server (`--on`, running a task with a `runner:`) arrives in follow-up releases, see
+the [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
 
 </Callout>
 
@@ -16,6 +16,8 @@ is registered under a short name, which later features (`--on <name>`, a task's
 
 ```bash
 hammerkit remote add build https://build.example.com --issuer https://login.example.com
+hammerkit remote login build
+hammerkit remote accounts build
 hammerkit remote list
 hammerkit remote use build
 hammerkit remote remove build
@@ -32,6 +34,9 @@ in the working directory.
 | `remote list` | Show the registered servers and which one is the default. |
 | `remote use <location>` | Set the default location: `local`, `auto` or a registered name. |
 | `remote remove <name>` | Forget a server. If it was the default, runs are local again. |
+| `remote login <name>` | Sign in to the server with your identity provider. |
+| `remote logout <name>` | Forget the sign-in. |
+| `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
 name at a different server pass `--force`, so a typo can't silently redirect your
@@ -66,3 +71,30 @@ decision of where to send work stays on the machine.
 Server URLs must use `https`. Plain `http` is accepted only for `localhost`,
 `127.0.0.1` and `[::1]`, for local testing. URLs with credentials, a query string
 or a fragment are rejected, and a trailing slash is dropped.
+
+## Signing in
+
+`remote login` uses the OAuth device authorization grant, so it works on a machine
+without a browser:
+
+```
+$ hammerkit remote login build
+To sign in, open https://login.example.com/activate and enter the code ABCD-EFGH
+signed in to build as 4f1c2b
+service accounts: op-payments-dev, op-web-dev
+```
+
+Open the address on any device, sign in as you normally do, and enter the code. The
+server tells hammerkit which identity provider client to use, so there is nothing to
+configure beyond `remote add`. The `--issuer` you registered has to be one the
+server accepts, otherwise the login stops before the browser step.
+
+What is stored is one short-lived access token in `~/.hammerkit/credentials.json`
+(`HAMMERKIT_CREDENTIALS` picks another file), readable by you only. A refresh token
+is not kept: when the token expires, `remote login` again. The token is bound to the
+URL and issuer it was issued for, so registering the name again for another server
+(`remote add --force`) does not send the old token there.
+
+Agents and CI do not use `login`. They bring their own token, an agent from its own
+client credentials and a CI job from the OIDC token of the job, and the server maps
+it to service accounts through its [entitlements](/docs/cli/server#entitlements).

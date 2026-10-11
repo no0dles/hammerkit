@@ -32,6 +32,12 @@ export const issuerSchema = z
     audience: z.string().min(1),
     // the claim listing the groups of the caller
     groupsClaim: z.string().min(1).default('groups'),
+    // the public OAuth client `remote login` signs in with (device authorization
+    // grant); without one this issuer can only be used with a token obtained
+    // elsewhere, such as a CI job's or an agent's own
+    clientId: z.string().min(1).optional(),
+    // what the login asks for, such as `openid api://hammerkit/.default`
+    scope: z.string().min(1).default('openid'),
   })
   .strict()
 

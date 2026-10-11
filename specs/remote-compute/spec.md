@@ -109,7 +109,7 @@ hammerkit remote login <name>                      # phase B1, OAuth sign-in
 hammerkit remote accounts [name]                   # phase B1, service accounts assigned to me
 ```
 
-Registering a name again with another URL or issuer needs `--force`. `remote add` stores no credential. Discovery of the issuer from the server, and a confirmation of it, arrive with the server (`--issuer` then becomes an assertion).
+Registering a name again with another URL or issuer needs `--force`. `remote add` stores no credential. `remote login` checks the registered issuer against the server's discovery document, so `--issuer` is an assertion the server has to confirm before any identity provider is contacted. Login is the OAuth device grant with the client the server publishes; one short-lived access token is stored per server in `credentials.json` (mode 0600), bound to the URL and issuer, and no refresh token is kept (an OS keychain with refresh is a later option).
 
 ## Outputs and reading them (phase B1)
 
@@ -136,7 +136,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
 | B0 | This foundation: ADR-0008, this spec, the host config and `remote add / list / use / remove`. |
-| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); then `remote login` and `remote accounts`, run registry, event streaming, snapshot upload and ref checkout, `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
+| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); OAuth token validation, entitlements and `GET /v1/me` (done); `remote login` (device code), `logout` and `accounts` (done); then the run registry, event streaming, snapshot upload and ref checkout, `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
 | B2 | Kubernetes backend: Jobs on node pools, namespace per user, in-cluster secret path, log streaming, upload dedupe, backend-side cache push. |
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 

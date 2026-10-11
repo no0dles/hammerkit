@@ -5,8 +5,7 @@ description: "Run this machine as a hammerkit server that remote runs can be sen
 <Callout type="warn">
 
 Experimental. The server checks OAuth tokens and tells a caller which service
-accounts they have. Accepting runs and `remote login` arrive in follow-up
-releases, see the
+accounts they have. Accepting runs arrives in a follow-up release, see the
 [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
 
 </Callout>
@@ -38,6 +37,8 @@ issuers:
   - issuer: https://login.example.com
     audience: hammerkit
     groupsClaim: groups   # default
+    clientId: hammerkit-cli
+    scope: openid api://hammerkit/.default
 entitlements:
   - subject: { iss: https://login.example.com, sub: 4f1c2b }
     accounts: [op-payments-dev]
@@ -59,7 +60,7 @@ backend:
 | `listen` | Interface and port. Port `0` picks a free one. |
 | `tls` | Certificate and key to serve https. |
 | `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
-| `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). |
+| `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
 | `entitlements` | Who may use which service account, see [below](#entitlements). |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
 
@@ -118,7 +119,14 @@ client can check it before signing in:
   "name": "hammerkit",
   "version": "1.17.0",
   "protocol": 1,
-  "issuers": ["https://login.example.com"],
+  "issuers": [
+    {
+      "issuer": "https://login.example.com",
+      "audience": "hammerkit",
+      "clientId": "hammerkit-cli",
+      "scope": "openid api://hammerkit/.default"
+    }
+  ],
   "backend": { "type": "host", "platform": { "os": "macos", "arch": "arm64" } }
 }
 ```

@@ -17,9 +17,12 @@ afterAll(async () => {
 })
 
 function verifier(options: Partial<Issuer> = {}, now = NOW) {
-  return new TokenVerifier([{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups', ...options }], {
-    now: () => now,
-  })
+  return new TokenVerifier(
+    [{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups', scope: 'openid', ...options }],
+    {
+      now: () => now,
+    }
+  )
 }
 
 function claims(extra: Record<string, unknown> = {}) {
@@ -40,9 +43,12 @@ describe('TokenVerifier', () => {
     const other = createTestKey(alg, `k-${alg}`)
     const idp = await startTestIssuer([other])
     try {
-      const v = new TokenVerifier([{ issuer: idp.url, audience: 'hammerkit', groupsClaim: 'groups' }], {
-        now: () => NOW,
-      })
+      const v = new TokenVerifier(
+        [{ issuer: idp.url, audience: 'hammerkit', groupsClaim: 'groups', scope: 'openid' }],
+        {
+          now: () => NOW,
+        }
+      )
       const principal = await v.verify(signToken(other, { ...claims(), iss: idp.url }))
       expect(principal.sub).toBe('alice')
     } finally {
@@ -115,9 +121,12 @@ describe('TokenVerifier', () => {
     const idp = await startTestIssuer([createTestKey('RS256', 'old')])
     try {
       let now = NOW
-      const v = new TokenVerifier([{ issuer: idp.url, audience: 'hammerkit', groupsClaim: 'groups' }], {
-        now: () => now,
-      })
+      const v = new TokenVerifier(
+        [{ issuer: idp.url, audience: 'hammerkit', groupsClaim: 'groups', scope: 'openid' }],
+        {
+          now: () => now,
+        }
+      )
       const old = idp.keys[0]
       await v.verify(signToken(old, { ...claims(), iss: idp.url }))
       await v.verify(signToken(old, { ...claims(), iss: idp.url }))
@@ -140,28 +149,37 @@ describe('TokenVerifier', () => {
   })
 
   it('refuses metadata that names another issuer', async () => {
-    const v = new TokenVerifier([{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups' }], {
-      now: () => NOW,
-      fetch: (async (url: string) =>
-        new Response(JSON.stringify({ issuer: 'https://other.example', jwks_uri: `${url}/jwks` }))) as typeof fetch,
-    })
+    const v = new TokenVerifier(
+      [{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups', scope: 'openid' }],
+      {
+        now: () => NOW,
+        fetch: (async (url: string) =>
+          new Response(JSON.stringify({ issuer: 'https://other.example', jwks_uri: `${url}/jwks` }))) as typeof fetch,
+      }
+    )
     await expect(v.verify(signToken(key, claims()))).rejects.toThrow('issuer metadata names https://other.example')
   })
 
   it('refuses keys that are not served over https', async () => {
-    const v = new TokenVerifier([{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups' }], {
-      now: () => NOW,
-      fetch: (async () =>
-        new Response(JSON.stringify({ issuer: issuer.url, jwks_uri: 'http://keys.example/jwks' }))) as typeof fetch,
-    })
+    const v = new TokenVerifier(
+      [{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups', scope: 'openid' }],
+      {
+        now: () => NOW,
+        fetch: (async () =>
+          new Response(JSON.stringify({ issuer: issuer.url, jwks_uri: 'http://keys.example/jwks' }))) as typeof fetch,
+      }
+    )
     await expect(v.verify(signToken(key, claims()))).rejects.toThrow('is not https')
   })
 
   it('reports an issuer that does not answer', async () => {
-    const v = new TokenVerifier([{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups' }], {
-      now: () => NOW,
-      fetch: (async () => new Response('{}', { status: 503 })) as typeof fetch,
-    })
+    const v = new TokenVerifier(
+      [{ issuer: issuer.url, audience: 'hammerkit', groupsClaim: 'groups', scope: 'openid' }],
+      {
+        now: () => NOW,
+        fetch: (async () => new Response('{}', { status: 503 })) as typeof fetch,
+      }
+    )
     await expect(v.verify(signToken(key, claims()))).rejects.toThrow('answered 503')
   })
 })
