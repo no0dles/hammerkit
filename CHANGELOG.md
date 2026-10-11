@@ -1,3 +1,10 @@
+## [1.19.1](https://github.com/no0dles/hammerkit/compare/v1.19.0...v1.19.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* mount the go and cargo caches from the home directory ([#72](https://github.com/no0dles/hammerkit/issues/72)) ([37b060c](https://github.com/no0dles/hammerkit/commit/37b060c782966b33cb888f95d4de0a01a523d910))
+
 # [1.19.0](https://github.com/no0dles/hammerkit/compare/v1.18.0...v1.19.0) (2026-10-10)
 
 
