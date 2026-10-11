@@ -42,6 +42,7 @@ A task is built from a small, fixed set of fields:
 | `cache` | The [caching](/docs/task/caching) method/backend for this task. |
 | `timeout` | Maximum execution time, e.g. `10m` (see [timeouts](#timeouts)). |
 | `resources` | CPU and memory limits of the container (see [resources](#resources)). |
+| `runner` | The server the task has to run on (see [runner](#runner)). |
 
 ## Source files (`src`)
 Tasks that depend on input files should declare them under `src`.
@@ -226,3 +227,43 @@ for containers on Docker (on Kubernetes the cluster places pods by their request
 The capacity is the Docker host's when containers run there, else this machine's.
 `HAMMERKIT_CPUS` and `HAMMERKIT_MEMORY` (e.g. `8`, `16Gi`) set it, for a CI runner
 that shares its machine, for example.
+
+## Runner
+
+<Callout type="warn">
+
+Experimental. A task can name its server already, but running on one arrives in a
+follow-up release. Until then a run that resolves to a server stops with an error
+instead of running locally.
+
+</Callout>
+
+`runner` names a server registered with [`hammerkit remote add`](/docs/cli/remote),
+for a task that has to run somewhere else, such as a Mac mini for an Xcode build.
+Set it on a task or as a default for the whole build file; `extend` inherits it.
+
+```yaml
+runner: linux-pool # default of the tasks of this file
+
+tasks:
+  ios:
+    runner: mac-mini
+    cmds:
+      - xcodebuild -scheme app
+```
+
+The build file holds a name only. The URL and the OAuth issuer live in the host
+config, so a project can't send your source code to a server you never registered.
+
+Where a run happens, highest first:
+
+1. `--on` / `--local` (follow-up release)
+2. the `HAMMERKIT_ON` environment variable (`local`, `auto` or a server name)
+3. the `runner` of the tasks in the run
+4. `run.on` of the host config, set with `hammerkit remote use`
+5. the local machine
+
+`auto` stands for the tasks' `runner`, else local. A run goes to a single server, so
+tasks that name different servers fail the run, and a name that is not registered
+is an error: hammerkit never quietly runs a task somewhere else than you asked.
+`local` and `auto` can't be used as a `runner`.

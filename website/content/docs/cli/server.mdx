@@ -1,0 +1,519 @@
+---
+title: "Server"
+description: "Run this machine as a hammerkit server that remote runs can be sent to."
+---
+<Callout type="warn">
+
+Experimental. The server checks OAuth tokens and tells a caller which service
+accounts they have. Accepting runs arrives in a follow-up release, see the
+[remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
+
+</Callout>
+
+`server` turns a machine into the target of remote runs: a Mac mini for iOS builds,
+a Linux box with big CPUs, later a Kubernetes cluster. It reads its own config
+file, so it needs no build file.
+
+```bash
+hammerkit server --config /etc/hammerkit/server.yaml
+```
+
+The server runs until it is interrupted. `HAMMERKIT_SERVER_CONFIG` can stand in for
+`--config`.
+
+## Config
+
+The file belongs to whoever operates the server and is reviewed like code. Unknown
+keys are an error, so a typo is not silently ignored.
+
+```yaml
+listen:
+  host: 127.0.0.1   # default
+  port: 8480        # default
+tls:
+  cert: /etc/hammerkit/tls.crt
+  key: /etc/hammerkit/tls.key
+issuers:
+  - issuer: https://login.example.com
+    audience: hammerkit
+    groupsClaim: groups   # default
+    clientId: hammerkit-cli
+    scope: openid api://hammerkit/.default
+entitlements:
+  - subject: { iss: https://login.example.com, sub: 4f1c2b }
+    accounts: [op-payments-dev]
+    request: [op-payments-prod]
+    default: op-payments-dev
+  - group: { iss: https://login.example.com, name: eng-web }
+    accounts: [op-web-dev]
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository: corp/payments, ref: refs/heads/main }
+    publish: [payments]
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository: corp/payments, ref: refs/heads/main }
+    accounts: [op-payments-ci]
+    source: [ref]
+sources:
+  payments: { git: git@github.com:corp/payments.git }   # where the code of a run comes from
+approvals:
+  timeout: 1h        # default
+  maxWaiting: 100    # default
+storage:
+  directory: /var/lib/hammerkit   # default ~/.hammerkit/server
+runs:
+  maxConcurrent: 4   # default
+  keep: 200          # default
+backend:
+  type: host
+  platform: { os: macos, arch: arm64 }   # detected when left out
+```
+
+| Key | What it does |
+| --- | --- |
+| `listen` | Interface and port. Port `0` picks a free one. |
+| `tls` | Certificate and key to serve https. |
+| `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
+| `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
+| `entitlements` | Who may use which service account, see [below](#entitlements). |
+| `approvals` | How long a requested run waits for its approval (`timeout`) and how many may wait (`maxWaiting`), see [Approvals](#approvals). |
+| `sources` | The repository of each published build file, by its name. A run with `source: ref` gets its code from there, see [Executing a run](#executing-a-run). Credentials are those of the git configuration of the user the server runs as. |
+| `storage` | Where the server keeps what must survive a restart: the published build files. Runs work in `runs/` below it while they run. |
+| `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. |
+| `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
+
+Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
+Anywhere else the config needs `tls`, or `behindTlsProxy: true`.
+
+## Authentication
+
+Every call except discovery and the health check carries an OAuth access token as
+`Authorization: Bearer <token>`. The server fetches the issuer's keys from its
+OpenID discovery document and accepts a token only when
+
+* it is signed with `RS256`, `RS384`, `RS512`, `PS256`, `ES256`, `ES384` or `ES512`
+  (never `none` or a shared secret),
+* its `iss` is one of the configured issuers and its `aud` contains the configured
+  audience,
+* it has not expired and is already valid (a minute of clock skew is allowed), and
+* it has a `sub`.
+
+Keys are cached for ten minutes, and fetched again, at most once a minute, when a
+token names a key the server does not know yet, so a rotation needs no restart. A
+refused token only gets `401 invalid token`; the reason goes to the server's log,
+with everything a caller sent quoted and stripped of control characters, so a caller
+can't forge log lines. Concurrent requests share one key fetch, a failing issuer is
+left alone for ten seconds, and the previous keys keep working for up to an hour
+while the issuer is down.
+
+Two things the server does not check, so set them up on the identity provider:
+
+* `aud` has to be an API audience for the server, not the OAuth client's own id, or an
+  ID token for that client would be accepted. The server does not look at the token
+  type (`typ`) or the authorized party (`azp`).
+* A `claims` entitlement matches any string claim as it finds it. It does not know
+  that `email` needs `email_verified`; match on `sub`, a group or a claim the
+  provider controls.
+
+### Entitlements
+
+An entitlement says which service accounts a caller may use. The server matches
+the validated claims of the token only, never anything the caller sends along.
+
+| Who | Matches |
+| --- | --- |
+| `subject: {iss, sub}` | exactly that person or client |
+| `group: {iss, name}` | every caller of that issuer whose groups claim lists the name |
+| `claims: {iss, match}` | every token of that issuer whose string claims equal all of `match`, for CI jobs (repository, ref, environment) |
+
+A caller gets the accounts of all entitlements that match, and none when no entry
+matches. A caller with no account and nothing to publish can do nothing on the
+server, they are not even shown which build files exist.
+
+An account is given in one of two modes:
+
+* `accounts` makes the caller **admin** of the account: they run on it at once and
+  approve the runs others request on it.
+* `request` lets the caller ask for runs on the account. Such a run waits until an
+  admin of the account approves it, see [Approvals](#approvals).
+
+When entitlements give both for the same account, admin wins. `default` names the
+account used when a run names none, and has to be one of `accounts` or `request`;
+with a single account that account is the default. `source` limits
+where the code may come from, `upload` for the caller's working tree and `ref` for
+a git ref the server checks out itself; a caller matching several entitlements
+gets only what all of them allow. Every grant is written to the log with issuer,
+subject, accounts and the entitlements that matched.
+
+`publish` lists the names of the [build files](#build-files) the caller may publish,
+or `*` for any. It is a permission of its own: who defines the work does not have to
+be who runs it, for example a CI job on the main branch publishes and everyone else
+only runs. `propose` is the lower mode of `publish`, see [Proposing a version](#proposing-a-version). An entitlement needs at least one of `accounts`, `request`, `publish` and `propose`.
+
+`GET /v1/me` returns the identity and what the caller may use:
+
+```json
+{
+  "iss": "https://login.example.com",
+  "sub": "4f1c2b",
+  "accounts": ["op-payments-dev"],
+  "request": ["op-payments-prod"],
+  "default": "op-payments-dev",
+  "publish": [],
+  "propose": []
+}
+```
+
+## Build files
+
+A run does not bring its own build file. The server keeps the build files that
+were published to it, and a run says which one to use and which of its tasks to
+execute. So whoever may run work cannot change what a task does, and what a task
+does is decided by whoever may publish.
+
+```
+PUT /v1/definitions/payments
+```
+
+```json
+{
+  "entry": ".hammerkit.yaml",
+  "files": {
+    ".hammerkit.yaml": "tasks:\n  build:\n    cmds: [npm run build]\n",
+    "web/.hammerkit.yaml": "..."
+  }
+}
+```
+
+A published build file is a bundle: the file that starts it (`entry`, the usual
+`.hammerkit.yaml` when left out) and every file it includes, as text, up to 200
+files and 1 MiB. The name says what it is for (letters, digits, `.`, `_` and `-`).
+The server reads the bundle the way a run would, in a directory of its own where
+only the bundle's files exist, so one that does not load is refused when it is
+published and not when somebody wants to run it (`400`). A bundle may not include
+anything outside of itself. Includes from git have to be pinned to a commit and
+come from an `https://` or `ssh://` address, because the version below can only
+vouch for what is in the bundle.
+
+**Versions.** Every bundle has a version, the hash of its files:
+`sha256:<hex>` of the JSON `[entry, [[path, sha-256 of the content], ...]]` with
+the paths sorted. The same files have the same version anywhere, so a client can
+compute it and compare it with the server's. A version is never changed; publishing
+different files under the same name adds a version, publishing the same files again
+answers `200` and changes nothing (the first publish answers `201`).
+
+| Call | What it does |
+| --- | --- |
+| `PUT /v1/definitions/<name>` | Publish a bundle. Needs the `publish` permission for that name, else `403`. With only `propose` it is a [proposal](#proposing-a-version) and answers `202`. |
+| `GET /v1/definitions` | The names with their latest version. |
+| `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each, the tasks and services it has and what each task works on (`inputs`). |
+| `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
+| `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
+
+Reading needs a token and at least one service account, `publish` or `propose`
+permission. Versions are kept in the `storage` directory and survive a restart.
+
+**Inputs.** A version lists, for every task, what it works on, so a client knows
+which of its files a run needs without planning the build file itself:
+
+```json
+"inputs": {
+  "build": { "src": ["package.json", "src/**/*.ts", "!src/**/*.spec.ts"], "mounts": [], "deps": [], "needs": [] },
+  "test": { "src": [], "mounts": [".npm"], "deps": ["build"], "needs": ["db"] }
+}
+```
+
+`src` are the patterns of the task's own `src` as the build file writes them
+(environment variables are not substituted), `mounts` are the host paths a
+container task mounts, `deps` the tasks and `needs` the services it waits for. Paths
+are relative to the root of the bundle, which is also the root of the project's
+files, and a path outside of it is left out because it cannot be sent. What a task
+inherits from its dependencies is listed with those. Versions published before this
+was recorded have no `inputs`.
+
+### Proposing a version
+
+Who defines the work decides what runs, so a new version of a build file can wait for
+a second pair of eyes. `propose` on an entitlement is the lower mode of `publish`,
+like `request` is the lower mode of `accounts`:
+
+```yaml
+entitlements:
+  - group: { iss: https://login.example.com, name: platform }
+    publish: [payments]
+  - claims:
+      iss: https://login.example.com
+      match: { client: coding-agent }
+    propose: [payments]
+```
+
+A caller who may only propose a name sends the same `PUT`. The server reads the
+bundle as it does for a publish and refuses one that does not load, then keeps it as
+a **proposal** (`202`). It is not a version: it can not be run, `latest` does not
+change and the build files are not listed with it. Someone who may `publish` that
+name, and did not propose it, approves it, and only then it is published, as
+the proposer's version with the approver recorded as `approvedBy`. That is the version
+runs refer to by hash, so what was approved is what runs. Where a caller may both
+publish and propose a name, publishing wins.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/proposals` | The proposals the caller made or may decide, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, `base` (the latest version it would follow) and whether the caller `canDecide`. |
+| `GET /v1/proposals/<name>/<hash>` | One of them. |
+| `GET /v1/proposals/<name>/<hash>/files` | Its files, to read what would be published. |
+| `POST /v1/proposals/<name>/<hash>/approve` | Publish it. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/proposals/<name>/<hash>/reject` | Drop it; the reason (up to 500 characters) is kept with it. |
+
+What the caller neither proposed nor may decide does not exist for them (`404`), and
+one that is decided or expired is `409`. A proposal expires after the `approvals.timeout`
+like a requested run does, and `approvals.maxWaiting` limits the proposals that wait
+(`503`). Proposals are kept in memory: after a restart the proposer proposes again.
+Each proposal and decision is logged with who made it.
+
+A proposal approves a new version of the build file, not the code its commands run:
+`npm test` still executes the files a run brings. Production accounts stay behind
+[`request`](#approvals) and `source: [ref]`.
+
+## Source files
+
+A run from an `upload` works on the caller's files. They are sent in two steps so
+that only what the server does not have yet travels: the caller announces the tree
+as a list of files with their digests, the server says which digests it lacks, and
+the caller sends those.
+
+```
+POST /v1/sources
+```
+
+```json
+{
+  "files": [
+    { "path": "package.json", "sha256": "9f2c...", "size": 812 },
+    { "path": "bin/run.sh", "sha256": "41ab...", "size": 233, "mode": "exec" }
+  ]
+}
+```
+
+The answer names the tree, a **snapshot**, and says what is missing:
+
+```json
+{
+  "snapshot": "sha256:5d1e...",
+  "files": 2,
+  "bytes": 1045,
+  "createdAt": "2026-10-11T11:00:00.000Z",
+  "missing": ["9f2c...", "41ab..."],
+  "complete": false
+}
+```
+
+The snapshot is the `sha256:<hex>` of the JSON `[[path, sha-256, mode], ...]` with
+the paths sorted, the same construction as the version of a build file, so the same
+files have the same name anywhere. It answers `201` for a new tree and `200` for
+one the server already knows. Then each missing file is sent on its own:
+
+| Call | What it does |
+| --- | --- |
+| `POST /v1/sources` | Announce a tree. Up to 20,000 files, 32 MiB per file, 1 GiB per tree. |
+| `PUT /v1/sources/blobs/<sha256>` | Send the content of one file as the request body. Answers `201`, or `200` when the server had it. |
+| `GET /v1/sources` | The trees the caller keeps, what they take and the limit. |
+| `GET /v1/sources/<snapshot>` | One tree and the digests still missing; `complete` when none is. |
+| `DELETE /v1/sources/<snapshot>` | Forget a tree and the content no other tree of the caller needs. |
+
+A second run after one edited file announces the tree again and sends that file
+only. A client can also skip the announcement when the snapshot it computes is the
+one it used last and `GET /v1/sources/<snapshot>` says it is complete.
+
+* **Only the caller's.** Trees and content belong to the caller who sent them;
+  another caller's snapshot is `404`. Content is never shared between callers: a
+  server that answers "I already have this file" to anybody would tell them what
+  other people work on.
+* **Only announced content.** A file is taken only if a tree the caller announced
+  lists its digest, with the size announced, and only if the content has that
+  digest. Anything else is `400`.
+* **Credentials do not leave.** A tree with a path that looks like a credential is
+  refused with `400` that names it, even when a `src` pattern reaches it: `.env`
+  (not `.env.example`, `.env.sample`, `.env.template`), `.npmrc`, `.netrc`,
+  `.pypirc`, `.git-credentials`, private keys (`id_rsa` and its kin, `*.pem`,
+  `*.p12`, `*.pfx`) and anything below `.git/`, `.ssh/`, `.aws/`, `.gnupg/` or
+  `.kube/`. Secrets belong in a secret provider; there is no override.
+* **Quota.** A caller may keep 4 GiB; a file that would go over is `413`. Nothing
+  is removed on its own, a caller deletes what they no longer need.
+* **Who may.** Callers who can run something and whose entitlements allow `upload`
+  as a `source`; others get `403`.
+
+Paths are relative to the root of the project, forward slashes, nothing that climbs
+out; `inputs` of a [build file version](#build-files) say which files a run needs.
+
+## Runs
+
+A run is a request to execute tasks of a published [build file](#build-files). The server keeps the runs in
+memory, so they are gone after a restart. Every call needs a token, and a run can be
+seen and cancelled only by the caller that submitted it: for anyone else its id is
+`404`, the same as an id that does not exist.
+
+| Call | What it does |
+| --- | --- |
+| `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`, or `awaiting-approval` when the caller only has the account on [`request`](#approvals). |
+| `GET /v1/runs` | The caller's runs, newest first. |
+| `GET /v1/runs/<id>` | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. |
+| `POST /v1/runs/<id>/cancel` | Cancel a run: one that is queued or waits for an approval at once, a running one when its tasks have stopped. |
+| `GET /v1/runs/<id>/events` | The run's events as server-sent events, see below. |
+
+```json
+{
+  "definition": { "name": "payments", "hash": "sha256:9f2c..." },
+  "tasks": ["build", "test"],
+  "account": "op-payments-dev",
+  "source": { "type": "ref", "ref": "refs/heads/main" },
+  "options": { "env": "staging", "cache": "checksum", "timeout": "30m" }
+}
+```
+
+* `definition` names the published build file and the version to run: a hash, or
+  `latest` when left out. The run is pinned to the version the server chose, which
+  the answer shows, so what it executes does not change under it. A name or version
+  that does not exist is `400`.
+* `tasks` are task names as on the command line, up to 100. A task the build file
+  does not have is `400`. Instead of names, labels in `options.filter` can select
+  the tasks.
+* `account` is the service account the run uses. It has to be one of the caller's
+  [entitlements](#entitlements), and defaults to the caller's default account; a
+  caller who may only publish runs without one. Naming an account they may not use
+  is `403`, and a caller with no entitlement at all may not run.
+* `source` says where the code comes from: `{ "type": "ref", "ref": "..." }` for a git
+  ref the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
+  for the caller's working tree, announced and sent beforehand, see [Source
+  files](#source-files). A snapshot that is unknown, or that still lacks files, is
+  `400`. The kinds an entitlement lists in `source` are the only ones allowed,
+  anything else is `403`.
+* `options` are the settings of `hammerkit run` that make sense on a server, all
+  optional: `env`, `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
+  `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
+  parallel and how much of the machine they use stay with the server, and `watch` and
+  the log mode are for terminals only, so they are not accepted.
+
+The request names the work, it does not contain it: what the tasks do comes from the
+published build file, and the files they work on come from `source`. A `ref` is
+fetched by the server. An `upload` refers to a snapshot of the working tree that is
+sent separately, so the request stays small however large the project is.
+
+The body is JSON up to 64 KiB, and unknown fields are rejected. Each submitted run is
+logged with who submitted it, the account and the source.
+
+The events carry the sequence number as their `id`, so a client that lost the
+connection continues with the `Last-Event-ID` header (or `?after=<n>`) and misses
+nothing. The stream replays what happened and then follows the run until it is over;
+a finished run's events are replayed and the stream ends. Event types are `state`
+(`awaiting-approval`, `queued`, `running` and the final state, with the `error` of a failed run), `approval`
+(who approved or rejected the run), `task` (a task started or finished)
+and `log` (a line of a task's output). A run that
+produces more than 5000 events is cut off with one `truncated` event, the state
+changes are always kept.
+
+### Executing a run
+
+The server runs the tasks of an accepted run on its own machine, with the same engine
+as `hammerkit run`, so the `local` and `docker` runtimes and the task cache work as
+they do there:
+
+1. It fetches the `ref` (a branch, tag or commit) of the repository the operator set
+   in `sources.<build file name>.git`, into a directory made for the run. The caller
+   names a ref, never a repository, and a ref that is not a plain branch, tag or
+   commit name is refused.
+2. It writes the files of the published version over the checkout, so the tasks are
+   the published ones whatever the build file in the repository says.
+3. It runs the tasks in the order they were named (or the ones the labels select),
+   stopping at the first one that fails, and reports each task and its output as
+   events.
+4. It removes the directory, whether the run succeeded, failed or was cancelled.
+
+The tasks only see the tools to find docker and the network (`PATH`, `HOME`,
+`DOCKER_HOST`, proxy settings and the like) from the environment of the server, not
+the rest of it, so the secrets the operator gave the server stay with the server.
+The local task cache is shared by all runs: a task is keyed by its definition and its
+sources, not by where the checkout is.
+
+A run fails with the reason when the server has no `sources` entry for its build file,
+when the ref can not be fetched, or when it comes from an `upload`: uploads are not
+supported by the executor yet, use `source: ref`. Cancelling a run stops the fetch or
+the running task.
+
+> Service accounts are only checked against the entitlements for now: the executor
+> does not resolve the secrets of an account yet.
+
+## Approvals
+
+Some work should not happen because one identity asked for it: a deploy with the
+production key, a task with access to customer data. Access to a service account comes
+in two modes for that, see [Entitlements](#entitlements). Whoever is **admin** of an
+account runs on it directly. Whoever may only **request** it can ask for a run, which
+waits in state `awaiting-approval` until an admin of that account approves it. This
+suits an agent or a developer who proposes a deployment and a person who confirms it.
+
+```yaml
+entitlements:
+  - group: { iss: https://login.example.com, name: release-managers }
+    accounts: [op-payments-prod]
+  - group: { iss: https://login.example.com, name: eng-payments }
+    accounts: [op-payments-dev]
+    request: [op-payments-prod]
+approvals:
+  timeout: 1h        # how long a run waits, default 1h
+  maxWaiting: 100    # runs waiting at the same time, default 100
+```
+
+* The mode belongs to the account of the run, which is chosen in its request and
+  checked against the caller's entitlements. Nothing in a build file can change it, so
+  every requested run with the production key is held, whatever its tasks are called
+  or labelled, and whoever may [publish](#build-files) cannot lift it.
+* A caller approves what they have access to: admin of the account the run uses.
+  Admin of another account sees nothing of it. An admin does not need `request`,
+  their own runs on the account start at once, and nobody approves their own run.
+  Approvers see the published build files, so they can read what they approve, and
+  nothing more.
+* One approval is enough. A run nobody approves within `timeout` is rejected, and so
+  is one an admin rejects. More than `maxWaiting` waiting runs are refused with `503`.
+  A run that waits is cancelled when the server stops, like every other.
+* A run without a service account is not held. What an approval cannot cover is what
+  the code does: pinning commands does not pin the code they run, so an account that
+  matters should also be limited to `source: [ref]`.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/approvals` | The runs waiting for an approval the caller can give, with who asked, the build file version, tasks, account, source and options. |
+| `GET /v1/approvals/<id>` | One of them. |
+| `POST /v1/approvals/<id>/approve` | Approve the run, which is queued. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/approvals/<id>/reject` | End the run; the reason (up to 500 characters) becomes its `error`. |
+
+What a caller may not approve does not exist for them (`404`), and a run that is no
+longer waiting is `409`. Each call is logged with who decided and the result, and the
+decision is an event of the run, so the one who asked sees who approved it.
+`GET /v1/me` tells which accounts the caller is admin of and which they may request,
+and `hammerkit remote accounts` shows it. The command line has [`remote approvals`, `approve` and `reject`](/docs/cli/remote#approving-runs).
+
+## Discovery
+
+`GET /.well-known/hammerkit` needs no token and returns what the server is, so a
+client can check it before signing in:
+
+```json
+{
+  "name": "hammerkit",
+  "version": "1.17.0",
+  "protocol": 1,
+  "issuers": [
+    {
+      "issuer": "https://login.example.com",
+      "audience": "hammerkit",
+      "clientId": "hammerkit-cli",
+      "scope": "openid api://hammerkit/.default"
+    }
+  ],
+  "backend": { "type": "host", "platform": { "os": "macos", "arch": "arm64" } }
+}
+```
+
+`GET /healthz` answers `{"status":"ok"}` for a load balancer or a process manager.
+Every other path needs a token.

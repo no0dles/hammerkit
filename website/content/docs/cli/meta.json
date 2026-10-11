@@ -13,6 +13,8 @@
     "includes",
     "store-restore",
     "package",
+    "remote",
+    "server",
     "clean",
     "validate"
   ]

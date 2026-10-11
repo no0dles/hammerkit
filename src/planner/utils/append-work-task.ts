@@ -97,6 +97,7 @@ function parseTask(
       task.schema.account
     ),
     resources: parseWorkResources(task.schema.resources),
+    runner: task.schema.runner ?? task.scope.schema.runner ?? null,
   }
 
   if (isBuildFileContainerTaskSchema(task.schema)) {

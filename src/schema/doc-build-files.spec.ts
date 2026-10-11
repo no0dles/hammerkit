@@ -37,6 +37,7 @@ const KNOWN_TOP_KEYS = new Set([
   'secretProviders',
   'secretAccounts',
   'labels',
+  'runner',
 ])
 
 // A doc block can declare itself intentionally invalid by putting this comment
@@ -52,6 +53,26 @@ const HISTORICAL_DIRS = ['release-blog']
 // matched by a unique snippet of its body. Keep the reason — these are the only
 // blocks allowed to be unrecognized.
 const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
+  {
+    file: join('cli', 'server.mdx'),
+    snippet: 'audience: hammerkit',
+    reason: 'server config (hammerkit server --config), not a build file',
+  },
+  {
+    file: join('cli', 'server.mdx'),
+    snippet: 'release-managers',
+    reason: 'entitlements of the server config (hammerkit server --config), not a build file',
+  },
+  {
+    file: join('cli', 'server.mdx'),
+    snippet: 'coding-agent',
+    reason: 'entitlements of the server config (hammerkit server --config), not a build file',
+  },
+  {
+    file: join('cli', 'remote.mdx'),
+    snippet: 'issuer: https://login.example.com',
+    reason: 'host config (~/.hammerkit/config.yaml), not a build file',
+  },
   {
     file: join('installation.mdx'),
     snippet: 'DOCKER_TLS_CERTDIR',

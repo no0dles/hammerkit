@@ -7,6 +7,7 @@ import { labelsSchema } from './labels-schema'
 import { buildFileCacheSchema } from './cache-schema'
 import { buildFileIncludeSchema } from './build-file-include-schema'
 import { buildFileSecretAccountsSchema, buildFileSecretProvidersSchema } from './build-file-secret-provider-schema'
+import { runnerSchema } from './runner-schema'
 
 export const buildFileSchema = object({
   envs: envsSchema.optional(),
@@ -19,6 +20,8 @@ export const buildFileSchema = object({
   secretProviders: buildFileSecretProvidersSchema.optional(),
   secretAccounts: buildFileSecretAccountsSchema.optional(),
   labels: labelsSchema.optional(),
+  // default `runner` of the tasks of this file
+  runner: runnerSchema.optional(),
 })
   .strict()
   .describe('Build file with support for containerization\nhttps://hammerkit.dev/docs/build-file')
