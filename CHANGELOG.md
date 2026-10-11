@@ -1,3 +1,10 @@
+# [1.25.0](https://github.com/no0dles/hammerkit/compare/v1.24.0...v1.25.0) (2026-10-11)
+
+
+### Features
+
+* **server:** redesign remote compute around accounts, repositories and isolated runs ([#90](https://github.com/no0dles/hammerkit/issues/90)) ([8ddc5ae](https://github.com/no0dles/hammerkit/commit/8ddc5ae557a18c88c2d49e3ee6a003bd19f319c5))
+
 # [1.24.0](https://github.com/no0dles/hammerkit/compare/v1.23.0...v1.24.0) (2026-10-11)
 
 
