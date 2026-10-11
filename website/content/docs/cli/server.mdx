@@ -146,7 +146,7 @@ subject, accounts and the entitlements that matched.
 `publish` lists the names of the [build files](#build-files) the caller may publish,
 or `*` for any. It is a permission of its own: who defines the work does not have to
 be who runs it, for example a CI job on the main branch publishes and everyone else
-only runs. An entitlement needs `accounts`, `request`, `publish` or any of them.
+only runs. `propose` is the lower mode of `publish`, see [Proposing a version](#proposing-a-version). An entitlement needs at least one of `accounts`, `request`, `publish` and `propose`.
 
 `GET /v1/me` returns the identity and what the caller may use:
 
@@ -157,7 +157,8 @@ only runs. An entitlement needs `accounts`, `request`, `publish` or any of them.
   "accounts": ["op-payments-dev"],
   "request": ["op-payments-prod"],
   "default": "op-payments-dev",
-  "publish": []
+  "publish": [],
+  "propose": []
 }
 ```
 
@@ -201,14 +202,57 @@ answers `200` and changes nothing (the first publish answers `201`).
 
 | Call | What it does |
 | --- | --- |
-| `PUT /v1/definitions/<name>` | Publish a bundle. Needs the `publish` permission for that name, else `403`. |
+| `PUT /v1/definitions/<name>` | Publish a bundle. Needs the `publish` permission for that name, else `403`. With only `propose` it is a [proposal](#proposing-a-version) and answers `202`. |
 | `GET /v1/definitions` | The names with their latest version. |
 | `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each and the tasks and services it has. |
 | `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
 | `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
 
-Reading needs a token and at least one service account or `publish` permission.
-Versions are kept in the `storage` directory and survive a restart.
+Reading needs a token and at least one service account, `publish` or `propose`
+permission. Versions are kept in the `storage` directory and survive a restart.
+
+### Proposing a version
+
+Who defines the work decides what runs, so a new version of a build file can wait for
+a second pair of eyes. `propose` on an entitlement is the lower mode of `publish`,
+like `request` is the lower mode of `accounts`:
+
+```yaml
+entitlements:
+  - group: { iss: https://login.example.com, name: platform }
+    publish: [payments]
+  - claims:
+      iss: https://login.example.com
+      match: { client: coding-agent }
+    propose: [payments]
+```
+
+A caller who may only propose a name sends the same `PUT`. The server reads the
+bundle as it does for a publish and refuses one that does not load, then keeps it as
+a **proposal** (`202`). It is not a version: it can not be run, `latest` does not
+change and the build files are not listed with it. Someone who may `publish` that
+name, and did not propose it, approves it, and only then it is published, as
+the proposer's version with the approver recorded as `approvedBy`. That is the version
+runs refer to by hash, so what was approved is what runs. Where a caller may both
+publish and propose a name, publishing wins.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/proposals` | The proposals the caller made or may decide, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, `base` (the latest version it would follow) and whether the caller `canDecide`. |
+| `GET /v1/proposals/<name>/<hash>` | One of them. |
+| `GET /v1/proposals/<name>/<hash>/files` | Its files, to read what would be published. |
+| `POST /v1/proposals/<name>/<hash>/approve` | Publish it. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/proposals/<name>/<hash>/reject` | Drop it; the reason (up to 500 characters) is kept with it. |
+
+What the caller neither proposed nor may decide does not exist for them (`404`), and
+one that is decided or expired is `409`. A proposal expires after the `approvals.timeout`
+like a requested run does, and `approvals.maxWaiting` limits the proposals that wait
+(`503`). Proposals are kept in memory: after a restart the proposer proposes again.
+Each proposal and decision is logged with who made it.
+
+A proposal approves a new version of the build file, not the code its commands run:
+`npm test` still executes the files a run brings. Production accounts stay behind
+[`request`](#approvals) and `source: [ref]`.
 
 ## Runs
 

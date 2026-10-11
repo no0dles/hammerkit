@@ -1,4 +1,4 @@
-import { getGrant, isAdmin, mayPublish, maySeeDefinitions } from './policy'
+import { getGrant, isAdmin, mayPropose, mayPublish, maySeeDefinitions } from './policy'
 import { Principal } from './oauth'
 import { Entitlement } from './server-config'
 
@@ -24,6 +24,7 @@ describe('getGrant', () => {
       accounts: [],
       request: [],
       publish: [],
+      propose: [],
       default: null,
       source: ['upload', 'ref'],
       matched: [],
@@ -134,5 +135,31 @@ describe('request and admin', () => {
 
   it('takes the only account as default whichever the mode', () => {
     expect(getGrant([{ subject: { iss: IDP, sub: 'bob' }, accounts: [], request: ['prod'] }], bob).default).toBe('prod')
+  })
+})
+
+describe('propose and publish', () => {
+  const entitlement = (extra: object): Entitlement[] => [
+    { subject: { iss: IDP, sub: 'alice' }, accounts: [], ...extra } as Entitlement,
+  ]
+
+  it('keeps what may be proposed apart from what may be published', () => {
+    const grant = getGrant(entitlement({ propose: ['payments'], publish: ['web'] }), alice)
+    expect(grant.propose).toEqual(['payments'])
+    expect(mayPropose(grant, 'payments')).toBe(true)
+    expect(mayPropose(grant, 'web')).toBe(false)
+    expect(mayPublish(grant, 'payments')).toBe(false)
+    expect(mayPublish(grant, 'web')).toBe(true)
+  })
+
+  it('takes * for any name', () => {
+    const grant = getGrant(entitlement({ propose: ['*'] }), alice)
+    expect(mayPropose(grant, 'anything')).toBe(true)
+    expect(mayPublish(grant, 'anything')).toBe(false)
+  })
+
+  it('lets somebody who may only propose see the build files', () => {
+    expect(maySeeDefinitions(getGrant(entitlement({ propose: ['payments'] }), alice))).toBe(true)
+    expect(getGrant([], alice).propose).toEqual([])
   })
 })

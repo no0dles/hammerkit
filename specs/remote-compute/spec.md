@@ -95,7 +95,8 @@ The server holds the build file; a run names a published build file and the task
 - The mode is decided on the account of the run, chosen in the request and checked against the entitlements; nothing in a build file changes it, so it holds however a task is named or labelled. (Found in review: earlier rules on task names and labels could be dodged by whoever may publish, and were removed.)
 - A requested run waits in `awaiting-approval`: one approval by an admin of its account, never the one who asked. A rejection, or the timeout, ends it as `rejected`. Waiting runs are limited. `GET /v1/approvals`, `POST /v1/approvals/<id>/approve|reject`; the decision is an event of the run. A caller only sees and decides what they are admin of.
 - Admins read the published build files, so they can read what they approve.
-- Build file changes get the same treatment in the next step: `propose` next to `publish`, a proposed version cannot run until someone with `publish` for that name approves it.
+- Build file changes get the same treatment: `propose` is the lower mode of `publish`. A bundle from a caller who may only propose is read like a publish and kept as a **proposal** (in memory, expiring with the same timeout and limit), not as a version: it can not run and is not `latest`. Someone with `publish` for that name, not the proposer, approves it, and only then it is published (proposer as `publishedBy`, approver as `approvedBy`). `GET /v1/proposals`, `/v1/proposals/<name>/<hash>[/files]`, `POST .../approve|reject`. A caller sees the proposals they made or may decide.
+- What an approved version does not cover: the code its commands run (see the limit above).
 - This is meant to be the mechanism the secrets design reuses for the step-up approval of `reveal`: an approval is a decision by a different identity on one pinned request.
 
 ## Placement and the runner

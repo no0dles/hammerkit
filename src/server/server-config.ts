@@ -88,6 +88,9 @@ export const entitlementSchema = z
     // the build files (by name) the caller may publish, `*` for any; a separate
     // permission from running them, so who defines work and who runs it can differ
     publish: z.array(z.union([z.literal('*'), definitionName])).optional(),
+    // the build files the caller may propose a new version of: it can not run until
+    // someone who may `publish` that name approves it
+    propose: z.array(z.union([z.literal('*'), definitionName])).optional(),
     // the account used when the caller names none; one of accounts or request
     default: z.string().min(1).optional(),
     // where the code may come from: the caller's working tree or a git ref
@@ -102,11 +105,12 @@ export const entitlementSchema = z
     if (
       entitlement.accounts.length === 0 &&
       (entitlement.request ?? []).length === 0 &&
+      (entitlement.propose ?? []).length === 0 &&
       (entitlement.publish ?? []).length === 0
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, or build files to publish',
+        message: 'name accounts to use or request, or build files to publish or propose',
       })
     }
     if (

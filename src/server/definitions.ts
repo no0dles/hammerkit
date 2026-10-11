@@ -19,6 +19,8 @@ export interface DefinitionVersion {
   entry: string
   publishedAt: string
   publishedBy: { iss: string; sub: string }
+  // when somebody else proposed it, who approved it
+  approvedBy?: { iss: string; sub: string }
   // what a run can ask for
   tasks: string[]
   services: string[]
@@ -171,28 +173,49 @@ export class DefinitionStore {
     }
   }
 
+  // Reads a bundle the way a run would and says what it would be as a version;
+  // `existing` is the published version with the same hash, if there is one.
+  async prepare(
+    name: string,
+    bundle: Bundle,
+    publisher: { iss: string; sub: string }
+  ): Promise<{ version: DefinitionVersion; existing?: DefinitionVersion }> {
+    const hash = hashBundle(bundle)
+    const existing = this.find(name, hash)
+    if (existing) {
+      return { version: existing, existing }
+    }
+    const { tasks, services } = await inspectBundle(bundle, this.environment)
+    return {
+      version: {
+        name,
+        hash,
+        entry: bundle.entry,
+        publishedAt: new Date(this.now()).toISOString(),
+        publishedBy: { iss: publisher.iss, sub: publisher.sub },
+        tasks,
+        services,
+      },
+    }
+  }
+
   // Publishing what already is there changes nothing and says so.
   async publish(
     name: string,
     bundle: Bundle,
-    publisher: { iss: string; sub: string }
+    publisher: { iss: string; sub: string },
+    approvedBy?: { iss: string; sub: string }
   ): Promise<{ version: DefinitionVersion; created: boolean }> {
-    const hash = hashBundle(bundle)
-    const existing = this.find(name, hash)
-    if (existing) {
-      return { version: existing, created: false }
+    const prepared = await this.prepare(name, bundle, publisher)
+    if (prepared.existing) {
+      return { version: prepared.existing, created: false }
     }
-    const { tasks, services } = await inspectBundle(bundle, this.environment)
     const version: DefinitionVersion = {
-      name,
-      hash,
-      entry: bundle.entry,
+      ...prepared.version,
       publishedAt: new Date(this.now()).toISOString(),
-      publishedBy: { iss: publisher.iss, sub: publisher.sub },
-      tasks,
-      services,
+      ...(approvedBy ? { approvedBy: { iss: approvedBy.iss, sub: approvedBy.sub } } : {}),
     }
-    const file = this.file(name, hash)
+    const file = this.file(name, version.hash)
     await mkdir(dirname(file), { recursive: true })
     const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
     await writeFile(temporary, JSON.stringify({ version, bundle }), { flag: 'wx' })
