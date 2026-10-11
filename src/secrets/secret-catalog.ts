@@ -31,6 +31,9 @@ export interface SecretAccountDefinition {
 export interface SecretCatalog {
   providers: { [name: string]: SecretProviderDefinition }
   accounts: { [name: string]: SecretAccountDefinition }
+  // every provider secret names its account: neither the task's `account` nor a
+  // default account is used. Set for the catalog of a server.
+  explicitAccounts?: boolean
 }
 
 export function emptySecretCatalog(): SecretCatalog {

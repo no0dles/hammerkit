@@ -42,9 +42,12 @@ so they work with or without a build file in the working directory.
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
 | `remote publish <definition> [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes under a name, see [Publishing](#publishing-a-build-file). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
+| `remote show <run> [server]` | Show a run that waits for your approval in full: per task the commands, image, secrets and accounts, see [Approving runs](#approving-runs). |
 | `remote proposals [server]` | List the proposed versions of build files you made or may approve, see [Proposing](#proposing-a-version). |
 | `remote diff <name@hash> [server]` | Show what a proposed version changes. |
 | `remote approve <run or name@hash> [server]` | Let a run go ahead, or publish a proposed version. `--reason <text>` is optional. |
+| `remote yank <name@hash> [server]` | Pull a published version back: no run starts from it and it is not `latest`. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
+| `remote unyank <name@hash> [server]` | Let a yanked version go on. Needs `builds: publish`. |
 | `remote reject <run or name@hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
@@ -101,15 +104,16 @@ the bundle, computed here the same way the server computes it, so the same files
 always have the same version. Publishing what a server already has says `already
 published` and changes nothing.
 
-You need the `publish` permission for that name on the server, see
-[entitlements](/docs/cli/server#entitlements). Without a server name the default
+You need `builds: publish` on the server, see
+[entitlements](/docs/cli/server#entitlements). A build file that reads secrets as an
+account you do not `use` is proposed instead, see below. Without a server name the default
 server is used, and `--file <path>` publishes another build file.
 
 ### Proposing a version
 
-With only the `propose` permission for the name, the same command proposes the
-version. It does not become a version and can not run until somebody who may publish
-that name approves it:
+With only `builds: propose`, or when the build file names an account you do not use,
+the same command proposes the version. It does not become a version and can not run
+until somebody who may publish, and uses those accounts, approves it:
 
 ```
 $ hammerkit remote publish payments build
@@ -125,6 +129,7 @@ $ hammerkit remote proposals build
 build: 1 proposed
 payments@sha256:4be1a07c...  proposed by coding-agent, waits for your approval
   tasks and services: build, deploy, more:lint
+  accounts: op-payments-prod, the proposer does not use op-payments-prod
   decide before 2026-10-11T11:41:00.000Z
 $ hammerkit remote diff payments@sha256:4be1a07c... build
 payments@sha256:4be1a07c... on build, proposed by coding-agent (https://login.example.com)
@@ -142,13 +147,16 @@ The diff shows the lines that changed with two lines around them, in full and wi
 control characters replaced by `?`, so nothing hides in it. It shows the files of the
 bundle, not what the commands in them do. `remote reject` drops the proposal, with a
 `--reason` the one who proposed it reads in `remote proposals`. Nobody approves their
-own proposal, and what you may not decide does not exist for you.
+own proposal, and what you may not decide does not exist for you. A proposal is `stale`
+when another version was published since: `remote proposals` and `remote diff` say so,
+and it can only be rejected, then proposed again on top of the new version. After a
+rejection you can not propose that build file again for ten minutes (`approvals.cooldown`).
 
 ## Approving runs
 
-A run on a service account that its caller may only
-[request](/docs/cli/server#approvals) waits for an admin of that account to approve
-it. If you are an admin of the account:
+A run that reads secrets as a service account its caller may only
+[request](/docs/cli/server#approvals) waits for somebody who uses that account to
+approve it. If you use the account:
 
 ```
 $ hammerkit remote approvals build
@@ -156,17 +164,34 @@ build: 1 waiting for your approval
 run_Qx3k9ZpL2mW7vN4a  requested by 4f1c2b (https://login.example.com)
   payments sha256:9f2c61d0...
   tasks: deploy
-  account op-payments-prod, source ref refs/heads/main, env=staging
-  needs the approval of an admin of op-payments-prod
+  accounts: op-payments-prod, source ref refs/heads/main, env=staging
+  op-payments-prod: waits for somebody who uses it to approve
   decide before 2026-10-11T10:41:00.000Z
 $ hammerkit remote approve run_Qx3k9ZpL2mW7vN4a build
 approved run_Qx3k9ZpL2mW7vN4a on build, it is queued
 ```
 
+`remote show` prints what each task of the run does, so the decision does not need the
+build file:
+
+```
+$ hammerkit remote show run_Qx3k9ZpL2mW7vN4a build
+...
+  deploy  task, docker node:22  [remote-include]
+    $ ./deploy.sh
+    after: build
+    secret gsm:kube-token as op-payments-prod -> KUBE_TOKEN
+```
+
+The line `look at:` of the list names the tasks with a flag: `local-task` runs on the host
+and not in a container, `host-port` binds a port of the host and `remote-include`
+includes a file from git. A secret's value is never shown, only where it is read from.
+
 What you see is what the decision rests on: who asked, which version of which build
-file, the tasks, the service account and where the code comes from. The version is
-the one the run is pinned to, so what you approve is what runs. You see the runs on
-the accounts you are admin of, and no others.
+file, the tasks, the service accounts they read secrets as and where the code comes
+from. The version is the one the run is pinned to, so what you approve is what runs.
+You approve for every account you use; a run on several waits until they are all
+covered. You see the runs on the accounts you use, and no others.
 
 ## Signing in
 
@@ -179,7 +204,7 @@ signing in to https://build.example.com through https://login.example.com
   client hammerkit-cli, audience hammerkit, scope openid api://hammerkit/.default
 To sign in, open https://login.example.com/activate and enter the code ABCD-EFGH
 signed in to build as 4f1c2b
-service accounts: op-payments-dev, op-web-dev
+service accounts: op-payments-dev (use), op-payments-prod (request), op-web-dev (use)
 ```
 
 Open the address on any device, sign in as you normally do, and enter the code. The

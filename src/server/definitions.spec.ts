@@ -133,7 +133,7 @@ describe('DefinitionStore', () => {
   })
   afterEach(() => rmSync(directory, { recursive: true, force: true }))
 
-  const store = () => new DefinitionStore(directory, environment, () => clock)
+  const store = () => new DefinitionStore(directory, environment, { now: () => clock })
 
   it('keeps what is published under the hash of its files', async () => {
     const s = store()
@@ -203,5 +203,49 @@ describe('DefinitionStore', () => {
     await expect(s.publish('broken', bundle({ '.hammerkit.yaml': 'tasks: [' }), alice)).rejects.toThrow(DefinitionError)
     expect(s.names()).toEqual([])
     expect(() => readdirSync(join(directory, 'broken'))).toThrow()
+  })
+})
+
+describe('DefinitionStore yank', () => {
+  let root: string
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'hammerkit-yank-'))
+  })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  const other = bundle({ '.hammerkit.yaml': 'tasks:\n  other:\n    cmds: [echo other]\n' })
+
+  it('takes a version out of latest, keeps it, and gives it back', async () => {
+    const store = new DefinitionStore(root, environmentMock(root))
+    const first = (await store.publish('payments', bundle(), alice)).version
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const second = (await store.publish('payments', other, alice)).version
+    expect(store.find('payments', 'latest')?.hash).toBe(second.hash)
+
+    const yanked = await store.yank('payments', second.hash, alice, { reason: 'broken' })
+    expect(yanked?.yanked).toMatchObject({ by: alice, reason: 'broken' })
+    expect(store.find('payments', 'latest')?.hash).toBe(first.hash)
+    expect(store.find('payments', second.hash)?.yanked?.reason).toBe('broken')
+    expect(await store.files(second)).toEqual(other)
+
+    // a second yank changes nothing, the first one stands
+    const again = await store.yank('payments', second.hash, { iss: 'x', sub: 'y' }, { reason: 'later' })
+    expect(again?.yanked).toMatchObject({ by: alice, reason: 'broken' })
+
+    await store.yank('payments', second.hash, alice, { undo: true })
+    expect(store.find('payments', 'latest')?.hash).toBe(second.hash)
+    expect(store.find('payments', second.hash)?.yanked).toBeUndefined()
+    expect(await store.yank('payments', 'sha256:' + '0'.repeat(64), alice)).toBeUndefined()
+  })
+
+  it('keeps a yank over a restart', async () => {
+    const store = new DefinitionStore(root, environmentMock(root))
+    const { version } = await store.publish('payments', bundle(), alice)
+    await store.yank('payments', version.hash, alice, { reason: 'broken' })
+
+    const restarted = new DefinitionStore(root, environmentMock(root))
+    await restarted.load()
+    expect(restarted.find('payments', version.hash)?.yanked?.reason).toBe('broken')
+    expect(restarted.find('payments', 'latest')).toBeUndefined()
   })
 })

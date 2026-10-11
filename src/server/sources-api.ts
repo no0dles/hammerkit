@@ -3,7 +3,7 @@ import { HASH_PATTERN } from '../remote/bundle'
 import { MAX_MANIFEST_BODY_BYTES, sourceManifestSchema } from '../remote/source-manifest'
 import { readJson, send } from './http'
 import { Principal } from './oauth'
-import { getGrant, maySeeDefinitions } from './policy'
+import { getGrant, mayRun } from './policy'
 import { ServerConfig } from './server-config'
 import { SourceError, SourceStore } from './sources'
 
@@ -106,7 +106,7 @@ function notFound(res: ServerResponse): void {
 // Sending files is only for callers who may run something from an upload.
 function mustMayUpload(config: ServerConfig, principal: Principal): void {
   const grant = getGrant(config.entitlements, principal)
-  if (!maySeeDefinitions(grant) || !grant.source.includes('upload')) {
+  if (!mayRun(grant)) {
     throw new SourceError(403, 'uploads are not allowed for you')
   }
 }

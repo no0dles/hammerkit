@@ -1,6 +1,6 @@
 # Feature Specification: Remote Compute
 
-**Status**: Draft, implementation in progress (ADR-0009). Delivered in phases; later phases are marked.
+**Status**: Draft, implementation in progress (ADR-0009, ADR-0010). Delivered in phases; later phases are marked.
 
 **Input**: run tasks on machines the team operates, so a laptop or a coding agent keeps working locally while heavy or platform-specific work runs elsewhere, with outputs staying on the remote until someone asks for them, and with authorization decided by OAuth alone.
 
@@ -20,7 +20,7 @@ callers: CLI, agents, MCP / Open WebUI, CI           OAuth only
         v
 hammerkit server
   - OAuth resource server (iss, aud, exp checked; several issuers)
-  - policy: entitlements (caller -> service accounts) and rules (caller -> tasks, source)
+  - policy: entitlements (caller -> level on service accounts, builds, repos); the accounts of a run are derived from the secrets of the published build file
   - scheduler: plans and orchestrates the graph with the existing engine, places tasks
   - run registry: runs, state, logs, handles; streams events
         |
@@ -51,20 +51,34 @@ The server accepts several issuers (the company IdP and each CI platform).
 ### Policy (server config, reviewed like code)
 
 ```yaml
+secretProviders:                  # commands, the operator's, never a build file's
+  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}'] }
+accounts:                         # the catalog; a secret names one of these
+  op-payments-dev:  { providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/dev.json } } } }
+  op-payments-prod:
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/prod.json } } }
+    source: [ref]                 # production accounts only for reviewed code
+    refs: [main, 'release/*']
+sources:                          # where code may come from, host/path patterns, most specific first
+  - match: github.com/corp/*
+    secret: { from: 'gsm:github-readonly-token', account: scm-read }   # a reserved account, no caller uses it
+runtimes: [docker]                # what tasks may run on; `local` has to be allowed by name
+approvals: { timeout: 1h, maxWaiting: 100, cooldown: 10m }
+runs:
+  env: { allow: [PATH, DOCKER_HOST] }   # the only variables of the server a run sees
+  limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
+  maxDuration: 1h
 entitlements:
   - subject: { iss: https://idp.corp, sub: 4f1c... }
-    accounts: [op-payments-dev]
-    default: op-payments-dev
-  - group: eng-web
-    accounts: [op-web-dev]
-  - subject: { iss: https://token.actions.githubusercontent.com, sub: "repo:corp/payments:ref:refs/heads/main" }
-    accounts: [op-payments-ci]
-    source: [ref]
-rules:
-  - match: { group: release }
-    tasks: all
-    accounts: [op-prod-deploy]
-    source: [ref]                 # production accounts only for reviewed code
+    accounts: { op-payments-dev: use, op-payments-prod: request }
+    repos: [github.com/corp/*]    # the repositories a ref run may name
+    builds: run                   # run | propose | publish, each includes the lower
+  - group: { iss: https://idp.corp, name: release-managers }
+    accounts: { op-payments-prod: use }
+  - claims: { iss: https://token.actions.githubusercontent.com, match: { repository: corp/payments, ref: refs/heads/main } }
+    accounts: { op-payments-dev: use }
+    repos: [github.com/corp/payments]
+    builds: publish
 backend:
   type: host                      # host | kubernetes
   platform: { os: linux, arch: amd64 }
@@ -72,8 +86,12 @@ backend:
 
 - Matching uses issuer and `sub` from the validated token only. Default deny: no entry, no account.
 - `source: upload` is the caller's working tree; `source: ref` is a git ref the server checks out itself.
-- An uploaded working tree may name providers and accounts but must not define them; definitions come from the server config or an allowed SHA-pinned include.
-- Every grant decision is logged with issuer, `sub`, matched rule and accounts.
+- A published build file may name accounts but must not define providers or accounts; they come from the server config.
+- No account is named in a run request, on a task or by a default: the accounts of a run are the accounts of the secrets of the tasks it executes, derived by the engine from the hash-pinned files and the run's scope. A task without secrets holds no credentials and needs no account. On a server a provider secret must name its `account`, `file:` secrets are refused and `env:` secrets only read variables of `runs.env.allow`.
+- Every grant decision is logged with issuer, `sub`, matched entitlements and accounts.
+- A run from `source: ref` names a repository (`host/path`) and a ref in the request, never a url. The caller's `repos` and the operator's `sources` both have to cover it. The ref is pinned to a commit when the run is submitted and the executor fails if the ref moved, so what was approved is what runs. The read credential is a secret of a provider read as a reserved account, handed to git for one fetch through its environment, and masked in logs.
+- A run executes in a process of its own with a private home directory, a cache namespace per source trust, the allowlisted environment, and no other secret than those of its accounts. A published build file may not name an environment, a Kubernetes service, a cache backend, a mount outside the bundle or a runtime the operator did not allow, and a `file:` secret is refused: where things run and what is read from the machine is the operator's.
+- Per caller (issuer and subject) the server limits the runs that wait for an approval, that wait in the queue and that execute at once (`429` over the first two); a run is stopped after `runs.maxDuration` and its log is capped. Runs are written to the storage directory when their state changes: a restart keeps finished runs, lets waiting runs wait on, and fails the ones that were queued or running with the server. SIGHUP reloads the entitlements only; the rest of the config needs a restart.
 
 ### Secrets
 
@@ -83,7 +101,7 @@ The machine that executes a task holds the secret-manager credentials and resolv
 
 The server holds the build file; a run names a published build file and the tasks to execute, it does not bring task definitions. So an agent that may run work cannot change what a task does, and what needs a second person's approval is decided by the access mode of the account, which the operator sets (see Approvals).
 
-- A **bundle** is the entry file and every file it includes, as text (200 files, 1 MiB), published with `PUT /v1/definitions/<name>`. `publish: [names | '*']` on an entitlement is a separate permission from `accounts`, so who defines work and who runs it differ by configuration (CI on main publishes, agents run).
+- A **bundle** is the entry file and every file it includes, as text (200 files, 1 MiB), published with `PUT /v1/definitions/<name>`. `builds: run | propose | publish` on an entitlement is a separate permission from `accounts`, so who defines work and who runs it differ by configuration (CI on main publishes, agents run). Build file names are free, the config never lists them. A bundle whose secrets name an account the publisher does not `use` is a proposal even for `publish`, approved by a publisher who uses those accounts.
 - The **version** is the sha-256 of the bundle (entry and every path with the hash of its content, paths sorted), computed identically by server and client. Versions are immutable and kept on disk; publishing the same files again changes nothing; `latest` is the one published last. A run pins the hash it was started with.
 - A bundle is read on publish in a directory of its own, so a build file that does not load, includes something outside of the bundle or an unpinned or local git include is refused then. The hash can only vouch for what is inside the bundle.
 - Local, unpublished build files are not run on a server: a developer who wants to try a change publishes it (with a publish permission for a name of their own).
@@ -109,11 +127,12 @@ The server holds the build file; a run names a published build file and the task
 
 ## Approvals
 
-- A service account is given to a caller in one of two modes in the entitlements (Pascal's model): `accounts` makes them **admin** (runs on it at once, approves the runs others request on it), `request` lets them ask for runs on it, which wait until an admin of that account approves. Admin wins where both are given. The same shape serves a person who is not trusted with a key yet and an agent that proposes a deployment for a person to confirm.
-- The mode is decided on the account of the run, chosen in the request and checked against the entitlements; nothing in a build file changes it, so it holds however a task is named or labelled. (Found in review: earlier rules on task names and labels could be dodged by whoever may publish, and were removed.)
-- A requested run waits in `awaiting-approval`: one approval by an admin of its account, never the one who asked. A rejection, or the timeout, ends it as `rejected`. Waiting runs are limited. `GET /v1/approvals`, `POST /v1/approvals/<id>/approve|reject`; the decision is an event of the run. A caller only sees and decides what they are admin of.
-- Admins read the published build files, so they can read what they approve.
-- Build file changes get the same treatment: `propose` is the lower mode of `publish`. A bundle from a caller who may only propose is read like a publish and kept as a **proposal** (in memory, expiring with the same timeout and limit), not as a version: it can not run and is not `latest`. Someone with `publish` for that name, not the proposer, approves it, and only then it is published (proposer as `publishedBy`, approver as `approvedBy`). `GET /v1/proposals`, `/v1/proposals/<name>/<hash>[/files]`, `POST .../approve|reject`. A caller sees the proposals they made or may decide.
+- A service account is given to a caller at one of two levels in the entitlements: `use` runs on it at once and approves the runs others request on it, `request` lets them ask for runs on it, which wait until somebody who may `use` it approves. `use` wins where both are given. The same shape serves a person who is not trusted with a key yet and an agent that proposes a deployment for a person to confirm.
+- The accounts of a run are derived from the secrets in the pinned build file, so nothing in a request or in how a task is named or labelled changes them. (Found in review: earlier rules on task names and labels could be dodged by whoever may publish, and were removed; a task can not read a secret without its account.) The executor derives them again before it starts and the secret resolver refuses any other account.
+- A requested run waits in `awaiting-approval`: an approver covers every account they `use`, never the one who asked, and the run is released when the approvals cover all waiting accounts (one person using all, or one per account). The accounts have one run-level expiry; a rejection by any covering approver, or the timeout, ends it as `rejected`. A request for an account nobody uses is refused at once. Waiting runs are limited. `GET /v1/approvals`, `POST /v1/approvals/<id>/approve|reject`; the decision is an event of the run. A caller only sees and decides what they use.
+- Approvers read the published build files, so they can read what they approve. A run that waits shows its `plan`: per task the commands, image, secrets, mounts and accounts as the engine reads them (`remote show <run>`).
+- Build file changes get the same treatment: `builds: propose` is the lower level of `publish`. A bundle from a caller who may only propose, or who lacks `use` on an account it names, is read like a publish and kept as a **proposal** (in memory, expiring with the same timeout and limit), not as a version: it can not run and is not `latest`. A publisher who uses the missing accounts, not the proposer, approves it, and only then it is published (proposer as `publishedBy`, approver as `approvedBy`). `GET /v1/proposals`, `/v1/proposals/<name>/<hash>[/files]`, `POST .../approve|reject`. A caller sees the proposals they made, and publishers see all. A proposal records the version it follows and is approved only while that is still the latest (else it is `stale` and can only be rejected), it may not include from git (the server would fetch before anybody approved), and a rejection starts a cooldown for the proposer and the version.
+- A published version can be **yanked** by whoever publishes the build file or uses an account of the version, with a reason: it is no longer `latest`, runs of it are refused at submit and again before they start, and `unyank` (publishers) lets it go on.
 - What an approved version does not cover: the code its commands run (see the limit above).
 - This is meant to be the mechanism the secrets design reuses for the step-up approval of `reveal`: an approval is a decision by a different identity on one pinned request.
 
@@ -169,7 +188,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 - A project file cannot cause a server to be trusted or a destination to be chosen.
 - A compromised caller gets only that identity's entitlement; a compromised policy layer can grant only accounts the backend is configured to honour.
 - Backends hold least-privilege, short-lived provider credentials; one backend serves one trust level (agents on one, release on another).
-- Build code is trusted; third-party code inside tasks (install scripts) is why secrets go only to tasks that need them, which rules can enforce.
+- Build code is trusted; third-party code inside tasks (install scripts) is why secrets go only to tasks that need them, which the plan of a version (the accounts per task) makes visible to the people who approve it.
 
 ## Phases
 
@@ -177,7 +196,6 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
 | B0 | This foundation: ADR-0009, this spec, the host config and `remote add / list / use / remove`. |
->>>>>>> origin/release/remote-secrets
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 
 ## Open questions

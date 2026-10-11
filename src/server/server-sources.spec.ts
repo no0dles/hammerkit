@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { HOST_RUNS_YAML } from '../testing/host-env'
 import { join } from 'path'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
@@ -6,15 +7,19 @@ import { createTestKey, signToken, startTestIssuer } from '../testing/test-issue
 import { readServerConfig } from './server-config'
 import { RunningServer, startServer } from './server'
 
+// carol uses an account but may not run anything, so she has nothing to upload for
 const policy = `
+accounts:
+  op-dev: {}
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-dev]
+    accounts: { op-dev: use }
+    builds: run
   - subject: { iss: ISSUER, sub: bob }
-    accounts: [op-dev]
+    accounts: { op-dev: use }
+    builds: run
   - subject: { iss: ISSUER, sub: carol }
-    accounts: [op-dev]
-    source: [ref]
+    accounts: { op-dev: use }
 `
 
 interface JsonResponse extends Response {
@@ -37,9 +42,9 @@ async function withApi(name: string, fn: (api: Api) => Promise<void>) {
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(join(cwd, 'data'))} }\nissuers:\n  - { issuer: "${
-          idp.url
-        }", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
+        `${HOST_RUNS_YAML}listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
+          join(cwd, 'data')
+        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
       )
       const log: string[] = []
       const server = await startServer(await readServerConfig(env, file), env, { log: (line) => log.push(line) })

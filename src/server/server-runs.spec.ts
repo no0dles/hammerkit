@@ -6,19 +6,42 @@ import { tmpdir } from 'os'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { readServerConfig } from './server-config'
-import { passedEnvironment } from './executor'
+import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { COMMIT, REPO, SOURCES_YAML, fakeRepos } from '../testing/repos'
+import { TEST_WORKER } from '../testing/worker'
+import { RepoAccessOptions } from './repo-access'
+import { Environment } from '../executer/environment'
 import { RunExecutor } from './runs'
 import { RunningServer, startServer } from './server'
 
+// alice requests runs on prod, which bob approves; bob publishes the build files,
+// carol only runs what needs no credentials of prod
 const policy = `
+runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} }, RUNS }
+runtimes: [docker, local]
+secretProviders:
+  echo: { command: [${JSON.stringify(process.execPath)}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }
+accounts:
+  op-payments-dev: { providers: { echo: { env: {} } } }
+  op-payments-ci: { providers: { echo: { env: {} } } }
+  op-payments-prod: { providers: { echo: { env: {} } }, source: [ref], refs: [main, "release/*"] }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
-    accounts: [op-payments-dev, op-payments-ci]
-    default: op-payments-dev
-    publish: [payments]
+    accounts: { op-payments-dev: use, op-payments-ci: use, op-payments-prod: request }
+    repos: [github.com/corp/*]
+    builds: run
+  - subject: { iss: ISSUER, sub: bob }
+    accounts: { op-payments-dev: use, op-payments-ci: use, op-payments-prod: use }
+    repos: [github.com/corp/*, gitlab.corp.com/**]
+    builds: publish
   - subject: { iss: ISSUER, sub: carol }
-    accounts: [op-payments-ci]
-    source: [ref]
+    accounts: { op-payments-ci: use }
+    repos: [github.com/corp/*]
+    builds: run
+  - subject: { iss: ISSUER, sub: dave }
+    accounts: { op-payments-dev: use }
+    repos: [github.com/corp/*]
+    builds: run
 `
 
 // the responses of this api are json
@@ -28,6 +51,11 @@ interface JsonResponse extends Response {
 
 interface Api {
   server: RunningServer
+  // the config the server was started with, to read it again
+  env: Environment
+  file: string
+  // stops the server and starts it again on the same storage
+  restart: (executor?: RunExecutor) => Promise<void>
   log: string[]
   token: (sub?: string) => string
   call: (
@@ -42,7 +70,10 @@ async function withApi(
   name: string,
   executor: RunExecutor | undefined,
   fn: (api: Api) => Promise<void>,
-  extraConfig = ''
+  extraConfig = '',
+  repos: RepoAccessOptions = fakeRepos,
+  // more keys of `runs`, as the inside of a yaml flow mapping
+  runs = ''
 ) {
   const key = createTestKey('ES256', 'k1')
   const idp = await startTestIssuer([key])
@@ -53,20 +84,24 @@ async function withApi(
         file,
         `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
           join(cwd, 'server-data')
-        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
-          /ISSUER/g,
-          `"${idp.url}"`
-        )}${extraConfig}`
+        )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy
+          .replace(/ISSUER/g, `"${idp.url}"`)
+          .replace('RUNS', runs)}${SOURCES_YAML}${extraConfig}`
       )
       const log: string[] = []
       // the tools a run needs to find, git and the shell, come from the environment of the server
-      const serverEnv = { ...env, processEnvs: { ...env.processEnvs, ...passedEnvironment(process.env) } }
-      const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
-        log: (line) => log.push(line),
-        executor,
-      })
+      const serverEnv = { ...env, processEnvs: { ...process.env } }
+      const start = async (executor: RunExecutor | undefined) =>
+        startServer(await readServerConfig(serverEnv, file), serverEnv, {
+          log: (line) => log.push(line),
+          executor,
+          repos,
+          worker: TEST_WORKER,
+        })
+      let server = await start(executor)
       const token = (sub = 'alice') =>
         signToken(key, { iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
+      // the url changes with the port of a new start
       const call: Api['call'] = (method, path, options = {}) =>
         fetch(`${server.url}${path}`, {
           method,
@@ -79,12 +114,28 @@ async function withApi(
         }) as Promise<JsonResponse>
       const submit = (body: unknown, sub?: string) => call('POST', '/v1/runs', { body, sub })
       try {
-        const published = await call('PUT', '/v1/definitions/payments', { body: bundle })
+        const published = await call('PUT', '/v1/definitions/payments', { body: bundle, sub: 'bob' })
         if (published.status !== 201) {
-          throw new Error(`could not publish the build file: ${published.status}`)
+          throw new Error(
+            `could not publish the build file: ${published.status} ${JSON.stringify(await published.json())}`
+          )
         }
         request.definition.hash = (await published.json()).hash
-        await fn({ server, log, token, call, submit })
+        await fn({
+          get server() {
+            return server
+          },
+          env: serverEnv,
+          file,
+          restart: async (next) => {
+            await server.close()
+            server = await start(next)
+          },
+          log,
+          token,
+          call,
+          submit,
+        })
       } finally {
         await server.close()
       }
@@ -96,14 +147,34 @@ async function withApi(
 
 const bundle = {
   files: {
-    '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo build]\n  test:\n    cmds: [echo test]\n',
+    '.hammerkit.yaml': [
+      'tasks:',
+      '  build:',
+      '    cmds: [echo build]',
+      '  test:',
+      '    cmds: [echo test]',
+      '  integration:',
+      '    labels: { group: slow }',
+      '    deps: [ci-secret]',
+      '    cmds: [echo integration]',
+      '  ci-secret:',
+      '    secrets:',
+      '      - { from: "echo:ci", account: op-payments-ci, env: TOKEN }',
+      '    cmds: [echo ci]',
+      '  deploy:',
+      '    deps: [build]',
+      '    secrets:',
+      '      - { from: "echo:prod", account: op-payments-prod, env: KUBE_TOKEN }',
+      '    cmds: [echo deploy]',
+      '',
+    ].join('\n'),
   },
 }
 // the hash is filled in once the build file is published
 const request = {
   definition: { name: 'payments', hash: 'latest' },
   tasks: ['build'],
-  source: { type: 'ref', ref: 'main' },
+  source: { type: 'ref', repo: REPO, ref: 'main' },
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -160,7 +231,7 @@ describe('runs api', () => {
     })
   })
 
-  it('accepts a run for the default account, executes it and shows its state', async () => {
+  it('accepts a run that needs no account, executes it and shows its state', async () => {
     await withApi('runs-api-submit', done, async (api) => {
       const response = await api.submit(request)
       expect(response.status).toBe(202)
@@ -169,42 +240,103 @@ describe('runs api', () => {
         definition: { name: 'payments', hash: expect.stringMatching(/^sha256:/) },
         state: 'queued',
         tasks: ['build'],
-        account: 'op-payments-dev',
+        accounts: [],
         source: request.source,
       })
+      expect(run.approvals).toBeUndefined()
       expect(run.owner).toBeUndefined()
       expect(run.id).toMatch(/^run_/)
 
       const finished = await untilState(api, run.id, ['succeeded', 'failed'])
       expect(finished.state).toBe('succeeded')
       expect(api.log.join('\n')).toMatch(
-        new RegExp(`run ${run.id} iss=\\S+ sub=alice account=op-payments-dev source=ref tasks=1`)
+        new RegExp(`run ${run.id} iss=\\S+ sub=alice accounts=\\[\\] source=ref tasks=1`)
       )
       const list = await (await api.call('GET', '/v1/runs')).json()
       expect(list.runs.map((r: { id: string }) => r.id)).toEqual([run.id])
     })
   })
 
-  it('lets a caller pick any of their accounts, and refuses the others', async () => {
+  it('derives the accounts of a run from the secrets of what it executes', async () => {
     await withApi('runs-api-accounts', done, async (api) => {
-      const ci = await api.submit({ ...request, account: 'op-payments-ci' })
+      const ci = await api.submit({ ...request, tasks: ['ci-secret'] })
       expect(ci.status).toBe(202)
-      expect((await ci.json()).account).toBe('op-payments-ci')
+      expect(await ci.json()).toMatchObject({ accounts: ['op-payments-ci'], state: 'queued' })
 
-      const other = await api.submit({ ...request, account: 'op-prod-deploy' })
-      expect(other.status).toBe(403)
-      expect(await other.json()).toEqual({ error: 'you may not use the service account op-prod-deploy' })
+      // the dependencies and the tasks a label selects count, not only the ones named
+      const labelled = await api.submit({
+        definition: request.definition,
+        source: request.source,
+        options: { filter: ['group=slow'] },
+      })
+      expect((await labelled.json()).accounts).toEqual(['op-payments-ci'])
+      const nothing = await api.submit({ ...request, tasks: ['build', 'test'] })
+      expect((await nothing.json()).accounts).toEqual([])
+    })
+  })
+
+  it('holds a run on an account the caller can only request, and shows who may approve', async () => {
+    await withApi('runs-api-request', done, async (api) => {
+      const response = await api.submit({ ...request, tasks: ['deploy'] })
+      expect(response.status).toBe(202)
+      const run = await response.json()
+      expect(run).toMatchObject({
+        state: 'awaiting-approval',
+        accounts: ['op-payments-prod'],
+        approvals: [{ account: 'op-payments-prod', expiresAt: expect.any(String) }],
+      })
+      expect(api.log.join('\n')).toContain('accounts=[op-payments-prod] source=ref tasks=1 approval=[op-payments-prod]')
+      // bob uses prod and approves; the account is read from the files, not from the request
+      expect((await api.call('POST', `/v1/approvals/${run.id}/approve`, { sub: 'bob' })).status).toBe(200)
+      expect((await untilState(api, run.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+    })
+  })
+
+  it('refuses an account the caller has no level on, naming it', async () => {
+    await withApi('runs-api-no-level', done, async (api) => {
+      const refused = await api.submit({ ...request, tasks: ['deploy'] }, 'carol')
+      expect(refused.status).toBe(403)
+      expect((await refused.json()).error).toContain('you may not use the account op-payments-prod')
       expect(api.log.join('\n')).toContain('refuse run')
+      // what needs no account still runs for her
+      expect((await api.submit({ ...request, tasks: ['build'] }, 'carol')).status).toBe(202)
 
-      // a caller without any entitlement may not run, nor name an account
-      expect((await api.submit({ ...request, account: 'op-payments-dev' }, 'mallory')).status).toBe(403)
+      // a caller without any entitlement may not run at all
       const none = await api.submit(request, 'mallory')
       expect(none.status).toBe(403)
       expect((await none.json()).error).toContain('not entitled')
     })
   })
 
-  it('only takes the kind of source the entitlement allows', async () => {
+  it('refuses a run of an account from a ref it does not allow', async () => {
+    await withApi('runs-api-refs', done, async (api) => {
+      const feature = await api.submit(
+        { ...request, tasks: ['deploy'], source: { type: 'ref', repo: REPO, ref: 'feature' } },
+        'bob'
+      )
+      expect(feature.status).toBe(403)
+      expect((await feature.json()).error).toContain('only used by runs from main, release/*')
+      const release = await api.submit(
+        { ...request, tasks: ['deploy'], source: { type: 'ref', repo: REPO, ref: 'release/1.2' } },
+        'bob'
+      )
+      expect(release.status).toBe(202)
+      // a commit names no branch
+      const commit = await api.submit(
+        { ...request, tasks: ['deploy'], source: { type: 'ref', repo: REPO, ref: 'a'.repeat(40) } },
+        'bob'
+      )
+      expect(commit.status).toBe(403)
+    })
+  })
+
+  it('does not take an account in the request', async () => {
+    await withApi('runs-api-no-account-field', done, async (api) => {
+      expect((await api.submit({ ...request, account: 'op-payments-dev' })).status).toBe(400)
+    })
+  })
+
+  it('does not run from an upload yet, and says so at once', async () => {
     await withApi('runs-api-source', done, async (api) => {
       const content = 'hello'
       const sha256 = createHash('sha256').update(content).digest('hex')
@@ -221,14 +353,12 @@ describe('runs api', () => {
         headers: { authorization: `Bearer ${api.token('alice')}` },
         body: content,
       })
-      expect((await api.submit(upload, 'alice')).status).toBe(202)
+      const complete = await api.submit(upload, 'alice')
+      expect(complete.status).toBe(501)
+      expect((await complete.json()).error).toContain('upload')
       const unknown = await api.submit({ ...request, source: { type: 'upload', snapshot: `sha256:${'0'.repeat(64)}` } })
       expect(unknown.status).toBe(400)
       expect((await unknown.json()).error).toContain('not known')
-      const refused = await api.submit(upload, 'carol')
-      expect(refused.status).toBe(403)
-      expect((await refused.json()).error).toContain('runs from upload are not allowed')
-      expect((await api.submit(request, 'carol')).status).toBe(202)
     })
   })
 
@@ -270,9 +400,9 @@ describe('runs api', () => {
       expect(missing.status).toBe(400)
       expect((await missing.json()).error).toContain('there is no build file payments')
       expect((await api.submit({ ...request, definition: { name: 'web' } })).status).toBe(400)
-      const unknown = await api.submit({ ...request, tasks: ['build', 'deploy', 'rm-rf'] })
+      const unknown = await api.submit({ ...request, tasks: ['build', 'nope', 'rm-rf'] })
       expect(unknown.status).toBe(400)
-      expect((await unknown.json()).error).toBe('payments has no task "deploy", "rm-rf"')
+      expect((await unknown.json()).error).toBe('payments has no task "nope", "rm-rf"')
       expect((await api.submit({ ...request, definition: { name: 'payments', hash: 'v2' } })).status).toBe(400)
     })
   })
@@ -281,7 +411,7 @@ describe('runs api', () => {
     await withApi('runs-api-options', done, async (api) => {
       const options = {
         env: 'staging',
-        filter: ['unit'],
+        filter: ['group=unit'],
         exclude: ['slow'],
         cache: 'none',
         cacheReadOnly: true,
@@ -295,8 +425,13 @@ describe('runs api', () => {
       expect((await (await api.submit(request)).json()).options).toEqual({})
       // labels can select the tasks instead of names
       expect(
-        (await api.submit({ definition: request.definition, source: request.source, options: { filter: ['unit'] } }))
-          .status
+        (
+          await api.submit({
+            definition: request.definition,
+            source: request.source,
+            options: { filter: ['group=unit'] },
+          })
+        ).status
       ).toBe(202)
     })
   })
@@ -379,11 +514,38 @@ describe('runs api', () => {
     })
   })
 
-  it('fails a run with the reason when the server has no repository for the build file', async () => {
-    await withApi('runs-api-no-source', undefined, async (api) => {
+  it('refuses a repository the caller does not list, or the server can not read, before anything is queued', async () => {
+    await withApi('runs-api-repos', undefined, async (api) => {
+      const other = { ...request, source: { type: 'ref', repo: 'github.com/other/tool', ref: 'main' } }
+      const refused = await api.submit(other)
+      expect(refused.status).toBe(403)
+      expect((await refused.json()).error).toContain('you may not run from github.com/other/tool')
+
+      // bob may name any gitlab repository, but this server is configured for github only
+      const gitlab = { ...request, source: { type: 'ref', repo: 'gitlab.corp.com/a/b/c', ref: 'main' } }
+      const unreadable = await api.submit(gitlab, 'bob')
+      expect(unreadable.status).toBe(400)
+      expect((await unreadable.json()).error).toContain('this server can not read gitlab.corp.com/a/b/c')
+      expect((await (await api.call('GET', '/v1/runs')).json()).runs).toEqual([])
+    })
+  })
+
+  it('pins the ref to a commit when the run is submitted, or says why it can not', async () => {
+    await withApi('runs-api-pin', undefined, async (api) => {
       const run = await (await api.submit(request)).json()
-      const failed = await untilState(api, run.id, ['failed'])
-      expect(failed.error).toContain('sources.payments.git')
+      expect(run.source).toEqual({ type: 'ref', repo: REPO, ref: 'main', commit: COMMIT })
+
+      const missing = await api.submit({ ...request, source: { type: 'ref', repo: REPO, ref: 'missing' } })
+      expect(missing.status).toBe(400)
+      expect((await missing.json()).error).toContain('there is no branch or tag missing')
+      const both = await api.submit({ ...request, source: { type: 'ref', repo: REPO, ref: 'both' } })
+      expect((await both.json()).error).toContain('both a branch and a tag')
+
+      // a url is not a repository, however it is written
+      for (const repo of ['https://user:pw@github.com/corp/x', 'github.com/corp/../x', 'file:///etc', '-x/y']) {
+        const bad = await api.submit({ ...request, source: { type: 'ref', repo, ref: 'main' } })
+        expect(bad.status).toBe(400)
+      }
     })
   })
 
@@ -405,6 +567,7 @@ describe('runs api', () => {
         undefined,
         async (api) => {
           const published = await api.call('PUT', '/v1/definitions/payments', {
+            sub: 'bob',
             body: { files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' } },
           })
           const hash = (await published.json()).hash
@@ -414,11 +577,138 @@ describe('runs api', () => {
           expect(events.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
           expect(events.some((e) => e.event === 'task' && e.data.state === 'succeeded')).toBe(true)
         },
-        `sources:\n  payments: { git: ${JSON.stringify(repository)} }\n`
+        '',
+        { url: () => repository }
       )
     } finally {
       rmSync(repository, { recursive: true, force: true })
     }
+  })
+
+  it('answers 429 to a caller over their limits, and still takes the runs of others', async () => {
+    const { executor } = gated()
+    await withApi(
+      'runs-api-limits',
+      executor,
+      async (api) => {
+        expect((await api.submit({ ...request, tasks: ['deploy'] })).status).toBe(202)
+        const over = await api.submit({ ...request, tasks: ['deploy'] })
+        expect(over.status).toBe(429)
+        expect((await over.json()).error).toContain('1 runs waiting for an approval')
+        // bob uses prod, so his run needs no approval
+        expect((await api.submit(request, 'bob')).status).toBe(202)
+      },
+      '',
+      fakeRepos,
+      'limits: { waiting: 1 }'
+    )
+  })
+
+  it('stops a run that takes longer than the maximum', async () => {
+    await withApi(
+      'runs-api-duration',
+      gated().executor,
+      async (api) => {
+        const run = await (await api.submit(request)).json()
+        const ended = await untilState(api, run.id, ['failed'])
+        expect(ended.error).toMatch(/took longer than 1s and was stopped/)
+      },
+      '',
+      fakeRepos,
+      'maxDuration: 1s'
+    )
+  })
+
+  it('keeps its runs over a restart, the waiting ones wait on', async () => {
+    await withApi('runs-api-restart', done, async (api) => {
+      const finished = await (await api.submit(request)).json()
+      await untilState(api, finished.id, ['succeeded'])
+      const waiting = await (await api.submit({ ...request, tasks: ['deploy'] })).json()
+
+      await api.restart(gated().executor)
+
+      const kept = await (await api.call('GET', `/v1/runs/${finished.id}`)).json()
+      expect(kept).toMatchObject({ state: 'succeeded', tasks: ['build'] })
+      const events = await readEvents(await api.call('GET', `/v1/runs/${finished.id}/events`))
+      expect(events.map((e) => e.event)).toContain('task')
+      const held = await (await api.call('GET', `/v1/runs/${waiting.id}`)).json()
+      expect(held.state).toBe('awaiting-approval')
+      // and it can still be approved
+      expect((await api.call('POST', `/v1/approvals/${waiting.id}/approve`, { sub: 'bob' })).status).toBe(200)
+      expect((await untilState(api, waiting.id, ['running'])).state).toBe('running')
+    })
+  })
+
+  it('reads the entitlements again on a reload, and keeps the old ones when the new are wrong', async () => {
+    await withApi('runs-api-reload', done, async (api) => {
+      expect((await api.submit(request, 'carol')).status).toBe(202)
+      const config = await readServerConfig(api.env, api.file)
+
+      // carol loses her entitlement, and something that needs a restart changes
+      const next = {
+        ...config,
+        entitlements: config.entitlements.filter((e) => e.subject?.sub !== 'carol'),
+        approvals: { ...config.approvals, maxWaiting: 7 },
+      }
+      expect(api.server.reload(next)).toEqual({ restart: ['approvals'] })
+      expect((await api.submit(request, 'carol')).status).toBe(403)
+      expect((await api.submit(request)).status).toBe(202)
+      expect(api.log.join('\n')).toContain('reloaded 3 entitlements, restart for: approvals')
+
+      const wrong = {
+        ...next,
+        entitlements: [{ ...next.entitlements[0], accounts: { 'op-unknown': 'use' as const } }],
+      }
+      expect(() => api.server.reload(wrong)).toThrow(/no account op-unknown/)
+      expect((await api.submit(request)).status).toBe(202)
+    })
+  })
+
+  it('pulls a version back for who publishes it or uses its accounts, and no run starts from it', async () => {
+    await withApi('runs-api-yank', done, async (api) => {
+      const hash = request.definition.hash
+      const path = (action: string) => `/v1/definitions/payments/${hash}/${action}`
+      // dave uses an account, but not one of this version
+      expect((await api.call('POST', path('yank'), { sub: 'dave' })).status).toBe(403)
+      expect((await api.call('POST', path('yank'), { sub: 'nobody' })).status).toBe(404)
+      expect(
+        (await api.call('POST', `/v1/definitions/payments/sha256:${'0'.repeat(64)}/yank`, { sub: 'bob' })).status
+      ).toBe(404)
+
+      // carol uses op-payments-ci, which the version works with
+      const yanked = await api.call('POST', path('yank'), { sub: 'carol', body: { reason: 'leaks a token' } })
+      expect(yanked.status).toBe(200)
+      expect(await yanked.json()).toMatchObject({
+        hash,
+        yanked: { by: { sub: 'carol' }, reason: 'leaks a token', at: expect.any(String) },
+      })
+      expect(api.log.join('\n')).toContain(`yank payments@${hash}`)
+
+      const refused = await api.submit(request, 'carol')
+      expect(refused.status).toBe(409)
+      expect((await refused.json()).error).toContain('was yanked: leaks a token')
+      // it is not latest any more, the version stays for the record
+      expect((await api.call('GET', '/v1/definitions/payments/latest', { sub: 'bob' })).status).toBe(404)
+      expect((await api.submit({ ...request, definition: { name: 'payments', hash: 'latest' } })).status).toBe(400)
+      const versions = await (await api.call('GET', '/v1/definitions/payments', { sub: 'bob' })).json()
+      expect(versions.versions[0].yanked.reason).toBe('leaks a token')
+
+      // letting it go on is for who publishes
+      expect((await api.call('POST', path('unyank'), { sub: 'carol' })).status).toBe(403)
+      const back = await api.call('POST', path('unyank'), { sub: 'bob' })
+      expect(back.status).toBe(200)
+      expect((await back.json()).yanked).toBeUndefined()
+      expect((await api.submit(request, 'carol')).status).toBe(202)
+    })
+  })
+
+  it('keeps a yanked version over a restart', async () => {
+    await withApi('runs-api-yank-restart', done, async (api) => {
+      const hash = request.definition.hash
+      await api.call('POST', `/v1/definitions/payments/${hash}/yank`, { sub: 'bob' })
+      await api.restart()
+      expect((await api.submit(request, 'carol')).status).toBe(409)
+    })
   })
 
   it('answers 404 or 405 for what is not a run call', async () => {

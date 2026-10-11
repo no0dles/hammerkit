@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { HOST_RUNS_YAML } from '../testing/host-env'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer, TestDeviceFlow, TestIssuer, TestKey } from '../testing/test-issuer'
@@ -40,15 +41,19 @@ async function withLogin(
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `listen: { port: 0 }
+        `${HOST_RUNS_YAML}listen: { port: 0 }
 issuers:
   - issuer: "${idp.url}"
     audience: hammerkit
     ${options.clientId === false ? '' : 'clientId: hammerkit-cli'}
     scope: "${options.scope ?? 'openid api://hammerkit/.default'}"
+secretProviders:
+  echo: { command: [echo, "{{ref}}"] }
+accounts:
+  op-payments-dev: { providers: { echo: { env: {} } } }
 entitlements:
   - subject: { iss: "${idp.url}", sub: alice }
-    accounts: [op-payments-dev]
+    accounts: { op-payments-dev: use }
 `
       )
       const server = await startServer(await readServerConfig(env, file), env)
@@ -89,7 +94,7 @@ describe('deviceLogin', () => {
       expect(result.expiresAt).toBeGreaterThan(Date.now() + 3000 * 1000)
 
       const me = await getMe(setup.host, result.accessToken)
-      expect(me).toMatchObject({ sub: 'alice', accounts: ['op-payments-dev'], default: 'op-payments-dev' })
+      expect(me).toMatchObject({ sub: 'alice', accounts: [{ name: 'op-payments-dev', level: 'use' }] })
     })
   })
 

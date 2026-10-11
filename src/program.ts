@@ -26,6 +26,7 @@ import { formatDuration, formatSize, parseDuration, parseSize } from './utils/un
 import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
+import { registerRunWorkerCommand } from './server/run-worker-command'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
@@ -122,6 +123,7 @@ export async function getProgram(
 ): Promise<{ program: commaner.Command; args: string[] }> {
   const program = new Command()
   registerServerCommand(program, environment)
+  registerRunWorkerCommand(program, environment)
 
   const parsed = parseSetArguments(argv)
   const args = parsed.args

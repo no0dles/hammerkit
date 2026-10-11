@@ -27,6 +27,10 @@ export function fetchProviderValue(
   ref: string,
   environment: Environment
 ): Promise<string> {
+  const allowed = environment.hosted?.accounts
+  if (allowed && !allowed.includes(binding.account.name)) {
+    return Promise.reject(new Error(`the run may not read secrets as ${binding.account.name}`))
+  }
   let values = runs.get(environment)
   if (!values) {
     values = new Map()

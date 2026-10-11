@@ -38,7 +38,12 @@ interface ProposalView {
   reason?: string
   tasks: string[]
   services: string[]
+  accounts: string[]
+  missing: string[]
+  plan?: Record<string, PlanView>
   base: string | null
+  latest: string | null
+  stale: boolean
   mine: boolean
   canDecide: boolean
 }
@@ -57,11 +62,28 @@ interface ApprovalView {
   createdAt: string
   definition: { name: string; hash: string }
   tasks: string[]
-  account: string | null
+  accounts: string[]
   source: { type: string; ref?: string; snapshot?: string }
   options: Record<string, unknown>
-  approval?: { expiresAt: string; approvedBy?: { sub: string } }
+  approvals?: { account: string; expiresAt: string; approvedBy?: { sub: string } }[]
+  plan?: Record<string, PlanView>
   state: string
+}
+
+// what a task or service does, see the plan of a version on the server
+interface PlanView {
+  kind: 'task' | 'service'
+  runtime: string
+  image?: string
+  cmds: string[]
+  deps: string[]
+  needs: string[]
+  accounts: string[]
+  secrets: { from: string; account: string | null; target: string }[]
+  mounts: string[]
+  ports: string[]
+  generates: string[]
+  flags: string[]
 }
 
 const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
@@ -78,12 +100,53 @@ function describe(run: ApprovalView): string[] {
     )})`,
     `  ${printable(run.definition.name)} ${printable(run.definition.hash)}`,
     `  tasks: ${run.tasks.length > 0 ? run.tasks.map(printable).join(', ') : 'selected by labels'}`,
-    `  account ${run.account === null ? 'none' : printable(run.account)}, source ${printable(source)}${
-      options ? `, ${printable(options)}` : ''
-    }`,
-    `  needs the approval of an admin of ${run.account === null ? 'none' : printable(run.account)}`,
-    `  decide before ${printable(run.approval?.expiresAt ?? '-')}`,
+    `  accounts: ${run.accounts.length > 0 ? run.accounts.map(printable).join(', ') : 'none'}, source ${printable(
+      source
+    )}${options ? `, ${printable(options)}` : ''}`,
+    ...(run.approvals ?? []).map(
+      (approval) =>
+        `  ${printable(approval.account)}: ${
+          approval.approvedBy
+            ? `approved by ${printable(approval.approvedBy.sub)}`
+            : 'waits for somebody who uses it to approve'
+        }`
+    ),
+    ...flagLines(run),
+    `  decide before ${printable(run.approvals?.[0]?.expiresAt ?? '-')}`,
   ]
+}
+
+// What to look at first, one line.
+function flagLines(run: { plan?: Record<string, PlanView> }): string[] {
+  const flagged = Object.entries(run.plan ?? {}).filter(([, entry]) => entry.flags.length > 0)
+  return flagged.length > 0
+    ? [
+        `  look at: ${flagged
+          .map(([name, entry]) => `${printable(name)} (${entry.flags.map(printable).join(', ')})`)
+          .join(', ')}`,
+      ]
+    : []
+}
+
+// The tasks and services the run executes and what each does, never a secret's value.
+function describePlan(plan: Record<string, PlanView>): string[] {
+  return Object.entries(plan).flatMap(([name, entry]) => [
+    `  ${colors.bold(printable(name))}  ${entry.kind}, ${printable(entry.runtime)}${
+      entry.image ? ` ${printable(entry.image)}` : ''
+    }${entry.flags.length > 0 ? `  [${entry.flags.map(printable).join(', ')}]` : ''}`,
+    ...entry.cmds.map((cmd) => `    $ ${printable(cmd)}`),
+    ...(entry.deps.length > 0 ? [`    after: ${entry.deps.map(printable).join(', ')}`] : []),
+    ...(entry.needs.length > 0 ? [`    needs: ${entry.needs.map(printable).join(', ')}`] : []),
+    ...entry.secrets.map(
+      (secret) =>
+        `    secret ${printable(secret.from)}${secret.account ? ` as ${printable(secret.account)}` : ''} -> ${printable(
+          secret.target
+        )}`
+    ),
+    ...(entry.mounts.length > 0 ? [`    mounts: ${entry.mounts.map(printable).join(', ')}`] : []),
+    ...(entry.ports.length > 0 ? [`    ports: ${entry.ports.map(printable).join(', ')}`] : []),
+    ...(entry.generates.length > 0 ? [`    generates: ${entry.generates.map(printable).join(', ')}`] : []),
+  ])
 }
 
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
@@ -151,6 +214,25 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
 
   remote
+    .command('show <run> [server]')
+    .description('show a run that waits for your approval in full: the commands, secrets and accounts of its tasks')
+    .action(
+      guarded('Remote show was not successful', async (run: string, name: string | undefined) => {
+        if (!RUN_ID.test(run)) {
+          throw new Error(`${printable(run)} is not a run id, list them with: hammerkit remote approvals`)
+        }
+        const { server, token } = await connect(name)
+        const view = (await callServer<ApprovalView>(server, token, 'GET', `/v1/approvals/${run}`)).body
+        for (const line of describe(view)) {
+          environment.stdout.write(`${line}\n`)
+        }
+        environment.stdout.write(
+          view.plan ? `${describePlan(view.plan).join('\n')}\n` : 'the server did not record what its tasks do\n'
+        )
+      })
+    )
+
+  remote
     .command('proposals [server]')
     .description('list the proposed versions of build files you made or may approve')
     .action(
@@ -170,6 +252,23 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           )
           const names = [...proposal.tasks, ...proposal.services]
           environment.stdout.write(`  tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+          if (proposal.accounts.length > 0) {
+            environment.stdout.write(
+              `  accounts: ${proposal.accounts.map(printable).join(', ')}${
+                proposal.missing.length > 0
+                  ? `, the proposer does not use ${proposal.missing.map(printable).join(', ')}`
+                  : ''
+              }\n`
+            )
+          }
+          for (const line of flagLines(proposal)) {
+            environment.stdout.write(`${line}\n`)
+          }
+          if (proposal.stale) {
+            environment.stdout.write(
+              `  stale: ${printable(proposal.name)} has a newer version, reject it and propose again on top of it\n`
+            )
+          }
           if (proposal.state === 'waiting') {
             environment.stdout.write(`  decide before ${printable(proposal.expiresAt)}\n`)
           } else if (proposal.reason) {
@@ -210,10 +309,47 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         environment.stdout.write(
           base ? `compared with ${printable(view.base)}\n` : 'no version is published yet, everything is new\n'
         )
+        if (view.stale) {
+          environment.stdout.write(
+            `warning: ${printable(proposal.name)} has a newer version (${printable(
+              view.latest
+            )}), this can only be rejected\n`
+          )
+        }
         const lines = diffBundles(base, proposed)
         environment.stdout.write(lines.length > 0 ? `${lines.join('\n')}\n` : 'the files are the same\n')
       })
     )
+
+  for (const action of ['yank', 'unyank'] as const) {
+    remote
+      .command(`${action} <version> [server]`)
+      .description(
+        action === 'yank'
+          ? 'pull a published version (name@hash) back: no run starts from it and it is not latest'
+          : 'let a yanked version (name@hash) go on'
+      )
+      .addOption(new Option('--reason <text>', 'why, shown to whoever tries to run it').argParser((value) => value))
+      .action(
+        guarded(`Remote ${action} was not successful`, async (target: string, name: string | undefined, options) => {
+          const version = parseProposal(target)
+          if (!version) {
+            throw new Error(`${printable(target)} is not a version, name it like payments@sha256:...`)
+          }
+          const { name: serverName, server, token } = await connect(name)
+          await callServer(
+            server,
+            token,
+            'POST',
+            `/v1/definitions/${encodeURIComponent(version.name)}/${version.hash}/${action}`,
+            options.reason ? { reason: options.reason } : undefined
+          )
+          environment.stdout.write(
+            `${action === 'yank' ? 'yanked' : 'let go on'} ${printable(target)} on ${serverName}\n`
+          )
+        })
+      )
+  }
 
   for (const action of ['approve', 'reject'] as const) {
     remote

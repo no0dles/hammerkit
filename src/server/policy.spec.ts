@@ -1,6 +1,17 @@
-import { getGrant, isAdmin, mayPropose, mayPublish, maySeeDefinitions } from './policy'
+import {
+  canUse,
+  decideRun,
+  getGrant,
+  Grant,
+  mayPropose,
+  mayPublish,
+  mayRun,
+  maySeeDefinitions,
+  RunDecisionInput,
+  usedAccounts,
+} from './policy'
 import { Principal } from './oauth'
-import { Entitlement } from './server-config'
+import { Account, Entitlement } from './server-config'
 
 const IDP = 'https://idp.corp'
 const GITHUB = 'https://token.actions.githubusercontent.com'
@@ -8,158 +19,202 @@ const GITHUB = 'https://token.actions.githubusercontent.com'
 const alice: Principal = { iss: IDP, sub: 'alice', groups: ['eng-web'], claims: {} }
 
 const entitlements: Entitlement[] = [
-  { subject: { iss: IDP, sub: 'alice' }, accounts: ['op-payments-dev'], default: 'op-payments-dev' },
-  { group: { iss: IDP, name: 'eng-web' }, accounts: ['op-web-dev', 'op-payments-dev'] },
+  { subject: { iss: IDP, sub: 'alice' }, accounts: { 'op-payments-dev': 'use' }, repos: [], builds: 'run' },
+  {
+    group: { iss: IDP, name: 'eng-web' },
+    accounts: { 'op-web-dev': 'use', 'op-payments-dev': 'request' },
+    repos: ['github.com/corp/web'],
+  },
   {
     claims: { iss: GITHUB, match: { repository: 'corp/payments', ref: 'refs/heads/main' } },
-    accounts: ['op-payments-ci'],
-    source: ['ref'],
+    accounts: { 'op-payments-ci': 'use' },
+    repos: ['github.com/corp/payments'],
+    builds: 'publish',
   },
 ]
 
 describe('getGrant', () => {
   it('denies by default', () => {
     const grant = getGrant(entitlements, { iss: IDP, sub: 'bob', groups: [], claims: {} })
-    expect(grant).toEqual({
-      accounts: [],
-      request: [],
-      publish: [],
-      propose: [],
-      default: null,
-      source: ['upload', 'ref'],
-      matched: [],
-    })
-    expect(getGrant([], alice).accounts).toEqual([])
+    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, matched: [] })
+    expect(getGrant([], alice).accounts).toEqual({})
   })
 
-  it('adds up the accounts of a person and their groups', () => {
+  it('adds up the accounts and repositories of a person and their groups, the higher level wins', () => {
     const grant = getGrant(entitlements, alice)
-    expect(grant.accounts).toEqual(['op-payments-dev', 'op-web-dev'])
-    expect(grant.default).toBe('op-payments-dev')
+    expect(grant.accounts).toEqual({ 'op-payments-dev': 'use', 'op-web-dev': 'use' })
+    expect(grant.repos).toEqual(['github.com/corp/web'])
     expect(grant.matched).toEqual([0, 1])
+    expect(usedAccounts(grant)).toEqual(['op-payments-dev', 'op-web-dev'])
+  })
+
+  it('keeps use over request whichever entitlement comes first', () => {
+    const order: Entitlement[] = [
+      { group: { iss: IDP, name: 'eng-web' }, accounts: { prod: 'use' }, repos: [] },
+      { subject: { iss: IDP, sub: 'alice' }, accounts: { prod: 'request' }, repos: [] },
+    ]
+    expect(getGrant(order, alice).accounts).toEqual({ prod: 'use' })
+    expect(getGrant([...order].reverse(), alice).accounts).toEqual({ prod: 'use' })
+    expect(canUse(getGrant(order, alice), 'prod')).toBe(true)
+    expect(canUse(getGrant([order[1]], alice), 'prod')).toBe(false)
   })
 
   it('does not take an account of another issuer with the same subject', () => {
-    expect(getGrant(entitlements, { ...alice, iss: 'https://evil.example' }).accounts).toEqual([])
+    expect(getGrant(entitlements, { ...alice, iss: 'https://evil.example' }).accounts).toEqual({})
   })
 
-  it('has no default when several accounts are possible and none is marked', () => {
-    const grant = getGrant([entitlements[1]], alice)
-    expect(grant.accounts).toEqual(['op-web-dev', 'op-payments-dev'])
-    expect(grant.default).toBeNull()
-  })
-
-  it('uses the only account as the default', () => {
-    expect(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: ['one'] }], alice).default).toBe('one')
-  })
-
-  it('matches a CI job by its claims and limits where the code may come from', () => {
+  it('matches a CI job by its claims', () => {
     const job: Principal = {
       iss: GITHUB,
       sub: 'repo:corp/payments:ref:refs/heads/main',
       groups: [],
       claims: { repository: 'corp/payments', ref: 'refs/heads/main', actor: 'x' },
     }
-    expect(getGrant(entitlements, job)).toMatchObject({ accounts: ['op-payments-ci'], source: ['ref'], matched: [2] })
+    expect(getGrant(entitlements, job)).toMatchObject({
+      accounts: { 'op-payments-ci': 'use' },
+      repos: ['github.com/corp/payments'],
+      builds: 'publish',
+      matched: [2],
+    })
     expect(getGrant(entitlements, { ...job, claims: { ...job.claims, ref: 'refs/heads/feature' } }).accounts).toEqual(
-      []
+      {}
     )
-    expect(getGrant(entitlements, { ...job, claims: { repository: 'corp/payments' } }).accounts).toEqual([])
+    expect(getGrant(entitlements, { ...job, claims: { repository: 'corp/payments' } }).accounts).toEqual({})
   })
 
-  it('keeps only the source every matching entitlement allows', () => {
-    const both: Entitlement[] = [
-      { subject: { iss: IDP, sub: 'alice' }, accounts: ['a'], source: ['upload', 'ref'] },
-      { group: { iss: IDP, name: 'eng-web' }, accounts: ['b'], source: ['ref'] },
+  it('takes the highest builds level of the matching entitlements', () => {
+    const levels: Entitlement[] = [
+      { subject: { iss: IDP, sub: 'alice' }, accounts: {}, repos: [], builds: 'propose' },
+      { group: { iss: IDP, name: 'eng-web' }, accounts: {}, repos: [], builds: 'run' },
     ]
-    expect(getGrant(both, alice).source).toEqual(['ref'])
+    expect(getGrant(levels, alice).builds).toBe('propose')
+    expect(getGrant([levels[1], levels[0]], alice).builds).toBe('propose')
+  })
+})
+
+describe('builds levels', () => {
+  const grantOf = (builds: Entitlement['builds']): Grant =>
+    getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: {}, repos: [], builds }], alice)
+
+  it('includes each level in the next', () => {
+    expect([mayRun(grantOf('run')), mayPropose(grantOf('run')), mayPublish(grantOf('run'))]).toEqual([
+      true,
+      false,
+      false,
+    ])
+    expect([mayRun(grantOf('propose')), mayPropose(grantOf('propose')), mayPublish(grantOf('propose'))]).toEqual([
+      true,
+      true,
+      false,
+    ])
+    expect([mayRun(grantOf('publish')), mayPropose(grantOf('publish')), mayPublish(grantOf('publish'))]).toEqual([
+      true,
+      true,
+      true,
+    ])
   })
 
-  it('adds up what may be published, separately from the accounts', () => {
-    const both: Entitlement[] = [
-      { subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['payments'] },
-      { group: { iss: IDP, name: 'eng-web' }, accounts: ['b'], publish: ['web', 'payments'] },
-    ]
-    const grant = getGrant(both, alice)
-    expect(grant.publish).toEqual(['payments', 'web'])
-    expect(mayPublish(grant, 'web')).toBe(true)
-    expect(mayPublish(grant, 'other')).toBe(false)
-    const onlyAccounts = getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: ['a'] }], alice)
-    expect(onlyAccounts.publish).toEqual([])
-    expect(mayPublish(onlyAccounts, 'payments')).toBe(false)
+  it('does not let an account alone run anything', () => {
+    const onlyAccounts = getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: { a: 'use' }, repos: [] }], alice)
+    expect(mayRun(onlyAccounts)).toBe(false)
+    expect(mayPublish(onlyAccounts)).toBe(false)
   })
 
-  it('lets publish everything with a star', () => {
-    const grant = getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['*'] }], alice)
-    expect(mayPublish(grant, 'anything')).toBe(true)
-  })
-
-  it('shows the build files to who can run or publish, and to nobody else', () => {
+  it('shows the build files to who has a builds level or an account, and to nobody else', () => {
     expect(maySeeDefinitions(getGrant([], alice))).toBe(false)
-    expect(maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: ['a'] }], alice))).toBe(true)
+    expect(maySeeDefinitions(grantOf('run'))).toBe(true)
     expect(
-      maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['x'] }], alice))
-    ).toBe(true)
-  })
-
-  it('shows them to somebody who may only request runs', () => {
-    expect(
-      maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], request: ['a'] }], alice))
+      maySeeDefinitions(
+        getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: { a: 'request' }, repos: [] }], alice)
+      )
     ).toBe(true)
   })
 })
 
-describe('request and admin', () => {
-  const bob: Principal = { iss: IDP, sub: 'bob', groups: ['devs', 'ops'], claims: {} }
-  const both: Entitlement[] = [
-    { group: { iss: IDP, name: 'devs' }, accounts: [], request: ['prod', 'dev'], default: 'prod' },
-    { group: { iss: IDP, name: 'ops' }, accounts: ['prod'] },
+describe('decideRun', () => {
+  const catalog: { [name: string]: Account } = {
+    ci: { providers: {} },
+    dev: { providers: {} },
+    prod: { providers: {}, source: ['ref'], refs: ['main', 'release/*'] },
+  }
+  const grantOf = (accounts: Grant['accounts'], builds: Grant['builds'] = 'run'): Grant => ({
+    accounts,
+    repos: ['github.com/corp/*'],
+    builds,
+    matched: [0],
+  })
+  const base = (over: Partial<RunDecisionInput>): RunDecisionInput => ({
+    grant: grantOf({ ci: 'use', dev: 'use', prod: 'request' }),
+    accounts: [],
+    catalog,
+    source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'main' },
+    approvable: () => true,
+    readable: () => true,
+    ...over,
+  })
+  const refuse = (status: number, error: RegExp) => ({ type: 'refuse', status, error: expect.stringMatching(error) })
+
+  const table: [string, Partial<RunDecisionInput>, object][] = [
+    ['a task without secrets needs no account', {}, { type: 'run' }],
+    ['an account the caller uses runs at once', { accounts: ['dev'] }, { type: 'run' }],
+    ['an account the caller can only request waits', { accounts: ['prod'] }, { type: 'approval', accounts: ['prod'] }],
+    ['only the requested accounts wait', { accounts: ['dev', 'prod'] }, { type: 'approval', accounts: ['prod'] }],
+    [
+      'an account the caller has no level on is refused, by name',
+      { accounts: ['other'] },
+      refuse(403, /account other/),
+    ],
+    [
+      'no builds level means nothing runs',
+      { grant: grantOf({ dev: 'use' }, null), accounts: ['dev'] },
+      refuse(403, /not entitled/),
+    ],
+    ['an upload is not supported yet', { source: { type: 'upload' } }, refuse(501, /upload/)],
+    [
+      'an account that takes only a ref refuses an upload',
+      { accounts: ['prod'], source: { type: 'upload' } },
+      refuse(501, /upload/),
+    ],
+    [
+      'a branch the account allows',
+      { accounts: ['prod'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'release/1.2' } },
+      { type: 'approval', accounts: ['prod'] },
+    ],
+    [
+      'a branch the account does not allow',
+      { accounts: ['prod'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'feature' } },
+      refuse(403, /only used by runs from main, release\/\*/),
+    ],
+    [
+      'a commit names no branch, so an account with refs refuses it',
+      { accounts: ['prod'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'a'.repeat(40) } },
+      refuse(403, /only used by runs from/),
+    ],
+    [
+      'a commit is fine for an account without refs',
+      { accounts: ['dev'], source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'a'.repeat(40) } },
+      { type: 'run' },
+    ],
+    [
+      'a request nobody can approve is refused at once',
+      { accounts: ['prod'], approvable: () => false },
+      refuse(409, /nobody can approve prod/),
+    ],
   ]
 
-  it('keeps the two modes apart', () => {
-    const grant = getGrant([both[0]], bob)
-    expect(grant.accounts).toEqual([])
-    expect(grant.request).toEqual(['prod', 'dev'])
-    expect(grant.default).toBe('prod')
-    expect(isAdmin(grant, 'prod')).toBe(false)
+  it.each(table)('%s', (_name, input, expected) => {
+    expect(decideRun(base(input))).toEqual(expected)
   })
 
-  it('lets admin win where an account is given in both', () => {
-    const grant = getGrant(both, bob)
-    expect(grant.accounts).toEqual(['prod'])
-    expect(grant.request).toEqual(['dev'])
-    expect(isAdmin(grant, 'prod')).toBe(true)
-    expect(isAdmin(grant, 'dev')).toBe(false)
-    expect(isAdmin(grant, null)).toBe(false)
-  })
-
-  it('takes the only account as default whichever the mode', () => {
-    expect(getGrant([{ subject: { iss: IDP, sub: 'bob' }, accounts: [], request: ['prod'] }], bob).default).toBe('prod')
-  })
-})
-
-describe('propose and publish', () => {
-  const entitlement = (extra: object): Entitlement[] => [
-    { subject: { iss: IDP, sub: 'alice' }, accounts: [], ...extra } as Entitlement,
-  ]
-
-  it('keeps what may be proposed apart from what may be published', () => {
-    const grant = getGrant(entitlement({ propose: ['payments'], publish: ['web'] }), alice)
-    expect(grant.propose).toEqual(['payments'])
-    expect(mayPropose(grant, 'payments')).toBe(true)
-    expect(mayPropose(grant, 'web')).toBe(false)
-    expect(mayPublish(grant, 'payments')).toBe(false)
-    expect(mayPublish(grant, 'web')).toBe(true)
-  })
-
-  it('takes * for any name', () => {
-    const grant = getGrant(entitlement({ propose: ['*'] }), alice)
-    expect(mayPropose(grant, 'anything')).toBe(true)
-    expect(mayPublish(grant, 'anything')).toBe(false)
-  })
-
-  it('lets somebody who may only propose see the build files', () => {
-    expect(maySeeDefinitions(getGrant(entitlement({ propose: ['payments'] }), alice))).toBe(true)
-    expect(getGrant([], alice).propose).toEqual([])
+  it('refuses an account that restricts its source', () => {
+    const decision = decideRun(
+      base({
+        grant: grantOf({ prod: 'use' }),
+        accounts: ['prod'],
+        catalog: { prod: { providers: {}, source: ['upload'] } },
+        source: { type: 'ref', repo: 'github.com/corp/payments', ref: 'main' },
+      })
+    )
+    expect(decision).toEqual(refuse(403, /not used by runs from ref/))
   })
 })

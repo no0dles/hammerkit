@@ -86,4 +86,16 @@ describe('provider values', () => {
       { level: 'debug', message: 'secret db via gsm/test', context: { type: 'cli', name: 'hammerkit' } },
     ])
   })
+
+  it('refuses an account a hosted run was not admitted for, without calling the provider', async () => {
+    const hosted: Environment = {
+      ...environment,
+      hosted: { catalog: { providers: {}, accounts: {} }, accounts: ['ci'] },
+    }
+    await expect(fetchProviderValue(binding('p', 'prod'), 'db', hosted)).rejects.toThrow(
+      'the run may not read secrets as prod'
+    )
+    expect(calls).toEqual([])
+    await expect(fetchProviderValue(binding('p', 'ci'), 'db', hosted)).resolves.toBe('db#1')
+  })
 })

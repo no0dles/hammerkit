@@ -1,18 +1,9 @@
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'path'
+import { mkdir, readdir, readFile, rename, writeFile } from 'fs/promises'
+import { dirname, join } from 'path'
 import { randomBytes } from 'crypto'
-import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
-import { FileContext } from '../file/file-context'
-import { getFileContext } from '../file/get-file-context'
-import { isWithin } from '../includes/resolve-git-source'
-import { createParseContext } from '../schema/schema-parser'
-import { parseReferences } from '../schema/reference-parser'
-import { getWorkContext } from '../schema/work-scope-parser'
-import { isContainerWorkTask } from '../planner/work-task'
 import { Bundle, hashBundle, HASH_PATTERN } from '../remote/bundle'
-import { getErrorMessage } from '../log'
+import { DefinitionInputs, DefinitionError, PlanPolicy, planBundle, TaskPlan } from './plan'
 
 export interface DefinitionVersion {
   name: string
@@ -29,152 +20,17 @@ export interface DefinitionVersion {
   // what each task works on, so a client knows which of its files to send;
   // versions published before this was recorded have none
   inputs?: Record<string, DefinitionInputs>
+  // what each task and service does and the accounts it uses; versions published
+  // before this was recorded have none, and none of them runs on a server
+  plan?: Record<string, TaskPlan>
+  // every account the version uses
+  accounts?: string[]
+  // pulled back: no run starts from it, and it is not `latest`, but it stays for the record
+  yanked?: { at: string; by: { iss: string; sub: string }; reason?: string }
 }
 
-// The files a task reads and the tasks and services it waits for. Paths are
-// relative to the root of the bundle, which is where the project's files go as
-// well; what lies outside of it cannot be sent and is left out.
-export interface DefinitionInputs {
-  // the `src` patterns as the build file writes them (environment variables are
-  // not substituted), `!` exclusions are kept
-  src: string[]
-  // host paths mounted into the container
-  mounts: string[]
-  deps: string[]
-  needs: string[]
-}
-
-export interface InspectedBundle {
-  tasks: string[]
-  services: string[]
-  inputs: Record<string, DefinitionInputs>
-}
-
-export class DefinitionError extends Error {}
-
-// 40 (sha-1) or 64 (sha-256) hex digits
-const COMMIT_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/i
-
-// A hash alone can only name what is inside the bundle, so everything a build
-// file pulls in from elsewhere has to be pinned: a git include needs a commit
-// and a remote that is not a path on the server.
-function findLooseIncludes(bundle: Bundle): string[] {
-  const problems: string[] = []
-  for (const [path, content] of Object.entries(bundle.files)) {
-    if (!/\.ya?ml$/i.test(path)) {
-      continue
-    }
-    let document: any
-    try {
-      document = parse(content)
-    } catch {
-      continue // a file that isn't valid yaml is reported when the bundle is parsed
-    }
-    for (const block of ['includes', 'references']) {
-      for (const [name, include] of Object.entries(document?.[block] ?? {})) {
-        const source = include as { git?: unknown; ref?: unknown }
-        if (!source || typeof source !== 'object' || source.git === undefined) {
-          continue
-        }
-        if (typeof source.git !== 'string' || !/^(https:\/\/|ssh:\/\/|git@[\w.-]+:)/.test(source.git)) {
-          problems.push(`${path}: ${block}.${name}: git has to be an https:// or ssh:// address`)
-        }
-        if (typeof source.ref !== 'string' || !COMMIT_PATTERN.test(source.ref)) {
-          problems.push(`${path}: ${block}.${name}: pin ref to a commit, a branch or tag can move`)
-        }
-      }
-    }
-  }
-  return problems
-}
-
-// What a build file may read while it is inspected: its own files. The rest of
-// the server is not its business (a missing file is "not there", not an error).
-function confined(files: FileContext, root: string): FileContext {
-  const check = (path: string) => {
-    if (!isWithin(root, resolve(root, path))) {
-      throw new DefinitionError(`${path} is outside of the bundle`)
-    }
-  }
-  const guarded = (fn: (path: string) => any) => (path: string) => {
-    check(path)
-    return fn.call(files, path)
-  }
-  return {
-    ...files,
-    read: guarded(files.read),
-    readStream: guarded(files.readStream),
-    listFiles: guarded(files.listFiles),
-    stats: guarded(files.stats),
-    exists: async (path: string) => isWithin(root, resolve(root, path)) && files.exists(path),
-    watch: files.watch,
-  }
-}
-
-// A path of a task, written relative to the root of the bundle with forward
-// slashes. A leading `!` (an exclusion) is kept. Nothing is returned for a path
-// outside of the bundle.
-function insideBundle(root: string, cwd: string, path: string): string[] {
-  const negated = path.startsWith('!')
-  const absolute = resolve(cwd, negated ? path.slice(1) : path)
-  const inside = relative(root, absolute)
-  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
-    return []
-  }
-  const portable = inside.split(sep).join(posix.sep)
-  // a pattern keeps its glob characters, `resolve` only normalizes separators
-  return [`${negated ? '!' : ''}${portable === '' ? '.' : portable}`]
-}
-
-// Writes the bundle into a directory of its own and reads it the way a run
-// would, so a build file that doesn't parse is refused when it is published, not
-// when somebody wants to run it.
-export async function inspectBundle(bundle: Bundle, environment: Environment): Promise<InspectedBundle> {
-  const problems = findLooseIncludes(bundle)
-  if (problems.length > 0) {
-    throw new DefinitionError(problems.join('\n'))
-  }
-  const directory = await mkdtemp(join(tmpdir(), 'hammerkit-definition-'))
-  try {
-    for (const [path, content] of Object.entries(bundle.files)) {
-      await mkdir(dirname(join(directory, path)), { recursive: true })
-      await writeFile(join(directory, path), content)
-    }
-    const inspected: Environment = {
-      ...environment,
-      cwd: directory,
-      file: confined(getFileContext(directory), directory),
-    }
-    try {
-      const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected)
-      const context = await parseReferences(ctx, scope, inspected)
-      const workTree = getWorkContext(context, { environmentName: null }, inspected)
-      const inputs: Record<string, DefinitionInputs> = {}
-      for (const item of Object.values(workTree.tasks)) {
-        inputs[item.name] = {
-          // the sources a task inherits from its dependencies belong to those
-          src: item.data.src
-            .filter((source) => source.inherited === null)
-            .flatMap((source) => insideBundle(directory, item.data.cwd, source.source)),
-          mounts: isContainerWorkTask(item.data)
-            ? item.data.mounts.flatMap((mount) => insideBundle(directory, item.data.cwd, mount.localPath))
-            : [],
-          deps: item.deps.map((dep) => dep.name).sort(),
-          needs: item.needs.map((need) => need.name).sort(),
-        }
-      }
-      return {
-        tasks: Object.keys(context.tasks).sort(),
-        services: Object.keys(context.services).sort(),
-        inputs: Object.fromEntries(Object.entries(inputs).sort(([a], [b]) => (a < b ? -1 : 1))),
-      }
-    } catch (e) {
-      throw new DefinitionError(getErrorMessage(e).split(directory).join('.'))
-    }
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-}
+export { DefinitionError, inspectBundle } from './plan'
+export type { DefinitionInputs, InspectedBundle, TaskPlan } from './plan'
 
 // The published build files: immutable versions, each named by its hash. They
 // are kept in files, so a restart doesn't forget what runs were started from.
@@ -183,9 +39,14 @@ export class DefinitionStore {
 
   constructor(
     private readonly directory: string,
+    // the environment a build file is read with: on a server, the hosted one
     private readonly environment: Environment,
-    private readonly now: () => number = Date.now
-  ) {}
+    private readonly options: { policy?: PlanPolicy; now?: () => number } = {}
+  ) {
+    this.now = options.now ?? Date.now
+  }
+
+  private readonly now: () => number
 
   async load(): Promise<void> {
     let names: string[] = []
@@ -214,10 +75,48 @@ export class DefinitionStore {
     return this.has(name) ? [...(this.versions.get(name) as DefinitionVersion[])] : []
   }
 
-  // a hash, or `latest` for the version published last
+  // a hash, or `latest` for the version published last that is not yanked
   find(name: string, hash: string): DefinitionVersion | undefined {
     const versions = this.list(name)
-    return hash === 'latest' ? versions[0] : versions.find((v) => v.hash === hash)
+    return hash === 'latest' ? versions.find((v) => !v.yanked) : versions.find((v) => v.hash === hash)
+  }
+
+  /**
+   * Pulls a version back (or, with `undo`, lets it go on). The version is rewritten in
+   * place, its files stay: a run that was started from it has them.
+   */
+  async yank(
+    name: string,
+    hash: string,
+    by: { iss: string; sub: string },
+    options: { reason?: string; undo?: boolean } = {}
+  ): Promise<DefinitionVersion | undefined> {
+    const version = this.versions.get(name)?.find((v) => v.hash === hash)
+    if (!version || Boolean(version.yanked) === !options.undo) {
+      return version
+    }
+    const bundle = await this.files(version)
+    if (!bundle) {
+      return version
+    }
+    const next: DefinitionVersion = { ...version }
+    if (options.undo) {
+      delete next.yanked
+    } else {
+      next.yanked = {
+        at: new Date(this.now()).toISOString(),
+        by: { iss: by.iss, sub: by.sub },
+        ...(options.reason ? { reason: options.reason } : {}),
+      }
+    }
+    const file = this.file(name, hash)
+    const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
+    await writeFile(temporary, JSON.stringify({ version: next, bundle }), { flag: 'wx' })
+    await rename(temporary, file)
+    // the same object, so whoever holds the version sees it
+    Object.keys(version).forEach((key) => delete (version as any)[key])
+    Object.assign(version, next)
+    return version
   }
 
   async files(version: DefinitionVersion): Promise<Bundle | undefined> {
@@ -233,14 +132,19 @@ export class DefinitionStore {
   async prepare(
     name: string,
     bundle: Bundle,
-    publisher: { iss: string; sub: string }
+    publisher: { iss: string; sub: string },
+    // a proposal is read before anybody trusts it: it may not make the server fetch
+    options: { noRemote?: boolean } = {}
   ): Promise<{ version: DefinitionVersion; existing?: DefinitionVersion }> {
     const hash = hashBundle(bundle)
     const existing = this.find(name, hash)
     if (existing) {
       return { version: existing, existing }
     }
-    const { tasks, services, inputs } = await inspectBundle(bundle, this.environment)
+    const { tasks, services, inputs, plan, accounts } = await planBundle(bundle, this.environment, {
+      policy: this.options.policy,
+      noRemote: options.noRemote,
+    })
     return {
       version: {
         name,
@@ -251,6 +155,8 @@ export class DefinitionStore {
         tasks,
         services,
         inputs,
+        plan,
+        accounts,
       },
     }
   }

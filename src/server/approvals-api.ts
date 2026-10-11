@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from 'http'
 import { z } from 'zod'
 import { readJson, send } from './http'
 import { Principal, quote } from './oauth'
-import { getGrant, isAdmin } from './policy'
+import { canUse, getGrant } from './policy'
 import { RUN_ID_PATTERN, Run, RunRegistry } from './runs'
 import { ServerConfig } from './server-config'
 
@@ -18,16 +18,17 @@ function toApprovalView(run: Run) {
     createdAt: run.createdAt,
     definition: run.definition,
     tasks: run.tasks,
-    account: run.account,
+    accounts: run.accounts,
+    plan: run.plan,
     source: run.source,
     options: run.options,
-    approval: run.approval,
+    approvals: run.approvals,
   }
 }
 
 /**
- * The runs waiting for an approval, which an admin of the service account they
- * use gives:
+ * The runs waiting for an approval, which somebody who uses the accounts they
+ * need gives (one person is enough when they use all of them):
  *
  *   GET  /v1/approvals                  the runs the caller may approve
  *   GET  /v1/approvals/<id>             one of them
@@ -52,7 +53,7 @@ export async function handleApprovals(
   }
   const [, id, action] = match
   const grant = getGrant(config.entitlements, principal)
-  const canDecide = (account: string | null) => isAdmin(grant, account)
+  const canDecide = (account: string) => canUse(grant, account)
 
   if (!id) {
     if (req.method !== 'GET') {
@@ -61,7 +62,11 @@ export async function handleApprovals(
     }
     const open = registry
       .waiting()
-      .filter((run) => !(run.owner.iss === principal.iss && run.owner.sub === principal.sub) && canDecide(run.account))
+      .filter(
+        (run) =>
+          !(run.owner.iss === principal.iss && run.owner.sub === principal.sub) &&
+          (run.approvals ?? []).some((approval) => !approval.approvedBy && canDecide(approval.account))
+      )
     send(res, 200, { approvals: open.map(toApprovalView) })
     return true
   }
@@ -104,6 +109,9 @@ export async function handleApprovals(
       break
     case 'not-waiting':
       send(res, 409, { error: `the run is ${result.state}, it does not wait for an approval` })
+      break
+    case 'already-approved':
+      send(res, 409, { error: 'you approved all you can, the run waits for somebody who uses the other accounts' })
       break
     default:
       send(res, 404, { error: 'not found' })

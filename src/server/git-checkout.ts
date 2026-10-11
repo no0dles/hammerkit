@@ -28,7 +28,10 @@ export async function checkoutRef(
   ref: string,
   directory: string,
   env: { [key: string]: string | undefined },
-  signal: AbortSignal
+  signal: AbortSignal,
+  // the commit the ref was resolved to when the run was submitted: a ref that moved since
+  // is not what was approved
+  expectedCommit?: string
 ): Promise<string> {
   if (!isValidRef(ref)) {
     throw new Error(`${JSON.stringify(ref.slice(0, 80))} is not a branch, tag or commit`)
@@ -38,7 +41,66 @@ export async function checkoutRef(
   await run(['init', '--quiet', directory])
   await run(['-C', directory, 'fetch', '--quiet', '--depth', '1', '--', repository, ref])
   await run(['-C', directory, '-c', 'advice.detachedHead=false', 'checkout', '--quiet', 'FETCH_HEAD'])
-  return (await run(['-C', directory, 'rev-parse', 'HEAD'])).trim()
+  const commit = (await run(['-C', directory, 'rev-parse', 'HEAD'])).trim()
+  if (expectedCommit && commit !== expectedCommit) {
+    throw new Error(`${ref} is at ${commit} now, the run was submitted for ${expectedCommit}`)
+  }
+  return commit
+}
+
+export class RefError extends Error {}
+
+const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/
+
+/**
+ * The commit a branch or tag of a repository points to now: `refs/heads/<ref>`, else
+ * `refs/tags/<ref>` (the commit of an annotated tag). A name that is both a branch and
+ * a tag is ambiguous. A full commit hash is taken as it is.
+ */
+export async function resolveRef(
+  repository: string,
+  ref: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string> {
+  if (!isValidRef(ref)) {
+    throw new RefError(`${JSON.stringify(ref.slice(0, 80))} is not a branch, tag or commit`)
+  }
+  if (COMMIT.test(ref.toLowerCase())) {
+    return ref.toLowerCase()
+  }
+  const output = await git(
+    [
+      'ls-remote',
+      '--heads',
+      '--tags',
+      '--',
+      repository,
+      `refs/heads/${ref}`,
+      `refs/tags/${ref}`,
+      `refs/tags/${ref}^{}`,
+    ],
+    env,
+    signal,
+    `the refs of ${repository}`
+  )
+  const found = new Map<string, string>()
+  for (const line of output.split('\n')) {
+    const [commit, name] = line.split('\t')
+    if (commit && name) {
+      found.set(name, commit)
+    }
+  }
+  const branch = found.get(`refs/heads/${ref}`)
+  const tag = found.get(`refs/tags/${ref}^{}`) ?? found.get(`refs/tags/${ref}`)
+  if (branch && tag) {
+    throw new RefError(`${ref} is both a branch and a tag, name one of them`)
+  }
+  const commit = branch ?? tag
+  if (!commit) {
+    throw new RefError(`there is no branch or tag ${ref}`)
+  }
+  return commit
 }
 
 async function git(

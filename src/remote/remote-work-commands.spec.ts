@@ -6,13 +6,20 @@ import { runProgram } from '../run-program'
 import { createTestKey, signToken, startTestIssuer, TestDeviceFlow } from '../testing/test-issuer'
 import { readServerConfig } from '../server/server-config'
 import { startServer } from '../server/server'
+import { REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
+import { HOST_ENV_ALLOW } from '../testing/host-env'
 
 const HK = 'hammerkit'
 
 const buildFile = `tasks:
   build:
     cmds: [echo build]
+  deploy:
+    deps: [build]
+    secrets:
+      - { from: "echo:kube", account: op-payments-prod, env: KUBE_TOKEN }
+    cmds: [echo deploy]
 includes:
   more: ./more.yaml
 `
@@ -28,7 +35,7 @@ interface Harness {
 
 async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
   const key = createTestKey('ES256', 'k1')
-  let who = 'alice'
+  let who = 'bob'
   const flow: TestDeviceFlow = { clientId: 'hammerkit-cli', interval: 0, token: () => '' }
   const idp = await startTestIssuer([key], flow)
   const token = (sub: string) =>
@@ -43,22 +50,43 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
       writeFileSync(
         serverFile,
         [
+          `runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }`,
+          'runtimes: [docker, local]',
           'listen: { port: 0 }',
           `storage: { directory: ${JSON.stringify(join(cwd, 'server-data'))} }`,
           'issuers:',
           `  - { issuer: "${idp.url}", audience: hammerkit, clientId: hammerkit-cli }`,
+          'secretProviders:',
+          `  echo: { command: [${JSON.stringify(
+            process.execPath
+          )}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }`,
+          'accounts:',
+          '  op-payments-dev: { providers: { echo: { env: {} } } }',
+          '  op-payments-prod: { providers: { echo: { env: {} } } }',
+          'sources:',
+          '  - match: github.com/corp/*',
           'entitlements:',
+          // alice runs: the dev account is hers, the production one she asks for
           `  - subject: { iss: "${idp.url}", sub: alice }`,
-          '    accounts: [op-payments-dev]',
-          '    request: [op-payments-prod]',
-          '    default: op-payments-dev',
-          '    publish: [payments]',
+          '    accounts: { op-payments-dev: use, op-payments-prod: request }',
+          '    repos: [github.com/corp/payments]',
+          '    builds: run',
           `  - subject: { iss: "${idp.url}", sub: carol }`,
-          '    request: [op-payments-prod]',
+          '    accounts: { op-payments-prod: request }',
+          '    repos: [github.com/corp/payments]',
+          '    builds: run',
+          // bob publishes, as he uses every account the build file names, and approves for prod
           `  - subject: { iss: "${idp.url}", sub: bob }`,
-          '    accounts: [op-payments-prod]',
+          '    accounts: { op-payments-dev: use, op-payments-prod: use }',
+          '    repos: [github.com/corp/payments]',
+          '    builds: publish',
+          // dana may publish, but does not use the production account
+          `  - subject: { iss: "${idp.url}", sub: dana }`,
+          '    repos: [github.com/corp/payments]',
+          '    builds: publish',
           `  - subject: { iss: "${idp.url}", sub: agent }`,
-          '    propose: [payments]',
+          '    repos: [github.com/corp/payments]',
+          '    builds: propose',
           '',
         ].join('\n')
       )
@@ -73,7 +101,10 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           executed.push(run.tasks.join(','))
         },
       }
-      const server = await startServer(await readServerConfig(environment, serverFile), environment, { executor })
+      const server = await startServer(await readServerConfig(environment, serverFile), environment, {
+        executor,
+        repos: fakeRepos,
+      })
       try {
         const run = async (...args: string[]) => {
           const out = memoryStream()
@@ -103,12 +134,11 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
   }
 }
 
-async function submit(h: Harness, sub: string, account: string) {
+async function submit(h: Harness, sub: string, task: string) {
   const response = await h.call(sub, 'POST', '/v1/runs', {
     definition: { name: 'payments' },
-    tasks: ['build'],
-    account,
-    source: { type: 'ref', ref: 'main' },
+    tasks: [task],
+    source: { type: 'ref', repo: REPO, ref: 'main' },
   })
   expect(response.status).toBe(202)
   return response.body as { id: string; state: string }
@@ -120,15 +150,15 @@ describe('remote publish', () => {
       await h.run('remote', 'login', 'build')
       const first = await h.run('remote', 'publish', 'payments', 'build')
       expect(first).toMatch(/published payments to build: sha256:[0-9a-f]{64} \(2 files\)/)
-      expect(first).toContain('tasks and services: build, more:lint')
+      expect(first).toContain('tasks and services: build, deploy, more:lint')
 
       const again = await h.run('remote', 'publish', 'payments', 'build')
       expect(again).toContain('already published payments to build')
       const hash = /sha256:[0-9a-f]{64}/.exec(first)?.[0]
       expect(again).toContain(hash)
 
-      const published = await h.call('alice', 'GET', '/v1/definitions/payments/latest')
-      expect(published.body).toMatchObject({ hash, tasks: ['build', 'more:lint'] })
+      const published = await h.call('bob', 'GET', '/v1/definitions/payments/latest')
+      expect(published.body).toMatchObject({ hash, tasks: ['build', 'deploy', 'more:lint'] })
     })
   })
 
@@ -143,11 +173,38 @@ describe('remote publish', () => {
 
   it('tells what the server refused and why', async () => {
     await withHarness('remote-publish-refused', async (h) => {
-      h.as('bob')
+      h.as('alice')
       await h.run('remote', 'login', 'build')
       await expect(h.run('remote', 'publish', 'payments', 'build')).rejects.toThrow(
-        'answered 403: you may not publish payments'
+        'answered 403: you may not publish payments, it needs builds: propose or publish'
       )
+    })
+  })
+
+  it('proposes a build file that names an account the publisher does not use', async () => {
+    await withHarness('remote-publish-account', async (h) => {
+      h.as('dana')
+      await h.run('remote', 'login', 'build')
+      const out = await h.run('remote', 'publish', 'payments', 'build')
+      expect(out).toMatch(/proposed payments to build: sha256:[0-9a-f]{64}/)
+      const listing = await h.run('remote', 'proposals', 'build')
+      expect(listing).toContain('accounts: op-payments-prod, the proposer does not use op-payments-prod')
+      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(404)
+
+      // bob uses the account, so he approves it
+      h.as('bob')
+      await h.run('remote', 'login', 'build')
+      const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0]
+      expect(await h.run('remote', 'approve', `payments@${hash}`, 'build')).toContain('it is published')
+
+      // and pulls it back, which refuses runs of it until it is let go on
+      expect(await h.run('remote', 'yank', `payments@${hash}`, 'build', '--reason', 'leaks')).toContain(
+        `yanked payments@${hash} on build`
+      )
+      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(404)
+      expect(await h.run('remote', 'unyank', `payments@${hash}`, 'build')).toContain('let go on')
+      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(200)
+      await expect(h.run('remote', 'yank', 'payments', 'build')).rejects.toThrow('is not a version')
     })
   })
 
@@ -168,7 +225,7 @@ describe('remote approvals', () => {
   async function waitingRun(h: Harness) {
     await h.run('remote', 'login', 'build')
     await h.run('remote', 'publish', 'payments', 'build')
-    return submit(h, 'alice', 'op-payments-prod')
+    return submit(h, 'alice', 'deploy')
   }
 
   it('lists what waits for the approver and lets them approve it', async () => {
@@ -184,17 +241,25 @@ describe('remote approvals', () => {
       expect(listing).toContain(run.id)
       expect(listing).toContain('requested by alice')
       expect(listing).toMatch(/payments sha256:/)
-      expect(listing).toContain('tasks: build')
-      expect(listing).toContain('account op-payments-prod, source ref main')
-      expect(listing).toContain('needs the approval of an admin of op-payments-prod')
+      expect(listing).toContain('tasks: deploy')
+      expect(listing).toContain('accounts: op-payments-prod, source ref main')
+      expect(listing).toContain('op-payments-prod: waits for somebody who uses it to approve')
+
+      const shown = await h.run('remote', 'show', run.id, 'build')
+      expect(shown).toContain('task, local  [local-task]')
+      expect(shown).toContain('$ echo deploy')
+      expect(shown).toContain('after: build')
+      expect(shown).toContain('secret echo:kube as op-payments-prod -> KUBE_TOKEN')
+      expect(shown).not.toContain('KUBE_TOKEN=')
+      await expect(h.run('remote', 'show', 'nope', 'build')).rejects.toThrow('is not a run id')
 
       expect(await h.run('remote', 'approve', run.id, 'build')).toContain(`approved ${run.id} on build, it is queued`)
       expect(await h.run('remote', 'approvals', 'build')).toContain('no runs wait for your approval')
       for (let i = 0; i < 100 && h.executed.length === 0; i++) {
         await new Promise((resolve) => setTimeout(resolve, 10))
       }
-      expect(h.executed).toEqual(['build'])
-      expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.approval.approvedBy.sub).toBe('bob')
+      expect(h.executed).toEqual(['deploy'])
+      expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.approvals[0].approvedBy.sub).toBe('bob')
     })
   })
 
@@ -212,10 +277,12 @@ describe('remote approvals', () => {
     })
   })
 
-  it('does not let the one who asked decide, nor anybody who is not admin of the account', async () => {
+  it('does not let the one who asked decide, nor anybody who does not use the account', async () => {
     await withHarness('remote-approvals-refused', async (h) => {
       const run = await waitingRun(h)
-      // alice is not admin of the production account, so for her the run is not there to approve
+      h.as('alice')
+      await h.run('remote', 'login', 'build')
+      // alice only requests the production account, so for her the run is not there to approve
       await expect(h.run('remote', 'approve', run.id, 'build')).rejects.toThrow('answered 404')
       expect(await h.run('remote', 'approvals', 'build')).toContain('no runs wait for your approval')
       expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.state).toBe('awaiting-approval')
@@ -241,7 +308,7 @@ describe('remote proposals', () => {
     await h.run('remote', 'login', 'build')
     const out = await h.run('--file', 'more.yaml', 'remote', 'publish', 'payments', 'build')
     const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0] as string
-    h.as('alice')
+    h.as('bob')
     await h.run('remote', 'login', 'build')
     return { out, hash, target: `payments@${hash}` }
   }
@@ -252,7 +319,7 @@ describe('remote proposals', () => {
       expect(out).toMatch(/proposed payments to build: sha256:[0-9a-f]{64} \(1 file\)/)
       expect(out).toContain('tasks and services: lint')
       expect(out).toContain('can not run before somebody who may publish payments approves it')
-      expect((await h.call('alice', 'GET', '/v1/definitions/payments')).body.versions).toHaveLength(1)
+      expect((await h.call('bob', 'GET', '/v1/definitions/payments')).body.versions).toHaveLength(1)
       expect((await h.call('agent', 'GET', `/v1/proposals/payments/${hash}`)).body.state).toBe('waiting')
     })
   })
@@ -297,8 +364,8 @@ describe('remote proposals', () => {
       expect(await h.run('remote', 'approve', target, 'build')).toContain(
         `approved ${target} on build, it is published`
       )
-      const latest = await h.call('alice', 'GET', '/v1/definitions/payments/latest')
-      expect(latest.body).toMatchObject({ hash, publishedBy: { sub: 'agent' }, approvedBy: { sub: 'alice' } })
+      const latest = await h.call('bob', 'GET', '/v1/definitions/payments/latest')
+      expect(latest.body).toMatchObject({ hash, publishedBy: { sub: 'agent' }, approvedBy: { sub: 'bob' } })
       expect(await h.run('remote', 'proposals', 'build')).not.toContain('waits for your approval')
       await expect(h.run('remote', 'approve', target, 'build')).rejects.toThrow('answered 409')
     })

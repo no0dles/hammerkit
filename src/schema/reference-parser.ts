@@ -104,8 +104,14 @@ export async function parseReferences(
   }
 
   for (const file of Object.values(ctx.files)) {
+    if (environment.hosted && (file.schema.secretProviders || file.schema.secretAccounts)) {
+      throw new Error(
+        `${file.fileName} declares secret providers or accounts, which a server defines in its own config`
+      )
+    }
     if (!reference.envFiles[file.cwd]) {
-      reference.envFiles[file.cwd] = await readEnvFile(file.cwd, environment)
+      // a server does not read the `.env` of a checkout: it is code of the project
+      reference.envFiles[file.cwd] = environment.hosted ? {} : await readEnvFile(file.cwd, environment)
     }
 
     const buildFileEnvs = file.schema.envs
@@ -182,7 +188,9 @@ export async function parseReferences(
   }
 
   reference.caches = withBuiltinCaches(declaredCaches)
-  reference.secrets = collectSecretCatalog(Object.values(ctx.files), environment, reference)
+  reference.secrets = environment.hosted
+    ? { ...environment.hosted.catalog, explicitAccounts: true }
+    : collectSecretCatalog(Object.values(ctx.files), environment, reference)
 
   return reference
 }

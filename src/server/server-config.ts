@@ -3,6 +3,12 @@ import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import { parseDuration } from '../utils/units'
+import {
+  buildFileSecretAccountSchema,
+  buildFileSecretProvidersSchema,
+} from '../schema/build-file-secret-provider-schema'
+import { SecretCatalog } from '../secrets/secret-catalog'
+import { isRepoPattern } from './repo'
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1']
 
@@ -76,54 +82,91 @@ export interface Who {
   claims?: z.infer<typeof claimsSchema>
 }
 
-export const entitlementSchema = z
+// The service accounts a server knows. A run never names one: the accounts it
+// uses are the ones its secrets are read as, and an entitlement says who may use
+// or only request each.
+const accountNameSchema = z
+  .string()
+  .regex(/^[A-Za-z][A-Za-z0-9_-]*$/, 'a name starts with a letter and holds letters, digits, - and _')
+
+export const accountSchema = z
   .object({
-    ...whoShape,
-    // admin: runs on these accounts at once, and approves the runs others
-    // request on them
-    accounts: z.array(z.string().min(1)).default([]),
-    // may request runs on these accounts, which wait until an admin of the account
-    // (someone with it in `accounts`) approves them
-    request: z.array(z.string().min(1)).optional(),
-    // the build files (by name) the caller may publish, `*` for any; a separate
-    // permission from running them, so who defines work and who runs it can differ
-    publish: z.array(z.union([z.literal('*'), definitionName])).optional(),
-    // the build files the caller may propose a new version of: it can not run until
-    // someone who may `publish` that name approves it
-    propose: z.array(z.union([z.literal('*'), definitionName])).optional(),
-    // the account used when the caller names none; one of accounts or request
-    default: z.string().min(1).optional(),
-    // where the code may come from: the caller's working tree or a git ref
+    description: z.string().min(1).max(200).optional(),
+    // per secret provider, the environment that makes its command act as this
+    // account; the credentials are files and variables of the operator's machine
+    providers: buildFileSecretAccountSchema.shape.providers.default({}),
+    // where the code of a run using this account may come from; both when left out
     source: z
       .array(z.enum(['upload', 'ref']))
       .min(1)
       .optional(),
+    // the refs (branches or tags, `release/*` for a level) a run using this account
+    // may be started from; a commit is not accepted then, it names no branch
+    refs: z.array(z.string().min(1).max(200)).min(1).optional(),
+  })
+  .strict()
+  .superRefine((account, ctx) => {
+    if (account.refs && (account.source?.length !== 1 || account.source[0] !== 'ref')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['refs'],
+        message: 'refs only restricts runs from a git ref, set source: [ref] too, an upload names no ref',
+      })
+    }
+  })
+
+export type Account = z.infer<typeof accountSchema>
+
+export const accountLevelSchema = z.enum(['use', 'request'])
+export type AccountLevel = z.infer<typeof accountLevelSchema>
+
+// What a caller may do with the build files: run what is published, propose new
+// versions that someone else approves, or publish. Each level includes the lower.
+export const buildsLevelSchema = z.enum(['run', 'propose', 'publish'])
+export type BuildsLevel = z.infer<typeof buildsLevelSchema>
+
+const repoPatternSchema = z.string().refine(isRepoPattern, 'expected host/path, such as github.com/corp/*')
+
+export const entitlementSchema = z
+  .object({
+    ...whoShape,
+    // `use`: runs on the account at once and approves the runs others request on it;
+    // `request`: runs wait until somebody who may `use` the account approves them
+    accounts: z.record(accountNameSchema, accountLevelSchema).default({}),
+    // the repositories (`host/path` patterns) the caller may run from a git ref
+    repos: z.array(repoPatternSchema).default([]),
+    builds: buildsLevelSchema.optional(),
   })
   .strict()
   .superRefine((entitlement, ctx) => {
     checkWho(entitlement, ctx)
-    if (
-      entitlement.accounts.length === 0 &&
-      (entitlement.request ?? []).length === 0 &&
-      (entitlement.propose ?? []).length === 0 &&
-      (entitlement.publish ?? []).length === 0
-    ) {
+    if (Object.keys(entitlement.accounts).length === 0 && entitlement.builds === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, or build files to publish or propose',
-      })
-    }
-    if (
-      entitlement.default &&
-      ![...entitlement.accounts, ...(entitlement.request ?? [])].includes(entitlement.default)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['default'],
-        message: 'default has to be one of accounts or request',
+        message: 'name accounts to use or request, or a builds level',
       })
     }
   })
+
+// A repository the server can read: `github.com/corp/*` for an organisation,
+// `gitlab.corp.com/platform/**` for a group with its subgroups. The credential is a
+// secret of a provider, read as `account`, and handed to git for that fetch only.
+export const sourceSchema = z
+  .object({
+    match: repoPatternSchema,
+    secret: z
+      .object({
+        from: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'expected provider:reference'),
+        account: accountNameSchema,
+        // the user name of the basic authentication the token is sent with
+        username: z.string().min(1).default('x-access-token'),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+
+export type Source = z.infer<typeof sourceSchema>
 
 const duration = z.string().refine((value) => {
   try {
@@ -158,7 +201,11 @@ export const serverConfigSchema = z
     // the OAuth issuers whose tokens the server accepts, and the audience those
     // tokens have to carry
     issuers: z.array(issuerSchema).min(1, 'at least one issuer is needed, OAuth is the only way to call the server'),
-    // who may use which service account; default deny, so no entry means no account
+    // the service accounts, and the commands that read secrets as them; a build file
+    // can not declare either, only name an account on its secrets
+    accounts: z.record(accountNameSchema, accountSchema).default({}),
+    secretProviders: buildFileSecretProvidersSchema.default({}),
+    // who may use which service account and which build files; default deny
     entitlements: z.array(entitlementSchema).default([]),
     approvals: z
       .object({
@@ -166,24 +213,24 @@ export const serverConfigSchema = z
         timeout: duration.default('1h'),
         // runs waiting at the same time, more are refused
         maxWaiting: z.number().int().min(1).default(100),
+        // after a version was rejected, who proposed it can not propose that build
+        // file again, and nobody that version, for this long
+        cooldown: duration.default('10m'),
       })
       .strict()
       .default({}),
-    // where a run gets its code from: the repository of each build file, by its name.
-    // The caller names a branch, tag or commit of it, never a repository.
-    sources: z
-      .record(
-        definitionName,
-        z
-          .object({
-            git: z
-              .string()
-              .min(1)
-              .refine((value) => !value.startsWith('-'), 'a repository can not look like an option'),
-          })
-          .strict()
-      )
-      .default({}),
+    // the repositories a run may get its code from, as patterns of `host/path`, and
+    // the secret that reads them: a token in a secret provider, read as a service
+    // account of the operator. The caller names a repository and a ref in the request,
+    // never a url.
+    sources: z.array(sourceSchema).default([]),
+    // what tasks may run on: containers, and the local runtime that runs commands on
+    // this machine as the user of the server. Local tasks read the whole file system of that
+    // user, so they have to be allowed by name.
+    runtimes: z
+      .array(z.enum(['docker', 'local']))
+      .min(1)
+      .default(['docker']),
     // where the server keeps what must survive a restart: the published build files
     storage: z
       .object({ directory: z.string().min(1).optional() })
@@ -196,6 +243,39 @@ export const serverConfigSchema = z
         maxConcurrent: z.number().int().min(1).default(4),
         // finished runs that are kept for their state and logs
         keep: z.number().int().min(1).default(200),
+        // what one caller (issuer and subject) may have at a time, so a single
+        // caller can not take the whole machine; over it a request gets 429
+        limits: z
+          .object({
+            // runs that wait for an approval
+            waiting: z.number().int().min(1).default(10),
+            // runs that wait in the queue for a free place
+            queued: z.number().int().min(1).default(20),
+            // runs that execute at the same time, the others wait in the queue
+            running: z.number().int().min(1).default(2),
+          })
+          .strict()
+          .default({}),
+        // a run that executes longer is stopped and fails
+        maxDuration: duration.default('1h'),
+        // log output kept per run; the rest is cut off
+        maxLogBytes: z
+          .number()
+          .int()
+          .min(1024)
+          .default(1024 * 1024),
+        // the environment of a run: the variables of the server process that tasks
+        // (and the git fetch) can see. Nothing else of the server's environment
+        // is passed on, so there is no list built in; an operator names what the
+        // tools of the host need, such as PATH and DOCKER_HOST.
+        env: z
+          .object({
+            allow: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_()]*$/)).default([]),
+            // fixed values that are set in addition
+            set: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()).default({}),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),
@@ -221,6 +301,71 @@ export const serverConfigSchema = z
         })
       }
     })
+    for (const [name, account] of Object.entries(config.accounts)) {
+      for (const provider of Object.keys(account.providers)) {
+        if (!config.secretProviders[provider]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['accounts', name, 'providers', provider],
+            message: `secret provider ${provider} is not declared in secretProviders`,
+          })
+        }
+      }
+    }
+    config.entitlements.forEach((entitlement, index) => {
+      for (const account of Object.keys(entitlement.accounts)) {
+        if (!config.accounts[account]) {
+          const known = Object.keys(config.accounts)
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['entitlements', index, 'accounts', account],
+            message: `unknown account ${account}, ${
+              known.length > 0 ? `accounts: ${known.join(', ')}` : 'none is defined'
+            }`,
+          })
+        }
+      }
+    })
+    config.sources.forEach((source, index) => {
+      if (!source.secret) {
+        return
+      }
+      const { from, account } = source.secret
+      const kind = from.substring(0, from.indexOf(':'))
+      const where = ['sources', index, 'secret'] as (string | number)[]
+      if (!config.accounts[account]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'account'],
+          message: `unknown account ${account}`,
+        })
+      } else if (!config.accounts[account].providers[kind]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'from'],
+          message: `account ${account} has no credentials for the provider ${kind}`,
+        })
+      }
+      if (!config.secretProviders[kind]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'from'],
+          message: `secret provider ${kind} is not declared in secretProviders`,
+        })
+      }
+    })
+    const readers = getSourceAccounts(config)
+    config.entitlements.forEach((entitlement, index) => {
+      for (const account of Object.keys(entitlement.accounts)) {
+        if (readers.includes(account)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['entitlements', index, 'accounts', account],
+            message: `the account ${account} reads the sources, no entitlement may name it`,
+          })
+        }
+      }
+    })
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -231,6 +376,11 @@ export const serverConfigSchema = z
   })
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>
+
+// The accounts that read repositories: no caller uses them and no build file names them.
+export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string[] {
+  return [...new Set(config.sources.flatMap((source) => (source.secret ? [source.secret.account] : [])))]
+}
 export type ServerPlatform = z.infer<typeof serverPlatformSchema>
 
 export async function readServerConfig(environment: Environment, path: string): Promise<ServerConfig> {
@@ -250,6 +400,27 @@ export async function readServerConfig(environment: Environment, path: string): 
     throw new Error(`invalid ${path}: ${where}${issue.message}`)
   }
   return result.data
+}
+
+// The secret providers and accounts of the config as the engine reads them, so a
+// secret of a build file is read as an account of the operator.
+export function getSecretCatalog(config: ServerConfig): SecretCatalog {
+  const providers: SecretCatalog['providers'] = {}
+  for (const [name, provider] of Object.entries(config.secretProviders)) {
+    providers[name] = {
+      name,
+      type: 'command',
+      command: provider.command,
+      env: provider.env ?? {},
+      timeoutMs: parseDuration(provider.timeout ?? '30s'),
+      declaredIn: 'the server config',
+    }
+  }
+  const accounts: SecretCatalog['accounts'] = {}
+  for (const [name, account] of Object.entries(config.accounts)) {
+    accounts[name] = { name, default: false, providers: account.providers, declaredIn: 'the server config' }
+  }
+  return { providers, accounts, explicitAccounts: true }
 }
 
 export function detectPlatform(): ServerPlatform {

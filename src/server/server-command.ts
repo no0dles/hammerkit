@@ -22,12 +22,30 @@ export function registerServerCommand(program: Command, environment: Environment
         })
         environment.stdout.write(`hammerkit server listening on ${server.url}\n`)
 
+        // SIGHUP reads the entitlements again, so who may do what changes without
+        // a restart; the rest of the config needs one
+        const reload = async () => {
+          try {
+            const result = server.reload(await readServerConfig(environment, options.config))
+            if (result.restart.length > 0) {
+              environment.stdout.write(`changed but not reloaded, restart for: ${result.restart.join(', ')}\n`)
+            }
+          } catch (e) {
+            environment.stdout.write(`entitlements were not reloaded: ${getErrorMessage(e)}\n`)
+          }
+        }
+        const onReload = () => void reload()
+        if (process.platform !== 'win32') {
+          process.on('SIGHUP', onReload)
+        }
+
         await new Promise<void>((resolve) => {
           if (environment.abortCtrl.signal.aborted) {
             resolve()
           }
           environment.abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
         })
+        process.off('SIGHUP', onReload)
         await server.close()
         environment.stdout.write('hammerkit server stopped\n')
       } catch (e) {

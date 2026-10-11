@@ -2,11 +2,13 @@ import { z } from 'zod'
 import { parseDuration } from '../utils/units'
 import { HASH_PATTERN } from '../remote/bundle'
 import { definitionName } from './server-config'
+import { normalizeRepo } from './repo'
 
 const name = z.string().min(1).max(200)
 
-// What `POST /v1/runs` takes. Who is asking, which accounts they may use and
-// where code may come from is decided from the token, never from this body.
+// What `POST /v1/runs` takes. Who is asking and which accounts they may use is
+// decided from the token, never from this body; the accounts a run uses are those
+// its secrets are read as, which the server derives from the published build file.
 const duration = z.string().refine((value) => {
   try {
     parseDuration(value)
@@ -50,10 +52,26 @@ export const runRequestSchema = z
     // tasks by their name in the build file, as on the command line; labels in
     // the options can select tasks instead
     tasks: z.array(name).max(100).default([]),
-    // the service account to use; the caller's default when left out
-    account: name.optional(),
     source: z.discriminatedUnion('type', [
-      z.object({ type: z.literal('ref'), ref: name }).strict(),
+      z
+        .object({
+          type: z.literal('ref'),
+          // `host/path`, such as github.com/corp/payments; the server reads it from its own
+          // sources, a url is never taken from a request
+          repo: z.string().transform((value, ctx) => {
+            const repo = normalizeRepo(value)
+            if (!repo) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'expected a repository like github.com/corp/payments',
+              })
+              return z.NEVER
+            }
+            return repo
+          }),
+          ref: name,
+        })
+        .strict(),
       // the name of a tree announced with POST /v1/sources
       z.object({ type: z.literal('upload'), snapshot: z.string().regex(HASH_PATTERN) }).strict(),
     ]),

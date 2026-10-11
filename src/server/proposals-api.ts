@@ -4,31 +4,43 @@ import { HASH_PATTERN } from '../remote/bundle'
 import { DefinitionError, DefinitionStore } from './definitions'
 import { readJson, send } from './http'
 import { Principal, quote } from './oauth'
-import { getGrant, Grant, mayPublish } from './policy'
-import { Proposal, ProposalRegistry } from './proposals'
+import { canUse, getGrant, Grant, mayPublish } from './policy'
+import { Proposal, ProposalRegistry, StaleProposalError } from './proposals'
 import { definitionName, ServerConfig } from './server-config'
 
 const decisionSchema = z.object({ reason: z.string().max(500).optional() }).strict()
 
 const same = (a: { iss: string; sub: string }, b: { iss: string; sub: string }) => a.iss === b.iss && a.sub === b.sub
 
+// Whoever approves publishes it, and uses the accounts its proposer did not: a
+// version that names an account is approved by somebody the account trusts.
+export const mayApprove = (grant: Grant, proposal: Proposal): boolean =>
+  mayPublish(grant) && proposal.missing.every((account) => canUse(grant, account))
+
 // What the caller is shown of a proposal: what it is, who proposed it and the
 // version it would replace, so the files can be compared.
 function toView(store: DefinitionStore, proposal: Proposal, principal: Principal, grant: Grant) {
+  const latest = store.find(proposal.name, 'latest')?.hash ?? null
+  const stale = proposal.state === 'waiting' && latest !== proposal.base
   return {
     ...proposal,
-    base: store.find(proposal.name, 'latest')?.hash ?? null,
+    // the version it follows is fixed when it is proposed; if another one was
+    // published since, it can only be rejected
+    latest,
+    stale,
     mine: same(proposal.proposedBy, principal),
-    // approving needs the permission to publish the name, and somebody else's proposal
+    // approving needs the permission to publish, the accounts the proposer lacked, and
+    // somebody else's proposal
     canDecide:
-      proposal.state === 'waiting' && mayPublish(grant, proposal.name) && !same(proposal.proposedBy, principal),
+      proposal.state === 'waiting' && !stale && mayApprove(grant, proposal) && !same(proposal.proposedBy, principal),
   }
 }
 
 /**
  * New versions of build files that wait for an approval. Whoever may only
- * propose a version (`propose` on an entitlement) puts one here; someone who may
- * `publish` that name approves it, and it is published then.
+ * propose a version (`builds: propose`), or publishes one that names accounts they
+ * do not use, puts one here; someone who may publish, and uses those accounts,
+ * approves it, and it is published then.
  *
  *   GET  /v1/proposals                          the ones the caller proposed or may decide
  *   GET  /v1/proposals/<name>/<hash>            one of them
@@ -53,7 +65,7 @@ export async function handleProposals(
   const [, name, hash, action] = match
   const grant = getGrant(config.entitlements, principal)
   // what the caller neither proposed nor may decide does not exist for them
-  const visible = (proposal: Proposal) => same(proposal.proposedBy, principal) || mayPublish(grant, proposal.name)
+  const visible = (proposal: Proposal) => same(proposal.proposedBy, principal) || mayPublish(grant)
 
   if (name === undefined) {
     if (req.method !== 'GET') {
@@ -110,9 +122,14 @@ export async function handleProposals(
       name,
       hash,
       outcome,
-      (n) => mayPublish(grant, n),
+      (proposed) => mayApprove(grant, proposed),
       async (bundle) => {
         const proposed = proposals.get(name, hash)
+        // looked at again here, just before it is published
+        const latest = store.find(name, 'latest')?.hash ?? null
+        if (proposed && latest !== proposed.base) {
+          throw new StaleProposalError(proposed.base, latest)
+        }
         await store.publish(name, bundle, proposed?.proposedBy ?? principal, principal)
       },
       body.data.reason
@@ -136,6 +153,11 @@ export async function handleProposals(
         send(res, 404, { error: 'not found' })
     }
   } catch (e) {
+    if (e instanceof StaleProposalError) {
+      log(`${action} proposal=${name}@${hash} iss=${principal.iss} sub=${principal.sub} result=stale`)
+      send(res, 409, { error: e.message })
+      return true
+    }
     if (e instanceof DefinitionError) {
       send(res, 400, { error: `the build file does not load: ${e.message}` })
       return true

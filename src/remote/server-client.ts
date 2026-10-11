@@ -47,14 +47,12 @@ export async function getDiscovery(server: HostServer): Promise<DiscoveryDocumen
 export interface MeResponse {
   iss: string
   sub: string
-  accounts: string[]
-  default: string | null
-  // the build files the caller may publish, `*` for any
-  publish?: string[]
-  // the build files the caller may propose versions of
-  propose?: string[]
-  // the accounts the caller may request runs on, an admin of the account approves them
-  request?: string[]
+  // `use` runs at once and approves, `request` waits for somebody who uses the account
+  accounts: { name: string; level: 'use' | 'request' }[]
+  // the repositories (host/path patterns) the caller may run from a git ref
+  repos: string[]
+  // what the caller may do with the build files
+  builds: 'run' | 'propose' | 'publish' | null
 }
 
 export async function getMe(server: HostServer, token: string): Promise<MeResponse> {

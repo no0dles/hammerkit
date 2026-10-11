@@ -1,6 +1,9 @@
 import { randomBytes } from 'crypto'
 import { Principal } from './oauth'
 import type { RunOptions } from './run-request'
+import type { TaskPlan } from './plan'
+import type { RunStore } from './run-store'
+import { formatDuration } from '../utils/units'
 
 export type RunState =
   | 'awaiting-approval'
@@ -20,24 +23,35 @@ export function isFinal(state: RunState): boolean {
 
 type Identity = { iss: string; sub: string }
 
-// A run that was requested, not started by an admin of its account, waits for
-// one admin of that account to approve it.
+// A run that uses accounts its owner may only request waits for somebody who may
+// use each of them. One entry per account, one expiry for the run: it is
+// rejected if it still waits then. An approver covers every account they use, so
+// one person is enough when they use all of them.
 export interface RunApproval {
-  // the run is rejected if it still waits then
+  account: string
   expiresAt: string
   approvedBy?: Identity
   approvedAt?: string
 }
 
-export type RunSource = { type: 'ref'; ref: string } | { type: 'upload'; snapshot: string }
+// A ref run names a repository (`host/path`) and a branch, tag or commit of it, and is
+// pinned to the commit the ref pointed to when it was submitted, so what is approved is
+// what runs.
+export type RunSource =
+  | { type: 'ref'; repo: string; ref: string; commit: string }
+  | { type: 'upload'; snapshot: string }
 
 export interface RunSpec {
   // the version of the published build file the run executes
   definition: { name: string; hash: string }
   // the tasks to run, by their name in the build file
   tasks: string[]
-  // the service account the run uses, null for none
-  account: string | null
+  // the accounts the run uses: the ones its secrets are read as, derived from the
+  // published build file and never requested
+  accounts: string[]
+  // what the tasks and services of the run do, with their dependencies, for who
+  // decides about it; read from the pinned files when the run was submitted
+  plan?: Record<string, TaskPlan>
   source: RunSource
   // the settings of `hammerkit run` the caller chose, see run-request.ts
   options: RunOptions
@@ -47,7 +61,7 @@ export interface Run extends RunSpec {
   id: string
   // who submitted it: only they see it
   owner: { iss: string; sub: string }
-  approval?: RunApproval
+  approvals?: RunApproval[]
   state: RunState
   createdAt: string
   startedAt?: string
@@ -64,7 +78,7 @@ export type RunEventData =
 export type RunEvent =
   | RunEventData
   | { type: 'state'; state: RunState; error?: string }
-  | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; reason?: string }
+  | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; accounts: string[]; reason?: string }
   | { type: 'truncated' }
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
@@ -81,7 +95,25 @@ export interface RunExecutor {
   execute(run: Run, context: RunContext): Promise<void>
 }
 
-export class RunError extends Error {}
+// The server can not take the run now; `status` is what the caller is told
+export class RunError extends Error {
+  status: number = 503
+}
+
+// A caller is over one of their limits, others may still submit
+export class QuotaError extends RunError {
+  status = 429
+}
+
+// What one caller may have at a time
+export interface RunLimits {
+  // runs that wait for an approval
+  waiting: number
+  // runs that wait in the queue for a free place
+  queued: number
+  // runs that execute at the same time; the others of the caller wait in the queue
+  running: number
+}
 
 export interface RunRegistryOptions {
   executor: RunExecutor
@@ -94,15 +126,26 @@ export interface RunRegistryOptions {
   // runs that wait for an approval at the same time, and for how long (ms)
   maxWaiting?: number
   approvalTimeout?: number
+  // what one caller may have waiting, queued and running; unlimited when left out
+  limits?: RunLimits
+  // a run that executes longer is stopped and fails (ms)
+  maxDuration?: number
+  // log output kept per run (bytes of text), the rest is cut off with a `truncated` event
+  maxLogBytes?: number
+  // keeps the runs over a restart
+  store?: RunStore
+  log?: (line: string) => void
   now?: () => number
 }
 
 export type DecisionResult =
   | { status: 'ok'; run: Run }
-  // not a run of the caller's to see, or not on an account they are admin of
+  // not a run of the caller's to see, or none of the accounts waiting for an approval is one they use
   | { status: 'not-found' }
   | { status: 'own-run' }
   | { status: 'not-waiting'; state: RunState }
+  // an approval of accounts that are all approved already: the run waits for others
+  | { status: 'already-approved' }
 
 interface Entry {
   run: Run
@@ -110,8 +153,15 @@ interface Entry {
   listeners: Set<(event: StoredEvent) => void>
   abort: AbortController
   truncated: boolean
+  bytes: number
   timer?: NodeJS.Timeout
+  // the run was stopped because it took too long
+  timedOut?: boolean
+  // writes of the record one after the other
+  saving: Promise<void>
 }
+
+type AccountCheck = (account: string) => boolean
 
 export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
 
@@ -129,6 +179,7 @@ export class RunRegistry {
   private readonly maxWaiting: number
   private readonly approvalTimeout: number
   private readonly now: () => number
+  private readonly maxLogBytes: number
 
   constructor(private readonly options: RunRegistryOptions) {
     this.maxConcurrent = options.maxConcurrent ?? 4
@@ -137,17 +188,58 @@ export class RunRegistry {
     this.maxWaiting = options.maxWaiting ?? 100
     this.approvalTimeout = options.approvalTimeout ?? 60 * 60 * 1000
     this.now = options.now ?? Date.now
+    this.maxLogBytes = options.maxLogBytes ?? Infinity
   }
 
-  // A run that needs an approval waits for it, the others are queued at once.
-  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, needsApproval = false): Run {
+  /**
+   * Takes back the runs of a previous start. Those that waited for an approval wait
+   * again, for what is left of their time; those that were queued or running when the
+   * server stopped failed with it, and say so.
+   */
+  async restore(): Promise<void> {
+    const store = this.options.store
+    if (!store) {
+      return
+    }
+    const { records, skipped } = await store.load()
+    skipped.forEach((name) => this.options.log?.(`skip run record ${name}: it can not be read`))
+    for (const { run, events } of records) {
+      const entry: Entry = {
+        run,
+        events,
+        listeners: new Set(),
+        abort: new AbortController(),
+        truncated: events.some((event) => event.type === 'truncated'),
+        bytes: 0,
+        saving: Promise.resolve(),
+      }
+      this.entries.set(run.id, entry)
+      if (run.state === 'awaiting-approval') {
+        const left = Date.parse(run.approvals?.[0]?.expiresAt ?? '') - this.now()
+        if (Number.isFinite(left) && left > 0) {
+          entry.timer = setTimeout(() => this.expire(entry), left)
+          entry.timer.unref()
+        } else {
+          this.finish(entry, 'rejected', 'nobody approved it in time')
+        }
+      } else if (run.state === 'queued' || run.state === 'running') {
+        this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
+      }
+    }
+    this.evict()
+  }
+
+  // A run that needs approvals (for the accounts named) waits for them, the others
+  // are queued at once.
+  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, approvalAccounts: string[] = []): Run {
     if (this.closed) {
       throw new RunError('the server is shutting down')
     }
-    const waiting = needsApproval
+    const waiting = approvalAccounts.length > 0
     if (waiting && this.waiting().length >= this.maxWaiting) {
       throw new RunError('too many runs are waiting for an approval')
     }
+    this.checkLimits(owner, waiting)
     const run: Run = {
       ...spec,
       id: `run_${randomBytes(12).toString('base64url')}`,
@@ -155,13 +247,23 @@ export class RunRegistry {
       state: waiting ? 'awaiting-approval' : 'queued',
       createdAt: this.timestamp(),
     }
-    const entry: Entry = { run, events: [], listeners: new Set(), abort: new AbortController(), truncated: false }
+    const entry: Entry = {
+      run,
+      events: [],
+      listeners: new Set(),
+      abort: new AbortController(),
+      truncated: false,
+      bytes: 0,
+      saving: Promise.resolve(),
+    }
     this.entries.set(run.id, entry)
+    if (waiting) {
+      // before the first event, which is written down with the run
+      const expiresAt = new Date(this.now() + this.approvalTimeout).toISOString()
+      run.approvals = approvalAccounts.map((account) => ({ account, expiresAt }))
+    }
     this.record(entry, { type: 'state', state: run.state })
     if (waiting) {
-      run.approval = {
-        expiresAt: new Date(this.now() + this.approvalTimeout).toISOString(),
-      }
       entry.timer = setTimeout(() => this.expire(entry), this.approvalTimeout)
       entry.timer.unref()
     } else {
@@ -174,8 +276,10 @@ export class RunRegistry {
     return accepted
   }
 
-  get(owner: Pick<Principal, 'iss' | 'sub'>, id: string): Run | undefined {
-    const entry = this.find(owner, id)
+  // `canUse` also lets who uses an account the run needed approved read it: they
+  // decided about it, so they may follow it and stop it.
+  get(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Run | undefined {
+    const entry = this.find(owner, id, canUse)
     return entry ? this.copy(entry.run) : undefined
   }
 
@@ -188,8 +292,8 @@ export class RunRegistry {
   }
 
   // A queued run is cancelled at once; a running one when its executor stops.
-  cancel(owner: Pick<Principal, 'iss' | 'sub'>, id: string): Run | undefined {
-    const entry = this.find(owner, id)
+  cancel(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Run | undefined {
+    const entry = this.find(owner, id, canUse)
     if (!entry) {
       return undefined
     }
@@ -212,9 +316,9 @@ export class RunRegistry {
       .map((entry) => this.copy(entry.run))
   }
 
-  // One run that waits (or waited), if `canDecide` says the decider is admin of
-  // its account.
-  getForApproval(id: string, canDecide: (account: string | null) => boolean): Run | undefined {
+  // One run that waits (or waited), if `canDecide` says the decider uses one of the
+  // accounts it still needs approved.
+  getForApproval(id: string, canDecide: AccountCheck): Run | undefined {
     const entry = this.entries.get(id)
     if (!entry || !this.mayDecide(entry, canDecide)) {
       return undefined
@@ -222,12 +326,14 @@ export class RunRegistry {
     return this.copy(entry.run)
   }
 
-  // An approval queues the run, a rejection ends it. Nobody decides on their own run.
+  // An approval covers the accounts the approver uses; the run is queued when all
+  // of its accounts are covered. A rejection by anybody who covers one of them ends
+  // it. Nobody decides on their own run.
   decide(
     decider: Pick<Principal, 'iss' | 'sub'>,
     id: string,
     outcome: 'approved' | 'rejected',
-    canDecide: (account: string | null) => boolean,
+    canDecide: AccountCheck,
     reason?: string
   ): DecisionResult {
     const entry = this.entries.get(id)
@@ -237,17 +343,31 @@ export class RunRegistry {
     if (this.owns(decider, entry)) {
       return { status: 'own-run' }
     }
-    if (entry.run.state !== 'awaiting-approval' || !entry.run.approval) {
+    if (entry.run.state !== 'awaiting-approval' || !entry.run.approvals) {
       return { status: 'not-waiting', state: entry.run.state }
     }
     const by = { iss: decider.iss, sub: decider.sub }
-    this.record(entry, { type: 'approval', outcome, by, ...(reason ? { reason } : {}) })
+    const covered = entry.run.approvals.filter((approval) => !approval.approvedBy && canDecide(approval.account))
+    if (outcome === 'approved' && covered.length === 0) {
+      return { status: 'already-approved' }
+    }
+    const accounts = entry.run.approvals
+      .filter((approval) => canDecide(approval.account))
+      .map((approval) => approval.account)
+    this.record(entry, { type: 'approval', outcome, by, accounts, ...(reason ? { reason } : {}) })
     if (outcome === 'rejected') {
       this.finish(entry, 'rejected', `rejected by ${by.sub}${reason ? `: ${reason}` : ''}`)
       return { status: 'ok', run: this.copy(entry.run) }
     }
-    entry.run.approval.approvedBy = by
-    entry.run.approval.approvedAt = this.timestamp()
+    const approvedAt = this.timestamp()
+    for (const approval of covered) {
+      approval.approvedBy = by
+      approval.approvedAt = approvedAt
+    }
+    if (entry.run.approvals.some((approval) => !approval.approvedBy)) {
+      // some accounts still wait for somebody who uses them
+      return { status: 'ok', run: this.copy(entry.run) }
+    }
     this.clearTimer(entry)
     entry.run.state = 'queued'
     this.record(entry, { type: 'state', state: 'queued' })
@@ -263,9 +383,10 @@ export class RunRegistry {
     owner: Pick<Principal, 'iss' | 'sub'>,
     id: string,
     after: number,
-    listener: (event: StoredEvent) => void
+    listener: (event: StoredEvent) => void,
+    canUse?: AccountCheck
   ): { events: StoredEvent[]; finished: boolean; stop: () => void } | undefined {
-    const entry = this.find(owner, id)
+    const entry = this.find(owner, id, canUse)
     if (!entry) {
       return undefined
     }
@@ -285,7 +406,12 @@ export class RunRegistry {
     }
     for (const entry of this.entries.values()) {
       if (entry.run.state === 'awaiting-approval') {
-        this.finish(entry, 'cancelled')
+        if (this.options.store) {
+          // the record keeps it waiting, the next start takes it back
+          this.clearTimer(entry)
+        } else {
+          this.finish(entry, 'cancelled')
+        }
       }
     }
     for (const entry of this.entries.values()) {
@@ -296,15 +422,18 @@ export class RunRegistry {
     while (this.running > 0) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
+    // the runs that were stopped are written down before the server is gone
+    await Promise.all([...this.entries.values()].map((entry) => entry.saving))
   }
 
-  private find(owner: Pick<Principal, 'iss' | 'sub'>, id: string): Entry | undefined {
+  private find(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Entry | undefined {
     const entry = this.entries.get(id)
-    return entry && this.owns(owner, entry) ? entry : undefined
+    return entry && (this.owns(owner, entry) || (canUse && this.mayDecide(entry, canUse))) ? entry : undefined
   }
 
-  private mayDecide(entry: Entry, canDecide: (account: string | null) => boolean): boolean {
-    return entry.run.approval !== undefined && canDecide(entry.run.account)
+  // Whoever uses an account the run needed approved is to see it and decide.
+  private mayDecide(entry: Entry, canDecide: AccountCheck): boolean {
+    return (entry.run.approvals ?? []).some((approval) => canDecide(approval.account))
   }
 
   private expire(entry: Entry): void {
@@ -332,7 +461,8 @@ export class RunRegistry {
       source: { ...run.source },
       options: JSON.parse(JSON.stringify(run.options)),
       owner: { ...run.owner },
-      ...(run.approval ? { approval: JSON.parse(JSON.stringify(run.approval)) } : {}),
+      accounts: [...run.accounts],
+      ...(run.approvals ? { approvals: JSON.parse(JSON.stringify(run.approvals)) } : {}),
     }
   }
 
@@ -340,9 +470,37 @@ export class RunRegistry {
     return new Date(this.now()).toISOString()
   }
 
+  // What a caller has now, against what they may have.
+  private checkLimits(owner: Pick<Principal, 'iss' | 'sub'>, waiting: boolean): void {
+    const limits = this.options.limits
+    if (!limits) {
+      return
+    }
+    const mine = [...this.entries.values()].filter((entry) => this.owns(owner, entry))
+    const count = (state: RunState) => mine.filter((entry) => entry.run.state === state).length
+    if (waiting && count('awaiting-approval') >= limits.waiting) {
+      throw new QuotaError(`you have ${limits.waiting} runs waiting for an approval, wait for a decision or cancel one`)
+    }
+    if (!waiting && count('queued') >= limits.queued) {
+      throw new QuotaError(`you have ${limits.queued} runs in the queue, wait for one to start or cancel one`)
+    }
+  }
+
+  private runningOf(owner: Pick<Principal, 'iss' | 'sub'>): number {
+    return [...this.entries.values()].filter((entry) => entry.run.state === 'running' && this.owns(owner, entry)).length
+  }
+
+  // The first run in the queue whose caller has a place left: one caller with many runs
+  // does not keep the others from the machine.
   private dispatch(): void {
-    while (this.running < this.maxConcurrent && this.queue.length > 0) {
-      const entry = this.queue.shift() as Entry
+    while (this.running < this.maxConcurrent) {
+      const index = this.queue.findIndex(
+        (entry) => !this.options.limits || this.runningOf(entry.run.owner) < this.options.limits.running
+      )
+      if (index < 0) {
+        return
+      }
+      const [entry] = this.queue.splice(index, 1)
       this.running++
       this.execute(entry).finally(() => {
         this.running--
@@ -355,19 +513,38 @@ export class RunRegistry {
     entry.run.state = 'running'
     entry.run.startedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'running' })
+    const limit = this.options.maxDuration
+    const timer = limit
+      ? setTimeout(() => {
+          entry.timedOut = true
+          entry.abort.abort()
+        }, limit)
+      : undefined
+    timer?.unref()
     try {
       await this.options.executor.execute(this.copy(entry.run), {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
       })
-      this.finish(entry, entry.abort.signal.aborted ? 'cancelled' : 'succeeded')
-    } catch (e) {
       this.finish(
         entry,
-        entry.abort.signal.aborted ? 'cancelled' : 'failed',
-        entry.abort.signal.aborted ? undefined : e instanceof Error ? e.message : String(e)
+        entry.timedOut ? 'failed' : entry.abort.signal.aborted ? 'cancelled' : 'succeeded',
+        entry.timedOut ? this.tooLong() : undefined
       )
+    } catch (e) {
+      const cancelled = entry.abort.signal.aborted && !entry.timedOut
+      this.finish(
+        entry,
+        cancelled ? 'cancelled' : 'failed',
+        entry.timedOut ? this.tooLong() : cancelled ? undefined : e instanceof Error ? e.message : String(e)
+      )
+    } finally {
+      clearTimeout(timer)
     }
+  }
+
+  private tooLong(): string {
+    return `the run took longer than ${formatDuration(this.options.maxDuration as number)} and was stopped`
   }
 
   private finish(entry: Entry, state: RunState, error?: string): void {
@@ -383,14 +560,18 @@ export class RunRegistry {
   }
 
   private record(entry: Entry, event: RunEvent, force = false): void {
-    // an executor that keeps talking can't fill the memory of the server; the
+    // an executor that keeps talking can't fill the memory of the server or its disk; the
     // state changes, which are few, are always kept
-    if (!force && event.type !== 'state' && entry.events.length >= this.maxEvents) {
-      if (!entry.truncated) {
-        entry.truncated = true
-        this.push(entry, { type: 'truncated' })
+    if (!force && event.type !== 'state') {
+      const size = event.type === 'log' ? Buffer.byteLength(event.text) + 64 : 64
+      if (entry.events.length >= this.maxEvents || entry.bytes + size > this.maxLogBytes) {
+        if (!entry.truncated) {
+          entry.truncated = true
+          this.push(entry, { type: 'truncated' })
+        }
+        return
       }
-      return
+      entry.bytes += size
     }
     this.push(entry, event)
   }
@@ -401,6 +582,22 @@ export class RunRegistry {
     for (const listener of entry.listeners) {
       listener(stored)
     }
+    // what a restart must not lose: the runs that wait, and how a run ended. A running
+    // run is not kept up to date, it fails with the server.
+    if (event.type === 'state' || event.type === 'approval') {
+      this.persist(entry)
+    }
+  }
+
+  private persist(entry: Entry): void {
+    const store = this.options.store
+    if (!store) {
+      return
+    }
+    const record = { run: this.copy(entry.run), events: [...entry.events] }
+    entry.saving = entry.saving
+      .then(() => store.save(record))
+      .catch((e) => this.options.log?.(`could not keep run ${record.run.id}: ${e instanceof Error ? e.message : e}`))
   }
 
   // Only finished runs are dropped, oldest first.
@@ -408,6 +605,7 @@ export class RunRegistry {
     const finished = [...this.entries.values()].filter((entry) => FINAL_STATES.includes(entry.run.state))
     for (const entry of finished.slice(0, Math.max(0, finished.length - this.keep))) {
       this.entries.delete(entry.run.id)
+      void entry.saving.then(() => this.options.store?.remove(entry.run.id)).catch(() => undefined)
     }
   }
 }

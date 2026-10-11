@@ -3,12 +3,18 @@ import { createServer as createHttpsServer } from 'https'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, ServerConfig } from './server-config'
+import { detectPlatform, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { getGrant, maySeeDefinitions } from './policy'
-import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, StoredEvent } from './runs'
+import { canUse, decideRun, getGrant, mayRun } from './policy'
+import { FileRunStore } from './run-store'
+import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSource, StoredEvent } from './runs'
+import { RefError } from './git-checkout'
+import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
+import { PlanContext, planRun } from './run-plan'
+import { runEnvironment } from './run-environment'
+import { handleAccounts } from './accounts-api'
 import { runRequestSchema } from './run-request'
 import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
@@ -40,9 +46,21 @@ export function getDiscoveryDocument(config: ServerConfig): DiscoveryDocument {
   }
 }
 
+export interface ReloadResult {
+  // the keys of the new config that differ and need a restart to take effect
+  restart: string[]
+}
+
 export interface RunningServer {
   url: string
   close(): Promise<void>
+  /**
+   * Takes over the entitlements of a new config, for the next request. Nothing else is
+   * reloaded: the accounts, issuers, providers and sources are in use by runs, and a
+   * changed one is reported in `restart`. Throws, and keeps the entitlements, when
+   * the new ones name an account or an issuer this server does not have.
+   */
+  reload(next: ServerConfig): ReloadResult
 }
 
 export interface ServerOptions extends TokenVerifierOptions {
@@ -50,6 +68,10 @@ export interface ServerOptions extends TokenVerifierOptions {
   log?: (line: string) => void
   // carries out the runs; without one, runs are accepted and fail with a reason
   executor?: RunExecutor
+  // the command that starts the process of a run; `hammerkit server-run` of this build by default
+  worker?: string[]
+  // how repositories are located and resolved, for tests
+  repos?: RepoAccessOptions
 }
 
 const HEARTBEAT_MS = 15_000
@@ -58,6 +80,7 @@ const HEARTBEAT_MS = 15_000
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
 function streamEvents(
   registry: RunRegistry,
+  config: ServerConfig,
   principal: Principal,
   id: string,
   req: IncomingMessage,
@@ -67,12 +90,18 @@ function streamEvents(
   const after = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? 0)
   const write = (event: StoredEvent) =>
     res.write(`id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-  const watch = registry.watch(principal, id, Number.isFinite(after) && after > 0 ? after : 0, (event) => {
-    write(event)
-    if (event.type === 'state' && isFinal(event.state)) {
-      end()
-    }
-  })
+  const watch = registry.watch(
+    principal,
+    id,
+    Number.isFinite(after) && after > 0 ? after : 0,
+    (event) => {
+      write(event)
+      if (event.type === 'state' && isFinal(event.state)) {
+        end()
+      }
+    },
+    accountsOf(config, principal)
+  )
   if (!watch) {
     send(res, 404, { error: 'not found' })
     return
@@ -100,6 +129,8 @@ async function handleRuns(
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  planning: PlanContext,
+  repos: RepoAccess,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -116,7 +147,7 @@ async function handleRuns(
     if (method === 'GET') {
       send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
     } else if (method === 'POST') {
-      await submitRun(config, registry, definitions, sources, log, principal, req, res)
+      await submitRun(config, registry, definitions, sources, planning, repos, log, principal, req, res)
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -129,18 +160,24 @@ async function handleRuns(
       send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
       return true
     }
-    const run = registry.cancel(principal, id)
+    const run = registry.cancel(principal, id, accountsOf(config, principal))
     log(`cancel iss=${principal.iss} sub=${principal.sub} run=${id} found=${Boolean(run)}`)
     run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
   } else if (method !== 'GET') {
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
-    streamEvents(registry, principal, id, req, res, url)
+    streamEvents(registry, config, principal, id, req, res, url)
   } else {
-    const run = registry.get(principal, id)
+    const run = registry.get(principal, id, accountsOf(config, principal))
     run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
   }
   return true
+}
+
+// The accounts the caller uses: who approves a run on them follows and stops it.
+function accountsOf(config: ServerConfig, principal: Principal): (account: string) => boolean {
+  const grant = getGrant(config.entitlements, principal)
+  return (account) => canUse(grant, account)
 }
 
 function toRunResponse(run: Run): Omit<Run, 'owner'> {
@@ -154,6 +191,8 @@ async function submitRun(
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  planning: PlanContext,
+  repos: RepoAccess,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -167,21 +206,29 @@ async function submitRun(
   }
   const request = parsed.data
   const grant = getGrant(config.entitlements, principal)
-  const account = request.account ?? grant.default
   // what the caller may not do is said plainly: they already know who they are
-  if (account !== null && !grant.accounts.includes(account) && !grant.request.includes(account)) {
-    log(`refuse run iss=${principal.iss} sub=${principal.sub}: service account ${quote(account)} is not granted`)
-    send(res, 403, { error: `you may not use the service account ${account}` })
-    return
-  }
-  if (!grant.source.includes(request.source.type)) {
-    log(`refuse run iss=${principal.iss} sub=${principal.sub}: source ${request.source.type} is not granted`)
-    send(res, 403, { error: `runs from ${request.source.type} are not allowed for you` })
-    return
-  }
-  if (!maySeeDefinitions(grant)) {
+  if (!mayRun(grant)) {
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: no entitlement`)
     send(res, 403, { error: 'you are not entitled to run anything on this server' })
+    return
+  }
+  const version = definitions.find(request.definition.name, request.definition.hash)
+  if (!version) {
+    send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
+    return
+  }
+  if (version.yanked) {
+    send(res, 409, {
+      error: `${version.name} at ${version.hash} was yanked${
+        version.yanked.reason ? `: ${version.yanked.reason}` : ''
+      }`,
+    })
+    return
+  }
+  const known = [...version.tasks, ...version.services]
+  const unknown = request.tasks.filter((task) => !known.includes(task))
+  if (unknown.length > 0) {
+    send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
   if (request.source.type === 'upload') {
@@ -200,40 +247,77 @@ async function submitRun(
       return
     }
   }
-  const version = definitions.find(request.definition.name, request.definition.hash)
-  if (!version) {
-    send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
+  // the accounts of a run are read from the files it is pinned to, with the engine
+  const bundle = version.plan ? await definitions.files(version) : undefined
+  if (!version.plan || !bundle) {
+    send(res, 409, {
+      error: `${version.name} at ${version.hash} was published before accounts were recorded, publish it again`,
+    })
     return
   }
-  const known = [...version.tasks, ...version.services]
-  const unknown = request.tasks.filter((task) => !known.includes(task))
-  if (unknown.length > 0) {
-    send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
+  let planned
+  try {
+    planned = await planRun(bundle, request, planning.environment, planning.policy)
+  } catch (e) {
+    send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
     return
   }
-  // asking for an account is not using it: an admin of it has to approve
-  const needsApproval = account !== null && !grant.accounts.includes(account)
+  const decision = decideRun({
+    grant,
+    accounts: planned.accounts,
+    catalog: config.accounts,
+    source:
+      request.source.type === 'ref'
+        ? { type: 'ref', repo: request.source.repo, ref: request.source.ref }
+        : { type: 'upload' },
+    approvable: (account) => config.entitlements.some((entitlement) => entitlement.accounts[account] === 'use'),
+    readable: (repo) => repos.readable(repo),
+  })
+  if (decision.type === 'refuse') {
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${decision.error}`)
+    send(res, decision.status, { error: decision.error })
+    return
+  }
+  const approvals = decision.type === 'approval' ? decision.accounts : []
+  // the ref is pinned now: the approver sees the commit, and the run executes that one
+  let source: RunSource
+  if (request.source.type === 'ref') {
+    try {
+      const commit = await repos.resolve(request.source.repo, request.source.ref)
+      source = { type: 'ref', repo: request.source.repo, ref: request.source.ref, commit }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${message}`)
+      send(res, e instanceof RefError ? 400 : 502, {
+        error: e instanceof RefError ? message : `could not resolve ${request.source.ref}: ${message}`,
+      })
+      return
+    }
+  } else {
+    source = request.source
+  }
   try {
     const run = registry.submit(
       principal,
       {
         definition: { name: version.name, hash: version.hash },
         tasks: request.tasks,
-        account,
-        source: request.source,
+        accounts: planned.accounts,
+        plan: planned.plan,
+        source,
         options: request.options,
       },
-      needsApproval
+      approvals
     )
     log(
-      `run ${run.id} iss=${principal.iss} sub=${principal.sub} account=${account ?? '-'} source=${
+      `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
         run.source.type
-      } tasks=${run.tasks.length}${needsApproval ? ' approval=required' : ''}`
+      } tasks=${run.tasks.length}${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {
     if (e instanceof RunError) {
-      send(res, 503, { error: e.message })
+      send(res, e.status, { error: e.message })
       return
     }
     throw e
@@ -272,6 +356,8 @@ async function handle(
   definitions: DefinitionStore,
   proposals: ProposalRegistry,
   sources: SourceStore,
+  planning: PlanContext,
+  repos: RepoAccess,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -293,22 +379,7 @@ async function handle(
     return
   }
 
-  if (path === '/v1/me' && req.method === 'GET') {
-    const grant = getGrant(config.entitlements, principal)
-    log(
-      `grant iss=${principal.iss} sub=${principal.sub} accounts=[${grant.accounts.join(
-        ','
-      )}] entitlements=[${grant.matched.join(',')}]`
-    )
-    send(res, 200, {
-      iss: principal.iss,
-      sub: principal.sub,
-      accounts: grant.accounts,
-      default: grant.default,
-      request: grant.request,
-      publish: grant.publish,
-      propose: grant.propose,
-    })
+  if (await handleAccounts(config, log, principal, req, res, url)) {
     return
   }
   if (await handleDefinitions(config, definitions, proposals, log, principal, req, res, url)) {
@@ -317,7 +388,7 @@ async function handle(
   if (await handleSources(config, sources, log, principal, req, res, url)) {
     return
   }
-  if (await handleRuns(config, registry, definitions, sources, log, principal, req, res, url)) {
+  if (await handleRuns(config, registry, definitions, sources, planning, repos, log, principal, req, res, url)) {
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -334,37 +405,69 @@ export async function startServer(
   environment: Environment,
   options: ServerOptions = {}
 ): Promise<RunningServer> {
+  // tasks find their tools through PATH, a server that hides it would fail every run
+  if (!config.runs.env.allow.some((name) => name.toUpperCase() === 'PATH') && !('PATH' in config.runs.env.set)) {
+    throw new Error(
+      'runs.env.allow has no PATH, tasks could not find their tools: add PATH (and on Windows SystemRoot, ComSpec, PATHEXT and TEMP)'
+    )
+  }
   const verifier = new TokenVerifier(config.issuers, options)
   const write = options.log ?? (() => undefined)
   // request urls and subjects come from callers: no control characters, so no forged log lines
   const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
-  const definitions = new DefinitionStore(
-    join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'definitions'),
-    environment
-  )
+  if (config.runtimes.includes('local')) {
+    log(
+      'warning: the local runtime is allowed, local tasks run as the user of this server and read all it can read; ' +
+        'an account is then an approval class, not a credential boundary'
+    )
+  }
+  // build files are read, planned and run as the server's runs see the world: the
+  // operator's accounts and the allowlisted environment, nothing of the server's own
+  const planning: PlanContext = {
+    environment: {
+      ...environment,
+      processEnvs: runEnvironment(config, environment.processEnvs),
+      hosted: { catalog: getSecretCatalog(config) },
+    },
+    policy: { envs: config.runs.env.allow, reserved: getSourceAccounts(config), runtimes: config.runtimes },
+  }
+  const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')
+  const definitions = new DefinitionStore(join(storage, 'definitions'), planning.environment, {
+    policy: planning.policy,
+  })
   await definitions.load()
+  const repos = new RepoAccess(config, planning.environment, options.repos)
   const executor =
     options.executor ??
     new HostExecutor({
-      config,
       definitions,
-      environment,
-      directory: join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'runs'),
+      planning,
+      repos,
+      directory: join(storage, 'runs'),
+      cache: join(storage, 'cache'),
+      worker: options.worker,
     })
-  const sources = new SourceStore(join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'sources'))
+  const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({
     executor,
     maxConcurrent: config.runs.maxConcurrent,
     keep: config.runs.keep,
     maxWaiting: config.approvals.maxWaiting,
     approvalTimeout: parseDuration(config.approvals.timeout),
+    limits: config.runs.limits,
+    maxDuration: parseDuration(config.runs.maxDuration),
+    maxLogBytes: config.runs.maxLogBytes,
+    store: new FileRunStore(join(storage, 'records')),
+    log,
   })
+  await registry.restore()
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),
+    cooldown: parseDuration(config.approvals.cooldown),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, definitions, proposals, sources, verifier, log, req, res).catch((e) => {
+    handle(config, registry, definitions, proposals, sources, planning, repos, verifier, log, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return
@@ -400,6 +503,33 @@ export async function startServer(
   const host = address.family === 'IPv6' ? `[${address.address}]` : address.address
   return {
     url: `${config.tls ? 'https' : 'http'}://${host}:${address.port}`,
+    reload: (next) => {
+      const readers = getSourceAccounts(config)
+      next.entitlements.forEach((entitlement, index) => {
+        const iss = (entitlement.subject ?? entitlement.group ?? entitlement.claims)?.iss
+        if (iss && !config.issuers.some((issuer) => issuer.issuer === iss)) {
+          throw new Error(`entitlements.${index}: issuer ${iss} is not accepted by the running server`)
+        }
+        for (const account of Object.keys(entitlement.accounts)) {
+          if (!config.accounts[account] || readers.includes(account)) {
+            throw new Error(`entitlements.${index}: the running server has no account ${account} to give`)
+          }
+        }
+      })
+      const restart = Object.keys(next).filter(
+        (key) =>
+          key !== 'entitlements' &&
+          JSON.stringify(next[key as keyof ServerConfig]) !== JSON.stringify(config[key as keyof ServerConfig])
+      )
+      // every request reads the entitlements of this object
+      config.entitlements = next.entitlements
+      log(
+        `reloaded ${next.entitlements.length} entitlements${
+          restart.length > 0 ? `, restart for: ${restart.join(', ')}` : ''
+        }`
+      )
+      return { restart }
+    },
     close: async () => {
       proposals.close()
       await registry.close()

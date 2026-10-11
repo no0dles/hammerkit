@@ -1,3 +1,4 @@
+import { HOST_RUNS_YAML } from '../testing/host-env'
 import { join } from 'path'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
@@ -89,13 +90,14 @@ describe('collectBundle', () => {
         writeFileSync(
           file,
           [
+            HOST_RUNS_YAML,
             'listen: { port: 0 }',
             `storage: { directory: ${JSON.stringify(join(cwd, 'data'))} }`,
             'issuers:',
             `  - { issuer: "${idp.url}", audience: hammerkit }`,
             'entitlements:',
             `  - subject: { iss: "${idp.url}", sub: alice }`,
-            "    publish: ['*']",
+            '    builds: publish',
             '',
           ].join('\n')
         )
