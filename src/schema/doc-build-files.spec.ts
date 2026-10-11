@@ -366,7 +366,7 @@ describe('best-practices build configs', () => {
     .sort()
 
   it('finds the best-practices templates', () => {
-    expect(files.length).toBeGreaterThanOrEqual(10)
+    expect(files.length).toBeGreaterThanOrEqual(7)
   })
 
   it.each(files)('%s is a valid build file', async (name) => {

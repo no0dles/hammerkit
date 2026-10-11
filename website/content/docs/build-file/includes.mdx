@@ -61,12 +61,12 @@ git repository. Use this to share build files between projects without copying t
 includes:
   npm:
     git: https://github.com/no0dles/hammerkit.git
-    ref: v1.13.0
-    path: best-practices/build.npm.yaml
+    ref: v1.16.0
+    path: catalog/npm
 
 tasks:
   build:
-    deps: [npm:ci]
+    deps: [npm:install]
     cmds:
       - npm run build
 ```
@@ -107,9 +107,10 @@ tasks:
 includes:
   npm:
     git: https://github.com/no0dles/hammerkit.git
-    path: best-practices/build.npm.yaml
+    ref: v1.16.0
+    path: catalog/npm
     with:
-      NODE_VERSION: 24
+      NODE_VERSION: 22
 ```
 
 A name the included file does not declare is an error that lists the declared inputs, so a
