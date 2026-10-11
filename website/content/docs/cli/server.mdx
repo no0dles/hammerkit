@@ -145,11 +145,13 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 {
   "tasks": ["build", "test"],
   "account": "op-payments-dev",
-  "source": { "type": "ref", "ref": "refs/heads/main" }
+  "source": { "type": "ref", "ref": "refs/heads/main" },
+  "options": { "env": "staging", "cache": "checksum", "timeout": "30m" }
 }
 ```
 
-* `tasks` are task names as on the command line, up to 100.
+* `tasks` are task names as on the command line, up to 100. Instead of names, labels
+  in `options.filter` can select the tasks.
 * `account` is the service account the run uses. It has to be one of the caller's
   [entitlements](#entitlements), and defaults to the caller's default account. A
   caller without accounts can run without one. Naming an account they may not use is
@@ -158,6 +160,18 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
   ref the server checks out itself, or `{ "type": "upload", "snapshot": "..." }` for
   the caller's working tree. The kinds an entitlement lists in `source` are the only
   ones allowed, anything else is `403`.
+
+* `options` are the settings of `hammerkit run` that make sense on a server, all
+  optional: `file` (the build file inside the source, a relative path), `env`,
+  `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
+  `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
+  parallel and how much of the machine they use stay with the server, and `watch` and
+  the log mode are for terminals only, so they are not accepted.
+
+The request names the work, it does not contain it: the code comes from `source`. A
+`ref` is fetched by the server. An `upload` refers to a snapshot of the working tree
+that is uploaded separately (not built yet), so the request stays small however large
+the project is.
 
 The body is JSON up to 64 KiB, and unknown fields are rejected. Each submitted run is
 logged with who submitted it, the account and the source.

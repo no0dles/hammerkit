@@ -207,6 +207,49 @@ describe('runs api', () => {
     })
   })
 
+  it('takes the settings of a run and keeps them with it', async () => {
+    await withApi('runs-api-options', done, async (api) => {
+      const options = {
+        file: 'ci/hammerkit.yaml',
+        env: 'staging',
+        filter: ['unit'],
+        exclude: ['slow'],
+        cache: 'none',
+        cacheReadOnly: true,
+        timeout: '1h30m',
+        skipDeps: false,
+      }
+      const response = await api.submit({ ...request, options })
+      expect(response.status).toBe(202)
+      expect((await response.json()).options).toEqual(options)
+      // without any, the run has none and the server decides
+      expect((await (await api.submit(request)).json()).options).toEqual({})
+      // labels can select the tasks instead of names
+      expect((await api.submit({ source: request.source, options: { filter: ['unit'] } })).status).toBe(202)
+    })
+  })
+
+  it('rejects settings that are not for a server or not safe', async () => {
+    await withApi('runs-api-bad-options', done, async (api) => {
+      for (const options of [
+        { file: '/etc/hammerkit.yaml' },
+        { file: '../outside.yaml' },
+        { file: 'a/../../b.yaml' },
+        { file: 'a\\b.yaml' },
+        { cache: 'forever' },
+        { timeout: 'soon' },
+        { watch: true },
+        { concurrency: 64 },
+        { filter: 'unit' },
+      ]) {
+        const response = await api.submit({ ...request, options })
+        expect([JSON.stringify(options), response.status]).toEqual([JSON.stringify(options), 400])
+      }
+      // neither a task nor a label to select them
+      expect((await api.submit({ source: request.source })).status).toBe(400)
+    })
+  })
+
   it('shows a run to its owner only', async () => {
     await withApi('runs-api-owner', gated().executor, async (api) => {
       const run = await (await api.submit(request)).json()

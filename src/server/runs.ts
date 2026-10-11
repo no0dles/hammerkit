@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto'
 import { Principal } from './oauth'
+import type { RunOptions } from './run-request'
 
 export type RunState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -13,6 +14,8 @@ export interface RunSpec {
   // the service account the run uses, null for none
   account: string | null
   source: RunSource
+  // the settings of `hammerkit run` the caller chose, see run-request.ts
+  options: RunOptions
 }
 
 export interface Run extends RunSpec {
@@ -187,7 +190,13 @@ export class RunRegistry {
   }
 
   private copy(run: Run): Run {
-    return { ...run, tasks: [...run.tasks], source: { ...run.source }, owner: { ...run.owner } }
+    return {
+      ...run,
+      tasks: [...run.tasks],
+      source: { ...run.source },
+      options: JSON.parse(JSON.stringify(run.options)),
+      owner: { ...run.owner },
+    }
   }
 
   private timestamp(): string {

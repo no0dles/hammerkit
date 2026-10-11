@@ -199,7 +199,12 @@ async function submitRun(
     return
   }
   try {
-    const run = registry.submit(principal, { tasks: request.tasks, account, source: request.source })
+    const run = registry.submit(principal, {
+      tasks: request.tasks,
+      account,
+      source: request.source,
+      options: request.options,
+    })
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} account=${account ?? '-'} source=${
         run.source.type
