@@ -122,6 +122,7 @@ entitlements:
     default: op-payments-dev
     request: [op-payments-prod]
     publish: [payments]
+    propose: [web]
 `
         )
         const credentials = join(environment.cwd, 'credentials.json')
@@ -154,6 +155,7 @@ entitlements:
       expect(accounts).toMatch(/op-payments-dev.*\(default\)/)
       expect(accounts).toContain('op-web-dev')
       expect(accounts).toContain('may publish build files: payments')
+      expect(accounts).toContain('may propose build files, which need an approval: web')
       expect(accounts).toContain('may request runs, which an admin approves: op-payments-prod')
 
       expect(await run('remote', 'logout', 'build')).toContain('signed out of build')

@@ -57,6 +57,8 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           '    request: [op-payments-prod]',
           `  - subject: { iss: "${idp.url}", sub: bob }`,
           '    accounts: [op-payments-prod]',
+          `  - subject: { iss: "${idp.url}", sub: agent }`,
+          '    propose: [payments]',
           '',
         ].join('\n')
       )
@@ -223,8 +225,117 @@ describe('remote approvals', () => {
   it('checks the run id before it asks the server', async () => {
     await withHarness('remote-approvals-id', async (h) => {
       await h.run('remote', 'login', 'build')
-      await expect(h.run('remote', 'approve', '../v1/me', 'build')).rejects.toThrow('is not a run id')
-      await expect(h.run('remote', 'reject', 'nope', 'build')).rejects.toThrow('is not a run id')
+      await expect(h.run('remote', 'approve', '../v1/me', 'build')).rejects.toThrow(
+        'is not a run id or a proposed version'
+      )
+      await expect(h.run('remote', 'reject', 'nope', 'build')).rejects.toThrow('is not a run id or a proposed version')
+    })
+  })
+})
+
+describe('remote proposals', () => {
+  async function proposal(h: Harness) {
+    await h.run('remote', 'login', 'build')
+    await h.run('remote', 'publish', 'payments', 'build')
+    h.as('agent')
+    await h.run('remote', 'login', 'build')
+    const out = await h.run('--file', 'more.yaml', 'remote', 'publish', 'payments', 'build')
+    const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0] as string
+    h.as('alice')
+    await h.run('remote', 'login', 'build')
+    return { out, hash, target: `payments@${hash}` }
+  }
+
+  it('proposes when the caller may only propose, and says what happens next', async () => {
+    await withHarness('remote-proposals-propose', async (h) => {
+      const { out, hash } = await proposal(h)
+      expect(out).toMatch(/proposed payments to build: sha256:[0-9a-f]{64} \(1 file\)/)
+      expect(out).toContain('tasks and services: lint')
+      expect(out).toContain('can not run before somebody who may publish payments approves it')
+      expect((await h.call('alice', 'GET', '/v1/definitions/payments')).body.versions).toHaveLength(1)
+      expect((await h.call('agent', 'GET', `/v1/proposals/payments/${hash}`)).body.state).toBe('waiting')
+    })
+  })
+
+  it('lists them for the one who decides and for the one who proposed', async () => {
+    await withHarness('remote-proposals-list', async (h) => {
+      const { target } = await proposal(h)
+      const listing = await h.run('remote', 'proposals', 'build')
+      expect(listing).toContain('build: 1 proposed')
+      expect(listing).toContain(target)
+      expect(listing).toContain('proposed by agent, ')
+      expect(listing).toContain('waits for your approval')
+      expect(listing).toContain('tasks and services: lint')
+
+      h.as('agent')
+      await h.run('remote', 'login', 'build')
+      const own = await h.run('remote', 'proposals', 'build')
+      expect(own).toContain('proposed by you, waiting')
+
+      h.as('carol')
+      await h.run('remote', 'login', 'build')
+      expect(await h.run('remote', 'proposals', 'build')).toContain('no proposed versions')
+    })
+  })
+
+  it('shows what a proposal changes before it is approved', async () => {
+    await withHarness('remote-proposals-diff', async (h) => {
+      const { target } = await proposal(h)
+      const diff = await h.run('remote', 'diff', target, 'build')
+      expect(diff).toContain(`${target} on build, proposed by agent`)
+      expect(diff).toMatch(/compared with sha256:[0-9a-f]{64}/)
+      expect(diff).toContain('entry file: .hammerkit.yaml -> more.yaml')
+      expect(diff).toContain('--- .hammerkit.yaml (removed)')
+      // what both versions have is not repeated
+      expect(diff).not.toContain('--- more.yaml')
+    })
+  })
+
+  it('approves a proposal, which publishes it', async () => {
+    await withHarness('remote-proposals-approve', async (h) => {
+      const { target, hash } = await proposal(h)
+      expect(await h.run('remote', 'approve', target, 'build')).toContain(
+        `approved ${target} on build, it is published`
+      )
+      const latest = await h.call('alice', 'GET', '/v1/definitions/payments/latest')
+      expect(latest.body).toMatchObject({ hash, publishedBy: { sub: 'agent' }, approvedBy: { sub: 'alice' } })
+      expect(await h.run('remote', 'proposals', 'build')).not.toContain('waits for your approval')
+      await expect(h.run('remote', 'approve', target, 'build')).rejects.toThrow('answered 409')
+    })
+  })
+
+  it('rejects with a reason the one who proposed can read', async () => {
+    await withHarness('remote-proposals-reject', async (h) => {
+      const { target } = await proposal(h)
+      expect(await h.run('remote', 'reject', target, 'build', '--reason', 'use the other file')).toContain(
+        `rejected ${target} on build`
+      )
+      h.as('agent')
+      await h.run('remote', 'login', 'build')
+      expect(await h.run('remote', 'proposals', 'build')).toContain('rejected: use the other file')
+    })
+  })
+
+  it('does not let the proposer, nor anybody else, decide', async () => {
+    await withHarness('remote-proposals-refused', async (h) => {
+      const { target } = await proposal(h)
+      for (const sub of ['agent', 'carol']) {
+        h.as(sub)
+        await h.run('remote', 'login', 'build')
+        await expect(h.run('remote', 'approve', target, 'build')).rejects.toThrow('answered 404')
+      }
+      // the files are for who decides and who wrote them
+      await expect(h.run('remote', 'diff', target, 'build')).rejects.toThrow('answered 404')
+    })
+  })
+
+  it('checks the name before it asks the server', async () => {
+    await withHarness('remote-proposals-name', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await expect(h.run('remote', 'diff', 'payments', 'build')).rejects.toThrow('is not a proposal')
+      await expect(h.run('remote', 'approve', '../x@sha256:00', 'build')).rejects.toThrow(
+        'is not a run id or a proposed'
+      )
     })
   })
 })
