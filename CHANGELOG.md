@@ -1,3 +1,10 @@
+# [1.23.0](https://github.com/no0dles/hammerkit/compare/v1.22.0...v1.23.0) (2026-10-11)
+
+
+### Features
+
+* secret providers read as service accounts, per-run secret masking ([#85](https://github.com/no0dles/hammerkit/issues/85)) ([bd61b9d](https://github.com/no0dles/hammerkit/commit/bd61b9de48cec1b8f3c19c23d52059591c80c89a))
+
 # [1.22.0](https://github.com/no0dles/hammerkit/compare/v1.21.2...v1.22.0) (2026-10-11)
 
 
