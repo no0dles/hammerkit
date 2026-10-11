@@ -2,7 +2,13 @@ import { RunExecutor, RunRegistry, unavailableExecutor } from './runs'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const bob = { iss: 'https://idp.corp', sub: 'bob' }
-const spec = { tasks: ['build'], account: null, source: { type: 'ref' as const, ref: 'main' }, options: {} }
+const spec = {
+  definition: { name: 'payments', hash: 'sha256:' + 'a'.repeat(64) },
+  tasks: ['build'],
+  account: null,
+  source: { type: 'ref' as const, ref: 'main' },
+  options: {},
+}
 
 // an executor the test finishes by hand
 function manual() {

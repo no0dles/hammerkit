@@ -1,4 +1,4 @@
-import { getGrant } from './policy'
+import { getGrant, mayPublish, maySeeDefinitions } from './policy'
 import { Principal } from './oauth'
 import { Entitlement } from './server-config'
 
@@ -20,7 +20,7 @@ const entitlements: Entitlement[] = [
 describe('getGrant', () => {
   it('denies by default', () => {
     const grant = getGrant(entitlements, { iss: IDP, sub: 'bob', groups: [], claims: {} })
-    expect(grant).toEqual({ accounts: [], default: null, source: ['upload', 'ref'], matched: [] })
+    expect(grant).toEqual({ accounts: [], publish: [], default: null, source: ['upload', 'ref'], matched: [] })
     expect(getGrant([], alice).accounts).toEqual([])
   })
 
@@ -65,5 +65,32 @@ describe('getGrant', () => {
       { group: { iss: IDP, name: 'eng-web' }, accounts: ['b'], source: ['ref'] },
     ]
     expect(getGrant(both, alice).source).toEqual(['ref'])
+  })
+
+  it('adds up what may be published, separately from the accounts', () => {
+    const both: Entitlement[] = [
+      { subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['payments'] },
+      { group: { iss: IDP, name: 'eng-web' }, accounts: ['b'], publish: ['web', 'payments'] },
+    ]
+    const grant = getGrant(both, alice)
+    expect(grant.publish).toEqual(['payments', 'web'])
+    expect(mayPublish(grant, 'web')).toBe(true)
+    expect(mayPublish(grant, 'other')).toBe(false)
+    const onlyAccounts = getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: ['a'] }], alice)
+    expect(onlyAccounts.publish).toEqual([])
+    expect(mayPublish(onlyAccounts, 'payments')).toBe(false)
+  })
+
+  it('lets publish everything with a star', () => {
+    const grant = getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['*'] }], alice)
+    expect(mayPublish(grant, 'anything')).toBe(true)
+  })
+
+  it('shows the build files to who can run or publish, and to nobody else', () => {
+    expect(maySeeDefinitions(getGrant([], alice))).toBe(false)
+    expect(maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: ['a'] }], alice))).toBe(true)
+    expect(
+      maySeeDefinitions(getGrant([{ subject: { iss: IDP, sub: 'alice' }, accounts: [], publish: ['x'] }], alice))
+    ).toBe(true)
   })
 })

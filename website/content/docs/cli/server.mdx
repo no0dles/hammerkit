@@ -48,8 +48,14 @@ entitlements:
   - claims:
       iss: https://token.actions.githubusercontent.com
       match: { repository: corp/payments, ref: refs/heads/main }
+    publish: [payments]
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository: corp/payments, ref: refs/heads/main }
     accounts: [op-payments-ci]
     source: [ref]
+storage:
+  directory: /var/lib/hammerkit   # default ~/.hammerkit/server
 runs:
   maxConcurrent: 4   # default
   keep: 200          # default
@@ -65,6 +71,7 @@ backend:
 | `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
 | `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
 | `entitlements` | Who may use which service account, see [below](#entitlements). |
+| `storage` | Where the server keeps what must survive a restart: the published build files. |
 | `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
 
@@ -113,22 +120,83 @@ the validated claims of the token only, never anything the caller sends along.
 | `claims: {iss, match}` | every token of that issuer whose string claims equal all of `match`, for CI jobs (repository, ref, environment) |
 
 A caller gets the accounts of all entitlements that match, and none when no entry
-matches. `default` names the account used when a run names none, and has to be one
+matches. A caller with no account and nothing to publish can do nothing on the
+server, they are not even shown which build files exist. `default` names the account used when a run names none, and has to be one
 of `accounts`; with a single account that account is the default. `source` limits
 where the code may come from, `upload` for the caller's working tree and `ref` for
 a git ref the server checks out itself; a caller matching several entitlements
 gets only what all of them allow. Every grant is written to the log with issuer,
 subject, accounts and the entitlements that matched.
 
-`GET /v1/me` returns the identity and the accounts of the caller:
+`publish` lists the names of the [build files](#build-files) the caller may publish,
+or `*` for any. It is a permission of its own: who defines the work does not have to
+be who runs it, for example a CI job on the main branch publishes and everyone else
+only runs. An entitlement needs `accounts`, `publish` or both.
+
+`GET /v1/me` returns the identity and what the caller may use:
 
 ```json
-{ "iss": "https://login.example.com", "sub": "4f1c2b", "accounts": ["op-payments-dev"], "default": "op-payments-dev" }
+{
+  "iss": "https://login.example.com",
+  "sub": "4f1c2b",
+  "accounts": ["op-payments-dev"],
+  "default": "op-payments-dev",
+  "publish": []
+}
 ```
+
+## Build files
+
+A run does not bring its own build file. The server keeps the build files that
+were published to it, and a run says which one to use and which of its tasks to
+execute. So whoever may run work cannot change what a task does, and what a task
+does is decided by whoever may publish.
+
+```
+PUT /v1/definitions/payments
+```
+
+```json
+{
+  "entry": ".hammerkit.yaml",
+  "files": {
+    ".hammerkit.yaml": "tasks:\n  build:\n    cmds: [npm run build]\n",
+    "web/.hammerkit.yaml": "..."
+  }
+}
+```
+
+A published build file is a bundle: the file that starts it (`entry`, the usual
+`.hammerkit.yaml` when left out) and every file it includes, as text, up to 200
+files and 1 MiB. The name says what it is for (letters, digits, `.`, `_` and `-`).
+The server reads the bundle the way a run would, in a directory of its own where
+only the bundle's files exist, so one that does not load is refused when it is
+published and not when somebody wants to run it (`400`). A bundle may not include
+anything outside of itself. Includes from git have to be pinned to a commit and
+come from an `https://` or `ssh://` address, because the version below can only
+vouch for what is in the bundle.
+
+**Versions.** Every bundle has a version, the hash of its files:
+`sha256:<hex>` of the JSON `[entry, [[path, sha-256 of the content], ...]]` with
+the paths sorted. The same files have the same version anywhere, so a client can
+compute it and compare it with the server's. A version is never changed; publishing
+different files under the same name adds a version, publishing the same files again
+answers `200` and changes nothing (the first publish answers `201`).
+
+| Call | What it does |
+| --- | --- |
+| `PUT /v1/definitions/<name>` | Publish a bundle. Needs the `publish` permission for that name, else `403`. |
+| `GET /v1/definitions` | The names with their latest version. |
+| `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each and the tasks and services it has. |
+| `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
+| `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
+
+Reading needs a token and at least one service account or `publish` permission.
+Versions are kept in the `storage` directory and survive a restart.
 
 ## Runs
 
-A run is a request to execute tasks of a build file. The server keeps the runs in
+A run is a request to execute tasks of a published [build file](#build-files). The server keeps the runs in
 memory, so they are gone after a restart. Every call needs a token, and a run can be
 seen and cancelled only by the caller that submitted it: for anyone else its id is
 `404`, the same as an id that does not exist.
@@ -143,6 +211,7 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 
 ```json
 {
+  "definition": { "name": "payments", "hash": "sha256:9f2c..." },
   "tasks": ["build", "test"],
   "account": "op-payments-dev",
   "source": { "type": "ref", "ref": "refs/heads/main" },
@@ -150,28 +219,32 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 }
 ```
 
-* `tasks` are task names as on the command line, up to 100. Instead of names, labels
-  in `options.filter` can select the tasks.
+* `definition` names the published build file and the version to run: a hash, or
+  `latest` when left out. The run is pinned to the version the server chose, which
+  the answer shows, so what it executes does not change under it. A name or version
+  that does not exist is `400`.
+* `tasks` are task names as on the command line, up to 100. A task the build file
+  does not have is `400`. Instead of names, labels in `options.filter` can select
+  the tasks.
 * `account` is the service account the run uses. It has to be one of the caller's
-  [entitlements](#entitlements), and defaults to the caller's default account. A
-  caller without accounts can run without one. Naming an account they may not use is
-  `403`.
+  [entitlements](#entitlements), and defaults to the caller's default account; a
+  caller who may only publish runs without one. Naming an account they may not use
+  is `403`, and a caller with no entitlement at all may not run.
 * `source` says where the code comes from: `{ "type": "ref", "ref": "..." }` for a git
   ref the server checks out itself, or `{ "type": "upload", "snapshot": "..." }` for
   the caller's working tree. The kinds an entitlement lists in `source` are the only
   ones allowed, anything else is `403`.
-
 * `options` are the settings of `hammerkit run` that make sense on a server, all
-  optional: `file` (the build file inside the source, a relative path), `env`,
-  `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
+  optional: `env`, `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
   `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
   parallel and how much of the machine they use stay with the server, and `watch` and
   the log mode are for terminals only, so they are not accepted.
 
-The request names the work, it does not contain it: the code comes from `source`. A
-`ref` is fetched by the server. An `upload` refers to a snapshot of the working tree
-that is uploaded separately (not built yet), so the request stays small however large
-the project is.
+The request names the work, it does not contain it: what the tasks do comes from the
+published build file, and the files they work on come from `source`. A `ref` is
+fetched by the server. An `upload` refers to a snapshot of the working tree that is
+uploaded separately (not built yet), so the request stays small however large the
+project is.
 
 The body is JSON up to 64 KiB, and unknown fields are rejected. Each submitted run is
 logged with who submitted it, the account and the source.

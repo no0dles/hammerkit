@@ -6,9 +6,14 @@ import { getVersion } from '../version'
 import { detectPlatform, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { getGrant } from './policy'
+import { getGrant, maySeeDefinitions } from './policy'
 import { RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, StoredEvent, unavailableExecutor } from './runs'
 import { runRequestSchema } from './run-request'
+import { HttpError, readJson, send } from './http'
+import { DefinitionStore } from './definitions'
+import { handleDefinitions } from './definitions-api'
+import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
+import { join } from 'path'
 
 export { DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 export type { DiscoveredIssuer, DiscoveryDocument } from './discovery'
@@ -33,11 +38,6 @@ export interface RunningServer {
   close(): Promise<void>
 }
 
-function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
-  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers })
-  res.end(JSON.stringify(body))
-}
-
 export interface ServerOptions extends TokenVerifierOptions {
   // one line per decision about a caller, for the operator
   log?: (line: string) => void
@@ -45,37 +45,7 @@ export interface ServerOptions extends TokenVerifierOptions {
   executor?: RunExecutor
 }
 
-const MAX_BODY_BYTES = 64 * 1024
 const HEARTBEAT_MS = 15_000
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string
-  ) {
-    super(message)
-  }
-}
-
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  if (!/^application\/json(;|$)/i.test(req.headers['content-type'] ?? '')) {
-    throw new HttpError(415, 'send application/json')
-  }
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > MAX_BODY_BYTES) {
-      throw new HttpError(413, `the request is larger than ${MAX_BODY_BYTES} bytes`)
-    }
-    chunks.push(chunk)
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  } catch {
-    throw new HttpError(400, 'the body is not valid JSON')
-  }
-}
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -121,6 +91,7 @@ function streamEvents(
 async function handleRuns(
   config: ServerConfig,
   registry: RunRegistry,
+  definitions: DefinitionStore,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -137,7 +108,7 @@ async function handleRuns(
     if (method === 'GET') {
       send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
     } else if (method === 'POST') {
-      await submitRun(config, registry, log, principal, req, res)
+      await submitRun(config, registry, definitions, log, principal, req, res)
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -173,6 +144,7 @@ function toRunResponse(run: Run): Omit<Run, 'owner'> {
 async function submitRun(
   config: ServerConfig,
   registry: RunRegistry,
+  definitions: DefinitionStore,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -198,8 +170,25 @@ async function submitRun(
     send(res, 403, { error: `runs from ${request.source.type} are not allowed for you` })
     return
   }
+  if (!maySeeDefinitions(grant)) {
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: no entitlement`)
+    send(res, 403, { error: 'you are not entitled to run anything on this server' })
+    return
+  }
+  const version = definitions.find(request.definition.name, request.definition.hash)
+  if (!version) {
+    send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
+    return
+  }
+  const known = [...version.tasks, ...version.services]
+  const unknown = request.tasks.filter((task) => !known.includes(task))
+  if (unknown.length > 0) {
+    send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
+    return
+  }
   try {
     const run = registry.submit(principal, {
+      definition: { name: version.name, hash: version.hash },
       tasks: request.tasks,
       account,
       source: request.source,
@@ -249,6 +238,7 @@ async function authenticate(
 async function handle(
   config: ServerConfig,
   registry: RunRegistry,
+  definitions: DefinitionStore,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -277,10 +267,19 @@ async function handle(
         ','
       )}] entitlements=[${grant.matched.join(',')}]`
     )
-    send(res, 200, { iss: principal.iss, sub: principal.sub, accounts: grant.accounts, default: grant.default })
+    send(res, 200, {
+      iss: principal.iss,
+      sub: principal.sub,
+      accounts: grant.accounts,
+      default: grant.default,
+      publish: grant.publish,
+    })
     return
   }
-  if (await handleRuns(config, registry, log, principal, req, res, url)) {
+  if (await handleDefinitions(config, definitions, log, principal, req, res, url)) {
+    return
+  }
+  if (await handleRuns(config, registry, definitions, log, principal, req, res, url)) {
     return
   }
   send(res, 404, { error: 'not found' })
@@ -295,13 +294,18 @@ export async function startServer(
   const write = options.log ?? (() => undefined)
   // request urls and subjects come from callers: no control characters, so no forged log lines
   const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
+  const definitions = new DefinitionStore(
+    join(config.storage.directory ?? join(getHammerkitDirectory(), 'server'), 'definitions'),
+    environment
+  )
+  await definitions.load()
   const registry = new RunRegistry({
     executor: options.executor ?? unavailableExecutor,
     maxConcurrent: config.runs.maxConcurrent,
     keep: config.runs.keep,
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, verifier, log, req, res).catch((e) => {
+    handle(config, registry, definitions, verifier, log, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return

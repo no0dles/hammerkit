@@ -1,16 +1,12 @@
 import { z } from 'zod'
 import { parseDuration } from '../utils/units'
+import { HASH_PATTERN } from '../remote/bundle'
+import { definitionName } from './server-config'
 
 const name = z.string().min(1).max(200)
 
 // What `POST /v1/runs` takes. Who is asking, which accounts they may use and
 // where code may come from is decided from the token, never from this body.
-// Relative to the source, so a run can't point at files of the server.
-const buildFile = name.refine(
-  (value) => !value.startsWith('/') && !value.includes('\\') && !value.split('/').includes('..'),
-  'the build file is a path inside the source'
-)
-
 const duration = z.string().refine((value) => {
   try {
     parseDuration(value)
@@ -25,8 +21,6 @@ const duration = z.string().refine((value) => {
 // needs (watch, log mode) are left out.
 export const runOptionsSchema = z
   .object({
-    // the build file inside the source, the usual file name when left out
-    file: buildFile.optional(),
     // as --env
     env: name.optional(),
     // as --filter and --exclude: labels
@@ -45,6 +39,14 @@ export const runOptionsSchema = z
 
 export const runRequestSchema = z
   .object({
+    // the published build file to run, and the version of it: a hash, or the
+    // latest when left out. The server answers with the hash it chose.
+    definition: z
+      .object({
+        name: definitionName,
+        hash: z.union([z.literal('latest'), z.string().regex(HASH_PATTERN)]).default('latest'),
+      })
+      .strict(),
     // tasks by their name in the build file, as on the command line; labels in
     // the options can select tasks instead
     tasks: z.array(name).max(100).default([]),

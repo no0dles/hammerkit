@@ -6,6 +6,8 @@ export interface Grant {
   // the account used when a run names none: the first default of a matching
   // entitlement among the accounts the caller has, else the only account
   default: string | null
+  // the build files the caller may publish: names, or `*` for any
+  publish: string[]
   // where the code may come from; the intersection over the matching entitlements
   // that name one, both when none does
   source: ('upload' | 'ref')[]
@@ -29,10 +31,21 @@ function matches(entitlement: Entitlement, principal: Principal): boolean {
   return false
 }
 
+export function mayPublish(grant: Grant, name: string): boolean {
+  return grant.publish.includes('*') || grant.publish.includes(name)
+}
+
+// A caller who can neither run nor publish anything sees nothing of the server's
+// build files either.
+export function maySeeDefinitions(grant: Grant): boolean {
+  return grant.accounts.length > 0 || grant.publish.length > 0
+}
+
 // Default deny: a caller without a matching entitlement gets no account.
 export function getGrant(entitlements: Entitlement[], principal: Principal): Grant {
   const matched: number[] = []
   const accounts: string[] = []
+  const publish: string[] = []
   let defaultAccount: string | null = null
   let source: ('upload' | 'ref')[] | null = null
 
@@ -46,6 +59,11 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
         accounts.push(account)
       }
     }
+    for (const name of entitlement.publish ?? []) {
+      if (!publish.includes(name)) {
+        publish.push(name)
+      }
+    }
     defaultAccount = defaultAccount ?? entitlement.default ?? null
     if (entitlement.source) {
       source = source ? source.filter((s) => entitlement.source?.includes(s)) : [...entitlement.source]
@@ -54,6 +72,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
 
   return {
     accounts,
+    publish,
     default: defaultAccount ?? (accounts.length === 1 ? accounts[0] : null),
     source: source ?? ['upload', 'ref'],
     matched,
