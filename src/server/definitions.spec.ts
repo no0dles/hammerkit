@@ -36,6 +36,37 @@ describe('inspectBundle', () => {
     expect(inspected.services).toEqual([])
   })
 
+  it('says what each task works on, relative to the root of the bundle', async () => {
+    const inspected = await inspectBundle(
+      bundle({
+        '.hammerkit.yaml': [
+          'references:',
+          '  lib: ./lib',
+          'services:',
+          '  db:',
+          '    image: postgres:16',
+          'tasks:',
+          '  build:',
+          '    src: [package.json, "src/**/*.ts", "!src/**/*.spec.ts", ../outside/*.ts]',
+          '    cmds: [echo build]',
+          '  test:',
+          '    image: node:20',
+          '    deps: [build, lib:lint]',
+          '    needs: [db]',
+          '    mounts: [./.npm:/.npm, /var/run/docker.sock:/var/run/docker.sock]',
+          '    cmds: [echo test]',
+        ].join('\n'),
+        'lib/.hammerkit.yaml': 'tasks:\n  lint:\n    src: ["*.ts"]\n    cmds: [echo lint]\n',
+      }),
+      environment
+    )
+    expect(inspected.inputs).toEqual({
+      build: { src: ['package.json', 'src/**/*.ts', '!src/**/*.spec.ts'], mounts: [], deps: [], needs: [] },
+      'lib:lint': { src: ['lib/*.ts'], mounts: [], deps: [], needs: [] },
+      test: { src: [], mounts: ['.npm'], deps: ['build', 'lib:lint'], needs: ['db'] },
+    })
+  })
+
   it('refuses a build file that does not load, without telling where the server keeps it', async () => {
     await expect(inspectBundle(bundle({ '.hammerkit.yaml': 'tasks: [' }), environment)).rejects.toThrow(DefinitionError)
     const error = await inspectBundle(bundle({ '.hammerkit.yaml': 'tasks:\n  a:\n    nope: 1\n' }), environment).catch(

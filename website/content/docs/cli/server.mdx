@@ -204,12 +204,30 @@ answers `200` and changes nothing (the first publish answers `201`).
 | --- | --- |
 | `PUT /v1/definitions/<name>` | Publish a bundle. Needs the `publish` permission for that name, else `403`. With only `propose` it is a [proposal](#proposing-a-version) and answers `202`. |
 | `GET /v1/definitions` | The names with their latest version. |
-| `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each and the tasks and services it has. |
+| `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each, the tasks and services it has and what each task works on (`inputs`). |
 | `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
 | `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
 
 Reading needs a token and at least one service account, `publish` or `propose`
 permission. Versions are kept in the `storage` directory and survive a restart.
+
+**Inputs.** A version lists, for every task, what it works on, so a client knows
+which of its files a run needs without planning the build file itself:
+
+```json
+"inputs": {
+  "build": { "src": ["package.json", "src/**/*.ts", "!src/**/*.spec.ts"], "mounts": [], "deps": [], "needs": [] },
+  "test": { "src": [], "mounts": [".npm"], "deps": ["build"], "needs": ["db"] }
+}
+```
+
+`src` are the patterns of the task's own `src` as the build file writes them
+(environment variables are not substituted), `mounts` are the host paths a
+container task mounts, `deps` the tasks and `needs` the services it waits for. Paths
+are relative to the root of the bundle, which is also the root of the project's
+files, and a path outside of it is left out because it cannot be sent. What a task
+inherits from its dependencies is listed with those. Versions published before this
+was recorded have no `inputs`.
 
 ### Proposing a version
 
@@ -254,6 +272,77 @@ A proposal approves a new version of the build file, not the code its commands r
 `npm test` still executes the files a run brings. Production accounts stay behind
 [`request`](#approvals) and `source: [ref]`.
 
+## Source files
+
+A run from an `upload` works on the caller's files. They are sent in two steps so
+that only what the server does not have yet travels: the caller announces the tree
+as a list of files with their digests, the server says which digests it lacks, and
+the caller sends those.
+
+```
+POST /v1/sources
+```
+
+```json
+{
+  "files": [
+    { "path": "package.json", "sha256": "9f2c...", "size": 812 },
+    { "path": "bin/run.sh", "sha256": "41ab...", "size": 233, "mode": "exec" }
+  ]
+}
+```
+
+The answer names the tree, a **snapshot**, and says what is missing:
+
+```json
+{
+  "snapshot": "sha256:5d1e...",
+  "files": 2,
+  "bytes": 1045,
+  "createdAt": "2026-10-11T11:00:00.000Z",
+  "missing": ["9f2c...", "41ab..."],
+  "complete": false
+}
+```
+
+The snapshot is the `sha256:<hex>` of the JSON `[[path, sha-256, mode], ...]` with
+the paths sorted, the same construction as the version of a build file, so the same
+files have the same name anywhere. It answers `201` for a new tree and `200` for
+one the server already knows. Then each missing file is sent on its own:
+
+| Call | What it does |
+| --- | --- |
+| `POST /v1/sources` | Announce a tree. Up to 20,000 files, 32 MiB per file, 1 GiB per tree. |
+| `PUT /v1/sources/blobs/<sha256>` | Send the content of one file as the request body. Answers `201`, or `200` when the server had it. |
+| `GET /v1/sources` | The trees the caller keeps, what they take and the limit. |
+| `GET /v1/sources/<snapshot>` | One tree and the digests still missing; `complete` when none is. |
+| `DELETE /v1/sources/<snapshot>` | Forget a tree and the content no other tree of the caller needs. |
+
+A second run after one edited file announces the tree again and sends that file
+only. A client can also skip the announcement when the snapshot it computes is the
+one it used last and `GET /v1/sources/<snapshot>` says it is complete.
+
+* **Only the caller's.** Trees and content belong to the caller who sent them;
+  another caller's snapshot is `404`. Content is never shared between callers: a
+  server that answers "I already have this file" to anybody would tell them what
+  other people work on.
+* **Only announced content.** A file is taken only if a tree the caller announced
+  lists its digest, with the size announced, and only if the content has that
+  digest. Anything else is `400`.
+* **Credentials do not leave.** A tree with a path that looks like a credential is
+  refused with `400` that names it, even when a `src` pattern reaches it: `.env`
+  (not `.env.example`, `.env.sample`, `.env.template`), `.npmrc`, `.netrc`,
+  `.pypirc`, `.git-credentials`, private keys (`id_rsa` and its kin, `*.pem`,
+  `*.p12`, `*.pfx`) and anything below `.git/`, `.ssh/`, `.aws/`, `.gnupg/` or
+  `.kube/`. Secrets belong in a secret provider; there is no override.
+* **Quota.** A caller may keep 4 GiB; a file that would go over is `413`. Nothing
+  is removed on its own, a caller deletes what they no longer need.
+* **Who may.** Callers who can run something and whose entitlements allow `upload`
+  as a `source`; others get `403`.
+
+Paths are relative to the root of the project, forward slashes, nothing that climbs
+out; `inputs` of a [build file version](#build-files) say which files a run needs.
+
 ## Runs
 
 A run is a request to execute tasks of a published [build file](#build-files). The server keeps the runs in
@@ -291,9 +380,11 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
   caller who may only publish runs without one. Naming an account they may not use
   is `403`, and a caller with no entitlement at all may not run.
 * `source` says where the code comes from: `{ "type": "ref", "ref": "..." }` for a git
-  ref the server checks out itself, or `{ "type": "upload", "snapshot": "..." }` for
-  the caller's working tree. The kinds an entitlement lists in `source` are the only
-  ones allowed, anything else is `403`.
+  ref the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
+  for the caller's working tree, announced and sent beforehand, see [Source
+  files](#source-files). A snapshot that is unknown, or that still lacks files, is
+  `400`. The kinds an entitlement lists in `source` are the only ones allowed,
+  anything else is `403`.
 * `options` are the settings of `hammerkit run` that make sense on a server, all
   optional: `env`, `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
   `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
@@ -303,8 +394,7 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 The request names the work, it does not contain it: what the tasks do comes from the
 published build file, and the files they work on come from `source`. A `ref` is
 fetched by the server. An `upload` refers to a snapshot of the working tree that is
-uploaded separately (not built yet), so the request stays small however large the
-project is.
+sent separately, so the request stays small however large the project is.
 
 The body is JSON up to 64 KiB, and unknown fields are rejected. Each submitted run is
 logged with who submitted it, the account and the source.

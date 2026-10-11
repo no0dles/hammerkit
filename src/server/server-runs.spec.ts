@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
@@ -190,8 +191,25 @@ describe('runs api', () => {
 
   it('only takes the kind of source the entitlement allows', async () => {
     await withApi('runs-api-source', done, async (api) => {
-      const upload = { ...request, source: { type: 'upload', snapshot: 'snap-1' } }
+      const content = 'hello'
+      const sha256 = createHash('sha256').update(content).digest('hex')
+      const tree = await (
+        await api.call('POST', '/v1/sources', { body: { files: [{ path: 'a.txt', sha256, size: content.length }] } })
+      ).json()
+      const upload = { ...request, source: { type: 'upload', snapshot: tree.snapshot } }
+      // a tree that is not complete cannot be run
+      const incomplete = await api.submit(upload, 'alice')
+      expect(incomplete.status).toBe(400)
+      expect((await incomplete.json()).error).toContain('not complete')
+      await fetch(`${api.server.url}/v1/sources/blobs/${sha256}`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${api.token('alice')}` },
+        body: content,
+      })
       expect((await api.submit(upload, 'alice')).status).toBe(202)
+      const unknown = await api.submit({ ...request, source: { type: 'upload', snapshot: `sha256:${'0'.repeat(64)}` } })
+      expect(unknown.status).toBe(400)
+      expect((await unknown.json()).error).toContain('not known')
       const refused = await api.submit(upload, 'carol')
       expect(refused.status).toBe(403)
       expect((await refused.json()).error).toContain('runs from upload are not allowed')

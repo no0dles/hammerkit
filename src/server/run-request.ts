@@ -54,7 +54,8 @@ export const runRequestSchema = z
     account: name.optional(),
     source: z.discriminatedUnion('type', [
       z.object({ type: z.literal('ref'), ref: name }).strict(),
-      z.object({ type: z.literal('upload'), snapshot: name }).strict(),
+      // the name of a tree announced with POST /v1/sources
+      z.object({ type: z.literal('upload'), snapshot: z.string().regex(HASH_PATTERN) }).strict(),
     ]),
     options: runOptionsSchema.default({}),
   })

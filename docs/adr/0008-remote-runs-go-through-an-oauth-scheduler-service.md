@@ -20,4 +20,5 @@ The full design is in [specs/remote-compute](../../specs/remote-compute/spec.md)
 - A new network service that runs code. It is hardened like a CI server (TLS, token validation with audience, rate limits, audit) and sits behind the existing ingress or VPN.
 - The API is a new, versioned compatibility surface.
 - Local-first is unchanged: `run.on: local` is the default and a laptop works without a server.
+- Project files reach the server as a per-file manifest and only the content it lacks, kept per caller, never as one archive per run and never from a store shared between callers. What a task works on is published with its build file version, so the client does not plan.
 - Cache keys of a remote run are computed where the work runs, so a developer's own OS and CPU cannot leak into them. Without remotes nothing changes.
