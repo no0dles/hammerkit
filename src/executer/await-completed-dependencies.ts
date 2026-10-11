@@ -96,12 +96,30 @@ export async function awaitNoRequirements(svc: WorkItemState<WorkService, Servic
   )
 }
 
+// The dependencies and, recursively, theirs, each once.
+export function transitiveDeps(deps: WorkItemState<WorkTask, TaskState>[]): WorkItemState<WorkTask, TaskState>[] {
+  const seen = new Set<WorkItemState<WorkTask, TaskState>>()
+  const visit = (items: WorkItemState<WorkTask, TaskState>[]) => {
+    for (const item of items) {
+      if (!seen.has(item)) {
+        seen.add(item)
+        visit(item.deps)
+      }
+    }
+  }
+  visit(deps)
+  return [...seen]
+}
+
+// Waits for the whole dependency closure, not only the direct dependencies: a
+// cached direct dependency completes at once, while the dependencies it
+// skipped past are still being restored for the item about to run.
 export async function awaitCompletedDependencies(
   work: WorkItem<WorkTask | WorkService>,
   deps: WorkItemState<WorkTask, TaskState>[],
   abort: AbortSignal
 ): Promise<void> {
-  for (const dep of deps) {
+  for (const dep of transitiveDeps(deps)) {
     work.status.write('debug', `await completion of ${dep.name} with state ${dep.state.current.type}`)
     await awaitCompleted(work, dep, abort)
   }
