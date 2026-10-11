@@ -1,6 +1,6 @@
 # Feature Specification: Remote Compute
 
-**Status**: Draft, implementation in progress (ADR-0009). Delivered in phases; later phases are marked.
+**Status**: Draft, implementation in progress (ADR-0009, ADR-0010). Delivered in phases; later phases are marked.
 
 **Input**: run tasks on machines the team operates, so a laptop or a coding agent keeps working locally while heavy or platform-specific work runs elsewhere, with outputs staying on the remote until someone asks for them, and with authorization decided by OAuth alone.
 

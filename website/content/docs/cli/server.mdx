@@ -22,6 +22,64 @@ hammerkit server --config /etc/hammerkit/server.yaml
 The server runs until it is interrupted. `HAMMERKIT_SERVER_CONFIG` can stand in for
 `--config`.
 
+## Setting up a server
+
+The pieces, in the order an operator sets them up. Each step links to its section.
+
+1. **Identity provider.** Register an API audience for the server and list the issuer
+   under `issuers` ([Authentication](#authentication)). Nothing else identifies a caller.
+2. **Accounts.** Define one service account per set of credentials a build needs, and the
+   secret provider commands that read them ([Accounts](#accounts)). A production account
+   is limited to `source: [ref]` and the branches it may run from.
+3. **Repositories.** List the repositories the server may read under `sources`, with a
+   token that a provider command mints, for example from a GitHub App
+   ([Repositories](#repositories)).
+4. **Entitlements.** Say who may `use` or `request` which account, which repositories they
+   may name and whether they may `run`, `propose` or `publish` build files
+   ([Entitlements](#entitlements)).
+5. **Start it.** `hammerkit server --config server.yaml`, behind a TLS proxy or with `tls`.
+   Send `SIGHUP` to read the entitlements again without a restart
+   ([Limits and restarts](#limits-and-restarts)).
+
+A small config for one team on a Linux box, with a GitHub App token and a production
+account that needs a second person:
+
+```yaml
+listen: { host: 0.0.0.0, port: 8480 }
+behindTlsProxy: true
+issuers:
+  - { issuer: https://login.example.com, audience: hammerkit, clientId: hammerkit-cli }
+secretProviders:
+  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}'] }
+  github-app: { command: [/usr/local/bin/github-app-token, '{{ref}}'] }
+accounts:
+  scm-read:         { providers: { github-app: { env: { APP_KEY_FILE: /etc/hammerkit/app.pem } } } }
+  op-payments-dev:  { providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/dev.json } } } }
+  op-payments-prod:
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/prod.json } } }
+    source: [ref]
+    refs: [main]
+sources:
+  - match: github.com/corp/*
+    secret: { from: 'github-app:payments', account: scm-read }
+runs:
+  env: { allow: [PATH, DOCKER_HOST] }
+entitlements:
+  - group: { iss: https://login.example.com, name: platform }
+    accounts: { op-payments-dev: use, op-payments-prod: use }
+    repos: [github.com/corp/*]
+    builds: publish
+  - group: { iss: https://login.example.com, name: eng-payments }
+    accounts: { op-payments-dev: use, op-payments-prod: request }
+    repos: [github.com/corp/payments]
+    builds: run
+```
+
+A developer then registers and signs in with [`remote add` and `remote login`](/docs/cli/remote),
+someone in `platform` publishes the build file with `remote publish`, and a run is a
+`POST /v1/runs` (`remote run` does not exist yet). A run that reads the production secret
+waits in `remote approvals` until a member of `platform` approves it.
+
 ## Config
 
 The file belongs to whoever operates the server and is reviewed like code. Unknown
@@ -40,6 +98,8 @@ issuers:
     groupsClaim: groups   # default
     clientId: hammerkit-cli
     scope: openid api://hammerkit/.default
+  - issuer: https://token.actions.githubusercontent.com   # CI jobs, matched by claims
+    audience: hammerkit
 secretProviders:                    # the commands that read secrets, see Secret providers
   gsm:
     command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}']
@@ -224,8 +284,7 @@ Every grant is written to the log with issuer, subject, accounts and the entitle
 that matched. A caller with no account and no `builds` level can do nothing on the
 server, they are not even shown which build files exist.
 
-`GET /v1/me` returns the identity and what the caller may use, and `GET /v1/accounts`
-the accounts they have a level on, with their description and the sources they allow:
+`GET /v1/me` returns the identity and what the caller may use:
 
 ```json
 {
@@ -237,6 +296,19 @@ the accounts they have a level on, with their description and the sources they a
   ],
   "repos": ["github.com/corp/payments"],
   "builds": "run"
+}
+```
+
+`GET /v1/accounts` lists the accounts the caller has a level on, with the operator's
+`description` and the `sources` the account allows (`upload`, `ref`, or both when the
+config does not say):
+
+```json
+{
+  "accounts": [
+    { "name": "op-payments-dev", "description": "dev cluster", "level": "use", "sources": ["upload", "ref"] },
+    { "name": "op-payments-prod", "level": "request", "sources": ["ref"] }
+  ]
 }
 ```
 
@@ -524,7 +596,7 @@ seen and cancelled only by the caller that submitted it: for anyone else its id 
 {
   "definition": { "name": "payments", "hash": "sha256:9f2c..." },
   "tasks": ["build", "test"],
-  "source": { "type": "ref", "ref": "refs/heads/main" },
+  "source": { "type": "ref", "repo": "github.com/corp/payments", "ref": "main" },
   "options": { "env": "staging", "cache": "checksum", "timeout": "30m" }
 }
 ```
@@ -560,6 +632,20 @@ sent separately, so the request stays small however large the project is.
 
 The body is JSON up to 64 KiB, and unknown fields are rejected. Each submitted run is
 logged with who submitted it, the accounts and the source.
+
+What `POST /v1/runs` answers, in the order the server checks:
+
+| Status | When |
+| --- | --- |
+| `202` | The run is accepted, `queued` or `awaiting-approval`. |
+| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, the repository is not readable by the server or the ref is not one branch or tag, or the snapshot is unknown or incomplete. |
+| `401` | The token is missing or invalid. |
+| `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. |
+| `409` | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request. |
+| `429` | The caller is over their [limits](#limits-and-restarts). |
+| `501` | The run is from an `upload`, which the executor does not support yet. |
+| `502` | The server could not reach the repository to resolve the ref. |
+| `503` | The server is shutting down, or too many runs wait for an approval. |
 
 The events carry the sequence number as their `id`, so a client that lost the
 connection continues with the `Last-Event-ID` header (or `?after=<n>`) and misses
@@ -724,7 +810,7 @@ approvals:
   run's `approvals`, with who approved it. They share one expiry: a run that nobody
   covers within `timeout` is rejected, and so is one that any covering approver
   rejects. More than `maxWaiting` waiting runs are refused with `503`. A run that waits
-  is cancelled when the server stops, like every other.
+  keeps waiting over a restart, for the time that is left, see [Limits and restarts](#limits-and-restarts).
 * A request for an account that nobody may use is refused at once (`409 nobody can
   approve <account>`) and not left to expire.
 * A caller approves what they have access to, and nobody approves their own run. A
