@@ -22,7 +22,6 @@ import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
 import { handleDefinitions } from './definitions-api'
 import { handleApprovals } from './approvals-api'
-import { approvesAnything, rulesFor } from './approvals'
 import { parseDuration } from '../utils/units'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
@@ -172,7 +171,7 @@ async function submitRun(
   const grant = getGrant(config.entitlements, principal)
   const account = request.account ?? grant.default
   // what the caller may not do is said plainly: they already know who they are
-  if (account !== null && !grant.accounts.includes(account)) {
+  if (account !== null && !grant.accounts.includes(account) && !grant.request.includes(account)) {
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: service account ${quote(account)} is not granted`)
     send(res, 403, { error: `you may not use the service account ${account}` })
     return
@@ -198,7 +197,8 @@ async function submitRun(
     send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
-  const rules = rulesFor(config.approvals.rules, version.graph, request.tasks, account)
+  // asking for an account is not using it: an admin of it has to approve
+  const needsApproval = account !== null && !grant.accounts.includes(account)
   try {
     const run = registry.submit(
       principal,
@@ -209,12 +209,12 @@ async function submitRun(
         source: request.source,
         options: request.options,
       },
-      rules.map((index) => ({ index, name: config.approvals.rules[index].name }))
+      needsApproval
     )
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} account=${account ?? '-'} source=${
         run.source.type
-      } tasks=${run.tasks.length}${rules.length > 0 ? ` approval=[${rules.join(',')}]` : ''}`
+      } tasks=${run.tasks.length}${needsApproval ? ' approval=required' : ''}`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {
@@ -289,8 +289,8 @@ async function handle(
       sub: principal.sub,
       accounts: grant.accounts,
       default: grant.default,
+      request: grant.request,
       publish: grant.publish,
-      approver: approvesAnything(config.approvals.rules, principal),
     })
     return
   }

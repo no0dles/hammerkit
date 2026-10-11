@@ -49,17 +49,14 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           `  - { issuer: "${idp.url}", audience: hammerkit, clientId: hammerkit-cli }`,
           'entitlements:',
           `  - subject: { iss: "${idp.url}", sub: alice }`,
-          '    accounts: [op-payments-dev, op-payments-prod]',
+          '    accounts: [op-payments-dev]',
+          '    request: [op-payments-prod]',
           '    default: op-payments-dev',
           '    publish: [payments]',
           `  - subject: { iss: "${idp.url}", sub: carol }`,
+          '    request: [op-payments-prod]',
+          `  - subject: { iss: "${idp.url}", sub: bob }`,
           '    accounts: [op-payments-prod]',
-          'approvals:',
-          '  rules:',
-          '    - name: prod key',
-          '      accounts: [op-payments-prod]',
-          '      approvers:',
-          `        - subject: { iss: "${idp.url}", sub: bob }`,
           '',
         ].join('\n')
       )
@@ -179,7 +176,7 @@ describe('remote approvals', () => {
 
       h.as('bob')
       await h.run('remote', 'login', 'build')
-      expect(await h.run('remote', 'accounts', 'build')).toContain('may approve runs')
+      expect(await h.run('remote', 'accounts', 'build')).toContain('op-payments-prod')
       const listing = await h.run('remote', 'approvals', 'build')
       expect(listing).toContain('build: 1 waiting for your approval')
       expect(listing).toContain(run.id)
@@ -187,7 +184,7 @@ describe('remote approvals', () => {
       expect(listing).toMatch(/payments sha256:/)
       expect(listing).toContain('tasks: build')
       expect(listing).toContain('account op-payments-prod, source ref main')
-      expect(listing).toContain('needs approval for: prod key')
+      expect(listing).toContain('needs the approval of an admin of op-payments-prod')
 
       expect(await h.run('remote', 'approve', run.id, 'build')).toContain(`approved ${run.id} on build, it is queued`)
       expect(await h.run('remote', 'approvals', 'build')).toContain('no runs wait for your approval')
@@ -195,7 +192,7 @@ describe('remote approvals', () => {
         await new Promise((resolve) => setTimeout(resolve, 10))
       }
       expect(h.executed).toEqual(['build'])
-      expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.approval.rules[0].approvedBy.sub).toBe('bob')
+      expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.approval.approvedBy.sub).toBe('bob')
     })
   })
 
@@ -213,10 +210,10 @@ describe('remote approvals', () => {
     })
   })
 
-  it('does not let the one who asked decide, nor anybody who approves nothing', async () => {
+  it('does not let the one who asked decide, nor anybody who is not admin of the account', async () => {
     await withHarness('remote-approvals-refused', async (h) => {
       const run = await waitingRun(h)
-      // alice approves nothing on this server, so for her the run is not there to approve
+      // alice is not admin of the production account, so for her the run is not there to approve
       await expect(h.run('remote', 'approve', run.id, 'build')).rejects.toThrow('answered 404')
       expect(await h.run('remote', 'approvals', 'build')).toContain('no runs wait for your approval')
       expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.state).toBe('awaiting-approval')

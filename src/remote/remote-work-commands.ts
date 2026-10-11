@@ -31,7 +31,7 @@ interface ApprovalView {
   account: string | null
   source: { type: string; ref?: string; snapshot?: string }
   options: Record<string, unknown>
-  approval?: { rules: { name: string; approvedBy?: { sub: string } }[]; expiresAt: string }
+  approval?: { expiresAt: string; approvedBy?: { sub: string } }
   state: string
 }
 
@@ -43,8 +43,6 @@ function describe(run: ApprovalView): string[] {
   const options = Object.entries(run.options)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)
     .join(' ')
-  const pending = (run.approval?.rules ?? []).filter((rule) => !rule.approvedBy).map((rule) => rule.name)
-  const done = (run.approval?.rules ?? []).filter((rule) => rule.approvedBy)
   return [
     `${colors.bold(printable(run.id))}  requested by ${printable(run.requestedBy.sub)} (${printable(
       run.requestedBy.iss
@@ -54,11 +52,7 @@ function describe(run: ApprovalView): string[] {
     `  account ${run.account === null ? 'none' : printable(run.account)}, source ${printable(source)}${
       options ? `, ${printable(options)}` : ''
     }`,
-    `  needs approval for: ${pending.map(printable).join(', ') || '-'}${
-      done.length > 0
-        ? ` (approved: ${done.map((d) => `${printable(d.name)} by ${printable(d.approvedBy?.sub)}`).join(', ')})`
-        : ''
-    }`,
+    `  needs the approval of an admin of ${run.account === null ? 'none' : printable(run.account)}`,
     `  decide before ${printable(run.approval?.expiresAt ?? '-')}`,
   ]
 }
@@ -143,9 +137,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           environment.stdout.write(
             body.state === 'rejected'
               ? `rejected ${run} on ${serverName}\n`
-              : body.state === 'awaiting-approval'
-                ? `approved ${run} on ${serverName} for your rules, it waits for the others\n`
-                : `approved ${run} on ${serverName}, it is queued\n`
+              : `approved ${run} on ${serverName}, it is queued\n`
           )
         })
       )

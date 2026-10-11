@@ -105,8 +105,9 @@ server is used, and `--file <path>` publishes another build file.
 
 ## Approving runs
 
-Runs that fall under an [approval rule](/docs/cli/server#approvals) wait for somebody
-else to approve them. If you are one of the approvers:
+A run on a service account that its caller may only
+[request](/docs/cli/server#approvals) waits for an admin of that account to approve
+it. If you are an admin of the account:
 
 ```
 $ hammerkit remote approvals build
@@ -115,7 +116,7 @@ run_Qx3k9ZpL2mW7vN4a  requested by 4f1c2b (https://login.example.com)
   payments sha256:9f2c61d0...
   tasks: deploy
   account op-payments-prod, source ref refs/heads/main, env=staging
-  needs approval for: prod key
+  needs the approval of an admin of op-payments-prod
   decide before 2026-10-11T10:41:00.000Z
 $ hammerkit remote approve run_Qx3k9ZpL2mW7vN4a build
 approved run_Qx3k9ZpL2mW7vN4a on build, it is queued
@@ -123,8 +124,8 @@ approved run_Qx3k9ZpL2mW7vN4a on build, it is queued
 
 What you see is what the decision rests on: who asked, which version of which build
 file, the tasks, the service account and where the code comes from. The version is
-the one the run is pinned to, so what you approve is what runs. A run that needs
-more than your approval says it waits for the others. Nobody approves their own run.
+the one the run is pinned to, so what you approve is what runs. You see the runs on
+the accounts you are admin of, and no others.
 
 ## Signing in
 

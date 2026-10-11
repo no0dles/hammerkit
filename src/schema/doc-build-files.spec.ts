@@ -59,7 +59,7 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
   },
   {
     file: join('cli', 'server.mdx'),
-    snippet: 'customer-data',
+    snippet: 'release-managers',
     reason: 'approval rules of the server config (hammerkit server --config), not a build file',
   },
   {

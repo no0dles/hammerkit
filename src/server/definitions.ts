@@ -11,7 +11,6 @@ import { createParseContext } from '../schema/schema-parser'
 import { parseReferences } from '../schema/reference-parser'
 import { Bundle, hashBundle, HASH_PATTERN } from '../remote/bundle'
 import { getErrorMessage } from '../log'
-import { LabelValues } from '../executer/label-values'
 
 export interface DefinitionVersion {
   name: string
@@ -23,18 +22,7 @@ export interface DefinitionVersion {
   // what a run can ask for
   tasks: string[]
   services: string[]
-  // what each of them is labelled with and runs first, for the approval rules
-  graph: DefinitionGraph
 }
-
-export interface DefinitionNode {
-  kind: 'task' | 'service'
-  labels: LabelValues
-  // the tasks and services it needs: dependencies, needed services, service init
-  depends: string[]
-}
-
-export type DefinitionGraph = { [name: string]: DefinitionNode }
 
 export class DefinitionError extends Error {}
 
@@ -103,7 +91,7 @@ function confined(files: FileContext, root: string): FileContext {
 export async function inspectBundle(
   bundle: Bundle,
   environment: Environment
-): Promise<{ tasks: string[]; services: string[]; graph: DefinitionGraph }> {
+): Promise<{ tasks: string[]; services: string[] }> {
   const problems = findLooseIncludes(bundle)
   if (problems.length > 0) {
     throw new DefinitionError(problems.join('\n'))
@@ -122,26 +110,7 @@ export async function inspectBundle(
     try {
       const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected)
       const context = await parseReferences(ctx, scope, inspected)
-      const graph: DefinitionGraph = {}
-      for (const [name, task] of Object.entries(context.tasks)) {
-        graph[name] = {
-          kind: 'task',
-          labels: task.labels,
-          depends: [...task.deps.map((d) => d.relativeName), ...task.needs.map((n) => n.relativeName)],
-        }
-      }
-      for (const [name, service] of Object.entries(context.services)) {
-        graph[name] = {
-          kind: 'service',
-          labels: service.labels,
-          depends: [
-            ...service.deps.map((d) => d.relativeName),
-            ...service.needs.map((n) => n.relativeName),
-            ...(service.init ? [service.init.relativeName] : []),
-          ],
-        }
-      }
-      return { tasks: Object.keys(context.tasks).sort(), services: Object.keys(context.services).sort(), graph }
+      return { tasks: Object.keys(context.tasks).sort(), services: Object.keys(context.services).sort() }
     } catch (e) {
       throw new DefinitionError(getErrorMessage(e).split(directory).join('.'))
     }
@@ -174,12 +143,7 @@ export class DefinitionStore {
           continue
         }
         const stored = JSON.parse(await readFile(join(this.directory, name, file), 'utf8'))
-        // versions stored before the approval rules existed lack their graph: read it
-        // again, so a rule is never skipped for an old version
-        const version: DefinitionVersion = stored.version.graph
-          ? stored.version
-          : { ...stored.version, ...(await inspectBundle(stored.bundle, this.environment)) }
-        this.add(version)
+        this.add(stored.version)
       }
     }
   }
@@ -218,7 +182,7 @@ export class DefinitionStore {
     if (existing) {
       return { version: existing, created: false }
     }
-    const { tasks, services, graph } = await inspectBundle(bundle, this.environment)
+    const { tasks, services } = await inspectBundle(bundle, this.environment)
     const version: DefinitionVersion = {
       name,
       hash,
@@ -227,7 +191,6 @@ export class DefinitionStore {
       publishedBy: { iss: publisher.iss, sub: publisher.sub },
       tasks,
       services,
-      graph,
     }
     const file = this.file(name, hash)
     await mkdir(dirname(file), { recursive: true })

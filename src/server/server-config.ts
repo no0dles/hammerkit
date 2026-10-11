@@ -76,16 +76,19 @@ export interface Who {
   claims?: z.infer<typeof claimsSchema>
 }
 
-export const whoSchema = z.object(whoShape).strict().superRefine(checkWho)
-
 export const entitlementSchema = z
   .object({
     ...whoShape,
+    // admin: runs on these accounts at once, and approves the runs others
+    // request on them
     accounts: z.array(z.string().min(1)).default([]),
+    // may request runs on these accounts, which wait until an admin of the account
+    // (someone with it in `accounts`) approves them
+    request: z.array(z.string().min(1)).optional(),
     // the build files (by name) the caller may publish, `*` for any; a separate
     // permission from running them, so who defines work and who runs it can differ
     publish: z.array(z.union([z.literal('*'), definitionName])).optional(),
-    // the account used when the caller names none; one of accounts
+    // the account used when the caller names none; one of accounts or request
     default: z.string().min(1).optional(),
     // where the code may come from: the caller's working tree or a git ref
     source: z
@@ -96,11 +99,25 @@ export const entitlementSchema = z
   .strict()
   .superRefine((entitlement, ctx) => {
     checkWho(entitlement, ctx)
-    if (entitlement.accounts.length === 0 && (entitlement.publish ?? []).length === 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'name accounts to use, or build files to publish' })
+    if (
+      entitlement.accounts.length === 0 &&
+      (entitlement.request ?? []).length === 0 &&
+      (entitlement.publish ?? []).length === 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'name accounts to use or request, or build files to publish',
+      })
     }
-    if (entitlement.default && !entitlement.accounts.includes(entitlement.default)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['default'], message: 'default has to be one of accounts' })
+    if (
+      entitlement.default &&
+      ![...entitlement.accounts, ...(entitlement.request ?? [])].includes(entitlement.default)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['default'],
+        message: 'default has to be one of accounts or request',
+      })
     }
   })
 
@@ -112,34 +129,7 @@ const duration = z.string().refine((value) => {
   }
 }, 'expected a duration like 30m, 1h or 1d')
 
-// A run that falls under a rule waits until one of the rule's approvers, who is
-// not the caller, approves it. A rule applies when the run uses one of its
-// `accounts`, or executes a task that matches `tasks` (names, `*` stands for any
-// characters) or `labels` (a key with one of the values); the tasks a run needs
-// first count too.
-//
-// Only `accounts` can be relied on to guard a credential: the account of a run is
-// chosen in its request and checked against the caller's entitlements, nothing in
-// a build file can change it. Task names and labels come from the build file, so
-// whoever may publish it can rename a task or drop a label and fall out of the
-// rule; those rules are as strong as who holds that `publish` permission.
-export const approvalRuleSchema = z
-  .object({
-    // shown to the caller and the approvers, and unique
-    name: z.string().min(1).max(100),
-    accounts: z.array(z.string().min(1)).min(1).optional(),
-    tasks: z.array(z.string().min(1)).min(1).optional(),
-    labels: z.record(z.union([z.string(), z.array(z.string()).min(1)])).optional(),
-    approvers: z.array(whoSchema).min(1),
-  })
-  .strict()
-  .refine(
-    (rule) => rule.accounts !== undefined || rule.tasks !== undefined || rule.labels !== undefined,
-    'name the accounts, tasks or labels it applies to'
-  )
-
 export type Issuer = z.infer<typeof issuerSchema>
-export type ApprovalRule = z.infer<typeof approvalRuleSchema>
 export type Entitlement = z.infer<typeof entitlementSchema>
 
 // The server config is written by an operator and reviewed like code, so a typo
@@ -172,7 +162,6 @@ export const serverConfigSchema = z
         timeout: duration.default('1h'),
         // runs waiting at the same time, more are refused
         maxWaiting: z.number().int().min(1).default(100),
-        rules: z.array(approvalRuleSchema).default([]),
       })
       .strict()
       .default({}),
@@ -212,25 +201,6 @@ export const serverConfigSchema = z
           message: `issuer ${iss} is not one of the accepted issuers`,
         })
       }
-    })
-    config.approvals.rules.forEach((rule, index) => {
-      if (config.approvals.rules.findIndex((other) => other.name === rule.name) !== index) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['approvals', 'rules', index, 'name'],
-          message: `the rule name ${rule.name} is used twice`,
-        })
-      }
-      rule.approvers.forEach((approver, approverIndex) => {
-        const iss = (approver.subject ?? approver.group ?? approver.claims)?.iss
-        if (iss && !issuers.includes(iss)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['approvals', 'rules', index, 'approvers', approverIndex],
-            message: `issuer ${iss} is not one of the accepted issuers`,
-          })
-        }
-      })
     })
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {
       ctx.addIssue({
