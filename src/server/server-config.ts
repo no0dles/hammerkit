@@ -108,6 +108,16 @@ export const serverConfigSchema = z
     issuers: z.array(issuerSchema).min(1, 'at least one issuer is needed, OAuth is the only way to call the server'),
     // who may use which service account; default deny, so no entry means no account
     entitlements: z.array(entitlementSchema).default([]),
+    // limits of the run registry
+    runs: z
+      .object({
+        // runs that execute at the same time, the others wait in queue
+        maxConcurrent: z.number().int().min(1).default(4),
+        // finished runs that are kept for their state and logs
+        keep: z.number().int().min(1).default(200),
+      })
+      .strict()
+      .default({}),
     backend: z
       .object({
         type: z.literal('host'),

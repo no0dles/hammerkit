@@ -50,6 +50,9 @@ entitlements:
       match: { repository: corp/payments, ref: refs/heads/main }
     accounts: [op-payments-ci]
     source: [ref]
+runs:
+  maxConcurrent: 4   # default
+  keep: 200          # default
 backend:
   type: host
   platform: { os: macos, arch: arm64 }   # detected when left out
@@ -62,6 +65,7 @@ backend:
 | `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
 | `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry and the claim that lists a caller's groups. At least one: OAuth is the only way to call the server. The issuer is an https URL (http for localhost). `clientId` and `scope` are what [`remote login`](/docs/cli/remote#signing-in) signs in with; an issuer without a `clientId` only takes tokens obtained elsewhere. |
 | `entitlements` | Who may use which service account, see [below](#entitlements). |
+| `runs` | `maxConcurrent` runs execute at the same time, the others wait in queue. `keep` finished runs are remembered, the oldest are dropped first. |
 | `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
 
 Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
@@ -122,6 +126,55 @@ subject, accounts and the entitlements that matched.
 { "iss": "https://login.example.com", "sub": "4f1c2b", "accounts": ["op-payments-dev"], "default": "op-payments-dev" }
 ```
 
+## Runs
+
+A run is a request to execute tasks of a build file. The server keeps the runs in
+memory, so they are gone after a restart. Every call needs a token, and a run can be
+seen and cancelled only by the caller that submitted it: for anyone else its id is
+`404`, the same as an id that does not exist.
+
+| Call | What it does |
+| --- | --- |
+| `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`. |
+| `GET /v1/runs` | The caller's runs, newest first. |
+| `GET /v1/runs/<id>` | One run: `state` is `queued`, `running`, `succeeded`, `failed` or `cancelled`, a failed run has an `error`. |
+| `POST /v1/runs/<id>/cancel` | Cancel a run: a queued one at once, a running one when its tasks have stopped. |
+| `GET /v1/runs/<id>/events` | The run's events as server-sent events, see below. |
+
+```json
+{
+  "tasks": ["build", "test"],
+  "account": "op-payments-dev",
+  "source": { "type": "ref", "ref": "refs/heads/main" }
+}
+```
+
+* `tasks` are task names as on the command line, up to 100.
+* `account` is the service account the run uses. It has to be one of the caller's
+  [entitlements](#entitlements), and defaults to the caller's default account. A
+  caller without accounts can run without one. Naming an account they may not use is
+  `403`.
+* `source` says where the code comes from: `{ "type": "ref", "ref": "..." }` for a git
+  ref the server checks out itself, or `{ "type": "upload", "snapshot": "..." }` for
+  the caller's working tree. The kinds an entitlement lists in `source` are the only
+  ones allowed, anything else is `403`.
+
+The body is JSON up to 64 KiB, and unknown fields are rejected. Each submitted run is
+logged with who submitted it, the account and the source.
+
+The events carry the sequence number as their `id`, so a client that lost the
+connection continues with the `Last-Event-ID` header (or `?after=<n>`) and misses
+nothing. The stream replays what happened and then follows the run until it is over;
+a finished run's events are replayed and the stream ends. Event types are `state`
+(`queued`, `running` and the final state, with the `error` of a failed run), `task`
+(a task started or finished) and `log` (a line of a task's output). A run that
+produces more than 5000 events is cut off with one `truncated` event, the state
+changes are always kept.
+
+> This server cannot execute runs yet: until a backend is wired in, an accepted run
+> fails at once with the reason `this server has no backend that can execute runs
+> yet`. What exists is the part around it, authorization, queueing, state and events.
+
 ## Discovery
 
 `GET /.well-known/hammerkit` needs no token and returns what the server is, so a
@@ -145,4 +198,4 @@ client can check it before signing in:
 ```
 
 `GET /healthz` answers `{"status":"ok"}` for a load balancer or a process manager.
-Every other path needs a token, and is `404` until runs are supported.
+Every other path needs a token.
