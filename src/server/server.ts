@@ -22,6 +22,8 @@ import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
 import { handleDefinitions } from './definitions-api'
 import { handleApprovals } from './approvals-api'
+import { handleProposals } from './proposals-api'
+import { ProposalRegistry } from './proposals'
 import { parseDuration } from '../utils/units'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
@@ -256,6 +258,7 @@ async function handle(
   config: ServerConfig,
   registry: RunRegistry,
   definitions: DefinitionStore,
+  proposals: ProposalRegistry,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -291,16 +294,20 @@ async function handle(
       default: grant.default,
       request: grant.request,
       publish: grant.publish,
+      propose: grant.propose,
     })
     return
   }
-  if (await handleDefinitions(config, definitions, log, principal, req, res, url)) {
+  if (await handleDefinitions(config, definitions, proposals, log, principal, req, res, url)) {
     return
   }
   if (await handleRuns(config, registry, definitions, log, principal, req, res, url)) {
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
+    return
+  }
+  if (await handleProposals(config, definitions, proposals, log, principal, req, res, url)) {
     return
   }
   send(res, 404, { error: 'not found' })
@@ -327,8 +334,12 @@ export async function startServer(
     maxWaiting: config.approvals.maxWaiting,
     approvalTimeout: parseDuration(config.approvals.timeout),
   })
+  const proposals = new ProposalRegistry({
+    maxWaiting: config.approvals.maxWaiting,
+    timeout: parseDuration(config.approvals.timeout),
+  })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, definitions, verifier, log, req, res).catch((e) => {
+    handle(config, registry, definitions, proposals, verifier, log, req, res).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return
@@ -365,6 +376,7 @@ export async function startServer(
   return {
     url: `${config.tls ? 'https' : 'http'}://${host}:${address.port}`,
     close: async () => {
+      proposals.close()
       await registry.close()
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()))

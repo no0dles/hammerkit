@@ -12,6 +12,9 @@ export interface Grant {
   default: string | null
   // the build files the caller may publish: names, or `*` for any
   publish: string[]
+  // the build files the caller may propose versions of, which someone who may
+  // publish them has to approve
+  propose: string[]
   // where the code may come from; the intersection over the matching entitlements
   // that name one, both when none does
   source: ('upload' | 'ref')[]
@@ -39,10 +42,14 @@ export function mayPublish(grant: Grant, name: string): boolean {
   return grant.publish.includes('*') || grant.publish.includes(name)
 }
 
+export function mayPropose(grant: Grant, name: string): boolean {
+  return grant.propose.includes('*') || grant.propose.includes(name)
+}
+
 // A caller who can neither run nor publish anything sees nothing of the server's
 // build files either. Admins see them, they have to know what they approve.
 export function maySeeDefinitions(grant: Grant): boolean {
-  return grant.accounts.length > 0 || grant.request.length > 0 || grant.publish.length > 0
+  return grant.accounts.length > 0 || grant.request.length > 0 || grant.publish.length > 0 || grant.propose.length > 0
 }
 
 // Admin of an account decides about the runs on it.
@@ -56,6 +63,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const accounts: string[] = []
   const requested: string[] = []
   const publish: string[] = []
+  const propose: string[] = []
   let defaultAccount: string | null = null
   let source: ('upload' | 'ref')[] | null = null
 
@@ -79,6 +87,11 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
         publish.push(name)
       }
     }
+    for (const name of entitlement.propose ?? []) {
+      if (!propose.includes(name)) {
+        propose.push(name)
+      }
+    }
     defaultAccount = defaultAccount ?? entitlement.default ?? null
     if (entitlement.source) {
       source = source ? source.filter((s) => entitlement.source?.includes(s)) : [...entitlement.source]
@@ -92,6 +105,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     accounts,
     request,
     publish,
+    propose,
     default: defaultAccount ?? (usable.length === 1 ? usable[0] : null),
     source: source ?? ['upload', 'ref'],
     matched,

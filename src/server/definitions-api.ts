@@ -3,7 +3,8 @@ import { bundleSchema, HASH_PATTERN, MAX_BUNDLE_BYTES } from '../remote/bundle'
 import { DefinitionError, DefinitionStore } from './definitions'
 import { readJson, send } from './http'
 import { Principal } from './oauth'
-import { getGrant, mayPublish, maySeeDefinitions } from './policy'
+import { getGrant, mayPropose, mayPublish, maySeeDefinitions } from './policy'
+import { ProposalError, ProposalRegistry } from './proposals'
 import { definitionName, ServerConfig } from './server-config'
 
 // A bundle is JSON text with escapes, so the body may be somewhat larger than the files.
@@ -12,7 +13,8 @@ const MAX_PUBLISH_BYTES = MAX_BUNDLE_BYTES * 2
 /**
  * The published build files:
  *
- *   PUT  /v1/definitions/<name>                 publish a bundle
+ *   PUT  /v1/definitions/<name>                 publish a bundle, or propose it when the
+ *                                               caller may only propose (answers 202)
  *   GET  /v1/definitions                        the names, with their latest version
  *   GET  /v1/definitions/<name>                 the versions of one
  *   GET  /v1/definitions/<name>/<hash|latest>   one version
@@ -21,6 +23,7 @@ const MAX_PUBLISH_BYTES = MAX_BUNDLE_BYTES * 2
 export async function handleDefinitions(
   config: ServerConfig,
   store: DefinitionStore,
+  proposals: ProposalRegistry,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -40,7 +43,7 @@ export async function handleDefinitions(
   }
 
   if (name !== undefined && version === undefined && req.method === 'PUT') {
-    await publish(config, store, log, principal, name, req, res)
+    await publish(config, store, proposals, log, principal, name, req, res)
     return true
   }
   if (req.method !== 'GET') {
@@ -83,6 +86,7 @@ export async function handleDefinitions(
 async function publish(
   config: ServerConfig,
   store: DefinitionStore,
+  proposals: ProposalRegistry,
   log: (line: string) => void,
   principal: Principal,
   name: string,
@@ -90,7 +94,8 @@ async function publish(
   res: ServerResponse
 ): Promise<void> {
   const grant = getGrant(config.entitlements, principal)
-  if (!mayPublish(grant, name)) {
+  const direct = mayPublish(grant, name)
+  if (!direct && !mayPropose(grant, name)) {
     log(`refuse publish iss=${principal.iss} sub=${principal.sub}: build file ${name} is not granted`)
     send(res, 403, { error: `you may not publish ${name}` })
     return
@@ -102,6 +107,21 @@ async function publish(
     return
   }
   try {
+    if (!direct) {
+      // a version can't run before it is approved, but it has to load, as it would
+      // have when published, so the approver is not asked about a broken one
+      const { version, existing } = await store.prepare(name, parsed.data, principal)
+      if (existing) {
+        send(res, 200, { ...existing, created: false })
+        return
+      }
+      const { proposal, created } = proposals.propose(version, parsed.data, principal)
+      log(
+        `propose ${name} ${proposal.hash} iss=${principal.iss} sub=${principal.sub} created=${created} tasks=${proposal.tasks.length}`
+      )
+      send(res, created ? 202 : 200, { ...proposal, created })
+      return
+    }
     const { version, created } = await store.publish(name, parsed.data, principal)
     log(
       `publish ${name} ${version.hash} iss=${principal.iss} sub=${principal.sub} created=${created} tasks=${version.tasks.length}`
@@ -111,6 +131,10 @@ async function publish(
     if (e instanceof DefinitionError) {
       log(`refuse publish iss=${principal.iss} sub=${principal.sub}: ${name} does not load`)
       send(res, 400, { error: `the build file does not load: ${e.message}` })
+      return
+    }
+    if (e instanceof ProposalError) {
+      send(res, 503, { error: e.message })
       return
     }
     throw e
