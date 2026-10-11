@@ -1,0 +1,16 @@
+---
+title: "Changelog 1.11.3"
+version: "1.11.3"
+date: "2026-10-04"
+---
+Includes 1.11.2, which has no release of its own.
+
+## Fixed
+- **A service's init never comes from the cache.** A recreated service used to skip
+  its init and lose the state the init sets up (roles, buckets, replica sets) while
+  the run reported success. Neither the default cache method nor `--cache` re-enables
+  the init's cache now.
+- **A service's dependencies run only when the service starts.** They always ran,
+  even when every task needing the service was a cache hit, so a cached run still
+  reset the service's data. They run once the service is starting and are skipped
+  when it ends without starting, or when all their dependents are outside the run.

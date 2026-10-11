@@ -3,9 +3,12 @@
   "version": "0.0.38",
   "private": true,
   "scripts": {
+    "prebuild": "node scripts/changelog.mjs",
     "build": "next build",
+    "predev": "node scripts/changelog.mjs",
     "dev": "next dev",
     "start": "serve out",
+    "pretypes:check": "node scripts/changelog.mjs",
     "types:check": "next typegen && tsc --noEmit"
   },
   "dependencies": {

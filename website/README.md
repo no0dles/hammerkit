@@ -13,7 +13,10 @@ npm run build     # static export to out/
 - `app/(home)` — the landing page and `/changelog`
 - `content/docs` — the documentation pages (MDX); the sidebar follows the
   `meta.json` files
-- `content/changelog` — one entry per release (`version`, `date` frontmatter)
+- `content/changelog` — one entry per release (`version`, `date` frontmatter).
+  `scripts/changelog.mjs` writes an `auto-*.mdx` entry (not committed) for every
+  version in the root `CHANGELOG.md` that has no hand-written `<version>.mdx`,
+  before `dev` and `build`; semantic-release writes that file on each release
 - `app/sitemap.ts`, `app/robots.ts` — `sitemap.xml` and `robots.txt`; search,
   `llms.txt` and per-page Markdown come with Fumadocs
 
