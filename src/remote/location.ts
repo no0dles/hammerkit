@@ -1,6 +1,6 @@
 import { Environment } from '../executer/environment'
 import { WorkTree } from '../planner/work-tree'
-import { HostServer, readHostConfig } from './host-config'
+import { HostServer, hasServer, readHostConfig } from './host-config'
 
 export interface LocationOptions {
   // --on <name>
@@ -43,7 +43,7 @@ export async function resolveRunLocation(
 }
 
 function lookup(servers: Record<string, HostServer>, name: string): RunLocation {
-  const server = servers[name]
+  const server = hasServer(servers, name) ? servers[name] : undefined
   if (!server) {
     throw new Error(`server ${name} is not registered, add it with: hammerkit remote add ${name} <url> --issuer <url>`)
   }

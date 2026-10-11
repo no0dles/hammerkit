@@ -1,5 +1,5 @@
-import { join } from 'path'
-import { statSync, readFileSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { Environment } from '../executer/environment'
 import { getAccessToken, getCredentialsPath, removeToken, saveToken } from './credentials'
@@ -86,6 +86,36 @@ describe('credentials', () => {
     await createTestCase('credentials-default', {}).setup(async (_cwd, env) => {
       delete env.processEnvs.HAMMERKIT_CREDENTIALS
       expect(getCredentialsPath(env)).toMatch(/hammerkit[\\/]credentials\.json$/)
+    })
+  })
+
+  it('does not follow a link left at the path of the temporary file', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    await withCredentials('credentials-symlink', async (env, file) => {
+      await saveToken(env, 'build', token())
+      const victim = join(dirname(file), 'victim')
+      writeFileSync(victim, 'untouched')
+      symlinkSync(victim, `${file}.${process.pid}.tmp`)
+      await saveToken(env, 'mac', token())
+      expect(readFileSync(victim, 'utf8')).toBe('untouched')
+      expect(readdirSync(dirname(file)).filter((f) => f.endsWith('.tmp') && !f.includes(`${process.pid}`))).toEqual([])
+    })
+  })
+
+  it('does not use a token file that others can read', async () => {
+    if (process.platform === 'win32') {
+      return
+    }
+    await withCredentials('credentials-open', async (env, file) => {
+      await saveToken(env, 'build', token())
+      chmodSync(file, 0o644)
+      await expect(getAccessToken(env, 'build', server, 5000)).rejects.toThrow('must belong to you and be private')
+      expect(existsSync(file)).toBe(true)
+      // signing in again replaces it with a private one
+      await saveToken(env, 'build', token())
+      expect(await getAccessToken(env, 'build', server, 5000)).toBe('secret-token')
     })
   })
 })

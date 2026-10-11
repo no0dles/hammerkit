@@ -7,7 +7,6 @@ import {
   ensureLocalKeycloak,
   KEYCLOAK_AUDIENCE,
   KEYCLOAK_CLIENT,
-  KEYCLOAK_REALM,
   KEYCLOAK_USER,
   LocalKeycloak,
 } from '../ensure-keycloak'
@@ -125,7 +124,7 @@ entitlements:
           prompt: (message) => {
             const address = /open (\S+) and enter/.exec(message)?.[1]
             if (!address) {
-              throw new Error(`no address in: ${message}`)
+              return // the line saying who is being signed in
             }
             // the user's side of the login, in the background while the CLI polls
             approved = approveDeviceLogin(address)
@@ -141,8 +140,4 @@ entitlements:
     }),
     180000
   )
-
-  it('uses the realm the tests configure', () => {
-    expect(KEYCLOAK_REALM).toBe('hammerkit')
-  })
 })

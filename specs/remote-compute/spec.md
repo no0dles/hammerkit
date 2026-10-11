@@ -109,7 +109,7 @@ hammerkit remote login <name>                      # phase B1, OAuth sign-in
 hammerkit remote accounts [name]                   # phase B1, service accounts assigned to me
 ```
 
-Registering a name again with another URL or issuer needs `--force`. `remote add` stores no credential. `remote login` checks the registered issuer against the server's discovery document, so `--issuer` is an assertion the server has to confirm before any identity provider is contacted. Login is the OAuth device grant with the client the server publishes; one short-lived access token is stored per server in `credentials.json` (mode 0600), bound to the URL and issuer, and no refresh token is kept (an OS keychain with refresh is a later option).
+Registering a name again with another URL or issuer needs `--force`. `remote add` stores no credential. `remote login` checks the registered issuer against the server's discovery document, so `--issuer` is an assertion the server has to confirm before any identity provider is contacted. Login is the OAuth device grant with the client the server publishes; one short-lived access token is stored per server in `credentials.json` (mode 0600), bound to the URL and issuer, and no refresh token is kept (an OS keychain with refresh is a later option). The client, audience and scope a login asks for are pinned in the host config at the first login (or by `remote add`), a server that later offers others is refused, and the token is checked for issuer and audience before it is sent to the server, so a hostile server can't turn `remote login` into a device-code phish for another service.
 
 ## Outputs and reading them (phase B1)
 

@@ -24,7 +24,7 @@ interface Setup {
 
 async function withLogin(
   name: string,
-  options: { flow?: Partial<TestDeviceFlow>; clientId?: boolean },
+  options: { flow?: Partial<TestDeviceFlow>; clientId?: boolean; scope?: string },
   fn: (setup: Setup) => Promise<void>
 ): Promise<void> {
   const flow: TestDeviceFlow = {
@@ -45,7 +45,7 @@ issuers:
   - issuer: "${idp.url}"
     audience: hammerkit
     ${options.clientId === false ? '' : 'clientId: hammerkit-cli'}
-    scope: "openid api://hammerkit/.default"
+    scope: "${options.scope ?? 'openid api://hammerkit/.default'}"
 entitlements:
   - subject: { iss: "${idp.url}", sub: alice }
     accounts: [op-payments-dev]
@@ -76,7 +76,15 @@ describe('deviceLogin', () => {
   it('shows the code, waits for the approval and returns a token the server accepts', async () => {
     await withLogin('device-login-ok', { flow: { pending: 2 } }, async (setup) => {
       const result = await login(setup)
-      expect(setup.prompts).toEqual([`To sign in, open ${setup.idp.url}/activate and enter the code ABCD-EFGH`])
+      expect(setup.prompts[0]).toContain(
+        'client hammerkit-cli, audience hammerkit, scope openid api://hammerkit/.default'
+      )
+      expect(setup.prompts[1]).toBe(`To sign in, open ${setup.idp.url}/activate and enter the code ABCD-EFGH`)
+      expect(result.pinned).toEqual({
+        clientId: 'hammerkit-cli',
+        audience: 'hammerkit',
+        scope: 'openid api://hammerkit/.default',
+      })
       expect(setup.sleeps).toEqual([1000, 1000, 1000])
       expect(result.expiresAt).toBeGreaterThan(Date.now() + 3000 * 1000)
 
@@ -195,6 +203,68 @@ describe('deviceLogin', () => {
     await withLogin('device-login-metadata', {}, async (setup) => {
       setup.idp.metadata = { issuer: 'https://other.example' }
       await expect(login(setup)).rejects.toThrow('describes itself as https://other.example')
+    })
+  })
+
+  it('refuses what the server offers when it differs from what is pinned', async () => {
+    await withLogin('device-login-pinned', {}, async (setup) => {
+      await expect(deviceLogin({ ...setup.host, clientId: 'azure-cli' }, { prompt: () => undefined })).rejects.toThrow(
+        'now asks for clientId "hammerkit-cli", but "azure-cli" is pinned'
+      )
+      await expect(
+        deviceLogin({ ...setup.host, audience: 'https://graph.example' }, { prompt: () => undefined })
+      ).rejects.toThrow('now asks for audience')
+      await expect(
+        deviceLogin({ ...setup.host, scope: 'https://graph.example/.default' }, { prompt: () => undefined })
+      ).rejects.toThrow('now asks for scope')
+      // the same values, pinned, sign in as usual
+      const pinned = { clientId: 'hammerkit-cli', audience: 'hammerkit', scope: 'openid api://hammerkit/.default' }
+      const result = await deviceLogin(
+        { ...setup.host, ...pinned },
+        { prompt: () => undefined, sleep: async () => undefined }
+      )
+      expect(result.pinned).toEqual(pinned)
+    })
+  })
+
+  it('does not send a token that is meant for something else to the server', async () => {
+    await withLogin('device-login-audience', {}, async (setup) => {
+      setup.flow.token = () =>
+        signToken(key, {
+          iss: setup.idp.url,
+          sub: 'alice',
+          aud: 'https://graph.microsoft.com',
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        })
+      await expect(login(setup)).rejects.toThrow('not meant for hammerkit, it is not sent to the server')
+      setup.flow.token = () => 'opaque-token'
+      await expect(login(setup)).rejects.toThrow('not meant for hammerkit')
+    })
+  })
+
+  it('never asks for a refresh token', async () => {
+    await withLogin(
+      'device-login-offline',
+      { scope: 'openid offline_access api://hammerkit/.default' },
+      async (setup) => {
+        const result = await login(setup)
+        expect(setup.flow.requests?.[0].scope).toBe('openid api://hammerkit/.default')
+        expect(result.pinned.scope).toBe('openid api://hammerkit/.default')
+      }
+    )
+  })
+
+  it('polls at least once a second, however low the issuer sets the interval', async () => {
+    await withLogin('device-login-interval', { flow: { interval: 0, pending: 1 } }, async (setup) => {
+      await login(setup)
+      expect(setup.sleeps).toEqual([1000, 1000])
+    })
+  })
+
+  it('does not follow an endpoint that redirects the device code elsewhere', async () => {
+    await withLogin('device-login-redirect', {}, async (setup) => {
+      setup.idp.metadata = { token_endpoint: `${setup.idp.url}/redirect` }
+      await expect(login(setup)).rejects.toThrow('unable to reach')
     })
   })
 })

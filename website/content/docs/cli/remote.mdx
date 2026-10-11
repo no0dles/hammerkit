@@ -30,7 +30,7 @@ in the working directory.
 
 | Command | What it does |
 | --- | --- |
-| `remote add <name> <url> --issuer <url>` | Register a server. `--issuer` is the OAuth issuer the server accepts tokens from. |
+| `remote add <name> <url> --issuer <url>` | Register a server. `--issuer` is the OAuth issuer the server accepts tokens from, written exactly as the `iss` of its tokens (some providers end it with a slash). `--client-id`, `--audience` and `--scope` pin what a login asks for, see [Signing in](#signing-in). |
 | `remote list` | Show the registered servers and which one is the default. |
 | `remote use <location>` | Set the default location: `local`, `auto` or a registered name. |
 | `remote remove <name>` | Forget a server. If it was the default, runs are local again. |
@@ -79,18 +79,31 @@ without a browser:
 
 ```
 $ hammerkit remote login build
+signing in to https://build.example.com through https://login.example.com
+  client hammerkit-cli, audience hammerkit, scope openid api://hammerkit/.default
 To sign in, open https://login.example.com/activate and enter the code ABCD-EFGH
 signed in to build as 4f1c2b
 service accounts: op-payments-dev, op-web-dev
 ```
 
 Open the address on any device, sign in as you normally do, and enter the code. The
-server tells hammerkit which identity provider client to use, so there is nothing to
-configure beyond `remote add`. The `--issuer` you registered has to be one the
+server tells hammerkit which identity provider client, audience and scope to use, so
+there is nothing to configure beyond `remote add`. The `--issuer` you registered has to be one the
 server accepts, otherwise the login stops before the browser step.
 
+The server is only trusted with that once. The first successful login pins the client,
+audience and scope in the host config, and a later login refuses a server that asks
+for something else (register it again with `remote add --force` if the change is
+expected). Look at the line printed before the code: a client or audience you do not
+recognise, such as one of a cloud provider's own APIs, means stop. To not rely on the
+first use, give them to `remote add` (`--client-id`, `--audience`, `--scope`), the
+values come from whoever runs the server. Before a token is sent to the server,
+hammerkit checks that it was issued by the registered issuer for the pinned audience,
+so a token for another service never leaves your machine. `offline_access` is dropped
+from the scope: no refresh token is requested.
+
 What is stored is one short-lived access token in `~/.hammerkit/credentials.json`
-(`HAMMERKIT_CREDENTIALS` picks another file), readable by you only. A refresh token
+(`HAMMERKIT_CREDENTIALS` picks another file), readable by you only (a file others can read is not used; hammerkit says how to fix it). A refresh token
 is not kept: when the token expires, `remote login` again. The token is bound to the
 URL and issuer it was issued for, so registering the name again for another server
 (`remote add --force`) does not send the old token there.

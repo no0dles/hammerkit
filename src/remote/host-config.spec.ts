@@ -5,6 +5,8 @@ import { environmentMock } from '../executer/environment-mock'
 import {
   addServer,
   getHostConfigPath,
+  hasServer,
+  pinLogin,
   normalizeServerUrl,
   readHostConfig,
   removeServer,
@@ -40,8 +42,44 @@ describe('host config', () => {
     const server = await addServer(environment, 'mac-mini', 'https://mac-mini.corp/', {
       issuer: 'https://idp.corp/',
     })
-    expect(server).toEqual({ url: 'https://mac-mini.corp', issuer: 'https://idp.corp' })
+    expect(server).toEqual({ url: 'https://mac-mini.corp', issuer: 'https://idp.corp/' })
     expect((await readHostConfig(environment)).servers['mac-mini']).toEqual(server)
+  })
+
+  it('keeps the issuer as spelled, because tokens carry it that way', async () => {
+    const server = await addServer(environment, 'a', 'https://a.corp', { issuer: 'https://tenant.auth0.example/' })
+    expect(server.issuer).toBe('https://tenant.auth0.example/')
+    expect((await addServer(environment, 'b', 'https://b.corp', { issuer: 'https://idp.corp' })).issuer).toBe(
+      'https://idp.corp'
+    )
+  })
+
+  it('pins what a login asks for, and treats a change as a different server', async () => {
+    const pins = { clientId: 'cli', audience: 'hammerkit', scope: 'openid' }
+    await addServer(environment, 'a', 'https://a.corp', { issuer: 'https://idp.corp', ...pins })
+    expect((await readHostConfig(environment)).servers.a).toMatchObject(pins)
+    await expect(
+      addServer(environment, 'a', 'https://a.corp', { issuer: 'https://idp.corp', ...pins, audience: 'other' })
+    ).rejects.toThrow('already registered')
+    await pinLogin(environment, 'b', pins)
+    await addServer(environment, 'c', 'https://c.corp', { issuer: 'https://idp.corp' })
+    await pinLogin(environment, 'c', pins)
+    expect((await readHostConfig(environment)).servers.c).toMatchObject(pins)
+  })
+
+  it('checks the url and issuer again when it reads the file', async () => {
+    const path = getHostConfigPath(environment)
+    await environment.file.createDirectory(join(path, '..'))
+    writeFileSync(path, 'servers:\n  a:\n    url: http://a.corp\n    issuer: https://idp.corp\n')
+    await expect(readHostConfig(environment)).rejects.toThrow('servers.a.url: the url must use https')
+    writeFileSync(path, 'servers:\n  a:\n    url: https://a.corp\n    issuer: https://user:pw@idp.corp\n')
+    await expect(readHostConfig(environment)).rejects.toThrow('must not contain credentials')
+  })
+
+  it('does not find inherited members as servers', async () => {
+    expect(hasServer({}, 'constructor')).toBe(false)
+    await expect(setDefaultLocation(environment, 'constructor')).rejects.toThrow('not registered')
+    await expect(removeServer(environment, 'toString')).rejects.toThrow('not registered')
   })
 
   it('registering the same server again is idempotent', async () => {

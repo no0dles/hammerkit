@@ -1,4 +1,5 @@
-import { chmod, mkdir, rename, writeFile } from 'fs/promises'
+import { randomBytes } from 'crypto'
+import { mkdir, open, rename, stat, unlink } from 'fs/promises'
 import { dirname, join } from 'path'
 import { Environment } from '../executer/environment'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
@@ -32,14 +33,37 @@ async function readAll(environment: Environment): Promise<Record<string, StoredT
   }
 }
 
-// Only the owner may read it, and it is replaced atomically.
+// Only the owner may read it, and it is replaced atomically. The temporary file
+// has a name nobody can guess and is created exclusively (never through a link
+// someone left behind), already private.
 async function writeAll(environment: Environment, all: Record<string, StoredToken>): Promise<void> {
   const path = getCredentialsPath(environment)
-  await mkdir(dirname(path), { recursive: true })
-  const temporary = `${path}.${process.pid}.tmp`
-  await writeFile(temporary, JSON.stringify(all, null, 2), { mode: 0o600 })
-  await chmod(temporary, 0o600)
-  await rename(temporary, path)
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  const temporary = `${path}.${randomBytes(8).toString('hex')}.tmp`
+  const file = await open(temporary, 'wx', 0o600)
+  try {
+    await file.writeFile(JSON.stringify(all, null, 2))
+  } finally {
+    await file.close()
+  }
+  try {
+    await rename(temporary, path)
+  } catch (e) {
+    await unlink(temporary).catch(() => undefined)
+    throw e
+  }
+}
+
+// A token that others can read is as good as published: it isn't used.
+async function assertPrivate(environment: Environment): Promise<void> {
+  const path = getCredentialsPath(environment)
+  if (process.platform === 'win32' || !(await environment.file.exists(path))) {
+    return
+  }
+  const info = await stat(path)
+  if ((info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid())) {
+    throw new Error(`${path} must belong to you and be private, fix it with: chmod 600 ${path}, or sign in again`)
+  }
 }
 
 export async function saveToken(environment: Environment, name: string, token: StoredToken): Promise<void> {
@@ -65,7 +89,9 @@ export async function getAccessToken(
   server: HostServer,
   now = Date.now()
 ): Promise<string> {
-  const stored = (await readAll(environment))[name]
+  await assertPrivate(environment)
+  const all = await readAll(environment)
+  const stored = Object.prototype.hasOwnProperty.call(all, name) ? all[name] : undefined
   const signIn = `sign in with: hammerkit remote login ${name}`
   if (!stored) {
     throw new Error(`not signed in to ${name}, ${signIn}`)

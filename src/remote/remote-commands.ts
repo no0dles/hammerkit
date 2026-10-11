@@ -4,7 +4,9 @@ import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import {
   addServer,
+  pinLogin,
   getHostConfigPath,
+  hasServer,
   HostServer,
   readHostConfig,
   removeServer,
@@ -36,10 +38,19 @@ export function registerRemoteCommands(program: Command, environment: Environmen
     .command('add <name> <url>')
     .description('register a server under a name that build files and --on can refer to')
     .addOption(new Option('--issuer <url>', 'OAuth issuer the server accepts tokens from').makeOptionMandatory())
+    .addOption(new Option('--client-id <id>', 'OAuth client to sign in with (pinned; default: what the server offers)'))
+    .addOption(new Option('--audience <audience>', 'audience of the token (pinned; default: what the server offers)'))
+    .addOption(new Option('--scope <scope>', 'scopes to request (pinned; default: what the server offers)'))
     .addOption(new Option('--force', 'point an already registered name at a different server').default(false))
     .action(
       guarded('Remote add was not successful', async (name: string, url: string, options) => {
-        const server = await addServer(environment, name, url, { issuer: options.issuer, force: options.force })
+        const server = await addServer(environment, name, url, {
+          issuer: options.issuer,
+          clientId: options.clientId,
+          audience: options.audience,
+          scope: options.scope,
+          force: options.force,
+        })
         environment.stdout.write(`added ${name}: ${server.url} (issuer ${server.issuer})\n`)
       })
     )
@@ -92,7 +103,7 @@ export function registerRemoteCommands(program: Command, environment: Environmen
   const getServer = async (name: string | undefined): Promise<{ name: string; server: HostServer }> => {
     const config = await readHostConfig(environment)
     const chosen = name ?? config.run.on
-    if (!chosen || !config.servers[chosen]) {
+    if (!chosen || !hasServer(config.servers, chosen)) {
       throw new Error(
         name
           ? `server ${name} is not registered, add it with: hammerkit remote add ${name} <url> --issuer <url>`
@@ -108,10 +119,11 @@ export function registerRemoteCommands(program: Command, environment: Environmen
     .action(
       guarded('Remote login was not successful', async (name: string) => {
         const { server } = await getServer(name)
-        const result = await deviceLogin(server, {
+        const { pinned, ...result } = await deviceLogin(server, {
           prompt: (message) => environment.stdout.write(`${message}\n`),
           signal: environment.abortCtrl.signal,
         })
+        await pinLogin(environment, name, pinned)
         await saveToken(environment, name, { url: server.url, issuer: server.issuer, ...result })
         try {
           const me = await getMe(server, result.accessToken)

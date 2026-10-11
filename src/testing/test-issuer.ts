@@ -124,6 +124,10 @@ export async function startTestIssuer(keys: TestKey[], device?: TestDeviceFlow):
           )
         }
       })
+    } else if (req.url === '/redirect') {
+      res.statusCode = 307
+      res.setHeader('location', `${issuer.url}/token`)
+      res.end()
     } else if (req.url === '/jwks') {
       issuer.fetches.jwks++
       res.end(JSON.stringify({ keys: issuer.keys.map((k) => k.jwk) }))

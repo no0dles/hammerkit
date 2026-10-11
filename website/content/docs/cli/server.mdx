@@ -82,7 +82,20 @@ OpenID discovery document and accepts a token only when
 
 Keys are cached for ten minutes, and fetched again, at most once a minute, when a
 token names a key the server does not know yet, so a rotation needs no restart. A
-refused token only gets `401 invalid token`; the reason goes to the server's log.
+refused token only gets `401 invalid token`; the reason goes to the server's log,
+with everything a caller sent quoted and stripped of control characters, so a caller
+can't forge log lines. Concurrent requests share one key fetch, a failing issuer is
+left alone for ten seconds, and the previous keys keep working for up to an hour
+while the issuer is down.
+
+Two things the server does not check, so set them up on the identity provider:
+
+* `aud` has to be an API audience for the server, not the OAuth client's own id, or an
+  ID token for that client would be accepted. The server does not look at the token
+  type (`typ`) or the authorized party (`azp`).
+* A `claims` entitlement matches any string claim as it finds it. It does not know
+  that `email` needs `email_verified`; match on `sub`, a group or a claim the
+  provider controls.
 
 ### Entitlements
 
