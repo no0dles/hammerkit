@@ -136,12 +136,12 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 |---|---|
 | A | Secret providers and per-task service accounts, local only (separate spec). |
 | B0 | This foundation: ADR-0008, this spec, the host config and `remote add / list / use / remove`. |
-| B1 | The `runner:` field and placement rules; `hammerkit` in server mode (host backend): OAuth resource server, policy, run registry, event streaming, snapshot upload and ref checkout, handles and `output`; `remote login`, `run --on`. |
+| B1 | The `runner:` field and placement rules (done); `hammerkit server` with config and discovery (done); then OAuth resource server and entitlement policy, `remote login`, run registry, event streaming, snapshot upload and ref checkout, `run --on`, handles and `output`. The discovery document makes `remote add --issuer` an assertion. |
 | B2 | Kubernetes backend: Jobs on node pools, namespace per user, in-cluster secret path, log streaming, upload dedupe, backend-side cache push. |
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 
 ## Open questions
 
-- The command that hosts the server: a documented task example is called `serve`, which a top-level `hammerkit serve` would shadow; candidates are `hammerkit server` or a subcommand under `remote`.
+- The command that hosts the server is `hammerkit server` (a top-level `hammerkit serve` would shadow a documented task example). Open for Pascal to rename before the release.
 - The discovery document format served by a server for `remote add`.
 - Which CI platforms are supported first (GitHub Actions OIDC, then GitLab).

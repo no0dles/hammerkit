@@ -1,0 +1,71 @@
+---
+title: "Server"
+description: "Run this machine as a hammerkit server that remote runs can be sent to."
+---
+<Callout type="warn">
+
+Experimental. The server answers a discovery request today. Accepting runs,
+OAuth sign-in and the entitlement policy arrive in follow-up releases, see the
+[remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
+
+</Callout>
+
+`server` turns a machine into the target of remote runs: a Mac mini for iOS builds,
+a Linux box with big CPUs, later a Kubernetes cluster. It reads its own config
+file, so it needs no build file.
+
+```bash
+hammerkit server --config /etc/hammerkit/server.yaml
+```
+
+The server runs until it is interrupted. `HAMMERKIT_SERVER_CONFIG` can stand in for
+`--config`.
+
+## Config
+
+The file belongs to whoever operates the server and is reviewed like code. Unknown
+keys are an error, so a typo is not silently ignored.
+
+```yaml
+listen:
+  host: 127.0.0.1   # default
+  port: 8480        # default
+tls:
+  cert: /etc/hammerkit/tls.crt
+  key: /etc/hammerkit/tls.key
+issuers:
+  - issuer: https://login.example.com
+    audience: hammerkit
+backend:
+  type: host
+  platform: { os: macos, arch: arm64 }   # detected when left out
+```
+
+| Key | What it does |
+| --- | --- |
+| `listen` | Interface and port. Port `0` picks a free one. |
+| `tls` | Certificate and key to serve https. |
+| `behindTlsProxy` | Set to `true` when a proxy in front terminates TLS. |
+| `issuers` | The OAuth issuers whose tokens are accepted, with the audience they must carry. At least one: OAuth is the only way to call the server. |
+| `backend` | Where tasks run. `host` is this machine, with the docker and local runtimes. `platform` is what the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. |
+
+Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
+Anywhere else the config needs `tls`, or `behindTlsProxy: true`.
+
+## Discovery
+
+`GET /.well-known/hammerkit` needs no token and returns what the server is, so a
+client can check it before signing in:
+
+```json
+{
+  "name": "hammerkit",
+  "version": "1.17.0",
+  "protocol": 1,
+  "issuers": ["https://login.example.com"],
+  "backend": { "type": "host", "platform": { "os": "macos", "arch": "arm64" } }
+}
+```
+
+`GET /healthz` answers `{"status":"ok"}` for a load balancer or a process manager.
+Every other path is `404` until runs are supported.
