@@ -1,8 +1,9 @@
 name: release
 # Every push to master is released from its commit messages (Conventional
 # Commits): fix/perf make a patch, feat a minor, a breaking change a major. It
-# bumps package.json, writes CHANGELOG.md, tags vX.Y.Z and creates the GitHub
-# release (config: .releaserc.json), then starts push.yaml for the tag.
+# bumps package.json, writes CHANGELOG.md and tags vX.Y.Z (config:
+# .releaserc.json), then starts push.yaml for the tag, which creates the GitHub
+# release together with its binaries.
 on:
   push:
     branches:
@@ -10,7 +11,7 @@ on:
 concurrency:
   group: release
 permissions:
-  contents: write # release commit, tag and GitHub release
+  contents: write # release commit and tag
   actions: write # starts push.yaml: a tag pushed with this token does not
 jobs:
   release:
