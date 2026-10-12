@@ -196,9 +196,12 @@ describe('kubernetes backend of a server', () => {
       expect(await left()).toEqual([])
 
       // the outputs went to the server's cache, so the next run of the same code hits
+      // on the task it asked for, and nothing runs again
       const second = await execute('run_k8s_two', version.hash)
       expect(second.error).toBeUndefined()
-      expect(second.events).toContainEqual({ type: 'task', task: 'build', state: 'cached' })
+      expect(second.events).toContainEqual({ type: 'task', task: 'check', state: 'cached' })
+      expect(second.events).not.toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+      expect(second.text).not.toContain('read hello from the checkout')
     })
   )
 })
