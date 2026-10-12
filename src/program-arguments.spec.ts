@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'fs'
 import { createTestCase } from './testing/test-case'
 import { runProgram } from './run-program'
 import { memoryStream } from './testing/test-streams'
+import { statusConsole } from './planner/work-item-status'
 
 // shell() forwards args to commander behind a script-name placeholder, see
 // program-commands.spec.ts
@@ -39,17 +40,20 @@ describe('program arguments after --', () => {
     'run hands them to the last command of the task, each one argument',
     async () => {
       const t = createTestCase('cmd-run-arguments', files)
+      const status = memoryStream()
       await t.setup(async (cwd, environment) => {
         // a copy of process.env is case-sensitive, and Windows names it Path: local
         // commands get PATH, as the real process.env answers it on every platform
         const processEnvs = { ...environment.processEnvs, PATH: process.env.PATH }
         await runProgram(
-          { ...environment, processEnvs },
+          { ...environment, processEnvs, status: statusConsole(status.stream, environment.secrets) },
           [HK, 'run', 'args', '--', ...ARGS, '--file', 'other.yaml'],
           true
         )
       })
       const dir = join(process.cwd(), 'temp', 'cmd-run-arguments')
+      // the task's log tells why when it wrote nothing
+      expect(existsSync(join(dir, 'out.json')) || status.read()).toBe(true)
       expect(JSON.parse(readFileSync(join(dir, 'out.json')).toString())).toEqual([...ARGS, '--file', 'other.yaml'])
       expect(existsSync(join(dir, 'pwned.txt'))).toBe(false)
     },
