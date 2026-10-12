@@ -1,6 +1,6 @@
 # Feature Specification: Remote Compute
 
-**Status**: Draft, implementation in progress (ADR-0009, ADR-0010). Delivered in phases; later phases are marked.
+**Status**: Draft, implementation in progress (ADR-0009, ADR-0010; sandboxes designed in ADR-0011). Delivered in phases; later phases are marked.
 
 **Input**: run tasks on machines the team operates, so a laptop or a coding agent keeps working locally while heavy or platform-specific work runs elsewhere, with outputs staying on the remote until someone asks for them, and with authorization decided by OAuth alone.
 
@@ -54,7 +54,9 @@ The server accepts several issuers (the company IdP and each CI platform).
 secretProviders:                  # commands, the operator's, never a build file's
   gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}'] }
 accounts:                         # the catalog; a secret names one of these
-  op-payments-dev:  { providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/dev.json } } } }
+  op-payments-dev:
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/dev.json } } }
+    source: [ref, upload, sandbox] # sandbox runs only for accounts that list it
   op-payments-prod:
     providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/prod.json } } }
     source: [ref]                 # production accounts only for reviewed code
@@ -62,16 +64,24 @@ accounts:                         # the catalog; a secret names one of these
 sources:                          # where code may come from, host/path patterns, most specific first
   - match: github.com/corp/*
     secret: { from: 'gsm:github-readonly-token', account: scm-read }   # a reserved account, no caller uses it
+    push: { secret: { from: 'gsm:github-agent-push', account: scm-push }, branches: ['agent/**'] }   # designed: sandbox push
 runtimes: [docker]                # what tasks may run on; `local` has to be allowed by name
 approvals: { timeout: 1h, maxWaiting: 100, cooldown: 10m }
 runs:
   env: { allow: [PATH, DOCKER_HOST] }   # the only variables of the server a run sees
   limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
   maxDuration: 1h
+  network: { level: open }       # designed: the most open network a task gets
+sandboxes:                        # designed, ADR-0011
+  runtimes: [docker]
+  network: { level: allow, hosts: [registry.npmjs.org] }
+  limits: { count: 5, bytes: 20Gi }
+  total: 500Gi
 entitlements:
   - subject: { iss: https://idp.corp, sub: 4f1c... }
     accounts: { op-payments-dev: use, op-payments-prod: request }
     repos: [github.com/corp/*]    # the repositories a ref run may name
+    sandboxes: true               # designed: may keep sandboxes of these repos
     builds: run                   # run | propose | publish, each includes the lower
   - group: { iss: https://idp.corp, name: release-managers }
     accounts: { op-payments-prod: use }
@@ -117,13 +127,19 @@ The server holds the build file; a run names a published build file and the task
 - Limits are part of the API from the start: 20,000 files, 32 MiB per file, 1 GiB per tree, 4 GiB per caller, nothing evicted on its own.
 - Not built: the client that walks the tree and sends the delta, `ref` plus a delta for tracked files, and the matcher with `!` exclusions on the Kubernetes upload path (a `// TODO` in `src/kubernetes/volumes.ts`).
 
-**Sandbox (design, not built).** The caller passes a git repository and a ref; the server fetches it into a directory it owns, which belongs to that caller and is not shared. Runs name the sandbox as their source and their tasks execute in that directory, authorized by the service account of the task as for any run. A sandbox stays until it is deleted; quotas limit what a caller keeps, nothing expires.
+**Sandbox (designed, not built; ADR-0011).** A sandbox is a caller's own checkout on the server, which runs published tasks. It is for an agent with no machine and for a person whose laptop should not build, not for production.
 
-- Creating one is a fetch, not a run: no container, no slot of the run ledger.
-- One run at a time per sandbox. The fetch credential is a service account's (named at creation), resolved by the server and never left in the checkout (no token in `.git/config`).
-- `source` on entitlements gains `sandbox` next to `ref` and `upload`: a sandbox can hold any local change, so production accounts do not list it.
-- A caller with no local files (an agent without a machine) needs typed file operations on the sandbox (tree, read, search, edit, diff); shell-like commands are a published build file's task that mounts the sandbox, not an API of their own.
-- Host mode keeps a sandbox as a directory. In Kubernetes mode it is a PVC attached to a task or service only while it runs: idle costs storage, not CPU or memory, `ReadWriteOnce` lets pods on one node share it, and a `ResourceQuota` on storage in the caller's namespace is the quota. Both are two implementations of one interface (create, attach, delete, usage), so the host version does not bake in a path on the server's disk.
+- **Create** (`POST /v1/sandboxes { repo, ref }`) resolves the ref to a commit and fetches it with the read credential of the operator's `sources`, like a ref run. It is a fetch, not a run: no container and no slot of the run limits. An entitlement with `sandboxes: true` may create sandboxes of its `repos`. A sandbox belongs to its caller (`404` for anybody else), stays until it is deleted (no TTL, nothing evicted), and counts against `sandboxes.limits` (count and bytes per caller, a total).
+- **Files.** Two ways in. The first is typed endpoints for clients without tools of their own (MCP): `tree`, `files` (`offset`/`limit`, numbered lines), `search` (ripgrep's parameters), `edits` (atomic batches of `replace` with `old_string`/`new_string`, `write`, `delete`, `move`, and `patch` as a git diff or an `apply_patch` body), and `changes` (summary, diff or patch against the base commit). The second is a raw surface for harnesses that bring their own tools and only swap the backend (pi's tool operations): read and write bytes, and stat. Every list, read and search is capped, with a total and a cursor. No symbolic link is followed, `.git/` and the upload deny list are never read or written, and edits while a run holds the sandbox are `409`.
+- **Runs** name `source: { type: sandbox, id }`. The published, pinned build file runs: its files are read from the run's private directory with the sandbox as their directory, so the sandbox's own `.hammerkit.yaml` is just a file. Rules for these runs:
+  - One run per sandbox at a time.
+  - Container runtimes only, unless the operator lists `local` in `sandboxes.runtimes`.
+  - The cache namespace is per owner.
+  - The run records the base commit and a hash of the diff it started from.
+- **Accounts** are used by sandbox runs only when their `source` lists `sandbox`; an account without `source` takes `ref` and `upload`, not `sandbox`.
+- **Shell.** A shell is a published task whose last command is `sh -c`, run with [arguments](../task-arguments/spec.md) (`options.args`). A task that reads secrets takes no arguments on a server, so a shell holds no account. Its network is capped by `sandboxes.network` ([network limits](../task-network/spec.md)).
+- **Work out**: first, a patch from `changes` that the caller turns into a branch. Later, `POST /v1/sandboxes/<id>/push { branch, message }` with the write credential of `sources[].push`, only to the branches it lists (`agent/**`). **Work in**: the `patch` edit, so a laptop's uncommitted work needs no second upload path.
+- **Storage** is one interface (create, attach to a run, files, usage, delete) with two implementations. On a host it is a directory. On Kubernetes it is a PVC in the caller's namespace, mounted only while a task or a short file-operation pod runs, so an idle sandbox costs storage only, and a `ResourceQuota` on storage is the quota. Kubernetes needs the task executor first.
 
 ## Approvals
 
@@ -199,8 +215,6 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 
 ## Open questions
-
-- Sandboxes: whether execution includes arbitrary commands or tasks only; whether the published build file or the sandbox's own `.hammerkit.yaml` runs (the first keeps task definitions out of an agent's reach and is the default); how the fetch credential is chosen.
 
 - The command that hosts the server is `hammerkit server` (a top-level `hammerkit serve` would shadow a documented task example). Open for Pascal to rename before the release.
 - The discovery document format served by a server for `remote add`.
