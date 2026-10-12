@@ -22,6 +22,7 @@ import { getWorkTaskRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
 import { parseDuration } from '../../utils/units'
 import { parseWorkResources } from '../work-resources'
+import { formatNetwork, parseWorkNetwork } from '../work-network'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -97,6 +98,8 @@ function parseTask(
       task.schema.account
     ),
     resources: parseWorkResources(task.schema.resources),
+    network: parseWorkNetwork(task.schema.network),
+    networkCeiling: null,
     runner: task.schema.runner ?? task.scope.schema.runner ?? null,
   }
 
@@ -113,6 +116,12 @@ function parseTask(
     if (fileSecret) {
       throw new Error(
         `task ${task.relativeName}: a local task takes secrets as env only (${getSecretName(fileSecret)})`
+      )
+    }
+    if (baseWorkNode.network.type !== 'open') {
+      throw new Error(
+        `task ${task.relativeName}: network ${formatNetwork(baseWorkNode.network)} needs a container, ` +
+          `hammerkit can't limit the network of a local task`
       )
     }
     return <LocalWorkTask>{

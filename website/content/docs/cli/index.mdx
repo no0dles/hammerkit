@@ -61,6 +61,7 @@ These options are shared by the task-running commands ([run](/docs/cli/execute),
 | `-l, --log <mode>` | `interactive` (local) / `live` (CI) | `interactive`, `live` or `grouped`. |
 | `--cache <method>` | `checksum` | `checksum`, `modify-date` or `none`. See [caching](/docs/task/caching). |
 | `--timeout <duration>` | – | Default [timeout](/docs/task#timeouts) for tasks without their own. |
+| `--network <level>` | – | The most any task or service of the run [reaches](/docs/task/network#a-ceiling-for-the-run) besides its needs: `none`, `open` or `allow:<host>,<host>`, whatever it declares. Fails with a local task in the run. |
 
 Label filters are always `key=value`; a key-only `-f dev` is rejected.
 

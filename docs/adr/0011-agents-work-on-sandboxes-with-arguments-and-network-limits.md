@@ -13,7 +13,7 @@
   - A shell is a task whose last command is `sh -c`; there is no exec endpoint.
   - On a server, a task that reads secrets takes no arguments, so a shell holds no account. A server never takes `--set`.
 - **Network limits are a field of every container task and service.**
-  - The levels are `none` and `open`, plus a host allowlist through a per-run egress proxy that fails closed. The services in `needs` are reachable at every level, since a task names them because it uses them.
+  - The levels are `none` and `open`, plus a host allowlist through an egress proxy per task or service that fails closed. The services in `needs` are reachable at every level, since a task names them because it uses them.
   - A ceiling can be set from outside the build file: `run --network` on a laptop, and `runs.network` and `sandboxes.network` on a server.
   - Local tasks can't be limited and are refused under a ceiling.
 - **Sandbox runs use containers only** unless the operator names `local`. The run process is not a boundary (ADR-0010), and a local task could read every other caller's sandbox on the same host.

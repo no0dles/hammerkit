@@ -29,6 +29,13 @@ describe('isOrphanedContainer', () => {
     expect(isOrphanedContainer(container('running', { ...labels, 'hammerkit-daemon': 'true' }), dead)).toBe(false)
   })
 
+  it('treats the egress proxy of a dead run as orphaned, but not one of a daemon service', () => {
+    const labels = { 'hammerkit-type': 'proxy', 'hammerkit-pid': '123', 'hammerkit-host': here }
+    expect(isOrphanedContainer(container('running', { ...labels, 'hammerkit-daemon': 'false' }), dead)).toBe(true)
+    expect(isOrphanedContainer(container('running', { ...labels, 'hammerkit-daemon': 'true' }), dead)).toBe(false)
+    expect(isOrphanedContainer(container('running', labels), alive)).toBe(false)
+  })
+
   it('keeps containers started on another machine', () => {
     const task = container('running', { 'hammerkit-type': 'task', 'hammerkit-pid': '123', 'hammerkit-host': 'other' })
     expect(isOrphanedContainer(task, dead)).toBe(false)
