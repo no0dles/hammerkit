@@ -1,4 +1,4 @@
-# 0011: A published build file is named by its hash only
+# 0012: A published build file is named by its hash only
 
 [ADR-0010](0010-a-server-run-is-derived-pinned-and-isolated.md) pins a run to the hash of a published build file. The first implementation also gave every build file a name of the publisher's choice (`PUT /v1/definitions/<name>`), with `latest`, a proposal that follows the latest version of its name (`stale` otherwise) and `remote diff` against it. The name protected nothing: whoever may publish or propose picks any name, so a new name starts a new line and a diff against "the previous version" shows what the proposer chose to compare with, not what changed.
 
