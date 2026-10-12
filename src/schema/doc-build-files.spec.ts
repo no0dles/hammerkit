@@ -1,7 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from 'fs'
 import { basename, join, relative } from 'path'
 import { parse as yamlParse } from 'yaml'
+import { ZodTypeAny } from 'zod'
 import { buildFileSchema } from './build-file-schema'
+import { serverConfigSchema } from '../server/server-config'
 import { createTestCase } from '../testing/test-case'
 import { createCli } from '../program'
 
@@ -44,6 +46,13 @@ const KNOWN_TOP_KEYS = new Set([
 // on its first line; the harness then asserts the schema REJECTS it.
 const EXPECT_INVALID = '# hammerkit:expect-invalid'
 
+// A block titled server.yaml (```yaml title="server.yaml") is the config of
+// `hammerkit server`, often only a part of it. Each of its top-level keys is
+// validated against that key of the server config schema. A block with `issuers`
+// is a whole config and is also checked as one, with the references between keys
+// (an entitlement naming an account).
+const SERVER_CONFIG_TITLE = 'server.yaml'
+
 // Directories that document a specific past version, not the current build-file
 // reference. Their snippets are expected to use the syntax of their release and
 // must not be validated against today's schema.
@@ -53,21 +62,6 @@ const HISTORICAL_DIRS = ['release-blog']
 // matched by a unique snippet of its body. Keep the reason — these are the only
 // blocks allowed to be unrecognized.
 const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
-  {
-    file: join('cli', 'server.mdx'),
-    snippet: 'audience: hammerkit',
-    reason: 'server config (hammerkit server --config), not a build file',
-  },
-  {
-    file: join('cli', 'server.mdx'),
-    snippet: 'release-managers',
-    reason: 'entitlements of the server config (hammerkit server --config), not a build file',
-  },
-  {
-    file: join('cli', 'server.mdx'),
-    snippet: 'coding-agent',
-    reason: 'entitlements of the server config (hammerkit server --config), not a build file',
-  },
   {
     file: join('cli', 'remote.mdx'),
     snippet: 'issuer: https://login.example.com',
@@ -103,6 +97,7 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
 interface YamlBlock {
   body: string
   startLine: number
+  title?: string
 }
 
 interface DocBlock extends YamlBlock {
@@ -135,6 +130,7 @@ function extractYamlBlocks(content: string): YamlBlock[] {
     if (!/^\s*```ya?ml(\s.*)?$/.test(lines[i])) {
       continue
     }
+    const title = /title="([^"]*)"/.exec(lines[i])?.[1]
     const start = i + 1
     const body: string[] = []
     let j = start
@@ -142,7 +138,7 @@ function extractYamlBlocks(content: string): YamlBlock[] {
       body.push(lines[j])
       j++
     }
-    blocks.push({ body: body.join('\n'), startLine: start + 1 })
+    blocks.push({ body: body.join('\n'), startLine: start + 1, title })
     i = j
   }
   return blocks
@@ -203,6 +199,36 @@ describe('docs build-file examples', () => {
           it(`${label} is a documented non-hammerkit block`, () => {
             // Listed in FOREIGN_BLOCKS with a reason — nothing to validate.
             expect(FOREIGN_BLOCKS[foreignIndex].reason).toBeTruthy()
+          })
+          return
+        }
+
+        if (block.title === SERVER_CONFIG_TITLE) {
+          it(`${label} is valid server config`, () => {
+            const parsed = yamlParse(block.body)
+            expect(parsed && typeof parsed === 'object' && !Array.isArray(parsed)).toBe(true)
+            const shape = serverConfigSchema.innerType().shape as Record<string, ZodTypeAny>
+            for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+              if (!shape[key]) {
+                throw new Error(`${relFile}:${block.startLine} has the unknown server config key ${key}`)
+              }
+              const result = shape[key].safeParse(value)
+              if (!result.success) {
+                throw new Error(
+                  `${relFile}:${block.startLine} fails the server config schema:\n` +
+                    result.error.issues.map((iss) => `  - ${[key, ...iss.path].join('.')}: ${iss.message}`).join('\n')
+                )
+              }
+            }
+            if ('issuers' in (parsed as Record<string, unknown>)) {
+              const result = serverConfigSchema.safeParse(parsed)
+              if (!result.success) {
+                throw new Error(
+                  `${relFile}:${block.startLine} is not a valid server config:\n` +
+                    result.error.issues.map((iss) => `  - ${iss.path.join('.')}: ${iss.message}`).join('\n')
+                )
+              }
+            }
           })
           return
         }

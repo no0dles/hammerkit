@@ -1,0 +1,72 @@
+---
+title: "Authentication"
+description: "The OAuth issuers a server accepts tokens from, and what it checks on every token."
+---
+OAuth is the only way to call a server: there are no API keys and no passwords. The
+`issuers` of the config list the identity providers whose tokens are accepted, at least one.
+
+```yaml title="server.yaml"
+issuers:
+  - issuer: https://login.example.com
+    audience: hammerkit
+    groupsClaim: groups   # default
+    clientId: hammerkit-cli
+    scope: openid api://hammerkit/.default
+  - issuer: https://token.actions.githubusercontent.com   # CI jobs, matched by claims
+    audience: hammerkit
+```
+
+| Key | What it does |
+| --- | --- |
+| `issuer` | The issuer, written exactly as the `iss` of its tokens (some providers end it with a slash). An https URL, http only for `localhost`. Its keys are fetched from its OpenID discovery document. |
+| `audience` | What the `aud` of a token has to contain: an API audience registered for the server. |
+| `groupsClaim` | The claim that lists the groups of a caller, `groups` by default. [Entitlements](/docs/remote-compute/entitlements) with `group` match on it. |
+| `clientId` | The public OAuth client that [`remote login`](/docs/cli/remote#signing-in) signs in with, by the device authorization grant. An issuer without one only takes tokens obtained elsewhere, such as a CI job's or an agent's own. |
+| `scope` | What `remote login` asks for, `openid` by default. |
+
+The server publishes the issuers with their client, audience and scope in its
+[discovery document](/docs/remote-compute#discovery), so `remote login` needs nothing
+configured beyond `remote add`.
+
+## What is checked
+
+Every call except discovery and the health check carries an OAuth access token as
+`Authorization: Bearer <token>`. The server fetches the issuer's keys from its
+OpenID discovery document and accepts a token only when
+
+* it is signed with `RS256`, `RS384`, `RS512`, `PS256`, `ES256`, `ES384` or `ES512`
+  (never `none` or a shared secret),
+* its `iss` is one of the configured issuers and its `aud` contains the configured
+  audience,
+* it has not expired and is already valid (a minute of clock skew is allowed), and
+* it has a `sub`.
+
+Keys are cached for ten minutes, and fetched again, at most once a minute, when a
+token names a key the server does not know yet, so a rotation needs no restart. A
+refused token only gets `401 invalid token`; the reason goes to the server's log,
+with everything a caller sent quoted and stripped of control characters, so a caller
+can't forge log lines. Concurrent requests share one key fetch, a failing issuer is
+left alone for ten seconds, and the previous keys keep working for up to an hour
+while the issuer is down.
+
+Two things the server does not check, so set them up on the identity provider:
+
+* `aud` has to be an API audience for the server, not the OAuth client's own id, or an
+  ID token for that client would be accepted. The server does not look at the token
+  type (`typ`) or the authorized party (`azp`).
+* A `claims` entitlement matches any string claim as it finds it. It does not know
+  that `email` needs `email_verified`; match on `sub`, a group or a claim the
+  provider controls.
+
+## Transport
+
+Plain http carries OAuth tokens, so `listen` on anything but the loopback interface needs
+`tls` (a certificate and key) or `behindTlsProxy: true` when a proxy in front terminates
+TLS. A config without either is refused at startup.
+
+```yaml title="server.yaml"
+listen: { host: 0.0.0.0, port: 8480 }
+tls:
+  cert: /etc/hammerkit/tls.crt
+  key: /etc/hammerkit/tls.key
+```

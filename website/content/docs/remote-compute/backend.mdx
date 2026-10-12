@@ -1,0 +1,45 @@
+---
+title: "Backend"
+description: "Where the tasks of a run execute, what the machine offers and which runtimes tasks may use."
+---
+`backend` says where the tasks of runs execute. Today that is `host`: this machine, with the
+same engine as `hammerkit run`. `runtimes` says which runtimes of that engine tasks may use.
+
+```yaml title="server.yaml"
+backend:
+  type: host
+  platform: { os: macos, arch: arm64 }   # detected when left out
+runtimes: [docker]   # what tasks may run on, docker by default
+```
+
+| Key | What it does |
+| --- | --- |
+| `backend.type` | `host`, this machine. It is the only backend so far and the default. |
+| `backend.platform` | What the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. Detected when left out. Clients read it from the [discovery document](/docs/remote-compute#discovery). |
+| `runtimes` | What tasks may run on, see [Runtimes](#runtimes). |
+
+## Runtimes
+
+`runtimes` lists what tasks may run on: `docker` (containers, the default) and `local`
+(commands on this machine as the user of the server, which have to be allowed by name).
+
+```yaml title="server.yaml"
+runtimes: [docker, local]
+```
+
+A build file with a task on a runtime that is not listed is refused when it is published
+or proposed, see [What a build file may not do](/docs/remote-compute/build-files#what-a-build-file-may-not-do).
+The server logs a warning at startup when `local` is allowed. A container task uses the
+docker daemon of the server's environment, so name `DOCKER_HOST` in
+[`runs.env.allow`](/docs/remote-compute/runs#config) when it is not the default.
+
+## One server is one trust level
+
+The process of a run is not a sandbox. It runs as the user
+of the server, a `local` task reads everything that user can read, and a container task can
+use the docker daemon the server is configured for. Accounts keep credentials apart (a task
+only reads the secrets of the accounts its run was admitted for), but they do not keep code
+apart on one machine. Do not mix production and untrusted agents on one server: run
+them on different servers, each with the accounts of its own level, and with `local` only on
+a server whose users you trust with the machine. The storage directory and the other runs of
+a server are inside what a `local` task can read.

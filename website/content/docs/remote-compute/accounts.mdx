@@ -1,0 +1,97 @@
+---
+title: "Accounts"
+description: "The service accounts of the operator, the secret providers that read secrets as them, and which code may use them."
+---
+A service account is a name the operator defines for one set of credentials, such as the
+test or the production key of a team. The credentials are files and variables of the
+operator's machine, they never reach the config: an account gives each secret provider
+command the environment that makes it act as that account.
+
+```yaml title="server.yaml"
+secretProviders:
+  gsm:
+    command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}']
+accounts:
+  op-payments-dev:
+    description: Payments, test secrets
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-dev.json } } }
+  op-payments-prod:
+    description: Payments, production
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-prod.json } } }
+    source: [ref]                   # only from reviewed code
+    refs: [main, 'release/*']       # and only from these branches
+  scm-read:                         # reads the repositories, no entitlement may name it
+    description: Read-only access to source repositories
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/scm-read.json } } }
+```
+
+| Key | What it does |
+| --- | --- |
+| `description` | Shown to callers in `GET /v1/accounts` and `remote accounts`, up to 200 characters. |
+| `providers` | Per secret provider, the `env` its command runs with when it reads a secret as this account. The provider has to be declared under `secretProviders`. |
+| `source` | Where the code of a run using the account may come from, see [Restricting the code](#restricting-the-code). |
+| `refs` | The branches or tags such a run may start from. |
+
+An account name starts with a letter and holds letters, digits, `-` and `_`.
+[Entitlements](/docs/remote-compute/entitlements) say who may `use` or `request` an
+account. An account a [source](/docs/remote-compute/sources) reads repositories with is the
+server's own: no entitlement may name it and no build file may read a secret as it.
+
+## Secret providers
+
+`secretProviders` are the commands that read secrets, the same as the `secretProviders` of
+a build file, see [Secret providers](/docs/task/secret-providers): a `command` as a list of
+arguments, run without a shell, where `{{ref}}` is replaced by the reference of the secret,
+an optional static `env` and a `timeout` (`30s` by default). Only the operator declares them;
+a published build file can not.
+
+## How a run gets its accounts
+
+The secrets in a published build file say which account each is read as (`account:` on the secret), and the server
+derives from that which accounts a run uses: a task without secrets uses none and holds
+no credentials. Nothing in a run request, no default and no `account` on a task or
+service chooses one, so the person who asks for a run cannot pick the account they
+prefer.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  test:
+    cmds: [npm test]            # no secrets, no account
+  deploy:
+    secrets:
+      - from: gsm:kube-token
+        account: op-payments-prod
+        env: KUBE_TOKEN
+    cmds: [./deploy.sh]
+```
+
+## Restricting the code
+
+An account can limit where the code of a run that uses it comes from:
+
+* `source`: where the code of a run using the account may come from, `upload` for
+  the caller's working tree and `ref` for a git ref. Both when left out.
+* `refs`: the branches or tags (`release/*` matches one level) such a run may start
+  from. It needs `source: [ref]`, and a bare commit is refused because it names no
+  branch.
+
+```yaml title="server.yaml"
+accounts:
+  op-payments-prod:
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-prod.json } } }
+    source: [ref]
+    refs: [main, 'release/*']
+```
+
+A run that breaks either rule is refused with `403` when it is submitted. Approving a run
+or a build file does not approve the code its commands execute, so an account that matters
+should be limited to `source: [ref]` and the branches that are reviewed.
+
+## Secrets on a server
+
+Because the account is chosen by the published file, a server applies stricter rules
+to secrets than a local run does: a provider secret names its account (`account:`
+is required, a task's `account:` and `default: true` are not used), `file:` secrets
+are refused, and an `env:` secret may only read a variable listed in `runs.env.allow`.
+A build file that declares `secretProviders` or `secretAccounts` is refused, and so is
+a project `.env` file read: the operator's providers and accounts are the only ones.
