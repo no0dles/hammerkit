@@ -125,8 +125,8 @@ describe('HostExecutor', () => {
     expect(logs.join('\n')).toContain('hello')
     expect(logs.join('\n')).toContain('published')
     expect(logs.join('\n')).not.toContain('from-the-repository')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'running' })
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'running' }))
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
   })
 
   it('does not hand its own environment to the commands', async () => {
@@ -157,7 +157,7 @@ describe('HostExecutor', () => {
     const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
     expect(text).toContain('token=')
     expect(text).not.toContain('the-token-value')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
   })
 
   it('refuses a run that would use an account it was not admitted for, before anything starts', async () => {
@@ -183,7 +183,15 @@ describe('HostExecutor', () => {
     })
     const { events, error } = await execute(run(hash))
     expect(error?.message).toBe('build failed')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'failed' })
+    // the exit code of the command that failed (on Windows the redirection fails first,
+    // run-worker.spec.ts checks the value), and how long it ran
+    expect(events).toContainEqual({
+      type: 'task',
+      task: 'build',
+      state: 'failed',
+      exitCode: expect.any(Number),
+      durationMs: expect.any(Number),
+    })
   })
 
   it('runs the tasks in the order they were named, and stops at the first failure', async () => {
@@ -203,7 +211,7 @@ describe('HostExecutor', () => {
     })
     const { events, error } = await execute(run(hash, { tasks: [], options: { filter: ['group=ci'] } }))
     expect(error).toBeUndefined()
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
     expect(events.filter((e) => e.type === 'task' && e.task === 'other')).toEqual([])
   })
 
