@@ -1,4 +1,4 @@
-import { Bundle } from '../remote/bundle'
+import { Annotations, Bundle } from '../remote/bundle'
 import { DefinitionVersion, TaskPlan } from './definitions'
 import { Principal } from './oauth'
 import { formatDuration } from '../utils/units'
@@ -22,6 +22,8 @@ export interface Proposal {
   // besides being allowed to publish
   missing: string[]
   plan: Record<string, TaskPlan>
+  // where the proposer says it comes from, kept when it is published
+  annotations?: Annotations
   proposedBy: Identity
   createdAt: string
   // the proposal expires if it still waits then
@@ -115,6 +117,7 @@ export class ProposalRegistry {
       accounts: version.accounts ?? [],
       missing,
       plan: version.plan ?? {},
+      ...(version.annotations ? { annotations: { ...version.annotations } } : {}),
       proposedBy: { iss: proposer.iss, sub: proposer.sub },
       createdAt: new Date(this.now()).toISOString(),
       expiresAt: new Date(this.now() + this.timeout).toISOString(),

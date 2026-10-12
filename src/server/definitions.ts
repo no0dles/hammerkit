@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, rename, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { Environment } from '../executer/environment'
-import { Bundle, hashBundle, HASH_PATTERN } from '../remote/bundle'
+import { Annotations, Bundle, hashBundle, HASH_PATTERN } from '../remote/bundle'
 import { DefinitionInputs, DefinitionError, PlanPolicy, planBundle, TaskPlan } from './plan'
 
 export interface DefinitionVersion {
@@ -13,6 +13,8 @@ export interface DefinitionVersion {
   publishedBy: { iss: string; sub: string }
   // when somebody else proposed it, who approved it
   approvedBy?: { iss: string; sub: string }
+  // where the publisher says it comes from, as of its first publish
+  annotations?: Annotations
   // what a run can ask for
   tasks: string[]
   services: string[]
@@ -137,7 +139,7 @@ export class DefinitionStore {
     bundle: Bundle,
     publisher: { iss: string; sub: string },
     // a proposal is read before anybody trusts it: it may not make the server fetch
-    options: { noRemote?: boolean } = {}
+    options: { noRemote?: boolean; annotations?: Annotations } = {}
   ): Promise<{ version: DefinitionVersion; existing?: DefinitionVersion }> {
     const hash = hashBundle(bundle)
     const existing = this.find(hash)
@@ -154,6 +156,9 @@ export class DefinitionStore {
         entry: bundle.entry,
         publishedAt: new Date(this.now()).toISOString(),
         publishedBy: { iss: publisher.iss, sub: publisher.sub },
+        ...(options.annotations && Object.keys(options.annotations).length > 0
+          ? { annotations: { ...options.annotations } }
+          : {}),
         tasks,
         services,
         inputs,
@@ -163,13 +168,15 @@ export class DefinitionStore {
     }
   }
 
-  // Publishing what already is there changes nothing and says so.
+  // Publishing what already is there changes nothing and says so, its annotations
+  // included: they stay those of the first publish.
   async publish(
     bundle: Bundle,
     publisher: { iss: string; sub: string },
-    approvedBy?: { iss: string; sub: string }
+    options: { approvedBy?: { iss: string; sub: string }; annotations?: Annotations } = {}
   ): Promise<{ version: DefinitionVersion; created: boolean }> {
-    const prepared = await this.prepare(bundle, publisher)
+    const { approvedBy } = options
+    const prepared = await this.prepare(bundle, publisher, { annotations: options.annotations })
     if (prepared.existing) {
       return { version: prepared.existing, created: false }
     }

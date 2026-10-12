@@ -1,0 +1,88 @@
+import { execFile } from 'child_process'
+import { hostname, userInfo } from 'os'
+import { dirname, relative, resolve, sep } from 'path'
+import { promisify } from 'util'
+import { normalizeRepo } from '../server/repo'
+import { Annotations, annotationsSchema } from './bundle'
+
+const execFileAsync = promisify(execFile)
+
+async function git(cwd: string, ...args: string[]): Promise<string | undefined> {
+  try {
+    const value = (await execFileAsync('git', args, { cwd, timeout: 5_000 })).stdout.trim()
+    return value || undefined
+  } catch {
+    return undefined
+  }
+}
+
+// `host/path` of a remote, or nothing: a url that is neither https, ssh nor
+// `user@host:path` is left out, so a credential in it never leaves the machine.
+export function remoteRepo(url: string): string | undefined {
+  const scp = /^[\w.-]+@([\w.-]+):(?!\/)(.+)$/.exec(url)
+  if (scp) {
+    return normalizeRepo(`${scp[1]}/${scp[2]}`) ?? undefined
+  }
+  try {
+    const parsed = new URL(url)
+    if (!['https:', 'ssh:'].includes(parsed.protocol)) {
+      return undefined
+    }
+    return normalizeRepo(`${parsed.hostname}${parsed.pathname}`) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Where a build file is published from: its path in its repository (or on this
+// machine, outside of one), the repository and commit, this machine and its user.
+// What can not be found is left out.
+export async function collectAnnotations(fileName: string): Promise<Annotations> {
+  const path = resolve(fileName)
+  const cwd = dirname(path)
+  const annotations: Annotations = {}
+  const root = await git(cwd, 'rev-parse', '--show-toplevel')
+  annotations.path = root ? relative(resolve(root), path).split(sep).join('/') : path
+  if (root) {
+    const remote = await git(cwd, 'remote', 'get-url', 'origin')
+    const repo = remote ? remoteRepo(remote) : undefined
+    const commit = await git(cwd, 'rev-parse', 'HEAD')
+    if (repo) {
+      annotations.repo = repo
+    }
+    if (commit) {
+      annotations.commit = commit
+    }
+  }
+  annotations.machine = hostname()
+  try {
+    annotations.user = userInfo().username
+  } catch {
+    // a user without an entry in the password database
+  }
+  return Object.fromEntries(Object.entries(annotations).filter(([, value]) => value))
+}
+
+// `--annotation key=value` sets one, `key=` leaves it out.
+export function applyAnnotations(annotations: Annotations, options: string[]): Annotations {
+  const result = { ...annotations }
+  for (const option of options) {
+    const index = option.indexOf('=')
+    if (index <= 0) {
+      throw new Error(`${option} is not an annotation, write it as key=value`)
+    }
+    const key = option.slice(0, index)
+    const value = option.slice(index + 1)
+    if (value) {
+      result[key] = value
+    } else {
+      delete result[key]
+    }
+  }
+  const parsed = annotationsSchema.safeParse(result)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    throw new Error(`${issue.path.length > 0 ? `annotation ${issue.path.join('.')}` : 'annotations'}: ${issue.message}`)
+  }
+  return parsed.data
+}

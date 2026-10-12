@@ -184,6 +184,19 @@ describe('proposals api', () => {
     })
   })
 
+  it('keeps what the proposer says about where it comes from when it is published', async () => {
+    await withApi('proposals-api-annotations', '', async (api) => {
+      const from = { repo: 'github.com/corp/payments', machine: 'agent-box', user: 'agent' }
+      const response = await api.call('POST', '/v1/definitions', { sub: 'agent', body: { files, annotations: from } })
+      const proposal = await response.json()
+      expect(proposal).toMatchObject({ state: 'waiting', annotations: from })
+      expect((await (await api.call('GET', '/v1/proposals')).json()).proposals[0].annotations).toEqual(from)
+      expect((await api.call('POST', path(proposal.hash, '/approve'))).status).toBe(200)
+      const published = await (await api.call('GET', `/v1/definitions/${proposal.hash}`)).json()
+      expect(published).toMatchObject({ publishedBy: { sub: 'agent' }, approvedBy: { sub: 'dev' }, annotations: from })
+    })
+  })
+
   it('drops a rejected version with the reason, and asks to wait before it is proposed again', async () => {
     await withApi('proposals-api-reject', '', async (api) => {
       const proposal = await (await api.publish('agent', files)).json()

@@ -44,6 +44,7 @@ so they work with or without a build file in the working directory.
 | `remote logout <name>` | Forget the sign-in. |
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
 | `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). |
+| `remote versions [server]` | List the published versions, newest first, with who published them, where they come from and whether they were yanked. `--filter key=value` (repeatable) keeps the ones with that [annotation](/docs/remote-compute/build-files#annotations). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
 | `remote show <run or hash> [server]` | Show a run that waits for your approval, or a proposed version, in full: per task the commands, image, secrets and accounts, and every file of a proposed version, see [Approving runs](#approving-runs) and [Proposing](#proposing-a-version). |
 | `remote proposals [server]` | List the proposed versions of build files you made or may approve, see [Proposing](#proposing-a-version). |
@@ -95,6 +96,7 @@ who runs them. `remote publish` sends yours:
 $ hammerkit remote publish build
 published to build: sha256:9f2c61d0... (3 files)
 tasks and services: build, deploy, more:lint
+from: path=.hammerkit.yaml repo=github.com/corp/payments commit=4be1a07c... machine=ci-runner-7 user=runner
 ```
 
 It reads the build file with the parser of a run and sends it together with every
@@ -106,6 +108,22 @@ the bundle, computed here the same way the server computes it, so the same files
 always have the same version. That hash is the only name the version has: a run
 names it, there is no `latest`. Publishing what a server already has says `already
 published` and changes nothing.
+
+With the bundle go [annotations](/docs/remote-compute/build-files#annotations) that say
+where it comes from, the `from:` line: the path of the build file in its git repository,
+the repository and commit, this machine and your user name. They are not part of the
+hash. `--annotation key=value` adds one or replaces one, `--annotation user=` leaves one
+out, and it can be given more than once. `remote versions` lists what a server has and
+finds it by them:
+
+```
+$ hammerkit remote versions build --filter repo=github.com/corp/payments
+build: 1 published
+sha256:9f2c61d0...  published by ci at 2026-10-12T20:31:00.000Z
+  from: path=.hammerkit.yaml repo=github.com/corp/payments commit=4be1a07c... machine=ci-runner-7 user=runner
+  tasks and services: build, deploy, more:lint
+  accounts: op-payments-prod
+```
 
 You need `builds: publish` on the server, see
 [entitlements](/docs/remote-compute/entitlements). A build file that reads secrets as an
@@ -131,6 +149,7 @@ The one who may publish reads the whole version before deciding:
 $ hammerkit remote proposals build
 build: 1 proposed
 sha256:4be1a07c...  proposed by coding-agent, waits for your approval
+  from: path=.hammerkit.yaml repo=github.com/corp/payments machine=agent-sandbox-3 user=agent
   tasks and services: build, deploy, more:lint
   accounts: op-payments-prod, the proposer does not use op-payments-prod
   decide before 2026-10-11T11:41:00.000Z

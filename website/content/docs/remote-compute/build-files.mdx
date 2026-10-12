@@ -48,13 +48,43 @@ Whoever reviews a version reads all of it, its [plan](#plan-and-accounts) and it
 | Call | What it does |
 | --- | --- |
 | `POST /v1/definitions` | Publish a bundle. Needs `builds: publish`, else `403`. With `builds: propose`, or when the bundle names accounts the caller does not `use`, it is a [proposal](#proposing-a-version) and answers `202`. The answer carries the `hash`. |
-| `GET /v1/definitions` | Every version, newest first, with who published (and approved) it and when, the tasks and services it has, the `accounts` it uses and whether it was yanked. |
+| `GET /v1/definitions` | Every version, newest first, with who published (and approved) it and when, its [annotations](#annotations), the tasks and services it has, the `accounts` it uses and whether it was yanked. `?repo=github.com/corp/payments&machine=ci-7` keeps the versions with those annotations. |
 | `GET /v1/definitions/<hash>` | One version, with its `plan` and what each task works on (`inputs`). |
 | `GET /v1/definitions/<hash>/files` | The files of one version, to see what would run. |
 | `POST /v1/definitions/<hash>/yank` | Pull a version back, see [Yanking](#yanking-a-version). The body is optional: `{ "reason": "..." }`. |
 | `POST /v1/definitions/<hash>/unyank` | Let a yanked version go on. Needs `builds: publish`. |
 
 Reading needs a token and at least one service account or `builds` level. Versions are kept in the `storage` directory and survive a restart.
+
+## Annotations
+
+Without names, a version says where it comes from with annotations the publisher sends
+next to the bundle, so the versions of one repository or one machine can be found, and
+cleaned up, later:
+
+```json
+{
+  "entry": ".hammerkit.yaml",
+  "files": { ".hammerkit.yaml": "..." },
+  "annotations": {
+    "path": "web/.hammerkit.yaml",
+    "repo": "github.com/corp/payments",
+    "commit": "4be1a07c...",
+    "machine": "ci-runner-7",
+    "user": "runner"
+  }
+}
+```
+
+`remote publish` fills in `path` (the build file's path in its git repository, or on the
+machine outside of one), `repo` (the `origin` remote as `host/path`, left out when it is
+not an https or ssh address), `commit`, `machine` and `user`. Any other key works too: up
+to 20, lower case letters, digits, `.`, `_` and `-`, each value up to 500 characters.
+
+Annotations are not part of the hash, so the same files sent from two machines are one
+version, and it keeps the annotations of its first publish (a proposal keeps the
+proposer's when it is approved). The server stores them as they were sent: they identify
+a version, they prove nothing. Who published it is `publishedBy`, from the token.
 
 ## Inputs
 

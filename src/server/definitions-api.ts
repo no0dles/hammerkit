@@ -1,6 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'http'
 import { z } from 'zod'
-import { bundleSchema, HASH_PATTERN, MAX_BUNDLE_BYTES } from '../remote/bundle'
+import { annotationsSchema, bundleSchema, HASH_PATTERN, MAX_BUNDLE_BYTES } from '../remote/bundle'
 import { DefinitionError, DefinitionStore, DefinitionVersion } from './definitions'
 import { readJson, send } from './http'
 import { Principal, quote } from './oauth'
@@ -15,8 +15,11 @@ const MAX_PUBLISH_BYTES = MAX_BUNDLE_BYTES * 2
  * The published build files, each version named by its hash:
  *
  *   POST /v1/definitions                 publish a bundle, or propose it when the caller
- *                                        may only propose (answers 202); answers its hash
- *   GET  /v1/definitions                 the versions, newest first
+ *                                        may only propose (answers 202); answers its hash.
+ *                                        Beside entry and files the body may carry
+ *                                        `annotations`, which are not part of the hash
+ *   GET  /v1/definitions                 the versions, newest first; `?<key>=<value>`
+ *                                        keeps the ones with those annotations
  *   GET  /v1/definitions/<hash>          one version
  *   GET  /v1/definitions/<hash>/files    its files
  *   POST /v1/definitions/<hash>/yank     pull it back (body: optional {reason})
@@ -68,7 +71,13 @@ export async function handleDefinitions(
   }
 
   if (hash === undefined) {
-    send(res, 200, { definitions: store.list().map(toSummary) })
+    const wanted = [...url.searchParams.entries()]
+    send(res, 200, {
+      definitions: store
+        .list()
+        .filter((version) => wanted.every(([key, value]) => version.annotations?.[key] === value))
+        .map(toSummary),
+    })
     return true
   }
   const found = store.find(hash)
@@ -87,8 +96,19 @@ export async function handleDefinitions(
 
 // What the list shows of a version: who published it and when, and what it runs as.
 function toSummary(version: DefinitionVersion) {
-  const { hash, entry, publishedAt, publishedBy, approvedBy, tasks, services, accounts, yanked } = version
-  return { hash, entry, publishedAt, publishedBy, approvedBy, tasks, services, accounts: accounts ?? [], yanked }
+  const { hash, entry, publishedAt, publishedBy, approvedBy, annotations, tasks, services, accounts, yanked } = version
+  return {
+    hash,
+    entry,
+    publishedAt,
+    publishedBy,
+    approvedBy,
+    annotations: annotations ?? {},
+    tasks,
+    services,
+    accounts: accounts ?? [],
+    yanked,
+  }
 }
 
 const yankSchema = z.object({ reason: z.string().max(500).optional() }).strict()
@@ -150,7 +170,17 @@ async function publish(
     send(res, 403, { error: 'you may not publish build files, it needs builds: propose or publish' })
     return
   }
-  const parsed = bundleSchema.safeParse(await readJson(req, MAX_PUBLISH_BYTES))
+  const body = await readJson(req, MAX_PUBLISH_BYTES)
+  // the annotations ride along with the bundle, they are not part of it
+  const { annotations: said, ...rest } = body && typeof body === 'object' ? body : ({} as any)
+  const annotated = annotationsSchema.optional().safeParse(said)
+  if (!annotated.success) {
+    const issue = annotated.error.issues[0]
+    send(res, 400, { error: `${['annotations', ...issue.path].join('.')}: ${issue.message}` })
+    return
+  }
+  const annotations = annotated.data
+  const parsed = bundleSchema.safeParse(rest)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
     send(res, 400, { error: `${issue.path.join('.') || 'request'}: ${issue.message}` })
@@ -161,6 +191,7 @@ async function publish(
     // have when published, so the approver is not asked about a broken one
     const { version, existing } = await store.prepare(parsed.data, principal, {
       noRemote: !mayPublish(grant),
+      annotations,
     })
     if (existing) {
       send(res, 200, { ...existing, created: false })
@@ -179,7 +210,7 @@ async function publish(
       send(res, created ? 202 : 200, { ...proposal, created })
       return
     }
-    const { version: published, created } = await store.publish(parsed.data, principal)
+    const { version: published, created } = await store.publish(parsed.data, principal, { annotations })
     log(
       `publish ${published.hash} iss=${principal.iss} sub=${principal.sub} created=${created} tasks=${published.tasks.length}`
     )

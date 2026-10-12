@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { hostname } from 'os'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
@@ -161,6 +162,10 @@ describe('remote publish', () => {
 
       const published = await h.call('bob', 'GET', `/v1/definitions/${hash}`)
       expect(published.body).toMatchObject({ hash, tasks: ['build', 'deploy', 'more:lint'] })
+      // where it comes from rides along, outside of the hash
+      expect(first).toMatch(/^from: path=\S*\.hammerkit\.yaml .*machine=/m)
+      expect(published.body.annotations).toMatchObject({ machine: hostname() })
+      expect(published.body.annotations.path).toMatch(/\.hammerkit\.yaml$/)
     })
   })
 
@@ -218,6 +223,37 @@ describe('remote publish', () => {
       await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'build')).rejects.toThrow(
         'there is no build file'
       )
+    })
+  })
+})
+
+describe('remote versions', () => {
+  it('lists what was published with where it comes from, and finds it by that', async () => {
+    await withHarness('remote-versions', async (h) => {
+      await h.run('remote', 'login', 'build')
+      expect(await h.run('remote', 'versions', 'build')).toContain('build: no published versions')
+      const one = await h.run('remote', 'publish', 'build', '--annotation', 'team=payments', '--annotation', 'user=')
+      const two = await h.run('--file', 'more.yaml', 'remote', 'publish', 'build', '--annotation', 'team=web')
+      const hash = (out: string) => /sha256:[0-9a-f]{64}/.exec(out)?.[0] as string
+
+      const all = await h.run('remote', 'versions', 'build')
+      expect(all).toContain('build: 2 published')
+      // newest first
+      expect(all.indexOf(hash(two))).toBeLessThan(all.indexOf(hash(one)))
+      expect(all).toContain('published by bob at ')
+      expect(all).toContain('team=payments')
+      expect(all).toContain('accounts: op-payments-prod')
+
+      const payments = await h.run('remote', 'versions', 'build', '--filter', 'team=payments')
+      expect(payments).toContain('build: 1 published')
+      expect(payments).toContain(hash(one))
+      expect(payments).not.toContain(hash(two))
+      expect(payments).not.toMatch(/user=/)
+      expect(await h.run('remote', 'versions', 'build', '--filter', 'team=none')).toContain(
+        'no published versions match'
+      )
+      await expect(h.run('remote', 'versions', 'build', '--filter', 'team')).rejects.toThrow('is not a filter')
+      await expect(h.run('remote', 'publish', 'build', '--annotation', 'Team=x')).rejects.toThrow('annotation Team')
     })
   })
 })

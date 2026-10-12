@@ -115,7 +115,11 @@ export async function handleProposals(
       outcome,
       (proposed) => mayApprove(grant, proposed),
       async (bundle) => {
-        await store.publish(bundle, proposals.get(hash)?.proposedBy ?? principal, principal)
+        const proposed = proposals.get(hash)
+        await store.publish(bundle, proposed?.proposedBy ?? principal, {
+          approvedBy: principal,
+          annotations: proposed?.annotations,
+        })
       },
       body.data.reason
     )

@@ -158,6 +158,7 @@ describe('definitions api', () => {
         entry: '.hammerkit.yaml',
         publishedAt: two.publishedAt,
         publishedBy: two.publishedBy,
+        annotations: {},
         tasks: ['build', 'deploy', 'test'],
         services: [],
         accounts: [],
@@ -169,6 +170,56 @@ describe('definitions api', () => {
       ])
       const content = await (await api.call('GET', `/v1/definitions/${one.hash}/files`, 'bob')).json()
       expect(content).toEqual({ entry: '.hammerkit.yaml', files })
+    })
+  })
+
+  it('keeps what the publisher says about where a version comes from, outside of its hash', async () => {
+    await withApi('definitions-api-annotations', async (api) => {
+      const from = { path: 'web/.hammerkit.yaml', repo: 'github.com/corp/web', machine: 'ci-7', user: 'runner' }
+      const published = await api.call('POST', '/v1/definitions', 'alice', { ...bundle, annotations: from })
+      expect(published.status).toBe(201)
+      const version = await published.json()
+      expect(version).toMatchObject({ hash: hashBundle({ entry: '.hammerkit.yaml', files }), annotations: from })
+
+      // the same files from elsewhere are the same version, as it was first published
+      const again = await api.call('POST', '/v1/definitions', 'ci', { ...bundle, annotations: { machine: 'laptop' } })
+      expect(await again.json()).toMatchObject({ hash: version.hash, created: false, annotations: from })
+
+      const other = { files: { '.hammerkit.yaml': 'tasks:\n  lint:\n    cmds: [echo lint]\n' } }
+      const plain = await (await api.call('POST', '/v1/definitions', 'alice', other)).json()
+      expect(plain).not.toHaveProperty('annotations')
+
+      // the list finds the versions by what they say
+      const list = async (query: string) =>
+        (await (await api.call('GET', `/v1/definitions${query}`, 'bob')).json()).definitions.map(
+          (v: { hash: string }) => v.hash
+        )
+      expect(await list('?repo=github.com/corp/web')).toEqual([version.hash])
+      expect(await list('?repo=github.com/corp/web&machine=ci-7')).toEqual([version.hash])
+      expect(await list('?repo=github.com/corp/web&machine=laptop')).toEqual([])
+      expect(await list('')).toEqual([plain.hash, version.hash])
+
+      await api.restart()
+      expect((await (await api.call('GET', `/v1/definitions/${version.hash}`, 'bob')).json()).annotations).toEqual(from)
+    })
+  })
+
+  it('refuses annotations that are not short text under a plain key', async () => {
+    await withApi('definitions-api-annotations-invalid', async (api) => {
+      const post = (annotations: unknown) => api.call('POST', '/v1/definitions', 'alice', { ...bundle, annotations })
+      for (const annotations of [
+        { 'Not A Key': 'x' },
+        { note: 'x'.repeat(501) },
+        { note: 1 },
+        { note: '' },
+        Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`k${i}`, 'x'])),
+        'path=x',
+      ]) {
+        const response = await post(annotations)
+        expect(response.status).toBe(400)
+        expect((await response.json()).error).toMatch(/^annotations/)
+      }
+      expect((await (await api.call('GET', '/v1/definitions', 'alice')).json()).definitions).toEqual([])
     })
   })
 

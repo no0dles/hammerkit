@@ -4,7 +4,8 @@ import { Environment } from '../executer/environment'
 import { getAccessToken } from './credentials'
 import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
-import { Bundle, HASH_PATTERN } from './bundle'
+import { Annotations, Bundle, HASH_PATTERN } from './bundle'
+import { applyAnnotations, collectAnnotations } from './annotations'
 import { callServer, printable } from './server-client'
 import { showBundle } from './bundle-text'
 
@@ -18,6 +19,7 @@ export interface WorkCommandContext {
 
 interface PublishedVersion {
   hash: string
+  annotations?: Annotations
   created: boolean
   tasks: string[]
   services: string[]
@@ -26,8 +28,22 @@ interface PublishedVersion {
   expiresAt?: string
 }
 
+// one version in the list of a server
+interface VersionView {
+  hash: string
+  publishedAt: string
+  publishedBy: { iss: string; sub: string }
+  approvedBy?: { sub: string }
+  annotations: Annotations
+  tasks: string[]
+  services: string[]
+  accounts: string[]
+  yanked?: { by: { sub: string }; reason?: string }
+}
+
 interface ProposalView {
   hash: string
+  annotations?: Annotations
   state: string
   proposedBy: { iss: string; sub: string }
   createdAt: string
@@ -75,6 +91,16 @@ interface PlanView {
 }
 
 const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
+
+// what the publisher said about where a version comes from, one line
+function annotationLines(annotations: Annotations | undefined): string[] {
+  const entries = Object.entries(annotations ?? {})
+  return entries.length > 0
+    ? [`  from: ${entries.map(([key, value]) => `${printable(key)}=${printable(value)}`).join(' ')}`]
+    : []
+}
+
+const collectOption = (value: string, previous: string[] = []) => [...previous, value]
 
 // What a person who approves is shown of a run: everything the decision rests on.
 function describe(run: ApprovalView): string[] {
@@ -149,11 +175,21 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
   remote
     .command('publish [server]')
     .description('publish the build file and the files it includes to a server, runs refer to it by its hash')
+    .addOption(
+      new Option(
+        '--annotation <key=value>',
+        'say more about where it comes from, or leave one out with key=; path, repo, commit, machine and user are filled in'
+      ).argParser(collectOption)
+    )
     .action(
-      guarded('Remote publish was not successful', async (name: string | undefined) => {
+      guarded('Remote publish was not successful', async (name: string | undefined, options) => {
         const bundle = await collectBundle(buildFile, environment)
+        const annotations = applyAnnotations(await collectAnnotations(buildFile), options.annotation ?? [])
         const { name: serverName, server, token } = await connect(name)
-        const answer = await callServer<PublishedVersion>(server, token, 'POST', '/v1/definitions', bundle)
+        const answer = await callServer<PublishedVersion>(server, token, 'POST', '/v1/definitions', {
+          ...bundle,
+          annotations,
+        })
         const version = answer.body
         const files = Object.keys(bundle.files).length
         const proposed = answer.status === 202
@@ -163,10 +199,65 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         )
         const names = [...(version.tasks ?? []), ...(version.services ?? [])]
         environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+        for (const line of annotationLines(version.annotations)) {
+          environment.stdout.write(`${line.trimStart()}\n`)
+        }
         if (proposed) {
           environment.stdout.write(
             `it can not run before somebody who may publish approves it, until ${printable(version.expiresAt)}\n`
           )
+        }
+      })
+    )
+
+  remote
+    .command('versions [server]')
+    .description('list the published versions of build files on a server, newest first, with where they come from')
+    .addOption(
+      new Option(
+        '--filter <key=value>',
+        'only the versions with this annotation, such as repo=github.com/corp/payments'
+      ).argParser(collectOption)
+    )
+    .action(
+      guarded('Remote versions was not successful', async (name: string | undefined, options) => {
+        const query = new URLSearchParams()
+        for (const filter of (options.filter ?? []) as string[]) {
+          const index = filter.indexOf('=')
+          if (index <= 0) {
+            throw new Error(`${printable(filter)} is not a filter, write it as key=value`)
+          }
+          query.append(filter.slice(0, index), filter.slice(index + 1))
+        }
+        const { name: serverName, server, token } = await connect(name)
+        const path = `/v1/definitions${query.toString() !== '' ? `?${query}` : ''}`
+        const { body } = await callServer<{ definitions: VersionView[] }>(server, token, 'GET', path)
+        if (body.definitions.length === 0) {
+          environment.stdout.write(`${serverName}: no published versions${query.toString() !== '' ? ' match' : ''}\n`)
+          return
+        }
+        environment.stdout.write(`${serverName}: ${body.definitions.length} published\n`)
+        for (const version of body.definitions) {
+          environment.stdout.write(
+            `${colors.bold(printable(version.hash))}  published by ${printable(version.publishedBy.sub)} at ${printable(
+              version.publishedAt
+            )}${version.approvedBy ? `, approved by ${printable(version.approvedBy.sub)}` : ''}\n`
+          )
+          for (const line of annotationLines(version.annotations)) {
+            environment.stdout.write(`${line}\n`)
+          }
+          const names = [...version.tasks, ...version.services]
+          environment.stdout.write(`  tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+          if (version.accounts.length > 0) {
+            environment.stdout.write(`  accounts: ${version.accounts.map(printable).join(', ')}\n`)
+          }
+          if (version.yanked) {
+            environment.stdout.write(
+              `  yanked by ${printable(version.yanked.by.sub)}${
+                version.yanked.reason ? `: ${printable(version.yanked.reason)}` : ''
+              }\n`
+            )
+          }
         }
       })
     )
@@ -215,7 +306,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
               proposal.proposedBy.sub
             )} (${printable(proposal.proposedBy.iss)}), ${printable(proposal.state)}\n`
           )
-          for (const line of [...flagLines(proposal), ...describePlan(proposal.plan ?? {}), ...showBundle(files)]) {
+          for (const line of [
+            ...annotationLines(proposal.annotations),
+            ...flagLines(proposal),
+            ...describePlan(proposal.plan ?? {}),
+            ...showBundle(files),
+          ]) {
             environment.stdout.write(`${line}\n`)
           }
           return
@@ -246,6 +342,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           const who = proposal.mine ? 'you' : printable(proposal.proposedBy.sub)
           const state = proposal.canDecide ? colors.bold('waits for your approval') : printable(proposal.state)
           environment.stdout.write(`${colors.bold(printable(proposal.hash))}  proposed by ${who}, ${state}\n`)
+          for (const line of annotationLines(proposal.annotations)) {
+            environment.stdout.write(`${line}\n`)
+          }
           const names = [...proposal.tasks, ...proposal.services]
           environment.stdout.write(`  tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
           if (proposal.accounts.length > 0) {
