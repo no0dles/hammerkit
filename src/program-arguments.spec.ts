@@ -13,10 +13,15 @@ const HK = 'hammerkit'
 // differently, which is no second command but not this test's point.
 const ARGS = ['a b', '-t', 'x; echo pwned > pwned.txt', "it's", '$HOME', '$(echo pwned)', '*', '--set', 'X=1']
 
+// The run starts a real shell: PowerShell on Windows, which takes up to half a
+// minute to start on the hosted runner.
+const RUN_TIMEOUT = Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000
+
 describe('program arguments after --', () => {
   const buildFile = {
     tasks: {
-      args: { cmds: ['node -e 0', 'node args.js'], cache: 'none' },
+      // one command, one shell start; task-arguments.spec.ts checks that only the last command gets them
+      args: { cmds: ['node args.js'], cache: 'none' },
       other: { cmds: ['node -e 0'] },
     },
   }
@@ -25,22 +30,26 @@ describe('program arguments after --', () => {
     'args.js': `require('fs').writeFileSync('out.json', JSON.stringify(process.argv.slice(2)))\n`,
   }
 
-  it('run hands them to the last command of the task, each one argument', async () => {
-    const t = createTestCase('cmd-run-arguments', files)
-    await t.setup(async (cwd, environment) => {
-      // a copy of process.env is case-sensitive, and Windows names it Path: local
-      // commands get PATH, as the real process.env answers it on every platform
-      const processEnvs = { ...environment.processEnvs, PATH: process.env.PATH }
-      await runProgram(
-        { ...environment, processEnvs },
-        [HK, 'run', 'args', '--', ...ARGS, '--file', 'other.yaml'],
-        true
-      )
-    })
-    const dir = join(process.cwd(), 'temp', 'cmd-run-arguments')
-    expect(JSON.parse(readFileSync(join(dir, 'out.json')).toString())).toEqual([...ARGS, '--file', 'other.yaml'])
-    expect(existsSync(join(dir, 'pwned.txt'))).toBe(false)
-  })
+  it(
+    'run hands them to the last command of the task, each one argument',
+    async () => {
+      const t = createTestCase('cmd-run-arguments', files)
+      await t.setup(async (cwd, environment) => {
+        // a copy of process.env is case-sensitive, and Windows names it Path: local
+        // commands get PATH, as the real process.env answers it on every platform
+        const processEnvs = { ...environment.processEnvs, PATH: process.env.PATH }
+        await runProgram(
+          { ...environment, processEnvs },
+          [HK, 'run', 'args', '--', ...ARGS, '--file', 'other.yaml'],
+          true
+        )
+      })
+      const dir = join(process.cwd(), 'temp', 'cmd-run-arguments')
+      expect(JSON.parse(readFileSync(join(dir, 'out.json')).toString())).toEqual([...ARGS, '--file', 'other.yaml'])
+      expect(existsSync(join(dir, 'pwned.txt'))).toBe(false)
+    },
+    RUN_TIMEOUT
+  )
 
   it('run refuses them when several tasks are selected', async () => {
     const t = createTestCase('cmd-run-arguments-several', files)
