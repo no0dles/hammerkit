@@ -251,6 +251,9 @@ async function followProxyLog(
       return null
     }
     const output = new PassThrough()
+    // close() aborts the request, which errors the response stream the
+    // client pipes in here; nothing listens to it there
+    output.on('pipe', (source) => source.on('error', () => undefined))
     createInterface({ input: output }).on('line', (line) => {
       const event = parseEgressProxyEvent(line)
       if (event?.type === 'refused') {

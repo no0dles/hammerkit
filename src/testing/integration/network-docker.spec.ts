@@ -14,7 +14,8 @@ const image = 'alpine:3.21'
 const noInterfaces = 'test "$(ls /sys/class/net)" = lo'
 // no route to an address outside, whatever DNS says
 const noRoute = '! wget -q -T 3 -O /dev/null http://1.1.1.1'
-const noRouteWithoutProxy = '! env -u http_proxy -u HTTP_PROXY wget -q -T 3 -O /dev/null http://1.1.1.1'
+const noRouteWithoutProxy =
+  '! env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY wget -q -T 3 -O /dev/null http://1.1.1.1'
 // a web server the tasks reach by name
 const web = {
   image: 'node:24-alpine',

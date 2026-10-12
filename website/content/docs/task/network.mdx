@@ -131,6 +131,7 @@ runs through `env` to empty the proxy variables.
 
 A `NetworkPolicy` only takes effect when the cluster's network plugin enforces it
 (Calico, Cilium, and recent versions of kind's kindnet do; some plain setups
-don't). A task's refused hosts show up in its log; a service outlives the run on
+don't). Some plugins, kindnet among them, apply it a moment after a pod started,
+so a connection made in that first moment can still get out. A task's refused hosts show up in its log; a service outlives the run on
 a cluster, so its refused hosts are in the log of its proxy, the Deployment named
 `hammerkit-proxy-<id>`.
