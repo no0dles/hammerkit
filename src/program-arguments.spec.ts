@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { platform } from 'os'
 import { readFileSync, existsSync } from 'fs'
 import { createTestCase } from './testing/test-case'
 import { runProgram } from './run-program'
@@ -17,11 +18,15 @@ const ARGS = ['a b', '-t', 'x; echo pwned > pwned.txt', "it's", '$HOME', '$(echo
 // minute to start on the hosted runner.
 const RUN_TIMEOUT = Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000
 
+// A local command gets PATH but not PATHEXT, so PowerShell finds node only by
+// its full file name.
+const NODE = platform() === 'win32' ? 'node.exe' : 'node'
+
 describe('program arguments after --', () => {
   const buildFile = {
     tasks: {
       // one command, one shell start; task-arguments.spec.ts checks that only the last command gets them
-      args: { cmds: ['node args.js'], cache: 'none' },
+      args: { cmds: [`${NODE} args.js`], cache: 'none' },
       other: { cmds: ['node -e 0'] },
     },
   }
@@ -76,7 +81,7 @@ describe('program arguments after --', () => {
     })
     const listed = JSON.parse(stdout.read())
     expect(listed.tasks.map((task: any) => [task.name, task.command])).toEqual([
-      ['args', 'node args.js'],
+      ['args', `${NODE} args.js`],
       ['other', 'node -e 0'],
     ])
     expect(listed.services.map((service: any) => [service.name, service.command])).toEqual([
