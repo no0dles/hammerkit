@@ -616,7 +616,7 @@ describe('runs api', () => {
                   '    deps: [build]',
                   '    cmds:',
                   '      - echo checking',
-                  '      - echo expected 1 to be 2',
+                  "      - echo 'expected 1 to be 2'",
                   '      - exit 4',
                   '',
                 ].join('\n'),
