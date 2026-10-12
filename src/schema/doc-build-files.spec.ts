@@ -63,6 +63,11 @@ const HISTORICAL_DIRS = ['release-blog']
 // blocks allowed to be unrecognized.
 const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
   {
+    file: join('remote-compute', 'authentication.mdx'),
+    snippet: 'id_tokens:',
+    reason: 'GitLab CI (.gitlab-ci.yml) job that asks for an ID token, not a hammerkit build file',
+  },
+  {
     file: join('cli', 'remote.mdx'),
     snippet: 'issuer: https://login.example.com',
     reason: 'host config (~/.hammerkit/config.yaml), not a build file',

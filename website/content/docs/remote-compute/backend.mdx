@@ -14,7 +14,7 @@ runtimes: [docker]   # what tasks may run on, docker by default
 
 | Key | What it does |
 | --- | --- |
-| `backend.type` | `host`, this machine. It is the only backend so far and the default. |
+| `backend.type` | `host`, this machine. It is the only backend so far and the default, so it can be left out. `type` is there for the backends that follow, such as Kubernetes (Jobs on node pools, see the [spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md)), which will bring keys of their own. |
 | `backend.platform` | What the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. Detected when left out. Clients read it from the [discovery document](/docs/remote-compute#discovery). |
 | `runtimes` | What tasks may run on, see [Runtimes](#runtimes). |
 

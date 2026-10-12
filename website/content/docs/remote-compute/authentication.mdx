@@ -58,6 +58,156 @@ Two things the server does not check, so set them up on the identity provider:
   that `email` needs `email_verified`; match on `sub`, a group or a claim the
   provider controls.
 
+## Identity providers
+
+Any OpenID Connect provider works when it issues **JWT access tokens** for an API audience
+of the server and publishes `/.well-known/openid-configuration` below the issuer, with an
+`issuer` that is exactly the configured one. `remote login` also needs the provider's
+device authorization endpoint and a public client. Some providers only hand out JWTs to
+workloads (CI jobs, service accounts) and opaque tokens to people; those are listed
+without `clientId`, and people sign in through another issuer of the same server.
+
+| Provider | People (`remote login`) | Agents and CI |
+| --- | --- | --- |
+| [Keycloak](#keycloak) | yes | clients with a service account |
+| [Microsoft Entra ID](#microsoft-entra-id) | yes | app registrations (client credentials) |
+| [Google](#google) | no, access tokens are opaque | identity tokens of service accounts |
+| [GitHub](#github-actions) | no, access tokens are opaque | GitHub Actions OIDC tokens |
+| [GitLab](#gitlab-ci) | no, access tokens are opaque | GitLab CI ID tokens |
+
+To let people with a GitHub or GitLab account sign in, broker that login through Keycloak
+or Entra ID; the server then sees the broker's tokens.
+
+### Keycloak
+
+```yaml title="server.yaml"
+issuers:
+  - issuer: https://keycloak.example.com/realms/corp
+    audience: hammerkit
+    clientId: hammerkit-cli
+entitlements:
+  - group: { iss: https://keycloak.example.com/realms/corp, name: platform }
+    builds: publish
+```
+
+* Create a public client `hammerkit-cli` with **OAuth 2.0 Device Authorization Grant**
+  enabled.
+* Keycloak does not put an API audience into access tokens by default. Add a client
+  scope with an **Audience** mapper that includes the custom audience `hammerkit` in the
+  access token, and assign it to `hammerkit-cli` and to the agents' clients.
+* Add a **Group Membership** mapper with the token claim name `groups` and **Full group
+  path** off, so groups arrive as `platform` and not `/platform`.
+* An agent is a confidential client with **Service accounts roles** on; it gets its token
+  with the client credentials grant. Its `sub` is the id of the client's service account
+  user, which a `subject` entitlement names, or put the service account user in a group.
+
+### Microsoft Entra ID
+
+```yaml title="server.yaml"
+issuers:
+  - issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0   # your tenant id
+    audience: 11111111-1111-1111-1111-111111111111   # client id of the API app
+    clientId: 22222222-2222-2222-2222-222222222222   # client id of the CLI app
+    scope: api://hammerkit/access
+    groupsClaim: roles
+entitlements:
+  - group: { iss: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0, name: platform }
+    builds: publish
+```
+
+* Register an API app: under **Expose an API** set the Application ID URI
+  `api://hammerkit` and add a scope `access`. Set `requestedAccessTokenVersion` to `2` in
+  its manifest: version 2 tokens carry the issuer above and the API's client id as `aud`.
+  Version 1 tokens are issued by `https://sts.windows.net/<tenant id>/` instead.
+* Register a CLI app with **Allow public client flows** on and the API permission
+  `access`; its client id is `clientId`.
+* Use the tenant id in the issuer, not `common` or `organizations`: those have no single
+  issuer.
+* The `groups` claim of Entra holds object ids, not names. Define **app roles** on the API
+  app (such as `platform`), assign them to groups, users or agent apps, and read them with
+  `groupsClaim: roles`.
+* An agent is an app registration that gets `api://hammerkit/.default` with the client
+  credentials grant. Its `sub` is the object id of its service principal, and the app
+  roles assigned to it are in `roles` too.
+
+### Google
+
+```yaml title="server.yaml"
+issuers:
+  - issuer: https://accounts.google.com
+    audience: hammerkit
+entitlements:
+  - subject: { iss: https://accounts.google.com, sub: '104857382910563728194' }   # unique id of the service account
+    builds: run
+```
+
+Google's access tokens are opaque, so a Google issuer takes the identity tokens of
+service accounts, whose `aud` is whatever the caller asks for:
+
+```bash
+# a workload on GCE, GKE or Cloud Run
+curl -s -H 'Metadata-Flavor: Google' \
+  'http://metadata.google.internal/computeMetadata/v1/instance/service-account/identity?audience=hammerkit'
+# elsewhere, impersonating the service account
+gcloud auth print-identity-token --impersonate-service-account=agent@corp-ci.iam.gserviceaccount.com --audiences=hammerkit
+```
+
+The `sub` of such a token is the unique id of the service account, shown by
+`gcloud iam service-accounts describe`. There is no groups claim, so entitlements name
+each `subject`.
+
+### GitHub Actions
+
+```yaml title="server.yaml"
+issuers:
+  - issuer: https://token.actions.githubusercontent.com
+    audience: hammerkit
+entitlements:
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository: corp/payments, ref: refs/heads/main }
+    builds: run
+```
+
+A job with `permissions: { id-token: write }` asks for a token with the audience of the
+server:
+
+```bash
+curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+  "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=hammerkit" | jq -r .value
+```
+
+Match on `repository`, `ref`, `environment` or `job_workflow_ref`. `repository_id` and
+`repository_owner_id` do not change when a repository is renamed or recreated under the
+same name, so they are the safer choice for a long-lived entitlement.
+
+### GitLab CI
+
+```yaml title="server.yaml"
+issuers:
+  - issuer: https://gitlab.com   # or the address of your GitLab
+    audience: hammerkit
+entitlements:
+  - claims:
+      iss: https://gitlab.com
+      match: { project_path: corp/payments, ref: main, ref_type: branch, ref_protected: 'true' }
+    builds: run
+```
+
+A job declares the token it needs, and GitLab puts it in the variable:
+
+```yaml title=".gitlab-ci.yml"
+deploy:
+  id_tokens:
+    HAMMERKIT_TOKEN:
+      aud: hammerkit
+  script:
+    - curl -H "Authorization: Bearer $HAMMERKIT_TOKEN" https://build.example.com/v1/me
+```
+
+`ref_protected` is the string `'true'` on a protected branch or tag, so only pipelines
+that maintainers control match. `project_id` stays the same when a project is renamed.
+
 ## Transport
 
 Plain http carries OAuth tokens, so `listen` on anything but the loopback interface needs
