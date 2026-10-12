@@ -50,6 +50,8 @@ export async function checkoutRef(
 
 export class RefError extends Error {}
 
+export class GitOutputTooLarge extends Error {}
+
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 
 /**
@@ -110,7 +112,9 @@ export async function git(
   baseEnv: { [key: string]: string | undefined },
   signal: AbortSignal,
   what: string,
-  action = 'fetch'
+  action = 'fetch',
+  // what git may print; a diff of a sandbox can be larger than the default
+  maxBuffer = 1024 * 1024
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -121,7 +125,7 @@ export async function git(
   env.GIT_TERMINAL_PROMPT = '0'
   env.GIT_ALLOW_PROTOCOL = ALLOWED_PROTOCOLS
   try {
-    return (await execFileAsync('git', args, { env, signal })).stdout
+    return (await execFileAsync('git', args, { env, signal, maxBuffer })).stdout
   } catch (e) {
     const error = e as NodeJS.ErrnoException & { stderr?: string }
     if (error.code === 'ABORT_ERR') {
@@ -129,6 +133,9 @@ export async function git(
     }
     if (error.code === 'ENOENT') {
       throw new Error(`unable to ${action} ${what}: git is not installed`)
+    }
+    if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      throw new GitOutputTooLarge(`unable to ${action} ${what}: git printed more than ${maxBuffer} bytes`)
     }
     const reason =
       (error.stderr ?? '')

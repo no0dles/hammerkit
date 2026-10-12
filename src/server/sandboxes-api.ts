@@ -6,6 +6,7 @@ import { decideSandbox, getGrant } from './policy'
 import { normalizeRepo } from './repo'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
+import { handleSandboxFiles, SandboxFileAction } from './sandbox-files-api'
 import { Sandbox, SandboxError, SandboxRegistry } from './sandboxes'
 import { ServerConfig } from './server-config'
 
@@ -36,6 +37,8 @@ const fetchSchema = z.object({ ref: refSchema }).strict()
  *   GET    /v1/sandboxes/<id>         one sandbox
  *   DELETE /v1/sandboxes/<id>         cancel its runs and remove it
  *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to another commit
+ *   ...    /v1/sandboxes/<id>/tree, files/<path>, search, edits, changes: its files, see
+ *          `handleSandboxFiles`
  *
  * A sandbox is its owner's: anybody else gets `404`.
  */
@@ -49,11 +52,14 @@ export async function handleSandboxes(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/sandboxes(?:\/([^/]+)(?:\/(fetch))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/sandboxes(?:\/([^/]+)(?:\/(fetch|tree|search|edits|changes)|\/(files)\/(.+))?)?$/.exec(
+    url.pathname
+  )
   if (!match) {
     return false
   }
-  const [, id, action] = match
+  const [, id, named, files, encodedPath] = match
+  const action = named ?? files
   const method = req.method
   const who = `iss=${principal.iss} sub=${principal.sub}`
   try {
@@ -86,6 +92,26 @@ export async function handleSandboxes(
     const sandbox = SANDBOX_ID_PATTERN.test(id) ? sandboxes.get(principal, id) : undefined
     if (!sandbox) {
       send(res, 404, { error: 'not found' })
+      return true
+    }
+    if (action && action !== 'fetch') {
+      // the caller may have lost the repository since they created the sandbox
+      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, (repo) =>
+        repos.readable(repo)
+      )
+      if (refused) {
+        log(`refuse sandbox ${action} ${id} ${who}: ${refused.error}`)
+        send(res, refused.status, { error: refused.error })
+        return true
+      }
+      let path: string | undefined
+      try {
+        path = encodedPath === undefined ? undefined : decodeURIComponent(encodedPath)
+      } catch {
+        send(res, 400, { error: 'the path is not valid percent-encoding' })
+        return true
+      }
+      await handleSandboxFiles(sandboxes, log, principal, sandbox, action as SandboxFileAction, path, req, res, url)
       return true
     }
     if (action === 'fetch') {

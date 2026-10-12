@@ -61,6 +61,9 @@ interface JsonResponse extends Response {
 
 interface Api {
   call: (method: string, path: string, options?: { sub?: string; body?: unknown }) => Promise<JsonResponse>
+  url: string
+  // the authorization header of alice
+  auth: () => string
   hash: string
   log: string[]
 }
@@ -117,16 +120,18 @@ describe('sandboxes api', () => {
           repos: { url: () => repository },
           worker: TEST_WORKER,
         })
+        const auth = (sub = 'alice') =>
+          `Bearer ${signToken(key, {
+            iss: idp.url,
+            sub,
+            aud: 'hammerkit',
+            exp: Math.floor(Date.now() / 1000) + 300,
+          })}`
         const call: Api['call'] = (method, path, options = {}) =>
           fetch(`${server.url}${path}`, {
             method,
             headers: {
-              authorization: `Bearer ${signToken(key, {
-                iss: idp.url,
-                sub: options.sub ?? 'alice',
-                aud: 'hammerkit',
-                exp: Math.floor(Date.now() / 1000) + 300,
-              })}`,
+              authorization: auth(options.sub),
               ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
             },
             body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -137,7 +142,7 @@ describe('sandboxes api', () => {
             body: { files: { '.hammerkit.yaml': buildFile } },
           })
           expect(published.status).toBe(201)
-          await fn({ call, hash: (await published.json()).hash, log })
+          await fn({ call, url: server.url, auth: () => auth(), hash: (await published.json()).hash, log })
         } finally {
           await server.close()
         }
@@ -274,6 +279,18 @@ describe('sandboxes api', () => {
       })
       const fetch = await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'next' } })
       expect(fetch.status).toBe(409)
+      // no edits while the run holds it, reading a file works
+      const edit = await api.call('POST', `/v1/sandboxes/${sandbox.id}/edits`, {
+        body: { ops: [{ op: 'write', path: 'x.txt', content: 'x' }] },
+      })
+      expect(edit.status).toBe(409)
+      expect((await edit.json()).error).toMatch(`the run ${run.id} holds the sandbox`)
+      expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}/files/input.txt`)).status).toBe(200)
+      // what walks the files waits for the run
+      expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}/tree`)).status).toBe(409)
+      expect((await api.call('POST', `/v1/sandboxes/${sandbox.id}/search`, { body: { pattern: 'x' } })).status).toBe(
+        409
+      )
       // a second run waits for the first
       const second = await (await runOn(api, sandbox.id)).json()
       expect((await (await api.call('GET', `/v1/runs/${second.id}`)).json()).state).toBe('queued')
@@ -283,6 +300,104 @@ describe('sandboxes api', () => {
         state: 'cancelled',
         error: 'the sandbox was deleted',
       })
+    })
+  })
+
+  it('reads, searches and edits the files of a sandbox, and answers its changes', async () => {
+    await withApi('sandboxes-api-files', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const base = `/v1/sandboxes/${sandbox.id}`
+      const tree = await (await api.call('GET', `${base}/tree`)).json()
+      expect(tree).toMatchObject({ path: '', entries: [{ path: 'input.txt', type: 'file', size: 9 }], total: 1 })
+
+      const read = await (await api.call('GET', `${base}/files/input.txt`)).json()
+      expect(read).toMatchObject({ path: 'input.txt', content: '     1\tfrom-main', lines: 1 })
+
+      // the raw surface of harness backends: write bytes, stat, read bytes
+      const put = (path: string, body: string, headers: Record<string, string> = {}) =>
+        fetch(`${api.url}${base}/files/${path}`, {
+          method: 'PUT',
+          headers: { authorization: api.auth(), ...headers },
+          body,
+        })
+      const written = await put('src/new%20file.ts', 'export const x = 1\n')
+      expect(written.status).toBe(201)
+      expect(await written.json()).toMatchObject({ path: 'src/new file.ts', change: 'added', size: 19 })
+      const head = await fetch(`${api.url}${base}/files/src/new%20file.ts`, {
+        method: 'HEAD',
+        headers: { authorization: api.auth() },
+      })
+      expect(head.status).toBe(200)
+      expect(head.headers.get('content-length')).toBe('19')
+      expect(head.headers.get('x-hammerkit-type')).toBe('file')
+      const raw = await fetch(`${api.url}${base}/files/src/new%20file.ts?raw`, {
+        headers: { authorization: api.auth() },
+      })
+      expect(await raw.text()).toBe('export const x = 1\n')
+      const etag = raw.headers.get('etag') as string
+      expect(etag).toMatch(/^"[0-9a-f]{64}"$/)
+      expect((await put('src/new%20file.ts', 'y', { 'if-match': etag })).status).toBe(200)
+      expect((await put('src/new%20file.ts', 'z', { 'if-match': etag })).status).toBe(412)
+      expect(
+        (await fetch(`${api.url}${base}/files/nothing`, { method: 'HEAD', headers: { authorization: api.auth() } }))
+          .status
+      ).toBe(404)
+      expect(await (await api.call('GET', `${base}/files/src?stat`)).json()).toMatchObject({ type: 'directory' })
+      expect((await api.call('GET', `${base}/files/.env`)).status).toBe(403)
+      expect((await api.call('GET', `${base}/files/a%2F..%2F..%2Fx`)).status).toBe(400)
+
+      const edits = await api.call('POST', `${base}/edits`, {
+        body: {
+          ops: [
+            { op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'sandbox' },
+            {
+              op: 'patch',
+              patch: '*** Begin Patch\n*** Add File: docs/a.md\n+# A\n*** End Patch\n',
+            },
+          ],
+        },
+      })
+      expect(edits.status).toBe(200)
+      expect((await edits.json()).files.map((file: { path: string }) => file.path)).toEqual(['docs/a.md', 'input.txt'])
+      const refused = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'x' }] },
+      })
+      expect(refused.status).toBe(422)
+      expect(await refused.json()).toMatchObject({
+        op: 0,
+        error: expect.stringMatching(/old_string is not in input\.txt/),
+      })
+      expect((await api.call('POST', `${base}/edits`, { body: { ops: [{ op: 'chmod', path: 'x' }] } })).status).toBe(
+        400
+      )
+
+      const search = await api.call('POST', `${base}/search`, {
+        body: { pattern: 'SANDBOX', '-i': true, output_mode: 'content' },
+      })
+      expect(await search.json()).toMatchObject({
+        output_mode: 'content',
+        matches: [{ path: 'input.txt', line: 1, text: 'from-sandbox' }],
+      })
+
+      const changes = await (await api.call('GET', `${base}/changes`)).json()
+      expect(changes).toEqual({
+        commit: sandbox.commit,
+        files: [
+          { path: 'docs/a.md', status: 'added', additions: 1, deletions: 0 },
+          { path: 'input.txt', status: 'modified', additions: 1, deletions: 1 },
+          { path: 'src/new file.ts', status: 'added', additions: 1, deletions: 0 },
+        ],
+      })
+      const diff = await api.call('GET', `${base}/changes?format=diff`)
+      expect(diff.headers.get('content-type')).toBe('text/x-diff; charset=utf-8')
+      expect(await diff.text()).toContain('+from-sandbox')
+      const patch = await (await api.call('GET', `${base}/changes?format=patch&message=Agent%20work`)).text()
+      expect(patch).toContain('Subject: [PATCH] Agent work')
+
+      // the files are the owner's alone
+      expect((await api.call('GET', `${base}/tree`, { sub: 'carol' })).status).toBe(404)
+      expect((await api.call('GET', `${base}/files/input.txt`, { sub: 'carol' })).status).toBe(404)
+      expect(api.log.some((line) => line.startsWith(`sandbox edits ${sandbox.id} iss=`))).toBe(true)
     })
   })
 })

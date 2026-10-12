@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 import { copyFile, lstat, mkdir, readdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
+import { HostSandboxFiles, SandboxFiles, SandboxGit } from './sandbox-files'
 
 // What a sandbox's files are at a moment: the commit it was fetched at, and the git tree
 // of its files as they are (what `.gitignore` leaves out is not part of it). The two are
@@ -37,6 +38,8 @@ export interface SandboxStorage {
   attach(id: string): Promise<string>
   // the bytes it takes, its git data included
   usage(id: string): Promise<number>
+  // reading, searching and editing its files through the API
+  files(id: string): SandboxFiles
   remove(id: string): Promise<void>
   // the ids that have storage, to clean up what a crash left behind
   list(): Promise<string[]>
@@ -60,7 +63,7 @@ export class HostSandboxStorage implements SandboxStorage {
     return join(this.directory, id)
   }
 
-  private files(id: string): string {
+  private workTree(id: string): string {
     return join(this.root(id), 'files')
   }
 
@@ -69,25 +72,69 @@ export class HostSandboxStorage implements SandboxStorage {
     args: string[],
     env: { [key: string]: string },
     signal: AbortSignal,
-    action: string
+    action: string,
+    maxBuffer?: number
   ): Promise<string> {
     const root = this.root(id)
     return git(
       [
         `--git-dir=${join(root, 'git')}`,
-        `--work-tree=${this.files(id)}`,
+        `--work-tree=${this.workTree(id)}`,
         '-c',
         `core.hooksPath=${join(root, 'no-hooks')}`,
         '-c',
         'core.fsmonitor=false',
         '-c',
         'advice.detachedHead=false',
+        // the files are what the repository holds, on a Windows server too: the API answers
+        // their bytes, and tasks read them in Linux containers
+        '-c',
+        'core.autocrlf=false',
         ...args,
       ],
       env,
       signal,
       `sandbox ${id}`,
-      action
+      action,
+      maxBuffer
+    )
+  }
+
+  // The environment of git when it reads the sandbox, without an index of its own.
+  private readEnv(extra: { [key: string]: string } = {}): { [key: string]: string } {
+    const env: { [key: string]: string } = {}
+    for (const [key, value] of Object.entries(this.env)) {
+      if (value !== undefined && key !== 'GIT_INDEX_FILE') {
+        env[key] = value
+      }
+    }
+    return { ...env, ...extra }
+  }
+
+  // `fn` with a copy of the sandbox's index, so neither the index nor the files change.
+  private async withIndex<T>(id: string, signal: AbortSignal, fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
+    const root = this.root(id)
+    const index = join(root, `index-${randomBytes(6).toString('hex')}`)
+    try {
+      await copyFile(join(root, 'git', 'index'), index).catch(() => undefined)
+      return await fn((args, action, options = {}) =>
+        this.git(id, args, this.readEnv({ ...options.env, GIT_INDEX_FILE: index }), signal, action, options.maxBuffer)
+      )
+    } finally {
+      await rm(index, { force: true })
+    }
+  }
+
+  files(id: string): SandboxFiles {
+    const timeout = () => AbortSignal.timeout(5 * 60 * 1000)
+    return new HostSandboxFiles(
+      this.workTree(id),
+      {
+        run: (args, action, options = {}) =>
+          this.git(id, args, this.readEnv(options.env), timeout(), action, options.maxBuffer),
+        withIndex: (fn) => this.withIndex(id, timeout(), fn),
+      },
+      this.env
     )
   }
 
@@ -95,7 +142,7 @@ export class HostSandboxStorage implements SandboxStorage {
     const root = this.root(id)
     // the sandboxes are their owners', nobody else on the machine reads them
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    await mkdir(this.files(id), { recursive: true })
+    await mkdir(this.workTree(id), { recursive: true })
     try {
       await git(['init', '--quiet', '--bare', join(root, 'git')], fetch.env, fetch.signal, `sandbox ${id}`, 'create')
       return await this.checkout(id, fetch, true)
@@ -133,29 +180,16 @@ export class HostSandboxStorage implements SandboxStorage {
   // The tree is written with an index of its own, so neither the sandbox's index nor its
   // files change.
   async state(id: string, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
-    const root = this.root(id)
-    const index = join(root, `index-${randomBytes(6).toString('hex')}`)
-    const env: { [key: string]: string } = { GIT_INDEX_FILE: index }
-    for (const [key, value] of Object.entries(this.env)) {
-      if (value !== undefined && key !== 'GIT_INDEX_FILE') {
-        env[key] = value
-      }
-    }
-    try {
-      await copyFile(join(root, 'git', 'index'), index).catch(() => undefined)
-      await this.git(id, ['add', '--all', '--', '.'], env, signal, 'read')
-      const tree = (await this.git(id, ['write-tree'], env, signal, 'read')).trim()
-      const [commit, base] = (await this.git(id, ['rev-parse', 'HEAD', 'HEAD^{tree}'], env, signal, 'read'))
-        .trim()
-        .split('\n')
+    return this.withIndex(id, signal, async (run) => {
+      await run(['add', '--all', '--', '.'], 'read')
+      const tree = (await run(['write-tree'], 'read')).trim()
+      const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
       return { commit, tree, clean: tree === base }
-    } finally {
-      await rm(index, { force: true })
-    }
+    })
   }
 
   async attach(id: string): Promise<string> {
-    const files = this.files(id)
+    const files = this.workTree(id)
     const stats = await lstat(files).catch(() => undefined)
     if (!stats?.isDirectory()) {
       throw new Error(`the sandbox ${id} has no files on this server`)

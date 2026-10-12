@@ -6,6 +6,7 @@ import { RefError } from './git-checkout'
 import { Principal } from './oauth'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
+import { EditedFile, EditOp, SandboxFiles } from './sandbox-files'
 import { SandboxState, SandboxStorage } from './sandbox-storage'
 
 // How long creating a sandbox or moving it to another commit may take
@@ -289,6 +290,60 @@ export class SandboxRegistry {
    */
   async withSandbox<T>(owner: Owner, id: string, fn: (sandbox: Sandbox) => Promise<T>): Promise<T> {
     return this.withLock(id, async () => fn(copy(this.mine(owner, id))))
+  }
+
+  // The files of one of the owner's sandboxes, to read: reads work while a run holds it.
+  files(owner: Owner, id: string): SandboxFiles {
+    this.mine(owner, id)
+    return this.options.storage.files(id)
+  }
+
+  /**
+   * A read that walks the files with other programs (ripgrep, git): between two batches of
+   * edits, and not while a run holds the sandbox. Those programs follow a directory that a
+   * task swaps for a link while they read; a read of one file checks what it opened.
+   */
+  async read<T>(owner: Owner, id: string, fn: (files: SandboxFiles) => Promise<T>): Promise<T> {
+    return this.withLock(id, async () => {
+      this.mine(owner, id)
+      this.mustBeFree(id)
+      return fn(this.options.storage.files(id))
+    })
+  }
+
+  /**
+   * Applies a batch of edits to the files of a sandbox, all of them or none. Not while a run
+   * holds the sandbox, and not past the owner's bytes.
+   */
+  async edit(owner: Owner, id: string, ops: EditOp[], dryRun = false): Promise<EditedFile[]> {
+    return this.withLock(id, async () => {
+      const sandbox = this.mine(owner, id)
+      this.mustBeFree(id)
+      const plan = await this.options.storage.files(id).plan(ops)
+      if (dryRun || plan.files.length === 0) {
+        return plan.files
+      }
+      if (plan.bytes > 0) {
+        const { limits } = this.options
+        const used = this.usage(owner).bytes
+        if (used + plan.bytes > limits.bytes) {
+          throw new SandboxError(
+            413,
+            `the edits take ${formatSize(plan.bytes)} more, your sandboxes take ${formatSize(
+              used
+            )} of your limit of ${formatSize(limits.bytes)}: delete a sandbox`
+          )
+        }
+        if (this.total() + plan.bytes > limits.total) {
+          throw new SandboxError(507, 'the server has no room for these edits')
+        }
+      }
+      await plan.commit()
+      sandbox.bytes = Math.max(0, sandbox.bytes + plan.bytes)
+      sandbox.lastUsedAt = this.timestamp()
+      await this.save(sandbox)
+      return plan.files
+    })
   }
 
   state(id: string): Promise<SandboxState> {

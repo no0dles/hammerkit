@@ -202,4 +202,31 @@ describe('SandboxRegistry', () => {
     expect(sandboxes.get(alice, sandbox.id)?.bytes).toBeGreaterThanOrEqual(sandbox.bytes + 64 * 1024)
     expect(registryWith({ bytes: sandbox.bytes }).overLimit(alice)).toBeUndefined()
   })
+
+  it("edits only an owner's sandbox that no run holds, within their bytes", async () => {
+    const sandboxes = registryWith({ bytes: 1024 * 1024 })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    const write = (content: string) => [{ op: 'write' as const, path: 'notes/new.txt', content }]
+    await expect(sandboxes.edit(bob, sandbox.id, write('x'))).rejects.toMatchObject({ status: 404 })
+    holder = 'run_1'
+    await expect(sandboxes.edit(alice, sandbox.id, write('x'))).rejects.toMatchObject({
+      status: 409,
+      message: `the run run_1 holds the sandbox ${sandbox.id}, wait for it to finish or cancel it`,
+    })
+    // reads work while a run holds it
+    expect((await sandboxes.files(alice, sandbox.id).read('input.txt', {})).content).toBe('     1\tone')
+    holder = undefined
+    expect(await sandboxes.edit(alice, sandbox.id, write('hello'), true)).toMatchObject([{ change: 'added' }])
+    expect(await sandboxes.files(alice, sandbox.id).stat('notes/new.txt')).toBeUndefined()
+    expect(await sandboxes.edit(alice, sandbox.id, write('hello'))).toMatchObject([{ path: 'notes/new.txt', size: 5 }])
+    const after = sandboxes.get(alice, sandbox.id)
+    expect(after?.bytes).toBe(sandbox.bytes + 5)
+    await expect(sandboxes.edit(alice, sandbox.id, write('x'.repeat(1024 * 1024)))).rejects.toMatchObject({
+      status: 413,
+    })
+    expect((await sandboxes.files(alice, sandbox.id).read('notes/new.txt', {})).content).toBe('     1\thello')
+    expect(await sandboxes.read(alice, sandbox.id, (files) => files.changes())).toEqual([
+      { path: 'notes/new.txt', status: 'added', additions: 1, deletions: 0 },
+    ])
+  })
 })
