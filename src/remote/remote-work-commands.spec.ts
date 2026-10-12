@@ -385,7 +385,9 @@ describe('remote proposals', () => {
   it('shows a proposal whole before it is approved: what its tasks do and every file', async () => {
     await withHarness('remote-proposals-show', async (h) => {
       const { target } = await proposal(h)
-      const shown = await h.run('remote', 'show', target, 'build')
+      // without the bold a terminal shows
+      // eslint-disable-next-line no-control-regex
+      const shown = (await h.run('remote', 'show', target, 'build')).replace(/\u001b\[[0-9;]*m/g, '')
       expect(shown).toContain(`${target} on build, proposed by agent`)
       expect(shown).toContain('lint  task, local')
       expect(shown).toContain('$ echo')
