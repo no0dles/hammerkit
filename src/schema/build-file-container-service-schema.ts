@@ -5,6 +5,7 @@ import { labelsSchema } from './labels-schema'
 import { buildFileServiceContainerHealthcheck } from './build-file-service-container-healthcheck'
 import { buildFileSecretSchema } from './build-file-secret-schema'
 import { resourcesSchema } from './resources-schema'
+import { networkSchema } from './network-schema'
 
 export const buildFileContainerServiceSchema = object({
   image: string(),
@@ -37,6 +38,8 @@ export const buildFileContainerServiceSchema = object({
   // the service account its provider secrets are read as, unless a secret names one
   account: string().optional(),
   resources: resourcesSchema.optional(),
+  // what the service reaches besides its needs; tasks needing it always reach it
+  network: networkSchema.optional(),
 })
   .strict()
   .describe('container service')

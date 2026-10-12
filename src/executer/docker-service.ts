@@ -18,23 +18,28 @@ import { checkReadiness } from './check-readiness'
 import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
 import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
-import { getNeedsNetwork } from './docker-task'
+import {
+  ContainerNetworkOptions,
+  DockerItemNetwork,
+  getNetworkHostConfig,
+  prepareItemNetwork,
+} from '../docker/item-network'
 import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { WorkItem } from '../planner/work-item'
 import { ServiceState } from './scheduler/service-state'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
-import { getServiceContainers } from './get-service-containers'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { DockerResources, resolveDockerResources } from './docker-resources'
+import { getProxylessEnvironment } from '../network/egress-proxy'
 
 const HEALTHCHECK_INTERVAL_MS = 1000
 
 export function buildServiceCreateOptions(
   item: WorkItem<ContainerWorkService>,
   options: ExecuteOptions<ServiceState>,
-  network: { links: string[]; hosts: string[] },
+  network: ContainerNetworkOptions,
   secrets: ContainerSecrets,
   resources: DockerResources = {}
 ): ContainerCreateOptions {
@@ -43,7 +48,7 @@ export function buildServiceCreateOptions(
   return {
     Image: item.data.image,
     Hostname: getServiceHostname(item.name),
-    Env: Object.entries({ ...envs, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
+    Env: Object.entries({ ...envs, ...network.env, ...secrets.env }).map(([key, value]) => `${key}=${value}`),
     Labels: {
       app: 'hammerkit',
       'hammerkit-id': getWorkInstanceId(item),
@@ -61,8 +66,7 @@ export function buildServiceCreateOptions(
     Cmd: command.cmd ?? undefined,
     WorkingDir: convertToPosixPath(getServiceWorkingDir(item.data)),
     HostConfig: {
-      ExtraHosts: network.hosts,
-      Links: network.links,
+      ...getNetworkHostConfig(network),
       Binds: [
         ...item.data.src.map((s) => `${s.absolutePath}:${s.absolutePath}`),
         ...item.data.mounts.map(
@@ -94,6 +98,7 @@ export async function dockerService(
   environment: Environment
 ): Promise<void> {
   let container: Container | null = null
+  let network: DockerItemNetwork | null = null
 
   try {
     await prepareMounts(item, environment)
@@ -105,13 +110,16 @@ export async function dockerService(
     await prepareVolume(item, docker)
     checkForAbort(options.abort)
 
-    const serviceContainers = getServiceContainers(item.needs)
-    const network = getNeedsNetwork(serviceContainers, item.needs)
+    network = await prepareItemNetwork(docker, item, environment, { daemon: options.daemon })
+    checkForAbort(options.abort)
 
     item.status.write('debug', `create container with image ${item.data.image}`)
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
     const resources = await resolveDockerResources(docker, item.data.resources, item.status)
-    container = await docker.createContainer(buildServiceCreateOptions(item, options, network, secrets, resources))
+    container = await docker.createContainer(
+      buildServiceCreateOptions(item, options, network.options, secrets, resources)
+    )
+    await network.connect(container)
 
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)
@@ -143,7 +151,8 @@ export async function dockerService(
           environment,
           container,
           user,
-          options.abort
+          options.abort,
+          getProxylessEnvironment(network.options.env ?? {})
         )
         if (!ready && Date.now() >= deadline) {
           throw new Error(getHealthcheckTimeoutMessage(item.name, healthcheck))
@@ -203,9 +212,14 @@ export async function dockerService(
         item.status.write('error', `remove of container failed ${getErrorMessage(e)}`)
       }
     }
-    // a daemon keeps its secret files until `hammerkit down` stops it
+    // a daemon keeps its secret files and network until `hammerkit down` stops it
     if (!options.daemon) {
       await removeContainerSecrets(getWorkInstanceId(item))
+      if (network) {
+        await network
+          .release()
+          .catch((e) => item.status.write('error', `remove of network failed ${getErrorMessage(e)}`))
+      }
     }
   }
 }

@@ -152,8 +152,14 @@ tasks:
     await expect(planBundle(bundle(service), hosted, onCluster)).rejects.toThrow(
       'db: the secret X is read from gsm, which this server does for tasks only'
     )
+    const offline =
+      'tasks:\n  a:\n    image: alpine:3.19\n    network: none\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(offline), hosted, onCluster)).rejects.toThrow(
+      'a: the secret X is read from gsm in the Job of the task, which network none would cut off from it'
+    )
     await expect(planBundle(bundle(build), hosted, onCluster)).resolves.toBeTruthy()
     await expect(planBundle(bundle(cached), hosted, { policy })).resolves.toBeTruthy()
+    await expect(planBundle(bundle(offline), hosted, { policy })).resolves.toBeTruthy()
   })
 
   it('refuses a task whose runtime the server does not allow', async () => {

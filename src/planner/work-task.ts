@@ -9,6 +9,7 @@ import { WorkEnvironmentVariables } from '../environment/replace-env-variables'
 import { WorkItem } from './work-item'
 import { WorkSecret } from './work-secret'
 import { WorkResources } from './work-resources'
+import { WorkNetwork } from './work-network'
 
 // `task`: the task's own envs; `input`: a value the including file passed with
 // `with`; `build-file`: the top-level envs of its build file; `extend`: carried
@@ -39,6 +40,10 @@ export interface BaseWorkTask {
   secrets: WorkSecret[]
   // container limits, null for none; a hint only for a local task
   resources: WorkResources | null
+  // what the container reaches besides its needs, as the build file declares it
+  network: WorkNetwork
+  // the run's `--network` ceiling, null for none; see getEffectiveNetwork
+  networkCeiling: WorkNetwork | null
   // server the task has to run on, null for wherever the run happens
   runner: string | null
 }

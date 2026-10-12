@@ -6,6 +6,7 @@
     "needs",
     "caching",
     "container",
+    "network",
     "secrets",
     "secret-providers",
     "kubernetes",

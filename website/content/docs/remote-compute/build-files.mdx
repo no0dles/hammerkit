@@ -122,7 +122,8 @@ task) when it
   secret the server does not list in `runs.env.allow`, or reads a secret as the account
   that reads repositories (see [Accounts](/docs/remote-compute/accounts) and [Sources](/docs/remote-compute/sources)).
 * on a [Kubernetes backend](/docs/remote-compute/backend#secrets-in-the-job), reads a provider
-  secret in a service, or one with `cache: true`.
+  secret in a service, one with `cache: true`, or one in a task with a limited
+  [`network`](/docs/remote-compute/backend#network).
 
 Without this a task with no secrets would still reach what the operator's machine can: a
 published file would be enough to send a run, or the cache, to a host of its choosing.

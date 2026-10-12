@@ -6,8 +6,10 @@ import { environmentMock } from './environment-mock'
 import { getCacheDirectory, getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { removeOrphanedContainers } from '../docker/remove-orphaned-containers'
+import { removeOrphanedNetworks } from '../docker/item-network'
 
 vi.mock('../docker/remove-orphaned-containers', () => ({ removeOrphanedContainers: vi.fn() }))
+vi.mock('../docker/item-network', () => ({ removeOrphanedNetworks: vi.fn() }))
 vi.mock('./execute-docker', () => ({ getContainerCli: vi.fn(() => ({ docker: true })) }))
 
 const cacheId = 't1'
@@ -219,6 +221,7 @@ describe('cleanCache', () => {
 
   it('clears services and removes containers left behind on docker', async () => {
     vi.mocked(removeOrphanedContainers).mockResolvedValue(['0123456789abcdef'])
+    vi.mocked(removeOrphanedNetworks).mockResolvedValue(['hammerkit-0123'])
     const info = vi.spyOn(environment.console, 'info')
     const remove = vi.fn()
     const clear = vi.fn()
@@ -242,6 +245,8 @@ describe('cleanCache', () => {
     expect(clear).toHaveBeenCalledWith('s1', environment)
     expect(removeOrphanedContainers).toHaveBeenCalledWith({ docker: true })
     expect(info).toHaveBeenCalledWith('removed container 0123456789ab left behind by a stopped run')
+    expect(removeOrphanedNetworks).toHaveBeenCalledWith({ docker: true })
+    expect(info).toHaveBeenCalledWith('removed network hammerkit-0123 left behind by a stopped run')
   })
 })
 

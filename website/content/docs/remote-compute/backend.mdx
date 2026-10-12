@@ -162,6 +162,23 @@ hits restores them into a new claim before its dependents start. The files of a 
 are copied from the server's checkout into its claim. So on a cluster the storage directory
 of the server (`storage.directory`) belongs on a volume of its own.
 
+### Network
+
+A task's [`network`](/docs/task/network) works on a cluster as in a
+[Kubernetes environment](/docs/task/network#kubernetes): a limited task's Jobs get a `NetworkPolicy`
+that lets them reach only the services they need and, under `allow`, their egress proxy, a
+Deployment on the first pool. A task without an image limits its network the same way, since it
+runs in a container of the tool image. The policy, the proxy and its Service carry
+`hammerkit.dev/run` and go with the rest of the run.
+
+The cluster's network plugin has to enforce `NetworkPolicy` (Calico and Cilium do, and recent
+kind). Some apply a policy a moment after the pod started, so `none` is not a hard boundary for
+the first moment of a task.
+
+A task that reads a provider's secret keeps an open network for now: its init containers are in
+the task's pod, so its policy would cut them off from the secret manager. Such a build file is
+refused when it is published, and a run whose ceiling would limit such a task fails that task.
+
 ### What the server may do
 
 In its own namespace the server reads the Secrets of the accounts and creates tokens of their
@@ -186,9 +203,10 @@ rules:
     verbs: [get, list, create, patch, delete, deletecollection]
   - { apiGroups: [batch], resources: [jobs, jobs/status], verbs: [get, list, create, patch, delete, deletecollection] }
   - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
+  - { apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [get, list, create, patch, delete] }
 ```
 
 Bind the Role and the ClusterRole to the server's ServiceAccount.
 
-Not yet: network limits of tasks as a `NetworkPolicy` on the pods of a run (they carry
-`hammerkit.dev/run` for it), Windows nodes, and a cache in a registry or a bucket.
+Not yet: Windows nodes, a cache in a registry or a bucket, and a limited network for a task
+that reads a provider's secret.

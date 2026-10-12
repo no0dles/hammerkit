@@ -81,6 +81,8 @@ describe('checkCacheState auto-pull', () => {
         timeout: null,
         secrets: [],
         resources: null,
+        network: { type: 'open' },
+        networkCeiling: null,
         runner: null,
         caching: resolved,
         description: null,

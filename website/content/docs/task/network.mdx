@@ -1,0 +1,137 @@
+---
+title: "Network"
+description: "Limit what a container task or service reaches: only the services it needs, a list of hosts through an egress proxy, or everything."
+---
+A container task reaches whatever the machine it runs on reaches. That is fine for
+most builds, but not for a step that should not need the network (a test suite), or
+for code you don't fully trust (an install script, an agent's change). `network`
+limits what a task or service reaches besides the services it needs.
+
+```yaml
+tasks:
+  test:
+    image: node:24-alpine
+    network: none                 # nothing at all
+    cmds: [npm test]
+
+  e2e:
+    image: node:24-alpine
+    needs: [postgres]
+    network: none                 # postgres, and nothing else
+    cmds: [npm run e2e]
+
+  install:
+    image: node:24-alpine
+    network:
+      allow: [registry.npmjs.org, '*.githubusercontent.com']
+    cmds: [npm ci]
+
+  deploy:
+    image: node:24-alpine
+    network: open                 # the default
+    cmds: [npm run deploy]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    healthcheck:
+      cmd: pg_isready -U postgres
+```
+
+| Level | Reaches, besides its `needs` |
+|---|---|
+| `open` (default) | Everything the host reaches, as without `network`. |
+| `none` | Nothing. |
+| `allow: [hosts]` | HTTP and HTTPS to the listed hosts, through an egress proxy. |
+
+The services in `needs` are reachable at every level, under the names the task
+needs them by: a task lists a service because it uses it. `network` works the same
+on [container services](/docs/service/container#network), and the tasks and
+services that need a limited service still reach it.
+
+`network` is not part of the [cache key](/docs/task/caching): it decides whether a
+task can work, not what a successful one produces. Ports a service publishes on the
+host stay published.
+
+## Allowed hosts
+
+A host is a name (`registry.npmjs.org`) or `*.` and a domain for every name under
+it (`*.githubusercontent.com` allows `raw.githubusercontent.com`, not
+`githubusercontent.com` itself). Names only: no ports and no IP addresses, and any
+port of an allowed host is allowed.
+
+Under `allow`, hammerkit starts an egress proxy next to the task and sets
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (and their lowercase spellings) for it,
+with the needed services in `NO_PROXY`. Package managers, `curl`, `git` and most
+HTTP clients read these variables. The proxy passes requests and `CONNECT` tunnels
+to an allowed host and answers everything else with `403 Forbidden`. Each refused
+host shows up once in the task's log, so a failing install says why:
+
+```
+warn network: refused example.com
+```
+
+The proxy is the only way out. A tool that ignores the proxy variables finds no
+route at all, and it fails closed: when the proxy is gone, nothing gets out. A tool
+that ignores `NO_PROXY` (busybox `wget`, say) still reaches the needed services,
+through the proxy. A service's healthcheck checks the service itself, so it runs
+without the proxy variables.
+
+Only HTTP and HTTPS go by host name. A database or anything else a task talks to
+over plain TCP belongs in its `needs` as a [service](/docs/service).
+
+## A ceiling for the run
+
+`--network` on [`run`](/docs/cli/execute) and [`up`](/docs/cli/up) sets the most any
+task or service of the run reaches, whatever the build file says. It is how a run
+of code you didn't write gets limited without changing the build file:
+
+```bash
+hammerkit run test --network none
+hammerkit run install --network allow:registry.npmjs.org,*.npmjs.com
+```
+
+The levels are ordered `none` < `allow` < `open`, and the ceiling clamps a more open
+setting down to it: under `--network none` every task reaches its needed services
+and nothing else. Under an `allow:` ceiling, an `open` task gets the ceiling's
+hosts, and a task with its own allow list keeps the hosts both lists allow. A
+service started by an earlier `up` is recreated when the ceiling changes its
+network.
+
+## Local tasks
+
+Hammerkit can't limit the network of a local task (one without an `image`), which
+runs on the host. `network` other than `open` on a local task is an error
+when the build file is read, and so is a `--network` ceiling below `open` with a
+local task in the run. Run the task in a container to limit it.
+
+## Docker
+
+A limited task or service gets an internal Docker network of its own, with no
+route out. The services it needs join that network under the names it needs them
+by, and under `allow` so does the proxy, which is also on the default bridge to
+reach the allowed hosts. A task with `network: none` that needs no service gets no
+network at all, only the loopback interface.
+
+The proxy is a small Node.js script run in a stock `node:24-alpine` container, so
+there is no hammerkit image to pull. The internal network and the proxy need Linux
+containers. Each limited task or service has its own proxy
+and its own allow list. The network and the proxy are removed with the task or
+service: a service started with `up --daemon` keeps them until `down`, and
+[`clean`](/docs/cli/clean) removes those of a run that was killed.
+
+## Kubernetes
+
+On a [Kubernetes environment](/docs/task/kubernetes), a limited task's jobs and a
+limited service's pods get a `NetworkPolicy` that allows egress to the pods of the
+services they need and, under `allow`, to their proxy, which runs as its own
+Deployment and Service. Everything else is denied, DNS included: the needed
+services and the proxy are host aliases of the pod. A service's healthcheck probe
+runs through `env` to empty the proxy variables.
+
+A `NetworkPolicy` only takes effect when the cluster's network plugin enforces it
+(Calico, Cilium, and recent versions of kind's kindnet do; some plain setups
+don't). Some plugins, kindnet among them, apply it a moment after a pod started,
+so a connection made in that first moment can still get out. A task's refused hosts show up in its log; a service outlives the run on
+a cluster, so its refused hosts are in the log of its proxy, the Deployment named
+`hammerkit-proxy-<id>`.

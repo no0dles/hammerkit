@@ -228,13 +228,37 @@ export class KubernetesExecutor implements RunExecutor {
 }
 
 // Everything a run made in the caller's namespace, by its label: Jobs with their
-// pods, Deployments, Services, claims and Secrets.
+// pods, Deployments (services and egress proxies), Services, claims, Secrets and
+// the NetworkPolicies of limited networks, which go last so no pod of the run
+// outlives its policy.
 export async function removeRunObjects(instance: KubernetesInstance, namespace: string, run: string): Promise<void> {
-  const selector = { namespace, labelSelector: `${RUN_LABEL}=${run}` }
+  const labelSelector = `${RUN_LABEL}=${run}`
+  const selector = { namespace, labelSelector }
   await instance.batchApi.deleteCollectionNamespacedJob({ ...selector, propagationPolicy: 'Background' })
   await instance.appsApi.deleteCollectionNamespacedDeployment({ ...selector, propagationPolicy: 'Background' })
   await instance.coreApi.deleteCollectionNamespacedPod({ ...selector, gracePeriodSeconds: 0 })
   await instance.coreApi.deleteCollectionNamespacedService(selector)
   await instance.coreApi.deleteCollectionNamespacedSecret(selector)
   await instance.coreApi.deleteCollectionNamespacedPersistentVolumeClaim(selector)
+  const policies = await instance.objectApi.list(
+    'networking.k8s.io/v1',
+    'NetworkPolicy',
+    namespace,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    labelSelector
+  )
+  for (const policy of policies.items) {
+    // the items of a list do not say their kind
+    const metadata = { name: policy.metadata?.name, namespace }
+    await instance.objectApi
+      .delete({ apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata })
+      .catch((e) => {
+        if (statusCodeOf(e) !== 404) {
+          throw e
+        }
+      })
+  }
 }

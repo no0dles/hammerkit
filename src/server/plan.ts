@@ -18,6 +18,7 @@ import { WorkTask } from '../planner/work-task'
 import { Bundle } from '../remote/bundle'
 import { getErrorMessage } from '../log'
 import { ParseError } from '../schema/parse-error'
+import { formatNetwork } from '../planner/work-network'
 
 export class DefinitionError extends Error {}
 
@@ -261,6 +262,13 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
           problems.push(
             `${item.name}: the secret ${describeSecret(secret).target} has cache: true, its digest would need ` +
               'the value before the Job of the task reads it, which this server does not support yet'
+          )
+        } else if (item.data.network.type !== 'open') {
+          // the init containers that read it share the pod's NetworkPolicy
+          problems.push(
+            `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider} in the ` +
+              `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it, ` +
+              'a task that reads secrets of a provider keeps an open network on this server'
           )
         }
       }

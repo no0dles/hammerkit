@@ -11,6 +11,7 @@ import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
 import { getRunLabels } from './job-placement'
+import { formatNetwork, getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
 
 // Where the values are in the pod (an in-memory volume), and where the init container
 // of a secret finds the credential of its account
@@ -53,6 +54,29 @@ export function splitJobSecrets(
     }
   }
   return { delivered, inJob }
+}
+
+/**
+ * The init containers that read secrets share the pod, and so the NetworkPolicy, of
+ * the task: under a limited network they could not reach the secret manager. Until
+ * they run in a pod of their own, a task that reads a provider's secret in its Job
+ * keeps an open network.
+ */
+export function assertSecretsReachable(
+  task: WorkItem<ContainerWorkTask>,
+  secrets: JobSecret[],
+  network: WorkNetwork = getEffectiveNetwork(task.data)
+): void {
+  if (secrets.length === 0 || network.type === 'open') {
+    return
+  }
+  const secret = secrets[0]
+  throw new Error(
+    `task ${task.name}: secret ${getSecretName(secret.secret)} is read from ${describeSecretSource(
+      secret.secret
+    )} in the Job of the task, which network ${formatNetwork(network)} would cut off from it; ` +
+      'on this cluster a task that reads secrets of a provider keeps an open network'
+  )
 }
 
 // The accounts of the secrets, in the order they are first read

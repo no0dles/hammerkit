@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { BatchV1Api, CoreV1Api, KubeConfig } from '@kubernetes/client-node'
+import { BatchV1Api, CoreV1Api, KubeConfig, NetworkingV1Api } from '@kubernetes/client-node'
 import { requiresKubernetes } from '../requires-kubernetes'
 import { environmentMock } from '../../executer/environment-mock'
 import { DefinitionStore } from '../../server/definitions'
@@ -34,11 +34,15 @@ function git(cwd: string, ...args: string[]): void {
   })
 }
 
-function cluster(): { core: CoreV1Api; batch: BatchV1Api } {
+function cluster(): { core: CoreV1Api; batch: BatchV1Api; networking: NetworkingV1Api } {
   const config = new KubeConfig()
   config.loadFromDefault()
   config.setCurrentContext(context)
-  return { core: config.makeApiClient(CoreV1Api), batch: config.makeApiClient(BatchV1Api) }
+  return {
+    core: config.makeApiClient(CoreV1Api),
+    batch: config.makeApiClient(BatchV1Api),
+    networking: config.makeApiClient(NetworkingV1Api),
+  }
 }
 
 const BUILD_FILE = `
@@ -54,8 +58,15 @@ tasks:
       - echo "key=$API_KEY"
       - test -s /run/secrets/token && echo token-present
       - mkdir -p out && cat input.txt > out/result.txt
+  offline:
+    image: alpine:3.19
+    network: none
+    cmds:
+      # the policy may apply a moment after the pod started
+      - for i in $(seq 30); do wget -q -T 2 -O /dev/null http://1.1.1.1 || exit 0; sleep 1; done; exit 1
+      - echo offline-ok
   check:
-    deps: [build]
+    deps: [build, offline]
     src: [input.txt]
     cmds:
       - echo "read $(cat out/result.txt)"
@@ -182,8 +193,10 @@ describe('kubernetes backend of a server', () => {
       expect(first.text).toContain('read hello from the checkout')
       expect(first.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
       expect(first.events).toContainEqual({ type: 'task', task: 'check', state: 'succeeded' })
+      // network: none is a NetworkPolicy on the Job's pod
+      expect(first.text).toContain('offline-ok')
 
-      const { core, batch } = cluster()
+      const { core, batch, networking } = cluster()
       const quota = await core.readNamespacedResourceQuota({ name: 'hammerkit', namespace: callerNamespace })
       expect(quota.spec?.hard).toEqual({ pods: '20' })
       const selector = { namespace: callerNamespace, labelSelector: 'hammerkit.dev/run=run_k8s_one' }
@@ -192,6 +205,7 @@ describe('kubernetes backend of a server', () => {
           ...(await batch.listNamespacedJob(selector)).items,
           ...(await core.listNamespacedSecret(selector)).items,
           ...(await core.listNamespacedPersistentVolumeClaim(selector)).items,
+          ...(await networking.listNamespacedNetworkPolicy(selector)).items,
         ].filter((item) => !item.metadata?.deletionTimestamp)
       expect(await left()).toEqual([])
 

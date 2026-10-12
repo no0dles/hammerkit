@@ -5,7 +5,7 @@ import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { WorkKubernetesServer } from '../planner/work-environment'
 import { WorkSecret } from '../planner/work-secret'
-import { getJobSecretSpec, JobSecretSpec, splitJobSecrets } from './job-secrets'
+import { assertSecretsReachable, getJobSecretSpec, JobSecretSpec, splitJobSecrets } from './job-secrets'
 
 const server: WorkKubernetesServer = {
   run: 'run_1',
@@ -111,6 +111,21 @@ describe('secrets read in the Job', () => {
     expect(() =>
       getJobSecretSpec(item, inJob, { ...server, providers: {} }, credentials, environmentMock(tmpdir()))
     ).toThrow('this server names no image for the provider echo')
+  })
+
+  it('keeps a task that reads them on an open network, its init containers share the pod’s policy', () => {
+    const { inJob } = splitJobSecrets(secrets, server)
+    const task = (network: unknown, networkCeiling: unknown = null) =>
+      ({ name: 'deploy', data: { network, networkCeiling } }) as any
+    expect(() => assertSecretsReachable(task({ type: 'open' }), inJob)).not.toThrow()
+    expect(() => assertSecretsReachable(task({ type: 'none' }), [])).not.toThrow()
+    expect(() => assertSecretsReachable(task({ type: 'none' }), inJob)).toThrow(
+      'task deploy: secret TOKEN is read from echo:the-token-value'
+    )
+    // a ceiling of the run limits it as much as the build file
+    expect(() => assertSecretsReachable(task({ type: 'open' }, { type: 'allow', hosts: ['a.com'] }), inJob)).toThrow(
+      'network allow'
+    )
   })
 
   it('keeps the command as it is for a task without such secrets', () => {

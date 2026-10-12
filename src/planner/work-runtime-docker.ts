@@ -24,6 +24,7 @@ import { getWorkInstanceId } from './work-instance-id'
 import { Readable } from 'stream'
 import { getServiceDefinitionHash } from './service-definition'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
+import { getItemNetworkName, removeItemNetwork } from '../docker/item-network'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -67,6 +68,7 @@ export function dockerTaskRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
+      await removeItemNetwork(docker, getItemNetworkName(task))
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       await dockerTask(docker, task, environment, options)
@@ -225,6 +227,7 @@ export function dockerServiceRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
+      await removeItemNetwork(docker, getItemNetworkName(service))
       await removeContainerSecrets(getWorkInstanceId(service))
     },
     async remove(): Promise<void> {
