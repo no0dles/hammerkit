@@ -27,7 +27,16 @@ describe('program arguments after --', () => {
 
   it('run hands them to the last command of the task, each one argument', async () => {
     const t = createTestCase('cmd-run-arguments', files)
-    await t.shell([HK, 'run', 'args', '--', ...ARGS, '--file', 'other.yaml'])
+    await t.setup(async (cwd, environment) => {
+      // a copy of process.env is case-sensitive, and Windows names it Path: local
+      // commands get PATH, as the real process.env answers it on every platform
+      const processEnvs = { ...environment.processEnvs, PATH: process.env.PATH }
+      await runProgram(
+        { ...environment, processEnvs },
+        [HK, 'run', 'args', '--', ...ARGS, '--file', 'other.yaml'],
+        true
+      )
+    })
     const dir = join(process.cwd(), 'temp', 'cmd-run-arguments')
     expect(JSON.parse(readFileSync(join(dir, 'out.json')).toString())).toEqual([...ARGS, '--file', 'other.yaml'])
     expect(existsSync(join(dir, 'pwned.txt'))).toBe(false)
