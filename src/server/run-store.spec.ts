@@ -50,6 +50,17 @@ describe('FileRunStore', () => {
     }
   })
 
+  it('keeps only the hash of the build file a run of an older server named', async () => {
+    const old = record('run_aaaaaaaaaaaaaaaa', '2026-01-01T00:00:00.000Z')
+    const hash = old.run.definition
+    writeFileSync(
+      join(directory, 'run_aaaaaaaaaaaaaaaa.json'),
+      JSON.stringify({ ...old, run: { ...old.run, definition: { name: 'payments', hash } } })
+    )
+    const { records } = await new FileRunStore(directory).load()
+    expect(records[0].run.definition).toBe(hash)
+  })
+
   it('removes a record, and what is not there is no error', async () => {
     const store = new FileRunStore(directory)
     await store.save(record('run_aaaaaaaaaaaaaaaa', '2026-01-01T00:00:00.000Z'))
