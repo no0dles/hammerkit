@@ -1,5 +1,5 @@
 {
   "title": "Remote compute",
   "icon": "Server",
-  "pages": ["index", "authentication", "entitlements", "accounts", "build-files", "sources", "runs", "backend"]
+  "pages": ["index", "authentication", "entitlements", "accounts", "build-files", "sources", "runs", "sandboxes", "backend"]
 }

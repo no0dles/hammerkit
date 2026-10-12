@@ -37,9 +37,15 @@ export interface RunApproval {
 // A ref run names a repository (`host/path`) and a branch, tag or commit of it, and is
 // pinned to the commit the ref pointed to when it was submitted, so what is approved is
 // what runs.
+//
+// A sandbox run names a sandbox of its owner. What it started from is recorded when it was
+// submitted: the commit the sandbox was fetched at and the git tree of its files, which
+// together name the changes it held. A run before it on the same sandbox may still change
+// the files, so the tree is what an approver saw, not a promise.
 export type RunSource =
   | { type: 'ref'; repo: string; ref: string; commit: string }
   | { type: 'upload'; snapshot: string }
+  | { type: 'sandbox'; id: string; repo: string; commit: string; tree: string }
 
 export interface RunSpec {
   // the version of the published build file the run executes
@@ -164,6 +170,11 @@ interface Entry {
 type AccountCheck = (account: string) => boolean
 
 export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
+export const SANDBOX_ID_PATTERN = /^sbx_[A-Za-z0-9_-]{16}$/
+
+function onSandbox(run: Run, sandbox: string): boolean {
+  return run.source.type === 'sandbox' && run.source.id === sandbox
+}
 
 // Where runs are kept while the server is up. Everything is scoped to the
 // caller that submitted the run: the same id asked for by someone else is
@@ -297,15 +308,35 @@ export class RunRegistry {
     if (!entry) {
       return undefined
     }
+    this.stop(entry)
+    return this.copy(entry.run)
+  }
+
+  // The run that holds a sandbox: the oldest on it that is not over. It holds it from
+  // when it is submitted, so the files are not moved under what an approver saw.
+  holder(sandbox: string): string | undefined {
+    return [...this.entries.values()].find((entry) => onSandbox(entry.run, sandbox) && !isFinal(entry.run.state))?.run
+      .id
+  }
+
+  // Cancels every run on a sandbox and resolves when none of them runs anymore.
+  async stopSandbox(sandbox: string, reason: string): Promise<void> {
+    const on = () => [...this.entries.values()].filter((entry) => onSandbox(entry.run, sandbox))
+    on().forEach((entry) => this.stop(entry, reason))
+    while (on().some((entry) => entry.run.state === 'running')) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
+  private stop(entry: Entry, reason?: string): void {
     if (entry.run.state === 'queued') {
       this.queue.splice(this.queue.indexOf(entry), 1)
-      this.finish(entry, 'cancelled')
+      this.finish(entry, 'cancelled', reason)
     } else if (entry.run.state === 'awaiting-approval') {
-      this.finish(entry, 'cancelled')
+      this.finish(entry, 'cancelled', reason)
     } else if (entry.run.state === 'running') {
       entry.abort.abort()
     }
-    return this.copy(entry.run)
   }
 
   // The runs that wait for an approval, of anybody, oldest first. Who may see
@@ -490,12 +521,24 @@ export class RunRegistry {
     return [...this.entries.values()].filter((entry) => entry.run.state === 'running' && this.owns(owner, entry)).length
   }
 
+  // Whether a run on the same sandbox executes: a sandbox runs one at a time.
+  private sandboxBusy(run: Run): boolean {
+    const source = run.source
+    return (
+      source.type === 'sandbox' &&
+      [...this.entries.values()].some((entry) => entry.run.state === 'running' && onSandbox(entry.run, source.id))
+    )
+  }
+
   // The first run in the queue whose caller has a place left: one caller with many runs
-  // does not keep the others from the machine.
+  // does not keep the others from the machine. A run on a sandbox another run works on
+  // waits for it.
   private dispatch(): void {
     while (this.running < this.maxConcurrent) {
       const index = this.queue.findIndex(
-        (entry) => !this.options.limits || this.runningOf(entry.run.owner) < this.options.limits.running
+        (entry) =>
+          (!this.options.limits || this.runningOf(entry.run.owner) < this.options.limits.running) &&
+          !this.sandboxBusy(entry.run)
       )
       if (index < 0) {
         return

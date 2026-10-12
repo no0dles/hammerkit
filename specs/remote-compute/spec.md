@@ -1,6 +1,6 @@
 # Feature Specification: Remote Compute
 
-**Status**: Draft, implementation in progress (ADR-0009, ADR-0010; sandboxes designed in ADR-0011). Delivered in phases; later phases are marked.
+**Status**: Draft, implementation in progress (ADR-0009, ADR-0010; sandboxes in ADR-0011, built on a host). Delivered in phases; later phases are marked.
 
 **Input**: run tasks on machines the team operates, so a laptop or a coding agent keeps working locally while heavy or platform-specific work runs elsewhere, with outputs staying on the remote until someone asks for them, and with authorization decided by OAuth alone.
 
@@ -72,16 +72,16 @@ runs:
   limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
   maxDuration: 1h
   network: { level: open }       # designed: the most open network a task gets
-sandboxes:                        # designed, ADR-0011
+sandboxes:                        # ADR-0011
   runtimes: [docker]
-  network: { level: allow, hosts: [registry.npmjs.org] }
+  network: { allow: [registry.npmjs.org] }
   limits: { count: 5, bytes: 20Gi }
   total: 500Gi
 entitlements:
   - subject: { iss: https://idp.corp, sub: 4f1c... }
     accounts: { op-payments-dev: use, op-payments-prod: request }
     repos: [github.com/corp/*]    # the repositories a ref run may name
-    sandboxes: true               # designed: may keep sandboxes of these repos
+    sandboxes: true               # may keep sandboxes of these repos
     builds: run                   # run | propose | publish, each includes the lower
   - group: { iss: https://idp.corp, name: release-managers }
     accounts: { op-payments-prod: use }
@@ -127,7 +127,7 @@ The server holds the build file; a run names a published build file and the task
 - Limits are part of the API from the start: 20,000 files, 32 MiB per file, 1 GiB per tree, 4 GiB per caller, nothing evicted on its own.
 - Not built: the client that walks the tree and sends the delta, `ref` plus a delta for tracked files, and the matcher with `!` exclusions on the Kubernetes upload path (a `// TODO` in `src/kubernetes/volumes.ts`).
 
-**Sandbox (designed, not built; ADR-0011).** A sandbox is a caller's own checkout on the server, which runs published tasks. It is for an agent with no machine and for a person whose laptop should not build, not for production.
+**Sandbox (ADR-0011; on a host: create, list, get, delete, fetch and runs are built, files, push and Kubernetes are not).** A sandbox is a caller's own checkout on the server, which runs published tasks. It is for an agent with no machine and for a person whose laptop should not build, not for production.
 
 - **Create** (`POST /v1/sandboxes { repo, ref }`) resolves the ref to a commit and fetches it with the read credential of the operator's `sources`, like a ref run. It is a fetch, not a run: no container and no slot of the run limits. An entitlement with `sandboxes: true` may create sandboxes of its `repos`. A sandbox belongs to its caller (`404` for anybody else), stays until it is deleted (no TTL, nothing evicted), and counts against `sandboxes.limits` (count and bytes per caller, a total).
 - **Files.** Two ways in. The first is typed endpoints for clients without tools of their own (MCP): `tree`, `files` (`offset`/`limit`, numbered lines), `search` (ripgrep's parameters), `edits` (atomic batches of `replace` with `old_string`/`new_string`, `write`, `delete`, `move`, and `patch` as a git diff or an `apply_patch` body), and `changes` (summary, diff or patch against the base commit). The second is a raw surface for harnesses that bring their own tools and only swap the backend (pi's tool operations): read and write bytes, and stat. Every list, read and search is capped, with a total and a cursor. No symbolic link is followed, `.git/` and the upload deny list are never read or written, and edits while a run holds the sandbox are `409`.
@@ -135,11 +135,18 @@ The server holds the build file; a run names a published build file and the task
   - One run per sandbox at a time.
   - Container runtimes only, unless the operator lists `local` in `sandboxes.runtimes`.
   - The cache namespace is per owner.
-  - The run records the base commit and a hash of the diff it started from.
+  - The run records the base commit and the git tree of the sandbox's files when it was submitted, which together name the diff it started from, and logs the tree again when it starts.
 - **Accounts** are used by sandbox runs only when their `source` lists `sandbox`; an account without `source` takes `ref` and `upload`, not `sandbox`.
 - **Shell.** A shell is a published task whose last command is `sh -c`, run with [arguments](../task-arguments/spec.md) (`options.args`). A task that reads secrets takes no arguments on a server, so a shell holds no account. Its network is capped by `sandboxes.network` ([network limits](../task-network/spec.md)).
 - **Work out**: first, a patch from `changes` that the caller turns into a branch. Later, `POST /v1/sandboxes/<id>/push { branch, message }` with the write credential of `sources[].push`, only to the branches it lists (`agent/**`). **Work in**: the `patch` edit, so a laptop's uncommitted work needs no second upload path.
 - **Storage** is one interface (create, attach to a run, files, usage, delete) with two implementations. On a host it is a directory. On Kubernetes it is a PVC in the caller's namespace, mounted only while a task or a short file-operation pod runs, so an idle sandbox costs storage only, and a `ResourceQuota` on storage is the quota. Kubernetes needs the task executor first.
+- **Built on a host** (implementation notes, defaults where this spec left a detail open):
+  - `POST /v1/sandboxes { repo, ref }` answers `201` once the shallow fetch is done; `GET /v1/sandboxes` lists the caller's with `limits` and `used`; `POST /v1/sandboxes/<id>/fetch { ref }` moves a sandbox only while it has no changes (`git` tree of its files equal to the commit's; what `.gitignore` leaves out does not count) and no run holds it, else `409`; `DELETE` cancels its runs, waits for them and removes it.
+  - A run holds its sandbox from submit until it is over, waiting for approval and queued included; a second run on it waits in the queue. Fetch (and later edits) are `409` meanwhile.
+  - Limits: `sandboxes.limits.count` (default 5) and `.bytes` (default 20Gi) per caller and `sandboxes.total` (default 500Gi), `413` per caller and `507` for the total; a create that turns out over the limit is removed. Bytes are measured after a fetch and after each run; a caller over their bytes gets `413` for runs on sandboxes until they delete one.
+  - The git data of a sandbox lives next to its files, not in them, and every git command names its git directory and work tree without hooks or a file system monitor: tasks write to the files, and git runs as the server's user.
+  - A run on a sandbox needs `sandboxes: true` and the repository in `repos` again at submit. `sandboxes.network` (written as a task's `network`, default `none`; `local` in `sandboxes.runtimes` needs `open`) is the network ceiling of its tasks and services; it is combined with `runs.network` once that is built.
+  - Engine: `createParseContext(file, environment, { directory: { read, work } })` reads build files below `read` and works below `work`.
 
 ## Approvals
 

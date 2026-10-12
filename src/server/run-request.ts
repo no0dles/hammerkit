@@ -3,6 +3,7 @@ import { parseDuration } from '../utils/units'
 import { HASH_PATTERN } from '../remote/bundle'
 import { definitionName } from './server-config'
 import { normalizeRepo } from './repo'
+import { SANDBOX_ID_PATTERN } from './runs'
 
 const name = z.string().min(1).max(200)
 
@@ -74,6 +75,10 @@ export const runRequestSchema = z
         .strict(),
       // the name of a tree announced with POST /v1/sources
       z.object({ type: z.literal('upload'), snapshot: z.string().regex(HASH_PATTERN) }).strict(),
+      // a sandbox of the caller's, see POST /v1/sandboxes
+      z
+        .object({ type: z.literal('sandbox'), id: z.string().regex(SANDBOX_ID_PATTERN, 'expected a sandbox id') })
+        .strict(),
     ]),
     options: runOptionsSchema.default({}),
   })

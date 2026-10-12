@@ -1,0 +1,288 @@
+import { execFileSync } from 'child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { createTestCase } from '../testing/test-case'
+import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
+import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { TEST_WORKER } from '../testing/worker'
+import { readServerConfig } from './server-config'
+import { RunExecutor } from './runs'
+import { startServer } from './server'
+
+const REPO = 'github.com/corp/payments'
+
+// alice keeps sandboxes; bob publishes and may not keep any; dev takes sandbox runs, ci does not
+const policy = `
+runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }
+runtimes: [docker, local]
+sandboxes: { runtimes: [docker, local], network: open, limits: { count: 2 } }
+secretProviders:
+  echo: { command: [${JSON.stringify(process.execPath)}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }
+accounts:
+  dev: { providers: { echo: { env: {} } }, source: [ref, sandbox] }
+  ci: { providers: { echo: { env: {} } } }
+sources:
+  - match: github.com/corp/*
+entitlements:
+  - subject: { iss: ISSUER, sub: alice }
+    accounts: { dev: use, ci: use }
+    repos: [github.com/corp/*]
+    builds: run
+    sandboxes: true
+  - subject: { iss: ISSUER, sub: carol }
+    repos: [github.com/corp/*]
+    builds: run
+    sandboxes: true
+  - subject: { iss: ISSUER, sub: bob }
+    accounts: { dev: use, ci: use }
+    repos: [github.com/corp/*]
+    builds: publish
+`
+
+const buildFile = [
+  'tasks:',
+  '  build:',
+  '    cmds: [cat input.txt]',
+  '  dev:',
+  '    secrets:',
+  '      - { from: "echo:dev", account: dev, env: TOKEN }',
+  '    cmds: [echo dev]',
+  '  ci:',
+  '    secrets:',
+  '      - { from: "echo:ci", account: ci, env: TOKEN }',
+  '    cmds: [echo ci]',
+  '',
+].join('\n')
+
+interface JsonResponse extends Response {
+  json(): Promise<any>
+}
+
+interface Api {
+  call: (method: string, path: string, options?: { sub?: string; body?: unknown }) => Promise<JsonResponse>
+  hash: string
+  log: string[]
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+describe('sandboxes api', () => {
+  let repository: string
+
+  const git = (...args: string[]) =>
+    execFileSync(
+      'git',
+      ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args],
+      {
+        cwd: repository,
+        encoding: 'utf8',
+      }
+    ).trim()
+
+  beforeEach(() => {
+    repository = mkdtempSync(join(tmpdir(), 'hammerkit-sandbox-repository-'))
+    git('init', '--quiet', '--initial-branch=main')
+    writeFileSync(join(repository, 'input.txt'), 'from-main')
+    git('add', '.')
+    git('commit', '--quiet', '-m', 'one')
+    git('checkout', '--quiet', '-b', 'next')
+    writeFileSync(join(repository, 'input.txt'), 'from-next')
+    git('commit', '--quiet', '-am', 'two')
+    git('checkout', '--quiet', 'main')
+  })
+
+  afterEach(() => rmSync(repository, { recursive: true, force: true }))
+
+  async function withApi(name: string, executor: RunExecutor | undefined, fn: (api: Api) => Promise<void>) {
+    const key = createTestKey('ES256', 'k1')
+    const idp = await startTestIssuer([key])
+    try {
+      await createTestCase(name, {}).setup(async (cwd, env) => {
+        const file = join(cwd, 'server.yaml')
+        writeFileSync(
+          file,
+          `listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
+            join(cwd, 'server-data')
+          )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(
+            /ISSUER/g,
+            `"${idp.url}"`
+          )}`
+        )
+        const log: string[] = []
+        const serverEnv = { ...env, processEnvs: { ...process.env } }
+        const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
+          log: (line) => log.push(line),
+          executor,
+          repos: { url: () => repository },
+          worker: TEST_WORKER,
+        })
+        const call: Api['call'] = (method, path, options = {}) =>
+          fetch(`${server.url}${path}`, {
+            method,
+            headers: {
+              authorization: `Bearer ${signToken(key, {
+                iss: idp.url,
+                sub: options.sub ?? 'alice',
+                aud: 'hammerkit',
+                exp: Math.floor(Date.now() / 1000) + 300,
+              })}`,
+              ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
+            },
+            body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          }) as Promise<JsonResponse>
+        try {
+          const published = await call('PUT', '/v1/definitions/payments', {
+            sub: 'bob',
+            body: { files: { '.hammerkit.yaml': buildFile } },
+          })
+          expect(published.status).toBe(201)
+          await fn({ call, hash: (await published.json()).hash, log })
+        } finally {
+          await server.close()
+        }
+      })
+    } finally {
+      await idp.close()
+    }
+  }
+
+  const create = (api: Api, sub = 'alice', ref = 'main') =>
+    api.call('POST', '/v1/sandboxes', { sub, body: { repo: REPO, ref } })
+
+  const runOn = (api: Api, id: string, tasks = ['build'], sub = 'alice') =>
+    api.call('POST', '/v1/runs', {
+      sub,
+      body: { definition: { name: 'payments', hash: api.hash }, tasks, source: { type: 'sandbox', id } },
+    })
+
+  async function untilState(api: Api, id: string, states: string[]) {
+    const until = Date.now() + 30_000
+    while (Date.now() < until) {
+      const run = await (await api.call('GET', `/v1/runs/${id}`)).json()
+      if (states.includes(run.state)) {
+        return run
+      }
+      await sleep(20)
+    }
+    throw new Error(`run ${id} never reached ${states}`)
+  }
+
+  it('creates, lists, moves and deletes the sandboxes of a caller', async () => {
+    await withApi('sandboxes-api-lifecycle', undefined, async (api) => {
+      const created = await create(api)
+      expect(created.status).toBe(201)
+      const sandbox = await created.json()
+      const commit = git('rev-parse', 'main')
+      expect(sandbox).toMatchObject({ repo: REPO, ref: 'main', commit, busy: false, run: null })
+      expect(sandbox.owner).toBeUndefined()
+
+      const list = await (await api.call('GET', '/v1/sandboxes')).json()
+      expect(list.sandboxes.map((s: { id: string }) => s.id)).toEqual([sandbox.id])
+      expect(list.limits).toEqual({ count: 2, bytes: 20 * 1024 ** 3 })
+      expect(list.used).toEqual({ count: 1, bytes: sandbox.bytes })
+      expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}`)).status).toBe(200)
+
+      // somebody else's sandbox is not there
+      expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}`, { sub: 'carol' })).status).toBe(404)
+      expect((await api.call('DELETE', `/v1/sandboxes/${sandbox.id}`, { sub: 'carol' })).status).toBe(404)
+      expect(await (await api.call('GET', '/v1/sandboxes', { sub: 'carol' })).json()).toMatchObject({ sandboxes: [] })
+
+      const moved = await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'next' } })
+      expect(moved.status).toBe(200)
+      expect(await moved.json()).toMatchObject({ ref: 'next', commit: git('rev-parse', 'next') })
+
+      expect((await api.call('DELETE', `/v1/sandboxes/${sandbox.id}`)).status).toBe(200)
+      expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}`)).status).toBe(404)
+      expect(api.log.some((line) => line.startsWith(`sandbox create ${sandbox.id} iss=`))).toBe(true)
+    })
+  })
+
+  it('needs sandboxes on an entitlement, a repository of the caller and a ref that exists', async () => {
+    await withApi('sandboxes-api-refused', undefined, async (api) => {
+      const bob = await create(api, 'bob')
+      expect(bob.status).toBe(403)
+      expect((await bob.json()).error).toBe('you are not entitled to keep sandboxes on this server')
+      const other = await api.call('POST', '/v1/sandboxes', { body: { repo: 'github.com/other/x', ref: 'main' } })
+      expect(other.status).toBe(403)
+      expect((await create(api, 'alice', 'missing')).status).toBe(400)
+      expect((await api.call('POST', '/v1/sandboxes', { body: { repo: 'not a repo', ref: 'main' } })).status).toBe(400)
+      expect((await api.call('POST', '/v1/sandboxes', { body: { repo: REPO } })).status).toBe(400)
+      // the limit of two
+      expect((await create(api)).status).toBe(201)
+      expect((await create(api)).status).toBe(201)
+      const over = await create(api)
+      expect(over.status).toBe(413)
+      expect((await over.json()).error).toMatch(/you have 2 sandboxes, the limit is 2/)
+    })
+  })
+
+  it('runs the published build file on the files of a sandbox', async () => {
+    await withApi('sandboxes-api-run', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const submitted = await runOn(api, sandbox.id)
+      expect(submitted.status).toBe(202)
+      const run = await submitted.json()
+      expect(run.source).toEqual({
+        type: 'sandbox',
+        id: sandbox.id,
+        repo: REPO,
+        commit: sandbox.commit,
+        tree: expect.stringMatching(/^[0-9a-f]{40}/),
+      })
+      const finished = await untilState(api, run.id, ['succeeded', 'failed'])
+      expect(finished.state).toBe('succeeded')
+      const events = await (await api.call('GET', `/v1/runs/${run.id}/events`)).text()
+      expect(events).toContain('from-main')
+    })
+  })
+
+  it("uses only the accounts that take sandbox runs, and only the caller's own sandboxes", async () => {
+    await withApi('sandboxes-api-accounts', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const ci = await runOn(api, sandbox.id, ['ci'])
+      expect(ci.status).toBe(403)
+      expect((await ci.json()).error).toBe('the account ci is not used by runs from sandbox')
+      const unknown = await runOn(api, 'sbx_aaaaaaaaaaaaaaaa')
+      expect(unknown.status).toBe(400)
+      expect((await unknown.json()).error).toMatch(/there is no sandbox sbx_aaaaaaaaaaaaaaaa/)
+      expect((await runOn(api, sandbox.id, ['build'], 'carol')).status).toBe(400)
+      const dev = await runOn(api, sandbox.id, ['dev'])
+      expect(dev.status).toBe(202)
+      await untilState(api, (await dev.json()).id, ['succeeded', 'failed'])
+    })
+  })
+
+  it('holds a sandbox for its run: no fetch then, and a delete cancels the run', async () => {
+    let started = false
+    const holding: RunExecutor = {
+      execute: (_run, { signal }) =>
+        new Promise<void>((_resolve, reject) => {
+          started = true
+          signal.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
+    }
+    await withApi('sandboxes-api-held', holding, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const run = await (await runOn(api, sandbox.id)).json()
+      while (!started) {
+        await sleep(5)
+      }
+      expect(await (await api.call('GET', `/v1/sandboxes/${sandbox.id}`)).json()).toMatchObject({
+        busy: true,
+        run: run.id,
+      })
+      const fetch = await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'next' } })
+      expect(fetch.status).toBe(409)
+      // a second run waits for the first
+      const second = await (await runOn(api, sandbox.id)).json()
+      expect((await (await api.call('GET', `/v1/runs/${second.id}`)).json()).state).toBe('queued')
+      expect((await api.call('DELETE', `/v1/sandboxes/${sandbox.id}`)).status).toBe(200)
+      expect((await (await api.call('GET', `/v1/runs/${run.id}`)).json()).state).toBe('cancelled')
+      expect(await (await api.call('GET', `/v1/runs/${second.id}`)).json()).toMatchObject({
+        state: 'cancelled',
+        error: 'the sandbox was deleted',
+      })
+    })
+  })
+})

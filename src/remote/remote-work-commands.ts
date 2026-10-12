@@ -63,7 +63,7 @@ interface ApprovalView {
   definition: { name: string; hash: string }
   tasks: string[]
   accounts: string[]
-  source: { type: string; ref?: string; snapshot?: string }
+  source: { type: string; ref?: string; snapshot?: string; repo?: string; commit?: string; tree?: string }
   options: Record<string, unknown>
   approvals?: { account: string; expiresAt: string; approvedBy?: { sub: string } }[]
   plan?: Record<string, PlanView>
@@ -90,7 +90,12 @@ const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
 
 // What a person who approves is shown of a run: everything the decision rests on.
 function describe(run: ApprovalView): string[] {
-  const source = run.source.type === 'ref' ? `ref ${run.source.ref}` : `snapshot ${run.source.snapshot}`
+  const source =
+    run.source.type === 'ref'
+      ? `ref ${run.source.ref}`
+      : run.source.type === 'sandbox'
+        ? `sandbox of ${run.source.repo} at ${run.source.commit}, files ${run.source.tree}`
+        : `snapshot ${run.source.snapshot}`
   const options = Object.entries(run.options)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)
     .join(' ')

@@ -2,7 +2,8 @@ import { z } from 'zod'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
-import { parseDuration } from '../utils/units'
+import { parseDuration, parseSize } from '../utils/units'
+import { networkSchema } from '../schema/network-schema'
 import {
   buildFileSecretAccountSchema,
   buildFileSecretProvidersSchema,
@@ -95,9 +96,10 @@ export const accountSchema = z
     // per secret provider, the environment that makes its command act as this
     // account; the credentials are files and variables of the operator's machine
     providers: buildFileSecretAccountSchema.shape.providers.default({}),
-    // where the code of a run using this account may come from; both when left out
+    // where the code of a run using this account may come from: `upload` and `ref` when
+    // left out; a sandbox, which holds unreviewed changes, only when it is listed
     source: z
-      .array(z.enum(['upload', 'ref']))
+      .array(z.enum(['upload', 'ref', 'sandbox']))
       .min(1)
       .optional(),
     // the refs (branches or tags, `release/*` for a level) a run using this account
@@ -136,14 +138,24 @@ export const entitlementSchema = z
     // the repositories (`host/path` patterns) the caller may run from a git ref
     repos: z.array(repoPatternSchema).default([]),
     builds: buildsLevelSchema.optional(),
+    // may keep sandboxes of the repositories in `repos`: checkouts on the server that
+    // runs work on
+    sandboxes: z.boolean().optional(),
   })
   .strict()
   .superRefine((entitlement, ctx) => {
     checkWho(entitlement, ctx)
-    if (Object.keys(entitlement.accounts).length === 0 && entitlement.builds === undefined) {
+    if (Object.keys(entitlement.accounts).length === 0 && entitlement.builds === undefined && !entitlement.sandboxes) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, or a builds level',
+        message: 'name accounts to use or request, a builds level or sandboxes',
+      })
+    }
+    if (entitlement.sandboxes && entitlement.repos.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sandboxes'],
+        message: 'a sandbox is a checkout of a repository, list the repositories in repos',
       })
     }
   })
@@ -175,6 +187,14 @@ const duration = z.string().refine((value) => {
     return false
   }
 }, 'expected a duration like 30m, 1h or 1d')
+
+const size = z.string().refine((value) => {
+  try {
+    return parseSize(value) > 0
+  } catch {
+    return false
+  }
+}, 'expected a size like 500Mi, 20Gi or 1Ti')
 
 export type Issuer = z.infer<typeof issuerSchema>
 export type Entitlement = z.infer<typeof entitlementSchema>
@@ -279,6 +299,33 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
+    // checkouts of callers on the server that runs work on (`sandboxes: true` on an
+    // entitlement). They stay until they are deleted, within these limits.
+    sandboxes: z
+      .object({
+        // what the tasks of a run on a sandbox may run on, out of `runtimes`. A local task
+        // would run as the user of the server and could read every other sandbox, so
+        // `local` has to be named here too.
+        runtimes: z
+          .array(z.enum(['docker', 'local']))
+          .min(1)
+          .default(['docker']),
+        // the most open network a task or service of a run on a sandbox gets, written as
+        // a task's `network`: only the services it needs by default
+        network: networkSchema.default('none'),
+        // what one caller may keep; a sandbox over it can't be created
+        limits: z
+          .object({
+            count: z.number().int().min(1).default(5),
+            bytes: size.default('20Gi'),
+          })
+          .strict()
+          .default({}),
+        // what all sandboxes together may take
+        total: size.default('500Gi'),
+      })
+      .strict()
+      .default({}),
     backend: z
       .object({
         type: z.literal('host'),
@@ -364,6 +411,22 @@ export const serverConfigSchema = z
             message: `the account ${account} reads the sources, no entitlement may name it`,
           })
         }
+      }
+    })
+    if (config.sandboxes.runtimes.includes('local') && config.sandboxes.network !== 'open') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sandboxes', 'network'],
+        message: 'hammerkit can not limit the network of a local task, set network: open to allow local in sandboxes',
+      })
+    }
+    config.sandboxes.runtimes.forEach((runtime, index) => {
+      if (!config.runtimes.includes(runtime)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sandboxes', 'runtimes', index],
+          message: `the runtime ${runtime} is not in runtimes, the server does not run on it at all`,
+        })
       }
     })
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {

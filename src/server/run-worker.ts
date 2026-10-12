@@ -16,6 +16,8 @@ import { parseDuration } from '../utils/units'
 import { runOptionsSchema } from './run-request'
 import { getRunScopes } from './run-plan'
 import type { RunEventData } from './runs'
+import { networkSchema } from '../schema/network-schema'
+import { parseWorkNetwork } from '../planner/work-network'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -30,6 +32,14 @@ export const workerInputSchema = z
   .object({
     // the build file to start from, in the checkout
     entry: z.string().min(1),
+    // set when the build files are read from a directory of the run and work on the
+    // files of a sandbox
+    directory: z
+      .object({ read: z.string().min(1), work: z.string().min(1) })
+      .strict()
+      .optional(),
+    // the most open network a task or service of the run gets, see `run --network`
+    network: networkSchema.optional(),
     tasks: z.array(z.string()),
     options: runOptionsSchema,
     // the accounts the run was admitted for; a secret of any other is refused
@@ -101,10 +111,13 @@ export async function runTasks(
       cacheReadOnly: options.cacheReadOnly ?? false,
       timeout: options.timeout ? parseDuration(options.timeout) : null,
       skipDeps: options.skipDeps !== false,
+      network: input.network ? parseWorkNetwork(input.network) : null,
     }
 
     for (const { name, scope } of getRunScopes(input.tasks, options)) {
-      const { ctx, scope: parsed } = await createParseContext(input.entry, environment)
+      const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
+        directory: input.directory,
+      })
       const workTree = getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment)
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0) {

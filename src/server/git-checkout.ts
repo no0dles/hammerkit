@@ -103,11 +103,14 @@ export async function resolveRef(
   return commit
 }
 
-async function git(
+// Runs git without a prompt and with the network transports only. Errors say what could
+// not be done (`unable to <action> <what>`) with the last line git printed.
+export async function git(
   args: string[],
   baseEnv: { [key: string]: string | undefined },
   signal: AbortSignal,
-  what: string
+  what: string,
+  action = 'fetch'
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -122,10 +125,10 @@ async function git(
   } catch (e) {
     const error = e as NodeJS.ErrnoException & { stderr?: string }
     if (error.code === 'ABORT_ERR') {
-      throw new Error(`fetching ${what} was cancelled`)
+      throw new Error(`${action === 'fetch' ? 'fetching' : `${action} of`} ${what} was cancelled`)
     }
     if (error.code === 'ENOENT') {
-      throw new Error(`unable to fetch ${what}: git is not installed`)
+      throw new Error(`unable to ${action} ${what}: git is not installed`)
     }
     const reason =
       (error.stderr ?? '')
@@ -133,6 +136,6 @@ async function git(
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
         .pop() ?? error.message
-    throw new Error(`unable to fetch ${what}: ${reason}`)
+    throw new Error(`unable to ${action} ${what}: ${reason}`)
   }
 }

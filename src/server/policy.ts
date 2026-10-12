@@ -10,6 +10,8 @@ export interface Grant {
   repos: string[]
   // what the caller may do with the build files, null for nothing
   builds: BuildsLevel | null
+  // may keep sandboxes of `repos`
+  sandboxes: boolean
   // the entitlements that matched, for the log
   matched: number[]
 }
@@ -69,6 +71,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const accounts: Grant['accounts'] = {}
   const repos: string[] = []
   let builds: BuildsLevel | null = null
+  let sandboxes = false
 
   entitlements.forEach((entitlement, index) => {
     if (!matches(entitlement, principal)) {
@@ -91,11 +94,52 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     ) {
       builds = entitlement.builds
     }
+    sandboxes = sandboxes || entitlement.sandboxes === true
   })
-  return { accounts, repos, builds, matched }
+  return { accounts, repos, builds, sandboxes, matched }
 }
 
-export type SubmittedSource = { type: 'ref'; repo: string; ref: string } | { type: 'upload' }
+export type SubmittedSource =
+  | { type: 'ref'; repo: string; ref: string }
+  | { type: 'upload' }
+  // a sandbox of the caller's, of this repository
+  | { type: 'sandbox'; repo: string }
+
+// Whether the caller may create a sandbox of a repository: `sandboxes: true` and the
+// repository in their `repos`, and the server able to read it. The answer is the
+// reason when not.
+export function decideSandbox(
+  grant: Grant,
+  repo: string,
+  readable: (repo: string) => boolean
+): { status: 400 | 403; error: string } | null {
+  if (!grant.sandboxes) {
+    return { status: 403, error: 'you are not entitled to keep sandboxes on this server' }
+  }
+  return checkRepo(grant, repo, readable, 'keep a sandbox of')
+}
+
+// the caller's own list first: what they may not name is not told whether the server can read it
+function checkRepo(
+  grant: Grant,
+  repo: string,
+  readable: (repo: string) => boolean,
+  what: string
+): { status: 400 | 403; error: string } | null {
+  if (!matchesAnyRepo(grant.repos, repo)) {
+    return {
+      status: 403,
+      error:
+        grant.repos.length > 0
+          ? `you may not ${what} ${repo}, your repositories are ${grant.repos.join(', ')}`
+          : `you may not ${what} ${repo}, no entitlement of yours lists a repository`,
+    }
+  }
+  if (!readable(repo)) {
+    return { status: 400, error: `this server can not read ${repo}` }
+  }
+  return null
+}
 
 export interface RunDecisionInput {
   grant: Grant
@@ -132,19 +176,12 @@ export function decideRun(input: RunDecisionInput): RunDecision {
       error: 'runs from an upload are not supported by this server yet, use a git ref',
     }
   }
-  // the caller's own list first: what they may not name is not told whether the server can read it
-  if (!matchesAnyRepo(grant.repos, source.repo)) {
-    return {
-      type: 'refuse',
-      status: 403,
-      error:
-        grant.repos.length > 0
-          ? `you may not run from ${source.repo}, your repositories are ${grant.repos.join(', ')}`
-          : `you may not run from ${source.repo}, no entitlement of yours lists a repository`,
-    }
+  if (source.type === 'sandbox' && !grant.sandboxes) {
+    return { type: 'refuse', status: 403, error: 'you are not entitled to keep sandboxes on this server' }
   }
-  if (!readable(source.repo)) {
-    return { type: 'refuse', status: 400, error: `this server can not read ${source.repo}` }
+  const repoProblem = checkRepo(grant, source.repo, readable, 'run from')
+  if (repoProblem) {
+    return { type: 'refuse', ...repoProblem }
   }
   const request: string[] = []
   for (const account of accounts) {
@@ -153,10 +190,12 @@ export function decideRun(input: RunDecisionInput): RunDecision {
       return { type: 'refuse', status: 403, error: `you may not use the account ${account}, it needs use or request` }
     }
     const rules = catalog[account]
-    if (rules?.source && !rules.source.includes(source.type)) {
+    // a sandbox holds changes nobody reviewed: an account takes its runs only when it says so
+    const sources = rules?.source ?? ['ref', 'upload']
+    if (!sources.includes(source.type)) {
       return { type: 'refuse', status: 403, error: `the account ${account} is not used by runs from ${source.type}` }
     }
-    if (rules?.refs) {
+    if (rules?.refs && source.type === 'ref') {
       if (COMMIT.test(source.ref) || !matchesRef(rules.refs, source.ref)) {
         return {
           type: 'refuse',

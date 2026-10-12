@@ -1,6 +1,7 @@
 import {
   canUse,
   decideRun,
+  decideSandbox,
   getGrant,
   Grant,
   mayPropose,
@@ -36,7 +37,7 @@ const entitlements: Entitlement[] = [
 describe('getGrant', () => {
   it('denies by default', () => {
     const grant = getGrant(entitlements, { iss: IDP, sub: 'bob', groups: [], claims: {} })
-    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, matched: [] })
+    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, sandboxes: false, matched: [] })
     expect(getGrant([], alice).accounts).toEqual({})
   })
 
@@ -134,13 +135,14 @@ describe('builds levels', () => {
 describe('decideRun', () => {
   const catalog: { [name: string]: Account } = {
     ci: { providers: {} },
-    dev: { providers: {} },
+    dev: { providers: {}, source: ['ref', 'sandbox'] },
     prod: { providers: {}, source: ['ref'], refs: ['main', 'release/*'] },
   }
-  const grantOf = (accounts: Grant['accounts'], builds: Grant['builds'] = 'run'): Grant => ({
+  const grantOf = (accounts: Grant['accounts'], builds: Grant['builds'] = 'run', sandboxes = true): Grant => ({
     accounts,
     repos: ['github.com/corp/*'],
     builds,
+    sandboxes,
     matched: [0],
   })
   const base = (over: Partial<RunDecisionInput>): RunDecisionInput => ({
@@ -196,6 +198,36 @@ describe('decideRun', () => {
       { type: 'run' },
     ],
     [
+      'a sandbox runs with an account that lists it',
+      { accounts: ['dev'], source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      { type: 'run' },
+    ],
+    [
+      'an account without a source takes no sandbox runs',
+      { accounts: ['ci'], source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      refuse(403, /account ci is not used by runs from sandbox/),
+    ],
+    [
+      'an account for refs only takes no sandbox runs',
+      { accounts: ['prod'], source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      refuse(403, /account prod is not used by runs from sandbox/),
+    ],
+    [
+      'a sandbox run without an account runs',
+      { source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      { type: 'run' },
+    ],
+    [
+      'a sandbox run needs sandboxes: true',
+      { grant: grantOf({ dev: 'use' }, 'run', false), source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      refuse(403, /not entitled to keep sandboxes/),
+    ],
+    [
+      'a sandbox of a repository the caller lost is refused',
+      { source: { type: 'sandbox', repo: 'github.com/other/payments' } },
+      refuse(403, /may not run from github.com\/other\/payments/),
+    ],
+    [
       'a request nobody can approve is refused at once',
       { accounts: ['prod'], approvable: () => false },
       refuse(409, /nobody can approve prod/),
@@ -216,5 +248,41 @@ describe('decideRun', () => {
       })
     )
     expect(decision).toEqual(refuse(403, /not used by runs from ref/))
+  })
+})
+
+describe('decideSandbox', () => {
+  const grant = (over: Partial<Grant> = {}): Grant => ({
+    accounts: {},
+    repos: ['github.com/corp/*'],
+    builds: 'run',
+    sandboxes: true,
+    matched: [0],
+    ...over,
+  })
+
+  it('lets a caller with sandboxes keep one of their repositories', () => {
+    expect(decideSandbox(grant(), 'github.com/corp/payments', () => true)).toBeNull()
+  })
+
+  it('needs sandboxes: true', () => {
+    expect(decideSandbox(grant({ sandboxes: false }), 'github.com/corp/payments', () => true)).toEqual({
+      status: 403,
+      error: 'you are not entitled to keep sandboxes on this server',
+    })
+  })
+
+  it('needs the repository in repos, before telling whether the server reads it', () => {
+    expect(decideSandbox(grant(), 'github.com/other/x', () => false)).toEqual({
+      status: 403,
+      error: 'you may not keep a sandbox of github.com/other/x, your repositories are github.com/corp/*',
+    })
+  })
+
+  it('needs a repository the server reads', () => {
+    expect(decideSandbox(grant(), 'github.com/corp/payments', () => false)).toEqual({
+      status: 400,
+      error: 'this server can not read github.com/corp/payments',
+    })
   })
 })

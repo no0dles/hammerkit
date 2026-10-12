@@ -35,7 +35,14 @@ export async function handleAccounts(
         .map((account) => `${account.name}:${account.level}`)
         .join(',')}] entitlements=[${grant.matched.join(',')}]`
     )
-    send(res, 200, { iss: principal.iss, sub: principal.sub, accounts, repos: grant.repos, builds: grant.builds })
+    send(res, 200, {
+      iss: principal.iss,
+      sub: principal.sub,
+      accounts,
+      repos: grant.repos,
+      builds: grant.builds,
+      sandboxes: grant.sandboxes,
+    })
     return true
   }
   send(res, 200, {

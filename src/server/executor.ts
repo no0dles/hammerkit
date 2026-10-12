@@ -11,6 +11,9 @@ import { checkoutRef } from './git-checkout'
 import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
 import { PlanContext, planRun } from './run-plan'
+import { PlanPolicy } from './plan'
+import { SandboxRegistry } from './sandboxes'
+import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
@@ -47,13 +50,25 @@ export interface HostExecutorOptions {
   cache: string
   // the command that starts the process of a run, see defaultWorker
   worker?: string[]
+  // the sandboxes runs may work on, and what such a run may do
+  sandboxes?: SandboxRunOptions
+}
+
+export interface SandboxRunOptions {
+  registry: SandboxRegistry
+  // the policy of a run on a sandbox: the runtimes of `sandboxes.runtimes`
+  policy: PlanPolicy
+  // the most open network a task or service of such a run gets
+  network: NetworkSchema
 }
 
 // The cache a run shares with others is the one of its source: the runs of a repository
-// share one, those of an upload only the uploader's. Somebody who can only upload can
-// not leave an entry for a run from a reviewed repository to find.
+// share one, those of an upload or a sandbox only their owner's. Somebody who can only
+// upload, or an agent on a sandbox, can not leave an entry for a run from a reviewed
+// repository to find.
 function cacheNamespace(run: Run): string {
-  const key = run.source.type === 'ref' ? `ref\0${run.source.repo}` : `upload\0${run.owner.iss}\0${run.owner.sub}`
+  const key =
+    run.source.type === 'ref' ? `ref\0${run.source.repo}` : `${run.source.type}\0${run.owner.iss}\0${run.owner.sub}`
   return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
 }
 
@@ -89,12 +104,16 @@ export class HostExecutor implements RunExecutor {
         }`
       )
     }
-    if (run.source.type !== 'ref') {
+    if (run.source.type === 'upload') {
       throw new Error('runs from an upload are not supported by this server yet, use a git ref')
     }
-    const { repo, ref, commit: pinned } = run.source
-    if (!repos.readable(repo)) {
-      throw new Error(`this server can not read ${repo}, the operator lists it in sources`)
+    const source = run.source
+    const sandboxes = this.options.sandboxes
+    if (source.type === 'sandbox' && !sandboxes) {
+      throw new Error('this server keeps no sandboxes')
+    }
+    if (source.type === 'ref' && !repos.readable(source.repo)) {
+      throw new Error(`this server can not read ${source.repo}, the operator lists it in sources`)
     }
     const worker = this.options.worker ?? defaultWorker()
     if (!worker) {
@@ -103,7 +122,8 @@ export class HostExecutor implements RunExecutor {
 
     // what was approved is what runs: the accounts are read again from the files with
     // the environment of the run, and the run may use no more than it was admitted for
-    const planned = await planRun(bundle, run, planning.environment, planning.policy)
+    const policy = source.type === 'sandbox' && sandboxes ? sandboxes.policy : planning.policy
+    const planned = await planRun(bundle, run, planning.environment, policy)
     const extra = planned.accounts.filter((account) => !run.accounts.includes(account))
     if (extra.length > 0) {
       throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
@@ -117,33 +137,67 @@ export class HostExecutor implements RunExecutor {
     context.signal.addEventListener('abort', abort, { once: true })
 
     const root = join(this.options.directory, run.id)
-    const checkout = join(root, 'source')
     try {
-      const credentials = await repos.credentials(repo)
-      let commit: string
-      try {
-        commit = await checkoutRef(repos.url(repo), ref, checkout, credentials.env, abortCtrl.signal, pinned)
-      } catch (e) {
-        throw repos.scrub(e, credentials.values)
+      let cwd: string
+      let input: Pick<WorkerInput, 'entry' | 'directory' | 'network'>
+      if (source.type === 'ref') {
+        cwd = join(root, 'source')
+        const { repo, ref, commit: pinned } = source
+        const credentials = await repos.credentials(repo)
+        let commit: string
+        try {
+          commit = await checkoutRef(repos.url(repo), ref, cwd, credentials.env, abortCtrl.signal, pinned)
+        } catch (e) {
+          throw repos.scrub(e, credentials.values)
+        }
+        context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
+        await this.writeBundle(cwd, bundle.files)
+        input = { entry: join(cwd, version.entry) }
+      } else {
+        // the published files are read from a directory of the run and work on the
+        // sandbox, whose own build files are just files
+        const { registry, network } = sandboxes as SandboxRunOptions
+        cwd = await registry.attach(source.id)
+        const state = await registry.state(source.id)
+        context.emit({
+          type: 'log',
+          task: 'hammerkit',
+          stream: 'stdout',
+          text: `sandbox ${source.id} of ${source.repo} at ${state.commit}, files ${state.tree}${
+            state.clean ? '' : ' with changes'
+          }`,
+        })
+        const published = join(root, 'bundle')
+        await mkdir(published, { recursive: true })
+        await this.writeBundle(published, bundle.files)
+        input = { entry: join(published, version.entry), directory: { read: published, work: cwd }, network }
       }
-      context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
-      await this.writeBundle(checkout, bundle.files)
 
       const home = join(root, 'home')
       await mkdir(home, { recursive: true })
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
-      const input: WorkerInput = {
-        entry: join(checkout, version.entry),
-        tasks: run.tasks,
-        options: run.options,
-        accounts: run.accounts,
-        catalog: planning.environment.hosted?.catalog as SecretCatalog,
-      }
-      await this.runInProcess(worker, input, checkout, this.processEnvironment(home, cache), context, abortCtrl.signal)
+      await this.runInProcess(
+        worker,
+        {
+          ...input,
+          tasks: run.tasks,
+          options: run.options,
+          accounts: run.accounts,
+          catalog: planning.environment.hosted?.catalog as SecretCatalog,
+        },
+        cwd,
+        this.processEnvironment(home, cache),
+        context,
+        abortCtrl.signal
+      )
     } finally {
       context.signal.removeEventListener('abort', abort)
       await rm(root, { recursive: true, force: true })
+      if (source.type === 'sandbox') {
+        // what the run wrote counts against the owner's limits
+        await sandboxes?.registry.measure(source.id).catch(() => undefined)
+      }
     }
   }
 

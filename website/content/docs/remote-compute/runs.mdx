@@ -46,8 +46,9 @@ there yet; a run is a `POST /v1/runs`.
 * `source` says where the code comes from: `{ "type": "ref", "repo": "github.com/corp/payments", "ref": "main" }`
   for a branch or tag of a repository (or a full commit hash) that the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
   for the caller's working tree, announced and sent beforehand, see [Source
-  files](#source-files). A snapshot that is unknown, or that still lacks files, is
-  `400`. The kinds the accounts of the run list in `source` (and, for `refs`, the
+  files](#source-files), or `{ "type": "sandbox", "id": "sbx_..." }` for a
+  [sandbox](/docs/remote-compute/sandboxes) of the caller's. A snapshot that is unknown, or that still lacks files, and a sandbox
+  that is not the caller's, are `400`. The kinds the accounts of the run list in `source` (and, for `refs`, the
   branches) are the only ones allowed, anything else is `403`.
 * `options` are the settings of `hammerkit run` that make sense on a server, all
   optional: `env`, `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
@@ -68,10 +69,11 @@ What `POST /v1/runs` answers, in the order the server checks:
 | Status | When |
 | --- | --- |
 | `202` | The run is accepted, `queued` or `awaiting-approval`. |
-| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, the repository is not readable by the server or the ref is not one branch or tag, or the snapshot is unknown or incomplete. |
+| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
 | `401` | The token is missing or invalid. |
-| `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. |
+| `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs `sandboxes: true`. |
 | `409` | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request. |
+| `413` | The caller's [sandboxes](/docs/remote-compute/sandboxes) take more than their limit (runs on a sandbox only). |
 | `429` | The caller is over their [limits](#limits-and-restarts). |
 | `501` | The run is from an `upload`, which the executor does not support yet. |
 | `502` | The server could not reach the repository to resolve the ref. |
@@ -191,8 +193,8 @@ chose for runs. Tasks do not get the environment of the process either, only the
 `envs` and the secrets they declare.
 
 The task cache is kept below the server's `storage` directory, one cache for the runs of
-a repository and one per caller for uploads. A run from an upload can therefore not leave
-an entry that a run from a reviewed repository finds. A task is keyed by its definition
+a repository and one per caller for uploads and for sandboxes. A run from an upload or a
+sandbox can therefore not leave an entry that a run from a reviewed repository finds. A task is keyed by its definition
 and its sources, not by where the checkout is.
 
 A run fails with the reason when the server does not list the repository, when the ref
@@ -205,7 +207,11 @@ files with the run's environment, and fails the run if it would use one it was n
 admitted for. The secrets of the tasks are read as the accounts of the server config, by
 the provider commands, and a secret of any other account is refused when it is fetched.
 
-The process of a run is not a sandbox, see [One server is one trust level](/docs/remote-compute/backend#one-server-is-one-trust-level).
+A run on a [sandbox](/docs/remote-compute/sandboxes#running-on-a-sandbox) skips the fetch: the
+published files are written to a directory of the run, and the process works on the files
+of the sandbox, which stay when the run is over.
+
+The process of a run is not an isolation boundary, see [One server is one trust level](/docs/remote-compute/backend#one-server-is-one-trust-level).
 
 ## Limits and restarts
 

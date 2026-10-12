@@ -469,6 +469,63 @@ describe('RunRegistry limits', () => {
   })
 })
 
+describe('RunRegistry sandboxes', () => {
+  const on = (id: string) => ({
+    ...spec,
+    source: { type: 'sandbox' as const, id, repo: 'github.com/corp/payments', commit: 'c'.repeat(40), tree: 't' },
+  })
+
+  it('runs one run at a time on a sandbox, and others next to it', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxConcurrent: 4 })
+    const first = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const second = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const other = registry.submit(alice, on('sbx_bbbbbbbbbbbbbbbb'))
+    await tick()
+    expect(pending).toHaveLength(2)
+    expect(registry.get(alice, second.id)?.state).toBe('queued')
+    expect(registry.get(alice, other.id)?.state).toBe('running')
+    pending[0].resolve()
+    await tick()
+    expect(registry.get(alice, first.id)?.state).toBe('succeeded')
+    expect(registry.get(alice, second.id)?.state).toBe('running')
+    await registry.close()
+  })
+
+  it('names the run that holds a sandbox, from its submit until it is over', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxConcurrent: 1 })
+    registry.submit(alice, spec)
+    const waiting = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    await tick()
+    expect(registry.get(alice, waiting.id)?.state).toBe('queued')
+    expect(registry.holder('sbx_aaaaaaaaaaaaaaaa')).toBe(waiting.id)
+    expect(registry.holder('sbx_bbbbbbbbbbbbbbbb')).toBeUndefined()
+    pending[0].resolve()
+    await tick()
+    pending[1].resolve()
+    await tick()
+    expect(registry.holder('sbx_aaaaaaaaaaaaaaaa')).toBeUndefined()
+    await registry.close()
+  })
+
+  it('stops every run on a sandbox and waits for the running one', async () => {
+    const { executor } = manual()
+    const registry = new RunRegistry({ executor })
+    const running = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const queued = registry.submit(alice, on('sbx_aaaaaaaaaaaaaaaa'))
+    const waiting = registry.submit(alice, { ...on('sbx_aaaaaaaaaaaaaaaa'), accounts: ['prod'] }, ['prod'])
+    const other = registry.submit(alice, on('sbx_bbbbbbbbbbbbbbbb'))
+    await tick()
+    await registry.stopSandbox('sbx_aaaaaaaaaaaaaaaa', 'the sandbox was deleted')
+    expect(registry.get(alice, running.id)?.state).toBe('cancelled')
+    expect(registry.get(alice, queued.id)).toMatchObject({ state: 'cancelled', error: 'the sandbox was deleted' })
+    expect(registry.get(alice, waiting.id)?.state).toBe('cancelled')
+    expect(registry.get(alice, other.id)?.state).toBe('running')
+    await registry.close()
+  })
+})
+
 describe('RunRegistry store', () => {
   let directory: string
   beforeEach(() => {

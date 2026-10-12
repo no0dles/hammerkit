@@ -236,6 +236,7 @@ entitlements:
         ],
         repos: ['github.com/corp/payments'],
         builds: 'run',
+        sandboxes: false,
       })
       expect(log.join('\n')).toMatch(
         /grant iss=\S+ sub=alice accounts=\[op-payments-dev:use,op-payments-prod:request,op-web-dev:use\] entitlements=\[0,1\]/
@@ -364,6 +365,49 @@ describe('server config policy', () => {
     ['an issuer that is not accepted', { subject: { iss: 'https://other', sub: 'a' }, accounts: { a: 'use' } }],
   ])('rejects %s', (_name, entitlement) => {
     expect(serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] }).success).toBe(false)
+  })
+
+  it('rejects sandboxes without repositories', () => {
+    const entitlement = { subject: { iss: 'https://idp.corp', sub: 'a' }, sandboxes: true }
+    const result = serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] })
+    expect(result.success).toBe(false)
+    expect(!result.success && result.error.issues[0].message).toMatch(/list the repositories in repos/)
+    expect(
+      serverConfigSchema.safeParse({ ...base, entitlements: [{ ...entitlement, repos: ['github.com/corp/*'] }] })
+        .success
+    ).toBe(true)
+  })
+
+  it('keeps sandboxes on containers with no network, unless the operator says otherwise', () => {
+    const config = serverConfigSchema.parse(base)
+    expect(config.sandboxes).toEqual({
+      runtimes: ['docker'],
+      network: 'none',
+      limits: { count: 5, bytes: '20Gi' },
+      total: '500Gi',
+    })
+    expect(
+      serverConfigSchema.safeParse({
+        ...base,
+        sandboxes: { network: { allow: ['registry.npmjs.org', '*.github.com'] } },
+      }).success
+    ).toBe(true)
+  })
+
+  it.each([
+    ['a runtime the server does not run on', { runtimes: ['local'], network: 'open' }, /not in runtimes/],
+    ['a level that does not exist', { network: 'some' }, /Invalid input/],
+    ['a host that is an address', { network: { allow: ['10.0.0.1'] } }, /invalid host/],
+    [
+      'local tasks under a limited network',
+      { runtimes: ['local'], network: 'none' },
+      /can not limit the network of a local task/,
+    ],
+    ['a size that is not one', { limits: { bytes: 'lots' } }, /expected a size/],
+  ])('rejects sandboxes with %s', (_name, sandboxes, message) => {
+    const result = serverConfigSchema.safeParse({ ...base, sandboxes })
+    expect(result.success).toBe(false)
+    expect(!result.success && result.error.issues[0].message).toMatch(message)
   })
 
   it('names the account that is not defined, and the ones that are', () => {
