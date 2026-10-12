@@ -16,6 +16,7 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
 import { Readable } from 'stream'
+import { getPodPlacement, getRunLabels } from './job-placement'
 
 // A previous run that crashed between creating an upload/download pod and its
 // `finally` cleanup leaves a pod behind under the same deterministic name. apply()
@@ -88,12 +89,21 @@ export async function getPodForPersistence(
       name,
       labels: {
         'hammerkit.dev/id': service.id(),
+        ...getRunLabels(env),
       },
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
     },
     spec: {
+      // on a server the claims are bound where the pod of the task can go: the nodes
+      // of its pool
+      ...(env.server
+        ? {
+            automountServiceAccountToken: false,
+            ...getPodPlacement(env.server, 'pool' in service.data ? service.data.pool : undefined),
+          }
+        : {}),
       containers: [
         {
           name: 'volume',

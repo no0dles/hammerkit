@@ -293,6 +293,13 @@ describe('network', () => {
           ])
           // a Service name has at most 63 characters, whatever the task is called
           expect(getProxyName(install).length).toBeLessThanOrEqual(63)
+
+          // on a server the policy carries the run, which removes it with the run's other objects
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {} }
+          expect(buildNetworkPolicy({ ...env, server }, offline, { type: 'none' }).metadata.labels).toEqual({
+            'hammerkit.dev/network-of': offline.id(),
+            'hammerkit.dev/run': 'run_1',
+          })
         }
       )
     })
