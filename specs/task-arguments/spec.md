@@ -2,7 +2,7 @@
 
 **Created**: 2026-10-12
 
-**Status**: Design, not implemented (ADR-0011)
+**Status**: Implemented, locally (FR-001 to FR-006) and on a server (FR-007, FR-008) (ADR-0011)
 
 **Input**: Narrowing a run (one test file, one test name, a flag for a dev server) needs a new task per variation or a `--set` variable the build file has to anticipate. Agents need the same thing on a server: a shell is a task that takes its command as an argument. Pascal decided on raw passthrough, as `npm run x -- ...` and `make` users know it, and that it works locally and remotely.
 
@@ -26,6 +26,14 @@
 - **FR-006**: `hammerkit ls --json` and the published versions of a server show each task's last command (and each service's `cmd`), so a caller can tell where arguments land.
 - **FR-007 (server)**: The run request takes `options.args: string[]` with exactly one entry in `tasks`. Limits: 100 arguments, 16 KiB together. A server never takes `--set`.
 - **FR-008 (server)**: A run that passes arguments to a task that reads secrets is refused at submit (`400`): an argument can make the command print its secrets. So a shell task never holds an account.
+
+## Implementation notes (server)
+
+- **Where the check sits.** The arguments are applied while the run is planned, so the run's `plan` (what the caller and an approver see) carries the command as it runs. The secrets check reads that plan at submit, and again in the executor before anything starts.
+- **Only the named task counts.** A dependency or needed service that reads secrets does not refuse the run: it never gets the arguments.
+- **Not a service.** A run request names tasks; arguments with a service in `tasks` are `400`.
+- **No NUL.** An argument with a NUL character is `400` at the schema, as locally.
+- **The approver's view.** `hammerkit remote approvals` and `remote show` list the arguments as JSON strings on a line of their own, so commas and spaces in one stay visible.
 
 ## Out of scope
 

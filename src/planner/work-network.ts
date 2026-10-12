@@ -62,6 +62,20 @@ export function getEffectiveNetwork(item: { network: WorkNetwork; networkCeiling
   return limitNetwork(item.network, item.networkCeiling)
 }
 
+// Whether `network` reaches more than `ceiling` allows: the ceiling would clamp it.
+export function exceedsNetwork(network: WorkNetwork, ceiling: WorkNetwork): boolean {
+  const limited = limitNetwork(network, ceiling)
+  if (limited.type !== network.type) {
+    return true
+  }
+  return network.type === 'allow' && limited.type === 'allow' && limited.hosts.join(',') !== network.hosts.join(',')
+}
+
+// The setting as a build file writes it.
+export function toNetworkSchema(network: WorkNetwork): NetworkSchema {
+  return network.type === 'allow' ? { allow: [...network.hosts] } : network.type
+}
+
 export function isLimitedNetwork(network: WorkNetwork): boolean {
   return network.type !== 'open'
 }

@@ -139,6 +139,30 @@ describe('workerMain', () => {
     ])
   })
 
+  it('appends the arguments to the last command of the task', async () => {
+    writeFileSync(join(directory, '.hammerkit.yaml'), 'tasks:\n  say:\n    cmds: [echo]\n')
+    const messages = await run({
+      ...base,
+      tasks: ['say'],
+      options: { ...base.options, args: ['from-the-arguments'] },
+      entry: join(directory, '.hammerkit.yaml'),
+    })
+    expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: true })
+    const text = messages.map((m) => (m.kind === 'event' && m.event.type === 'log' ? m.event.text : '')).join('')
+    expect(text).toContain('from-the-arguments')
+  })
+
+  it('holds the run to the network ceiling of the server', async () => {
+    // a local task can not be limited, so the ceiling refuses it before it starts
+    const messages = await run({ ...base, network: 'none', entry: join(directory, '.hammerkit.yaml') })
+    expect(messages[messages.length - 1]).toEqual({
+      kind: 'result',
+      ok: false,
+      error: expect.stringContaining("can't limit the network of the local task hello"),
+    })
+    expect(messages.some((m) => m.kind === 'event' && m.event.type === 'task')).toBe(false)
+  })
+
   it('says when the build file has no such task', async () => {
     const messages = await run({ ...base, tasks: ['nope'], entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toMatchObject({ kind: 'result', ok: false })

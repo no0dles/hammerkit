@@ -19,7 +19,7 @@ hammerkit keeps under `.hammerkit`). That is what gets reused — and what
 
 A task's cache key has two parts:
 
-* the task's **definition**: `cmds`, `image` (or the host OS for a local task),
+* the task's **definition**: `cmds` (with any [arguments](/docs/task/arguments) after `--`), `image` (or the host OS for a local task),
   the CPU architecture, `envs`, `mounts`, `shell`, `src` and `generates` paths,
   the working directory, and the definitions of its **dependencies**, and
 * its **state**: the declared **`src`** files (their content checksum by default,

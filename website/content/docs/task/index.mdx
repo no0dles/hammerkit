@@ -30,7 +30,7 @@ A task is built from a small, fixed set of fields:
 
 | Field | Purpose |
 |-------|---------|
-| `cmds` | The commands to run, in order. |
+| `cmds` | The commands to run, in order. [Arguments](/docs/task/arguments) after `--` are appended to the last one. |
 | `image` | Run the commands inside this container image. Omit to run on the host. |
 | `src` | Input files/folders. Used for [caching](/docs/task/caching) — unchanged sources let the task be skipped. |
 | `generates` | Output files/folders the task produces. This is what gets cached, stored and restored. |

@@ -436,6 +436,44 @@ describe('runs api', () => {
     })
   })
 
+  it('passes arguments to the one task a run names, and to no task that reads secrets', async () => {
+    await withApi('runs-api-args', done, async (api) => {
+      const args = ['src/login.spec.ts', '-t', 'a; rm -rf /']
+      const response = await api.submit({ ...request, tasks: ['deploy'], options: { args: ['--dry-run'] } })
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toBe(
+        'deploy reads secrets (KUBE_TOKEN), it takes no arguments on a server: an argument could make it print them'
+      )
+      expect(api.log.some((line) => line.includes('refuse run') && line.includes('deploy reads secrets'))).toBe(true)
+
+      // a dependency that reads secrets is fine, it does not get them
+      const integration = await api.submit({ ...request, tasks: ['integration'], options: { args } })
+      expect(integration.status).toBe(202)
+      const run = await integration.json()
+      expect(run.options.args).toEqual(args)
+      // the approver and the caller see the command as it runs
+      expect(run.plan.integration.command).toBe(`echo integration 'src/login.spec.ts' '-t' 'a; rm -rf /'`)
+      expect(run.plan['ci-secret'].command).toBe('echo ci')
+
+      const refuse = async (body: unknown, message: string | RegExp) => {
+        const refused = await api.submit(body)
+        expect(refused.status).toBe(400)
+        expect((await refused.json()).error).toMatch(message)
+      }
+      await refuse({ ...request, tasks: ['build', 'test'], options: { args } }, /arguments go to one task/)
+      await refuse(
+        { definition: request.definition, source: request.source, options: { filter: ['group=slow'], args } },
+        /arguments go to one task/
+      )
+      await refuse({ ...request, options: { args: Array(101).fill('x') } }, /options.args/)
+      await refuse({ ...request, options: { args: ['x'.repeat(16 * 1024 + 1)] } }, /longer than 16 KiB together/)
+      await refuse({ ...request, options: { args: ['a\0b'] } }, /NUL character/)
+      await refuse({ ...request, options: { args: [1] } }, /options.args/)
+      // no arguments are no arguments
+      expect((await api.submit({ ...request, tasks: ['build', 'test'], options: { args: [] } })).status).toBe(202)
+    })
+  })
+
   it('rejects settings that are not for a server or not safe', async () => {
     await withApi('runs-api-bad-options', done, async (api) => {
       for (const options of [
@@ -568,7 +606,9 @@ describe('runs api', () => {
         async (api) => {
           const published = await api.call('PUT', '/v1/definitions/payments', {
             sub: 'bob',
-            body: { files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' } },
+            body: {
+              files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n  show:\n    cmds: [cat]\n' },
+            },
           })
           const hash = (await published.json()).hash
           const run = await (await api.submit({ ...request, definition: { name: 'payments', hash } })).json()
@@ -576,6 +616,20 @@ describe('runs api', () => {
           const events = await readEvents(await api.call('GET', `/v1/runs/${run.id}/events`))
           expect(events.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
           expect(events.some((e) => e.event === 'task' && e.data.state === 'succeeded')).toBe(true)
+
+          // the arguments of a run reach its last command
+          const show = await (
+            await api.submit({
+              ...request,
+              definition: { name: 'payments', hash },
+              tasks: ['show'],
+              options: { args: ['input.txt'] },
+            })
+          ).json()
+          expect(show.plan.show.command).toMatch(/^cat 'input.txt'$/)
+          expect((await untilState(api, show.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+          const shown = await readEvents(await api.call('GET', `/v1/runs/${show.id}/events`))
+          expect(shown.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
         },
         '',
         { url: () => repository }

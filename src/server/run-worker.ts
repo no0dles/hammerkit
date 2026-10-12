@@ -14,10 +14,10 @@ import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { runOptionsSchema } from './run-request'
-import { getRunScopes } from './run-plan'
-import type { RunEventData, TaskStatus } from './runs'
 import { networkSchema } from '../schema/network-schema'
 import { parseWorkNetwork } from '../planner/work-network'
+import { getRunScopes } from './run-plan'
+import type { RunEventData, TaskStatus } from './runs'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -38,7 +38,8 @@ export const workerInputSchema = z
       .object({ read: z.string().min(1), work: z.string().min(1) })
       .strict()
       .optional(),
-    // the most open network a task or service of the run gets, see `run --network`
+    // the most open network a task or service of the run gets, see `run --network`: the
+    // server's `runs.network`, under `sandboxes.network` too on a sandbox
     network: networkSchema.optional(),
     tasks: z.array(z.string()),
     options: runOptionsSchema,

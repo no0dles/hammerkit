@@ -115,8 +115,9 @@ A run names the sandbox as its `source`, the rest of the request is a normal
   server and could read every other sandbox on the machine, so `local` has to be listed
   there by name, and in `runtimes`.
 * **Network.** No task or service of a run on a sandbox reaches more than
-  `sandboxes.network`, `none` by default: only the services it needs. A build file can
-  narrow it, never widen it, see [network limits](/docs/task/network).
+  `sandboxes.network`, `none` by default: only the services it needs, nor more than
+  [`runs.network`](/docs/remote-compute/runs#config), which holds for every run. A build
+  file can narrow it, never widen it, see [network limits](/docs/task/network).
 * **Cache.** Runs on sandboxes share a cache per owner, never with runs from a ref: a
   sandbox holds changes nobody reviewed, and an entry they leave must not reach a reviewed
   run.

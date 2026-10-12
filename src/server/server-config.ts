@@ -296,6 +296,9 @@ export const serverConfigSchema = z
           })
           .strict()
           .default({}),
+        // the most any task or service of a run reaches besides its needs: none, open
+        // or { allow: [hosts] }. A version that asks for more is refused at publish.
+        network: networkSchema.default('open'),
       })
       .strict()
       .default({}),
@@ -413,6 +416,13 @@ export const serverConfigSchema = z
         }
       }
     })
+    if (config.runs.network !== 'open' && config.runtimes.includes('local')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['runs', 'network'],
+        message: 'the network of a local task can not be limited, allow only the docker runtime with runs.network',
+      })
+    }
     if (config.sandboxes.runtimes.includes('local') && config.sandboxes.network !== 'open') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -420,8 +430,10 @@ export const serverConfigSchema = z
         message: 'hammerkit can not limit the network of a local task, set network: open to allow local in sandboxes',
       })
     }
+    // a server that runs only local tasks and grants no sandboxes keeps the default
+    const sandboxesGranted = config.entitlements.some((entitlement) => entitlement.sandboxes)
     config.sandboxes.runtimes.forEach((runtime, index) => {
-      if (!config.runtimes.includes(runtime)) {
+      if (sandboxesGranted && !config.runtimes.includes(runtime)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['sandboxes', 'runtimes', index],

@@ -71,7 +71,7 @@ runs:
   env: { allow: [PATH, DOCKER_HOST] }   # the only variables of the server a run sees
   limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
   maxDuration: 1h
-  network: { level: open }       # designed: the most open network a task gets
+  network: open                  # the most a task or service reaches besides its needs, as a task's `network`
 sandboxes:                        # ADR-0011
   runtimes: [docker]
   network: { allow: [registry.npmjs.org] }
@@ -102,6 +102,7 @@ backend:
 - A run from `source: ref` names a repository (`host/path`) and a ref in the request, never a url. The caller's `repos` and the operator's `sources` both have to cover it. The ref is pinned to a commit when the run is submitted and the executor fails if the ref moved, so what was approved is what runs. The read credential is a secret of a provider read as a reserved account, handed to git for one fetch through its environment, and masked in logs.
 - A run executes in a process of its own with a private home directory, a cache namespace per source trust, the allowlisted environment, and no other secret than those of its accounts. A published build file may not name an environment, a Kubernetes service, a cache backend, a mount outside the bundle or a runtime the operator did not allow, and a `file:` secret is refused: where things run and what is read from the machine is the operator's.
 - A run answers how each of its tasks went (built): `results` in `GET /v1/runs/<id>` has per task the status, exit code, duration, cache hit or the causes of a miss (the engine's `explain`), and its last 20 lines, kept past the log cap. `?wait=` (up to a minute) answers once the run is over, for clients that can not hold the event stream (an agent's tool call). `GET /v1/runs/<id>/logs` reads numbered lines with `task`, `tail`, `from`/`limit` and `grep` (a fixed string, never a regular expression of the caller) with `context`.
+- A run can pass [arguments](../task-arguments/spec.md) to exactly one task in `options.args` (up to 100, 16 KiB together), never to a task that reads secrets. `runs.network` is a [network](../task-network/spec.md) ceiling for every run, checked at publish: a version whose tasks or services ask for more is refused. A version's plan shows each item's last command (`command`) and its `network`.
 - Per caller (issuer and subject) the server limits the runs that wait for an approval, that wait in the queue and that execute at once (`429` over the first two); a run is stopped after `runs.maxDuration` and its log is capped. Runs are written to the storage directory when their state changes: a restart keeps finished runs, lets waiting runs wait on, and fails the ones that were queued or running with the server. SIGHUP reloads the entitlements only; the rest of the config needs a restart.
 
 ### Secrets

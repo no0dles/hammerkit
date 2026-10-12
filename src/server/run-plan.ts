@@ -11,11 +11,13 @@ function labels(values: string[] | undefined): LabelValues | undefined {
 }
 
 // The tasks in the order they were named, one scope each; by labels when none is.
+// The arguments, if any, go to the one task named (the request allows no more).
 export function getRunScopes(tasks: string[], options: RunOptions): { name: string; scope: WorkScope }[] {
+  const args = options.args && options.args.length > 0 ? { values: options.args, services: false } : undefined
   return tasks.length > 0
     ? tasks.map((task) => ({
         name: task,
-        scope: { taskName: task, environmentName: options.env ?? null },
+        scope: { taskName: task, environmentName: options.env ?? null, ...(args ? { args } : {}) },
       }))
     : [
         {
@@ -55,6 +57,31 @@ export async function planRun(
     plan,
     accounts: [...new Set(Object.values(plan).flatMap((entry) => entry.accounts))].sort(),
   }
+}
+
+/**
+ * Why a run may not pass its arguments, or null when it may. They go to a task, never a
+ * service, and never to a task that reads secrets: an argument can make the command
+ * print them, so a shell on a server holds no account.
+ */
+export function refuseArguments(
+  run: { tasks: string[]; options: RunOptions },
+  plan: PlannedRun['plan']
+): string | null {
+  if (!run.options.args || run.options.args.length === 0) {
+    return null
+  }
+  const [name] = run.tasks
+  const entry = plan[name]
+  if (!entry || entry.kind !== 'task') {
+    return `${name} is a service, arguments go to a task`
+  }
+  if (entry.secrets.length > 0) {
+    return `${name} reads secrets (${entry.secrets
+      .map((secret) => secret.target)
+      .join(', ')}), it takes no arguments on a server: an argument could make it print them`
+  }
+  return null
 }
 
 // What build files are read with on a server: the environment of its runs and the
