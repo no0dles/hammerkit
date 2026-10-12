@@ -76,17 +76,15 @@ export class HostExecutor implements RunExecutor {
 
   async execute(run: Run, context: RunContext): Promise<void> {
     const { definitions, planning, repos } = this.options
-    const version = definitions.find(run.definition.name, run.definition.hash)
+    const version = definitions.find(run.definition)
     const bundle = version ? await definitions.files(version) : undefined
     if (!version || !bundle) {
-      throw new Error(`the build file ${run.definition.name} at ${run.definition.hash} is no longer on this server`)
+      throw new Error(`the build file ${run.definition} is no longer on this server`)
     }
     // pulled back after the run was accepted, while it waited for an approval or in the queue
     if (version.yanked) {
       throw new Error(
-        `the build file ${run.definition.name} at ${run.definition.hash} was yanked${
-          version.yanked.reason ? `: ${version.yanked.reason}` : ''
-        }`
+        `the build file ${run.definition} was yanked${version.yanked.reason ? `: ${version.yanked.reason}` : ''}`
       )
     }
     if (run.source.type !== 'ref') {

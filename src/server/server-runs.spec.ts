@@ -114,13 +114,13 @@ async function withApi(
         }) as Promise<JsonResponse>
       const submit = (body: unknown, sub?: string) => call('POST', '/v1/runs', { body, sub })
       try {
-        const published = await call('PUT', '/v1/definitions/payments', { body: bundle, sub: 'bob' })
+        const published = await call('POST', '/v1/definitions', { body: bundle, sub: 'bob' })
         if (published.status !== 201) {
           throw new Error(
             `could not publish the build file: ${published.status} ${JSON.stringify(await published.json())}`
           )
         }
-        request.definition.hash = (await published.json()).hash
+        request.definition = (await published.json()).hash
         await fn({
           get server() {
             return server
@@ -172,7 +172,7 @@ const bundle = {
 }
 // the hash is filled in once the build file is published
 const request = {
-  definition: { name: 'payments', hash: 'latest' },
+  definition: '',
   tasks: ['build'],
   source: { type: 'ref', repo: REPO, ref: 'main' },
 }
@@ -237,7 +237,7 @@ describe('runs api', () => {
       expect(response.status).toBe(202)
       const run = await response.json()
       expect(run).toMatchObject({
-        definition: { name: 'payments', hash: expect.stringMatching(/^sha256:/) },
+        definition: expect.stringMatching(/^sha256:/),
         state: 'queued',
         tasks: ['build'],
         accounts: [],
@@ -388,22 +388,23 @@ describe('runs api', () => {
 
   it('pins the version of the build file a run uses', async () => {
     await withApi('runs-api-definition', done, async (api) => {
-      const latest = await api.submit({ ...request, definition: { name: 'payments' } })
-      const run = await latest.json()
-      expect(run.definition).toEqual({ name: 'payments', hash: request.definition.hash })
+      const pinned = await api.submit(request)
+      const run = await pinned.json()
+      expect(run.definition).toEqual(request.definition)
 
-      // a hash that was never published, a name that doesn't exist, a task the build file doesn't have
-      const missing = await api.submit({
-        ...request,
-        definition: { name: 'payments', hash: `sha256:${'0'.repeat(64)}` },
-      })
+      // a hash that was never published, a task the build file doesn't have
+      const missing = await api.submit({ ...request, definition: `sha256:${'0'.repeat(64)}` })
       expect(missing.status).toBe(400)
-      expect((await missing.json()).error).toContain('there is no build file payments')
-      expect((await api.submit({ ...request, definition: { name: 'web' } })).status).toBe(400)
+      expect((await missing.json()).error).toContain('there is no published build file sha256:0000')
       const unknown = await api.submit({ ...request, tasks: ['build', 'nope', 'rm-rf'] })
       expect(unknown.status).toBe(400)
-      expect((await unknown.json()).error).toBe('payments has no task "nope", "rm-rf"')
-      expect((await api.submit({ ...request, definition: { name: 'payments', hash: 'v2' } })).status).toBe(400)
+      expect((await unknown.json()).error).toBe(`${request.definition} has no task "nope", "rm-rf"`)
+      // a build file is named by its hash only: no name, no latest
+      for (const definition of [undefined, 'latest', 'payments', 'v2', { name: 'payments' }]) {
+        const named = await api.submit({ ...request, definition })
+        expect(named.status).toBe(400)
+        expect((await named.json()).error).toMatch(/^definition: /)
+      }
     })
   })
 
@@ -566,12 +567,12 @@ describe('runs api', () => {
         'runs-api-git',
         undefined,
         async (api) => {
-          const published = await api.call('PUT', '/v1/definitions/payments', {
+          const published = await api.call('POST', '/v1/definitions', {
             sub: 'bob',
             body: { files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' } },
           })
           const hash = (await published.json()).hash
-          const run = await (await api.submit({ ...request, definition: { name: 'payments', hash } })).json()
+          const run = await (await api.submit({ ...request, definition: hash })).json()
           expect((await untilState(api, run.id, ['succeeded', 'failed'])).state).toBe('succeeded')
           const events = await readEvents(await api.call('GET', `/v1/runs/${run.id}/events`))
           expect(events.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
@@ -666,14 +667,12 @@ describe('runs api', () => {
 
   it('pulls a version back for who publishes it or uses its accounts, and no run starts from it', async () => {
     await withApi('runs-api-yank', done, async (api) => {
-      const hash = request.definition.hash
-      const path = (action: string) => `/v1/definitions/payments/${hash}/${action}`
+      const hash = request.definition
+      const path = (action: string) => `/v1/definitions/${hash}/${action}`
       // dave uses an account, but not one of this version
       expect((await api.call('POST', path('yank'), { sub: 'dave' })).status).toBe(403)
       expect((await api.call('POST', path('yank'), { sub: 'nobody' })).status).toBe(404)
-      expect(
-        (await api.call('POST', `/v1/definitions/payments/sha256:${'0'.repeat(64)}/yank`, { sub: 'bob' })).status
-      ).toBe(404)
+      expect((await api.call('POST', `/v1/definitions/sha256:${'0'.repeat(64)}/yank`, { sub: 'bob' })).status).toBe(404)
 
       // carol uses op-payments-ci, which the version works with
       const yanked = await api.call('POST', path('yank'), { sub: 'carol', body: { reason: 'leaks a token' } })
@@ -682,16 +681,17 @@ describe('runs api', () => {
         hash,
         yanked: { by: { sub: 'carol' }, reason: 'leaks a token', at: expect.any(String) },
       })
-      expect(api.log.join('\n')).toContain(`yank payments@${hash}`)
+      expect(api.log.join('\n')).toContain(`yank ${hash}`)
 
       const refused = await api.submit(request, 'carol')
       expect(refused.status).toBe(409)
       expect((await refused.json()).error).toContain('was yanked: leaks a token')
-      // it is not latest any more, the version stays for the record
-      expect((await api.call('GET', '/v1/definitions/payments/latest', { sub: 'bob' })).status).toBe(404)
-      expect((await api.submit({ ...request, definition: { name: 'payments', hash: 'latest' } })).status).toBe(400)
-      const versions = await (await api.call('GET', '/v1/definitions/payments', { sub: 'bob' })).json()
-      expect(versions.versions[0].yanked.reason).toBe('leaks a token')
+      // the version stays for the record
+      expect((await (await api.call('GET', `/v1/definitions/${hash}`, { sub: 'bob' })).json()).yanked.reason).toBe(
+        'leaks a token'
+      )
+      const versions = await (await api.call('GET', '/v1/definitions', { sub: 'bob' })).json()
+      expect(versions.definitions[0].yanked.reason).toBe('leaks a token')
 
       // letting it go on is for who publishes
       expect((await api.call('POST', path('unyank'), { sub: 'carol' })).status).toBe(403)
@@ -704,8 +704,7 @@ describe('runs api', () => {
 
   it('keeps a yanked version over a restart', async () => {
     await withApi('runs-api-yank-restart', done, async (api) => {
-      const hash = request.definition.hash
-      await api.call('POST', `/v1/definitions/payments/${hash}/yank`, { sub: 'bob' })
+      await api.call('POST', `/v1/definitions/${request.definition}/yank`, { sub: 'bob' })
       await api.restart()
       expect((await api.submit(request, 'carol')).status).toBe(409)
     })

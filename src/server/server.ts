@@ -212,23 +212,21 @@ async function submitRun(
     send(res, 403, { error: 'you are not entitled to run anything on this server' })
     return
   }
-  const version = definitions.find(request.definition.name, request.definition.hash)
+  const version = definitions.find(request.definition)
   if (!version) {
-    send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
+    send(res, 400, { error: `there is no published build file ${request.definition}` })
     return
   }
   if (version.yanked) {
     send(res, 409, {
-      error: `${version.name} at ${version.hash} was yanked${
-        version.yanked.reason ? `: ${version.yanked.reason}` : ''
-      }`,
+      error: `${version.hash} was yanked${version.yanked.reason ? `: ${version.yanked.reason}` : ''}`,
     })
     return
   }
   const known = [...version.tasks, ...version.services]
   const unknown = request.tasks.filter((task) => !known.includes(task))
   if (unknown.length > 0) {
-    send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
+    send(res, 400, { error: `${version.hash} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
   if (request.source.type === 'upload') {
@@ -251,7 +249,7 @@ async function submitRun(
   const bundle = version.plan ? await definitions.files(version) : undefined
   if (!version.plan || !bundle) {
     send(res, 409, {
-      error: `${version.name} at ${version.hash} was published before accounts were recorded, publish it again`,
+      error: `${version.hash} was published before accounts were recorded, publish it again`,
     })
     return
   }
@@ -300,7 +298,7 @@ async function submitRun(
     const run = registry.submit(
       principal,
       {
-        definition: { name: version.name, hash: version.hash },
+        definition: version.hash,
         tasks: request.tasks,
         accounts: planned.accounts,
         plan: planned.plan,

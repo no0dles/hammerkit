@@ -5,8 +5,8 @@ import { DefinitionError, DefinitionStore } from './definitions'
 import { readJson, send } from './http'
 import { Principal, quote } from './oauth'
 import { canUse, getGrant, Grant, mayPublish } from './policy'
-import { Proposal, ProposalRegistry, StaleProposalError } from './proposals'
-import { definitionName, ServerConfig } from './server-config'
+import { Proposal, ProposalRegistry } from './proposals'
+import { ServerConfig } from './server-config'
 
 const decisionSchema = z.object({ reason: z.string().max(500).optional() }).strict()
 
@@ -17,22 +17,14 @@ const same = (a: { iss: string; sub: string }, b: { iss: string; sub: string }) 
 export const mayApprove = (grant: Grant, proposal: Proposal): boolean =>
   mayPublish(grant) && proposal.missing.every((account) => canUse(grant, account))
 
-// What the caller is shown of a proposal: what it is, who proposed it and the
-// version it would replace, so the files can be compared.
-function toView(store: DefinitionStore, proposal: Proposal, principal: Principal, grant: Grant) {
-  const latest = store.find(proposal.name, 'latest')?.hash ?? null
-  const stale = proposal.state === 'waiting' && latest !== proposal.base
+// What the caller is shown of a proposal: what it is and who proposed it.
+function toView(proposal: Proposal, principal: Principal, grant: Grant) {
   return {
     ...proposal,
-    // the version it follows is fixed when it is proposed; if another one was
-    // published since, it can only be rejected
-    latest,
-    stale,
     mine: same(proposal.proposedBy, principal),
     // approving needs the permission to publish, the accounts the proposer lacked, and
     // somebody else's proposal
-    canDecide:
-      proposal.state === 'waiting' && !stale && mayApprove(grant, proposal) && !same(proposal.proposedBy, principal),
+    canDecide: proposal.state === 'waiting' && mayApprove(grant, proposal) && !same(proposal.proposedBy, principal),
   }
 }
 
@@ -42,11 +34,11 @@ function toView(store: DefinitionStore, proposal: Proposal, principal: Principal
  * do not use, puts one here; someone who may publish, and uses those accounts,
  * approves it, and it is published then.
  *
- *   GET  /v1/proposals                          the ones the caller proposed or may decide
- *   GET  /v1/proposals/<name>/<hash>            one of them
- *   GET  /v1/proposals/<name>/<hash>/files      its files, for who decides
- *   POST /v1/proposals/<name>/<hash>/approve    publish it (body: optional {reason})
- *   POST /v1/proposals/<name>/<hash>/reject     drop it
+ *   GET  /v1/proposals                   the ones the caller proposed or may decide
+ *   GET  /v1/proposals/<hash>            one of them
+ *   GET  /v1/proposals/<hash>/files      its files, for who decides
+ *   POST /v1/proposals/<hash>/approve    publish it (body: optional {reason})
+ *   POST /v1/proposals/<hash>/reject     drop it
  */
 export async function handleProposals(
   config: ServerConfig,
@@ -58,16 +50,16 @@ export async function handleProposals(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/proposals(?:\/([^/]+)\/([^/]+)(?:\/(files|approve|reject))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/proposals(?:\/([^/]+)(?:\/(files|approve|reject))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
-  const [, name, hash, action] = match
+  const [, hash, action] = match
   const grant = getGrant(config.entitlements, principal)
   // what the caller neither proposed nor may decide does not exist for them
   const visible = (proposal: Proposal) => same(proposal.proposedBy, principal) || mayPublish(grant)
 
-  if (name === undefined) {
+  if (hash === undefined) {
     if (req.method !== 'GET') {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
       return true
@@ -76,22 +68,22 @@ export async function handleProposals(
       proposals: proposals
         .all()
         .filter(visible)
-        .map((proposal) => toView(store, proposal, principal, grant)),
+        .map((proposal) => toView(proposal, principal, grant)),
     })
     return true
   }
-  if (!definitionName.safeParse(name).success || !HASH_PATTERN.test(hash)) {
+  if (!HASH_PATTERN.test(hash)) {
     send(res, 404, { error: 'not found' })
     return true
   }
-  const proposal = proposals.get(name, hash)
+  const proposal = proposals.get(hash)
   if (!action) {
     if (req.method !== 'GET') {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
       return true
     }
     proposal && visible(proposal)
-      ? send(res, 200, toView(store, proposal, principal, grant))
+      ? send(res, 200, toView(proposal, principal, grant))
       : send(res, 404, { error: 'not found' })
     return true
   }
@@ -101,7 +93,7 @@ export async function handleProposals(
       return true
     }
     // the files are for who decides, and for who wrote them
-    const bundle = proposal && visible(proposal) ? proposals.bundle(name, hash) : undefined
+    const bundle = proposal && visible(proposal) ? proposals.bundle(hash) : undefined
     bundle ? send(res, 200, bundle) : send(res, 404, { error: 'not found' })
     return true
   }
@@ -119,29 +111,22 @@ export async function handleProposals(
   try {
     const result = await proposals.decide(
       principal,
-      name,
       hash,
       outcome,
       (proposed) => mayApprove(grant, proposed),
       async (bundle) => {
-        const proposed = proposals.get(name, hash)
-        // looked at again here, just before it is published
-        const latest = store.find(name, 'latest')?.hash ?? null
-        if (proposed && latest !== proposed.base) {
-          throw new StaleProposalError(proposed.base, latest)
-        }
-        await store.publish(name, bundle, proposed?.proposedBy ?? principal, principal)
+        await store.publish(bundle, proposals.get(hash)?.proposedBy ?? principal, principal)
       },
       body.data.reason
     )
     log(
-      `${action} proposal=${name}@${hash} iss=${principal.iss} sub=${principal.sub} result=${result.status}${
+      `${action} proposal=${hash} iss=${principal.iss} sub=${principal.sub} result=${result.status}${
         body.data.reason ? ` reason=${quote(body.data.reason)}` : ''
       }`
     )
     switch (result.status) {
       case 'ok':
-        send(res, 200, toView(store, result.proposal, principal, grant))
+        send(res, 200, toView(result.proposal, principal, grant))
         break
       case 'own-proposal':
         send(res, 403, { error: 'a version is approved by somebody else than who proposed it' })
@@ -153,11 +138,6 @@ export async function handleProposals(
         send(res, 404, { error: 'not found' })
     }
   } catch (e) {
-    if (e instanceof StaleProposalError) {
-      log(`${action} proposal=${name}@${hash} iss=${principal.iss} sub=${principal.sub} result=stale`)
-      send(res, 409, { error: e.message })
-      return true
-    }
     if (e instanceof DefinitionError) {
       send(res, 400, { error: `the build file does not load: ${e.message}` })
       return true

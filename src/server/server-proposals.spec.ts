@@ -54,7 +54,7 @@ interface Api {
     path: string,
     options?: { sub?: string | null; body?: unknown; headers?: Record<string, string> }
   ) => Promise<JsonResponse>
-  put: (sub: string, name: string, bundle: Record<string, string>) => Promise<JsonResponse>
+  publish: (sub: string, bundle: Record<string, string>) => Promise<JsonResponse>
 }
 
 async function withApi(name: string, extra: string, fn: (api: Api) => Promise<void>) {
@@ -102,7 +102,7 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
           log,
           executed,
           call,
-          put: (sub, name, bundle) => call('PUT', `/v1/definitions/${name}`, { sub, body: { files: bundle } }),
+          publish: (sub, bundle) => call('POST', '/v1/definitions', { sub, body: { files: bundle } }),
         })
       } finally {
         await server.close()
@@ -114,29 +114,28 @@ async function withApi(name: string, extra: string, fn: (api: Api) => Promise<vo
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-const path = (hash: string, rest = '') => `/v1/proposals/payments/${hash}${rest}`
+const path = (hash: string, rest = '') => `/v1/proposals/${hash}${rest}`
 
 describe('proposals api', () => {
   it('holds a proposed version until someone who may publish approves it', async () => {
     await withApi('proposals-api-approve', '', async (api) => {
-      const response = await api.put('agent', 'payments', files)
+      const response = await api.publish('agent', files)
       expect(response.status).toBe(202)
       const proposal = await response.json()
       expect(proposal).toMatchObject({
-        name: 'payments',
         state: 'waiting',
         proposedBy: { sub: 'agent' },
         tasks: ['build'],
         created: true,
       })
-      expect(api.log.join('\n')).toContain(`propose payments ${proposal.hash}`)
+      expect(api.log.join('\n')).toContain(`propose ${proposal.hash}`)
 
       // nothing is published, so nothing can run
-      expect((await api.call('GET', '/v1/definitions/payments', { sub: 'dev' })).status).toBe(404)
+      expect((await api.call('GET', `/v1/definitions/${proposal.hash}`, { sub: 'dev' })).status).toBe(404)
       const run = await api.call('POST', '/v1/runs', {
         sub: 'agent',
         body: {
-          definition: { name: 'payments', hash: proposal.hash },
+          definition: proposal.hash,
           tasks: ['build'],
           source: { type: 'ref', repo: REPO, ref: 'main' },
         },
@@ -146,7 +145,8 @@ describe('proposals api', () => {
       // dev sees what to decide on, with the files
       const list = await (await api.call('GET', '/v1/proposals')).json()
       expect(list.proposals).toHaveLength(1)
-      expect(list.proposals[0]).toMatchObject({ hash: proposal.hash, base: null, mine: false, canDecide: true })
+      expect(list.proposals[0]).toMatchObject({ hash: proposal.hash, mine: false, canDecide: true })
+      expect(list.proposals[0]).not.toHaveProperty('base')
       expect(await (await api.call('GET', path(proposal.hash, '/files'))).json()).toEqual({
         entry: '.hammerkit.yaml',
         files,
@@ -155,11 +155,11 @@ describe('proposals api', () => {
       const approved = await api.call('POST', path(proposal.hash, '/approve'), { body: { reason: 'looks fine' } })
       expect(approved.status).toBe(200)
       expect(await approved.json()).toMatchObject({ state: 'approved', decidedBy: { sub: 'dev' }, canDecide: false })
-      expect(api.log.join('\n')).toMatch(/approve proposal=payments@sha256:\S+ iss=\S+ sub=dev result=ok/)
+      expect(api.log.join('\n')).toMatch(/approve proposal=sha256:\S+ iss=\S+ sub=dev result=ok/)
 
-      // it is the latest version now, by whoever proposed it, approved by dev
-      const latest = await (await api.call('GET', '/v1/definitions/payments/latest', { sub: 'agent' })).json()
-      expect(latest).toMatchObject({
+      // it is published now, by whoever proposed it, approved by dev
+      const published = await (await api.call('GET', `/v1/definitions/${proposal.hash}`, { sub: 'agent' })).json()
+      expect(published).toMatchObject({
         hash: proposal.hash,
         publishedBy: { sub: 'agent' },
         approvedBy: { sub: 'dev' },
@@ -167,7 +167,7 @@ describe('proposals api', () => {
       const started = await api.call('POST', '/v1/runs', {
         sub: 'agent',
         body: {
-          definition: { name: 'payments', hash: proposal.hash },
+          definition: proposal.hash,
           tasks: ['build'],
           source: { type: 'ref', repo: REPO, ref: 'main' },
         },
@@ -180,87 +180,44 @@ describe('proposals api', () => {
 
       // decided once
       expect((await api.call('POST', path(proposal.hash, '/approve'))).status).toBe(409)
-      expect((await api.put('agent', 'payments', files)).status).toBe(200)
-    })
-  })
-
-  it('shows what a version would replace', async () => {
-    await withApi('proposals-api-base', '', async (api) => {
-      const first = await (await api.put('dev', 'payments', files)).json()
-      const proposal = await (await api.put('agent', 'payments', changed)).json()
-      const seen = await (await api.call('GET', path(proposal.hash))).json()
-      expect(seen).toMatchObject({ base: first.hash, tasks: ['build', 'deploy'] })
-      // the published version is still the old one
-      expect((await (await api.call('GET', '/v1/definitions/payments/latest')).json()).hash).toBe(first.hash)
+      expect((await api.publish('agent', files)).status).toBe(200)
     })
   })
 
   it('drops a rejected version with the reason, and asks to wait before it is proposed again', async () => {
     await withApi('proposals-api-reject', '', async (api) => {
-      const proposal = await (await api.put('agent', 'payments', files)).json()
+      const proposal = await (await api.publish('agent', files)).json()
       const rejected = await api.call('POST', path(proposal.hash, '/reject'), { body: { reason: 'not like this' } })
       expect(rejected.status).toBe(200)
       expect(await rejected.json()).toMatchObject({ state: 'rejected', reason: 'not like this' })
-      expect((await api.call('GET', '/v1/definitions/payments/latest')).status).toBe(404)
+      expect((await api.call('GET', `/v1/definitions/${proposal.hash}`)).status).toBe(404)
       expect((await api.call('POST', path(proposal.hash, '/reject'))).status).toBe(409)
 
       // the same version, and any other by the same caller, has to wait
-      const again = await api.put('agent', 'payments', files)
+      const again = await api.publish('agent', files)
       expect(again.status).toBe(429)
-      expect((await again.json()).error).toMatch(/rejected, propose again in \d+m/)
-      expect((await api.put('agent', 'payments', changed)).status).toBe(429)
-      // others, and other build files, do not
-      expect((await api.put('agent', 'billing', files)).status).toBe(202)
+      expect((await again.json()).error).toMatch(/this version was rejected, propose again in \d+m/)
+      const other = await api.publish('agent', changed)
+      expect(other.status).toBe(429)
+      expect((await other.json()).error).toMatch(/a version you proposed was rejected/)
     })
   })
 
   it('lets a rejected version be proposed again once the cooldown is over', async () => {
     await withApi('proposals-api-cooldown', 'approvals:\n  cooldown: 1s\n', async (api) => {
-      const proposal = await (await api.put('agent', 'payments', files)).json()
+      const proposal = await (await api.publish('agent', files)).json()
       await api.call('POST', path(proposal.hash, '/reject'))
-      expect((await api.put('agent', 'payments', files)).status).toBe(429)
+      expect((await api.publish('agent', files)).status).toBe(429)
       await sleep(1200)
-      expect((await api.put('agent', 'payments', files)).status).toBe(202)
+      expect((await api.publish('agent', files)).status).toBe(202)
     })
   })
 
   it('does not count a proposal that ran out of time as a rejection', async () => {
     await withApi('proposals-api-expired', 'approvals:\n  timeout: 1s\n', async (api) => {
-      await api.put('agent', 'payments', files)
+      await api.publish('agent', files)
       await sleep(1200)
-      expect((await api.put('agent', 'payments', files)).status).toBe(202)
-    })
-  })
-
-  it('approves only while the version it follows is still the latest', async () => {
-    await withApi('proposals-api-stale', '', async (api) => {
-      const first = await (await api.put('dev', 'payments', files)).json()
-      const proposal = await (await api.put('agent', 'payments', changed)).json()
-      expect(proposal.base).toBe(first.hash)
-      expect(await (await api.call('GET', path(proposal.hash))).json()).toMatchObject({ stale: false, canDecide: true })
-
-      // somebody publishes in the meantime
-      const newer = await (
-        await api.put('dev', 'payments', { '.hammerkit.yaml': 'tasks:\n  other:\n    cmds: [echo other]\n' })
-      ).json()
-      const seen = await (await api.call('GET', path(proposal.hash))).json()
-      expect(seen).toMatchObject({ base: first.hash, latest: newer.hash, stale: true, canDecide: false })
-
-      const approved = await api.call('POST', path(proposal.hash, '/approve'))
-      expect(approved.status).toBe(409)
-      expect((await approved.json()).error).toContain('changed since this was proposed')
-      expect((await (await api.call('GET', '/v1/definitions/payments/latest')).json()).hash).toBe(newer.hash)
-      // it can still be turned down
-      expect((await api.call('POST', path(proposal.hash, '/reject'))).status).toBe(200)
-    })
-  })
-
-  it('does not approve a first version when another one was published first', async () => {
-    await withApi('proposals-api-stale-first', '', async (api) => {
-      const proposal = await (await api.put('agent', 'payments', changed)).json()
-      expect(proposal.base).toBeNull()
-      await api.put('dev', 'payments', files)
-      expect((await api.call('POST', path(proposal.hash, '/approve'))).status).toBe(409)
+      expect((await api.publish('agent', files)).status).toBe(202)
     })
   })
 
@@ -271,18 +228,18 @@ describe('proposals api', () => {
           40
         )}\ntasks:\n  build:\n    cmds: [echo build]\n`,
       }
-      const response = await api.put('agent', 'payments', git)
+      const response = await api.publish('agent', git)
       expect(response.status).toBe(400)
       expect((await response.json()).error).toContain('a proposal may not include from git')
       // somebody who may publish is trusted to
-      const published = await api.put('dev', 'payments', git)
+      const published = await api.publish('dev', git)
       expect((await published.json()).error ?? '').not.toContain('a proposal may not include from git')
     })
   })
 
   it('shows a proposal to who wrote it and who decides, and to nobody else', async () => {
     await withApi('proposals-api-visibility', '', async (api) => {
-      const proposal = await (await api.put('agent', 'payments', files)).json()
+      const proposal = await (await api.publish('agent', files)).json()
 
       const own = await (await api.call('GET', '/v1/proposals', { sub: 'agent' })).json()
       expect(own.proposals).toHaveLength(1)
@@ -300,17 +257,16 @@ describe('proposals api', () => {
         expect((await api.call('GET', path(proposal.hash, '/files'), { sub })).status).toBe(404)
       }
       expect((await api.call('GET', path(proposal.hash))).status).toBe(200)
-      expect((await api.call('GET', '/v1/definitions/payments/latest')).status).toBe(404)
+      expect((await api.call('GET', `/v1/definitions/${proposal.hash}`)).status).toBe(404)
     })
   })
 
-  it('publishes at once for who may publish, under any name', async () => {
+  it('publishes at once for who may publish', async () => {
     await withApi('proposals-api-direct', '', async (api) => {
-      expect((await api.put('dev', 'payments', files)).status).toBe(201)
-      expect((await api.put('dev', 'payments', changed)).status).toBe(201)
-      expect((await api.put('dev', 'newthing', files)).status).toBe(201)
-      // proposing is for who may only propose, under any name
-      const other = await api.put('agent', 'newthing', changed)
+      expect((await api.publish('dev', files)).status).toBe(201)
+      expect((await api.publish('dev', files)).status).toBe(200)
+      // proposing is for who may only propose
+      const other = await api.publish('agent', changed)
       expect(other.status).toBe(202)
       expect((await other.json()).proposedBy.sub).toBe('agent')
       expect((await api.call('GET', '/v1/proposals', { sub: 'ops' })).status).toBe(200)
@@ -319,16 +275,16 @@ describe('proposals api', () => {
 
   it('refuses what is neither published nor proposed by the caller', async () => {
     await withApi('proposals-api-refused', '', async (api) => {
-      const refused = await api.put('viewer', 'other', files)
+      const refused = await api.publish('viewer', files)
       expect(refused.status).toBe(403)
-      expect((await api.put('mallory', 'payments', files)).status).toBe(403)
+      expect((await api.publish('mallory', files)).status).toBe(403)
       expect((await api.call('GET', '/v1/proposals', { sub: 'mallory' })).status).toBe(200)
     })
   })
 
   it('refuses a proposal that does not load, like a publish', async () => {
     await withApi('proposals-api-broken', '', async (api) => {
-      const response = await api.put('agent', 'payments', { '.hammerkit.yaml': 'tasks: [' })
+      const response = await api.publish('agent', { '.hammerkit.yaml': 'tasks: [' })
       expect(response.status).toBe(400)
       expect((await response.json()).error).toContain('does not load')
       expect((await (await api.call('GET', '/v1/proposals')).json()).proposals).toEqual([])
@@ -337,8 +293,8 @@ describe('proposals api', () => {
 
   it('answers a proposal of what is already published with the version', async () => {
     await withApi('proposals-api-published', '', async (api) => {
-      const published = await (await api.put('dev', 'payments', files)).json()
-      const again = await api.put('agent', 'payments', files)
+      const published = await (await api.publish('dev', files)).json()
+      const again = await api.publish('agent', files)
       expect(again.status).toBe(200)
       expect(await again.json()).toMatchObject({ hash: published.hash, created: false })
       expect((await (await api.call('GET', '/v1/proposals')).json()).proposals).toEqual([])
@@ -347,8 +303,8 @@ describe('proposals api', () => {
 
   it('refuses more waiting versions than the limit', async () => {
     await withApi('proposals-api-limit', 'approvals:\n  maxWaiting: 1\n', async (api) => {
-      expect((await api.put('agent', 'payments', files)).status).toBe(202)
-      const more = await api.put('agent', 'payments', changed)
+      expect((await api.publish('agent', files)).status).toBe(202)
+      const more = await api.publish('agent', changed)
       expect(more.status).toBe(503)
       expect((await more.json()).error).toContain('too many')
     })
@@ -356,11 +312,11 @@ describe('proposals api', () => {
 
   it('expires a proposal nobody decides on', async () => {
     await withApi('proposals-api-timeout', 'approvals:\n  timeout: 1s\n', async (api) => {
-      const proposal = await (await api.put('agent', 'payments', files)).json()
+      const proposal = await (await api.publish('agent', files)).json()
       await sleep(1200)
       expect((await (await api.call('GET', path(proposal.hash))).json()).state).toBe('expired')
       expect((await api.call('POST', path(proposal.hash, '/approve'))).status).toBe(409)
-      expect((await api.call('GET', '/v1/definitions/payments/latest')).status).toBe(404)
+      expect((await api.call('GET', `/v1/definitions/${proposal.hash}`)).status).toBe(404)
     })
   })
 
@@ -386,7 +342,7 @@ describe('proposals api', () => {
 
     it('is published at once by somebody who uses all of them', async () => {
       await withApi('proposals-api-accounts-direct', '', async (api) => {
-        const published = await api.put('lead', 'payments', deploy)
+        const published = await api.publish('lead', deploy)
         expect(published.status).toBe(201)
         expect(await published.json()).toMatchObject({ accounts: ['prod-key'] })
       })
@@ -394,7 +350,7 @@ describe('proposals api', () => {
 
     it('is only proposed when the publisher does not use one, even though they may publish', async () => {
       await withApi('proposals-api-accounts-missing', '', async (api) => {
-        const response = await api.put('dev', 'payments', deploy)
+        const response = await api.publish('dev', deploy)
         expect(response.status).toBe(202)
         const proposal = await response.json()
         expect(proposal).toMatchObject({
@@ -405,7 +361,7 @@ describe('proposals api', () => {
           plan: { deploy: { accounts: ['prod-key'], secrets: [{ from: 'echo:kube', account: 'prod-key' }] } },
         })
         expect(api.log.join('\n')).toContain('missing=[prod-key]')
-        expect((await api.call('GET', '/v1/definitions/payments/latest', { sub: 'dev' })).status).toBe(404)
+        expect((await api.call('GET', `/v1/definitions/${proposal.hash}`, { sub: 'dev' })).status).toBe(404)
 
         // ops may publish but does not use the key, so they see it and can not decide
         const seen = await (await api.call('GET', path(proposal.hash), { sub: 'ops' })).json()
@@ -419,8 +375,8 @@ describe('proposals api', () => {
         expect(lead).toMatchObject({ canDecide: true })
         const approved = await api.call('POST', path(proposal.hash, '/approve'), { sub: 'lead' })
         expect(approved.status).toBe(200)
-        const latest = await (await api.call('GET', '/v1/definitions/payments/latest', { sub: 'lead' })).json()
-        expect(latest).toMatchObject({
+        const published = await (await api.call('GET', `/v1/definitions/${proposal.hash}`, { sub: 'lead' })).json()
+        expect(published).toMatchObject({
           hash: proposal.hash,
           publishedBy: { sub: 'dev' },
           approvedBy: { sub: 'lead' },
@@ -431,7 +387,7 @@ describe('proposals api', () => {
 
     it('is proposed by who may only propose, and approved by somebody who also uses what the proposer lacked', async () => {
       await withApi('proposals-api-accounts-propose', '', async (api) => {
-        const proposal = await (await api.put('agent', 'payments', deploy)).json()
+        const proposal = await (await api.publish('agent', deploy)).json()
         expect(proposal).toMatchObject({ missing: ['prod-key'] })
         expect((await api.call('POST', path(proposal.hash, '/approve'), { sub: 'dev' })).status).toBe(404)
         expect((await api.call('POST', path(proposal.hash, '/approve'), { sub: 'lead' })).status).toBe(200)
@@ -440,7 +396,7 @@ describe('proposals api', () => {
 
     it('is refused when the server has no such account, listing the ones it has', async () => {
       await withApi('proposals-api-accounts-unknown', '', async (api) => {
-        const response = await api.put('lead', 'payments', {
+        const response = await api.publish('lead', {
           '.hammerkit.yaml': deploy['.hammerkit.yaml'].replace('prod-key', 'staging-key'),
         })
         expect(response.status).toBe(400)
@@ -453,14 +409,14 @@ describe('proposals api', () => {
 
   it('answers what is not a proposal call', async () => {
     await withApi('proposals-api-routes', '', async (api) => {
-      const proposal = await (await api.put('agent', 'payments', files)).json()
+      const proposal = await (await api.publish('agent', files)).json()
       expect((await api.call('GET', '/v1/proposals', { sub: null })).status).toBe(401)
       expect((await api.call('POST', '/v1/proposals')).status).toBe(405)
       expect((await api.call('POST', path(proposal.hash))).status).toBe(405)
       expect((await api.call('POST', path(proposal.hash, '/files'))).status).toBe(405)
       expect((await api.call('GET', path(proposal.hash, '/approve'))).status).toBe(405)
-      expect((await api.call('GET', '/v1/proposals/payments/nope')).status).toBe(404)
-      expect((await api.call('GET', `/v1/proposals/not a name/${proposal.hash}`)).status).toBe(404)
+      expect((await api.call('GET', '/v1/proposals/nope')).status).toBe(404)
+      expect((await api.call('GET', `/v1/proposals/payments/${proposal.hash}`)).status).toBe(404)
       expect((await api.call('POST', path(proposal.hash, '/other'))).status).toBe(404)
       const long = await api.call('POST', path(proposal.hash, '/reject'), { body: { reason: 'x'.repeat(501) } })
       expect(long.status).toBe(400)

@@ -110,8 +110,8 @@ describe('collectBundle', () => {
             aud: 'hammerkit',
             exp: Math.floor(Date.now() / 1000) + 300,
           })
-          const response = await fetch(`${server.url}/v1/definitions/payments`, {
-            method: 'PUT',
+          const response = await fetch(`${server.url}/v1/definitions`, {
+            method: 'POST',
             headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
             body: JSON.stringify(bundle),
           })

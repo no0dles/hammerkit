@@ -12,7 +12,7 @@ Experimental. The config and the API can still change between releases, see the
 A hammerkit server runs tasks for other people and agents on a machine that has what the
 work needs: a Mac mini for iOS builds, a Linux box with big CPUs, the credentials to deploy.
 Callers never get those credentials, and they can not change what a task does: they name a
-published build file, the tasks to run and where the code comes from, and the server
+published build file by its hash, the tasks to run and where the code comes from, and the server
 decides with its config whether they may.
 
 ## How it fits together
@@ -100,8 +100,8 @@ entitlements:
 ```
 
 A developer then registers and signs in with [`remote add` and `remote login`](/docs/cli/remote),
-someone in `platform` publishes the build file with `remote publish`, and a run is a
-`POST /v1/runs` (`remote run` does not exist yet). A run that reads the production secret
+someone in `platform` publishes the build file with `remote publish`, which prints its
+hash, and a run is a `POST /v1/runs` naming that hash (`remote run` does not exist yet). A run that reads the production secret
 waits in `remote approvals` until a member of `platform` approves it.
 
 ## Config

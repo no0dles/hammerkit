@@ -48,11 +48,6 @@ export const issuerSchema = z
   })
   .strict()
 
-// What a published build file is called: the project, as a build file author names it.
-export const definitionName = z
-  .string()
-  .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i, 'use letters, digits, ".", "_" and "-", starting with a letter or digit')
-
 const subjectSchema = z.object({ iss: z.string().min(1), sub: z.string().min(1) }).strict()
 const groupSchema = z.object({ iss: z.string().min(1), name: z.string().min(1) }).strict()
 const claimsSchema = z.object({ iss: z.string().min(1), match: z.record(z.string()) }).strict()

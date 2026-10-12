@@ -1,13 +1,12 @@
-import { mkdir, readdir, readFile, rename, writeFile } from 'fs/promises'
-import { dirname, join } from 'path'
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'fs/promises'
+import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { Environment } from '../executer/environment'
 import { Bundle, hashBundle, HASH_PATTERN } from '../remote/bundle'
 import { DefinitionInputs, DefinitionError, PlanPolicy, planBundle, TaskPlan } from './plan'
 
 export interface DefinitionVersion {
-  name: string
-  // sha256:<hex> of the bundle, see hashBundle
+  // sha256:<hex> of the bundle, see hashBundle: the only name a version has
   hash: string
   entry: string
   publishedAt: string
@@ -25,17 +24,26 @@ export interface DefinitionVersion {
   plan?: Record<string, TaskPlan>
   // every account the version uses
   accounts?: string[]
-  // pulled back: no run starts from it, and it is not `latest`, but it stays for the record
+  // pulled back: no run starts from it, but it stays for the record
   yanked?: { at: string; by: { iss: string; sub: string }; reason?: string }
 }
 
 export { DefinitionError, inspectBundle } from './plan'
 export type { DefinitionInputs, InspectedBundle, TaskPlan } from './plan'
 
-// The published build files: immutable versions, each named by its hash. They
-// are kept in files, so a restart doesn't forget what runs were started from.
+interface Stored {
+  version: DefinitionVersion
+  // where it is kept: `<hex>.json`, or `<name>/<hex>.json` for a version published
+  // when build files still had names
+  file: string
+}
+
+// The published build files: immutable versions, each named by its hash and by
+// nothing else, so whoever publishes can't make one look like the follower of
+// another. They are kept in files, so a restart doesn't forget what runs were
+// started from.
 export class DefinitionStore {
-  private readonly versions = new Map<string, DefinitionVersion[]>()
+  private readonly versions = new Map<string, Stored>()
 
   constructor(
     private readonly directory: string,
@@ -49,36 +57,34 @@ export class DefinitionStore {
   private readonly now: () => number
 
   async load(): Promise<void> {
-    let names: string[] = []
+    let entries: string[] = []
     try {
-      names = await readdir(this.directory)
+      entries = await readdir(this.directory)
     } catch {
       return // nothing was published yet
     }
-    for (const name of names) {
-      for (const file of await readdir(join(this.directory, name))) {
-        if (!file.endsWith('.json')) {
-          continue
+    for (const entry of entries) {
+      const path = join(this.directory, entry)
+      if ((await stat(path)).isDirectory()) {
+        // a name of an older server: its versions are versions like any other
+        for (const file of await readdir(path)) {
+          await this.read(join(path, file))
         }
-        const stored = JSON.parse(await readFile(join(this.directory, name, file), 'utf8'))
-        this.add(stored.version)
+      } else {
+        await this.read(path)
       }
     }
   }
 
-  names(): string[] {
-    return [...this.versions.keys()].sort()
-  }
-
   // newest first
-  list(name: string): DefinitionVersion[] {
-    return this.has(name) ? [...(this.versions.get(name) as DefinitionVersion[])] : []
+  list(): DefinitionVersion[] {
+    return [...this.versions.values()]
+      .map((stored) => stored.version)
+      .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
   }
 
-  // a hash, or `latest` for the version published last that is not yanked
-  find(name: string, hash: string): DefinitionVersion | undefined {
-    const versions = this.list(name)
-    return hash === 'latest' ? versions.find((v) => !v.yanked) : versions.find((v) => v.hash === hash)
+  find(hash: string): DefinitionVersion | undefined {
+    return this.versions.get(hash)?.version
   }
 
   /**
@@ -86,13 +92,13 @@ export class DefinitionStore {
    * place, its files stay: a run that was started from it has them.
    */
   async yank(
-    name: string,
     hash: string,
     by: { iss: string; sub: string },
     options: { reason?: string; undo?: boolean } = {}
   ): Promise<DefinitionVersion | undefined> {
-    const version = this.versions.get(name)?.find((v) => v.hash === hash)
-    if (!version || Boolean(version.yanked) === !options.undo) {
+    const stored = this.versions.get(hash)
+    const version = stored?.version
+    if (!stored || !version || Boolean(version.yanked) === !options.undo) {
       return version
     }
     const bundle = await this.files(version)
@@ -109,10 +115,7 @@ export class DefinitionStore {
         ...(options.reason ? { reason: options.reason } : {}),
       }
     }
-    const file = this.file(name, hash)
-    const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
-    await writeFile(temporary, JSON.stringify({ version: next, bundle }), { flag: 'wx' })
-    await rename(temporary, file)
+    await this.write(stored.file, next, bundle)
     // the same object, so whoever holds the version sees it
     Object.keys(version).forEach((key) => delete (version as any)[key])
     Object.assign(version, next)
@@ -120,8 +123,9 @@ export class DefinitionStore {
   }
 
   async files(version: DefinitionVersion): Promise<Bundle | undefined> {
+    const stored = this.versions.get(version.hash)
     try {
-      return JSON.parse(await readFile(this.file(version.name, version.hash), 'utf8')).bundle
+      return stored ? JSON.parse(await readFile(stored.file, 'utf8')).bundle : undefined
     } catch {
       return undefined
     }
@@ -130,14 +134,13 @@ export class DefinitionStore {
   // Reads a bundle the way a run would and says what it would be as a version;
   // `existing` is the published version with the same hash, if there is one.
   async prepare(
-    name: string,
     bundle: Bundle,
     publisher: { iss: string; sub: string },
     // a proposal is read before anybody trusts it: it may not make the server fetch
     options: { noRemote?: boolean } = {}
   ): Promise<{ version: DefinitionVersion; existing?: DefinitionVersion }> {
     const hash = hashBundle(bundle)
-    const existing = this.find(name, hash)
+    const existing = this.find(hash)
     if (existing) {
       return { version: existing, existing }
     }
@@ -147,7 +150,6 @@ export class DefinitionStore {
     })
     return {
       version: {
-        name,
         hash,
         entry: bundle.entry,
         publishedAt: new Date(this.now()).toISOString(),
@@ -163,12 +165,11 @@ export class DefinitionStore {
 
   // Publishing what already is there changes nothing and says so.
   async publish(
-    name: string,
     bundle: Bundle,
     publisher: { iss: string; sub: string },
     approvedBy?: { iss: string; sub: string }
   ): Promise<{ version: DefinitionVersion; created: boolean }> {
-    const prepared = await this.prepare(name, bundle, publisher)
+    const prepared = await this.prepare(bundle, publisher)
     if (prepared.existing) {
       return { version: prepared.existing, created: false }
     }
@@ -177,30 +178,36 @@ export class DefinitionStore {
       publishedAt: new Date(this.now()).toISOString(),
       ...(approvedBy ? { approvedBy: { iss: approvedBy.iss, sub: approvedBy.sub } } : {}),
     }
-    const file = this.file(name, version.hash)
-    await mkdir(dirname(file), { recursive: true })
-    const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
-    await writeFile(temporary, JSON.stringify({ version, bundle }), { flag: 'wx' })
-    await rename(temporary, file)
-    this.add(version)
+    if (!HASH_PATTERN.test(version.hash)) {
+      throw new DefinitionError('invalid hash')
+    }
+    const file = join(this.directory, `${version.hash.slice('sha256:'.length)}.json`)
+    await mkdir(this.directory, { recursive: true })
+    await this.write(file, version, bundle)
+    this.versions.set(version.hash, { version, file })
     return { version, created: true }
   }
 
-  private has(name: string): boolean {
-    return this.versions.has(name)
-  }
-
-  private add(version: DefinitionVersion): void {
-    const versions = this.versions.get(version.name) ?? []
-    versions.unshift(version)
-    versions.sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
-    this.versions.set(version.name, versions)
-  }
-
-  private file(name: string, hash: string): string {
-    if (!HASH_PATTERN.test(hash)) {
-      throw new DefinitionError('invalid hash')
+  private async read(file: string): Promise<void> {
+    if (!file.endsWith('.json')) {
+      return
     }
-    return join(this.directory, name, `${hash.slice('sha256:'.length)}.json`)
+    const { version } = JSON.parse(await readFile(file, 'utf8'))
+    // the name an older server kept with it means nothing now
+    delete version.name
+    // published under two names, it is still one version: yanked under either name, it
+    // stays yanked, else the first one counts
+    const known = this.versions.get(version.hash)?.version
+    const first =
+      !known || (Boolean(version.yanked) === Boolean(known.yanked) && version.publishedAt < known.publishedAt)
+    if (first || (version.yanked && !known?.yanked)) {
+      this.versions.set(version.hash, { version, file })
+    }
+  }
+
+  private async write(file: string, version: DefinitionVersion, bundle: Bundle): Promise<void> {
+    const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`
+    await writeFile(temporary, JSON.stringify({ version, bundle }), { flag: 'wx' })
+    await rename(temporary, file)
   }
 }

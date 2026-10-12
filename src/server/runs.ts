@@ -42,8 +42,8 @@ export type RunSource =
   | { type: 'upload'; snapshot: string }
 
 export interface RunSpec {
-  // the version of the published build file the run executes
-  definition: { name: string; hash: string }
+  // the hash of the published version of the build file the run executes
+  definition: string
   // the tasks to run, by their name in the build file
   tasks: string[]
   // the accounts the run uses: the ones its secrets are read as, derived from the
@@ -457,7 +457,6 @@ export class RunRegistry {
     return {
       ...run,
       tasks: [...run.tasks],
-      definition: { ...run.definition },
       source: { ...run.source },
       options: JSON.parse(JSON.stringify(run.options)),
       owner: { ...run.owner },

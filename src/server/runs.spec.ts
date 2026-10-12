@@ -7,7 +7,7 @@ import { FileRunStore } from './run-store'
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const bob = { iss: 'https://idp.corp', sub: 'bob' }
 const spec = {
-  definition: { name: 'payments', hash: 'sha256:' + 'a'.repeat(64) },
+  definition: 'sha256:' + 'a'.repeat(64),
   tasks: ['build'],
   accounts: [] as string[],
   source: { type: 'ref' as const, repo: 'github.com/corp/payments', ref: 'main', commit: 'c'.repeat(40) },

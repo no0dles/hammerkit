@@ -4,7 +4,6 @@ import { DefinitionVersion } from './definitions'
 import { CooldownError, ProposalError, ProposalRegistry } from './proposals'
 
 const version = (hash = 'sha256:' + 'a'.repeat(64)): DefinitionVersion => ({
-  name: 'payments',
   hash,
   entry: '.hammerkit.yaml',
   publishedAt: new Date().toISOString(),
@@ -22,15 +21,15 @@ describe('ProposalRegistry', () => {
     const { proposal, created } = registry.propose(version(), bundle, person('agent'))
     expect(created).toBe(true)
     expect(proposal).toMatchObject({
-      name: 'payments',
+      hash: version().hash,
       state: 'waiting',
       proposedBy: person('agent'),
       tasks: ['build'],
     })
     expect(new Date(proposal.expiresAt).getTime()).toBeGreaterThan(Date.now())
     expect(registry.waiting()).toHaveLength(1)
-    expect(registry.get('payments', version().hash)?.state).toBe('waiting')
-    expect(registry.bundle('payments', version().hash)).toEqual(bundle)
+    expect(registry.get(version().hash)?.state).toBe('waiting')
+    expect(registry.bundle(version().hash)).toEqual(bundle)
     registry.close()
   })
 
@@ -48,25 +47,16 @@ describe('ProposalRegistry', () => {
     const registry = new ProposalRegistry()
     registry.propose(version(), bundle, person('agent'))
     const published: Bundle[] = []
-    const result = await registry.decide(
-      person('dev'),
-      'payments',
-      version().hash,
-      'approved',
-      may(true),
-      async (b) => {
-        expect(registry.get('payments', version().hash)?.state).toBe('waiting')
-        published.push(b)
-      }
-    )
+    const result = await registry.decide(person('dev'), version().hash, 'approved', may(true), async (b) => {
+      expect(registry.get(version().hash)?.state).toBe('waiting')
+      published.push(b)
+    })
     expect(result).toMatchObject({ status: 'ok', proposal: { state: 'approved', decidedBy: person('dev') } })
     expect(published).toEqual([bundle])
     expect(registry.waiting()).toEqual([])
     // the files are not kept once it is decided
-    expect(registry.bundle('payments', version().hash)).toBeUndefined()
-    expect(
-      await registry.decide(person('dev'), 'payments', version().hash, 'rejected', may(true), async () => {})
-    ).toEqual({
+    expect(registry.bundle(version().hash)).toBeUndefined()
+    expect(await registry.decide(person('dev'), version().hash, 'rejected', may(true), async () => {})).toEqual({
       status: 'not-waiting',
       state: 'approved',
     })
@@ -77,11 +67,11 @@ describe('ProposalRegistry', () => {
     const registry = new ProposalRegistry()
     registry.propose(version(), bundle, person('agent'))
     await expect(
-      registry.decide(person('dev'), 'payments', version().hash, 'approved', may(true), async () => {
+      registry.decide(person('dev'), version().hash, 'approved', may(true), async () => {
         throw new Error('disk full')
       })
     ).rejects.toThrow('disk full')
-    expect(registry.get('payments', version().hash)?.state).toBe('waiting')
+    expect(registry.get(version().hash)?.state).toBe('waiting')
     registry.close()
   })
 
@@ -89,15 +79,7 @@ describe('ProposalRegistry', () => {
     const registry = new ProposalRegistry()
     registry.propose(version(), bundle, person('agent'))
     const publish = vi.fn()
-    const result = await registry.decide(
-      person('dev'),
-      'payments',
-      version().hash,
-      'rejected',
-      may(true),
-      publish,
-      'no'
-    )
+    const result = await registry.decide(person('dev'), version().hash, 'rejected', may(true), publish, 'no')
     expect(result).toMatchObject({ status: 'ok', proposal: { state: 'rejected', reason: 'no' } })
     expect(publish).not.toHaveBeenCalled()
     // the same version can be proposed again
@@ -109,19 +91,17 @@ describe('ProposalRegistry', () => {
     const registry = new ProposalRegistry()
     registry.propose(version(), bundle, person('agent'))
     const publish = vi.fn()
-    expect(await registry.decide(person('agent'), 'payments', version().hash, 'approved', may(true), publish)).toEqual({
+    expect(await registry.decide(person('agent'), version().hash, 'approved', may(true), publish)).toEqual({
       status: 'own-proposal',
     })
-    expect(await registry.decide(person('dev'), 'payments', version().hash, 'approved', may(false), publish)).toEqual({
+    expect(await registry.decide(person('dev'), version().hash, 'approved', may(false), publish)).toEqual({
       status: 'not-found',
     })
-    expect(
-      await registry.decide(person('dev'), 'payments', 'sha256:' + 'b'.repeat(64), 'approved', may(true), publish)
-    ).toEqual({
+    expect(await registry.decide(person('dev'), 'sha256:' + 'b'.repeat(64), 'approved', may(true), publish)).toEqual({
       status: 'not-found',
     })
     expect(publish).not.toHaveBeenCalled()
-    expect(registry.get('payments', version().hash)?.state).toBe('waiting')
+    expect(registry.get(version().hash)?.state).toBe('waiting')
     registry.close()
   })
 
@@ -129,11 +109,9 @@ describe('ProposalRegistry', () => {
     const registry = new ProposalRegistry({ timeout: 20 })
     registry.propose(version(), bundle, person('agent'))
     await new Promise((resolve) => setTimeout(resolve, 60))
-    expect(registry.get('payments', version().hash)?.state).toBe('expired')
-    expect(registry.bundle('payments', version().hash)).toBeUndefined()
-    expect(
-      await registry.decide(person('dev'), 'payments', version().hash, 'approved', may(true), async () => {})
-    ).toMatchObject({
+    expect(registry.get(version().hash)?.state).toBe('expired')
+    expect(registry.bundle(version().hash)).toBeUndefined()
+    expect(await registry.decide(person('dev'), version().hash, 'approved', may(true), async () => {})).toMatchObject({
       status: 'not-waiting',
       state: 'expired',
     })
@@ -146,19 +124,19 @@ describe('ProposalRegistry', () => {
     registry.propose(version(hash('a')), bundle, person('agent'))
     registry.propose(version(hash('b')), bundle, person('agent'))
     expect(() => registry.propose(version(hash('c')), bundle, person('agent'))).toThrow(ProposalError)
-    await registry.decide(person('dev'), 'payments', hash('a'), 'rejected', may(true), async () => {})
+    await registry.decide(person('dev'), hash('a'), 'rejected', may(true), async () => {})
     registry.propose(version(hash('c')), bundle, person('agent'))
-    await registry.decide(person('dev'), 'payments', hash('b'), 'rejected', may(true), async () => {})
+    await registry.decide(person('dev'), hash('b'), 'rejected', may(true), async () => {})
     registry.propose(version(hash('d')), bundle, person('agent'))
-    expect(registry.get('payments', hash('a'))).toBeUndefined()
-    expect(registry.get('payments', hash('b'))?.state).toBe('rejected')
+    expect(registry.get(hash('a'))).toBeUndefined()
+    expect(registry.get(hash('b'))?.state).toBe('rejected')
     registry.close()
   })
 
   describe('cooldown', () => {
     const hash = (c: string) => 'sha256:' + c.repeat(64)
     const reject = (registry: ProposalRegistry, h: string) =>
-      registry.decide(person('dev'), 'payments', h, 'rejected', may(true), async () => {})
+      registry.decide(person('dev'), h, 'rejected', may(true), async () => {})
 
     it('keeps who was turned down, and nobody the same version, from proposing again at once', async () => {
       let now = Date.parse('2026-01-01T00:00:00Z')
@@ -169,23 +147,14 @@ describe('ProposalRegistry', () => {
       now += 60_000
       expect(() => registry.propose(version(hash('a')), bundle, person('agent'))).toThrow(CooldownError)
       expect(() => registry.propose(version(hash('b')), bundle, person('agent'))).toThrow(/propose again in 9m/)
-      // somebody else with another version is not held back, nor is the same version of another build file
+      // somebody else with another version is not held back
       expect(() => registry.propose(version(hash('b')), bundle, person('other'))).not.toThrow()
       expect(() => registry.propose(version(hash('a')), bundle, person('other'))).toThrow(CooldownError)
-      expect(() => registry.propose({ ...version(hash('c')), name: 'billing' }, bundle, person('agent'))).not.toThrow()
 
       now += 600_000
       expect(() => registry.propose(version(hash('a')), bundle, person('agent'))).not.toThrow()
       registry.close()
     })
-  })
-
-  it('remembers the version a proposal follows', () => {
-    const registry = new ProposalRegistry()
-    const { proposal } = registry.propose(version(), bundle, person('agent'), [], 'sha256:' + 'f'.repeat(64))
-    expect(proposal.base).toBe('sha256:' + 'f'.repeat(64))
-    expect(registry.propose(version('sha256:' + 'b'.repeat(64)), bundle, person('agent')).proposal.base).toBeNull()
-    registry.close()
   })
 
   it('refuses proposals when it is closed', () => {

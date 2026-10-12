@@ -7,7 +7,7 @@ const record = (id: string, createdAt: string): RunRecord => ({
   run: {
     id,
     owner: { iss: 'https://idp.corp', sub: 'alice' },
-    definition: { name: 'payments', hash: 'sha256:' + 'a'.repeat(64) },
+    definition: 'sha256:' + 'a'.repeat(64),
     tasks: ['build'],
     accounts: [],
     source: { type: 'upload', snapshot: 'snap' },

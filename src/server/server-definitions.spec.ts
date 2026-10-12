@@ -93,18 +93,17 @@ const bundle = { files }
 describe('definitions api', () => {
   it('needs a token', async () => {
     await withApi('definitions-api-auth', async (api) => {
-      expect((await api.call('PUT', '/v1/definitions/payments', null, bundle)).status).toBe(401)
+      expect((await api.call('POST', '/v1/definitions', null, bundle)).status).toBe(401)
       expect((await api.call('GET', '/v1/definitions', null)).status).toBe(401)
     })
   })
 
   it('publishes a build file and tells its version, which is the hash of its files', async () => {
     await withApi('definitions-api-publish', async (api) => {
-      const response = await api.call('PUT', '/v1/definitions/payments', 'alice', bundle)
+      const response = await api.call('POST', '/v1/definitions', 'alice', bundle)
       expect(response.status).toBe(201)
       const version = await response.json()
       expect(version).toMatchObject({
-        name: 'payments',
         hash: hashBundle({ entry: '.hammerkit.yaml', files }),
         entry: '.hammerkit.yaml',
         tasks: ['build', 'test'],
@@ -121,98 +120,102 @@ describe('definitions api', () => {
         created: true,
         publishedBy: { sub: 'alice' },
       })
-      expect(api.log.join('\n')).toContain(`publish payments ${version.hash}`)
+      expect(version).not.toHaveProperty('name')
+      expect(api.log.join('\n')).toContain(`publish ${version.hash}`)
 
-      // the same files again are the same version
-      const again = await api.call('PUT', '/v1/definitions/payments', 'alice', bundle)
+      // the same files again are the same version, whoever publishes them
+      const again = await api.call('POST', '/v1/definitions', 'ci', bundle)
       expect(again.status).toBe(200)
-      expect(await again.json()).toMatchObject({ hash: version.hash, created: false })
+      expect(await again.json()).toMatchObject({ hash: version.hash, created: false, publishedBy: { sub: 'alice' } })
     })
   })
 
-  it('lets only who has a builds level publish, under any name', async () => {
+  it('lets only who has a builds level publish', async () => {
     await withApi('definitions-api-permission', async (api) => {
       // running something is not publishing it
-      const bob = await api.call('PUT', '/v1/definitions/web', 'bob', bundle)
+      const bob = await api.call('POST', '/v1/definitions', 'bob', bundle)
       expect(bob.status).toBe(403)
-      expect((await bob.json()).error).toBe('you may not publish web, it needs builds: propose or publish')
-      expect((await api.call('PUT', '/v1/definitions/payments', 'nobody', bundle)).status).toBe(403)
-      // names are free: they are the publisher's choice, not the operator's
-      expect((await api.call('PUT', '/v1/definitions/web', 'alice', bundle)).status).toBe(201)
-      expect((await api.call('PUT', '/v1/definitions/anything-else', 'ci', bundle)).status).toBe(201)
+      expect((await bob.json()).error).toBe('you may not publish build files, it needs builds: propose or publish')
+      expect((await api.call('POST', '/v1/definitions', 'nobody', bundle)).status).toBe(403)
+      expect((await api.call('POST', '/v1/definitions', 'ci', bundle)).status).toBe(201)
       expect(api.log.join('\n')).toContain('refuse publish')
     })
   })
 
-  it('lists versions, newest first, and reads one by hash or as latest', async () => {
+  it('lists versions, newest first, and reads one by its hash', async () => {
     await withApi('definitions-api-read', async (api) => {
-      const one = await (await api.call('PUT', '/v1/definitions/payments', 'alice', bundle)).json()
+      const one = await (await api.call('POST', '/v1/definitions', 'alice', bundle)).json()
       await new Promise((resolve) => setTimeout(resolve, 5))
       const next = {
         files: { '.hammerkit.yaml': `${files['.hammerkit.yaml']}  deploy:\n    cmds: [echo deploy]\n` },
       }
-      const two = await (await api.call('PUT', '/v1/definitions/payments', 'alice', next)).json()
+      const two = await (await api.call('POST', '/v1/definitions', 'ci', next)).json()
 
       const all = await (await api.call('GET', '/v1/definitions', 'bob')).json()
-      expect(all).toEqual({ definitions: [{ name: 'payments', latest: two.hash }] })
-      const versions = await (await api.call('GET', '/v1/definitions/payments', 'bob')).json()
-      expect(versions.latest).toBe(two.hash)
-      expect(versions.versions.map((v: { hash: string }) => v.hash)).toEqual([two.hash, one.hash])
+      expect(all.definitions.map((v: { hash: string }) => v.hash)).toEqual([two.hash, one.hash])
+      expect(all.definitions[0]).toEqual({
+        hash: two.hash,
+        entry: '.hammerkit.yaml',
+        publishedAt: two.publishedAt,
+        publishedBy: two.publishedBy,
+        tasks: ['build', 'deploy', 'test'],
+        services: [],
+        accounts: [],
+      })
 
-      expect((await (await api.call('GET', `/v1/definitions/payments/${one.hash}`, 'bob')).json()).tasks).toEqual([
+      expect((await (await api.call('GET', `/v1/definitions/${one.hash}`, 'bob')).json()).tasks).toEqual([
         'build',
         'test',
       ])
-      expect((await (await api.call('GET', '/v1/definitions/payments/latest', 'bob')).json()).hash).toBe(two.hash)
-      const content = await (await api.call('GET', `/v1/definitions/payments/${one.hash}/files`, 'bob')).json()
+      const content = await (await api.call('GET', `/v1/definitions/${one.hash}/files`, 'bob')).json()
       expect(content).toEqual({ entry: '.hammerkit.yaml', files })
     })
   })
 
   it('shows nothing to who can neither run nor publish, and 404 for what is not there', async () => {
     await withApi('definitions-api-hidden', async (api) => {
-      const published = await (await api.call('PUT', '/v1/definitions/payments', 'alice', bundle)).json()
-      expect((await (await api.call('GET', '/v1/definitions', 'stranger')).json()).definitions ?? []).toEqual([])
-      expect((await api.call('GET', '/v1/definitions/payments', 'stranger')).status).toBe(404)
-      expect((await api.call('GET', `/v1/definitions/payments/${published.hash}/files`, 'stranger')).status).toBe(404)
-      expect((await api.call('GET', '/v1/definitions/nothing', 'alice')).status).toBe(404)
-      expect((await api.call('GET', `/v1/definitions/payments/sha256:${'1'.repeat(64)}`, 'alice')).status).toBe(404)
-      expect((await api.call('GET', '/v1/definitions/payments/not-a-hash', 'alice')).status).toBe(404)
-      expect((await api.call('GET', '/v1/definitions/..%2Fetc', 'alice')).status).toBe(404)
-      expect((await api.call('DELETE', '/v1/definitions/payments', 'alice')).status).toBe(405)
+      const published = await (await api.call('POST', '/v1/definitions', 'alice', bundle)).json()
+      expect((await api.call('GET', '/v1/definitions', 'stranger')).status).toBe(404)
+      expect((await api.call('GET', `/v1/definitions/${published.hash}`, 'stranger')).status).toBe(404)
+      expect((await api.call('GET', `/v1/definitions/${published.hash}/files`, 'stranger')).status).toBe(404)
+      expect((await api.call('GET', `/v1/definitions/sha256:${'1'.repeat(64)}`, 'alice')).status).toBe(404)
+      for (const path of ['payments', 'latest', 'not-a-hash', '..%2Fetc', `payments/${published.hash}`]) {
+        expect((await api.call('GET', `/v1/definitions/${path}`, 'alice')).status).toBe(404)
+      }
+      // a name is not taken any more
+      expect((await api.call('PUT', '/v1/definitions/payments', 'alice', bundle)).status).toBe(404)
+      expect((await api.call('DELETE', `/v1/definitions/${published.hash}`, 'alice')).status).toBe(405)
       expect((await api.call('PUT', '/v1/definitions', 'alice', bundle)).status).toBe(405)
     })
   })
 
   it('refuses a bundle that is not well formed or does not load', async () => {
     await withApi('definitions-api-invalid', async (api) => {
-      const put = (body: unknown) => api.call('PUT', '/v1/definitions/payments', 'alice', body)
-      expect((await put({ files: { 'other.yaml': '' } })).status).toBe(400)
-      expect((await put({ files: { '../x': '', '.hammerkit.yaml': '' } })).status).toBe(400)
-      expect((await put({ files, extra: 1 })).status).toBe(400)
-      const broken = await put({ files: { '.hammerkit.yaml': 'tasks:\n  a:\n    nope: 1\n' } })
+      const post = (body: unknown) => api.call('POST', '/v1/definitions', 'alice', body)
+      expect((await post({ files: { 'other.yaml': '' } })).status).toBe(400)
+      expect((await post({ files: { '../x': '', '.hammerkit.yaml': '' } })).status).toBe(400)
+      expect((await post({ files, extra: 1 })).status).toBe(400)
+      const broken = await post({ files: { '.hammerkit.yaml': 'tasks:\n  a:\n    nope: 1\n' } })
       expect(broken.status).toBe(400)
       expect((await broken.json()).error).toContain('the build file does not load')
-      expect(api.log.join('\n')).toContain('payments does not load')
-      expect((await api.call('GET', '/v1/definitions/payments', 'alice')).status).toBe(404)
+      expect(api.log.join('\n')).toContain('the build file does not load')
+      expect((await (await api.call('GET', '/v1/definitions', 'alice')).json()).definitions).toEqual([])
 
-      const big = await put({ files: { '.hammerkit.yaml': 'x'.repeat(3 * 1024 * 1024) } })
+      const big = await post({ files: { '.hammerkit.yaml': 'x'.repeat(3 * 1024 * 1024) } })
       expect(big.status).toBe(413)
     })
   })
 
   it('keeps the versions over a restart', async () => {
     await withApi('definitions-api-restart', async (api) => {
-      const published = await (await api.call('PUT', '/v1/definitions/payments', 'alice', bundle)).json()
+      const published = await (await api.call('POST', '/v1/definitions', 'alice', bundle)).json()
       await api.restart()
-      const after = await (await api.call('GET', '/v1/definitions/payments/latest', 'alice')).json()
+      const after = await (await api.call('GET', `/v1/definitions/${published.hash}`, 'alice')).json()
       expect(after.hash).toBe(published.hash)
-      expect(await (await api.call('GET', `/v1/definitions/payments/${published.hash}/files`, 'alice')).json()).toEqual(
-        {
-          entry: '.hammerkit.yaml',
-          files,
-        }
-      )
+      expect(await (await api.call('GET', `/v1/definitions/${published.hash}/files`, 'alice')).json()).toEqual({
+        entry: '.hammerkit.yaml',
+        files,
+      })
     })
   })
 
