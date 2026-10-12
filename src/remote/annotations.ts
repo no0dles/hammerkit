@@ -1,6 +1,6 @@
 import { execFile } from 'child_process'
 import { hostname, userInfo } from 'os'
-import { dirname, relative, resolve, sep } from 'path'
+import { basename, dirname, resolve } from 'path'
 import { promisify } from 'util'
 import { normalizeRepo } from '../server/repo'
 import { Annotations, annotationsSchema } from './bundle'
@@ -41,9 +41,12 @@ export async function collectAnnotations(fileName: string): Promise<Annotations>
   const path = resolve(fileName)
   const cwd = dirname(path)
   const annotations: Annotations = {}
-  const root = await git(cwd, 'rev-parse', '--show-toplevel')
-  annotations.path = root ? relative(resolve(root), path).split(sep).join('/') : path
-  if (root) {
+  // git says where the directory is in the repository: comparing paths would trip on
+  // what the file system calls the same directory differently (symlinks, 8.3 names)
+  const inside = (await git(cwd, 'rev-parse', '--is-inside-work-tree')) === 'true'
+  const prefix = inside ? (await git(cwd, 'rev-parse', '--show-prefix')) ?? '' : undefined
+  annotations.path = prefix !== undefined ? `${prefix}${basename(path)}` : path
+  if (inside) {
     const remote = await git(cwd, 'remote', 'get-url', 'origin')
     const repo = remote ? remoteRepo(remote) : undefined
     const commit = await git(cwd, 'rev-parse', 'HEAD')

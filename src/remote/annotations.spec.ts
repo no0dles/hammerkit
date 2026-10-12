@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { hostname, tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { createGitRepo } from '../testing/git-repo'
 import { applyAnnotations, collectAnnotations, remoteRepo } from './annotations'
 
@@ -35,6 +35,20 @@ describe('collectAnnotations', () => {
       })
       expect(annotations.user).toBeTruthy()
     } finally {
+      repo.remove()
+    }
+  })
+
+  it('names the path in the repository however the file system spells the directory', async () => {
+    const repo = createGitRepo()
+    const link = join(mkdtempSync(join(tmpdir(), 'hammerkit-link-')), 'repo')
+    try {
+      repo.commit({ 'web/.hammerkit.yaml': 'tasks: {}\n' })
+      // another name for the same directory, as a symlink or an 8.3 name on windows is
+      symlinkSync(repo.path, link, 'junction')
+      expect((await collectAnnotations(join(link, 'web', '.hammerkit.yaml'))).path).toBe('web/.hammerkit.yaml')
+    } finally {
+      rmSync(dirname(link), { recursive: true, force: true })
       repo.remove()
     }
   })
