@@ -4,7 +4,7 @@ import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
 import { DefinitionError, planBundle } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
-import { planRun } from './run-plan'
+import { planRun, refuseArguments } from './run-plan'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -51,6 +51,8 @@ describe('planBundle on a server', () => {
       kind: 'task',
       runtime: 'local',
       cmds: ['./deploy.sh'],
+      command: './deploy.sh',
+      network: 'open',
       deps: ['build'],
       needs: [],
       accounts: ['prod'],
@@ -102,6 +104,135 @@ tasks:
       flags: ['host-port'],
     })
     expect(planned.plan.test.needs).toEqual(['db'])
+  })
+
+  it('shows the last command of each task and the cmd of each service, where arguments land', async () => {
+    const yaml = `
+services:
+  api:
+    image: node:22
+    cmd: node server.js
+    network: { allow: [registry.npmjs.org] }
+tasks:
+  setup:
+    image: node:22
+    cmds: [npm ci, npx vitest run]
+    network: none
+  empty:
+    image: node:22
+`
+    const planned = await planBundle(bundle(yaml), hosted, { policy })
+    expect(planned.plan.setup).toMatchObject({ command: 'npx vitest run', network: 'none' })
+    expect(planned.plan.empty.command).toBeNull()
+    expect(planned.plan.api).toMatchObject({
+      command: 'node server.js',
+      network: { allow: ['registry.npmjs.org'] },
+    })
+  })
+
+  it('appends the arguments of a run to the last command of its task, never to a dependency', async () => {
+    const yaml = `
+tasks:
+  build:
+    image: node:22
+    cmds: [npm run build]
+  test:
+    image: node:22
+    deps: [build]
+    cmds: [npm ci, npx vitest run]
+`
+    const run = { tasks: ['test'], options: { args: ['src/login.spec.ts', '-t', "it's a; rm -rf /"] } }
+    const planned = await planRun(bundle(yaml), run, hosted, policy)
+    expect(planned.plan.test.cmds).toEqual(['npm ci', `npx vitest run 'src/login.spec.ts' '-t' 'it'\\''s a; rm -rf /'`])
+    expect(planned.plan.test.command).toEqual(planned.plan.test.cmds[1])
+    expect(planned.plan.build.cmds).toEqual(['npm run build'])
+    expect(refuseArguments(run, planned.plan)).toBeNull()
+  })
+
+  it('refuses arguments for a task that reads secrets, and for a service', async () => {
+    const files = bundle(build)
+    const run = { tasks: ['test'], options: { args: ['-t', 'x'] } }
+    expect(refuseArguments(run, (await planRun(files, run, hosted, policy)).plan)).toEqual(
+      'test reads secrets (DB), it takes no arguments on a server: an argument could make it print them'
+    )
+    // a dependency that reads secrets does not get the arguments
+    const yaml = `
+tasks:
+  login:
+    image: node:22
+    secrets:
+      - { from: "gsm:npm-token", account: ci, env: NPM_TOKEN }
+    cmds: [npm whoami]
+  test:
+    image: node:22
+    deps: [login]
+    cmds: [npx vitest run]
+services:
+  db:
+    image: postgres:16
+    cmd: postgres
+`
+    const test = { tasks: ['test'], options: { args: ['-t', 'x'] } }
+    expect(refuseArguments(test, (await planRun(bundle(yaml), test, hosted, policy)).plan)).toBeNull()
+    const db = { tasks: ['db'], options: { args: ['-c', 'fsync=off'] } }
+    expect(refuseArguments(db, (await planRun(bundle(yaml), db, hosted, policy)).plan)).toEqual(
+      'db is a service, arguments go to a task'
+    )
+  })
+
+  it('refuses a version that reaches more than runs.network allows', async () => {
+    const yaml = `
+tasks:
+  install:
+    image: node:22
+    network: { allow: [registry.npmjs.org, '*.githubusercontent.com'] }
+    cmds: [npm ci]
+  test:
+    image: node:22
+    network: none
+    cmds: [npm test]
+`
+    const allow = (...hosts: string[]) => ({ ...policy, network: { type: 'allow' as const, hosts } })
+    // open, the default, allows anything
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, network: { type: 'open' } } })
+    ).resolves.toBeDefined()
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: allow('*.githubusercontent.com', 'registry.npmjs.org') })
+    ).resolves.toBeDefined()
+    // a wildcard of the server covers the names under it
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: allow('*.githubusercontent.com', '*.npmjs.org') })
+    ).resolves.toBeDefined()
+    await expect(planBundle(bundle(yaml), hosted, { policy: allow('registry.npmjs.org') })).rejects.toThrow(
+      'install: asks for network allow *.githubusercontent.com, registry.npmjs.org, more than this server allows (runs.network: allow registry.npmjs.org)'
+    )
+    // a name of the server does not cover the wildcard of the build file
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: allow('raw.githubusercontent.com', 'registry.npmjs.org') })
+    ).rejects.toThrow('install: asks for network')
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, network: { type: 'none' } } })
+    ).rejects.toThrow(/^install: asks for network allow .*\(runs.network: none\)$/)
+    // a task that asks for nothing passes, one that sets no network is open
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    image: node:22\n    network: none\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'none' } },
+      })
+    ).resolves.toBeDefined()
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    image: node:22\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'none' } },
+      })
+    ).rejects.toThrow('a: asks for network open, more than this server allows (runs.network: none)')
+  })
+
+  it('refuses a local task under a runs.network below open', async () => {
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'allow', hosts: ['registry.npmjs.org'] } },
+      })
+    ).rejects.toThrow("a: is a local task, which can't be limited to the network this server allows")
   })
 
   it('requires every provider secret to name its account, a task account does not count', async () => {

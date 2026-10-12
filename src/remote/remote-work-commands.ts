@@ -76,6 +76,7 @@ interface PlanView {
   runtime: string
   image?: string
   cmds: string[]
+  network?: unknown
   deps: string[]
   needs: string[]
   accounts: string[]
@@ -91,7 +92,9 @@ const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
 // What a person who approves is shown of a run: everything the decision rests on.
 function describe(run: ApprovalView): string[] {
   const source = run.source.type === 'ref' ? `ref ${run.source.ref}` : `snapshot ${run.source.snapshot}`
-  const options = Object.entries(run.options)
+  // the arguments are listed on their own line, each as a JSON string: commas and spaces stay visible
+  const { args, ...settings } = run.options
+  const options = Object.entries(settings)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)
     .join(' ')
   return [
@@ -103,6 +106,9 @@ function describe(run: ApprovalView): string[] {
     `  accounts: ${run.accounts.length > 0 ? run.accounts.map(printable).join(', ') : 'none'}, source ${printable(
       source
     )}${options ? `, ${printable(options)}` : ''}`,
+    ...(Array.isArray(args) && args.length > 0
+      ? [`  arguments: ${args.map((arg) => printable(JSON.stringify(arg))).join(' ')}`]
+      : []),
     ...(run.approvals ?? []).map(
       (approval) =>
         `  ${printable(approval.account)}: ${
@@ -135,6 +141,9 @@ function describePlan(plan: Record<string, PlanView>): string[] {
       entry.image ? ` ${printable(entry.image)}` : ''
     }${entry.flags.length > 0 ? `  [${entry.flags.map(printable).join(', ')}]` : ''}`,
     ...entry.cmds.map((cmd) => `    $ ${printable(cmd)}`),
+    ...(entry.network !== undefined && entry.network !== 'open'
+      ? [`    network: ${printable(typeof entry.network === 'string' ? entry.network : JSON.stringify(entry.network))}`]
+      : []),
     ...(entry.deps.length > 0 ? [`    after: ${entry.deps.map(printable).join(', ')}`] : []),
     ...(entry.needs.length > 0 ? [`    needs: ${entry.needs.map(printable).join(', ')}`] : []),
     ...entry.secrets.map(

@@ -6,6 +6,10 @@ import { normalizeRepo } from './repo'
 
 const name = z.string().min(1).max(200)
 
+// what one run may pass after `--`
+export const MAX_ARGS = 100
+export const MAX_ARGS_BYTES = 16 * 1024
+
 // What `POST /v1/runs` takes. Who is asking and which accounts they may use is
 // decided from the token, never from this body; the accounts a run uses are those
 // its secrets are read as, which the server derives from the published build file.
@@ -36,6 +40,16 @@ export const runOptionsSchema = z
     timeout: duration.optional(),
     // as --no-skip-deps when false
     skipDeps: z.boolean().optional(),
+    // as the text after `--`: appended to the last command of the one task the run
+    // names, each quoted for its shell. A task that reads secrets takes none.
+    args: z
+      .array(z.string().refine((arg) => !arg.includes('\0'), 'an argument can not contain a NUL character'))
+      .max(MAX_ARGS)
+      .refine(
+        (args) => args.reduce((total, arg) => total + Buffer.byteLength(arg), 0) <= MAX_ARGS_BYTES,
+        `the arguments are longer than ${MAX_ARGS_BYTES / 1024} KiB together`
+      )
+      .optional(),
   })
   .strict()
 
@@ -81,6 +95,10 @@ export const runRequestSchema = z
   .refine((request) => request.tasks.length > 0 || (request.options.filter ?? []).length > 0, {
     message: 'name at least one task, or filter by labels',
     path: ['tasks'],
+  })
+  .refine((request) => (request.options.args ?? []).length === 0 || request.tasks.length === 1, {
+    message: 'arguments go to one task, name exactly one in tasks',
+    path: ['options', 'args'],
   })
 
 export type RunRequest = z.infer<typeof runRequestSchema>

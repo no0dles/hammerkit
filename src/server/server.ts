@@ -12,7 +12,8 @@ import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSo
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
-import { PlanContext, planRun } from './run-plan'
+import { PlanContext, planRun, refuseArguments } from './run-plan'
+import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
 import { runRequestSchema } from './run-request'
@@ -262,6 +263,12 @@ async function submitRun(
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
     return
   }
+  const refused = refuseArguments(request, planned.plan)
+  if (refused) {
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${refused}`)
+    send(res, 400, { error: refused })
+    return
+  }
   const decision = decideRun({
     grant,
     accounts: planned.accounts,
@@ -429,7 +436,12 @@ export async function startServer(
       processEnvs: runEnvironment(config, environment.processEnvs),
       hosted: { catalog: getSecretCatalog(config) },
     },
-    policy: { envs: config.runs.env.allow, reserved: getSourceAccounts(config), runtimes: config.runtimes },
+    policy: {
+      envs: config.runs.env.allow,
+      reserved: getSourceAccounts(config),
+      runtimes: config.runtimes,
+      network: parseWorkNetwork(config.runs.network),
+    },
   }
   const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')
   const definitions = new DefinitionStore(join(storage, 'definitions'), planning.environment, {

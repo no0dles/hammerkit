@@ -20,6 +20,9 @@ const buildFile = `tasks:
     secrets:
       - { from: "echo:kube", account: op-payments-prod, env: KUBE_TOKEN }
     cmds: [echo deploy]
+  smoke:
+    deps: [deploy]
+    cmds: [echo smoke]
 includes:
   more: ./more.yaml
 `
@@ -134,11 +137,12 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
   }
 }
 
-async function submit(h: Harness, sub: string, task: string) {
+async function submit(h: Harness, sub: string, task: string, options: Record<string, unknown> = {}) {
   const response = await h.call(sub, 'POST', '/v1/runs', {
     definition: { name: 'payments' },
     tasks: [task],
     source: { type: 'ref', repo: REPO, ref: 'main' },
+    options,
   })
   expect(response.status).toBe(202)
   return response.body as { id: string; state: string }
@@ -150,7 +154,7 @@ describe('remote publish', () => {
       await h.run('remote', 'login', 'build')
       const first = await h.run('remote', 'publish', 'payments', 'build')
       expect(first).toMatch(/published payments to build: sha256:[0-9a-f]{64} \(2 files\)/)
-      expect(first).toContain('tasks and services: build, deploy, more:lint')
+      expect(first).toContain('tasks and services: build, deploy, more:lint, smoke')
 
       const again = await h.run('remote', 'publish', 'payments', 'build')
       expect(again).toContain('already published payments to build')
@@ -158,7 +162,7 @@ describe('remote publish', () => {
       expect(again).toContain(hash)
 
       const published = await h.call('bob', 'GET', '/v1/definitions/payments/latest')
-      expect(published.body).toMatchObject({ hash, tasks: ['build', 'deploy', 'more:lint'] })
+      expect(published.body).toMatchObject({ hash, tasks: ['build', 'deploy', 'more:lint', 'smoke'] })
     })
   })
 
@@ -260,6 +264,25 @@ describe('remote approvals', () => {
       }
       expect(h.executed).toEqual(['deploy'])
       expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.approvals[0].approvedBy.sub).toBe('bob')
+    })
+  })
+
+  it('shows the approver the arguments of a run and the command they make', async () => {
+    await withHarness('remote-approvals-arguments', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'publish', 'payments', 'build')
+      // the task that takes them reads no secrets, the one it waits for does
+      const run = await submit(h, 'alice', 'smoke', { args: ['--region', 'eu, us'], cache: 'none' })
+      expect(run.state).toBe('awaiting-approval')
+
+      h.as('bob')
+      await h.run('remote', 'login', 'build')
+      const listing = await h.run('remote', 'approvals', 'build')
+      expect(listing).toContain('source ref main, cache=none')
+      expect(listing).toContain('arguments: "--region" "eu, us"')
+      const shown = await h.run('remote', 'show', run.id, 'build')
+      expect(shown).toContain(`$ echo smoke '--region' 'eu, us'`)
+      expect(shown).toContain('$ echo deploy\n')
     })
   })
 

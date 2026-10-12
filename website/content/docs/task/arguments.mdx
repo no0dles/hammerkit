@@ -96,4 +96,7 @@ task's. A service without `cmd`, and a Kubernetes service, take no arguments.
   which are hammerkit's own options only before it. [`--set`](/docs/build-file/environment-variables)
   is unchanged and stays the way to fill a `$NAME` the build file references.
 - [`ls --json`](/docs/cli/ls#json) shows each task's last command and each service's
-  `cmd`, so a script or an agent can tell where its arguments land.
+  `cmd`, so a script or an agent can tell where its arguments land. A version published
+  to a server shows it as `command` in its plan.
+- A run on a [server](/docs/remote-compute/runs#arguments) takes them as `options.args`,
+  for one task that reads no secrets.
