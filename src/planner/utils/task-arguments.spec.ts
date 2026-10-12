@@ -1,5 +1,6 @@
-import { execFileSync } from 'child_process'
-import { platform } from 'os'
+import { spawnSync } from 'child_process'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { platform, tmpdir } from 'os'
 import { join } from 'path'
 import { appendArguments, getShellQuoting, quoteArgument } from './task-arguments'
 import { createTestCase } from '../../testing/test-case'
@@ -10,7 +11,7 @@ import { getServiceCommand, WorkService } from '../work-service'
 const HOSTILE = [
   'a b',
   '-t',
-  'a; echo pwned',
+  'a; echo pwned > pwned.txt',
   "it's",
   '$HOME',
   '$(echo pwned)',
@@ -21,6 +22,9 @@ const HOSTILE = [
   '\\',
   '"double"',
 ]
+
+// Windows PowerShell can take half a minute to start on the hosted runner
+const SHELL_TIMEOUT = Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000
 
 describe('task arguments', () => {
   describe('quoting', () => {
@@ -44,20 +48,32 @@ describe('task arguments', () => {
       expect(quoteArgument('it\u2019s', 'powershell')).toBe(`'it\u2019\u2019s'`)
     })
 
-    it('keeps every argument one word of text in a real sh', () => {
-      if (platform() === 'win32') {
-        // no sh on the windows runner; the PowerShell side is covered by the local task test below
-        expect(getShellQuoting('powershell.exe')).toBe('powershell')
-        return
-      }
-      const command = appendArguments(
-        { cwd: '/', cmd: `printf '%s\\0'`, parsed: { command: 'printf', args: ['%s\\0'] } },
-        HOSTILE,
-        'posix'
-      )
-      const output = execFileSync('sh', ['-c', command.cmd]).toString()
-      expect(output.split('\0').slice(0, -1)).toEqual(HOSTILE)
-    })
+    it(
+      'keeps every argument one word of text in the shell of local tasks',
+      () => {
+        // the shell executeCommand runs a local command in, with this process' env
+        const windows = platform() === 'win32'
+        // Windows PowerShell hands an empty argument, a double quote and a newline
+        // to native programs its own way: no second command, but not the same text
+        const args = windows ? HOSTILE.filter((arg) => arg !== '' && !/["\n]/.test(arg)) : HOSTILE
+        const dir = mkdtempSync(join(tmpdir(), 'hammerkit-arguments-'))
+        try {
+          writeFileSync(join(dir, 'args.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)))')
+          const command = appendArguments(
+            { cwd: dir, cmd: 'node args.js', parsed: { command: 'node', args: ['args.js'] } },
+            args,
+            windows ? 'powershell' : 'posix'
+          )
+          const result = spawnSync(command.cmd, { cwd: dir, shell: windows ? 'powershell.exe' : true })
+          expect(result.stderr.toString()).toBe('')
+          expect(JSON.parse(result.stdout.toString())).toEqual(args)
+          expect(existsSync(join(dir, 'pwned.txt'))).toBe(false)
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      },
+      SHELL_TIMEOUT
+    )
 
     it('appends the raw arguments to the parsed exec form', () => {
       const command = appendArguments(
