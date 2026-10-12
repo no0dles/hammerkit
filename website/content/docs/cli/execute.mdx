@@ -13,6 +13,17 @@ Tasks can be executed by name.
 hammerkit example
 ```
 
+## Pass arguments
+Arguments after `--` are appended to the task's last command, each quoted as one
+argument, and are part of its cache key. Its dependencies run without them.
+
+```bash
+hammerkit run test -- src/login.spec.ts -t "login flow"
+```
+
+A run that selects several tasks takes no arguments. See
+[arguments](/docs/task/arguments).
+
 ## Execute tasks with labels
 Tasks can be executed by matching labels or filtered by label values.
 
@@ -32,6 +43,8 @@ hammerkit -e build=ios
 
 ## Options
 ```
+Usage: hammerkit run [options] [task] [-- args...]
+
 Options:
   -f, --filter <labels...>    filter task and services with labels
   -e, --exclude <labels...>   exclude task and services with labels
