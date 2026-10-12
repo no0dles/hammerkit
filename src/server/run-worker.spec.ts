@@ -58,14 +58,77 @@ describe('workerMain', () => {
     const messages = await run({ ...base, entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: true })
     const events = messages.flatMap((m) => (m.kind === 'event' ? [m.event] : []))
-    expect(events).toContainEqual({ type: 'task', task: 'hello', state: 'running' })
-    expect(events).toContainEqual({ type: 'task', task: 'hello', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'hello', state: 'running' }))
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'hello', state: 'succeeded' }))
     expect(events.map((e) => (e.type === 'log' ? e.text : '')).join('')).toContain('hello-from-the-run')
   })
 
   it('says which task failed, and that a failure is not a cancellation', async () => {
     const messages = await run({ ...base, tasks: ['broken'], entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: false, error: 'broken failed' })
+  })
+
+  it('reports the exit code of a failed task and how long it ran', async () => {
+    const messages = await run({ ...base, tasks: ['broken'], entry: join(directory, '.hammerkit.yaml') })
+    const events = messages.flatMap((m) => (m.kind === 'event' ? [m.event] : []))
+    expect(events).toContainEqual({
+      type: 'task',
+      task: 'broken',
+      state: 'failed',
+      exitCode: 3,
+      durationMs: expect.any(Number),
+    })
+  })
+
+  it('says why a task ran, and when it came from the cache', async () => {
+    // the process of a run finds its caches through its environment, as the server sets it
+    const cache = mkdtempSync(join(tmpdir(), 'hammerkit-worker-cache-'))
+    vi.stubEnv('HAMMERKIT_DIR', cache)
+    writeFileSync(
+      join(directory, '.hammerkit.yaml'),
+      [
+        'caches:',
+        `  default: { method: checksum, backend: { type: local, path: ${JSON.stringify(join(cache, 'backend'))} } }`,
+        'tasks:',
+        '  build:',
+        '    src: [input.txt]',
+        '    cmds: [echo built]',
+        '',
+      ].join('\n')
+    )
+    writeFileSync(join(directory, 'input.txt'), 'one')
+    try {
+      const once = async () => {
+        const stdin = new PassThrough()
+        stdin.end(
+          JSON.stringify({
+            ...base,
+            tasks: ['build'],
+            options: { cache: 'checksum' },
+            entry: join(directory, '.hammerkit.yaml'),
+          })
+        )
+        const out = sink()
+        await workerMain(stdin, out.stream, { PATH: process.env.PATH }, directory, new AbortController())
+        return out.messages().flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
+      }
+      expect(await once()).toContainEqual({
+        type: 'task',
+        task: 'build',
+        state: 'succeeded',
+        durationMs: expect.any(Number),
+        causes: ['never cached'],
+      })
+      expect(await once()).toContainEqual({
+        type: 'task',
+        task: 'build',
+        state: 'cached',
+        durationMs: expect.any(Number),
+      })
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(cache, { recursive: true, force: true })
+    }
   })
 
   it('says when the input is not a run', async () => {
