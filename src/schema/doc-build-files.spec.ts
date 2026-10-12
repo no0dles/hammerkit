@@ -73,6 +73,11 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'host config (~/.hammerkit/config.yaml), not a build file',
   },
   {
+    file: join('remote-compute', 'backend.mdx'),
+    snippet: 'kind: ClusterRole',
+    reason: 'Kubernetes RBAC for the server of a Kubernetes backend, not a hammerkit build file',
+  },
+  {
     file: join('installation.mdx'),
     snippet: 'DOCKER_TLS_CERTDIR',
     reason: 'GitLab CI (.gitlab-ci.yml) example, not a hammerkit build file',

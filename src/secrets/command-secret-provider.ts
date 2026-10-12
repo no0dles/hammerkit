@@ -12,19 +12,40 @@ const STDERR_LIMIT = 500
 // auth login`, the 1Password app) is never picked up, and a missing credential
 // fails instead of falling back to one.
 export function createCommandSecretProvider(binding: SecretProviderBinding): SecretProvider {
-  const { definition, account } = binding
-
   return {
     async resolve(ref: string, environment: Environment): Promise<string> {
-      const [command, ...args] = definition.command.map((part) =>
-        expand(part, environment, `provider ${definition.name}`).replace(/\{\{ref\}\}/g, () => ref)
+      const { command, args, env } = getProviderInvocation(binding, ref, environment)
+      return run(
+        command,
+        args,
+        { ...minimalEnvironment(environment), ...env },
+        binding.definition.timeoutMs,
+        environment
       )
-      const env = {
-        ...minimalEnvironment(environment),
-        ...expandAll(definition.env, environment, `provider ${definition.name}`),
-        ...expandAll(account.env, environment, `account ${account.name}, provider ${definition.name}`),
-      }
-      return run(command, args, env, definition.timeoutMs, environment)
+    },
+  }
+}
+
+/**
+ * The command that reads `ref` as the account of the binding, and the variables of
+ * the provider and the account it runs with: `${NAME}` filled from the environment,
+ * `{{ref}}` as part of one argument. Without PATH, which is the machine's that runs it.
+ */
+export function getProviderInvocation(
+  binding: SecretProviderBinding,
+  ref: string,
+  environment: Environment
+): { command: string; args: string[]; env: { [key: string]: string } } {
+  const { definition, account } = binding
+  const [command, ...args] = definition.command.map((part) =>
+    expand(part, environment, `provider ${definition.name}`).replace(/\{\{ref\}\}/g, () => ref)
+  )
+  return {
+    command,
+    args,
+    env: {
+      ...expandAll(definition.env, environment, `provider ${definition.name}`),
+      ...expandAll(account.env, environment, `account ${account.name}, provider ${definition.name}`),
     },
   }
 }

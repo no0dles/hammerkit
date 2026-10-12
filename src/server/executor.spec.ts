@@ -193,6 +193,19 @@ describe('HostExecutor', () => {
     expect(events.filter((e) => e.type === 'task' && e.task === 'never')).toEqual([])
   })
 
+  it('shares the cache of a repository between its runs', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml':
+        'tasks:\n  build:\n    src: [input.txt]\n    generates: [out]\n    cmds:\n      - mkdir -p out\n      - cp input.txt out/copy.txt\n',
+    })
+    const first = await execute(run(hash, { id: 'run_one' }))
+    expect(first.error).toBeUndefined()
+    expect(first.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    const second = await execute(run(hash, { id: 'run_two' }))
+    expect(second.error).toBeUndefined()
+    expect(second.events).toContainEqual({ type: 'task', task: 'build', state: 'cached' })
+  })
+
   it('runs the tasks a label selects', async () => {
     const hash = await publish({
       '.hammerkit.yaml':

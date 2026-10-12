@@ -1,9 +1,10 @@
 ---
 title: "Backend"
-description: "Where the tasks of a run execute, what the machine offers and which runtimes tasks may use."
+description: "Where the tasks of a run execute: this machine, or Jobs on a Kubernetes cluster, and which runtimes tasks may use."
 ---
-`backend` says where the tasks of runs execute. Today that is `host`: this machine, with the
-same engine as `hammerkit run`. `runtimes` says which runtimes of that engine tasks may use.
+`backend` says where the tasks of runs execute. `host` is this machine, with the same engine
+as `hammerkit run`. `kubernetes` runs them as Jobs on a cluster, see [Kubernetes](#kubernetes).
+`runtimes` says which runtimes of the engine tasks may use.
 
 ```yaml title="server.yaml"
 backend:
@@ -14,8 +15,8 @@ runtimes: [docker]   # what tasks may run on, docker by default
 
 | Key | What it does |
 | --- | --- |
-| `backend.type` | `host`, this machine. It is the only backend so far and the default, so it can be left out. `type` is there for the backends that follow, such as Kubernetes (Jobs on node pools, see the [spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md)), which will bring keys of their own. |
-| `backend.platform` | What the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. Detected when left out. Clients read it from the [discovery document](/docs/remote-compute#discovery). |
+| `backend.type` | `host` (this machine, the default) or `kubernetes` (a cluster). |
+| `backend.platform` | `host` only. What the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. Detected when left out. Clients read it from the [discovery document](/docs/remote-compute#discovery). |
 | `runtimes` | What tasks may run on, see [Runtimes](#runtimes). |
 
 ## Runtimes
@@ -29,13 +30,16 @@ runtimes: [docker, local]
 
 A build file with a task on a runtime that is not listed is refused when it is published
 or proposed, see [What a build file may not do](/docs/remote-compute/build-files#what-a-build-file-may-not-do).
-The server logs a warning at startup when `local` is allowed. A container task uses the
+The server logs a warning at startup when `local` is allowed on a host. A container task uses the
 docker daemon of the server's environment, so name `DOCKER_HOST` in
 [`runs.env.allow`](/docs/remote-compute/runs#config) when it is not the default.
 
+On a cluster `local` means a task without an image runs in the `toolImage` of a pool, see
+[Pools](#pools).
+
 ## One server is one trust level
 
-The process of a run is not a sandbox. It runs as the user
+On a host, the process of a run is not a sandbox. It runs as the user
 of the server, a `local` task reads everything that user can read, and a container task can
 use the docker daemon the server is configured for. Accounts keep credentials apart (a task
 only reads the secrets of the accounts its run was admitted for), but they do not keep code
@@ -43,3 +47,148 @@ apart on one machine. Do not mix production and untrusted agents on one server: 
 them on different servers, each with the accounts of its own level, and with `local` only on
 a server whose users you trust with the machine. The storage directory and the other runs of
 a server are inside what a `local` task can read.
+
+On a cluster every task is a pod of its own in the caller's namespace, without a token of the
+cluster, so the boundary is the container and the namespace. The server still holds the
+right to mint the tokens of every account (see [Secrets in the Job](#secrets-in-the-job)), so
+the advice stands: one server, and one set of accounts, per trust level.
+
+## Kubernetes
+
+<Callout type="warn">
+Experimental, like the server. Linux nodes only.
+</Callout>
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  namespace: hammerkit              # the server's own; the namespace of its pod when left out
+  # kubeconfig: /etc/hammerkit/kubeconfig   # with context, for a cluster the server is not in
+  # context: prod
+  storageClass: standard-rwo        # of the claims of tasks; the cluster's default when left out
+  pools:
+    - name: builds
+      platform: { os: linux, arch: amd64 }
+      nodeSelector: { cloud.google.com/gke-nodepool: builds }
+      tolerations: [{ key: builds, operator: Exists, effect: NoSchedule }]
+      toolImage: ghcr.io/corp/build-tools:2026.10
+  providers:
+    gsm: { image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim }
+  quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20' }
+  defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
+```
+
+The server runs as before (it checks the code out, plans the run with the engine in a process
+of its own and keeps the cache), but every container task of a run becomes a Job and every
+service a Deployment, in a namespace of the caller.
+
+| Key | What it does |
+| --- | --- |
+| `namespace` | The server's own namespace, where the [credentials of the accounts](#secrets-in-the-job) are. Found on its own when the server runs in a pod. |
+| `kubeconfig`, `context` | The cluster, for a server outside of it. Without them the server uses its default kubeconfig, else the cluster it runs in. |
+| `namespacePrefix` | A caller's namespace is this and the first 16 hex digits of the sha-256 of their issuer and subject, `hammerkit-` by default. Two servers on one cluster need a prefix each. |
+| `storageClass` | The storage class of the claims tasks get. |
+| `pools` | Where pods are placed, see [Pools](#pools). One `linux`/`amd64` pool when left out. |
+| `providers` | Per secret provider, the image its command runs in. Every provider an account reads needs one. |
+| `quota` | The `ResourceQuota` of each caller's namespace, as Kubernetes writes it (`requests.cpu`, `limits.memory`, `pods`, `persistentvolumeclaims`, `requests.storage`). |
+| `defaultResources` | `requests` and `limits` (`cpu`, `memory`) for containers without [`resources`](/docs/task#resources), as a `LimitRange`, so they are admitted under a quota that limits compute. |
+
+### Namespaces
+
+The first run of a caller makes their namespace and applies `quota` and `defaultResources` to
+it on every run. What a run makes there carries the label `hammerkit.dev/run` and is deleted
+when the run ends, whether it succeeded or not: an idle caller costs nothing on the cluster.
+The runs of one caller execute one after the other, since the Jobs and claims of a task are
+named after its cache id; the runs of different callers run side by side. Kubernetes queues
+pods that do not fit the quota or the nodes.
+
+Pods of runs run with `automountServiceAccountToken: false`, so a task holds no token of the
+cluster.
+
+### Pools
+
+A pool is a set of nodes: `platform` (`linux`, with `amd64` or `arm64`), `nodeSelector`
+(the labels besides `kubernetes.io/os` and `kubernetes.io/arch`, which come from `platform`)
+and `tolerations`. Container tasks and services go to the first pool. A task without an image
+runs in the `toolImage` of the first pool that has one and offers the `platform` the task
+declares (`platform: { arch: arm64 }` picks an `arm64` pool). A task for macOS or
+Windows has no pool and fails when the run starts. `runtimes` has to list `local` for such tasks,
+and at least one pool needs a `toolImage` then.
+
+### Secrets in the Job
+
+The server reads no secret of a provider for a task on a cluster: the Job of the task does,
+with only the credentials of the accounts it uses. Each provider secret gets an init container
+in the provider's image, which runs the provider's command with the provider's and the account's
+`env` and writes the value into a volume in memory. The task's container mounts only that
+volume: a `path:` secret is the file, an `env:` secret is set before the command runs.
+
+The credential of an account is set under `accounts.<name>.kubernetes` and is put at
+`/var/run/hammerkit/account/` in the init containers of that account only:
+
+```yaml title="server.yaml"
+accounts:
+  payments-dev:
+    providers:
+      gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /var/run/hammerkit/account/gcp.json } }
+    kubernetes:
+      serviceAccount: payments-dev    # a ServiceAccount in backend.namespace
+      audience: //iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/hk/providers/cluster
+      secret: payments-dev-federation # a Secret in backend.namespace, each key a file
+```
+
+| Key | What it does |
+| --- | --- |
+| `serviceAccount` | A ServiceAccount of the server's namespace. When the task starts, the server asks for a token of it (10 minutes, for `audience`) and puts it at `token`. A cloud that trusts the cluster's issuer for that ServiceAccount (GCP workload identity federation, AWS `AssumeRoleWithWebIdentity`, Azure federated credentials) exchanges it for the account's credentials. Short-lived, and one trust binding per account whoever the caller is. |
+| `audience` | The audience of that token; the cluster's default when left out. |
+| `secret` | A Secret of the server's namespace, each key a file of the directory: the federation config that points at `token`, or a key file where nothing else works (long-lived, so the second choice). |
+
+The values never reach the server, so it can not mask them in the log. The task's output is
+masked in the pod instead, with `awk`, line by line, before it leaves the pod: the image of a
+task that reads such a secret needs `awk` (busybox, alpine, debian and their kin have it), and
+stdout and stderr arrive as one stream. Encodings of a value (base64, hex) are not masked
+there. `env:` secrets (variables of `runs.env.allow`) are the server's own and are handed over
+as before.
+
+Not yet on a cluster, and refused when a build file is published: a provider secret on a
+service, and a provider secret with `cache: true` (its digest would be needed before the Job
+reads the value).
+
+### Cache and sources
+
+The cache stays on the server, one per source trust as on a host (a repository's runs share it).
+After a task ran, its outputs are copied from its claim into the cache, and a later run that
+hits restores them into a new claim before its dependents start. The files of a task's `src`
+are copied from the server's checkout into its claim. So on a cluster the storage directory
+of the server (`storage.directory`) belongs on a volume of its own.
+
+### What the server may do
+
+In its own namespace the server reads the Secrets of the accounts and creates tokens of their
+ServiceAccounts. In the namespaces of callers it manages what runs need:
+
+```yaml title="rbac.yaml"
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: hammerkit-accounts, namespace: hammerkit }
+rules:
+  - { apiGroups: [''], resources: [secrets], verbs: [get] }
+  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: hammerkit-runs }
+rules:
+  - { apiGroups: [''], resources: [namespaces], verbs: [get, create] }
+  - { apiGroups: [''], resources: [resourcequotas, limitranges], verbs: [get, create, patch] }
+  - apiGroups: ['']
+    resources: [pods, pods/exec, pods/log, persistentvolumeclaims, secrets, services]
+    verbs: [get, list, create, patch, delete, deletecollection]
+  - { apiGroups: [batch], resources: [jobs, jobs/status], verbs: [get, list, create, patch, delete, deletecollection] }
+  - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
+```
+
+Bind the Role and the ClusterRole to the server's ServiceAccount.
+
+Not yet: network limits of tasks as a `NetworkPolicy` on the pods of a run (they carry
+`hammerkit.dev/run` for it), Windows nodes, and a cache in a registry or a bucket.

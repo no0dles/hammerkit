@@ -22,6 +22,8 @@ import { getWorkTaskRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
 import { parseDuration } from '../../utils/units'
 import { parseWorkResources } from '../work-resources'
+import { runInToolImage } from '../../kubernetes/job-placement'
+import { BuildFileLocalTaskSchema } from '../../schema/build-file-local-task-schema'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -30,7 +32,12 @@ export function appendWorkTask(
   environment: Environment,
   context: ReferencedContext
 ): WorkItemState<WorkTask, TaskState> {
-  const task = parseTask(cwd, referenceTask, environment, context)
+  const parsed = parseTask(cwd, referenceTask, environment, context)
+  // on a server's cluster a local task runs in a tool image like a container task
+  const task =
+    parsed.type === 'local-task' && workTree.environment.type === 'kubernetes' && workTree.environment.server
+      ? runInToolImage(parsed, workTree.environment.server, (referenceTask.schema as BuildFileLocalTaskSchema).platform)
+      : parsed
   if (!workTree.tasks[task.name]) {
     const workItem: WorkItem<WorkTask> = {
       // A dependency cycle is rejected before anything runs (checkForLoop), but

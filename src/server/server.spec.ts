@@ -440,6 +440,72 @@ describe('server config policy', () => {
     expect(account({ source: ['upload', 'ref'], refs: ['main'] })).toBe(false)
   })
 
+  describe('kubernetes backend', () => {
+    const kubernetes = (backend: object, extra: object = {}) =>
+      serverConfigSchema.safeParse({ ...base, ...extra, backend: { type: 'kubernetes', ...backend } })
+    const message = (result: ReturnType<typeof kubernetes>) => (result.success ? '' : result.error.issues[0].message)
+
+    it('fills in one linux pool and the namespace prefix', () => {
+      const result = kubernetes({})
+      expect(result.success && result.data.backend).toEqual({
+        type: 'kubernetes',
+        namespacePrefix: 'hammerkit-',
+        pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }],
+        providers: {},
+      })
+    })
+
+    it('takes pools, a quota as strings and default resources', () => {
+      const result = kubernetes({
+        namespace: 'hammerkit',
+        pools: [
+          { name: 'arm', platform: { os: 'linux', arch: 'arm64' }, toolImage: 'tools:1', tolerations: [{ key: 'b' }] },
+        ],
+        quota: { 'requests.cpu': 8, 'requests.memory': '16Gi' },
+        defaultResources: { requests: { cpu: '250m' } },
+      })
+      expect(result.success && result.data.backend.type === 'kubernetes' && result.data.backend.quota).toEqual({
+        'requests.cpu': '8',
+        'requests.memory': '16Gi',
+      })
+    })
+
+    it('offers linux nodes only, each pool once', () => {
+      expect(kubernetes({ pools: [{ name: 'mac', platform: { os: 'macos', arch: 'arm64' } }] }).success).toBe(false)
+      expect(message(kubernetes({ pools: [{ name: 'a' }, { name: 'a' }] }))).toBe('the pool a is named twice')
+    })
+
+    it('needs the image a provider of an account runs in, as the Job reads the secret', () => {
+      const extra = {
+        secretProviders: { gsm: { command: ['gcloud', '{{ref}}'] } },
+        accounts: { dev: { providers: { gsm: { env: {} } }, kubernetes: { serviceAccount: 'dev' } } },
+      }
+      expect(message(kubernetes({}, extra))).toBe(
+        'the account dev reads gsm in the Jobs of tasks, name the image to run it in'
+      )
+      expect(kubernetes({ providers: { gsm: { image: 'cloud-sdk:slim' } } }, extra).success).toBe(true)
+    })
+
+    it('takes the credentials of an account on a cluster only', () => {
+      const accounts = (credentials: object) => ({ accounts: { dev: { kubernetes: credentials } } })
+      expect(kubernetes({}, accounts({ serviceAccount: 'dev', audience: 'sts', secret: 'dev-files' })).success).toBe(
+        true
+      )
+      expect(message(kubernetes({}, accounts({})))).toBe('name a serviceAccount, a secret or both')
+      expect(message(kubernetes({}, accounts({ secret: 'x', audience: 'sts' })))).toBe(
+        'audience is the one of the serviceAccount token'
+      )
+      expect(serverConfigSchema.safeParse({ ...base, ...accounts({ secret: 'x' }) }).success).toBe(false)
+    })
+
+    it('needs a tool image for local tasks', () => {
+      expect(message(kubernetes({}, { runtimes: ['docker', 'local'] }))).toBe(
+        'local tasks run in the toolImage of a pool, give a pool one or remove local from runtimes'
+      )
+      expect(kubernetes({ pools: [{ name: 'a', toolImage: 'tools:1' }] }, { runtimes: ['local'] }).success).toBe(true)
+    })
+  })
+
   it('accepts issuers over https, and http only on loopback', () => {
     const parse = (issuer: string) => serverConfigSchema.safeParse({ issuers: [{ issuer, audience: 'hammerkit' }] })
     expect(parse('https://idp.corp').success).toBe(true)

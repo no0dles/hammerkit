@@ -19,7 +19,9 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
       kc.loadFromDefault()
     }
 
-    kc.setCurrentContext(kubernetes.context)
+    if (kubernetes.context) {
+      kc.setCurrentContext(kubernetes.context)
+    }
 
     const coreApi = kc.makeApiClient(CoreV1Api)
     const batchApi = kc.makeApiClient(BatchV1Api)
@@ -36,7 +38,9 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
     }
   } catch (e) {
     if (getErrorMessage(e) === 'No active cluster!') {
-      if (kubernetes.kubeConfig) {
+      if (!kubernetes.context) {
+        throw new Error('No cluster found: no kubeconfig names a current context, and this is not a pod of a cluster')
+      } else if (kubernetes.kubeConfig) {
         throw new Error(`No cluster found for context ${kubernetes.context} in ${kubernetes.kubeConfig}`)
       } else {
         throw new Error(`No cluster found for context ${kubernetes.context}`)

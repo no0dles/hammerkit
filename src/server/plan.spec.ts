@@ -140,6 +140,22 @@ tasks:
     )
   })
 
+  it('refuses on a cluster what the Job of a task can not read itself yet', async () => {
+    const onCluster = { policy: { ...policy, backend: 'kubernetes' as const } }
+    const cached =
+      'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X, cache: true }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(cached), hosted, onCluster)).rejects.toThrow(
+      'a: the secret X has cache: true, its digest would need the value before the Job of the task reads it'
+    )
+    const service =
+      'services:\n  db:\n    image: postgres:16\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n'
+    await expect(planBundle(bundle(service), hosted, onCluster)).rejects.toThrow(
+      'db: the secret X is read from gsm, which this server does for tasks only'
+    )
+    await expect(planBundle(bundle(build), hosted, onCluster)).resolves.toBeTruthy()
+    await expect(planBundle(bundle(cached), hosted, { policy })).resolves.toBeTruthy()
+  })
+
   it('refuses a task whose runtime the server does not allow', async () => {
     const yaml = 'tasks:\n  a:\n    cmds: [echo]\n  b:\n    image: node:22\n    cmds: [echo]\n'
     await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, runtimes: ['docker'] } })).rejects.toThrow(
