@@ -101,7 +101,8 @@ describe('sandbox files', () => {
     it('shows a link as a link and refuses paths outside', async () => {
       if (link('/etc', join(work, 'etc'))) {
         const top = await files.tree({})
-        expect(top.entries).toContainEqual({ path: 'etc', type: 'symlink', target: '/etc' })
+        // Windows answers the target as a drive path
+        expect(top.entries).toContainEqual({ path: 'etc', type: 'symlink', target: expect.stringMatching(/etc$/) })
         expect((await failure(files.tree({ path: 'etc' }))).message).toBe('etc is a symbolic link')
       }
       expect((await failure(files.tree({ path: '../x' }))).status).toBe(400)
@@ -348,7 +349,11 @@ describe('sandbox files', () => {
       // the patch makes the same change in a clone, as a commit
       const clone = join(root, 'clone')
       git(root, 'clone', '--quiet', repository, clone)
-      execFileSync('git', ['-c', 'commit.gpgsign=false', 'am', '--quiet'], { cwd: clone, input: patch })
+      execFileSync(
+        'git',
+        ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'am', '--quiet'],
+        { cwd: clone, input: patch }
+      )
       expect(readFileSync(join(clone, 'src', 'new.ts'), 'utf8')).toBe('one\ntwo\n')
       expect(existsSync(join(clone, 'id_rsa'))).toBe(false)
       // the sandbox itself is unchanged, its state still names the changes

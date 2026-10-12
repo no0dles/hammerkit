@@ -631,7 +631,11 @@ export class HostSandboxFiles implements SandboxFiles {
       }
       return total < skip + limit + SEARCH_COUNT
     }
-    const clean = (file: string) => (file.startsWith('./') ? file.slice(2) : file)
+    // the JSON of ripgrep names paths with the separator of the system, whatever --path-separator says
+    const clean = (file: string) => {
+      const path = process.platform === 'win32' ? file.replace(/\\/g, '/') : file
+      return path.startsWith('./') ? path.slice(2) : path
+    }
     const onRecord = (record: string): boolean => {
       if (mode === 'files_with_matches') {
         const file = clean(record)
