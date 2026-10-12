@@ -71,10 +71,10 @@ runs:
   env: { allow: [PATH, DOCKER_HOST] }   # the only variables of the server a run sees
   limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
   maxDuration: 1h
-  network: { level: open }       # designed: the most open network a task gets
+  network: open                  # the most a task or service reaches besides its needs, as a task's `network`
 sandboxes:                        # designed, ADR-0011
   runtimes: [docker]
-  network: { level: allow, hosts: [registry.npmjs.org] }
+  network: { allow: [registry.npmjs.org] }
   limits: { count: 5, bytes: 20Gi }
   total: 500Gi
 entitlements:
