@@ -2,7 +2,7 @@
 
 **Created**: 2026-10-12
 
-**Status**: Design, not implemented (ADR-0011)
+**Status**: Local side implemented (FR-001 to FR-006); the server side (FR-007, FR-008) is not built yet (ADR-0011)
 
 **Input**: Narrowing a run (one test file, one test name, a flag for a dev server) needs a new task per variation or a `--set` variable the build file has to anticipate. Agents need the same thing on a server: a shell is a task that takes its command as an argument. Pascal decided on raw passthrough, as `npm run x -- ...` and `make` users know it, and that it works locally and remotely.
 
