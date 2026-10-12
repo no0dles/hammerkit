@@ -348,7 +348,8 @@ describe('sandbox files', () => {
       expect(patch).toContain('Subject: [PATCH] Say hello')
       // the patch makes the same change in a clone, as a commit
       const clone = join(root, 'clone')
-      git(root, 'clone', '--quiet', repository, clone)
+      // as the repository holds them, also where git turns line feeds into CRLF on checkout
+      git(root, 'clone', '--quiet', '--config', 'core.autocrlf=false', repository, clone)
       execFileSync(
         'git',
         ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'am', '--quiet'],
