@@ -1,0 +1,213 @@
+---
+title: "Build files"
+description: "Publish, propose and yank the build files a server runs, and the versions runs are pinned to."
+---
+A run does not bring its own build file. The server keeps the build files that
+were published to it, and a run says which one to use and which of its tasks to
+execute. So whoever may run work cannot change what a task does, and what a task
+does is decided by whoever may publish.
+
+```
+PUT /v1/definitions/payments
+```
+
+```json
+{
+  "entry": ".hammerkit.yaml",
+  "files": {
+    ".hammerkit.yaml": "tasks:\n  build:\n    cmds: [npm run build]\n",
+    "web/.hammerkit.yaml": "..."
+  }
+}
+```
+
+A published build file is a bundle: the file that starts it (`entry`, the usual
+`.hammerkit.yaml` when left out) and every file it includes, as text, up to 200
+files and 1 MiB. The name says what it is for (letters, digits, `.`, `_` and `-`).
+The server reads the bundle the way a run would, in a directory of its own where
+only the bundle's files exist, so one that does not load is refused when it is
+published and not when somebody wants to run it (`400`). A bundle may not include
+anything outside of itself. Includes from git have to be pinned to a commit and
+come from an `https://` or `ssh://` address, because the version below can only
+vouch for what is in the bundle.
+
+## Versions
+
+Every bundle has a version, the hash of its files:
+`sha256:<hex>` of the JSON `[entry, [[path, sha-256 of the content], ...]]` with
+the paths sorted. The same files have the same version anywhere, so a client can
+compute it and compare it with the server's. A version is never changed; publishing
+different files under the same name adds a version, publishing the same files again
+answers `200` and changes nothing (the first publish answers `201`).
+
+| Call | What it does |
+| --- | --- |
+| `PUT /v1/definitions/<name>` | Publish a bundle. Needs `builds: publish`, else `403`. With `builds: propose`, or when the bundle names accounts the caller does not `use`, it is a [proposal](#proposing-a-version) and answers `202`. |
+| `GET /v1/definitions` | The names with their latest version. |
+| `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each, the tasks and services it has and what each task works on (`inputs`). |
+| `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
+| `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
+| `POST /v1/definitions/<name>/<hash>/yank` | Pull a version back, see [Yanking](#yanking-a-version). The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/definitions/<name>/<hash>/unyank` | Let a yanked version go on. Needs `builds: publish`. |
+
+Reading needs a token and at least one service account or `builds` level. Versions are kept in the `storage` directory and survive a restart.
+
+## Inputs
+
+A version lists, for every task, what it works on, so a client knows
+which of its files a run needs without planning the build file itself:
+
+```json
+"inputs": {
+  "build": { "src": ["package.json", "src/**/*.ts", "!src/**/*.spec.ts"], "mounts": [], "deps": [], "needs": [] },
+  "test": { "src": [], "mounts": [".npm"], "deps": ["build"], "needs": ["db"] }
+}
+```
+
+`src` are the patterns of the task's own `src` as the build file writes them
+(environment variables are not substituted), `mounts` are the host paths a
+container task mounts, `deps` the tasks and `needs` the services it waits for. Paths
+are relative to the root of the bundle, which is also the root of the project's
+files, and a path outside of it is left out because it cannot be sent. What a task
+inherits from its dependencies is listed with those. Versions published before this
+was recorded have no `inputs`.
+
+## Plan and accounts
+
+A version also carries a `plan`, what each task and service
+does as the engine reads it, and the `accounts` its secrets are read as. A reviewer
+or an agent sees `deploy` uses `op-payments-prod` before anything runs:
+
+```json
+"accounts": ["op-payments-prod"],
+"plan": {
+  "deploy": {
+    "kind": "task", "runtime": "docker", "image": "node:22",
+    "cmds": ["./deploy.sh"], "deps": [], "needs": [],
+    "accounts": ["op-payments-prod"],
+    "secrets": [{ "from": "gsm:kube-token", "account": "op-payments-prod", "target": "KUBE_TOKEN" }],
+    "mounts": [], "ports": [], "generates": [],
+    "flags": ["local-task"]
+  }
+}
+```
+
+The plan never holds a value of a secret, only where it is read from. `flags` are what a
+reviewer looks at first: `local-task` (it runs on the host, not in a container),
+`host-port` (it binds a port of the host) and `remote-include` (it includes a file from
+git). A bundle that names an account the server does not define is refused and the
+message lists the accounts that exist.
+
+## Publishing and accounts
+
+A bundle that uses an account the publisher does not
+`use` becomes a [proposal](#proposing-a-version) even for `builds: publish`, and is
+approved by somebody who may publish and who uses the accounts the proposer lacks. So
+one person can not publish a task that reads the production key for somebody else to
+run without a second pair of eyes.
+
+## What a build file may not do
+
+A build file is written by whoever publishes it and runs
+with what the operator gave the server, so a bundle is refused (`400`, naming the file and
+task) when it
+
+* names `environments`: the docker host or Kubernetes cluster is the server's to choose,
+* has a service for Kubernetes (`selector`, `kubeconfig` or `context`),
+* names a cache backend other than the server's own (`s3`, `registry`, or a `path`),
+* mounts a path outside of the bundle into a container, such as the docker socket, `/etc`
+  or a home directory,
+* has a task on a runtime that `runtimes` does not allow,
+* declares `secretProviders` or `secretAccounts`, reads a `file:` secret, reads an `env:`
+  secret the server does not list in `runs.env.allow`, or reads a secret as the account
+  that reads repositories (see [Accounts](/docs/remote-compute/accounts) and [Sources](/docs/remote-compute/sources)).
+
+Without this a task with no secrets would still reach what the operator's machine can: a
+published file would be enough to send a run, or the cache, to a host of its choosing.
+## Proposing a version
+
+Who defines the work decides what runs, so a new version of a build file can wait for
+a second pair of eyes. `builds: propose` is the lower level of `publish`, like
+`request` is the lower level of `use`:
+
+```yaml title="server.yaml"
+entitlements:
+  - group: { iss: https://login.example.com, name: platform }
+    accounts: { op-payments-prod: use }
+    builds: publish
+  - claims:
+      iss: https://login.example.com
+      match: { client: coding-agent }
+    builds: propose
+```
+
+A caller who may only propose sends the same `PUT`. The server reads the bundle as it
+does for a publish and refuses one that does not load, then keeps it as a
+**proposal** (`202`). A publish also ends up here when the bundle names accounts the
+publisher does not `use` (`missing` lists them). It is not a version: it can not be
+run, `latest` does not change and the build files are not listed with it. Someone who
+may `publish`, uses the accounts in `missing`, and did not propose it, approves it,
+and only then it is published, as the proposer's version with the approver recorded as
+`approvedBy`. That is the version runs refer to by hash, so what was approved is what
+runs.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/proposals` | The proposals the caller made or may see, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, the `accounts` and the `missing` ones, `plan`, `base` (the latest version when it was proposed, the one it follows), `latest`, `stale` and whether the caller `canDecide`. |
+| `GET /v1/proposals/<name>/<hash>` | One of them. |
+| `GET /v1/proposals/<name>/<hash>/files` | Its files, to read what would be published. |
+| `POST /v1/proposals/<name>/<hash>/approve` | Publish it. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/proposals/<name>/<hash>/reject` | Drop it; the reason (up to 500 characters) is kept with it. |
+
+A proposal is visible to its proposer and to everyone who may publish; what the caller
+neither proposed nor may decide does not exist for them (`404`), and one that is
+decided or expired is `409`. A proposal expires after the `approvals.timeout` like a
+requested run does, and `approvals.maxWaiting` limits the proposals that wait (`503`).
+Proposals are kept in memory, unlike runs: after a restart the proposer proposes again. Each
+proposal and decision is logged with who made it.
+
+### Only while it follows the latest
+
+A proposal records the latest version when it is
+made (`base`). If another version of the build file is published before it is decided, it
+is `stale`: it can only be rejected, approving answers `409`, because publishing it would
+put an old file in front of newer work for everyone who runs `latest`. The proposer
+proposes again on top of the new version.
+
+### No git includes
+
+A proposal is read before anybody approved it. A bundle that
+includes from git would make the server fetch from the network for a caller who may
+only propose, so a proposal with `includes` or `references` from git is refused
+(`400`). Whoever may publish can use them.
+
+### Cooldown
+
+After a rejection, the proposer can not propose that build file again,
+and nobody that version, for `approvals.cooldown` (default `10m`): `429`, with the time
+left. A proposal that only ran out of time does not start one. It keeps the people who
+decide from being asked again and again; like the proposals it is forgotten by a restart.
+
+A proposal approves a new version of the build file, not the code its commands run:
+`npm test` still executes the files a run brings. Production accounts stay behind
+[`request`](/docs/remote-compute/entitlements#approvals) and `source: [ref]`.
+
+## Yanking a version
+
+A published version is never changed, but one can be pulled back when it should not run
+any more (it leaks a token, it deploys to the wrong place). `POST
+/v1/definitions/<name>/<hash>/yank` is open to whoever has `builds: publish`, and to
+whoever `use`s an account the version works with: the people who answer for what runs
+as that account do not have to wait for a publisher. The body may carry a `reason`, up
+to 500 characters.
+
+A yanked version is not `latest` any more, a run that names it is refused with `409`
+and the reason, and a run that was accepted before, and still waits for an approval or in
+the queue, fails when it would start. Runs that already execute are not stopped; cancel
+them. The version and its files stay on the server for the record, and the version lists
+show who yanked it and why. `unyank` lets it go on, and needs `builds: publish`. Both are
+logged with who did it, and a yank survives a restart.
+
+From the command line, [`remote publish`](/docs/cli/remote#publishing-a-build-file) publishes
+or proposes the build file of the working directory, and `remote proposals`, `diff`,
+`approve`, `reject`, `yank` and `unyank` work with the versions.

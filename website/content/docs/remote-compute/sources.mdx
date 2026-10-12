@@ -1,0 +1,66 @@
+---
+title: "Sources"
+description: "The repositories a server may read the code of a run from, and the token it reads them with."
+---
+`sources` lists the repositories a run with `source: ref` may get its code from, and how
+the server reads each. The caller names a repository and a ref, never a URL, and the server
+fetches the code itself.
+
+```yaml title="server.yaml"
+sources:                            # the repositories a run may get its code from
+  - match: github.com/corp/*        # an organisation
+    secret: { from: 'gsm:github-readonly-token', account: scm-read }
+  - match: gitlab.corp.com/platform/**   # a group with its subgroups
+    secret: { from: 'gsm:gitlab-group-token', account: scm-read, username: oauth2 }
+```
+
+| Key | What it does |
+| --- | --- |
+| `match` | The repositories the entry covers, as a pattern of `host/path`. The first entry that matches decides. |
+| `secret.from` | The token, as `provider:reference` of a secret provider. Without `secret` the repository is read anonymously. |
+| `secret.account` | The [account](/docs/remote-compute/accounts) the token is read as. It needs credentials for that provider. |
+| `secret.username` | The user name of the basic authentication the token is sent with, `x-access-token` by default. A GitLab token is commonly sent as `oauth2`. |
+
+## Which repositories a run may use
+
+A run from a `ref` names a repository and a ref in its request. The repository is written
+`host/path`, such as `github.com/corp/payments` or `gitlab.corp.com/platform/team/tool`;
+the server builds the address from it (`https://host/path.git`). A leading `https://` and
+a trailing `.git` are dropped; credentials, a port or a query are refused with `400`. Two
+lists decide whether it may be used, and a run needs both:
+
+1. **The caller's `repos`**, the patterns of their entitlements added up
+   ([Entitlements](/docs/remote-compute/entitlements)). A repository outside of them is `403 you may not run
+   from <repo>` at submit, before anything is approved or queued. A caller without `repos`
+   can not start runs from a ref.
+2. **The server's `sources`**, the repositories it can read at all. `match` is a pattern
+   (`github.com/corp/payments` exactly, `github.com/corp/*` for one level,
+   `gitlab.corp.com/platform/**` for a group with its subgroups, which covers GitLab
+   subgroups) and the first source that matches decides. A repository none covers is
+   `400 this server can not read <repo>`.
+
+Both lists use the same patterns, host names and paths are compared in lower case.
+
+## The credential
+
+The credential is a secret of a secret provider, read as a service account of the
+operator, like the secrets of a task: `secret.from` is `provider:reference`, `account` is
+the account it is read as, and `username` (default `x-access-token`) is the user name of
+the basic authentication the token is sent with. A provider command can mint a
+short-lived token, for example of a GitHub App; it is read again after a minute. A source
+without a `secret` is read anonymously. The token goes to git for that one fetch through
+the environment of the git process, scoped to the host of the repository, so it is never
+an argument, never written to `.git/config` or the checkout, never in the environment of a
+task, and masked in the logs of the run. The account that reads repositories is the
+server's own: no entitlement may name it and no build file may use it for a secret.
+
+## Pinning
+
+The server resolves the ref when the run is submitted, with `git ls-remote`:
+`refs/heads/<ref>`, else `refs/tags/<ref>` (an annotated tag to its commit). A name that is
+both a branch and a tag, or neither, is `400`, a repository it can not reach is `502`. The
+run stores the repository, the ref and the `commit`, and the approver sees them. The
+executor fetches the ref and fails the run if it no longer points to that commit, so a
+branch that moved after the approval does not run other code than the one approved. A
+40-digit commit hash is taken as it is; an account with `refs` refuses one, because it
+names no branch.

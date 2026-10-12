@@ -1,0 +1,189 @@
+---
+title: "Entitlements"
+description: "Who may use or request which service account, run from which repositories and publish which build files."
+---
+An entitlement says which service accounts a caller may use, and what they may do
+with build files. The server matches the validated claims of the token only, never
+anything the caller sends along. Nothing is allowed by default.
+
+```yaml title="server.yaml"
+entitlements:
+  - group: { iss: https://login.example.com, name: platform }
+    accounts: { op-payments-dev: use, op-payments-prod: use }
+    repos: [github.com/corp/*]
+    builds: publish
+  - group: { iss: https://login.example.com, name: eng-payments }
+    accounts: { op-payments-dev: use, op-payments-prod: request }
+    repos: [github.com/corp/payments]
+    builds: run
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository: corp/payments, ref: refs/heads/main }
+    accounts: { op-payments-dev: use }
+    repos: [github.com/corp/payments]
+    builds: publish
+```
+
+| Key | What it does |
+| --- | --- |
+| `subject`, `group` or `claims` | Who the entry is for, exactly one of them, see [Who](#who). |
+| `accounts` | The [service accounts](/docs/remote-compute/accounts) the caller may `use` or `request`, see [Account levels](#account-levels). |
+| `repos` | The repositories the caller may name in a run from a git ref, see [Repositories](#repositories). |
+| `builds` | What the caller may do with build files: `run`, `propose` or `publish`, see [Build file levels](#build-file-levels). |
+
+An entry names accounts, a `builds` level or both.
+
+## Who
+
+| Who | Matches |
+| --- | --- |
+| `subject: {iss, sub}` | exactly that person or client |
+| `group: {iss, name}` | every caller of that issuer whose groups claim lists the name |
+| `claims: {iss, match}` | every token of that issuer whose string claims equal all of `match`, for CI jobs (repository, ref, environment) |
+
+A caller gets what all entitlements that match give, and nothing when no entry
+matches. Every account that an entitlement names has to be defined under `accounts`,
+a typo stops the server at startup.
+
+## Account levels
+
+`accounts` maps an account to a level:
+
+* `use` runs on the account at once and approves the runs others request on it.
+* `request` lets the caller ask for runs on the account. Such a run waits until
+  somebody who may `use` the account approves it, see [Approvals](#approvals).
+
+When several entitlements give a level for the same account, `use` wins. The account that
+reads the repositories of [`sources`](/docs/remote-compute/sources) is the server's own: no
+entitlement may name it.
+
+## Build file levels
+
+`builds` is what the caller may do with [build files](/docs/remote-compute/build-files), one
+level that includes the lower ones:
+
+| `builds` | May |
+| --- | --- |
+| `run` | start runs of published build files. Without a level nothing runs, an account alone does not allow it. |
+| `propose` | also send new versions, which somebody who may publish approves, see [Proposing a version](/docs/remote-compute/build-files#proposing-a-version). |
+| `publish` | also publish new versions of any build file. Who defines the work does not have to be who runs it. |
+
+Build files are named by whoever publishes them, so the config never lists names.
+
+## Repositories
+
+`repos` lists the repositories (`github.com/corp/payments`, `github.com/corp/*` for
+one level, `gitlab.corp.com/platform/**` for a group with its subgroups) the caller
+may name in a run from a git ref; the union of the matching entitlements applies. A
+caller without `repos` can not start runs from a ref. The server also has to be able to
+read the repository, see [Sources](/docs/remote-compute/sources).
+
+## What a caller sees
+
+Every grant is written to the log with issuer, subject, accounts and the entitlements
+that matched. A caller with no account and no `builds` level can do nothing on the
+server, they are not even shown which build files exist.
+
+`GET /v1/me` returns the identity and what the caller may use:
+
+```json
+{
+  "iss": "https://login.example.com",
+  "sub": "4f1c2b",
+  "accounts": [
+    { "name": "op-payments-dev", "level": "use" },
+    { "name": "op-payments-prod", "level": "request" }
+  ],
+  "repos": ["github.com/corp/payments"],
+  "builds": "run"
+}
+```
+
+`GET /v1/accounts` lists the accounts the caller has a level on, with the operator's
+`description` and the `sources` the account allows (`upload`, `ref`, or both when the
+config does not say):
+
+```json
+{
+  "accounts": [
+    { "name": "op-payments-dev", "description": "dev cluster", "level": "use", "sources": ["upload", "ref"] },
+    { "name": "op-payments-prod", "level": "request", "sources": ["ref"] }
+  ]
+}
+```
+
+## Approvals
+
+Some work should not happen because one identity asked for it: a deploy with the
+production key, a task with access to customer data. Access to a service account comes
+at two levels for that, see [Account levels](#account-levels). Whoever may **use** an
+account runs on it directly. Whoever may only **request** it can ask for a run, which
+waits in state `awaiting-approval` until somebody who may use that account approves it.
+This suits an agent or a developer who proposes a deployment and a person who confirms
+it.
+
+```yaml title="server.yaml"
+entitlements:
+  - group: { iss: https://login.example.com, name: release-managers }
+    accounts: { op-payments-prod: use }
+  - group: { iss: https://login.example.com, name: eng-payments }
+    accounts: { op-payments-dev: use, op-payments-prod: request }
+    builds: run
+approvals:
+  timeout: 1h        # how long a run waits, default 1h
+  maxWaiting: 100    # runs waiting at the same time, default 100
+```
+
+| Key | What it does |
+| --- | --- |
+| `approvals.timeout` | How long a requested run, or a [proposed version](/docs/remote-compute/build-files#proposing-a-version), waits for its decision before it is rejected or expires. `1h` by default. |
+| `approvals.maxWaiting` | Runs, and separately proposals, that wait at the same time; more are refused with `503`. `100` by default. |
+| `approvals.cooldown` | After a proposal was rejected, how long its proposer can not propose that build file again, and nobody that version. `10m` by default. |
+
+* The accounts of a run are derived from the secrets of the published, hash-pinned
+  build file, see [Accounts](/docs/remote-compute/accounts). Nothing in the request can change them, so
+  every run that reads a production secret as a requester is held, whatever its tasks
+  are called or labelled, and whoever may [publish](/docs/remote-compute/build-files) cannot lift it.
+* A run needs an approval for the accounts the caller can only request, the others
+  they use. `deploy` waits for `op-payments-prod` while `test` in the same run does not.
+* An approver covers every account they may `use`. A run that waits for accounts A and
+  B is released as soon as the approvals cover both: one person who uses both is
+  enough, otherwise two approve, one per account. Each account has its entry in the
+  run's `approvals`, with who approved it. They share one expiry: a run that nobody
+  covers within `timeout` is rejected, and so is one that any covering approver
+  rejects. More than `maxWaiting` waiting runs are refused with `503`. A run that waits
+  keeps waiting over a restart, for the time that is left, see [Limits and restarts](/docs/remote-compute/runs#limits-and-restarts).
+* A request for an account that nobody may use is refused at once (`409 nobody can
+  approve <account>`) and not left to expire.
+* A caller approves what they have access to, and nobody approves their own run. A
+  caller who uses none of the accounts that wait sees nothing of the run. Approvers see
+  the published build files, so they can read what they approve, and nothing more.
+* The approver is shown what to decide on: the tasks and services the run executes
+  with their dependencies as `plan` (commands, image, the secrets and the account each
+  is read as, mounts, ports and the `flags` to look at first, never a value), the
+  accounts, the version, the source and the options. Who uses an account a run needed
+  approved may also read that run (`GET /v1/runs/<id>` and its events) and cancel it;
+  `GET /v1/runs` stays the caller's own.
+* What an approval cannot cover is what the code does: pinning commands does not pin the
+  code they run, so an account that matters should also be limited to `source: [ref]`
+  and `refs`.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/approvals` | The runs waiting for an approval the caller can give, with who asked, the build file version, tasks, accounts, source and options. |
+| `GET /v1/approvals/<id>` | One of them. |
+| `POST /v1/approvals/<id>/approve` | Approve the accounts the caller uses; the run is queued when all are covered (`already-approved` is `409`). The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/approvals/<id>/reject` | End the run; the reason (up to 500 characters) becomes its `error`. |
+
+What a caller may not approve does not exist for them (`404`), and a run that is no
+longer waiting is `409`. Each call is logged with who decided and the result, and the
+decision is an event of the run, so the one who asked sees who approved it.
+`hammerkit remote accounts` shows the caller's levels. The command line has [`remote approvals`, `approve` and `reject`](/docs/cli/remote#approving-runs).
+
+## Changing entitlements
+
+`kill -HUP <pid>` reads the config file again and takes over its `entitlements`: who may use which account,
+which repositories and which build files changes for the next request, no restart and no run is touched.
+Entitlements that name an account or issuer the running server does not have are refused and the old ones
+stay. Everything else (accounts, issuers, providers, sources, limits) is read at start only, the server says
+which keys of the file differ and need a restart. SIGHUP is not available on Windows.

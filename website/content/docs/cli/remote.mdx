@@ -14,6 +14,9 @@ the [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs
 is registered under a short name, which later features (`--on <name>`, a task's
 `runner:`) refer to instead of a URL.
 
+How a server is set up, and how it decides who may run what, is described in
+[Remote compute](/docs/remote-compute).
+
 ```bash
 hammerkit remote add build https://build.example.com --issuer https://login.example.com
 hammerkit remote login build
@@ -105,7 +108,7 @@ always have the same version. Publishing what a server already has says `already
 published` and changes nothing.
 
 You need `builds: publish` on the server, see
-[entitlements](/docs/cli/server#entitlements). A build file that reads secrets as an
+[entitlements](/docs/remote-compute/entitlements). A build file that reads secrets as an
 account you do not `use` is proposed instead, see below. Without a server name the default
 server is used, and `--file <path>` publishes another build file.
 
@@ -155,7 +158,7 @@ rejection you can not propose that build file again for ten minutes (`approvals.
 ## Approving runs
 
 A run that reads secrets as a service account its caller may only
-[request](/docs/cli/server#approvals) waits for somebody who uses that account to
+[request](/docs/remote-compute/entitlements#approvals) waits for somebody who uses that account to
 approve it. If you use the account:
 
 ```
@@ -231,4 +234,4 @@ URL and issuer it was issued for, so registering the name again for another serv
 
 Agents and CI do not use `login`. They bring their own token, an agent from its own
 client credentials and a CI job from the OIDC token of the job, and the server maps
-it to service accounts through its [entitlements](/docs/cli/server#entitlements).
+it to service accounts through its [entitlements](/docs/remote-compute/entitlements).
