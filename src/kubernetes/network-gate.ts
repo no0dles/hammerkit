@@ -1,61 +1,71 @@
-import { V1Container } from '@kubernetes/client-node'
-import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { WorkItem } from '../planner/work-item'
-import { ContainerWorkTask } from '../planner/work-task'
-import { ContainerWorkService } from '../planner/work-service'
-import { getEffectiveNetwork } from '../planner/work-network'
-import { getContainerSecurity } from './job-placement'
+import { V1Container, V1SecurityContext } from '@kubernetes/client-node'
+import { EGRESS_PROXY_IMAGE } from '../network/egress-proxy'
 
-export const NETWORK_GATE_CONTAINER = 'network-gate'
-export const NETWORK_GATE_IMAGE = 'alpine:3.19'
-// how long a pod waits for its policy before it fails
-export const NETWORK_GATE_SECONDS = 60
+// Some network plugins (kind's kindnet among them) enforce a NetworkPolicy a
+// moment after a pod started, so a limited pod's first connections could
+// still get out. The gate is the pod's first init container: it waits until
+// the pod no longer reaches the cluster DNS, which the policy of every limited
+// item denies, so the item's own containers start only once the policy holds.
+// A policy that never takes hold fails the pod instead of running it open.
+// A script for `node -e` in the proxy's image, like the proxy.
+export const NETWORK_GATE_TIMEOUT_MS = 60000
+// the name of the gate's init container
+export const NETWORK_GATE_CONTAINER = 'hammerkit-network'
 
-/**
- * Waits until the pod's NetworkPolicy is in force. A network plugin applies a policy to
- * a new pod a moment after it starts, and until then the pod reaches everything. The
- * policy of a limited item allows no DNS, so once the cluster's DNS server (the
- * pod's nameserver) can't be reached on TCP 53, the policy holds. A cluster whose
- * plugin ignores NetworkPolicies fails the pod here instead of running it unlimited.
- */
-export function getNetworkGateScript(seconds: number, resolvConf = '/etc/resolv.conf'): string {
-  return [
-    `ns=$(sed -n 's/^nameserver[[:space:]]*\\([^[:space:]]*\\).*/\\1/p' ${resolvConf} | head -n 1)`,
-    `[ -n "$ns" ] || exit 0`,
-    `i=0`,
-    `while nc -z -w 1 "$ns" 53 2>/dev/null; do`,
-    `  i=$((i+1))`,
-    `  if [ "$i" -ge ${seconds} ]; then`,
-    `    echo "the network policy was not in force after ${seconds}s" >&2`,
-    `    exit 1`,
-    `  fi`,
-    `  sleep 1`,
-    `done`,
-  ].join('\n')
+// Kept free of anything but Node's own modules.
+export const NETWORK_GATE_SCRIPT = `
+const fs = require('fs')
+const net = require('net')
+const resolvConf = process.env.HAMMERKIT_GATE_RESOLV_CONF || '/etc/resolv.conf'
+const port = parseInt(process.env.HAMMERKIT_GATE_PORT || '53', 10)
+const deadline = Date.now() + parseInt(process.env.HAMMERKIT_GATE_TIMEOUT_MS || '${NETWORK_GATE_TIMEOUT_MS}', 10)
+function fail(message) {
+  process.stderr.write('hammerkit: ' + message + '\\n')
+  try {
+    fs.writeFileSync('/dev/termination-log', 'hammerkit: ' + message)
+  } catch (e) {}
+  process.exit(1)
+}
+let conf = ''
+try {
+  conf = fs.readFileSync(resolvConf, 'utf8')
+} catch (e) {}
+const match = /^nameserver\\s+(\\S+)/m.exec(conf)
+if (!match) {
+  fail('the pod has no cluster DNS, so its network policy can not be checked')
+}
+const nameserver = match[1]
+function attempt() {
+  const socket = net.connect({ host: nameserver, port, timeout: 2000 })
+  socket.once('connect', () => {
+    socket.destroy()
+    if (Date.now() > deadline) {
+      fail('the network policy of this pod is not enforced, it still reaches ' + nameserver)
+    }
+    setTimeout(attempt, 500)
+  })
+  // dropped or refused: the policy holds
+  socket.once('timeout', () => process.exit(0))
+  socket.once('error', () => process.exit(0))
+}
+attempt()
+`
+
+export const HELPER_SECURITY_CONTEXT: V1SecurityContext = {
+  runAsNonRoot: true,
+  // the image's `node` user
+  runAsUser: 1000,
+  allowPrivilegeEscalation: false,
+  readOnlyRootFilesystem: true,
+  capabilities: { drop: ['ALL'] },
 }
 
-// The first init container of a limited item's pods, so neither its secrets nor its
-// command run before the policy holds. An open item has none.
-export function getNetworkGate(
-  env: WorkKubernetesEnvironment,
-  item: WorkItem<ContainerWorkTask | ContainerWorkService>
-): V1Container[] {
-  if (getEffectiveNetwork(item.data).type === 'open') {
-    return []
+export function getNetworkGateContainer(): V1Container {
+  return {
+    name: NETWORK_GATE_CONTAINER,
+    image: EGRESS_PROXY_IMAGE,
+    command: ['node', '-e', NETWORK_GATE_SCRIPT],
+    securityContext: HELPER_SECURITY_CONTEXT,
+    resources: { limits: { memory: '64Mi' } },
   }
-  return [
-    {
-      name: NETWORK_GATE_CONTAINER,
-      image: NETWORK_GATE_IMAGE,
-      command: ['sh', '-c', getNetworkGateScript(NETWORK_GATE_SECONDS)],
-      ...getContainerSecurity(env),
-    },
-  ]
-}
-
-export function describeNetworkGateFailure(item: string): string {
-  return (
-    `the network policy of ${item} was not in force after ${NETWORK_GATE_SECONDS}s: ` +
-    `the cluster's network plugin must enforce NetworkPolicies`
-  )
 }

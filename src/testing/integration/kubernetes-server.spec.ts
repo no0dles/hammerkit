@@ -223,6 +223,8 @@ tasks:
       # the pod starts once its policy holds, so not one try gets through to the
       # server that reach shows is there
       - for i in $(seq 5); do if nc -z -w 2 ${reachable} 8080; then echo "reached on try $i"; exit 1; fi; done
+      # nor DNS: the namespace's default policy, which allows it, leaves limited pods out
+      - if timeout 10 nslookup kubernetes.default.svc.cluster.local; then echo resolved; exit 1; fi
       - echo offline-ok
   reach:
     image: alpine:3.19
@@ -232,6 +234,8 @@ tasks:
       # started, so the denied address is blocked from then on, five tries in a row (in
       # one command, since every command is a pod of its own)
       - for i in $(seq 30); do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && exit 0; sleep 1; done; exit 1
+      # and resolves names
+      - timeout 10 nslookup kubernetes.default.svc.cluster.local
       - >-
         for i in $(seq 30); do nc -z -w 2 ${denied} 8080 || break; sleep 1; done;
         for i in $(seq 5); do if nc -z -w 2 ${denied} 8080; then echo "reached on try $i"; exit 1; fi; done
@@ -374,6 +378,7 @@ describe('kubernetes backend of a server', () => {
           runRole,
           // the default ranges, and one web server of the cluster
           deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32', ...(denied ? [`${denied}/32`] : [])],
+          networkPolicy: 'enforced',
           namespacePrefix: prefix,
           pools: [{ name: 'default', toolImage: 'alpine:3.19' }],
           providers: { files: { image: 'alpine:3.19' } },

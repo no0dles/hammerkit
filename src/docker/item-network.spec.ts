@@ -1,6 +1,6 @@
 import Dockerode from 'dockerode'
 import { hostname } from 'os'
-import { removeItemNetwork, removeOrphanedNetworks } from './item-network'
+import { checkNetworkLimitSupport, removeItemNetwork, removeOrphanedNetworks } from './item-network'
 
 function fakeDocker(networks: { [name: string]: { labels: { [key: string]: string }; containers: string[] } }) {
   const removed: string[] = []
@@ -62,5 +62,36 @@ describe('item network', () => {
         .mockRejectedValue(Object.assign(new Error('no daemon'), { syscall: 'connect', code: 'ENOENT' })),
     } as unknown as Dockerode
     expect(await removeOrphanedNetworks(docker)).toEqual([])
+  })
+
+  describe('daemon support', () => {
+    const item = (type: 'none' | 'open') =>
+      ({ name: 'build', data: { network: { type }, networkCeiling: null } }) as any
+    const daemon = (Version: string, Os = 'linux') => ({ version: vi.fn().mockResolvedValue({ Version, Os }) }) as any
+
+    it('takes Linux containers on Docker 28 or later', async () => {
+      await expect(checkNetworkLimitSupport(daemon('28.0.0'), item('none'))).resolves.toBeUndefined()
+      await expect(checkNetworkLimitSupport(daemon('29.8.2'), item('none'))).resolves.toBeUndefined()
+    })
+
+    it('refuses an older daemon, naming the version it needs', async () => {
+      await expect(checkNetworkLimitSupport(daemon('27.5.1'), item('none'))).rejects.toThrow(
+        'build: network none needs Docker 28 or later, the daemon is 27.5.1'
+      )
+      await expect(checkNetworkLimitSupport(daemon('dev'), item('none'))).rejects.toThrow('needs Docker 28 or later')
+    })
+
+    it('refuses Windows containers', async () => {
+      await expect(checkNetworkLimitSupport(daemon('28.1.0', 'windows'), item('none'))).rejects.toThrow(
+        'build: network none needs Linux containers, the docker daemon runs windows containers'
+      )
+    })
+
+    it('asks the daemon once', async () => {
+      const docker = daemon('28.0.0')
+      await checkNetworkLimitSupport(docker, item('none'))
+      await checkNetworkLimitSupport(docker, item('none'))
+      expect(docker.version).toHaveBeenCalledTimes(1)
+    })
   })
 })

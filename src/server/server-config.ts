@@ -231,6 +231,10 @@ const kubernetesBackendSchema = z
     // range with the metadata endpoints of the clouds (and the node's identity) by
     // default; add the pod and service ranges of the cluster to keep them off it
     deniedEgress: z.array(cidrSchema).default(['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32']),
+    // the operator states that the cluster's network plugin enforces NetworkPolicy, as a
+    // build file's environment does: hammerkit can't tell from the API, and without it a
+    // task with a limited network fails rather than runs open
+    networkPolicy: z.literal('enforced').optional(),
   })
   .strict()
 

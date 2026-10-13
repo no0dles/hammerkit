@@ -117,14 +117,16 @@ describe('kubernetes backend', () => {
 
   it('keeps the pods of a caller from other namespaces and from the metadata endpoint of the cloud', () => {
     const [ingress, egress] = getNamespacePolicies('hk-alice', ['169.254.0.0/16', '10.0.0.0/8', 'fd00:ec2::/32'])
+    // policies add up: the pods of a limited item and the egress proxies have their own,
+    // which these must not widen (a limited pod would get DNS back through the egress one)
     expect(ingress.spec).toEqual({
-      podSelector: {},
+      podSelector: { matchExpressions: [{ key: 'hammerkit.dev/network', operator: 'DoesNotExist' }] },
       policyTypes: ['Ingress'],
       ingress: [{ _from: [{ podSelector: {} }] }],
     })
-    // the pods of a limited item have their own policy, which this one must not widen
+    // a proxy reaches out like an open pod
     expect(egress.spec?.podSelector).toEqual({
-      matchExpressions: [{ key: 'hammerkit.dev/network', operator: 'DoesNotExist' }],
+      matchExpressions: [{ key: 'hammerkit.dev/network', operator: 'NotIn', values: ['limited'] }],
     })
     expect(egress.spec?.egress).toEqual([
       { to: [{ podSelector: {} }] },

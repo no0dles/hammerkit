@@ -7,7 +7,13 @@ import { WorkSecret } from './work-secret'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 
 describe('describeFailedJob', () => {
-  const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', httpRoutes: [] } as WorkKubernetesEnvironment
+  const env: WorkKubernetesEnvironment = {
+    type: 'kubernetes',
+    namespace: 'demo',
+    context: 'ctx',
+    httpRoutes: [],
+    networkPolicyEnforced: true,
+  }
   const secret: JobSecret = {
     index: 0,
     secret: {
@@ -17,14 +23,14 @@ describe('describeFailedJob', () => {
     source: { provider: 'files', ref: 'missing', account: 'ci' } as any,
   }
 
-  function failed(name: string, exitCode: number): V1ContainerStatus {
+  function failed(name: string, exitCode: number, message?: string): V1ContainerStatus {
     return {
       name,
       image: 'alpine',
       imageID: '',
       ready: false,
       restartCount: 0,
-      state: { terminated: { exitCode, reason: 'Error' } },
+      state: { terminated: { exitCode, reason: 'Error', message } },
     }
   }
 
@@ -39,10 +45,10 @@ describe('describeFailedJob', () => {
   }
 
   it('says the network policy was not in force when the gate failed', async () => {
-    const instance = job([failed(NETWORK_GATE_CONTAINER, 1)])
-    expect(await describeFailedJob(instance, env, 'build', 'build-job', [])).toEqual(
-      "the network policy of build was not in force after 60s: the cluster's network plugin must enforce NetworkPolicies"
-    )
+    const message = 'hammerkit: the network policy of this pod is not enforced, it still reaches 10.96.0.10'
+    expect(
+      await describeFailedJob(job([failed(NETWORK_GATE_CONTAINER, 1, message)]), env, 'build', 'build-job', [])
+    ).toEqual(`build: ${message}`)
   })
 
   it('names the secret an init container could not read, never its output', async () => {
