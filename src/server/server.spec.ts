@@ -4,7 +4,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { Environment } from '../executer/environment'
-import { readServerConfig, serverConfigSchema } from './server-config'
+import { getSandboxRuntimes, readServerConfig, serverConfigSchema } from './server-config'
 import { DISCOVERY_PATH, RunningServer, SERVER_PROTOCOL, startServer } from './server'
 import { getVersion } from '../version'
 import { HOST_ENV_YAML } from '../testing/host-env'
@@ -381,17 +381,37 @@ describe('server config policy', () => {
   it('keeps sandboxes on containers with no network, unless the operator says otherwise', () => {
     const config = serverConfigSchema.parse(base)
     expect(config.sandboxes).toEqual({
-      runtimes: ['docker'],
       network: 'none',
+      env: { allow: [] },
       limits: { count: 5, bytes: '20Gi' },
       total: '500Gi',
     })
+    expect(getSandboxRuntimes(config)).toEqual(['docker'])
     expect(
       serverConfigSchema.safeParse({
         ...base,
         sandboxes: { network: { allow: ['registry.npmjs.org', '*.github.com'] } },
       }).success
     ).toBe(true)
+  })
+
+  it('starts a server that runs only local tasks, which then runs nothing on sandboxes', () => {
+    const config = serverConfigSchema.parse({ ...base, runtimes: ['local'] })
+    expect(getSandboxRuntimes(config)).toEqual([])
+    expect(
+      getSandboxRuntimes(
+        serverConfigSchema.parse({ ...base, runtimes: ['local'], sandboxes: { runtimes: ['local'], network: 'open' } })
+      )
+    ).toEqual(['local'])
+  })
+
+  it('lets env secrets of sandbox runs read only what runs read', () => {
+    const allowed = { ...base, runs: { env: { allow: ['NPM_TOKEN'] } }, sandboxes: { env: { allow: ['NPM_TOKEN'] } } }
+    expect(serverConfigSchema.parse(allowed).sandboxes.env.allow).toEqual(['NPM_TOKEN'])
+    const result = serverConfigSchema.safeParse({ ...base, sandboxes: { env: { allow: ['NPM_TOKEN'] } } })
+    expect(!result.success && result.error.issues[0].message).toBe(
+      'NPM_TOKEN is not in runs.env.allow, no run can read it'
+    )
   })
 
   it.each([

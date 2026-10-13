@@ -80,10 +80,11 @@ runs:
   env: { allow: [PATH, DOCKER_HOST] }   # the only variables of the server a run sees
   limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
   maxDuration: 1h
-  network: { level: open }       # designed: the most open network a task gets
+  network: open                  # the most a task or service reaches besides its needs, as a task's `network`
 sandboxes:                        # ADR-0011
-  runtimes: [docker]
+  runtimes: [docker]              # default: docker when the server runs containers
   network: { allow: [registry.npmjs.org] }
+  env: { allow: [] }              # the variables of runs.env an env: secret of a sandbox run reads
   limits: { count: 5, bytes: 20Gi }
   total: 500Gi
 entitlements:
@@ -138,7 +139,7 @@ The server holds the build file; a run names a published build file and the task
 
 **Sandbox (ADR-0011; on a host: create, list, get, delete, fetch and runs are built, files, push and Kubernetes are not).** A sandbox is a caller's own checkout on the server, which runs published tasks. It is for an agent with no machine and for a person whose laptop should not build, not for production.
 
-- **Create** (`POST /v1/sandboxes { repo, ref }`) resolves the ref to a commit and fetches it with the read credential of the operator's `sources`, like a ref run. It is a fetch, not a run: no container and no slot of the run limits. An entitlement with `sandboxes: true` may create sandboxes of its `repos`. A sandbox belongs to its caller (`404` for anybody else), stays until it is deleted (no TTL, nothing evicted), and counts against `sandboxes.limits` (count and bytes per caller, a total).
+- **Create** (`POST /v1/sandboxes { repo, ref }`) resolves the ref to a commit and fetches it with the read credential of the operator's `sources`, like a ref run. It is a fetch, not a run: no container and no slot of the run limits. An entitlement with `sandboxes: true` may create sandboxes of its `repos`, and only of those: the `repos` of the caller's other entitlements are for ref runs. A sandbox belongs to its caller (`404` for anybody else), stays until it is deleted (no TTL, nothing evicted), and counts against `sandboxes.limits` (count and bytes per caller, a total).
 - **Files.** Two ways in. The first is typed endpoints for clients without tools of their own (MCP): `tree`, `files` (`offset`/`limit`, numbered lines), `search` (ripgrep's parameters), `edits` (atomic batches of `replace` with `old_string`/`new_string`, `write`, `delete`, `move`, and `patch` as a git diff or an `apply_patch` body), and `changes` (summary, diff or patch against the base commit). The second is a raw surface for harnesses that bring their own tools and only swap the backend (pi's tool operations): read and write bytes, and stat. Every list, read and search is capped, with a total and a cursor. No symbolic link is followed, `.git/` and the upload deny list are never read or written, and edits while a run holds the sandbox are `409`.
 - **Runs** name `source: { type: sandbox, id }`. The published, pinned build file runs: its files are read from the run's private directory with the sandbox as their directory, so the sandbox's own `.hammerkit.yaml` is just a file. Rules for these runs:
   - One run per sandbox at a time.
@@ -156,6 +157,9 @@ The server holds the build file; a run names a published build file and the task
   - The git data of a sandbox lives next to its files, not in them, and every git command names its git directory and work tree without hooks or a file system monitor: tasks write to the files, and git runs as the server's user.
   - A run on a sandbox needs `sandboxes: true` and the repository in `repos` again at submit. `sandboxes.network` (written as a task's `network`, default `none`; `local` in `sandboxes.runtimes` needs `open`) is the network ceiling of its tasks and services; it is combined with `runs.network` once that is built.
   - Engine: `createParseContext(file, environment, { directory: { read, work } })` reads build files below `read` and works below `work`.
+  - The files are written by tasks and by whoever pushed the commit, so nothing on the server trusts them. Every `src`, mount and output of a run has to stay inside the files with no symbolic link on the way, checked when the run starts and again before each container is made, outputs are copied and cached outputs are restored (the check is #97's, shared with ref runs). The run's process starts in the run's private directory, not in the files. Files a task made unreadable are made readable again before they are measured, read for the tree or deleted, and what a container left as another user is given back through a short container; the docker volumes of a sandbox run's outputs are labelled with its files, counted against its bytes and removed with it.
+  - `sandboxes.runtimes` defaults to `docker` when the server runs containers and to nothing on a server with only `runtimes: [local]`, which then starts as before and refuses runs on sandboxes. `env:` secrets of sandbox runs read only `sandboxes.env.allow`, nothing by default. A run that waited for an approval fails when the tree of the files is no longer the one it was approved with; approvers see whether the files hold changes.
+  - On a Kubernetes backend sandboxes are not kept yet (`501` on create).
 
 ## Approvals
 

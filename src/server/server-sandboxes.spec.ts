@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createTestCase } from '../testing/test-case'
@@ -52,6 +52,13 @@ const buildFile = [
   '    secrets:',
   '      - { from: "echo:ci", account: ci, env: TOKEN }',
   '    cmds: [echo ci]',
+  '  path:',
+  '    secrets:',
+  '      - { from: "env:PATH", env: SEARCH }',
+  '    cmds: [echo path]',
+  '  leak:',
+  '    src: [escape]',
+  '    cmds: [cat escape/secret.txt]',
   '',
 ].join('\n')
 
@@ -63,6 +70,8 @@ interface Api {
   call: (method: string, path: string, options?: { sub?: string; body?: unknown }) => Promise<JsonResponse>
   hash: string
   log: string[]
+  // where the files of a sandbox are on the server
+  files: (id: string) => string
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -137,7 +146,12 @@ describe('sandboxes api', () => {
             body: { files: { '.hammerkit.yaml': buildFile } },
           })
           expect(published.status).toBe(201)
-          await fn({ call, hash: (await published.json()).hash, log })
+          await fn({
+            call,
+            hash: (await published.json()).hash,
+            log,
+            files: (id) => join(cwd, 'server-data', 'sandboxes', 'files', id, 'files'),
+          })
         } finally {
           await server.close()
         }
@@ -229,6 +243,7 @@ describe('sandboxes api', () => {
         repo: REPO,
         commit: sandbox.commit,
         tree: expect.stringMatching(/^[0-9a-f]{40}/),
+        clean: true,
       })
       const finished = await untilState(api, run.id, ['succeeded', 'failed'])
       expect(finished.state).toBe('succeeded')
@@ -250,6 +265,36 @@ describe('sandboxes api', () => {
       const dev = await runOn(api, sandbox.id, ['dev'])
       expect(dev.status).toBe(202)
       await untilState(api, (await dev.json()).id, ['succeeded', 'failed'])
+    })
+  })
+
+  it('refuses a run whose paths go through a link a task or a commit left in the sandbox', async () => {
+    await withApi('sandboxes-api-link', undefined, async (api) => {
+      const outside = mkdtempSync(join(tmpdir(), 'hammerkit-sandbox-outside-'))
+      try {
+        writeFileSync(join(outside, 'secret.txt'), 'server-secret')
+        const sandbox = await (await create(api)).json()
+        // what `ln -s` in a task of an earlier run leaves behind, a junction on Windows
+        symlinkSync(outside, join(api.files(sandbox.id), 'escape'), 'junction')
+        const run = await (await runOn(api, sandbox.id, ['leak'])).json()
+        const finished = await untilState(api, run.id, ['succeeded', 'failed'])
+        expect(finished).toMatchObject({ state: 'failed', error: expect.stringMatching(/symbolic link escape/) })
+        const events = await (await api.call('GET', `/v1/runs/${run.id}/events`)).text()
+        expect(events).not.toContain('server-secret')
+      } finally {
+        rmSync(outside, { recursive: true, force: true })
+      }
+    })
+  })
+
+  it('gives a run on a sandbox no variable of the server, unless sandboxes.env lists it', async () => {
+    await withApi('sandboxes-api-env', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const refused = await runOn(api, sandbox.id, ['path'])
+      expect(refused.status).toBe(400)
+      expect((await refused.json()).error).toMatch(
+        /reads env:PATH, which the server does not list in sandboxes.env.allow/
+      )
     })
   })
 

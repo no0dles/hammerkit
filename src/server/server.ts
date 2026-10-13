@@ -535,7 +535,12 @@ export async function startServer(
       log,
     }),
     // a sandbox holds code nobody reviewed: only the variables of `sandboxes.env`
-    policy: { ...planning.policy, envs: config.sandboxes.env.allow, runtimes: sandboxRuntimes },
+    policy: {
+      ...planning.policy,
+      envs: config.sandboxes.env.allow,
+      envsFrom: 'sandboxes.env.allow',
+      runtimes: sandboxRuntimes,
+    },
   }
   if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes)) {
     log(

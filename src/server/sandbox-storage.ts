@@ -210,7 +210,8 @@ export class HostSandboxStorage implements SandboxStorage {
     await this.exclusive(id, async () => {
       await this.reclaim(id).catch(() => undefined)
       await rm(this.root(id), { recursive: true, force: true, maxRetries: 3 })
-      await this.containers?.removeVolumes(this.files(id))
+      // without docker there is nothing to remove now; volumes stay labelled with the files
+      await this.containers?.removeVolumes(this.files(id)).catch(() => undefined)
     })
   }
 
