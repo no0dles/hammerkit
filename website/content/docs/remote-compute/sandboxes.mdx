@@ -409,7 +409,7 @@ is `409` too.
 
 | Status | When |
 | --- | --- |
-| `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start or end with `.` or end with `.lock`). |
+| `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start with `.` or `-`, or end with `.` or `.lock`). |
 | `403` | The branch is not in `push.branches`, the server does not push to the repository at all, or as for a fetch, the caller has no `sandboxes: true` or the repository any more. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
