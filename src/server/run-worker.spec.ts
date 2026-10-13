@@ -42,7 +42,9 @@ describe('workerMain', () => {
     const stdin = new PassThrough()
     stdin.end(typeof input === 'string' ? input : JSON.stringify(input))
     const out = sink()
-    await workerMain(stdin, out.stream, { PATH: process.env.PATH }, directory, new AbortController())
+    // PSModulePath too: Windows PowerShell takes half a minute to start without it
+    const envs = { PATH: process.env.PATH, PSModulePath: process.env.PSModulePath }
+    await workerMain(stdin, out.stream, envs, directory, new AbortController())
     return out.messages()
   }
 
@@ -101,6 +103,9 @@ describe('hammerkit server-run', () => {
       try {
         const out = memoryStream()
         environment.stdout = out.stream
+        // the copy of process.env names it Path on Windows, where PowerShell then
+        // takes the timeout to start
+        environment.processEnvs = { ...environment.processEnvs, PATH: process.env.PATH }
         await runProgram(environment, ['hammerkit', 'server-run'], true)
         const lines = out
           .read()

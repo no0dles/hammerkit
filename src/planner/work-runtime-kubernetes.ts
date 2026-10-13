@@ -25,6 +25,7 @@ import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kub
 import findProcess from 'find-process'
 import { getErrorMessage } from '../log'
 import { getVersion } from '../version'
+import { getKubernetesCommandText } from './utils/task-arguments'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
@@ -128,7 +129,7 @@ export function kubernetesTaskRuntime(
                       image: task.data.image,
                       // through the task's shell, as on Docker
                       command: [task.data.shell, '-c'],
-                      args: [cmd.cmd],
+                      args: [getKubernetesCommandText(cmd)],
                       workingDir: cmd.cwd,
                       env: [
                         ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
