@@ -26,8 +26,8 @@ The services in `needs` are always reachable, whatever the level: a task names t
 | Level | Reaches, besides its `needs` | Docker | Kubernetes |
 |---|---|---|---|
 | `open` (default) | everything the host reaches | default bridge, as today | no policy |
-| `allow: [hosts]` | HTTP(S) to the listed hosts | the item's internal network with its needed services, and a second internal network that only the item and its own egress proxy join; the proxy allows `CONNECT` by host name, and `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the needed services) are set for the item | ingress and egress `NetworkPolicy`: out to the item's proxy pod, its services' pods and DNS |
-| `none` | nothing | the item's internal network with the needed services attached by name; `NetworkMode: none` when there are none | ingress and egress `NetworkPolicy`: out to its services' pods and DNS only |
+| `allow: [hosts]` | HTTP(S) to the listed hosts | the item's internal network with its needed services, and a second internal network that only the item and its own egress proxy join; the proxy allows `CONNECT` by host name, and `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the needed services) are set for the item | ingress and egress `NetworkPolicy`: out to the item's proxy pod and its services' pods, which are host aliases, so no DNS |
+| `none` | nothing | the item's internal network with the needed services attached by name; `NetworkMode: none` when there are none | ingress and egress `NetworkPolicy`: out to its services' pods only, no DNS |
 
 The internal networks are created with `com.docker.network.bridge.inhibit_ipv4=true`, so the gateway gives no route to the host: without it a container on an `Internal: true` network still reaches every host port bound to `0.0.0.0` (a host proxy, `dockerd` on :2375, databases). The names carry the run, so concurrent runs never share or remove each other's networks.
 
@@ -55,8 +55,9 @@ The internal networks are created with `com.docker.network.bridge.inhibit_ipv4=t
 - **FR-009 (server)**: `runs.network` in the server config is the ceiling for every run, and the hosts any `allow` may list. A published version asking for more is refused at publish. `sandboxes.network` is the ceiling for runs on a sandbox (default `none`); it must be within `runs.network` (a config error otherwise), and a sandbox run gets the lower of the two.
 - **FR-010**: A limit holds or the run fails; it never runs open. What it depends on:
   - Docker 28 or later, for `inhibit_ipv4`, which also has the fix for CVE-2024-29018 (DNS forwarded from internal networks). A limited item on an older daemon, or on a Windows daemon, is an error before anything starts.
-  - On Kubernetes, a CNI that enforces `NetworkPolicy`. Hammerkit can't tell from the API, so the environment (or a server's `backend`) states `networkPolicy: enforced`, and a limited item without it is an error.
+  - On Kubernetes, a CNI that enforces `NetworkPolicy`. Hammerkit can't tell from the API, so the cluster's configuration states it: `networkPolicy: enforced` in the environment's `kubernetes` settings (or a server's `backend`). A limited item without it is an error.
   - On Kubernetes, the policy and proxy are named per run and removed only after the item's pods have terminated, so cancel, timeout and failure don't leave pods running without limits. The metadata range (`169.254.0.0/16`) is never allowed.
+  - On Kubernetes, a limited item gets no DNS: cluster DNS forwards any name upstream, so a `none` item could send data out in its queries. The needed services and the proxy are host aliases of the pod instead.
 
 ## Out of scope
 
