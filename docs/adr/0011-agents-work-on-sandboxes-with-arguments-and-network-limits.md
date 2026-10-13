@@ -29,7 +29,7 @@
 - **Declared, typed arguments with defaults and a schema** — not chosen: passthrough is what `npm` and `make` users know and needs nothing in the build file. The cost is no input schema for MCP tools, which instead describe where the arguments land.
 - **Network levels first, host allowlist later** — rejected: without host rules an agent can't install packages without being fully open.
 - **A separate `needs` level** (only the needed services) — rejected: needed services are always reachable, so `none` already means that.
-- **Arguments in the cache key** — rejected for now: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. Caching argument runs needs the record of which run produced the outputs to be per output location.
+- **Arguments in the cache key by default** — rejected: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. An explicit `--cache` opts a run with arguments back in; the record of which run produced a task's outputs is kept per task name, so it names one variant at a time.
 - **Refusing arguments when any item of the run reads a secret** — not chosen: a shell's dependencies routinely log in to a registry. The exemption is stated instead.
 
 ## Consequences
