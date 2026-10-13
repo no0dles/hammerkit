@@ -206,6 +206,8 @@ kind), for `network:` and for keeping callers apart. Without it nothing is isola
 policy a moment after the pod started, so a limited pod waits in an init container until its
 policy holds, and fails after 60 seconds if it never does (see
 [Kubernetes](/docs/task/network#kubernetes)). A run's policies go only after its pods are gone.
+A pod with an open network has no such wait, so on those plugins it can reach a `deniedEgress`
+address in its first moment.
 
 A task that reads a provider's secret keeps an open network for now: its init containers are in
 the task's pod, so its policy would cut them off from the secret manager. Such a build file is
@@ -280,6 +282,6 @@ metadata: { name: hammerkit-managed-namespaces }
 spec: { policyName: hammerkit-managed-namespaces, validationActions: [Deny] }
 ```
 
-Not yet: Windows nodes, a cache in a registry or a bucket, a limited network for a task
+Not yet: Windows nodes, holding a pod with an open network back until the policy of its namespace holds, a cache in a registry or a bucket, a limited network for a task
 that reads a provider's secret, and failing a task early whose pod can not start (an image that
 can not be pulled, no node for its pool).
