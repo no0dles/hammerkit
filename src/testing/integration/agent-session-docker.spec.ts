@@ -62,7 +62,8 @@ function connectAgent(client: SandboxClient) {
 
 // One agent session on a server whose sandboxes run in containers under a limited network:
 // a failing test, an edit through the tools, commands that reach only what the network
-// allows, the test passing with its result and logs, and the work taken out as a patch.
+// allows, the test passing with its result and logs, and the work taken out as a patch
+// and as a pushed branch.
 describe('agent session (docker)', () => {
   it(
     'edits a sandbox, runs its commands under the network of sandboxes and takes the work out',
@@ -100,7 +101,15 @@ describe('agent session (docker)', () => {
               `runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }`,
               'runtimes: [docker]',
               'sandboxes: { runtimes: [docker], network: { allow: [allowed.test] } }',
-              'sources: [{ match: github.com/corp/* }]',
+              'secretProviders:',
+              `  echo: { command: [${JSON.stringify(
+                process.execPath
+              )}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }`,
+              'accounts:',
+              '  scm-push: { providers: { echo: { env: {} } } }',
+              'sources:',
+              '  - match: github.com/corp/*',
+              '    push: { secret: { from: "echo:push-token", account: scm-push }, branches: [agent/**] }',
               'entitlements:',
               `  - { subject: { iss: "${idp.url}", sub: alice }, repos: [github.com/corp/*], builds: publish, sandboxes: true }`,
               '',
@@ -196,6 +205,23 @@ describe('agent session (docker)', () => {
             } finally {
               rmSync(clone, { recursive: true, force: true })
             }
+
+            // or as a branch the server pushes, only to the branches the operator allows
+            const push = (branch: string) =>
+              fetch(`${server.url}/v1/sandboxes/${view.id}/push`, {
+                method: 'POST',
+                headers: { authorization: `Bearer ${token()}`, 'content-type': 'application/json' },
+                body: JSON.stringify({ branch, message: 'Agent work' }),
+              })
+            expect((await push('main')).status).toBe(403)
+            expect((await push('agent/../main')).status).toBeGreaterThanOrEqual(400)
+            const pushed = await push('agent/fix-1')
+            expect(pushed.status).toBe(200)
+            const commit = git(repository, 'rev-parse', 'agent/fix-1')
+            expect(await pushed.json()).toMatchObject({ branch: 'agent/fix-1', commit })
+            expect(git(repository, 'show', 'agent/fix-1:src/app.ts')).toBe('export const answer = 42')
+            expect(git(repository, 'rev-parse', 'main')).toBe(base)
+            expect((await agent.call('changes', {})).text).toMatch(/no changes/i)
             await agent.close()
           } finally {
             await server.close()
