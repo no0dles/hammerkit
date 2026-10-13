@@ -10,7 +10,7 @@ import { getVersion } from '../version'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
-import { getRunLabels } from './job-placement'
+import { getContainerSecurity, getRunLabels } from './job-placement'
 import { formatNetwork, getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
 
 // Where the values are in the pod (an in-memory volume), and where the init container
@@ -18,8 +18,9 @@ import { formatNetwork, getEffectiveNetwork, WorkNetwork } from '../planner/work
 export const SECRET_VALUES_PATH = '/var/run/hammerkit/secrets'
 export const ACCOUNT_PATH = '/var/run/hammerkit/account'
 const VALUES_VOLUME = 'hammerkit-secret-values'
-// the shortest token TokenRequest hands out; the init containers use it at once
-const TOKEN_SECONDS = 600
+// a token is made for each Job right before it is created; it has to outlast the
+// time its pod waits for a node
+const TOKEN_SECONDS = 3600
 
 type ProviderSource = Extract<WorkSecretSource, { type: 'provider' }>
 
@@ -106,19 +107,18 @@ export async function ensureJobCredentials(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  secrets: JobSecret[]
+  secrets: JobSecret[],
+  admitted: string[] | undefined
 ): Promise<CredentialFiles> {
   const server = kubernetes.server
   const files: CredentialFiles = {}
   if (!server || secrets.length === 0) {
     return files
   }
+  assertJobAccounts(secrets, server, admitted)
   const data: { [key: string]: string } = {}
   for (const account of accountsOf(secrets)) {
     const credentials = server.accounts[account]
-    if (!credentials) {
-      continue
-    }
     files[account] = []
     if (credentials.serviceAccount) {
       const response = await instance.coreApi.createNamespacedServiceAccountToken({
@@ -172,6 +172,29 @@ export async function ensureJobCredentials(
   }
   await apply(instance, spec)
   return files
+}
+
+/**
+ * Refuses a secret of an account the run was not admitted for, or of one without a
+ * credential on the cluster: its command would run as whatever the node or the image
+ * of the provider is, which every account shares. Before anything is minted or copied.
+ */
+export function assertJobAccounts(
+  secrets: JobSecret[],
+  server: WorkKubernetesServer,
+  admitted: string[] | undefined
+): void {
+  for (const { secret, source } of secrets) {
+    const label = `secret ${getSecretName(secret)} (${describeSecretSource(secret)})`
+    if (admitted && !admitted.includes(source.account)) {
+      throw new Error(`${label}: the run was not admitted for the account ${source.account}`)
+    }
+    if (!server.accounts[source.account]) {
+      throw new Error(
+        `${label}: the account ${source.account} has no credential on this cluster (accounts.${source.account}.kubernetes)`
+      )
+    }
+  }
 }
 
 // Per account, the keys of the credentials Secret and the file each is in the
@@ -280,6 +303,7 @@ export function getJobSecretSpec(
         { name: VALUES_VOLUME, mountPath: SECRET_VALUES_PATH },
         ...(volume ? [{ name: volume, mountPath: ACCOUNT_PATH, readOnly: true }] : []),
       ],
+      ...getContainerSecurity({ server }),
     }
   })
   const mounts: V1VolumeMount[] = [{ name: VALUES_VOLUME, mountPath: SECRET_VALUES_PATH }]
