@@ -81,6 +81,7 @@ backend:
   defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
   # runRole: hammerkit-runs           # the ClusterRole the server binds in each caller's namespace
   deniedEgress: [169.254.0.0/16, fe80::/10, fd00:ec2::/32, 10.0.0.0/8]   # the default, and the cluster's ranges
+  networkPolicy: enforced            # the network plugin enforces NetworkPolicy; limited tasks need it
 ```
 
 The server runs as before (it checks the code out, plans the run with the engine in a process
@@ -107,11 +108,14 @@ of that name without the label is refused, the server runs no task in a namespac
 make. On every run the server puts in it, replacing what was there:
 
 - a RoleBinding of `runRole` to itself, its only rights in the namespace;
-- a `NetworkPolicy` that lets each pod accept connections from the pods of its namespace only
-  (the services a task needs, an egress proxy), so callers can not reach each other's pods;
-- a `NetworkPolicy` for the pods with an open network: they reach their namespace, DNS and any
-  address outside `deniedEgress`. A pod with a limited [network](#network) is left out, its own
-  policy is all it reaches;
+- a `NetworkPolicy` that lets each pod with an open network accept connections from the pods of
+  its namespace only (the services a task needs), so callers can not reach each other's pods;
+- a `NetworkPolicy` for the pods with an open network and the egress proxies: they reach their
+  namespace, DNS and any address outside `deniedEgress`.
+
+Policies add up, so neither selects a pod with a limited [network](#network) (labelled
+`hammerkit.dev/network: limited`): its own policy alone decides what it reaches, DNS left out, and
+what reaches it. An egress proxy takes connections from its task only.
 - `quota` and `defaultResources`; removing one from the config removes it from the namespace.
 
 The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
@@ -202,9 +206,14 @@ Service carry `hammerkit.dev/run` and go with the rest of the run. Pods with an 
 governed by the policy of the caller's namespace, see [Namespaces](#namespaces).
 
 The cluster's network plugin has to enforce `NetworkPolicy` (Calico and Cilium do, and recent
-kind), for `network:` and for keeping callers apart. Without it nothing is isolated. Some apply a
-policy a moment after the pod started, so `none` is not a hard boundary for the first moment of
-a task.
+kind), for `network:` and for keeping callers apart. Without it nothing is isolated. Hammerkit
+can't tell from the API, so `backend.networkPolicy: enforced` states it; without it a task with a
+limited network fails instead of running open. Some apply a
+policy a moment after the pod started, so a limited pod waits in an init container until its
+policy holds, and fails after 60 seconds if it never does (see
+[Kubernetes](/docs/task/network#kubernetes)). A run's policies go only after its pods are gone.
+A pod with an open network has no such wait, so on those plugins it can reach a `deniedEgress`
+address in its first moment.
 
 A task that reads a provider's secret keeps an open network for now: its init containers are in
 the task's pod, so its policy would cut them off from the secret manager. Such a build file is
@@ -279,6 +288,6 @@ metadata: { name: hammerkit-managed-namespaces }
 spec: { policyName: hammerkit-managed-namespaces, validationActions: [Deny] }
 ```
 
-Not yet: Windows nodes, a cache in a registry or a bucket, a limited network for a task
+Not yet: Windows nodes, holding a pod with an open network back until the policy of its namespace holds, a cache in a registry or a bucket, a limited network for a task
 that reads a provider's secret, and failing a task early whose pod can not start (an image that
 can not be pulled, no node for its pool).

@@ -117,14 +117,16 @@ describe('kubernetes backend', () => {
 
   it('keeps the pods of a caller from other namespaces and from the metadata endpoint of the cloud', () => {
     const [ingress, egress] = getNamespacePolicies('hk-alice', ['169.254.0.0/16', '10.0.0.0/8', 'fd00:ec2::/32'])
+    // policies add up: the pods of a limited item and the egress proxies have their own,
+    // which these must not widen (a limited pod would get DNS back through the egress one)
     expect(ingress.spec).toEqual({
-      podSelector: {},
+      podSelector: { matchExpressions: [{ key: 'hammerkit.dev/network', operator: 'DoesNotExist' }] },
       policyTypes: ['Ingress'],
       ingress: [{ _from: [{ podSelector: {} }] }],
     })
-    // the pods of a limited item have their own policy, which this one must not widen
+    // a proxy reaches out like an open pod
     expect(egress.spec?.podSelector).toEqual({
-      matchExpressions: [{ key: 'hammerkit.dev/network', operator: 'DoesNotExist' }],
+      matchExpressions: [{ key: 'hammerkit.dev/network', operator: 'NotIn', values: ['limited'] }],
     })
     expect(egress.spec?.egress).toEqual([
       { to: [{ podSelector: {} }] },
@@ -167,7 +169,10 @@ describe('kubernetes backend', () => {
           deleteCollectionNamespacedService: collection('Service'),
           deleteCollectionNamespacedSecret: collection('Secret'),
           deleteCollectionNamespacedPersistentVolumeClaim: collection('PersistentVolumeClaim'),
-          listNamespacedPod: async () => ({ items: [] }),
+          listNamespacedPod: async (request: any) => {
+            calls.push(`await Pod ${request.labelSelector}`)
+            return { items: [] }
+          },
           listNamespacedPersistentVolumeClaim: async () => ({ items: [] }),
         },
         batchApi: { deleteCollectionNamespacedJob: collection('Job') },
@@ -190,7 +195,7 @@ describe('kubernetes backend', () => {
             calls.push(`delete ${spec.kind} ${spec.metadata.name}`)
             return notFound()
           },
-          list: async () => ({ items: [] }),
+          list: async () => ({ items: [{ metadata: { name: 'hammerkit-network-build' } }] }),
         },
       }
       return { calls, instance }
@@ -225,15 +230,20 @@ describe('kubernetes backend', () => {
         ...['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
           (kind) => `delete ${kind} hammerkit.dev/run,hammerkit.dev/run!=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`
         ),
+        // the policy of a limited pod goes once the pod is gone
+        `await Pod hammerkit.dev/run,hammerkit.dev/run!=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`,
+        'delete NetworkPolicy hammerkit-network-build',
       ])
 
       calls.length = 0
       await placement.release({ id: 'run_AAAAAAAAAAAAAAA-', owner } as Run, context)
-      expect(calls).toEqual(
-        ['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
+      expect(calls).toEqual([
+        ...['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
           (kind) => `delete ${kind} hammerkit.dev/run=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`
-        )
-      )
+        ),
+        `await Pod hammerkit.dev/run=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`,
+        'delete NetworkPolicy hammerkit-network-build',
+      ])
     })
 
     it('refuses a namespace of the same name that hammerkit did not make', async () => {

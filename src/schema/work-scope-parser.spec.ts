@@ -36,7 +36,15 @@ describe('work-scope-parser', () => {
         context: 'prod',
         httpRoutes: [],
         namespace: 'default',
+        networkPolicyEnforced: false,
       })
+    })
+
+    it('reads that the cluster enforces NetworkPolicy', () => {
+      const context = {
+        environments: { default: { schema: { kubernetes: { context: 'prod', networkPolicy: 'enforced' } } } },
+      } as unknown as ReferencedContext
+      expect(defaultEnvironment(context)).toMatchObject({ type: 'kubernetes', networkPolicyEnforced: true })
     })
   })
 

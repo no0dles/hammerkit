@@ -36,6 +36,8 @@ const operatorNamespace = `hammerkit-srv-ops-${suffix}`
 const prefix = `hk-srv-${suffix}-`
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const callerNamespace = getCallerNamespace(prefix, alice)
+const bob = { iss: 'https://idp.corp', sub: 'bob' }
+const bobNamespace = getCallerNamespace(prefix, bob)
 const REPO = 'git.test/corp/payments'
 const KEY = 'value-of-the-operator-7f3a'
 
@@ -88,11 +90,11 @@ const ACCOUNT_RULES: V1PolicyRule[] = [
   { apiGroups: [''], resources: ['serviceaccounts/token'], verbs: ['create'], resourceNames: ['ci'] },
 ]
 
-// A web server in the operator's namespace, which a task can reach unless its
-// address is denied
-async function startWebServer(core: CoreV1Api, name: string): Promise<string> {
+// A web server, which a task can reach unless its address is denied or its namespace
+// is another caller's
+async function startWebServer(core: CoreV1Api, name: string, namespace = operatorNamespace): Promise<string> {
   await core.createNamespacedPod({
-    namespace: operatorNamespace,
+    namespace,
     body: {
       metadata: { name },
       spec: {
@@ -107,11 +109,89 @@ async function startWebServer(core: CoreV1Api, name: string): Promise<string> {
     },
   })
   for (;;) {
-    const pod = await core.readNamespacedPod({ name, namespace: operatorNamespace })
+    const pod = await core.readNamespacedPod({ name, namespace })
     if (pod.status?.phase === 'Running' && pod.status.podIP) {
       return pod.status.podIP
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await sleep(1000)
+  }
+}
+
+// Runs a script in a pod of its own and returns whether it succeeded.
+async function runPod(core: CoreV1Api, namespace: string, name: string, script: string): Promise<boolean> {
+  await core.createNamespacedPod({
+    namespace,
+    body: {
+      metadata: { name },
+      spec: {
+        restartPolicy: 'Never',
+        containers: [{ name: 'run', image: 'busybox:1.36', command: ['sh', '-c', script] }],
+      },
+    },
+  })
+  for (;;) {
+    const pod = await core.readNamespacedPod({ name, namespace })
+    if (pod.status?.phase === 'Succeeded' || pod.status?.phase === 'Failed') {
+      await core.deleteNamespacedPod({ name, namespace, gracePeriodSeconds: 0 })
+      return pod.status.phase === 'Succeeded'
+    }
+    await sleep(1000)
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function until(check: () => Promise<boolean>, timeout: number, what: string): Promise<void> {
+  const deadline = Date.now() + timeout
+  while (!(await check())) {
+    if (Date.now() > deadline) {
+      throw new Error(`${what} after ${timeout / 1000}s`)
+    }
+    await sleep(500)
+  }
+}
+
+// What a run left in a namespace: nothing, once it ended.
+async function left(run: string, namespace = callerNamespace) {
+  const { core, apps, batch, networking } = cluster()
+  const selector = { namespace, labelSelector: `hammerkit.dev/run=${getRunLabelValue(run)}` }
+  return [
+    ...(await batch.listNamespacedJob(selector)).items,
+    ...(await apps.listNamespacedDeployment(selector)).items,
+    ...(await core.listNamespacedPod(selector)).items,
+    ...(await core.listNamespacedService(selector)).items,
+    ...(await core.listNamespacedSecret(selector)).items,
+    ...(await core.listNamespacedPersistentVolumeClaim(selector)).items,
+    ...(await networking.listNamespacedNetworkPolicy(selector)).items,
+  ]
+    .filter((item) => !item.metadata?.deletionTimestamp)
+    .map((item) => item.metadata?.name)
+}
+
+// The Jobs of some namespaces, seen while a run executes.
+function watchJobs(namespaces: string[]) {
+  const seen = new Map(namespaces.map((namespace) => [namespace, new Set<string>()]))
+  let stopped = false
+  const { batch } = cluster()
+  const watching = (async () => {
+    while (!stopped) {
+      for (const namespace of namespaces) {
+        const jobs = await batch.listNamespacedJob({ namespace }).catch(() => ({ items: [] }))
+        for (const job of jobs.items) {
+          seen.get(namespace)?.add(job.metadata?.name ?? '')
+        }
+      }
+      await sleep(500)
+    }
+  })()
+  return {
+    async stop() {
+      stopped = true
+      await watching
+      return Object.fromEntries([...seen].map(([namespace, names]) => [namespace, [...names]]))
+    },
   }
 }
 
@@ -140,15 +220,25 @@ tasks:
     image: alpine:3.19
     network: none
     cmds:
-      # the policy may apply a moment after the pod started
-      - for i in $(seq 30); do wget -q -T 2 -O /dev/null http://1.1.1.1 || exit 0; sleep 1; done; exit 1
+      # the pod starts once its policy holds, so not one try gets through to the
+      # server that reach shows is there
+      - for i in $(seq 5); do if nc -z -w 2 ${reachable} 8080; then echo "reached on try $i"; exit 1; fi; done
+      # nor DNS: the namespace's default policy, which allows it, leaves limited pods out
+      - if timeout 10 nslookup kubernetes.default.svc.cluster.local; then echo resolved; exit 1; fi
       - echo offline-ok
   reach:
     image: alpine:3.19
     cmds:
-      # an open network reaches beyond the namespace, but not a denied address
+      # an open network reaches beyond the namespace, but not a denied address. An open
+      # pod has no gate: on kindnet the namespace's policy applies a moment after it
+      # started, so the denied address is blocked from then on, five tries in a row (in
+      # one command, since every command is a pod of its own)
       - for i in $(seq 30); do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && exit 0; sleep 1; done; exit 1
-      - for i in $(seq 30); do wget -q -T 2 -O /dev/null http://${denied}:8080/ || exit 0; sleep 1; done; exit 1
+      # and resolves names
+      - timeout 10 nslookup kubernetes.default.svc.cluster.local
+      - >-
+        for i in $(seq 30); do nc -z -w 2 ${denied} 8080 || break; sleep 1; done;
+        for i in $(seq 5); do if nc -z -w 2 ${denied} 8080; then echo "reached on try $i"; exit 1; fi; done
       - echo denied-ok
   check:
     deps: [build, offline, reach]
@@ -157,6 +247,9 @@ tasks:
     cmds:
       - echo "read $(cat out/result.txt)"
       - echo "from $(wget -q -O - http://api:8080/)"
+      # a pod of a Job, in the tool image, not the server's machine
+      - echo "host=$(hostname)"
+      - echo "alpine=$(cat /etc/alpine-release)"
 `
 
 describe('kubernetes backend of a server', () => {
@@ -243,7 +336,7 @@ describe('kubernetes backend of a server', () => {
   afterAll(
     requiresKubernetes(async () => {
       const { core, rbac } = cluster()
-      for (const name of [operatorNamespace, callerNamespace]) {
+      for (const name of [operatorNamespace, callerNamespace, bobNamespace]) {
         await core.deleteNamespace({ name }).catch(() => undefined)
       }
       await rbac.deleteClusterRoleBinding({ name: serverRole }).catch(() => undefined)
@@ -256,139 +349,306 @@ describe('kubernetes backend of a server', () => {
     })
   )
 
-  beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'hammerkit-kubernetes-server-'))
-    const repository = join(root, 'repository')
-    mkdirSync(repository)
-    git(repository, 'init', '--quiet', '--initial-branch=main')
-    writeFileSync(join(repository, 'input.txt'), 'hello from the checkout')
-    git(repository, 'add', '.')
-    git(repository, 'commit', '--quiet', '-m', 'one')
-    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+  // the gate of requiresKubernetes: without a cluster, CI skips the setup too
+  beforeEach(
+    requiresKubernetes(async () => {
+      root = mkdtempSync(join(tmpdir(), 'hammerkit-kubernetes-server-'))
+      const repository = join(root, 'repository')
+      mkdirSync(repository)
+      git(repository, 'init', '--quiet', '--initial-branch=main')
+      writeFileSync(join(repository, 'input.txt'), 'hello from the checkout')
+      git(repository, 'add', '.')
+      git(repository, 'commit', '--quiet', '-m', 'one')
+      commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
 
-    const config: ServerConfig = serverConfigSchema.parse({
-      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
-      runs: { env: { allow: HOST_ENV_ALLOW } },
-      runtimes: ['docker', 'local'],
-      sources: [{ match: 'git.test/corp/*' }],
-      secretProviders: { files: { command: ['cat', '/var/run/hammerkit/account/{{ref}}'] } },
-      accounts: {
-        ci: { providers: { files: { env: {} } }, kubernetes: { serviceAccount: 'ci', secret: 'ci-files' } },
-      },
-      backend: {
-        type: 'kubernetes',
-        kubeconfig,
-        context: kubeconfig ? 'hammerkit' : context,
-        namespace: operatorNamespace,
-        runRole,
-        // the default ranges, and one web server of the cluster
-        deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32', ...(denied ? [`${denied}/32`] : [])],
-        namespacePrefix: prefix,
-        pools: [{ name: 'default', toolImage: 'alpine:3.19' }],
-        providers: { files: { image: 'alpine:3.19' } },
-        quota: { pods: 20 },
-        defaultResources: { requests: { cpu: '10m', memory: '16Mi' } },
-      },
+      const config: ServerConfig = serverConfigSchema.parse({
+        issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+        runs: { env: { allow: HOST_ENV_ALLOW } },
+        runtimes: ['docker', 'local'],
+        sources: [{ match: 'git.test/corp/*' }],
+        secretProviders: { files: { command: ['cat', '/var/run/hammerkit/account/{{ref}}'] } },
+        accounts: {
+          ci: { providers: { files: { env: {} } }, kubernetes: { serviceAccount: 'ci', secret: 'ci-files' } },
+        },
+        backend: {
+          type: 'kubernetes',
+          kubeconfig,
+          context: kubeconfig ? 'hammerkit' : context,
+          namespace: operatorNamespace,
+          runRole,
+          // the default ranges, and one web server of the cluster
+          deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32', ...(denied ? [`${denied}/32`] : [])],
+          networkPolicy: 'enforced',
+          namespacePrefix: prefix,
+          pools: [{ name: 'default', toolImage: 'alpine:3.19' }],
+          providers: { files: { image: 'alpine:3.19' } },
+          quota: { pods: 20 },
+          defaultResources: { requests: { cpu: '10m', memory: '16Mi' } },
+        },
+      })
+      const planning: PlanContext = {
+        environment: {
+          ...environmentMock(root),
+          processEnvs: runEnvironment(config, process.env),
+          hosted: { catalog: getSecretCatalog(config) },
+        },
+        policy: { envs: config.runs.env.allow, runtimes: config.runtimes, backend: 'kubernetes' },
+      }
+      store = new DefinitionStore(join(root, 'definitions'), planning.environment, { policy: planning.policy })
+      executor = new KubernetesExecutor(config as ServerConfig & { backend: any }, process.env, {
+        definitions: store,
+        planning,
+        repos: new RepoAccess(config, planning.environment, { url: () => repository }),
+        directory: join(root, 'runs'),
+        cache: join(root, 'cache'),
+        worker: TEST_WORKER,
+      })
     })
-    const planning: PlanContext = {
-      environment: {
-        ...environmentMock(root),
-        processEnvs: runEnvironment(config, process.env),
-        hosted: { catalog: getSecretCatalog(config) },
-      },
-      policy: { envs: config.runs.env.allow, runtimes: config.runtimes, backend: 'kubernetes' },
+  )
+
+  afterEach(() => {
+    if (root) {
+      rmSync(root, { recursive: true, force: true })
     }
-    store = new DefinitionStore(join(root, 'definitions'), planning.environment, { policy: planning.policy })
-    executor = new KubernetesExecutor(config as ServerConfig & { backend: any }, process.env, {
-      definitions: store,
-      planning,
-      repos: new RepoAccess(config, planning.environment, { url: () => repository }),
-      directory: join(root, 'runs'),
-      cache: join(root, 'cache'),
-      worker: TEST_WORKER,
-    })
   })
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }))
+  async function publish(name: string, file: string, owner = alice): Promise<string> {
+    await store.load()
+    const { version } = await store.publish(
+      name,
+      { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': file } },
+      owner
+    )
+    return version.hash
+  }
 
-  async function execute(id: string, hash: string) {
+  async function execute(
+    id: string,
+    hash: string,
+    options: { owner?: typeof alice; tasks?: string[]; accounts?: string[]; signal?: AbortSignal; name?: string } = {}
+  ) {
     const run: Run = {
       id,
-      owner: alice,
+      owner: options.owner ?? alice,
       state: 'running',
       createdAt: new Date().toISOString(),
-      definition: { name: 'payments', hash },
-      tasks: ['check'],
-      accounts: ['ci'],
+      definition: { name: options.name ?? 'payments', hash },
+      tasks: options.tasks ?? ['check'],
+      accounts: options.accounts ?? ['ci'],
       source: { type: 'ref', repo: REPO, ref: 'main', commit },
       options: {},
     }
     const events: RunEventData[] = []
     const error = await executor
-      .execute(run, { emit: (e) => events.push(e), signal: new AbortController().signal })
+      .execute(run, { emit: (e) => events.push(e), signal: options.signal ?? new AbortController().signal })
       .then(
         () => undefined,
         (e: Error) => e
       )
     const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
-    return { events, error, text }
+    return { events, error, text, all: JSON.stringify(events) }
   }
+
+  const taskStates = (events: RunEventData[], task: string) =>
+    events.flatMap((e) => (e.type === 'task' && e.task === task ? [e.state] : []))
 
   it(
     'runs the tasks as Jobs in the caller’s namespace, reads secrets in the Job and cleans up',
     requiresKubernetes(async () => {
-      await store.load()
-      const { version } = await store.publish(
-        'payments',
-        { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': buildFile(reachable, denied) } },
-        alice
-      )
+      const hash = await publish('payments', buildFile(reachable, denied))
 
       // run ids may end in `-` or `_`, which a label value can't
-      const first = await execute('run_k8s_one_-', version.hash)
-      expect(first.error).toBeUndefined()
+      const jobs = watchJobs([callerNamespace, operatorNamespace])
+      const first = await execute('run_k8s_one_-', hash)
+      const seen = await jobs.stop()
+      expect(first.error, first.all).toBeUndefined()
       expect(first.text).toContain(`runs in the namespace ${callerNamespace}`)
+      // the Jobs ran in the caller's namespace, none in the server's
+      expect(seen[callerNamespace].filter((name) => name.endsWith('-job')).length).toBeGreaterThanOrEqual(4)
+      expect(seen[operatorNamespace]).toEqual([])
       expect(first.text).toContain('key=***')
       expect(first.text).toContain('token-present')
       expect(first.text).not.toContain(KEY)
-      // the local task ran in the tool image, on the output of the container task
+      // the local task ran in a pod of a Job in the tool image, on the output of the
+      // container task
       expect(first.text).toContain('read hello from the checkout')
-      expect(first.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
-      expect(first.events).toContainEqual({ type: 'task', task: 'check', state: 'succeeded' })
-      // network: none is a NetworkPolicy on the Job's pod
+      expect(first.text).toMatch(/host=\S+-job-\S+/)
+      expect(first.text).toMatch(/alpine=3\.19\.\d+/)
+      expect(first.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
+      expect(first.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'check', state: 'succeeded' }))
+      // network: none is a NetworkPolicy on the Job's pod, in force before its command
       expect(first.text).toContain('offline-ok')
       // the caller's namespace keeps an open task off the denied addresses
       expect(first.text).toContain('denied-ok')
       // the service is reached from its namespace
       expect(first.text).toContain('from api-ok')
 
-      const { core, apps, batch, networking } = cluster()
+      const { core } = cluster()
       const quota = await core.readNamespacedResourceQuota({ name: 'hammerkit', namespace: callerNamespace })
       expect(quota.spec?.hard).toEqual({ pods: '20' })
-      const selector = {
-        namespace: callerNamespace,
-        labelSelector: `hammerkit.dev/run=${getRunLabelValue('run_k8s_one_-')}`,
-      }
-      const left = async () =>
-        [
-          ...(await batch.listNamespacedJob(selector)).items,
-          ...(await apps.listNamespacedDeployment(selector)).items,
-          ...(await core.listNamespacedPod(selector)).items,
-          ...(await core.listNamespacedService(selector)).items,
-          ...(await core.listNamespacedSecret(selector)).items,
-          ...(await core.listNamespacedPersistentVolumeClaim(selector)).items,
-          ...(await networking.listNamespacedNetworkPolicy(selector)).items,
-        ].filter((item) => !item.metadata?.deletionTimestamp)
-      expect(await left()).toEqual([])
+      const limits = await core.readNamespacedLimitRange({ name: 'hammerkit', namespace: callerNamespace })
+      expect(limits.spec?.limits).toEqual([
+        expect.objectContaining({ type: 'Container', defaultRequest: { cpu: '10m', memory: '16Mi' } }),
+      ])
+      expect(await left('run_k8s_one_-')).toEqual([])
 
       // the outputs went to the server's cache, so the next run of the same code hits
       // on build and restores its outputs into a new claim; offline has no sources,
       // runs again, and so does check, which reads what was restored
-      const second = await execute('run_k8s_two_', version.hash)
-      expect(second.error).toBeUndefined()
-      expect(second.events).toContainEqual({ type: 'task', task: 'build', state: 'cached' })
-      expect(second.events).not.toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+      const second = await execute('run_k8s_two_', hash)
+      expect(second.error, second.all).toBeUndefined()
+      expect(second.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'cached' }))
+      expect(taskStates(second.events, 'build')).not.toContain('succeeded')
       expect(second.text).toContain('read hello from the checkout')
+      expect(await left('run_k8s_two_')).toEqual([])
+    })
+  )
+
+  it(
+    'keeps one caller’s Jobs off the pods of another',
+    requiresKubernetes(async () => {
+      const { core } = cluster()
+      // a pod of alice, whose namespace the first test made; her own pods reach it
+      const victim = await startWebServer(core, 'victim', callerNamespace)
+      expect(
+        await runPod(
+          core,
+          callerNamespace,
+          'neighbour',
+          `for i in $(seq 30); do nc -z -w 2 ${victim} 8080 && exit 0; sleep 1; done; exit 1`
+        )
+      ).toBe(true)
+
+      const hash = await publish(
+        'probe',
+        `
+tasks:
+  probe:
+    image: alpine:3.19
+    cmds:
+      - for i in $(seq 30); do nc -z -w 2 ${reachable} 8080 && exit 0; sleep 1; done; exit 1
+      - for i in $(seq 5); do if nc -z -w 2 ${victim} 8080; then echo "reached alice on try $i"; exit 1; fi; done
+      - echo isolated-ok
+`,
+        bob
+      )
+      const jobs = watchJobs([callerNamespace, bobNamespace])
+      const run = await execute('run_k8s_bob', hash, { owner: bob, name: 'probe', tasks: ['probe'], accounts: [] })
+      const seen = await jobs.stop()
+      expect(run.error, run.all).toBeUndefined()
+      expect(run.text).toContain(`runs in the namespace ${bobNamespace}`)
+      expect(run.text).toContain('isolated-ok')
+      // bob's Jobs ran in his namespace, nothing of his in alice's
+      expect(seen[bobNamespace].length).toBeGreaterThan(0)
+      expect(seen[callerNamespace]).toEqual([])
+      expect(await left('run_k8s_bob', bobNamespace)).toEqual([])
+      await core.deleteNamespacedPod({ name: 'victim', namespace: callerNamespace, gracePeriodSeconds: 0 })
+    })
+  )
+
+  it(
+    'removes what an earlier run left, and cleans up after a task failed',
+    requiresKubernetes(async () => {
+      const { core, networking } = cluster()
+      // as if the server had stopped during an earlier run of alice
+      const labels = { 'hammerkit.dev/run': getRunLabelValue('run_k8s_old') }
+      await core.createNamespacedSecret({
+        namespace: callerNamespace,
+        body: { metadata: { name: 'left-behind', labels }, stringData: { value: 'old' } },
+      })
+      await networking.createNamespacedNetworkPolicy({
+        namespace: callerNamespace,
+        body: {
+          metadata: { name: 'left-behind', labels },
+          spec: { podSelector: { matchLabels: { 'left-behind': 'true' } }, policyTypes: ['Egress'] },
+        },
+      })
+
+      const hash = await publish(
+        'broken',
+        `
+tasks:
+  broken:
+    image: alpine:3.19
+    cmds:
+      - echo before-the-failure && exit 7
+`
+      )
+      const run = await execute('run_k8s_broken', hash, { name: 'broken', tasks: ['broken'], accounts: [] })
+      expect(run.error?.message).toBe('broken failed')
+      expect(taskStates(run.events, 'broken')).toContain('failed')
+      // what the command printed before it failed
+      expect(run.text).toContain('before-the-failure')
+      expect(await left('run_k8s_broken')).toEqual([])
+      expect(await left('run_k8s_old')).toEqual([])
+    })
+  )
+
+  it(
+    'stops the Job of a cancelled run and cleans up',
+    requiresKubernetes(async () => {
+      const hash = await publish('slow', 'tasks:\n  slow:\n    image: alpine:3.19\n    cmds: [sleep 300]\n')
+      const abort = new AbortController()
+      const running = execute('run_k8s_cancel', hash, {
+        name: 'slow',
+        tasks: ['slow'],
+        accounts: [],
+        signal: abort.signal,
+      })
+      const { core } = cluster()
+      const selector = {
+        namespace: callerNamespace,
+        labelSelector: `hammerkit.dev/run=${getRunLabelValue('run_k8s_cancel')}`,
+      }
+      await until(
+        async () => (await core.listNamespacedPod(selector)).items.some((pod) => pod.status?.phase === 'Running'),
+        120_000,
+        'the pod of slow did not run'
+      )
+      const cancelled = Date.now()
+      abort.abort()
+      const run = await running
+      expect(run.error?.message).toBe('the run was cancelled')
+      expect(await left('run_k8s_cancel')).toEqual([])
+      expect(Date.now() - cancelled).toBeLessThan(30_000)
+    })
+  )
+
+  it(
+    'fails a task that runs past its timeout and removes its Job',
+    requiresKubernetes(async () => {
+      const hash = await publish(
+        'late',
+        'tasks:\n  late:\n    image: alpine:3.19\n    timeout: 20s\n    cmds: [echo started && sleep 300]\n'
+      )
+      const run = await execute('run_k8s_late', hash, { name: 'late', tasks: ['late'], accounts: [] })
+      expect(run.error?.message).toBe('late failed')
+      expect(taskStates(run.events, 'late')).toContain('failed')
+      expect(run.all).toContain('timed out after 20s')
+      expect(await left('run_k8s_late')).toEqual([])
+    })
+  )
+
+  it(
+    'names the secret an init container could not read',
+    requiresKubernetes(async () => {
+      const hash = await publish(
+        'locked',
+        `
+tasks:
+  locked:
+    image: alpine:3.19
+    secrets:
+      - { from: "files:missing", account: ci, env: MISSING }
+    cmds:
+      - echo never-ran
+`
+      )
+      const run = await execute('run_k8s_locked', hash, { name: 'locked', tasks: ['locked'] })
+      expect(run.error?.message).toBe('locked failed')
+      expect(run.all).toContain('secret MISSING (files:missing as ci) could not be read')
+      expect(run.text).not.toContain('never-ran')
+      expect(await left('run_k8s_locked')).toEqual([])
     })
   )
 })
