@@ -6,6 +6,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { WorkerMessage, workerMain } from './run-worker'
+import { hostEnvs } from '../testing/host-env'
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   const chunks: string[] = []
@@ -42,7 +43,7 @@ describe('workerMain', () => {
     const stdin = new PassThrough()
     stdin.end(typeof input === 'string' ? input : JSON.stringify(input))
     const out = sink()
-    await workerMain(stdin, out.stream, { PATH: process.env.PATH }, directory, new AbortController())
+    await workerMain(stdin, out.stream, hostEnvs(), directory, new AbortController())
     return out.messages()
   }
 

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { PassThrough, Writable } from 'stream'
 import { requiresLinuxContainers } from '../requires-linux-containers'
 import { WorkerMessage, workerMain } from '../../server/run-worker'
+import { hostEnvs } from '../host-env'
 
 // nothing but the loopback interface: no way out at all
 const noInterfaces = 'test "$(ls /sys/class/net)" = lo'
@@ -28,7 +29,7 @@ async function run(directory: string, task: string, network?: unknown): Promise<
       callback()
     },
   })
-  await workerMain(stdin, stdout, { PATH: process.env.PATH }, directory, new AbortController())
+  await workerMain(stdin, stdout, hostEnvs(), directory, new AbortController())
   return chunks
     .join('')
     .split('\n')
