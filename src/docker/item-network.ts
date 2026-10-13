@@ -18,7 +18,7 @@ import {
   EGRESS_PROXY_IMAGE,
   formatRefusedHost,
   getEgressProxyCommand,
-  getEgressProxyEnvironment,
+  getItemProxyEnvironment,
   getProxyClientEnvironment,
   parseEgressProxyEvent,
 } from '../network/egress-proxy'
@@ -278,9 +278,7 @@ async function startEgressProxy(
     Image: EGRESS_PROXY_IMAGE,
     Cmd: getEgressProxyCommand(),
     User: 'node',
-    Env: Object.entries(
-      getEgressProxyEnvironment([...network.hosts, ...item.needs.map((need) => need.name)], EGRESS_PROXY_HOST)
-    ).map(([key, value]) => `${key}=${value}`),
+    Env: Object.entries(getItemProxyEnvironment(item, EGRESS_PROXY_HOST)).map(([key, value]) => `${key}=${value}`),
     Labels: getHelperLabels(networkName, options),
     HostConfig: HELPER_HOST_CONFIG,
   }

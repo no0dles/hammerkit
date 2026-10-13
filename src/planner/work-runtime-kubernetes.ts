@@ -121,6 +121,7 @@ export function kubernetesTaskRuntime(
                   },
                 },
                 spec: {
+                  initContainers: network.initContainers,
                   containers: [
                     {
                       image: task.data.image,
