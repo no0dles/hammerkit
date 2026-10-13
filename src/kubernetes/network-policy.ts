@@ -22,12 +22,19 @@ import {
   parseEgressProxyEvent,
 } from '../network/egress-proxy'
 import { getErrorMessage } from '../log'
-import { getPodPlacement, getRunLabels } from './job-placement'
+import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
 const ID_LABEL = 'hammerkit.dev/id'
 const PROXY_LABEL = 'hammerkit.dev/proxy-for'
+// on the pods of a limited item on a server: its own policy governs their egress, the
+// one of the caller's namespace (see getNamespacePolicies) leaves them out
+export const NETWORK_LABEL = 'hammerkit.dev/network'
+
+export function getNetworkLabels(env: WorkKubernetesEnvironment, item: ContainerItem): { [label: string]: string } {
+  return env.server && getEffectiveNetwork(item.data).type !== 'open' ? { [NETWORK_LABEL]: 'limited' } : {}
+}
 
 export interface KubernetesItemNetwork {
   // the proxy variables under `allow`
@@ -214,6 +221,7 @@ async function ensureProxy(
               ),
               ports: [{ containerPort: EGRESS_PROXY_PORT }],
               readinessProbe: { tcpSocket: { port: EGRESS_PROXY_PORT }, periodSeconds: 1 },
+              ...getContainerSecurity(env),
             },
           ],
         },

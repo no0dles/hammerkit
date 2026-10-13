@@ -1,6 +1,13 @@
 import { WorkKubernetesServer } from '../planner/work-environment'
 import { LocalWorkTask } from '../planner/work-task'
-import { getLocalTaskPool, getPodPlacement, getRunLabels, getRunLabelValue, runInToolImage } from './job-placement'
+import {
+  getLocalTaskPool,
+  getPodPlacement,
+  getRunLabels,
+  getRunLabelValue,
+  placeOnPool,
+  runInToolImage,
+} from './job-placement'
 
 const server: WorkKubernetesServer = {
   run: 'run_1',
@@ -56,7 +63,16 @@ describe('job placement', () => {
       user: null,
       mounts: [],
       pool: 'arm',
+      arch: 'arm64',
     })
+    expect(runInToolImage(task, server, undefined).arch).toBe('x64')
+  })
+
+  it('keys a container task by the architecture of the first pool, where it runs', () => {
+    const container = { name: 'build', type: 'container-task', image: 'alpine' } as any
+    expect(placeOnPool(container, server).arch).toBe('x64')
+    const arm = { ...server, pools: [server.pools[2]] }
+    expect(placeOnPool(container, arm).arch).toBe('arm64')
   })
 
   it('places a pod on the nodes of its pool, the first by default', () => {

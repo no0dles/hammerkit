@@ -1,4 +1,4 @@
-import { V1Toleration } from '@kubernetes/client-node'
+import { V1SecurityContext, V1Toleration } from '@kubernetes/client-node'
 import { createHash } from 'crypto'
 import { WorkKubernetesEnvironment, WorkKubernetesPool, WorkKubernetesServer } from '../planner/work-environment'
 import { ContainerWorkTask, LocalWorkTask } from '../planner/work-task'
@@ -55,7 +55,19 @@ export function runInToolImage(
     user: null,
     mounts: [],
     pool: pool.name,
+    arch: getNodeArch(pool),
   }
+}
+
+// The architecture of a pool's nodes as process.arch names it, so a cache entry made on
+// amd64 nodes is never restored on arm64 ones
+export function getNodeArch(pool: WorkKubernetesPool): string {
+  return pool.platform.arch === 'amd64' ? 'x64' : pool.platform.arch
+}
+
+// A task on a server's cluster: a container task runs on the first pool
+export function placeOnPool(task: ContainerWorkTask, server: WorkKubernetesServer): ContainerWorkTask {
+  return task.arch ? task : { ...task, arch: getNodeArch(server.pools[0]) }
 }
 
 export interface PodPlacement {
@@ -91,4 +103,23 @@ export function getRunLabelValue(run: string): string {
 
 export function getRunLabels(kubernetes: Pick<WorkKubernetesEnvironment, 'server'>): { [label: string]: string } {
   return kubernetes.server ? { [RUN_LABEL]: getRunLabelValue(kubernetes.server.run) } : {}
+}
+
+/**
+ * What a container of a run may do on a server, where it shares nodes with the pods of
+ * other callers: no privilege escalation (setuid binaries such as sudo), no raw sockets
+ * (spoofing on a bridge network) and the runtime's seccomp profile.
+ */
+export function getContainerSecurity(kubernetes: Pick<WorkKubernetesEnvironment, 'server'>): {
+  securityContext?: V1SecurityContext
+} {
+  return kubernetes.server
+    ? {
+        securityContext: {
+          allowPrivilegeEscalation: false,
+          capabilities: { drop: ['NET_RAW'] },
+          seccompProfile: { type: 'RuntimeDefault' },
+        },
+      }
+    : {}
 }

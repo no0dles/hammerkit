@@ -5,7 +5,14 @@ import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { WorkKubernetesServer } from '../planner/work-environment'
 import { WorkSecret } from '../planner/work-secret'
-import { assertSecretsReachable, getJobSecretSpec, JobSecretSpec, splitJobSecrets } from './job-secrets'
+import {
+  assertJobAccounts,
+  assertSecretsReachable,
+  ensureJobCredentials,
+  getJobSecretSpec,
+  JobSecretSpec,
+  splitJobSecrets,
+} from './job-secrets'
 
 const server: WorkKubernetesServer = {
   run: 'run_1',
@@ -111,6 +118,68 @@ describe('secrets read in the Job', () => {
     expect(() =>
       getJobSecretSpec(item, inJob, { ...server, providers: {} }, credentials, environmentMock(tmpdir()))
     ).toThrow('this server names no image for the provider echo')
+  })
+
+  it('runs the init containers without privilege escalation or raw sockets', () => {
+    const { inJob } = splitJobSecrets(secrets, server)
+    const spec = getJobSecretSpec(item, inJob, server, credentials, environmentMock(tmpdir()))
+    expect(spec.initContainers[0].securityContext).toEqual({
+      allowPrivilegeEscalation: false,
+      capabilities: { drop: ['NET_RAW'] },
+      seccompProfile: { type: 'RuntimeDefault' },
+    })
+  })
+
+  it('refuses an account without a credential on the cluster, rather than the identity of the node', () => {
+    const { inJob } = splitJobSecrets(secrets, server)
+    expect(() => assertJobAccounts(inJob, server, undefined)).not.toThrow()
+    expect(() => assertJobAccounts(inJob, server, ['dev'])).toThrow('secret KEY (echo:multi')
+    expect(() =>
+      assertJobAccounts(inJob, { ...server, accounts: { dev: { serviceAccount: 'dev' } } }, undefined)
+    ).toThrow('the account ops has no credential on this cluster (accounts.ops.kubernetes)')
+  })
+
+  it('makes the credentials of a Job only for admitted accounts that have one, with a token of an hour', async () => {
+    const calls: string[] = []
+    const instance = {
+      coreApi: {
+        createNamespacedServiceAccountToken: async (request: any) => {
+          calls.push(`token ${request.name} ${request.body.spec.expirationSeconds}`)
+          return { status: { token: 'minted' } }
+        },
+        readNamespacedSecret: async (request: any) => {
+          calls.push(`read ${request.name}`)
+          return { data: { 'key.json': 'e30=' } }
+        },
+      },
+      objectApi: {
+        read: async () => {
+          throw Object.assign(new Error('not found'), { code: 404 })
+        },
+        create: async (spec: any) => {
+          calls.push(`create ${spec.metadata.name} ${Object.keys(spec.data).join(',')}`)
+          return spec
+        },
+      },
+    } as any
+    const kubernetes = { type: 'kubernetes', namespace: 'hk-alice', server } as any
+    const { inJob } = splitJobSecrets(secrets, server)
+    expect(await ensureJobCredentials(instance, kubernetes, item, inJob, undefined)).toEqual(credentials)
+    expect(calls).toEqual([
+      'token dev 3600',
+      'read ops-files',
+      'create deploy-abc-credentials dev.token,ops.file.key.json',
+    ])
+
+    calls.length = 0
+    await expect(ensureJobCredentials(instance, kubernetes, item, inJob, ['dev'])).rejects.toThrow(
+      'the run was not admitted for the account ops'
+    )
+    await expect(
+      ensureJobCredentials(instance, { ...kubernetes, server: { ...server, accounts: {} } }, item, inJob, undefined)
+    ).rejects.toThrow('has no credential on this cluster')
+    // nothing was minted or copied for a refused run
+    expect(calls).toEqual([])
   })
 
   it('keeps a task that reads them on an open network, its init containers share the pod’s policy', () => {

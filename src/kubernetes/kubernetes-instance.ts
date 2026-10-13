@@ -1,4 +1,13 @@
-import { AppsV1Api, BatchV1Api, CoreV1Api, Exec, KubeConfig, KubernetesObjectApi, Log } from '@kubernetes/client-node'
+import {
+  AppsV1Api,
+  AuthenticationV1Api,
+  BatchV1Api,
+  CoreV1Api,
+  Exec,
+  KubeConfig,
+  KubernetesObjectApi,
+  Log,
+} from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getErrorMessage } from '../log'
 
@@ -8,6 +17,7 @@ export interface KubernetesInstance {
   coreApi: CoreV1Api
   appsApi: AppsV1Api
   batchApi: BatchV1Api
+  authApi: AuthenticationV1Api
   log: Log
 }
 
@@ -28,6 +38,7 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
     const batchApi = kc.makeApiClient(BatchV1Api)
     const appsApi = kc.makeApiClient(AppsV1Api)
     const objectApi = kc.makeApiClient(KubernetesObjectApi)
+    const authApi = kc.makeApiClient(AuthenticationV1Api)
     const exec = new Exec(kc)
 
     return {
@@ -37,6 +48,7 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
       appsApi,
       coreApi,
       batchApi,
+      authApi,
     }
   } catch (e) {
     if (getErrorMessage(e) === 'No active cluster!') {

@@ -554,7 +554,30 @@ describe('server config policy', () => {
         namespacePrefix: 'hammerkit-',
         pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }],
         providers: {},
+        runRole: 'hammerkit-runs',
+        deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32'],
       })
+    })
+
+    it('takes address ranges the pods of runs may not reach', () => {
+      expect(kubernetes({ deniedEgress: ['10.0.0.0/8', 'fd00::/8'] }).success).toBe(true)
+      for (const range of ['10.0.0.0', '10.0.0.0/33', 'fd00::/129', 'cluster/8', '10.0.0.0/8/1', '']) {
+        expect(message(kubernetes({ deniedEgress: [range] })), range).toBe(
+          'expected an address range, such as 10.0.0.0/8 or fd00::/8'
+        )
+      }
+    })
+
+    it('reads the secrets of an account as its own credential, never as the node or the image', () => {
+      const extra = (account: object) => ({
+        secretProviders: { gsm: { command: ['gcloud', '{{ref}}'] } },
+        accounts: { dev: { providers: { gsm: { env: {} } }, ...account } },
+      })
+      const providers = { gsm: { image: 'cloud-sdk:slim' } }
+      expect(message(kubernetes({ providers }, extra({})))).toBe(
+        'the account dev reads secrets in the Jobs of tasks, name the serviceAccount or secret it reads them as'
+      )
+      expect(kubernetes({ providers }, extra({ kubernetes: { serviceAccount: 'dev' } })).success).toBe(true)
     })
 
     it('takes pools, a quota as strings and default resources', () => {
