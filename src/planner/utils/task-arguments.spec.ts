@@ -85,10 +85,10 @@ describe('task arguments', () => {
     )
 
     it('refuses on Windows PowerShell what it would split or run', () => {
-      for (const arg of ['', 'say "hi"', 'a&calc', 'a|b', '<in', '>out', '^', '%PATH%', '!x!', 'two\nlines']) {
+      for (const arg of ['', 'say "hi"', 'a&calc', 'a|b', '<in', '>out', '^', '%PATH%', '!x!', 'two\nlines', 'a b\\']) {
         expect(isRefusedByWindowsPowerShell(arg)).toBe(true)
       }
-      for (const arg of ['a b', '-t', "it's", '$HOME', '*', 'src\\login.spec.ts']) {
+      for (const arg of ['a b', '-t', "it's", '$HOME', '*', 'src\\login.spec.ts', 'dir\\']) {
         expect(isRefusedByWindowsPowerShell(arg)).toBe(false)
       }
     })
@@ -105,6 +105,35 @@ describe('task arguments', () => {
       expect(getKubernetesCommandText(declared)).toBe('echo $$')
       expect(getKubernetesCommandArgs(declared)).toEqual(['$$'])
     })
+
+    // npx, yarn and most of node_modules/.bin are .cmd shims, which Windows
+    // PowerShell starts through cmd.exe: what it takes reaches them as text too
+    const itOnWindows = platform() === 'win32' ? it : it.skip
+    itOnWindows(
+      'keeps the arguments a local task takes one word of text for a .cmd shim on Windows',
+      () => {
+        const args = [...HOSTILE, '$env:PATH', '~', '{a,b}', '#c', '@x', "'; echo pwned > pwned.txt; '"].filter(
+          (arg) => !isRefusedByWindowsPowerShell(arg)
+        )
+        const dir = mkdtempSync(join(tmpdir(), 'hammerkit-arguments-cmd-'))
+        try {
+          writeFileSync(join(dir, 'args.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)))')
+          writeFileSync(join(dir, 'args.cmd'), '@node "%~dp0args.js" %*\r\n')
+          const command = appendArguments(
+            { cwd: dir, cmd: '.\\args.cmd', parsed: { command: '.\\args.cmd', args: [] } },
+            args,
+            'powershell'
+          )
+          const result = spawnSync(command.cmd, { cwd: dir, shell: 'powershell.exe' })
+          expect(result.stderr.toString()).toBe('')
+          expect(JSON.parse(result.stdout.toString())).toEqual(args)
+          expect(existsSync(join(dir, 'pwned.txt'))).toBe(false)
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      },
+      SHELL_TIMEOUT
+    )
 
     it('appends the raw arguments to the parsed exec form', () => {
       const command = appendArguments(
@@ -127,12 +156,19 @@ describe('task arguments', () => {
         empty: { image: 'alpine', deps: ['build'] },
         local: { cmds: ['node args.js'] },
         migrate: { image: 'alpine', cmds: ['migrate up'] },
+        cmdexe: { image: 'alpine', shell: 'cmd.exe', cmds: ['echo hi'] },
       },
       services: {
         api: { image: 'node', cmd: 'node server.js', labels: { svc: 'api' } },
         shelled: { image: 'node', shell: 'bash', cmd: 'node server.js', labels: { svc: 'shelled' } },
         plain: { image: 'nginx', labels: { svc: 'plain' } },
         db: { image: 'postgres', cmd: 'postgres', init: 'migrate', healthcheck: { cmd: 'pg_isready' } },
+        forwarded: {
+          context: 'docker-desktop',
+          selector: { type: 'deployment', name: 'pg' },
+          ports: ['5432'],
+          labels: { svc: 'forwarded' },
+        },
       },
     }
 
@@ -180,7 +216,11 @@ describe('task arguments', () => {
     it('refuses on Windows the local task arguments PowerShell would split or run', async () => {
       const local = { taskName: 'local', args: { values: ['a&calc'], services: false } }
       if (platform() === 'win32') {
-        await expect(plan(local, () => undefined)).rejects.toThrow('runs in Windows PowerShell')
+        for (const refused of ['a&calc', '', '"', 'a b\\']) {
+          await expect(
+            plan({ taskName: 'local', args: { values: [refused], services: false } }, () => undefined)
+          ).rejects.toThrow('runs in Windows PowerShell')
+        }
       } else {
         await plan(local, (cli) => {
           expect(cli.task('local').data.cmds.map((c) => c.cmd)).toEqual([`node args.js 'a&calc'`])
@@ -223,6 +263,15 @@ describe('task arguments', () => {
       })
     })
 
+    it('refuses a NUL in an argument, and cmd.exe as the shell', async () => {
+      await expect(plan(task(['a\0b']), () => undefined)).rejects.toThrow(
+        'an argument after -- contains a NUL character'
+      )
+      await expect(
+        plan({ taskName: 'cmdexe', args: { values: ['x'], services: false } }, () => undefined)
+      ).rejects.toThrow("task cmdexe runs in cmd.exe, whose quoting hammerkit doesn't know")
+    })
+
     it('refuses a task without commands, and a shell it cannot quote for', async () => {
       await expect(
         plan({ taskName: 'empty', args: { values: ['x'], services: false } }, () => undefined)
@@ -262,6 +311,12 @@ describe('task arguments', () => {
         expect(cli.task('migrate').data.cmds.map((c) => c.cmd)).toEqual([`migrate up '--dry-run'`])
         expect(getServiceDefinitionHash(cli.service('db') as WorkItem<ContainerWorkService>)).toBe(definition)
       })
+    })
+
+    it('refuses a Kubernetes service, which has no cmd of its own', async () => {
+      await expect(plan(service('forwarded', ['x']), () => undefined)).rejects.toThrow(
+        'service forwarded is a kubernetes service and has no cmd for the arguments after --'
+      )
     })
 
     it('refuses a service without cmd', async () => {
