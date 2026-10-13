@@ -31,8 +31,7 @@
 - **FR-005**: The build file declares nothing for arguments. `--set` is unchanged and stays a separate, local mechanism.
 - **FR-006**: `hammerkit ls --json` and the published versions of a server show each task's last command (and each service's `cmd`), so a caller can tell where arguments land.
 - **FR-007 (server)**: The run request takes `options.args: string[]` with exactly one entry in `tasks`. Limits: 100 arguments, 16 KiB together, no NUL. A server never takes `--set`. An approver sees every argument in full: nothing is cut without a marker, and control and bidi characters are escaped.
-- **FR-008 (server)**: A run that passes arguments to a task is refused at submit (`400`), and again before it starts, when that task reads a secret or takes a value of an `envs` entry from the server's environment (`runs.env`), other than `PATH`, `HOME` and `CI`. An argument can make the command print what it holds, so a shell task holds no account and no server credential.
-  - Not covered, and documented for publishers: a dependency of the task and a service it needs may still read secrets. The task with arguments reads their outputs and calls the service, so a dependency of a shell must not write a secret into its outputs, and a service holding a secret must not serve it.
+- **FR-008 (server)**: A run that passes arguments is refused at submit (`400`), and again before it starts, when any task or service of the run reads a secret or takes a value of an `envs` entry from the server's environment (`runs.env`), other than `PATH`, `HOME` and `CI`. That covers the task itself, its dependencies and the services it needs: an argument can make the command print what the task holds, and what a dependency wrote into its outputs or a service answers, past the masking of secrets (a transform such as `rev`). So a shell task runs with no account and no server credential, nor next to one (decided by Pascal, 2026-10-13).
 
 ## Out of scope
 
