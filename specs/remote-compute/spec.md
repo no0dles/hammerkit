@@ -201,7 +201,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 - `grep` and `glob` run on the backend (ripgrep) and return matches only.
 - `fetch <handle> <glob> --to <dir>` is the only command that copies files locally, and only the selected ones.
 - Reads are limited to declared outputs, `src` and logs of the handle, with path traversal rejected, and are checked against the caller.
-- The same operations are exposed as MCP tools by `hammerkit mcp` (stdio first, streamable HTTP later).
+- The same operations are exposed as MCP tools by `hammerkit remote mcp` (stdio first, streamable HTTP later).
 
 ## Security properties
 
