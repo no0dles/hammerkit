@@ -10,9 +10,10 @@ import { DefinitionStore } from './definitions'
 import { checkoutRef } from './git-checkout'
 import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
-import { PlanContext, planRun } from './run-plan'
+import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { toNetworkSchema } from '../planner/work-network'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -122,6 +123,10 @@ export class HostExecutor implements RunExecutor {
     if (extra.length > 0) {
       throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
     }
+    const refused = refuseArguments(run, planned.plan)
+    if (refused) {
+      throw new Error(refused)
+    }
 
     const abortCtrl = new AbortController()
     const abort = () => abortCtrl.abort()
@@ -156,6 +161,8 @@ export class HostExecutor implements RunExecutor {
           options: run.options,
           accounts: run.accounts,
           catalog: planning.environment.hosted?.catalog as SecretCatalog,
+          // what the version was checked against at publish holds while it runs too
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
           ...(placed ? { kubernetes: placed.kubernetes } : {}),
         }
         const env = { ...this.processEnvironment(home, cache), ...placed?.env }

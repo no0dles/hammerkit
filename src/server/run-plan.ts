@@ -11,11 +11,17 @@ function labels(values: string[] | undefined): LabelValues | undefined {
 }
 
 // The tasks in the order they were named, one scope each; by labels when none is.
+// The arguments, if any, go to the one task named (the request allows no more). That
+// task runs uncached unless the request names a `cache` method, as `run --cache` does.
 export function getRunScopes(tasks: string[], options: RunOptions): { name: string; scope: WorkScope }[] {
+  const args =
+    options.args && options.args.length > 0
+      ? { values: options.args, services: false, cache: options.cache !== undefined }
+      : undefined
   return tasks.length > 0
     ? tasks.map((task) => ({
         name: task,
-        scope: { taskName: task, environmentName: options.env ?? null },
+        scope: { taskName: task, environmentName: options.env ?? null, ...(args ? { args } : {}) },
       }))
     : [
         {
@@ -55,6 +61,55 @@ export async function planRun(
     plan,
     accounts: [...new Set(Object.values(plan).flatMap((entry) => entry.accounts))].sort(),
   }
+}
+
+// Variables of a server that hold no credential (FR-008): a task may read these and
+// still take arguments.
+const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI']
+
+function readsOf(entry: PlannedRun['plan'][string]): string[] {
+  return [
+    ...entry.secrets.map((secret) => `the secret ${secret.target}`),
+    ...(entry.serverEnvs ?? [])
+      .filter((env) => !PLAIN_SERVER_ENVS.includes(env.toUpperCase()))
+      .map((env) => `$${env} of the server`),
+  ]
+}
+
+/**
+ * Why a run may not pass its arguments, or null when it may. They go to a task, never a
+ * service, and never to a run in which an item reads a secret or takes a variable of the
+ * server into its `envs`: an argument can make the command print what the task holds,
+ * and what its dependencies write into their outputs or its services serve, past the
+ * masking of secrets. So a shell on a server runs with no account and no credential of
+ * the server.
+ */
+export function refuseArguments(
+  run: { tasks: string[]; options: RunOptions },
+  plan: PlannedRun['plan']
+): string | null {
+  if (!run.options.args || run.options.args.length === 0) {
+    return null
+  }
+  const [name] = run.tasks
+  const entry = plan[name]
+  // a service named as a task is planned as nothing
+  if (!entry || entry.kind !== 'task') {
+    return `${name} is not a task of this version`
+  }
+  const reads = readsOf(entry)
+  if (reads.length > 0) {
+    return `${name} reads ${reads.join(', ')}, it takes no arguments on a server: an argument could make it print them`
+  }
+  // what a dependency or a service of the run holds reaches the task through its outputs or
+  // its answers, where an argument can print it in a form no mask knows (`rev token.txt`)
+  for (const [other, item] of Object.entries(plan).sort(([a], [b]) => a.localeCompare(b))) {
+    const held = (other === name ? [] : readsOf(item)).join(', ')
+    if (held.length > 0) {
+      return `${name} takes no arguments on a server: ${other} in its run reads ${held}, and an argument could make ${name} print what ${other} hands on`
+    }
+  }
+  return null
 }
 
 // What build files are read with on a server: the environment of its runs and the

@@ -13,7 +13,8 @@ import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
 import { KubernetesExecutor } from './kubernetes-backend'
-import { PlanContext, planRun } from './run-plan'
+import { PlanContext, planRun, refuseArguments } from './run-plan'
+import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
 import { runRequestSchema } from './run-request'
@@ -278,6 +279,11 @@ async function submitRun(
     send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
+  const argued = (request.options.args ?? []).length > 0 ? request.tasks[0] : undefined
+  if (argued !== undefined && version.services.includes(argued)) {
+    send(res, 400, { error: `${argued} is a service, arguments go to a task` })
+    return
+  }
   if (request.source.type === 'upload') {
     // a run starts from files the server has all of, never from a half-sent tree
     const tree = await sources.get(principal, request.source.snapshot)
@@ -307,6 +313,12 @@ async function submitRun(
     planned = await planRun(bundle, request, planning.environment, planning.policy)
   } catch (e) {
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
+    return
+  }
+  const refused = refuseArguments(request, planned.plan)
+  if (refused) {
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${refused}`)
+    send(res, 400, { error: refused })
     return
   }
   const decision = decideRun({
@@ -481,6 +493,7 @@ export async function startServer(
       reserved: getSourceAccounts(config),
       runtimes: config.runtimes,
       backend: config.backend.type,
+      network: parseWorkNetwork(config.runs.network),
     },
   }
   const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')

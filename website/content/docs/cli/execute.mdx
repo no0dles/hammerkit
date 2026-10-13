@@ -1,37 +1,60 @@
 ---
-title: "Execute"
-description: "Run the tasks in your build file."
+title: 'Execute'
+description: 'Run the tasks in your build file.'
 ---
+
 Running `hammerkit` without a command (or with the explicit `run` command)
 executes a task. It is the default command, so `hammerkit build` and
 `hammerkit run build` are equivalent.
 
 ## Execute a task
+
 Tasks can be executed by name.
 
 ```bash
 hammerkit example
 ```
 
+## Pass arguments
+
+Arguments after `--` are appended to the task's last command, each quoted as one
+argument. The task then skips the cache, unless `--cache <method>` is given; its
+dependencies run without them, cached as usual.
+
+```bash
+hammerkit run test -- src/login.spec.ts -t "login flow"
+```
+
+A run that selects several tasks takes no arguments. See
+[arguments](/docs/task/arguments).
+
 ## Execute tasks with labels
+
 Tasks can be executed by matching labels or filtered by label values.
 
 ### By matching labels
+
 `-f type=build` only executes tasks that have the given label value.
 Their dependencies don't need to match the label.
+
 ```bash
 hammerkit -f type=build
 ```
 
 ### By excluding labels
+
 `-e build=ios` excludes tasks that have the given label value.
 A task without a matching label is excluded as well if any of its dependencies matches.
+
 ```bash
 hammerkit -e build=ios
 ```
 
 ## Options
+
 ```
+Usage: hammerkit run [options] [task] [-- args...]
+
 Options:
   -f, --filter <labels...>    filter task and services with labels
   -e, --exclude <labels...>   exclude task and services with labels
