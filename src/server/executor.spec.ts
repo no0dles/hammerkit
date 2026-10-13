@@ -478,6 +478,24 @@ describe('HostExecutor', () => {
       expect(spaces.filter((name) => name.startsWith('sandbox-'))).toHaveLength(1)
     })
 
+    it('gives a ref run of the same repository a cache miss after a sandbox run', async () => {
+      const hash = await publish({
+        '.hammerkit.yaml':
+          'tasks:\n  build:\n    src: [input.txt]\n    generates: [out]\n    cmds:\n      - mkdir -p out\n      - cp input.txt out/copy.txt\n',
+      })
+      // the same files as the repository: a shared cache would hand the sandbox's outputs over
+      const onTheSandbox = await executeWith(onSandbox(), sandboxRun(hash, { id: 'run_sandbox' }))
+      expect(onTheSandbox.error).toBeUndefined()
+      expect(onTheSandbox.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+      const fromTheRef = await execute(run(hash, { id: 'run_ref' }))
+      expect(fromTheRef.error).toBeUndefined()
+      expect(fromTheRef.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+      expect(fromTheRef.events).not.toContainEqual({ type: 'task', task: 'build', state: 'cached' })
+      const spaces = readdirSync(join(root, 'cache'))
+      expect(spaces.some((name) => name.startsWith('sandbox-'))).toBe(true)
+      expect(spaces.some((name) => name.startsWith('ref-'))).toBe(true)
+    })
+
     it('fails a run on a sandbox that was deleted, and one without sandboxes', async () => {
       const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
       expect((await execute(sandboxRun(hash))).error?.message).toBe('this server keeps no sandboxes')

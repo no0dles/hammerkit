@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto'
-import { chmod, copyFile, lstat, mkdir, readdir, rm } from 'fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
+import { devNull } from 'os'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
@@ -172,9 +173,23 @@ export class HostSandboxStorage implements SandboxStorage {
         base[key] = value
       }
     }
+    // reading the files needs no configuration of the server's: a filter or attributes the
+    // machine's git config names would run on files a task wrote
+    base.GIT_CONFIG_NOSYSTEM = '1'
+    base.GIT_CONFIG_GLOBAL = devNull
     const env = { ...base, GIT_INDEX_FILE: index }
     try {
-      await copyFile(join(root, 'git', 'index'), index).catch(() => undefined)
+      // Git takes a file whose size and time match its entry for unchanged, unless the entry
+      // is as new as the index ("racy"). A file changed right after a checkout keeps the
+      // second of its entry, so the copy is dated two seconds before the index: every entry
+      // of the last checkout is racy, and its content is compared.
+      const original = join(root, 'git', 'index')
+      const written = await stat(original).catch(() => undefined)
+      if (written) {
+        await copyFile(original, index)
+        const before = new Date(written.mtimeMs - 2000)
+        await utimes(index, before, before)
+      }
       await this.git(id, ['add', '--all', '--', '.'], env, signal, 'read')
       const tree = (await this.git(id, ['write-tree'], env, signal, 'read')).trim()
       const [commit, base] = (await this.git(id, ['rev-parse', 'HEAD', 'HEAD^{tree}'], env, signal, 'read'))

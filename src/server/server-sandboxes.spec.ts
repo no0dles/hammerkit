@@ -16,7 +16,7 @@ const REPO = 'github.com/corp/payments'
 const policy = `
 runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }
 runtimes: [docker, local]
-sandboxes: { runtimes: [docker, local], network: open, limits: { count: 2 } }
+sandboxes: { runtimes: [docker, local], network: open, limits: { count: 2, bytes: 1Mi } }
 secretProviders:
   echo: { command: [${JSON.stringify(process.execPath)}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }
 accounts:
@@ -193,7 +193,7 @@ describe('sandboxes api', () => {
 
       const list = await (await api.call('GET', '/v1/sandboxes')).json()
       expect(list.sandboxes.map((s: { id: string }) => s.id)).toEqual([sandbox.id])
-      expect(list.limits).toEqual({ count: 2, bytes: 20 * 1024 ** 3 })
+      expect(list.limits).toEqual({ count: 2, bytes: 1024 ** 2 })
       expect(list.used).toEqual({ count: 1, bytes: sandbox.bytes })
       expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}`)).status).toBe(200)
 
@@ -284,6 +284,19 @@ describe('sandboxes api', () => {
       } finally {
         rmSync(outside, { recursive: true, force: true })
       }
+    })
+  })
+
+  it('refuses a run on a sandbox once a run grew the sandboxes of its owner over the limit', async () => {
+    await withApi('sandboxes-api-over', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      // what a task of the run writes, measured when it is over
+      writeFileSync(join(api.files(sandbox.id), 'big.bin'), Buffer.alloc(2 * 1024 * 1024))
+      const grew = await (await runOn(api, sandbox.id)).json()
+      expect((await untilState(api, grew.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+      const refused = await runOn(api, sandbox.id)
+      expect(refused.status).toBe(413)
+      expect((await refused.json()).error).toMatch(/more than your limit of 1Mi, delete a sandbox/)
     })
   })
 
