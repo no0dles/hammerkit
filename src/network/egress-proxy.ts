@@ -5,6 +5,8 @@
 // `refused` event on stdout. The script is passed to `node -e`, so the proxy
 // needs no image of its own, only a stock Node image.
 
+import { getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
+
 // Pinned, so the code behind the boundary is the same on every host. To bump
 // it, take the index digest of the tag (`docker buildx imagetools inspect
 // node:24-alpine`). The port relay runs in it too.
@@ -24,6 +26,9 @@ const http = require('http')
 const net = require('net')
 const dns = require('dns')
 const allow = JSON.parse(process.env.HAMMERKIT_ALLOW || '[]').map((h) => h.toLowerCase())
+// the names of the needed services, for tools that ignore NO_PROXY: exact
+// names only, never patterns
+const needs = JSON.parse(process.env.HAMMERKIT_NEEDS || '[]').map((h) => h.toLowerCase())
 const port = parseInt(process.env.HAMMERKIT_PROXY_PORT || '${EGRESS_PROXY_PORT}', 10)
 // the name whose address the proxy listens on, every address when unset
 const bind = process.env.HAMMERKIT_PROXY_BIND
@@ -34,7 +39,7 @@ function emit(event) {
 // the rule that allows a host: its exact name, a wildcard, or none
 function allowedBy(host) {
   const name = host.toLowerCase().replace(/\\.$/, '')
-  if (allow.includes(name)) {
+  if (allow.includes(name) || needs.includes(name)) {
     return 'exact'
   }
   return allow.some((rule) => rule.startsWith('*.') && name.endsWith(rule.substring(1))) ? 'wildcard' : null
@@ -66,7 +71,9 @@ function isInternal(address) {
   }
   return address === '::' || address === '::1' || /^f[cd]/i.test(address)
 }
-// The proxy resolves the name itself and connects to the address it checked.
+// The proxy resolves the name itself and connects only to the addresses it
+// checked, each in turn (a name can have an IPv6 address the network has no
+// route to).
 function resolve(host, rule, callback) {
   dns.lookup(host, { all: true }, (err, addresses) => {
     if (err || addresses.length === 0) {
@@ -74,8 +81,20 @@ function resolve(host, rule, callback) {
       return
     }
     const blocked = addresses.some((a) => isLinkLocal(a.address) || (rule !== 'exact' && isInternal(a.address)))
-    callback(null, blocked ? null : addresses[0].address)
+    callback(null, blocked ? null : addresses)
   })
+}
+// connection options that reach the checked addresses and nothing else
+function connectTo(host, addresses) {
+  const lookup = (hostname, options, callback) => {
+    const cb = typeof options === 'function' ? options : callback
+    if (typeof options === 'object' && options && options.all) {
+      cb(null, addresses)
+    } else {
+      cb(null, addresses[0].address, addresses[0].family)
+    }
+  }
+  return { host, lookup, autoSelectFamily: true }
 }
 function refuse(host) {
   if (!refused.has(host)) {
@@ -103,13 +122,13 @@ const server = http.createServer((req, res) => {
     res.end('hammerkit: network access to ' + url.hostname + ' is not allowed\\n')
     return
   }
-  resolve(url.hostname, rule, (err, address) => {
+  resolve(url.hostname, rule, (err, addresses) => {
     if (err) {
       res.writeHead(502, { 'content-type': 'text/plain' })
       res.end()
       return
     }
-    if (!address) {
+    if (!addresses) {
       refuse(url.hostname)
       res.writeHead(403, { 'content-type': 'text/plain' })
       res.end('hammerkit: ' + url.hostname + ' resolves to an address that is not allowed\\n')
@@ -121,7 +140,12 @@ const server = http.createServer((req, res) => {
     // the absolute URL wins over a Host header that disagrees
     headers.host = url.host
     const upstream = http.request(
-      { host: address, port: url.port || 80, method: req.method, path: url.pathname + url.search, headers },
+      Object.assign(connectTo(url.hostname, addresses), {
+        port: url.port || 80,
+        method: req.method,
+        path: url.pathname + url.search,
+        headers,
+      }),
       (response) => {
         res.writeHead(response.statusCode || 502, response.headers)
         response.pipe(res)
@@ -145,18 +169,18 @@ server.on('connect', (req, socket, head) => {
     socket.end('HTTP/1.1 403 Forbidden\\r\\ncontent-type: text/plain\\r\\n\\r\\nhammerkit: network access is not allowed\\n')
     return
   }
-  resolve(target.host, rule, (err, address) => {
+  resolve(target.host, rule, (err, addresses) => {
     if (err) {
       socket.end('HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n')
       return
     }
-    if (!address) {
+    if (!addresses) {
       refuse(target.host)
       socket.end('HTTP/1.1 403 Forbidden\\r\\ncontent-type: text/plain\\r\\n\\r\\nhammerkit: network access is not allowed\\n')
       return
     }
     let established = false
-    const upstream = net.connect(target.port, address, () => {
+    const upstream = net.connect(Object.assign(connectTo(target.host, addresses), { port: target.port }), () => {
       established = true
       socket.write('HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
       if (head && head.length > 0) {
@@ -196,14 +220,30 @@ export function getEgressProxyCommand(): string[] {
   return ['node', '-e', EGRESS_PROXY_SCRIPT]
 }
 
-// `bind` is the name the proxy listens on alone, so that nothing on its other
-// networks reaches it.
-export function getEgressProxyEnvironment(hosts: string[], bind?: string): { [key: string]: string } {
+// `needs` are the names of the needed services, allowed as exactly those
+// names. `bind` is the name the proxy listens on alone, so that nothing on its
+// other networks reaches it.
+export function getEgressProxyEnvironment(hosts: string[], needs: string[], bind?: string): { [key: string]: string } {
   return {
     HAMMERKIT_ALLOW: JSON.stringify(hosts),
+    HAMMERKIT_NEEDS: JSON.stringify(needs),
     HAMMERKIT_PROXY_PORT: `${EGRESS_PROXY_PORT}`,
     ...(bind ? { HAMMERKIT_PROXY_BIND: bind } : {}),
   }
+}
+
+// The proxy of a task or service: the hosts of its network in this run (under
+// the run's ceiling), and the names of the services it needs, on every runtime.
+export function getItemProxyEnvironment(
+  item: { data: { network: WorkNetwork; networkCeiling: WorkNetwork | null }; needs: { name: string }[] },
+  bind?: string
+): { [key: string]: string } {
+  const network = getEffectiveNetwork(item.data)
+  return getEgressProxyEnvironment(
+    network.type === 'allow' ? network.hosts : [],
+    item.needs.map((need) => need.name),
+    bind
+  )
 }
 
 // The variables that send the item's HTTP(S) through the proxy, both spellings

@@ -1,4 +1,5 @@
 import {
+  V1Container,
   V1Deployment,
   V1EnvVar,
   V1HostAlias,
@@ -25,12 +26,13 @@ import {
   EGRESS_PROXY_PORT,
   formatRefusedHost,
   getEgressProxyCommand,
-  getEgressProxyEnvironment,
+  getItemProxyEnvironment,
   getProxyClientEnvironment,
   parseEgressProxyEvent,
 } from '../network/egress-proxy'
 import { getErrorMessage } from '../log'
 import { sleep } from '../utils/sleep'
+import { getNetworkGateContainer, HELPER_SECURITY_CONTEXT } from './network-gate'
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
@@ -49,6 +51,9 @@ export interface KubernetesItemNetwork {
   env: V1EnvVar[]
   // the needed services, and the proxy under `allow`, by name
   hostAliases: V1HostAlias[]
+  // run before the item's own containers: under a limited network, the gate
+  // that waits until the policy holds
+  initContainers: V1Container[]
   // stops following the proxy's log
   close(): void
 }
@@ -200,13 +205,14 @@ export async function ensureKubernetesItemNetwork(
       // without the rights to manage NetworkPolicies, hammerkit never made one
       await removeKubernetesItemNetwork(instance, env, item, { run: null }, { ignoreForbidden: true })
     }
-    return { env: [], hostAliases, close() {} }
+    return { env: [], hostAliases, initContainers: [], close() {} }
   }
 
   await apply(instance, buildNetworkPolicy(env, item, network, options))
+  const initContainers = [getNetworkGateContainer()]
   if (network.type === 'none') {
     await removeProxy(instance, env, item, options, [404])
-    return { env: [], hostAliases, close() {} }
+    return { env: [], hostAliases, initContainers, close() {} }
   }
 
   let proxyIp: string
@@ -223,6 +229,7 @@ export async function ensureKubernetesItemNetwork(
       value,
     })),
     hostAliases: [...hostAliases, { ip: proxyIp, hostnames: [EGRESS_PROXY_HOST] }],
+    initContainers,
     close: () => follow?.abort(),
   }
 }
@@ -385,9 +392,7 @@ async function ensureProxy(
               name: 'proxy',
               image: EGRESS_PROXY_IMAGE,
               command: getEgressProxyCommand(),
-              env: Object.entries(getEgressProxyEnvironment([...hosts, ...item.needs.map((need) => need.name)])).map(
-                ([key, value]) => ({ name: key, value })
-              ),
+              env: Object.entries(getItemProxyEnvironment(item)).map(([key, value]) => ({ name: key, value })),
               ports: [{ containerPort: EGRESS_PROXY_PORT }],
               // in the pod, since its ingress policy may keep the kubelet out
               readinessProbe: {
@@ -400,14 +405,7 @@ async function ensureProxy(
                 },
                 periodSeconds: 2,
               },
-              securityContext: {
-                runAsNonRoot: true,
-                // the image's `node` user
-                runAsUser: 1000,
-                allowPrivilegeEscalation: false,
-                readOnlyRootFilesystem: true,
-                capabilities: { drop: ['ALL'] },
-              },
+              securityContext: HELPER_SECURITY_CONTEXT,
               resources: { limits: { memory: '256Mi' } },
             },
           ],

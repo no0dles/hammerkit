@@ -8,7 +8,7 @@ import {
 } from '../planner/work-service'
 import { KubernetesPersistence } from './volumes'
 import { KubernetesSecretRefs } from './secrets'
-import { V1Deployment, V1EnvVar, V1HostAlias, V1Probe } from '@kubernetes/client-node'
+import { V1Container, V1Deployment, V1EnvVar, V1HostAlias, V1Probe } from '@kubernetes/client-node'
 import { getServiceHostname } from '../planner/utils/service-hostname'
 import { apply, KubernetesObjectHeader } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -28,7 +28,7 @@ export async function ensureKubernetesDeploymentExists(
   secrets: KubernetesSecretRefs,
   stateKey: string,
   // the needed services by name, and the proxy of a limited network
-  network: { env: V1EnvVar[]; hostAliases: V1HostAlias[] }
+  network: { env: V1EnvVar[]; hostAliases: V1HostAlias[]; initContainers: V1Container[] }
 ) {
   const envs = getEnvironmentVariables(service.data.envs)
   const name = getResourceName(service)
@@ -76,6 +76,7 @@ export async function ensureKubernetesDeploymentExists(
           // the pod resolves its own service name, as with Docker's Hostname
           hostname: getServiceHostname(service.name),
           hostAliases: network.hostAliases,
+          initContainers: network.initContainers,
           containers: [
             {
               name: service.name.replace(/:/, '-'),

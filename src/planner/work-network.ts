@@ -1,4 +1,4 @@
-import { isAllowHost, NetworkSchema } from '../schema/network-schema'
+import { isAllowHost, isNeedName, NetworkSchema } from '../schema/network-schema'
 import { WorkTree } from './work-tree'
 
 // What a task or service reaches besides the services it needs, which it
@@ -116,7 +116,9 @@ export function formatNetwork(network: WorkNetwork): string {
 
 // Sets the run's ceiling on every task and service of the work tree. A local
 // task can't be limited, so a ceiling below open with one in the run is an
-// error before anything runs.
+// error before anything runs. So is a limited item that needs a service under
+// a name that is no host name: the proxy passes the names of the needed
+// services, and `*.com` would pass every .com host.
 export function applyNetworkCeiling(workTree: WorkTree, ceiling: WorkNetwork | null): void {
   const limit = ceiling && isLimitedNetwork(ceiling) ? ceiling : null
   if (limit) {
@@ -134,6 +136,19 @@ export function applyNetworkCeiling(workTree: WorkTree, ceiling: WorkNetwork | n
   for (const service of Object.values(workTree.services)) {
     if (service.data.type === 'container-service') {
       service.data.networkCeiling = limit
+    }
+  }
+  for (const item of [...Object.values(workTree.tasks), ...Object.values(workTree.services)]) {
+    if (item.data.type === 'local-task' || item.data.type === 'kubernetes-service') {
+      continue
+    }
+    const network = getEffectiveNetwork(item.data)
+    const invalid = item.needs.find((need) => !isNeedName(need.name))
+    if (isLimitedNetwork(network) && invalid) {
+      throw new Error(
+        `${item.name}: network ${formatNetwork(network)} reaches a needed service by a host name, ` +
+          `"${invalid.name}" is none (name it like db or api-v2)`
+      )
     }
   }
 }
