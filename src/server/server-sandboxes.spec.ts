@@ -9,6 +9,7 @@ import { TEST_WORKER } from '../testing/worker'
 import { readServerConfig } from './server-config'
 import { RunExecutor } from './runs'
 import { startServer } from './server'
+import { author } from './sandboxes-api'
 
 const REPO = 'github.com/corp/payments'
 
@@ -24,6 +25,7 @@ accounts:
   ci: { providers: { echo: { env: {} } } }
 sources:
   - match: github.com/corp/*
+    push: { branches: ['agent/**'] }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { dev: use, ci: use }
@@ -398,6 +400,69 @@ describe('sandboxes api', () => {
       expect((await api.call('GET', `${base}/tree`, { sub: 'carol' })).status).toBe(404)
       expect((await api.call('GET', `${base}/files/input.txt`, { sub: 'carol' })).status).toBe(404)
       expect(api.log.some((line) => line.startsWith(`sandbox edits ${sandbox.id} iss=`))).toBe(true)
+    })
+  })
+
+  it('commits the changes of a sandbox as the caller and pushes them to an allowed branch', async () => {
+    await withApi('sandboxes-api-push', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const base = `/v1/sandboxes/${sandbox.id}`
+      const push = (body: unknown, sub = 'alice') => api.call('POST', `${base}/push`, { sub, body })
+      const nothing = await push({ branch: 'agent/one', message: 'Agent work' })
+      expect(nothing.status).toBe(409)
+      expect((await nothing.json()).error).toBe(`the sandbox ${sandbox.id} has no changes to push`)
+
+      const edited = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'agent' }] },
+      })
+      expect(edited.status).toBe(200)
+      expect((await push({ branch: 'main', message: 'Agent work' })).status).toBe(403)
+      expect((await push({ branch: 'agent/one' })).status).toBe(400)
+      expect((await push({ branch: 'agent/one', message: 'x', author: 'someone' })).status).toBe(400)
+      expect((await push({ branch: 'agent/one', message: 'Agent work' }, 'carol')).status).toBe(404)
+      expect((await api.call('GET', `${base}/push`)).status).toBe(405)
+
+      const pushed = await push({ branch: 'agent/one', message: 'Agent work' })
+      expect(pushed.status).toBe(200)
+      const commit = git('rev-parse', 'agent/one')
+      expect(await pushed.json()).toMatchObject({
+        branch: 'agent/one',
+        commit,
+        sandbox: { id: sandbox.id, ref: 'agent/one', commit, pushed: { 'agent/one': commit } },
+      })
+      // a token without name and email: the subject at the host of the issuer
+      expect(git('log', '-1', '--format=%an <%ae>|%s', 'agent/one')).toBe('alice <alice@127.0.0.1>|Agent work')
+      expect(git('show', 'agent/one:input.txt')).toBe('from-agent')
+      // what is left to push is measured from the pushed commit
+      expect(await (await api.call('GET', `${base}/changes`)).json()).toEqual({ commit, files: [] })
+      expect(api.log.some((line) => line.startsWith(`sandbox push ${sandbox.id} iss=`))).toBe(true)
+    })
+  })
+})
+
+describe('the author of a push', () => {
+  const principal = (sub: string, claims: Record<string, string> = {}) => ({
+    iss: 'https://login.corp.test',
+    sub,
+    groups: [],
+    claims,
+  })
+
+  it('is the caller as their token names them', () => {
+    expect(author(principal('4f1c', { name: 'Alice Doe', email: 'alice@corp.test' }))).toEqual({
+      name: 'Alice Doe',
+      email: 'alice@corp.test',
+    })
+    expect(author(principal('agent-7', { preferred_username: 'agent' }))).toEqual({
+      name: 'agent',
+      email: 'agent-7@login.corp.test',
+    })
+  })
+
+  it('takes nothing from a claim that would break the commit header', () => {
+    expect(author(principal('a b|c', { name: 'Eve <eve@x>\nX', email: 'not an email' }))).toEqual({
+      name: 'Eve eve@xX',
+      email: 'a-b-c@login.corp.test',
     })
   })
 })

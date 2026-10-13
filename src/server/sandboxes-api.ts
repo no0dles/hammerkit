@@ -29,6 +29,14 @@ const createSchema = z
 
 const fetchSchema = z.object({ ref: refSchema }).strict()
 
+const pushSchema = z
+  .object({
+    branch: refSchema,
+    // the message of the commit, as `git commit -m` takes it
+    message: z.string().trim().min(1).max(10_000),
+  })
+  .strict()
+
 /**
  * The sandboxes of a caller: checkouts on the server that runs work on.
  *
@@ -37,6 +45,7 @@ const fetchSchema = z.object({ ref: refSchema }).strict()
  *   GET    /v1/sandboxes/<id>         one sandbox
  *   DELETE /v1/sandboxes/<id>         cancel its runs and remove it
  *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to another commit
+ *   POST   /v1/sandboxes/<id>/push    { branch, message }  commit the changes and push them
  *   ...    /v1/sandboxes/<id>/tree, files/<path>, search, edits, changes: its files, see
  *          `handleSandboxFiles`
  *
@@ -52,7 +61,7 @@ export async function handleSandboxes(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/sandboxes(?:\/([^/]+)(?:\/(fetch|tree|search|edits|changes)|\/(files)\/(.+))?)?$/.exec(
+  const match = /^\/v1\/sandboxes(?:\/([^/]+)(?:\/(fetch|push|tree|search|edits|changes)|\/(files)\/(.+))?)?$/.exec(
     url.pathname
   )
   if (!match) {
@@ -94,7 +103,7 @@ export async function handleSandboxes(
       send(res, 404, { error: 'not found' })
       return true
     }
-    if (action && action !== 'fetch') {
+    if (action && action !== 'fetch' && action !== 'push') {
       // the caller may have lost the repository since they created the sandbox
       const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, (repo) =>
         repos.readable(repo)
@@ -114,19 +123,25 @@ export async function handleSandboxes(
       await handleSandboxFiles(sandboxes, log, principal, sandbox, action as SandboxFileAction, path, req, res, url)
       return true
     }
-    if (action === 'fetch') {
+    if (action === 'fetch' || action === 'push') {
       if (method !== 'POST') {
         send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
         return true
       }
-      const body = parse(fetchSchema, await readJson(req))
+      const body = action === 'fetch' ? parse(fetchSchema, await readJson(req)) : parse(pushSchema, await readJson(req))
       // the caller may have lost the repository since they created the sandbox
       const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, (repo) =>
         repos.readable(repo)
       )
       if (refused) {
-        log(`refuse sandbox fetch ${id} ${who}: ${refused.error}`)
+        log(`refuse sandbox ${action} ${id} ${who}: ${refused.error}`)
         send(res, refused.status, { error: refused.error })
+        return true
+      }
+      if ('branch' in body) {
+        const pushed = await sandboxes.push(principal, id, body.branch, { ...author(principal), message: body.message })
+        log(`sandbox push ${id} ${who} branch=${body.branch} commit=${pushed.commit}`)
+        send(res, 200, { branch: body.branch, commit: pushed.commit, sandbox: view(sandboxes, pushed) })
         return true
       }
       const fetched = await sandboxes.fetch(principal, id, body.ref)
@@ -160,6 +175,32 @@ function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, body: unknown): T
     throw new SandboxError(400, `${issue.path.join('.') || 'request'}: ${issue.message}`)
   }
   return parsed.data
+}
+
+/**
+ * Who the commit of a push is by: the caller, as their token names them (`name` and
+ * `email`), else by their subject at the host of their issuer. Never what the request
+ * says, so a commit can not claim to be somebody else's.
+ */
+export function author(principal: Principal): { name: string; email: string } {
+  const clean = (value: string | undefined) =>
+    (value ?? '')
+      .replace(/[<>\0\r\n]/g, '')
+      .trim()
+      .slice(0, 200)
+  const name = clean(principal.claims.name) || clean(principal.claims.preferred_username) || clean(principal.sub)
+  const claimed = clean(principal.claims.email)
+  if (/^[^\s@]+@[^\s@]+$/.test(claimed)) {
+    return { name, email: claimed }
+  }
+  let host = 'hammerkit'
+  try {
+    host = new URL(principal.iss).hostname || host
+  } catch {
+    // an issuer that is not a URL keeps the default
+  }
+  const local = principal.sub.replace(/[^A-Za-z0-9._+-]/g, '-').slice(0, 64) || 'sandbox'
+  return { name, email: `${local}@${host}` }
 }
 
 // What the owner sees: everything but the owner, and the run that holds it.

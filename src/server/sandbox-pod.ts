@@ -2,6 +2,7 @@ import { rm } from 'fs/promises'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { Readable, Writable } from 'stream'
+import { GitOutputTooLarge } from './git-checkout'
 import { EditOp, PatchAuthor, ReadQuery, SandboxFileError, SearchQuery, TreeQuery } from './sandbox-files'
 import { HostSandboxStorage, SandboxKey } from './sandbox-storage'
 
@@ -30,12 +31,19 @@ export type SandboxPodRequest =
   | { op: 'diff'; id: string; format: 'diff' | 'patch'; author: PatchAuthor }
   // plans the edits and writes them when `commit` is set
   | { op: 'edit'; id: string; ops: EditOp[]; commit: boolean }
+  // the commit of the changes, for the server to push; the sandbox stays where it is
+  | { op: 'commit'; id: string; author: PatchAuthor }
+  // moves the sandbox to a commit it has, its files stay: what the server pushed
+  | { op: 'adopt'; id: string; commit: string }
 
 // The first line of the answer. A raw read sends the bytes of the file after it; `stream`
 // says there are more than an answer holds in memory.
 export type SandboxPodHeader =
   | { ok: true; result: unknown; stream?: boolean }
-  | { ok: false; error: { message: string; status?: number; details?: { [key: string]: unknown } } }
+  | {
+      ok: false
+      error: { message: string; status?: number; details?: { [key: string]: unknown }; kind?: 'too-large' }
+    }
 
 // An edit crosses as JSON: bytes as base64.
 export function encodeEditOps(ops: EditOp[]): EditOp[] {
@@ -51,12 +59,19 @@ export function decodePodError(error: Extract<SandboxPodHeader, { ok: false }>['
   if (error.status) {
     return new SandboxFileError(error.status as SandboxFileError['status'], error.message, error.details ?? {})
   }
+  if (error.kind === 'too-large') {
+    return new GitOutputTooLarge(error.message)
+  }
   return new Error(error.message)
 }
 
 function write(out: Writable, chunk: string | Buffer): Promise<void> {
   return new Promise((resolve, reject) => out.write(chunk, (e) => (e ? reject(e) : resolve())))
 }
+
+// A failure once the bytes of a raw read began: the answer can not say so any more, the
+// command fails instead.
+class AnswerStarted extends Error {}
 
 async function answer(
   storage: HostSandboxStorage,
@@ -100,6 +115,11 @@ async function answer(
       return send(await files().changes())
     case 'diff':
       return send(await files().diff(request.format, request.author))
+    case 'commit':
+      return send((await files().commit(request.author)) ?? null)
+    case 'adopt':
+      await storage.adopt(key, request.commit)
+      return send(null)
     case 'edit': {
       const plan = await files().plan(request.ops)
       if (request.commit) {
@@ -115,12 +135,16 @@ async function answer(
         ...(raw.stream ? { stream: true } : {}),
       }
       await write(out, JSON.stringify(header) + '\n')
-      if (raw.content) {
-        return write(out, raw.content)
-      }
-      const stream = raw.stream as Readable
-      for await (const chunk of stream) {
-        await write(out, chunk as Buffer)
+      try {
+        if (raw.content) {
+          return await write(out, raw.content)
+        }
+        const stream = raw.stream as Readable
+        for await (const chunk of stream) {
+          await write(out, chunk as Buffer)
+        }
+      } catch (e) {
+        throw new AnswerStarted(e instanceof Error ? e.message : String(e))
       }
       return
     }
@@ -130,7 +154,7 @@ async function answer(
 /**
  * Answers one request about the sandbox below `directory`. A failure of the request is an
  * answer too, with the status the API gives it; the process only fails when it can not
- * answer at all.
+ * answer at all, or a raw read fails after its first bytes.
  */
 export async function sandboxPodMain(directory: string, input: Readable, out: Writable): Promise<void> {
   const chunks: Buffer[] = []
@@ -142,9 +166,14 @@ export async function sandboxPodMain(directory: string, input: Readable, out: Wr
   try {
     await answer(storage, directory, request, out)
   } catch (e) {
+    if (e instanceof AnswerStarted) {
+      throw e
+    }
     const error: Extract<SandboxPodHeader, { ok: false }>['error'] =
       e instanceof SandboxFileError
         ? { status: e.status, message: e.message, details: e.details }
+        : e instanceof GitOutputTooLarge
+        ? { kind: 'too-large', message: e.message }
         : { message: e instanceof Error ? e.message : String(e) }
     await write(out, JSON.stringify({ ok: false, error } satisfies SandboxPodHeader) + '\n')
   }

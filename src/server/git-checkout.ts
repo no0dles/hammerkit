@@ -105,6 +105,28 @@ export async function resolveRef(
   return commit
 }
 
+// The commit a branch of a repository points to now, none when there is no such branch.
+export async function remoteBranch(
+  repository: string,
+  branch: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string | undefined> {
+  const output = await git(
+    ['ls-remote', '--heads', '--', repository, `refs/heads/${branch}`],
+    env,
+    signal,
+    `the branches of ${repository}`
+  )
+  for (const line of output.split('\n')) {
+    const [commit, name] = line.split('\t')
+    if (commit && name === `refs/heads/${branch}`) {
+      return commit
+    }
+  }
+  return undefined
+}
+
 // Runs git without a prompt and with the network transports only. Errors say what could
 // not be done (`unable to <action> <what>`) with the last line git printed.
 export async function git(

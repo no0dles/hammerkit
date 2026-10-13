@@ -2,15 +2,18 @@ import { randomBytes } from 'crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { formatSize } from '../utils/units'
-import { RefError } from './git-checkout'
+import { isValidRef, RefError, remoteBranch } from './git-checkout'
 import { Principal } from './oauth'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
-import { EditedFile, EditOp, SandboxFiles } from './sandbox-files'
-import { SandboxAttachment, SandboxKey, SandboxState, SandboxStorage } from './sandbox-storage'
+import { matchesRef } from './repo'
+import { EditedFile, EditOp, PatchAuthor, SandboxFiles } from './sandbox-files'
+import { SandboxAttachment, SandboxKey, SandboxPushConflict, SandboxState, SandboxStorage } from './sandbox-storage'
 
 // How long creating a sandbox or moving it to another commit may take
 const FETCH_TIMEOUT_MS = 10 * 60 * 1000
+// how old storage without a record has to be before a start removes it
+const ORPHAN_GRACE_MS = 60 * 60 * 1000
 
 type Owner = Pick<Principal, 'iss' | 'sub'>
 
@@ -31,11 +34,13 @@ export interface Sandbox {
   bytes: number
   createdAt: string
   lastUsedAt: string
+  // the branches it pushed, and the commit it pushed to each last
+  pushed?: { [branch: string]: string }
 }
 
 export class SandboxError extends Error {
   constructor(
-    readonly status: 400 | 404 | 409 | 413 | 502 | 507,
+    readonly status: 400 | 403 | 404 | 409 | 413 | 502 | 507,
     message: string
   ) {
     super(message)
@@ -64,7 +69,7 @@ export interface SandboxRegistryOptions {
   // where the records of the sandboxes are kept
   records: string
   limits: SandboxLimits
-  repos: Pick<RepoAccess, 'url' | 'credentials' | 'resolve' | 'scrub'>
+  repos: Pick<RepoAccess, 'url' | 'credentials' | 'pushCredentials' | 'source' | 'resolve' | 'scrub'>
   now?: () => number
   log?: (line: string) => void
 }
@@ -124,10 +129,17 @@ export class SandboxRegistry {
         this.options.log?.(`skip sandbox record ${name}: it can not be read`)
       }
     }
+    const now = Date.now()
     for (const entry of stored) {
-      if (!this.sandboxes.has(entry.id)) {
-        await entry.remove()
+      if (this.sandboxes.has(entry.id) || !entry.remove) {
+        continue
       }
+      // a sandbox being created has storage before its record
+      if (entry.createdAt && now - entry.createdAt.getTime() < ORPHAN_GRACE_MS) {
+        continue
+      }
+      this.options.log?.(`remove the storage of sandbox ${entry.id}: it has no record`)
+      await entry.remove()
     }
   }
 
@@ -261,6 +273,80 @@ export class SandboxRegistry {
         throw new SandboxError(502, repos.scrub(e, credentials.values).message)
       }
       sandbox.ref = ref
+      sandbox.bytes = await storage.usage(keyOf(sandbox))
+      sandbox.lastUsedAt = this.timestamp()
+      await this.save(sandbox)
+      return copy(sandbox)
+    })
+  }
+
+  /**
+   * Commits the changes of a sandbox as its owner and pushes them to a branch the operator
+   * allows (`sources[].push.branches`). The branch must not exist yet, or be one this
+   * sandbox pushed and still at what it pushed: a sandbox never writes over somebody
+   * else's work. The sandbox is at the pushed commit afterwards, so its changes are what
+   * is not pushed yet and the next push to the branch adds a commit to it.
+   */
+  async push(owner: Owner, id: string, branch: string, author: PatchAuthor): Promise<Sandbox> {
+    return this.withLock(id, async () => {
+      const sandbox = this.mine(owner, id)
+      const { storage, repos } = this.options
+      const allowed = repos.source(sandbox.repo)?.push?.branches
+      if (!allowed) {
+        throw new SandboxError(403, `this server does not push to ${sandbox.repo}`)
+      }
+      if (!isValidRef(branch)) {
+        throw new SandboxError(400, `${JSON.stringify(branch.slice(0, 80))} is not a branch name`)
+      }
+      if (!matchesRef(allowed, branch)) {
+        throw new SandboxError(403, `a sandbox may only push to ${allowed.join(', ')} of ${sandbox.repo}`)
+      }
+      this.mustBeFree(id)
+      if ((await storage.state(keyOf(sandbox))).clean) {
+        throw new SandboxError(409, `the sandbox ${id} has no changes to push`)
+      }
+      const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      const url = repos.url(sandbox.repo)
+      const read = await repos.credentials(sandbox.repo)
+      let current: string | undefined
+      try {
+        current = await remoteBranch(url, branch, read.env, signal)
+      } catch (e) {
+        throw new SandboxError(502, repos.scrub(e, read.values).message)
+      }
+      const pushed = sandbox.pushed?.[branch]
+      if (current && current !== pushed) {
+        throw new SandboxError(
+          409,
+          pushed
+            ? `${branch} moved since this sandbox pushed it, push to a new branch`
+            : `${branch} exists and this sandbox did not push it, push to a new branch`
+        )
+      }
+      const write = await repos.pushCredentials(sandbox.repo).catch((e) => {
+        throw new SandboxError(502, e instanceof Error ? e.message : String(e))
+      })
+      let commit: string | undefined
+      try {
+        commit = await storage.push(keyOf(sandbox), { url, branch, expect: current ?? null, author, env: write.env, signal })
+      } catch (e) {
+        if (e instanceof SandboxPushConflict) {
+          throw new SandboxError(409, e.message)
+        }
+        // the lease refuses a branch that somebody created or moved since it was read
+        const now = await remoteBranch(url, branch, read.env, signal).catch(() => current)
+        if (now !== current) {
+          throw new SandboxError(409, `${branch} changed while the sandbox pushed to it, push to a new branch`)
+        }
+        throw new SandboxError(502, repos.scrub(e, [...write.values, ...read.values]).message)
+      }
+      if (!commit) {
+        // only files the API never reads changed: the deny list stays on the server
+        throw new SandboxError(409, `the sandbox ${id} has no changes to push`)
+      }
+      sandbox.commit = commit
+      sandbox.ref = branch
+      sandbox.pushed = { ...sandbox.pushed, [branch]: commit }
       sandbox.bytes = await storage.usage(keyOf(sandbox))
       sandbox.lastUsedAt = this.timestamp()
       await this.save(sandbox)
@@ -455,5 +541,9 @@ function keyOf(sandbox: Sandbox): SandboxKey {
 }
 
 function copy(sandbox: Sandbox): Sandbox {
-  return { ...sandbox, owner: { ...sandbox.owner } }
+  return {
+    ...sandbox,
+    owner: { ...sandbox.owner },
+    ...(sandbox.pushed ? { pushed: { ...sandbox.pushed } } : {}),
+  }
 }

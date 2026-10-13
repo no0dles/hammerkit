@@ -464,6 +464,43 @@ describe('server config policy', () => {
       expect(serverConfigSchema.safeParse({ ...withProviders, sources }).success).toBe(false)
     })
 
+    it('takes the branches a sandbox may push to, and the secret it pushes with', () => {
+      const withPush = (push: object) =>
+        serverConfigSchema.safeParse({
+          ...withProviders,
+          accounts: { ...withProviders.accounts, 'scm-push': { providers: { gsm: { env: {} } } } },
+          sources: [{ match: 'github.com/corp/*', secret, push }],
+        })
+      const parsed = withPush({ secret: { from: 'gsm:push', account: 'scm-push' }, branches: ['agent/**'] })
+      expect(parsed.success && parsed.data.sources[0].push).toEqual({
+        secret: { from: 'gsm:push', account: 'scm-push', username: 'x-access-token' },
+        branches: ['agent/**'],
+      })
+      expect(withPush({ branches: ['agent/*', 'claude/**'] }).success).toBe(true)
+      expect(withPush({ branches: [] }).success).toBe(false)
+      expect(withPush({}).success).toBe(false)
+      expect(withPush({ branches: ['../main'] }).success).toBe(false)
+      expect(withPush({ branches: ['-f'] }).success).toBe(false)
+      expect(withPush({ branches: ['agent/**'], secret: { from: 'gsm:push', account: 'nope' } }).success).toBe(false)
+      expect(withPush({ branches: ['agent/**'], secret: { from: 'op:push', account: 'scm-push' } }).success).toBe(false)
+      expect(withPush({ branches: ['agent/**'], force: true }).success).toBe(false)
+      // the account that pushes is the server's own, like the one that reads
+      const given = serverConfigSchema.safeParse({
+        ...withProviders,
+        accounts: { ...withProviders.accounts, 'scm-push': { providers: { gsm: { env: {} } } } },
+        sources: [
+          {
+            match: 'github.com/corp/*',
+            push: { secret: { from: 'gsm:push', account: 'scm-push' }, branches: ['a/*'] },
+          },
+        ],
+        entitlements: [{ subject: { iss: 'https://idp.corp', sub: 'a' }, accounts: { 'scm-push': 'use' } }],
+      })
+      expect(JSON.stringify(given.success ? '' : given.error.issues)).toContain(
+        'the account scm-push reads or pushes the sources, no entitlement may name it'
+      )
+    })
+
     it('keeps the account that reads repositories away from entitlements', () => {
       const result = serverConfigSchema.safeParse({
         ...withProviders,
@@ -472,7 +509,7 @@ describe('server config policy', () => {
       })
       expect(result.success).toBe(false)
       expect(JSON.stringify(result.success ? '' : result.error.issues)).toContain(
-        'the account scm-read reads the sources, no entitlement may name it'
+        'the account scm-read reads or pushes the sources, no entitlement may name it'
       )
     })
   })
