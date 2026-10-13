@@ -13,11 +13,28 @@ function getStopTimeout(): number {
   return getEnvironmentConfig('HAMMERKIT_STOP_TIMEOUT_MS', 10000)
 }
 
+// A variable of the process. Windows ignores the case of their names and calls PATH
+// `Path`, which a copy of process.env (`{ ...process.env }`) keeps.
+export function processEnv(
+  envs: { [key: string]: string | undefined },
+  name: string,
+  windows: boolean
+): string | undefined {
+  if (envs[name] !== undefined || !windows) {
+    return envs[name]
+  }
+  const key = Object.keys(envs).find((key) => key.toUpperCase() === name.toUpperCase())
+  return key !== undefined ? envs[key] : undefined
+}
+
 // powershell takes about half a minute to start when it has to work out its module
-// path itself, so the one of the process is passed on
-function shellEnvs(windows: boolean, environment: Environment): { [key: string]: string } {
-  const value = environment.processEnvs['PSModulePath']
-  return windows && value !== undefined ? { PSModulePath: value } : {}
+// path or the PATH itself, so the ones of the process are passed on
+function shellEnvs(windows: boolean, environment: Environment): { [key: string]: string | undefined } {
+  const value = processEnv(environment.processEnvs, 'PSModulePath', windows)
+  return {
+    ...(windows && value !== undefined ? { PSModulePath: value } : {}),
+    PATH: processEnv(environment.processEnvs, 'PATH', windows),
+  }
 }
 
 export async function executeCommand(
@@ -31,7 +48,7 @@ export async function executeCommand(
   const windows = platform() === 'win32'
   return new Promise<number>((resolve, reject) => {
     const ps = spawn(command, {
-      env: { ...envs, ...shellEnvs(windows, environment), PATH: environment.processEnvs['PATH'] },
+      env: { ...envs, ...shellEnvs(windows, environment) },
       cwd,
       shell: windows ? 'powershell.exe' : true,
       // its own process group, so an abort reaches every process the command
