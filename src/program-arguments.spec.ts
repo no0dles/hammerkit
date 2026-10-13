@@ -4,6 +4,7 @@ import { createTestCase } from './testing/test-case'
 import { runProgram } from './run-program'
 import { memoryStream } from './testing/test-streams'
 import { statusConsole } from './planner/work-item-status'
+import { consoleContext } from './log'
 
 // shell() forwards args to commander behind a script-name placeholder, see
 // program-commands.spec.ts
@@ -87,6 +88,48 @@ describe('program arguments after --', () => {
     const t = createTestCase('cmd-run-arguments-several', files)
     await expect(t.shell([HK, 'run', '--', 'x'])).rejects.toThrow(
       'arguments after -- go to one task or service, but this run selects args, other'
+    )
+  })
+
+  itExceptWindows('run counts the tasks it selects, not the services', async () => {
+    const t = createTestCase('cmd-run-arguments-services', {
+      ...files,
+      '.hammerkit.yaml': {
+        tasks: { args: { cmds: ['node args.js'], labels: { app: 'x' } } },
+        services: { api: { image: 'node', cmd: 'node server.js', labels: { app: 'x' } } },
+      },
+    })
+    await t.setup(async (cwd, environment) => {
+      await runProgram(environment, [HK, 'run', '--filter', 'app=x', '--', 'x'], true)
+    })
+    const dir = join(process.cwd(), 'temp', 'cmd-run-arguments-services')
+    expect(JSON.parse(readFileSync(join(dir, 'out.json')).toString())).toEqual(['x'])
+  })
+
+  it('up hands them to the selected service, before anything starts', async () => {
+    const t = createTestCase('cmd-up-arguments', {
+      '.hammerkit.yaml': {
+        services: {
+          api: { image: 'node', cmd: 'node server.js', labels: { svc: 'api' } },
+          web: { image: 'nginx', labels: { svc: 'web' } },
+        },
+      },
+    })
+    // the refusals name the service, so the arguments reached it
+    const up = async (...args: string[]) => {
+      const errors = memoryStream()
+      await t.setup(async (cwd, environment) => {
+        await expect(
+          runProgram({ ...environment, console: consoleContext(errors.stream) }, [HK, 'up', ...args], true)
+        ).rejects.toThrow('Up was not successful')
+      })
+      return errors.read()
+    }
+    expect(await up('--filter', 'svc=web', '--', '--inspect')).toContain(
+      'service web has no cmd for the arguments after --'
+    )
+    expect(await up('--', '--inspect')).toContain(
+      'arguments after -- go to one task or service, but this run selects api, web'
     )
   })
 
