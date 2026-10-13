@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes, writeFile } from 'fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
@@ -174,13 +174,11 @@ export class HostSandboxStorage implements SandboxStorage {
     }
     // reading the files needs no configuration of the server's: a filter or attributes the
     // machine's git config names would run on files a task wrote
-    // (an empty file of its own: git on Windows can't read the null device as a config)
-    const noConfig = join(root, 'git', 'hammerkit-no-config')
     base.GIT_CONFIG_NOSYSTEM = '1'
-    base.GIT_CONFIG_GLOBAL = noConfig
+    // a file that is never there, which git reads as empty: Git for Windows refuses `\\.\nul`
+    base.GIT_CONFIG_GLOBAL = join(this.directory, 'no-git-config')
     const env = { ...base, GIT_INDEX_FILE: index }
     try {
-      await writeFile(noConfig, '')
       const original = join(root, 'git', 'index')
       await copyFile(original, index).then(
         // with the time of the index: git takes a file changed in the same second as it was
