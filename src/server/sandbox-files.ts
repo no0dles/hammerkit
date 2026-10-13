@@ -35,7 +35,8 @@ export class SandboxFileError extends Error {
   }
 }
 
-export type FileType = 'file' | 'directory' | 'symlink'
+// `other` is a pipe, a socket or a device a task made: the API reads none of them
+export type FileType = 'file' | 'directory' | 'symlink' | 'other'
 
 export interface FileStat {
   path: string
@@ -302,13 +303,57 @@ function decodeText(path: string, content: Buffer): string {
   }
 }
 
+// Files larger than this are read one by one, across sandboxes: a read holds a few times
+// the size of its file at once.
+const LARGE_FILE_BYTES = 1024 * 1024
+const LARGE_READS = 4
+let largeReads = 0
+const waitingReads: (() => void)[] = []
+
+async function readLimited<T>(size: number, fn: () => Promise<T>): Promise<T> {
+  if (size <= LARGE_FILE_BYTES) {
+    return fn()
+  }
+  if (largeReads < LARGE_READS) {
+    largeReads++
+  } else {
+    // the read that finishes hands its place over
+    await new Promise<void>((resolve) => waitingReads.push(resolve))
+  }
+  try {
+    return await fn()
+  } finally {
+    const next = waitingReads.shift()
+    if (next) {
+      next()
+    } else {
+      largeReads--
+    }
+  }
+}
+
+// The bytes of an open file, as many as it had when it was opened: a task of a run may
+// still be writing to it.
+async function readOpened(handle: FileHandle, size: number): Promise<Buffer> {
+  const content = Buffer.alloc(size)
+  let read = 0
+  while (read < size) {
+    const { bytesRead } = await handle.read(content, read, size - read, read)
+    if (bytesRead === 0) {
+      break
+    }
+    read += bytesRead
+  }
+  return content.subarray(0, read)
+}
+
 function numbered(line: number, text: string): string {
   const shown = text.length > MAX_LINE_CHARS ? `${text.slice(0, MAX_LINE_CHARS)}… [${text.length} chars]` : text
   return `${String(line).padStart(6)}\t${shown}`
 }
 
-function fileType(stats: { isDirectory(): boolean; isSymbolicLink(): boolean }): FileType {
-  return stats.isSymbolicLink() ? 'symlink' : stats.isDirectory() ? 'directory' : 'file'
+function fileType(stats: { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }): FileType {
+  return stats.isSymbolicLink() ? 'symlink' : stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other'
 }
 
 /**
@@ -376,7 +421,7 @@ export class HostSandboxFiles implements SandboxFiles {
     return {
       path,
       type,
-      size: type === 'directory' ? 0 : stats.size,
+      size: type === 'file' || type === 'symlink' ? stats.size : 0,
       exec: type === 'file' && (stats.mode & 0o111) !== 0,
       modifiedAt: stats.mtime.toISOString(),
       ...(type === 'symlink' ? { target: await readlink(absolute) } : {}),
@@ -395,8 +440,13 @@ export class HostSandboxFiles implements SandboxFiles {
     if (found.type === 'directory') {
       throw new SandboxFileError(400, `${path} is a directory, list it with tree`)
     }
+    if (found.type === 'other') {
+      throw new SandboxFileError(400, `${path} is a pipe, a socket or a device, not a file`)
+    }
     const absolute = this.absolute(path)
-    const handle = await open(absolute, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch((e) => {
+    // without O_NONBLOCK, opening a pipe a task swapped in after the check waits for a writer
+    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+    const handle = await open(absolute, flags).catch((e) => {
       if (isNotFound(e)) {
         throw new SandboxFileError(404, `${path} does not exist`)
       }
@@ -446,40 +496,53 @@ export class HostSandboxFiles implements SandboxFiles {
 
   async read(path: string, query: ReadQuery): Promise<ReadResult> {
     const { handle, stat } = await this.open(path)
-    let content: Buffer
-    try {
-      if (stat.size > MAX_FILE_BYTES) {
-        throw new SandboxFileError(413, `${path} takes ${stat.size} bytes, more than a read answers: read it raw`)
-      }
-      content = await handle.readFile()
-    } finally {
+    if (stat.size > MAX_FILE_BYTES) {
       await handle.close()
+      throw new SandboxFileError(413, `${path} takes ${stat.size} bytes, more than a read answers: read it raw`)
     }
+    return readLimited(stat.size, async () => {
+      let content: Buffer
+      try {
+        content = await readOpened(handle, stat.size)
+      } finally {
+        await handle.close()
+      }
+      return this.lines(path, content, query)
+    })
+  }
+
+  private lines(path: string, content: Buffer, query: ReadQuery): ReadResult {
     const text = decodeText(path, content)
-    const lines = text.split('\n')
-    if (lines[lines.length - 1] === '') {
-      lines.pop()
-    }
     const offset = Math.max(1, Math.floor(query.offset ?? 1))
     const limit = clamp(query.limit, READ_LINES, MAX_READ_LINES)
     const shown: string[] = []
     let bytes = 0
     let next = offset
-    while (next <= lines.length && next < offset + limit) {
-      const line = numbered(next, lines[next - 1])
-      if (shown.length > 0 && bytes + line.length > MAX_READ_BYTES) {
-        break
+    let full = false
+    // line by line: splitting a file of empty lines at once takes many times its size
+    let lines = 0
+    for (let start = 0; start < text.length; ) {
+      const end = text.indexOf('\n', start)
+      const stop = end < 0 ? text.length : end
+      lines++
+      if (!full && lines === next && next < offset + limit) {
+        const line = numbered(next, text.slice(start, stop))
+        if (shown.length > 0 && bytes + line.length > MAX_READ_BYTES) {
+          full = true
+        } else {
+          shown.push(line)
+          bytes += line.length + 1
+          next++
+        }
       }
-      shown.push(line)
-      bytes += line.length + 1
-      next++
+      start = stop + 1
     }
-    const truncated = next <= lines.length
+    const truncated = next <= lines
     return {
       path,
       sha256: sha256(content),
       size: content.length,
-      lines: lines.length,
+      lines,
       offset,
       content: shown.join('\n'),
       truncated,
@@ -490,14 +553,16 @@ export class HostSandboxFiles implements SandboxFiles {
   async raw(path: string): Promise<RawFile> {
     const { handle, stat } = await this.open(path)
     if (stat.size > MAX_FILE_BYTES) {
-      return { stat, stream: handle.createReadStream() }
+      return { stat, stream: handle.createReadStream({ start: 0, end: Math.max(0, stat.size - 1) }) }
     }
-    try {
-      const content = await handle.readFile()
-      return { stat: { ...stat, size: content.length }, content, sha256: sha256(content) }
-    } finally {
-      await handle.close()
-    }
+    return readLimited(stat.size, async () => {
+      try {
+        const content = await readOpened(handle, stat.size)
+        return { stat: { ...stat, size: content.length }, content, sha256: sha256(content) }
+      } finally {
+        await handle.close()
+      }
+    })
   }
 
   // The files git sees in the sandbox below `path`: committed or not, without what
@@ -521,7 +586,8 @@ export class HostSandboxFiles implements SandboxFiles {
         throw new SandboxFileError(404, `${path} does not exist`)
       }
       if (found.type !== 'directory') {
-        throw new SandboxFileError(400, `${path} is a ${found.type === 'file' ? 'file, read it' : 'symbolic link'}`)
+        const what = { file: 'file, read it', symlink: 'symbolic link', other: 'pipe, a socket or a device' }
+        throw new SandboxFileError(400, `${path} is a ${what[found.type]}`)
       }
     }
     const depth = clamp(query.depth, 1, 64)
@@ -557,10 +623,13 @@ export class HostSandboxFiles implements SandboxFiles {
         continue
       }
       const stats = await lstat(this.absolute(entry)).catch(() => undefined)
+      const found = stats ? fileType(stats) : 'file'
       result.push(
-        stats?.isSymbolicLink()
-          ? { path: entry, type: 'symlink', target: await readlink(this.absolute(entry)).catch(() => '') }
-          : { path: entry, type: 'file', size: stats?.size ?? 0 }
+        found === 'symlink'
+          ? { path: entry, type: found, target: await readlink(this.absolute(entry)).catch(() => '') }
+          : found === 'other'
+            ? { path: entry, type: found }
+            : { path: entry, type: 'file', size: stats?.size ?? 0 }
       )
     }
     const truncated = all.length > page.length
@@ -585,6 +654,9 @@ export class HostSandboxFiles implements SandboxFiles {
       }
       if (found.type === 'symlink') {
         throw new SandboxFileError(400, `${path} is a symbolic link, the API does not follow links`)
+      }
+      if (found.type === 'other') {
+        throw new SandboxFileError(400, `${path} is a pipe, a socket or a device, not a file`)
       }
     }
     if (query.type !== undefined && !/^[A-Za-z0-9_+-]{1,40}$/.test(query.type)) {
@@ -614,8 +686,10 @@ export class HostSandboxFiles implements SandboxFiles {
       args.push(`--glob=${glob}`)
     }
     // after the caller's globs, which would otherwise take precedence
+    // in any case, as a case-insensitive disk opens `.SSH` as `.ssh`; the paths found are
+    // checked against the deny list as well
     for (const directory of DENIED_DIRECTORIES) {
-      args.push(`--glob=!${directory}`)
+      args.push(`--iglob=!${directory}`)
     }
     if (query.type) {
       args.push(`--type=${query.type}`)
@@ -760,13 +834,21 @@ export class HostSandboxFiles implements SandboxFiles {
   }
 
   // The index of `fn` holds the files as they are, without what `.gitignore` leaves out and
-  // without the deny list, so nothing on it leaves the sandbox through a diff.
+  // without the deny list, so nothing on it leaves the sandbox through a diff. A repository a
+  // task made inside the files is left out too: git adds it as a link to a commit of it,
+  // whose id is not the sandbox's to tell.
   private async withFilesIndex<T>(fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
     return this.git.withIndex(async (run) => {
       await run(['add', '--all', '--', '.'], 'read')
-      const changed = (await run(['diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD'], 'read'))
-        .split('\0')
-        .filter((file) => file.length > 0 && deniedPath(file))
+      // `:<old mode> <new mode> <old id> <new id> <status>\0<path>\0`
+      const raw = (await run(['diff', '--cached', '--raw', '-z', '--no-renames', 'HEAD'], 'read')).split('\0')
+      const changed: string[] = []
+      for (let i = 0; i + 1 < raw.length; i += 2) {
+        const file = raw[i + 1]
+        if (deniedPath(file) || raw[i].split(' ')[1] === '160000') {
+          changed.push(file)
+        }
+      }
       if (changed.length > 0) {
         await run(['reset', '--quiet', 'HEAD', '--', ...changed.map((file) => `:(literal)${file}`)], 'read')
       }
@@ -876,9 +958,13 @@ export class HostSandboxFiles implements SandboxFiles {
       if (state.size > MAX_FILE_BYTES) {
         throw new SandboxFileError(413, `${path} takes ${state.size} bytes, more than an edit reads`)
       }
-      const { handle } = await this.open(path)
+      const { handle, stat } = await this.open(path)
       try {
-        state.content = await handle.readFile()
+        // the size checked above is the one when the edit started
+        if (stat.size > MAX_FILE_BYTES) {
+          throw new SandboxFileError(413, `${path} takes ${stat.size} bytes, more than an edit reads`)
+        }
+        state.content = await readLimited(stat.size, () => readOpened(handle, stat.size))
       } finally {
         await handle.close()
       }
