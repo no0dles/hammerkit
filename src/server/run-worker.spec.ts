@@ -158,6 +158,53 @@ describe('workerMain', () => {
     }
   })
 
+  const taskEvents = (messages: WorkerMessage[]) =>
+    messages.flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
+
+  it('calls the tasks after a failed one cancelled, and never running', async () => {
+    writeFileSync(
+      join(directory, '.hammerkit.yaml'),
+      'tasks:\n  a:\n    cmds: [exit 3]\n  b:\n    deps: [a]\n    cmds: [echo b]\n'
+    )
+    const events = taskEvents(await run({ ...base, tasks: ['b'], entry: join(directory, '.hammerkit.yaml') }))
+    expect(events).toContainEqual(expect.objectContaining({ task: 'a', state: 'failed', exitCode: 3 }))
+    expect(events.filter((e) => e.task === 'b')).toEqual([{ type: 'task', task: 'b', state: 'cancelled' }])
+  })
+
+  it('reports a dependency no task needed as skipped, without a duration', async () => {
+    const cache = mkdtempSync(join(tmpdir(), 'hammerkit-worker-cache-'))
+    vi.stubEnv('HAMMERKIT_DIR', cache)
+    writeFileSync(
+      join(directory, '.hammerkit.yaml'),
+      [
+        'caches:',
+        `  default: { method: checksum, backend: { type: local, path: ${JSON.stringify(join(cache, 'backend'))} } }`,
+        'tasks:',
+        '  a:',
+        '    src: [a.txt]',
+        '    cmds: [echo a]',
+        '  b:',
+        '    deps: [a]',
+        '    src: [b.txt]',
+        '    cmds: [echo b]',
+        '',
+      ].join('\n')
+    )
+    writeFileSync(join(directory, 'a.txt'), 'a')
+    writeFileSync(join(directory, 'b.txt'), 'b')
+    try {
+      const input = { ...base, tasks: ['b'], options: { cache: 'checksum' }, entry: join(directory, '.hammerkit.yaml') }
+      expect(taskEvents(await run(input))).toContainEqual(expect.objectContaining({ task: 'a', state: 'succeeded' }))
+      // b comes from the cache, so nothing needs a
+      const events = taskEvents(await run(input))
+      expect(events).toContainEqual(expect.objectContaining({ task: 'b', state: 'cached' }))
+      expect(events.filter((e) => e.task === 'a')).toEqual([{ type: 'task', task: 'a', state: 'skipped' }])
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(cache, { recursive: true, force: true })
+    }
+  })
+
   it('says when the input is not a run', async () => {
     const messages = await run('{"tasks": "build"}')
     expect(messages).toEqual([{ kind: 'result', ok: false, error: expect.stringContaining('could not be read') }])

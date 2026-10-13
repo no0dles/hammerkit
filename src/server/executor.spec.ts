@@ -9,7 +9,8 @@ import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
 import { runEnvironment } from './run-environment'
-import { Run, RunEventData } from './runs'
+import { Run, RunEventData, RunRegistry } from './runs'
+import { parseLogQuery, readLogs } from './run-logs'
 import { RepoAccess } from './repo-access'
 import { TEST_WORKER } from '../testing/worker'
 import { ServerConfig, serverConfigSchema } from './server-config'
@@ -155,6 +156,32 @@ describe('HostExecutor', () => {
     expect(text).toContain('token=')
     expect(text).not.toContain('the-token-value')
     expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
+  })
+
+  it('masks secrets in the results of a run and in its log', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    secrets:',
+        '      - { from: "echo:the-token-value", account: ci, env: TOKEN }',
+        '    cmds:',
+        `      - echo "out=${process.platform === 'win32' ? '$env:TOKEN' : '$TOKEN'}"`,
+        '      - exit 1',
+        '',
+      ].join('\n'),
+    })
+    const registry = new RunRegistry({ executor })
+    const { id } = registry.submit(alice, { ...run(hash, { accounts: ['ci'] }) })
+    const ended = await registry.wait(alice, id, 40_000)
+    expect(ended?.state).toBe('failed')
+    expect(ended?.results?.build).toMatchObject({ status: 'failed', lastLog: expect.arrayContaining(['out=***']) })
+    const logs = registry.logs(alice, id)
+    const page = readLogs(logs!.events, logs!.index, parseLogQuery(new URLSearchParams('grep=out=')), false)
+    expect(page.lines.map((l) => l.text)).toEqual(['out=***'])
+    expect(JSON.stringify(ended)).not.toContain('the-token-value')
+    expect(JSON.stringify(logs!.events)).not.toContain('the-token-value')
+    await registry.close()
   })
 
   it('refuses a run that would use an account it was not admitted for, before anything starts', async () => {

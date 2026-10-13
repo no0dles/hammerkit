@@ -210,6 +210,27 @@ export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
 // how much of the end of a task's output its result carries
 const TAIL_LINES = 20
 const TAIL_LINE_LENGTH = 1000
+// what a task event says of why a task ran or failed: a change to thousands of source
+// files is a cause per file. The process of a run cuts them already; an executor that
+// does not can still not make a result of any size.
+export const MAX_CAUSES = 20
+export const MAX_TASK_ERROR = 2 * 1024
+
+function bounded(event: Extract<RunEvent, { type: 'task' }>): Extract<RunEvent, { type: 'task' }> {
+  const causes = event.causes
+  return {
+    ...event,
+    ...(causes
+      ? {
+          causes: [
+            ...causes.slice(0, MAX_CAUSES).map((cause) => cause.slice(0, MAX_TASK_ERROR)),
+            ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
+          ],
+        }
+      : {}),
+    ...(event.error !== undefined ? { error: event.error.slice(0, MAX_TASK_ERROR) } : {}),
+  }
+}
 
 // what a task event weighs against the log limits of a run
 function taskEventSize(event: Extract<RunEvent, { type: 'task' }>): number {
@@ -684,7 +705,8 @@ export class RunRegistry {
     this.evict()
   }
 
-  private record(entry: Entry, event: RunEvent, force = false): void {
+  private record(entry: Entry, recorded: RunEvent, force = false): void {
+    const event = recorded.type === 'task' ? bounded(recorded) : recorded
     if (event.type === 'log') {
       this.keepTail(entry, event.task, event.text)
     } else if (event.type === 'task') {
