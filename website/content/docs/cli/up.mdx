@@ -30,6 +30,18 @@ does not run its [init](/docs/service/container#init) again.
 
 Stop services started this way with [`hammerkit down`](/docs/cli/down).
 
+## Pass arguments
+
+Arguments after `--` are appended to the `cmd` of the one service (or task) `up`
+starts:
+
+```bash
+hammerkit up --filter app=api -- --inspect
+```
+
+A filter that selects several services or tasks takes no arguments. See
+[arguments](/docs/task/arguments#services).
+
 <Callout type="info">
 
 Pass `--env <name>` to start the services in a configured environment, for
@@ -41,6 +53,8 @@ example a Kubernetes cluster declared under `environments:`. See
 ## Options
 
 ```
+Usage: hammerkit up [options] [-- args...]
+
 Options:
   -f, --filter <labels...>    filter task and services with labels
   -e, --exclude <labels...>   exclude task and services with labels

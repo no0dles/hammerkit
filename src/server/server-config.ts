@@ -468,6 +468,9 @@ export const serverConfigSchema = z
           })
           .strict()
           .default({}),
+        // the most any task or service of a run reaches besides its needs: none, open
+        // or { allow: [hosts] }. A version that asks for more is refused at publish.
+        network: networkSchema.default('open'),
       })
       .strict()
       .default({}),
@@ -568,6 +571,13 @@ export const serverConfigSchema = z
         }
       }
     })
+    if (config.runs.network !== 'open' && config.runtimes.includes('local')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['runs', 'network'],
+        message: 'the network of a local task can not be limited, allow only the docker runtime with runs.network',
+      })
+    }
     if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

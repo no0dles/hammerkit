@@ -353,8 +353,8 @@ describe('kubernetes backend of a server', () => {
       expect(first.text).not.toContain(KEY)
       // the local task ran in the tool image, on the output of the container task
       expect(first.text).toContain('read hello from the checkout')
-      expect(first.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
-      expect(first.events).toContainEqual({ type: 'task', task: 'check', state: 'succeeded' })
+      expect(first.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
+      expect(first.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'check', state: 'succeeded' }))
       // network: none is a NetworkPolicy on the Job's pod
       expect(first.text).toContain('offline-ok')
       // the caller's namespace keeps an open task off the denied addresses
@@ -386,8 +386,10 @@ describe('kubernetes backend of a server', () => {
       // runs again, and so does check, which reads what was restored
       const second = await execute('run_k8s_two_', version.hash)
       expect(second.error).toBeUndefined()
-      expect(second.events).toContainEqual({ type: 'task', task: 'build', state: 'cached' })
-      expect(second.events).not.toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+      expect(second.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'cached' }))
+      expect(second.events).not.toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' })
+      )
       expect(second.text).toContain('read hello from the checkout')
     })
   )

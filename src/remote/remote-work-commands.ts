@@ -5,7 +5,7 @@ import { getAccessToken } from './credentials'
 import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Bundle, HASH_PATTERN } from './bundle'
-import { callServer, printable } from './server-client'
+import { callServer, printable, printableWhole } from './server-client'
 import { diffBundles } from './text-diff'
 
 export interface WorkCommandContext {
@@ -84,6 +84,7 @@ interface PlanView {
   runtime: string
   image?: string
   cmds: string[]
+  network?: unknown
   deps: string[]
   needs: string[]
   accounts: string[]
@@ -106,7 +107,10 @@ function describe(run: ApprovalView): string[] {
             run.source.clean ? 'unchanged' : `with changes, files ${run.source.tree}`
           } (files .gitignore leaves out are not shown)`
         : `snapshot ${run.source.snapshot}`
-  const options = Object.entries(run.options)
+  // the arguments are shown whole on a line of their own, each as a JSON string,
+  // so commas, spaces and quotes inside one stay visible
+  const { args, ...settings } = run.options
+  const options = Object.entries(settings)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)
     .join(' ')
   return [
@@ -118,6 +122,9 @@ function describe(run: ApprovalView): string[] {
     `  accounts: ${run.accounts.length > 0 ? run.accounts.map(printable).join(', ') : 'none'}, source ${printable(
       source
     )}${options ? `, ${printable(options)}` : ''}`,
+    ...(Array.isArray(args) && args.length > 0
+      ? [`  arguments: ${args.map((arg) => printableWhole(JSON.stringify(arg))).join(' ')}`]
+      : []),
     ...(run.approvals ?? []).map(
       (approval) =>
         `  ${printable(approval.account)}: ${
@@ -149,7 +156,11 @@ function describePlan(plan: Record<string, PlanView>): string[] {
     `  ${colors.bold(printable(name))}  ${entry.kind}, ${printable(entry.runtime)}${
       entry.image ? ` ${printable(entry.image)}` : ''
     }${entry.flags.length > 0 ? `  [${entry.flags.map(printable).join(', ')}]` : ''}`,
-    ...entry.cmds.map((cmd) => `    $ ${printable(cmd)}`),
+    // a command is what is decided on: shown whole, however long
+    ...entry.cmds.map((cmd) => `    $ ${printableWhole(cmd)}`),
+    ...(entry.network !== undefined && entry.network !== 'open'
+      ? [`    network: ${printable(typeof entry.network === 'string' ? entry.network : JSON.stringify(entry.network))}`]
+      : []),
     ...(entry.deps.length > 0 ? [`    after: ${entry.deps.map(printable).join(', ')}`] : []),
     ...(entry.needs.length > 0 ? [`    needs: ${entry.needs.map(printable).join(', ')}`] : []),
     ...entry.secrets.map(

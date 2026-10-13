@@ -26,6 +26,21 @@ function git(cwd: string, ...args: string[]): void {
   })
 }
 
+// a run process that tells the network it was asked to run with
+const TELLING_WORKER = [
+  process.execPath,
+  '-e',
+  [
+    'let text = ""',
+    'process.stdin.on("data", (chunk) => (text += chunk))',
+    'process.stdin.on("end", () => {',
+    '  const network = JSON.stringify(JSON.parse(text).network)',
+    '  console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: network } }))',
+    '  console.log(JSON.stringify({ kind: "result", ok: true }))',
+    '})',
+  ].join('\n'),
+]
+
 describe('HostExecutor', () => {
   let root: string
   let repository: string
@@ -125,8 +140,8 @@ describe('HostExecutor', () => {
     expect(logs.join('\n')).toContain('hello')
     expect(logs.join('\n')).toContain('published')
     expect(logs.join('\n')).not.toContain('from-the-repository')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'running' })
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'running' }))
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
   })
 
   it('does not hand its own environment to the commands', async () => {
@@ -157,7 +172,7 @@ describe('HostExecutor', () => {
     const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
     expect(text).toContain('token=')
     expect(text).not.toContain('the-token-value')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
   })
 
   it('refuses a run that would use an account it was not admitted for, before anything starts', async () => {
@@ -177,13 +192,86 @@ describe('HostExecutor', () => {
     expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
 
+  it('appends the arguments of the run to the last command of its task', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo first, cat]\n' })
+    const { events, error } = await execute(run(hash, { options: { args: ['input.txt'] } }))
+    expect(error).toBeUndefined()
+    expect(events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')).toContain('hello')
+  })
+
+  it('refuses arguments for a task that reads secrets, before anything starts', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    secrets:',
+        '      - { from: "echo:x", account: ci, env: TOKEN }',
+        '    cmds: [echo started]',
+        '',
+      ].join('\n'),
+    })
+    const { events, error } = await execute(run(hash, { accounts: ['ci'], options: { args: ['$TOKEN'] } }))
+    expect(error?.message).toBe(
+      'build reads the secret TOKEN, it takes no arguments on a server: an argument could make it print them'
+    )
+    expect(events).toEqual([])
+  })
+
+  it('hands runs.network to the process of the run, and refuses what reaches more', async () => {
+    const limited: PlanContext = {
+      ...options.planning,
+      policy: { ...options.planning.policy, network: { type: 'allow', hosts: ['registry.npmjs.org'] } },
+    }
+    const network = new DefinitionStore(join(root, 'limited'), limited.environment, { policy: limited.policy })
+    const yaml = (setting: string) =>
+      `tasks:\n  build:\n    image: node:22\n    network: ${setting}\n    cmds: [npm ci]\n`
+    const { version } = await network.publish(
+      'payments',
+      { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': yaml('none') } },
+      alice
+    )
+    const telling = new HostExecutor({
+      ...options,
+      definitions: network,
+      planning: limited,
+      worker: TELLING_WORKER,
+    })
+    const events: RunEventData[] = []
+    await telling.execute(run(version.hash), { emit: (e) => events.push(e), signal: new AbortController().signal })
+    expect(events).toContainEqual({
+      type: 'log',
+      task: 't',
+      stream: 'stdout',
+      text: JSON.stringify({ allow: ['registry.npmjs.org'] }),
+    })
+
+    // a version published before the server limited its runs does not run with more
+    const open = await publish({ '.hammerkit.yaml': yaml('open') })
+    const before = new HostExecutor({ ...options, planning: limited })
+    const refused = await before
+      .execute(run(open), { emit: () => undefined, signal: new AbortController().signal })
+      .then(
+        () => undefined,
+        (e: Error) => e
+      )
+    expect(refused?.message).toContain('build: asks for network open, more than this server allows')
+  })
+
   it('fails the run when a task fails, with the task and its output', async () => {
     const hash = await publish({
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo broken >&2\n      - exit 3\n',
     })
     const { events, error } = await execute(run(hash))
     expect(error?.message).toBe('build failed')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'failed' })
+    // the exit code of the command that failed (on Windows the redirection fails first,
+    // run-worker.spec.ts checks the value), and how long it ran
+    expect(events).toContainEqual({
+      type: 'task',
+      task: 'build',
+      state: 'failed',
+      exitCode: expect.any(Number),
+      durationMs: expect.any(Number),
+    })
   })
 
   it('runs the tasks in the order they were named, and stops at the first failure', async () => {
@@ -203,10 +291,10 @@ describe('HostExecutor', () => {
     })
     const first = await execute(run(hash, { id: 'run_one' }))
     expect(first.error).toBeUndefined()
-    expect(first.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(first.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
     const second = await execute(run(hash, { id: 'run_two' }))
     expect(second.error).toBeUndefined()
-    expect(second.events).toContainEqual({ type: 'task', task: 'build', state: 'cached' })
+    expect(second.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'cached' }))
   })
 
   it('runs the tasks a label selects', async () => {
@@ -216,7 +304,7 @@ describe('HostExecutor', () => {
     })
     const { events, error } = await execute(run(hash, { tasks: [], options: { filter: ['group=ci'] } }))
     expect(error).toBeUndefined()
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
     expect(events.filter((e) => e.type === 'task' && e.task === 'other')).toEqual([])
   })
 
@@ -467,6 +555,28 @@ describe('HostExecutor', () => {
       expect(containers.error?.message).toMatch(/runs on the local runtime, which this server does not allow/)
       const closed = await executeWith(onSandbox(['docker', 'local'], 'none'), sandboxRun(hash))
       expect(closed.error?.message).toMatch(/--network none needs every task in a container/)
+    })
+
+    it('keeps a sandbox run under runs.network as well as sandboxes.network', async () => {
+      const ceiling: NetworkSchema = { allow: ['registry.npmjs.org'] }
+      const policy = { ...options.planning.policy, network: { type: 'allow' as const, hosts: ['registry.npmjs.org'] } }
+      const limited = new HostExecutor({
+        ...options,
+        planning: { ...options.planning, policy },
+        worker: TELLING_WORKER,
+        sandboxes: { registry: sandboxes, policy: { ...policy, runtimes: ['docker', 'local'] }, network: 'open' },
+      })
+      const yaml = (setting: string) =>
+        `tasks:\n  build:\n    image: node:22\n    network: ${setting}\n    cmds: [npm ci]\n`
+      const { events, error } = await executeWith(
+        limited,
+        sandboxRun(await publish({ '.hammerkit.yaml': yaml('none') }))
+      )
+      expect(error).toBeUndefined()
+      expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: JSON.stringify(ceiling) })
+
+      const open = await executeWith(limited, sandboxRun(await publish({ '.hammerkit.yaml': yaml('open') })))
+      expect(open.error?.message).toMatch(/more than this server allows/)
     })
 
     it('keeps the cache of a sandbox run apart from runs of the repository, one per owner', async () => {

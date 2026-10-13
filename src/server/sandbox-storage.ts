@@ -211,11 +211,11 @@ export class HostSandboxStorage implements SandboxStorage {
     try {
       const original = join(root, 'git', 'index')
       await copyFile(original, index).then(
-        // with the time of the index: git trusts what it lists of a file written in the same
-        // tick only when the index is older, and a copy made now is not
+        // with the time of the index: git takes a file changed in the same second as it was
+        // written for changed only when the index is no newer than the file (racy git)
         async () => {
-          const { atime, mtime } = await stat(original)
-          await utimes(index, atime, mtime)
+          const stats = await stat(original)
+          await utimes(index, stats.atime, stats.mtime)
         },
         () => undefined
       )

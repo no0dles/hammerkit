@@ -16,7 +16,8 @@ The published build file always runs. A sandbox only supplies the files: its own
 
 This page covers creating, listing, moving, deleting, running on sandboxes, reading,
 searching and editing their files, and pushing their changes, on a host and on a
-[Kubernetes backend](#on-kubernetes).
+[Kubernetes backend](#on-kubernetes). [Agents](/docs/remote-compute/agents) covers the
+clients that let a coding agent work on one.
 
 </Callout>
 
@@ -128,8 +129,9 @@ A run names the sandbox as its `source`, the rest of the request is a normal
   server and could read every other sandbox on the machine, so `local` has to be listed
   there by name, and in `runtimes`.
 * **Network.** No task or service of a run on a sandbox reaches more than
-  `sandboxes.network`, `none` by default: only the services it needs. A build file can
-  narrow it, never widen it, see [network limits](/docs/task/network).
+  `sandboxes.network`, `none` by default: only the services it needs, nor more than
+  [`runs.network`](/docs/remote-compute/runs#config), which holds for every run. A build
+  file can narrow it, never widen it, see [network limits](/docs/task/network).
 * **Variables.** An `env:` secret of a run on a sandbox reads only what
   `sandboxes.env.allow` lists, nothing by default: the code that would read it is nobody's
   reviewed code.
@@ -409,7 +411,7 @@ is `409` too.
 
 | Status | When |
 | --- | --- |
-| `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start or end with `.` or end with `.lock`). |
+| `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start with `.` or `-`, or end with `.` or `.lock`). |
 | `403` | The branch is not in `push.branches`, the server does not push to the repository at all, or as for a fetch, the caller has no `sandboxes: true` or the repository any more. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |

@@ -6,7 +6,7 @@ import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { TEST_WORKER } from '../testing/worker'
-import { readServerConfig } from './server-config'
+import { readServerConfig, ServerConfig } from './server-config'
 import { RunExecutor } from './runs'
 import { startServer } from './server'
 import { author } from './sandboxes-api'
@@ -78,6 +78,8 @@ interface Api {
   log: string[]
   // where the files of a sandbox are on the server
   files: (id: string) => string
+  // the entitlements the server reads from now on
+  entitle: (change: (entitlements: ServerConfig['entitlements']) => ServerConfig['entitlements']) => void
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -126,7 +128,8 @@ describe('sandboxes api', () => {
         )
         const log: string[] = []
         const serverEnv = { ...env, processEnvs: { ...process.env } }
-        const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
+        const config = await readServerConfig(serverEnv, file)
+        const server = await startServer(config, serverEnv, {
           log: (line) => log.push(line),
           executor,
           repos: { url: () => repository },
@@ -161,6 +164,9 @@ describe('sandboxes api', () => {
             hash: (await published.json()).hash,
             log,
             files: (id) => join(cwd, 'server-data', 'sandboxes', 'files', id, 'files'),
+            entitle: (change) => {
+              server.reload({ ...config, entitlements: change(config.entitlements) })
+            },
           })
         } finally {
           await server.close()
@@ -490,6 +496,21 @@ describe('sandboxes api', () => {
       // what is left to push is measured from the pushed commit
       expect(await (await api.call('GET', `${base}/changes`)).json()).toEqual({ commit, files: [] })
       expect(api.log.some((line) => line.startsWith(`sandbox push ${sandbox.id} iss=`))).toBe(true)
+
+      // a caller who lost the repository, or sandboxes, pushes no more
+      const again = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'agent', new_string: 'again' }] },
+      })
+      expect(again.status).toBe(200)
+      const alice = (entitlement: ServerConfig['entitlements'][number]) => entitlement.subject?.sub === 'alice'
+      api.entitle((entitlements) => entitlements.map((e) => (alice(e) ? { ...e, repos: ['github.com/other/*'] } : e)))
+      const lostRepo = await push({ branch: 'agent/two', message: 'Agent work' })
+      expect(lostRepo.status).toBe(403)
+      api.entitle((entitlements) => entitlements.map((e) => (alice(e) ? { ...e, sandboxes: false } : e)))
+      const lostSandboxes = await push({ branch: 'agent/two', message: 'Agent work' })
+      expect(lostSandboxes.status).toBe(403)
+      expect((await lostSandboxes.json()).error).toBe('you are not entitled to keep sandboxes on this server')
+      expect(git('branch', '--list', 'agent/two')).toBe('')
     })
   })
 })

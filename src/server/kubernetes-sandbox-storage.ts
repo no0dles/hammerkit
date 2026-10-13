@@ -163,6 +163,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         kubeConfig: access.kubeConfig,
         context: access.context,
         httpRoutes: [],
+        networkPolicyEnforced: true,
       })
     this.namespaces = new CallerNamespaces(this.instance, config.backend)
     this.server = createHash('sha256')

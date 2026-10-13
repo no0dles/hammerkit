@@ -83,14 +83,22 @@ or an agent sees `deploy` uses `op-payments-prod` before anything runs:
 "plan": {
   "deploy": {
     "kind": "task", "runtime": "docker", "image": "node:22",
-    "cmds": ["./deploy.sh"], "deps": [], "needs": [],
+    "cmds": ["./deploy.sh"], "command": "./deploy.sh", "network": "open",
+    "deps": [], "needs": [],
     "accounts": ["op-payments-prod"],
     "secrets": [{ "from": "gsm:kube-token", "account": "op-payments-prod", "target": "KUBE_TOKEN" }],
+    "serverEnvs": [],
     "mounts": [], "ports": [], "generates": [],
     "flags": ["local-task"]
   }
 }
 ```
+
+`command` is the last command of a task (the `cmd` of a service), where a run's
+[arguments](/docs/remote-compute/runs#arguments) land; `null` when there is none.
+`serverEnvs` are the variables of the server its `envs` read (`$NAME`, `${NAME}`).
+`network` is what it reaches besides its needs, as the build file declares it (`open`
+when it declares nothing). Versions published before these were recorded have neither.
 
 The plan never holds a value of a secret, only where it is read from. `flags` are what a
 reviewer looks at first: `local-task` (it runs on the host, not in a container),
@@ -119,6 +127,7 @@ task) when it
   or a home directory, or has a `src` or `generates` outside of it (the server would copy its
   own files into the task),
 * has a task on a runtime that `runtimes` does not allow,
+* has a task or service whose `network` reaches more than [`runs.network`](/docs/remote-compute/runs#network) allows,
 * declares `secretProviders` or `secretAccounts`, reads a `file:` secret, reads an `env:`
   secret the server does not list in `runs.env.allow`, or reads a secret as the account
   that reads repositories (see [Accounts](/docs/remote-compute/accounts) and [Sources](/docs/remote-compute/sources)).

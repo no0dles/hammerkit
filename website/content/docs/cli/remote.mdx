@@ -52,6 +52,7 @@ so they work with or without a build file in the working directory.
 | `remote yank <name@hash> [server]` | Pull a published version back: no run starts from it and it is not `latest`. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
 | `remote unyank <name@hash> [server]` | Let a yanked version go on. Needs `builds: publish`. |
 | `remote reject <run or name@hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
+| `remote mcp` | Serve a sandbox on a server as MCP tools over stdio for a coding agent, see [remote mcp](/docs/cli/remote-mcp). |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
 name at a different server pass `--force`, so a typo can't silently redirect your
@@ -189,6 +190,14 @@ $ hammerkit remote show run_Qx3k9ZpL2mW7vN4a build
 The line `look at:` of the list names the tasks with a flag: `local-task` runs on the host
 and not in a container, `host-port` binds a port of the host and `remote-include`
 includes a file from git. A secret's value is never shown, only where it is read from.
+
+A run that passes [arguments](/docs/remote-compute/runs#arguments) lists them on a line
+of their own, each as a JSON string (`arguments: "--region" "eu, us"`), and `remote show`
+prints its task's last command with them appended, as it runs. Arguments and commands are
+never cut; other text longer than 300 characters ends in `… (+N chars)`. Control
+characters show as `?`, and bidi and zero-width characters are written out
+(`\u{202e}`), so what you read is the order it runs in. A task that isn't `open` shows
+its `network`.
 
 What you see is what the decision rests on: who asked, which version of which build
 file, the tasks, the service accounts they read secrets as and where the code comes

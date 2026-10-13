@@ -110,7 +110,9 @@ export async function resolveRef(
 export function isValidBranch(branch: string): boolean {
   return (
     isValidRef(branch) &&
-    branch.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.') && !part.endsWith('.lock'))
+    branch
+      .split('/')
+      .every((part) => !part.startsWith('.') && !part.startsWith('-') && !part.endsWith('.') && !part.endsWith('.lock'))
   )
 }
 

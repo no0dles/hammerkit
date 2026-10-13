@@ -184,6 +184,7 @@ export class KubernetesExecutor implements RunExecutor {
       kubeConfig: this.access.kubeConfig,
       context: this.access.context,
       httpRoutes: [],
+      networkPolicyEnforced: true,
     })
     const namespace = config.backend.namespace ?? readInClusterNamespace()
     if (!namespace) {
@@ -236,6 +237,9 @@ export class KubernetesExecutor implements RunExecutor {
           context: this.access.context,
           httpRoutes: [],
           storageClass: backend.storageClass,
+          // the backend isolates callers with NetworkPolicy, so it needs a cluster that
+          // enforces it, and the limits of a task's network hold there too
+          networkPolicyEnforced: true,
           server: {
             run: run.id,
             namespace: this.namespace,

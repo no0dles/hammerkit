@@ -7,11 +7,19 @@ const WRITE_TIMEOUT_MS = 30_000
 export class ServerError extends Error {}
 
 // Text from the server or the identity provider is shown to the user: no
-// control characters, so it can't rewrite the terminal.
+// control characters, so it can't rewrite the terminal, and format characters
+// (bidi overrides, zero-width) written out, so text reads in the order it runs.
+// Long text is cut, and says how much was.
 export function printable(value: unknown): string {
+  const text = printableWhole(value)
+  return text.length > 300 ? `${text.slice(0, 300)}… (+${text.length - 300} chars)` : text
+}
+
+// The same, never cut: for what somebody decides on, such as a command.
+export function printableWhole(value: unknown): string {
   return String(value)
     .replace(/\p{Cc}/gu, '?')
-    .slice(0, 300)
+    .replace(/\p{Cf}/gu, (char) => `\\u{${char.codePointAt(0)?.toString(16)}}`)
 }
 
 async function getJson(url: string, token?: string): Promise<unknown> {

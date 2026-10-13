@@ -1,10 +1,18 @@
-import { V1Deployment, V1EnvVar, V1HostAlias, V1NetworkPolicy, V1Service } from '@kubernetes/client-node'
+import {
+  V1Deployment,
+  V1EnvVar,
+  V1HostAlias,
+  V1LabelSelector,
+  V1NetworkPolicy,
+  V1NetworkPolicyIngressRule,
+  V1Service,
+} from '@kubernetes/client-node'
 import { PassThrough, Writable } from 'stream'
 import { createInterface } from 'readline'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
 import { ContainerWorkTask } from '../planner/work-task'
-import { ContainerWorkService } from '../planner/work-service'
+import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
 import { getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
 import { KubernetesInstance } from './kubernetes-instance'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
@@ -22,12 +30,20 @@ import {
   parseEgressProxyEvent,
 } from '../network/egress-proxy'
 import { getErrorMessage } from '../log'
-import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
+import { sleep } from '../utils/sleep'
+import { getRunId } from '../utils/run-id'
+import { getPodPlacement, getRunLabels, getRunLabelValue, RUN_LABEL } from './job-placement'
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
 const ID_LABEL = 'hammerkit.dev/id'
 const PROXY_LABEL = 'hammerkit.dev/proxy-for'
+const NETWORK_OF_LABEL = 'hammerkit.dev/network-of'
+const PROXY_READY_TIMEOUT_MS = 60000
+// how long the pods of an item may take to end before their policy goes
+const POD_END_TIMEOUT_MS = 120000
+const POD_END_POLL_MS = 500
+
 // on the pods of a limited item on a server: its own policy governs their egress, the
 // one of the caller's namespace (see getNamespacePolicies) leaves them out
 export const NETWORK_LABEL = 'hammerkit.dev/network'
@@ -45,22 +61,72 @@ export interface KubernetesItemNetwork {
   close(): void
 }
 
-// Names short enough for a Service (63 characters), whatever the item is called.
-export function getProxyName(item: ContainerItem): string {
-  return `hammerkit-proxy-${item.id()}`
+// Whose pods a policy and proxy are for. A task's are per run (`run`), so
+// concurrent runs never replace or remove each other's limits; a service has
+// one Deployment, so one of each.
+export interface KubernetesNetworkScope {
+  run: string | null
 }
 
-export function getNetworkPolicyName(item: ContainerItem): string {
-  return `hammerkit-network-${item.id()}`
+// The scope of a task's limits: the run's label on a server, which the server puts on
+// everything of the run, so the policy selects the pods it labelled; this process's run
+// elsewhere.
+export function getTaskNetworkScope(env: WorkKubernetesEnvironment): KubernetesNetworkScope {
+  return { run: env.server ? getRunLabelValue(env.server.run) : getRunId() }
+}
+
+// A key short enough for a Service name (63 characters) with its prefix.
+function getNetworkKey(item: ContainerItem, scope: KubernetesNetworkScope): string {
+  return scope.run ? `${item.id().substring(0, 32)}-${scope.run.substring(0, 12)}` : item.id()
+}
+
+export function getProxyName(item: ContainerItem, scope: KubernetesNetworkScope): string {
+  return `hammerkit-proxy-${getNetworkKey(item, scope)}`
+}
+
+export function getNetworkPolicyName(item: ContainerItem, scope: KubernetesNetworkScope): string {
+  return `hammerkit-network-${getNetworkKey(item, scope)}`
+}
+
+// the pods of the item, of the run when the scope has one
+function getItemPodLabels(item: ContainerItem, scope: KubernetesNetworkScope): { [key: string]: string } {
+  return { [ID_LABEL]: item.id(), ...(scope.run ? { [RUN_LABEL]: scope.run } : {}) }
+}
+
+function toSelector(labels: { [key: string]: string }): string {
+  return Object.entries(labels)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(',')
+}
+
+// Who may connect to a limited item: the items that need it, and for a
+// service a Gateway API route of the environment, the cluster's equivalent
+// of a published port. A task takes no connections.
+function getIngress(env: WorkKubernetesEnvironment, item: ContainerItem): V1NetworkPolicyIngressRule[] {
+  if (!isContainerWorkService(item.data)) {
+    return []
+  }
+  if (env.httpRoutes.some((route) => route.service === item.name)) {
+    return [{}]
+  }
+  const ids = [...new Set(item.requiredBy.map((requirer) => requirer.id()))]
+  if (ids.length === 0) {
+    return []
+  }
+  const from: V1LabelSelector = { matchExpressions: [{ key: ID_LABEL, operator: 'In', values: ids }] }
+  // the client's name for `from`, a reserved word
+  return [{ _from: [{ podSelector: from }] }]
 }
 
 // The NetworkPolicy of a limited item: egress to the pods of the services it
 // needs and, under `allow`, to its proxy; nothing else, DNS included (needs
-// and the proxy are host aliases). An open item has none.
+// and the proxy are host aliases). Ingress only from what needs it. An open
+// item has none.
 export function buildNetworkPolicy(
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
-  network: WorkNetwork
+  network: WorkNetwork,
+  scope: KubernetesNetworkScope
 ): V1NetworkPolicy & KubernetesObjectHeader {
   const needs = item.needs.filter((need) => isContainerWorkServiceItem(need.service))
   return {
@@ -68,13 +134,14 @@ export function buildNetworkPolicy(
     kind: 'NetworkPolicy',
     metadata: {
       namespace: env.namespace,
-      name: getNetworkPolicyName(item),
+      name: getNetworkPolicyName(item, scope),
       annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { 'hammerkit.dev/network-of': item.id(), ...getRunLabels(env) },
+      labels: { [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) },
     },
     spec: {
-      podSelector: { matchLabels: { [ID_LABEL]: item.id() } },
-      policyTypes: ['Egress'],
+      podSelector: { matchLabels: getItemPodLabels(item, scope) },
+      policyTypes: ['Ingress', 'Egress'],
+      ingress: getIngress(env, item),
       egress: [
         ...(needs.length > 0
           ? [{ to: needs.map((need) => ({ podSelector: { matchLabels: { [ID_LABEL]: need.service.id() } } })) }]
@@ -82,7 +149,7 @@ export function buildNetworkPolicy(
         ...(network.type === 'allow'
           ? [
               {
-                to: [{ podSelector: { matchLabels: { [PROXY_LABEL]: item.id() } } }],
+                to: [{ podSelector: { matchLabels: { [PROXY_LABEL]: getNetworkKey(item, scope) } } }],
                 ports: [{ protocol: 'TCP', port: EGRESS_PROXY_PORT }],
               },
             ]
@@ -92,39 +159,79 @@ export function buildNetworkPolicy(
   }
 }
 
+// The proxy takes connections from its item's pods only, so no other pod
+// uses its allow list or reaches the item's services through it.
+export function buildProxyPolicy(
+  env: WorkKubernetesEnvironment,
+  item: ContainerItem,
+  scope: KubernetesNetworkScope
+): V1NetworkPolicy & KubernetesObjectHeader {
+  return {
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: {
+      namespace: env.namespace,
+      name: getProxyName(item, scope),
+      annotations: { 'hammerkit.dev/version': getVersion() },
+      labels: { [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) },
+    },
+    spec: {
+      podSelector: { matchLabels: { [PROXY_LABEL]: getNetworkKey(item, scope) } },
+      policyTypes: ['Ingress'],
+      ingress: [
+        {
+          _from: [{ podSelector: { matchLabels: getItemPodLabels(item, scope) } }],
+          ports: [{ protocol: 'TCP', port: EGRESS_PROXY_PORT }],
+        },
+      ],
+    },
+  }
+}
+
 // What the item's pods are created with, after its policy (and proxy) are in
-// place, so a pod never runs unlimited. An open item gets what it had before:
-// whatever an earlier limited run left goes.
+// place, so a pod never runs unlimited. A limited item needs an environment
+// that states its cluster enforces NetworkPolicy: hammerkit can't tell from
+// the API, and a policy nobody enforces would run the item open.
+// An open service gets what it had before: whatever an earlier limited run
+// left goes.
 // A task follows the proxy's log while its jobs run. A service outlives the
 // run on a cluster, so its refused hosts are in the proxy's own log.
 export async function ensureKubernetesItemNetwork(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
-  options: { followLog: boolean }
+  options: { followLog: boolean } & KubernetesNetworkScope
 ): Promise<KubernetesItemNetwork> {
   const network = getEffectiveNetwork(item.data)
+  if (network.type !== 'open' && !env.networkPolicyEnforced) {
+    throw new Error(
+      `${item.name}: network ${network.type} needs a cluster that enforces NetworkPolicy, ` +
+        'state it with networkPolicy: enforced on the kubernetes environment'
+    )
+  }
   const hostAliases = await getNeedHostAliases(instance, env, item)
   if (network.type === 'open') {
-    // without the rights to manage NetworkPolicies, hammerkit never made one
-    await removeKubernetesItemNetwork(instance, env, item, { ignoreForbidden: true })
+    if (!options.run) {
+      // without the rights to manage NetworkPolicies, hammerkit never made one
+      await removeKubernetesItemNetwork(instance, env, item, { run: null }, { ignoreForbidden: true })
+    }
     return { env: [], hostAliases, close() {} }
   }
 
-  await apply(instance, buildNetworkPolicy(env, item, network))
+  await apply(instance, buildNetworkPolicy(env, item, network, options))
   if (network.type === 'none') {
-    await removeProxy(instance, env, item, [404])
+    await removeProxy(instance, env, item, options, [404])
     return { env: [], hostAliases, close() {} }
   }
 
   let proxyIp: string
   try {
-    proxyIp = await ensureProxy(instance, env, item, network.hosts, hostAliases)
+    proxyIp = await ensureProxy(instance, env, item, network.hosts, hostAliases, options)
   } catch (e) {
-    await removeKubernetesItemNetwork(instance, env, item).catch(() => undefined)
+    await removeKubernetesItemNetwork(instance, env, item, options).catch(() => undefined)
     throw e
   }
-  const follow = options.followLog ? await followProxyLog(instance, env, item) : null
+  const follow = options.followLog ? await followProxyLog(instance, env, item, options) : null
   return {
     env: Object.entries(getProxyClientEnvironment(item.needs.map((need) => need.name))).map(([name, value]) => ({
       name,
@@ -135,10 +242,14 @@ export async function ensureKubernetesItemNetwork(
   }
 }
 
+// The policy and proxy of the scope go only once no pod of it runs anymore:
+// a pod that is still terminating (cancel, timeout, `down`) would otherwise
+// run without limits. When pods outlast the wait, the policy stays.
 export async function removeKubernetesItemNetwork(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
+  scope: KubernetesNetworkScope,
   options: { ignoreForbidden: boolean } = { ignoreForbidden: false }
 ): Promise<void> {
   const ignored = options.ignoreForbidden ? [403, 404] : [404]
@@ -146,11 +257,91 @@ export async function removeKubernetesItemNetwork(
     instance.objectApi.delete({
       apiVersion: 'networking.k8s.io/v1',
       kind: 'NetworkPolicy',
-      metadata: { name: getNetworkPolicyName(item), namespace: env.namespace },
+      metadata: { name: getNetworkPolicyName(item, scope), namespace: env.namespace },
     }),
     ignored
   )
-  await removeProxy(instance, env, item, ignored)
+  await removeProxy(instance, env, item, scope, ignored)
+}
+
+// Waits until no pod with the labels runs or waits to run.
+export async function awaitPodsEnded(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  labels: { [key: string]: string },
+  timeout = POD_END_TIMEOUT_MS
+): Promise<boolean> {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    const pods = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: toSelector(labels),
+    })
+    if (pods.items.every((pod) => pod.status?.phase === 'Succeeded' || pod.status?.phase === 'Failed')) {
+      return true
+    }
+    if (Date.now() >= deadline) {
+      return false
+    }
+    await sleep(POD_END_POLL_MS)
+  }
+}
+
+// Removes the scope's policy and proxy once its pods ended.
+export async function releaseKubernetesItemNetwork(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  item: ContainerItem,
+  scope: KubernetesNetworkScope
+): Promise<void> {
+  if (!(await awaitPodsEnded(instance, env, getItemPodLabels(item, scope)))) {
+    throw new Error(`pods of ${item.name} are still running, so its network policy stays`)
+  }
+  await removeKubernetesItemNetwork(instance, env, item, scope)
+}
+
+// Every policy and proxy of the item, of any run, once none of its pods runs:
+// what `down` and `clean` remove.
+export async function removeAllKubernetesItemNetworks(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  item: ContainerItem
+): Promise<void> {
+  if (!(await awaitPodsEnded(instance, env, { [ID_LABEL]: item.id() }))) {
+    throw new Error(`pods of ${item.name} are still running, so its network policy stays`)
+  }
+  const labelSelector = `${NETWORK_OF_LABEL}=${item.id()}`
+  let policies: V1NetworkPolicy[]
+  try {
+    const list = await instance.objectApi.list<V1NetworkPolicy & KubernetesObjectHeader>(
+      'networking.k8s.io/v1',
+      'NetworkPolicy',
+      env.namespace,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      labelSelector
+    )
+    policies = list.items
+  } catch (e) {
+    // without the rights to manage NetworkPolicies, hammerkit never made one
+    if (statusCodeOf(e) === 403) {
+      return
+    }
+    throw e
+  }
+  for (const policy of policies) {
+    await ignoreStatus(instance.objectApi.delete(policy), [404])
+  }
+  const deployments = await instance.appsApi.listNamespacedDeployment({ namespace: env.namespace, labelSelector })
+  for (const deployment of deployments.items) {
+    const name = deployment.metadata?.name
+    if (name) {
+      await ignoreStatus(instance.appsApi.deleteNamespacedDeployment({ name, namespace: env.namespace }), [404])
+      await ignoreStatus(instance.coreApi.deleteNamespacedService({ name, namespace: env.namespace }), [404])
+    }
+  }
 }
 
 // the services the item needs, by the names it lists them under
@@ -173,23 +364,24 @@ async function getNeedHostAliases(
   return hostAliases
 }
 
-// The proxy as a Deployment and a Service; its pods reach out without a policy
-// of their own, and reach the needed services by name for tools that ignore
-// NO_PROXY.
+// The proxy as a Deployment and a Service; its pods reach out without an
+// egress policy of their own, and reach the needed services by name for tools
+// that ignore NO_PROXY. Unprivileged, from a pinned image.
 async function ensureProxy(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
   hosts: string[],
-  hostAliases: V1HostAlias[]
+  hostAliases: V1HostAlias[],
+  scope: KubernetesNetworkScope
 ): Promise<string> {
-  const name = getProxyName(item)
-  const labels = { [PROXY_LABEL]: item.id() }
+  const name = getProxyName(item, scope)
+  const labels = { [PROXY_LABEL]: getNetworkKey(item, scope) }
   const metadata = {
     namespace: env.namespace,
     name,
     annotations: { 'hammerkit.dev/version': getVersion() },
-    labels: { ...labels, ...getRunLabels(env) },
+    labels: { ...labels, [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) },
   }
   // on a server the proxy runs on the nodes of the first pool, without a token
   const placement = env.server ? getPodPlacement(env.server, undefined) : null
@@ -204,13 +396,8 @@ async function ensureProxy(
         metadata: { labels: { ...labels, ...getRunLabels(env) } },
         spec: {
           hostAliases,
-          ...(placement
-            ? {
-                automountServiceAccountToken: false,
-                nodeSelector: placement.nodeSelector,
-                tolerations: placement.tolerations,
-              }
-            : {}),
+          automountServiceAccountToken: false,
+          ...(placement ? { nodeSelector: placement.nodeSelector, tolerations: placement.tolerations } : {}),
           containers: [
             {
               name: 'proxy',
@@ -220,8 +407,27 @@ async function ensureProxy(
                 ([key, value]) => ({ name: key, value })
               ),
               ports: [{ containerPort: EGRESS_PROXY_PORT }],
-              readinessProbe: { tcpSocket: { port: EGRESS_PROXY_PORT }, periodSeconds: 1 },
-              ...getContainerSecurity(env),
+              // in the pod, since its ingress policy may keep the kubelet out
+              readinessProbe: {
+                exec: {
+                  command: [
+                    'node',
+                    '-e',
+                    `require('net').connect(${EGRESS_PROXY_PORT}, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))`,
+                  ],
+                },
+                periodSeconds: 2,
+              },
+              securityContext: {
+                runAsNonRoot: true,
+                // the image's `node` user
+                runAsUser: 1000,
+                allowPrivilegeEscalation: false,
+                readOnlyRootFilesystem: true,
+                capabilities: { drop: ['ALL'] },
+                ...(env.server ? { seccompProfile: { type: 'RuntimeDefault' } } : {}),
+              },
+              resources: { limits: { memory: '256Mi' } },
             },
           ],
         },
@@ -238,12 +444,13 @@ async function ensureProxy(
       ports: [{ port: EGRESS_PROXY_PORT, targetPort: EGRESS_PROXY_PORT }],
     },
   }
+  await apply(instance, buildProxyPolicy(env, item, scope))
   await apply(instance, deployment)
   const created = await apply(instance, service)
   await awaitDeployRunningState(instance, env, name, {
-    podSelector: `${PROXY_LABEL}=${item.id()}`,
-    timeout: null,
-    timeoutMessage: '',
+    podSelector: toSelector(labels),
+    timeout: PROXY_READY_TIMEOUT_MS,
+    timeoutMessage: `the egress proxy of ${item.name} did not start`,
   })
   const ip = created.spec?.clusterIP
   if (!ip) {
@@ -257,12 +464,13 @@ async function ensureProxy(
 async function followProxyLog(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
-  item: ContainerItem
+  item: ContainerItem,
+  scope: KubernetesNetworkScope
 ): Promise<AbortController | null> {
   try {
     const pods = await instance.coreApi.listNamespacedPod({
       namespace: env.namespace,
-      labelSelector: `${PROXY_LABEL}=${item.id()}`,
+      labelSelector: `${PROXY_LABEL}=${getNetworkKey(item, scope)}`,
     })
     const pod = pods.items.find((p) => p.status?.phase === 'Running' && !p.metadata?.deletionTimestamp)
     if (!pod?.metadata?.name) {
@@ -289,11 +497,20 @@ async function removeProxy(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
+  scope: KubernetesNetworkScope,
   ignored: number[]
 ) {
-  const name = getProxyName(item)
+  const name = getProxyName(item, scope)
   await ignoreStatus(instance.appsApi.deleteNamespacedDeployment({ name, namespace: env.namespace }), ignored)
   await ignoreStatus(instance.coreApi.deleteNamespacedService({ name, namespace: env.namespace }), ignored)
+  await ignoreStatus(
+    instance.objectApi.delete({
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: { name, namespace: env.namespace },
+    }),
+    ignored
+  )
 }
 
 async function ignoreStatus(promise: Promise<unknown>, statusCodes: number[]): Promise<void> {

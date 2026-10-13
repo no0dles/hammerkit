@@ -10,12 +10,13 @@ import { DefinitionStore } from './definitions'
 import { checkoutRef } from './git-checkout'
 import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
-import { PlanContext, planRun } from './run-plan'
+import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { PlanPolicy } from './plan'
 import { SandboxRegistry } from './sandboxes'
 import { SandboxClaim } from './sandbox-storage'
 import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
+import { limitNetwork, parseWorkNetwork, toNetworkSchema } from '../planner/work-network'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
@@ -148,6 +149,10 @@ export class HostExecutor implements RunExecutor {
     if (extra.length > 0) {
       throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
     }
+    const refused = refuseArguments(run, planned.plan)
+    if (refused) {
+      throw new Error(refused)
+    }
 
     const abortCtrl = new AbortController()
     const abort = () => abortCtrl.abort()
@@ -178,7 +183,11 @@ export class HostExecutor implements RunExecutor {
         }
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
         await this.writeBundle(cwd, bundle.files)
-        input = { entry: join(cwd, version.entry) }
+        // what the version was checked against at publish holds while it runs too
+        input = {
+          entry: join(cwd, version.entry),
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+        }
       } else {
         // the published files are read from a directory of the run and work on the
         // sandbox, whose own build files are just files
@@ -209,7 +218,12 @@ export class HostExecutor implements RunExecutor {
         await mkdir(published, { recursive: true })
         await this.writeBundle(published, bundle.files)
         cwd = published
-        input = { entry: join(published, version.entry), directory: { read: published, work }, network }
+        input = {
+          entry: join(published, version.entry),
+          directory: { read: published, work },
+          // a sandbox run stays under both the sandbox and the server's runs.network
+          network: toNetworkSchema(limitNetwork(parseWorkNetwork(network), planning.policy.network ?? null)),
+        }
       }
 
       const home = join(root, 'home')

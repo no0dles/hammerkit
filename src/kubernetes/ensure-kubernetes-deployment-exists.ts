@@ -35,7 +35,7 @@ export async function ensureKubernetesDeploymentExists(
   const envs = getEnvironmentVariables(service.data.envs)
   const name = getResourceName(service)
   const healthcheckCommand = getHealthcheckCommand(service.data)
-  const serviceCommand = getServiceCommand(service.data)
+  const serviceCommand = getServiceCommand(service.data, { kubernetes: true })
   const probe: V1Probe | undefined = healthcheckCommand
     ? {
         exec: {

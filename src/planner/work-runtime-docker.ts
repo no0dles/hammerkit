@@ -24,7 +24,7 @@ import { getWorkInstanceId } from './work-instance-id'
 import { Readable } from 'stream'
 import { getServiceDefinitionHash } from './service-definition'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
-import { getItemNetworkName, removeItemNetwork } from '../docker/item-network'
+import { removeItemNetworks } from '../docker/item-network'
 import { hostedRoot, refuseHostLinks } from '../executer/execution-steps'
 import { assertItemPathsWithinRoot } from './utils/assert-item-paths'
 import { getErrorMessage } from '../log'
@@ -56,6 +56,8 @@ export function dockerTaskRuntime(
       })
     },
     async restore(environment: Environment, path: string): Promise<void> {
+      // the restored outputs aren't the ones the record names any more
+      await removeContainerTaskState(environment, task)
       await restoreContainer(docker, environment, task, path)
     },
     async archive(environment: Environment, path: string): Promise<void> {
@@ -71,7 +73,7 @@ export function dockerTaskRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
-      await removeItemNetwork(docker, getItemNetworkName(task))
+      await removeItemNetworks(docker, task)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       if (environment.hosted) {
@@ -226,6 +228,8 @@ export function dockerServiceRuntime(
       if (currentService.Labels['hammerkit-definition'] !== getServiceDefinitionHash(service)) {
         service.status.write('info', `${service.name} changed since it was started, recreating it`)
         await removeContainer(docker.getContainer(currentService.Id))
+        // its network, proxy and relay go with it, whatever its new setting
+        await removeItemNetworks(docker, service)
         return
       }
 
@@ -252,7 +256,7 @@ export function dockerServiceRuntime(
       for (const container of containers) {
         await removeContainer(docker.getContainer(container.Id))
       }
-      await removeItemNetwork(docker, getItemNetworkName(service))
+      await removeItemNetworks(docker, service)
       await removeContainerSecrets(getWorkInstanceId(service))
     },
     async remove(): Promise<void> {

@@ -5,6 +5,7 @@
     "dependencies",
     "needs",
     "caching",
+    "arguments",
     "container",
     "network",
     "secrets",

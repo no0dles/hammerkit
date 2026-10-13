@@ -2,7 +2,7 @@
 
 **Created**: 2026-10-12
 
-**Status**: Design, not implemented (ADR-0011)
+**Status**: Implemented for Docker and Kubernetes environments, and `runs.network` on a server (ADR-0011). `sandboxes.network` of FR-009 comes with sandboxes (agent harness work item 5).
 
 **Input**: Every container task and service is on the docker default network and reaches whatever the host reaches. An agent's work (and an untrusted install script) should reach the services it needs and a package registry, not the rest of the network. Pascal decided it is a general feature for all tasks and services, with levels and a host allowlist in the first version, and that the services a task needs are always reachable.
 
@@ -26,8 +26,8 @@ The services in `needs` are always reachable, whatever the level: a task names t
 | Level | Reaches, besides its `needs` | Docker | Kubernetes |
 |---|---|---|---|
 | `open` (default) | everything the host reaches | default bridge, as today | no policy |
-| `allow: [hosts]` | HTTP(S) to the listed hosts | the item's internal network with its needed services, and a second internal network that only the item and its own egress proxy join; the proxy allows `CONNECT` by host name, and `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the needed services) are set for the item | ingress and egress `NetworkPolicy`: out to the item's proxy pod, its services' pods and DNS |
-| `none` | nothing | the item's internal network with the needed services attached by name; `NetworkMode: none` when there are none | ingress and egress `NetworkPolicy`: out to its services' pods and DNS only |
+| `allow: [hosts]` | HTTP(S) to the listed hosts | the item's internal network with its needed services, and a second internal network that only the item and its own egress proxy join; the proxy allows `CONNECT` by host name, and `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (the needed services) are set for the item | ingress and egress `NetworkPolicy`: out to the item's proxy pod and its services' pods, which are host aliases, so no DNS |
+| `none` | nothing | the item's internal network with the needed services attached by name; `NetworkMode: none` when there are none | ingress and egress `NetworkPolicy`: out to its services' pods only, no DNS |
 
 The internal networks are created with `com.docker.network.bridge.inhibit_ipv4=true`, so the gateway gives no route to the host: without it a container on an `Internal: true` network still reaches every host port bound to `0.0.0.0` (a host proxy, `dockerd` on :2375, databases). The names carry the run, so concurrent runs never share or remove each other's networks.
 
@@ -57,6 +57,24 @@ The internal networks are created with `com.docker.network.bridge.inhibit_ipv4=t
   - Docker 28 or later, for `inhibit_ipv4`, which also has the fix for CVE-2024-29018 (DNS forwarded from internal networks). A limited item on an older daemon, or on a Windows daemon, is an error before anything starts.
   - On Kubernetes, a CNI that enforces `NetworkPolicy`. Hammerkit can't tell from the API, so the environment (or a server's `backend`) states `networkPolicy: enforced`, and a limited item without it is an error.
   - On Kubernetes, the policy and proxy are named per run and removed only after the item's pods have terminated, so cancel, timeout and failure don't leave pods running without limits. The metadata range (`169.254.0.0/16`) is never allowed.
+
+## Implementation notes
+
+- **A network and a proxy per task or service, not per run.** Each item then has its own allow list without the proxy telling its clients apart, and one item's list never opens a host to another. An open item that needs a limited service joins that service's internal network (a link gives the name it needs it by); a limited item has the services it needs join its own, so a limited service never gains a route out through an open neighbour.
+- **Docker networks** are named `hammerkit-<instance id>-<run id>`. Under `allow` the item also joins `<name>-proxy`, where its proxy is the only other member. The proxy listens on its address on that network alone, so neither the services on the item's network nor containers on the default bridge reach it. It joins the item's network without listening there, only to reach the needed services. Daemon support is checked once per run with `docker version`.
+- **Published ports of a limited service** go through a relay container (`src/network/port-relay.ts`, in the proxy's image) on the default bridge and the service's network, which holds the `PortBindings` and forwards each connection to the service.
+- **The proxy image** is the stock `node:24-alpine`, pinned by digest, running a dependency-free script (`node -e`, `src/network/egress-proxy.ts`), so there is no hammerkit image to build, publish and pull. It runs as the image's `node` user without capabilities, on a read-only root and with a memory limit. On Kubernetes it runs as a Deployment and a Service named `hammerkit-proxy-<key>`, with an ingress policy of its own that takes connections from its item's pods only.
+- **Kubernetes keys.** A task's policy and proxy are keyed by its id and the run (its job pods carry `hammerkit.dev/run`), so concurrent runs never replace or remove each other's limits. A service has one Deployment whatever the run, so its policy and proxy are keyed by its id. `down` and `clean` remove every policy and proxy of the item once none of its pods runs.
+- **Kubernetes ingress.** A limited task takes no connections. A limited service takes them from the pods of the items that need it (`requiredBy`), and from anywhere when an `httpRoute` of the environment points at it, the cluster's equivalent of a published port.
+- **Needed services through the proxy.** The proxy allows the names of the needed services too, so a tool that ignores `NO_PROXY` (busybox `wget`) still reaches them.
+- **Healthchecks without the proxy.** A service's healthcheck checks the service itself, so it runs with the proxy variables emptied (the exec's own variables on Docker, `env` in front of the probe on Kubernetes).
+- **No DNS on Kubernetes.** The needed services and the proxy are host aliases of the pod, so the policy allows no DNS either: cluster DNS forwards any name upstream, which would let `none` send data out in queries.
+- **Refused hosts on Kubernetes**: a task follows its proxy's log while its jobs run; a service outlives the run on a cluster, so its refused hosts stay in its proxy's log.
+- **Cleanup.** A daemon service keeps its network and proxy until `down`; `clean` removes the networks and proxies of a killed run, like its containers.
+- **`runs.network` is checked three times.** At publish and propose, every task and service of the version against it (the error names the item, what it asks for and the ceiling). At submit and in the executor, the run's items again, so a version published before the operator set a ceiling, and asking for more, is refused rather than clamped silently. The executor also hands the ceiling to the run's process as `--network`, so the engine enforces it.
+- **`runs.network` and local tasks.** A ceiling below `open` with `local` in `runtimes` is a config error: no local task could be published.
+- **Published versions show the network.** Each item of a version's `plan` carries its `network` as the build file declares it, next to `command`, its last command.
+- **A ceiling and running services.** The effective network is part of a service's definition hash, so a service started by an earlier `up` is recreated when a ceiling changes its network.
 
 ## Out of scope
 

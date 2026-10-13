@@ -18,7 +18,9 @@ import { WorkTask } from '../planner/work-task'
 import { Bundle } from '../remote/bundle'
 import { getErrorMessage } from '../log'
 import { ParseError } from '../schema/parse-error'
-import { formatNetwork } from '../planner/work-network'
+import { NetworkSchema } from '../schema/network-schema'
+import { getArgumentsTarget } from '../planner/utils/task-arguments'
+import { exceedsNetwork, formatNetwork, isLimitedNetwork, toNetworkSchema, WorkNetwork } from '../planner/work-network'
 
 export class DefinitionError extends Error {}
 
@@ -43,11 +45,19 @@ export interface TaskPlan {
   runtime: 'docker' | 'local'
   image?: string
   cmds: string[]
+  // where arguments land: the last command of a task, the `cmd` of a service;
+  // null when there is none. Versions published before this was recorded have none.
+  command?: string | null
+  // what it reaches besides its needs, as the build file declares it (local tasks: open)
+  network?: NetworkSchema
   deps: string[]
   needs: string[]
   // the accounts its secrets are read as
   accounts: string[]
   secrets: { from: string; account: string | null; target: string }[]
+  // the variables of the server its `envs` read (`$NAME`, `${NAME}`); versions
+  // published before this was recorded have none
+  serverEnvs?: string[]
   mounts: string[]
   ports: string[]
   generates: string[]
@@ -73,6 +83,9 @@ export interface PlanPolicy {
   reserved?: string[]
   // what tasks may run on; every runtime when left out
   runtimes?: ('docker' | 'local')[]
+  // the most any task or service may reach besides its needs (`runs.network`);
+  // open when left out
+  network?: WorkNetwork
   // where tasks run: on a cluster, the secrets of providers are read in the Job of a task
   backend?: 'host' | 'kubernetes'
 }
@@ -243,6 +256,24 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
       )
     }
     const data = item.data
+    const ceiling = policy.network
+    if (ceiling && isLimitedNetwork(ceiling)) {
+      if (data.type === 'local-task') {
+        problems.push(
+          `${
+            item.name
+          }: is a local task, which can't be limited to the network this server allows (runs.network: ${formatNetwork(
+            ceiling
+          )})`
+        )
+      } else if ('network' in data && exceedsNetwork(data.network, ceiling)) {
+        problems.push(
+          `${item.name}: asks for network ${formatNetwork(
+            data.network
+          )}, more than this server allows (runs.network: ${formatNetwork(ceiling)})`
+        )
+      }
+    }
     // what a task reads and writes is the bundle's: `src: ../..` would have the server
     // copy its own files (its credentials, other callers' caches) into the task
     for (const source of 'src' in data ? data.src : []) {
@@ -336,10 +367,13 @@ function toPlan(root: string, item: Item): TaskPlan {
     runtime: data.type === 'local-task' ? 'local' : 'docker',
     ...(isContainerWorkTask(data) || isContainerWorkService(data) ? { image: data.image } : {}),
     cmds: 'cmds' in data ? data.cmds.map((cmd) => cmd.cmd) : 'cmd' in data && data.cmd ? [data.cmd.cmd] : [],
+    command: getArgumentsTarget(data)?.cmd ?? null,
+    network: toNetworkSchema('network' in data ? data.network : { type: 'open' }),
     deps: item.deps.map((dep) => dep.name).sort(),
     needs: item.needs.map((need) => need.name).sort(),
     accounts,
     secrets,
+    serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
     mounts,
     ports,
     generates: 'generates' in data ? data.generates.map((generate) => generate.path) : [],

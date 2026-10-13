@@ -13,7 +13,8 @@ import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
 import { KubernetesExecutor } from './kubernetes-backend'
-import { PlanContext, PlannedRun, planRun } from './run-plan'
+import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
+import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
 import { runRequestSchema } from './run-request'
@@ -31,7 +32,8 @@ import { KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
 import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
 import { PlanPolicy } from './plan'
-import { parseDuration, parseSize } from '../utils/units'
+import { formatDuration, parseDuration, parseSize } from '../utils/units'
+import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 
@@ -89,6 +91,10 @@ export interface ServerOptions extends TokenVerifierOptions {
 }
 
 const HEARTBEAT_MS = 15_000
+
+// the longest `?wait=` of a run: below the 60 seconds after which a proxy in front of the
+// server (nginx by default) closes a connection that says nothing
+const MAX_WAIT_MS = 50_000
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -158,7 +164,7 @@ async function handleRuns(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
@@ -166,7 +172,14 @@ async function handleRuns(
   const method = req.method
   if (!id) {
     if (method === 'GET') {
-      send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
+      // the results of each task are read one run at a time
+      send(res, 200, {
+        runs: registry.list(principal).map((run) => {
+          const { results, ...listed } = toRunResponse(run)
+          void results
+          return listed
+        }),
+      })
     } else if (method === 'POST') {
       await submitRun(config, registry, definitions, sources, sandboxes, planning, repos, log, principal, req, res)
     } else {
@@ -188,9 +201,36 @@ async function handleRuns(
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
     streamEvents(registry, config, principal, id, req, res, url)
+  } else if (action === 'logs') {
+    let query
+    try {
+      query = parseLogQuery(url.searchParams)
+    } catch (e) {
+      send(res, 400, { error: e instanceof Error ? e.message : String(e) })
+      return true
+    }
+    const logs = registry.logs(principal, id, accountsOf(config, principal))
+    logs
+      ? send(res, 200, readLogs(logs.events, logs.index, query, logs.truncated))
+      : send(res, 404, { error: 'not found' })
   } else {
-    const run = registry.get(principal, id, accountsOf(config, principal))
-    run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+    let wait = 0
+    const waitParam = url.searchParams.get('wait')
+    if (waitParam !== null) {
+      try {
+        wait = Math.min(parseDuration(waitParam), MAX_WAIT_MS)
+      } catch {
+        send(res, 400, { error: `wait is a duration up to ${formatDuration(MAX_WAIT_MS)}, for example 30s` })
+        return true
+      }
+    }
+    // a caller that hangs up stops waiting
+    const gone = new AbortController()
+    res.on('close', () => gone.abort())
+    const run = await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)
+    if (!gone.signal.aborted) {
+      run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+    }
   }
   return true
 }
@@ -204,7 +244,7 @@ function accountsOf(config: ServerConfig, principal: Principal): (account: strin
 function toRunResponse(run: Run): Omit<Run, 'owner'> {
   const { owner, ...visible } = run
   void owner
-  return visible
+  return { ...visible, results: run.results ?? {} }
 }
 
 async function submitRun(
@@ -251,6 +291,11 @@ async function submitRun(
   const unknown = request.tasks.filter((task) => !known.includes(task))
   if (unknown.length > 0) {
     send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
+    return
+  }
+  const argued = (request.options.args ?? []).length > 0 ? request.tasks[0] : undefined
+  if (argued !== undefined && version.services.includes(argued)) {
+    send(res, 400, { error: `${argued} is a service, arguments go to a task` })
     return
   }
   if (request.source.type === 'upload') {
@@ -301,6 +346,12 @@ async function submitRun(
     planned = await planRun(bundle, request, planning.environment, sandbox ? sandboxes.policy : planning.policy)
   } catch (e) {
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
+    return
+  }
+  const refused = refuseArguments(request, planned.plan)
+  if (refused) {
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${refused}`)
+    send(res, 400, { error: refused })
     return
   }
   const decision = decideRun({
@@ -506,6 +557,7 @@ export async function startServer(
       envs: config.runs.env.allow,
       reserved: getSourceAccounts(config),
       runtimes: config.runtimes,
+      network: parseWorkNetwork(config.runs.network),
       backend: config.backend.type,
     },
   }

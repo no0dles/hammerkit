@@ -1,4 +1,7 @@
 import { ChildProcess, spawn } from 'child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { createServer, request, Server } from 'http'
 import { AddressInfo, connect, createServer as createNetServer } from 'net'
 import {
@@ -24,10 +27,11 @@ interface RunningProxy {
 }
 
 // the script as the container runs it: `node -e`, with its allow list in the env
-async function startProxy(hosts: string[]): Promise<RunningProxy> {
+// `preload` is a module the script runs after, to stand in for DNS
+async function startProxy(hosts: string[], bind?: string, preload?: string): Promise<RunningProxy> {
   const port = await freePort()
-  const child = spawn(process.execPath, ['-e', EGRESS_PROXY_SCRIPT], {
-    env: { ...getEgressProxyEnvironment(hosts), HAMMERKIT_PROXY_PORT: `${port}` },
+  const child = spawn(process.execPath, [...(preload ? ['-r', preload] : []), '-e', EGRESS_PROXY_SCRIPT], {
+    env: { ...getEgressProxyEnvironment(hosts, bind), HAMMERKIT_PROXY_PORT: `${port}` },
     stdio: ['ignore', 'pipe', 'inherit'],
   })
   const events: EgressProxyEvent[] = []
@@ -147,6 +151,100 @@ describe('egress proxy', () => {
   it('answers a request that is no proxy request with 400', async () => {
     const response = await get(proxy.port, '/')
     expect(response.status).toBe(400)
+  })
+})
+
+describe('egress proxy destinations', () => {
+  // the script's own env, past the schema, which takes no addresses: the
+  // proxy resolves an address to itself
+  it('refuses a name a wildcard allows when it resolves to the host', async () => {
+    const proxy = await startProxy(['*.0.0.1'])
+    try {
+      const response = await tunnel(proxy.port, '127.0.0.1:80', '127.0.0.1')
+      expect(response).toContain('403 Forbidden')
+      await waitFor(() => proxy.events.some((e) => e.type === 'refused'))
+      expect(proxy.events).toContainEqual({ type: 'refused', host: '127.0.0.1' })
+      expect((await get(proxy.port, 'http://127.0.0.1/')).status).toBe(403)
+    } finally {
+      proxy.process.kill()
+    }
+  })
+
+  it('refuses link-local addresses even for an exact name', async () => {
+    const proxy = await startProxy(['169.254.169.254'])
+    try {
+      expect(await tunnel(proxy.port, '169.254.169.254:80', '169.254.169.254')).toContain('403 Forbidden')
+      expect((await get(proxy.port, 'http://169.254.169.254/latest/meta-data')).status).toBe(403)
+    } finally {
+      proxy.process.kill()
+    }
+  })
+})
+
+describe('egress proxy with a name of several addresses', () => {
+  let dir: string
+  let upstream: Server
+  let upstreamPort: number
+  let proxy: RunningProxy
+
+  beforeAll(async () => {
+    upstream = createServer((req, res) => res.end(`hello from ${req.headers.host}`))
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+    upstreamPort = (upstream.address() as AddressInfo).port
+    // the first address has nothing listening, as an IPv6 address without a route
+    dir = mkdtempSync(join(tmpdir(), 'hammerkit-proxy-'))
+    const preload = join(dir, 'dns.js')
+    writeFileSync(
+      preload,
+      `const dns = require('dns')
+const lookup = dns.lookup
+dns.lookup = (host, options, callback) => {
+  if (host !== 'dual.test') return lookup(host, options, callback)
+  const addresses = [{ address: '::1', family: 6 }, { address: '127.0.0.1', family: 4 }]
+  const cb = typeof options === 'function' ? options : callback
+  if (options && options.all) cb(null, addresses)
+  else cb(null, addresses[0].address, addresses[0].family)
+}
+`
+    )
+    proxy = await startProxy(['dual.test'], undefined, preload)
+  })
+
+  afterAll(async () => {
+    proxy.process.kill()
+    await new Promise<void>((resolve) => upstream.close(() => resolve()))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('forwards an HTTP request to the address that answers', async () => {
+    const response = await get(proxy.port, `http://dual.test:${upstreamPort}/`)
+    expect(response.status).toBe(200)
+    expect(response.body).toBe(`hello from dual.test:${upstreamPort}`)
+  })
+
+  it('tunnels a CONNECT to the address that answers', async () => {
+    expect(await tunnel(proxy.port, `dual.test:${upstreamPort}`, 'dual.test')).toContain('hello from dual.test')
+  })
+})
+
+describe('egress proxy bound to one name', () => {
+  it('listens on that address only', async () => {
+    const proxy = await startProxy([], 'localhost')
+    try {
+      // the address the name resolves to answers, another one of the host does not
+      await expect(get(proxy.port, '/')).resolves.toMatchObject({ status: 400 })
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          const socket = connect(proxy.port, '127.0.0.2', () => {
+            socket.destroy()
+            resolve()
+          })
+          socket.on('error', reject)
+        })
+      ).rejects.toThrow()
+    } finally {
+      proxy.process.kill()
+    }
   })
 })
 
