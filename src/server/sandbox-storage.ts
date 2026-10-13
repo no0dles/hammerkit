@@ -104,14 +104,14 @@ export class HostSandboxStorage implements SandboxStorage {
         `core.hooksPath=${join(root, 'no-hooks')}`,
         '-c',
         'core.fsmonitor=false',
+        // files as committed, on every system: a checkout with the machine's line endings
+        // and a read without its config would see every file changed (Git for Windows)
+        '-c',
+        'core.autocrlf=false',
         '-c',
         'advice.detachedHead=false',
         '-c',
         'advice.addEmbeddedRepo=false',
-        // the files are what the repository holds, on a Windows server too: the API answers
-        // their bytes, and tasks read them in Linux containers
-        '-c',
-        'core.autocrlf=false',
         ...args,
       ],
       env,
