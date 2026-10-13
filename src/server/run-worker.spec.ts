@@ -5,7 +5,8 @@ import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
-import { WorkerMessage, workerMain } from './run-worker'
+import { WorkerMessage, taskCauses, workerMain } from './run-worker'
+import { HOST_ENV_ALLOW } from '../testing/host-env'
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   const chunks: string[] = []
@@ -25,6 +26,10 @@ function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   }
 }
 
+// the variables a server lets its runs see: without PSModulePath every powershell a
+// task starts takes about 20 seconds on Windows
+const hostEnvs = Object.fromEntries(HOST_ENV_ALLOW.map((name) => [name, process.env[name]]))
+
 describe('workerMain', () => {
   let directory: string
 
@@ -42,7 +47,7 @@ describe('workerMain', () => {
     const stdin = new PassThrough()
     stdin.end(typeof input === 'string' ? input : JSON.stringify(input))
     const out = sink()
-    await workerMain(stdin, out.stream, { PATH: process.env.PATH }, directory, new AbortController())
+    await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
     return out.messages()
   }
 
@@ -109,7 +114,7 @@ describe('workerMain', () => {
           })
         )
         const out = sink()
-        await workerMain(stdin, out.stream, { PATH: process.env.PATH }, directory, new AbortController())
+        await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
         return out.messages().flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
       }
       expect(await once()).toContainEqual({
@@ -166,6 +171,23 @@ describe('workerMain', () => {
   it('says when the build file has no such task', async () => {
     const messages = await run({ ...base, tasks: ['nope'], entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toMatchObject({ kind: 'result', ok: false })
+  })
+})
+
+describe('taskCauses', () => {
+  it('names at most 20 causes of a cache miss, masked and cut short', () => {
+    const causes = Array.from({ length: 25 }, (_, i) => `src/file-${i}.txt changed, token secret-${i}`)
+    causes[0] = 'x'.repeat(5000)
+    const result = taskCauses(causes, (text) => text.replace(/secret-\d+/g, '***'))
+    expect(result.causes).toHaveLength(21)
+    expect(result.causes?.[0]).toHaveLength(2048)
+    expect(result.causes?.[1]).toBe('src/file-1.txt changed, token ***')
+    expect(result.causes?.[20]).toBe('… and 5 more')
+  })
+
+  it('leaves the causes out when there are none', () => {
+    expect(taskCauses(undefined, (text) => text)).toEqual({})
+    expect(taskCauses([], (text) => text)).toEqual({})
   })
 })
 

@@ -82,8 +82,9 @@ export interface ServerOptions extends TokenVerifierOptions {
 
 const HEARTBEAT_MS = 15_000
 
-// the longest `?wait=` of a run: a proxy in front of the server cuts quieter connections
-const MAX_WAIT_MS = 60_000
+// the longest `?wait=` of a run: below the 60 seconds after which a proxy in front of the
+// server (nginx by default) closes a connection that says nothing
+const MAX_WAIT_MS = 50_000
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -199,7 +200,9 @@ async function handleRuns(
       return true
     }
     const logs = registry.logs(principal, id, accountsOf(config, principal))
-    logs ? send(res, 200, readLogs(logs.events, query, logs.truncated)) : send(res, 404, { error: 'not found' })
+    logs
+      ? send(res, 200, readLogs(logs.events, logs.index, query, logs.truncated))
+      : send(res, 404, { error: 'not found' })
   } else {
     let wait = 0
     const waitParam = url.searchParams.get('wait')

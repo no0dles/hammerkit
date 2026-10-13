@@ -711,7 +711,6 @@ describe('runs api', () => {
           expect(await logs.json()).toEqual({
             lines: [{ line: 2, task: 'test', stream: 'stdout', text: 'expected 1 to be 2', match: true }],
             total: 2,
-            matches: 1,
             truncated: false,
           })
           const tail = await (await api.call('GET', `/v1/runs/${run.id}/logs?tail=1`)).json()
@@ -746,7 +745,7 @@ describe('runs api', () => {
 
       const wrong = await api.call('GET', `/v1/runs/${run.id}?wait=soon`)
       expect(wrong.status).toBe(400)
-      expect((await wrong.json()).error).toBe('wait is a duration up to 1m, for example 30s')
+      expect((await wrong.json()).error).toBe('wait is a duration up to 50s, for example 30s')
       expect((await api.call('GET', `/v1/runs/${run.id}?wait=1s`, { sub: 'carol' })).status).toBe(404)
     })
   })

@@ -3,6 +3,7 @@ import { Principal } from './oauth'
 import type { RunOptions } from './run-request'
 import type { TaskPlan } from './plan'
 import type { RunStore } from './run-store'
+import { LogIndex } from './run-logs'
 import { formatDuration } from '../utils/units'
 
 export type RunState =
@@ -197,6 +198,8 @@ interface Entry {
   bytes: number
   // the last lines of each task, kept apart from the capped log
   tails: Map<string, string[]>
+  // where the lines of the log are, made when the log is first read
+  index?: LogIndex
   timer?: NodeJS.Timeout
   // the run was stopped because it took too long
   timedOut?: boolean
@@ -216,6 +219,12 @@ function onSandbox(run: Run, sandbox: string): boolean {
 // how much of the end of a task's output its result carries
 const TAIL_LINES = 20
 const TAIL_LINE_LENGTH = 1000
+
+// what a task event weighs against the log limits of a run
+function taskEventSize(event: Extract<RunEvent, { type: 'task' }>): number {
+  const causes = (event.causes ?? []).reduce((sum, cause) => sum + Buffer.byteLength(cause) + 4, 0)
+  return 64 + causes + Buffer.byteLength(event.error ?? '')
+}
 
 // Where runs are kept while the server is up. Everything is scoped to the
 // caller that submitted the run: the same id asked for by someone else is
@@ -518,13 +527,15 @@ export class RunRegistry {
     owner: Pick<Principal, 'iss' | 'sub'>,
     id: string,
     canUse?: AccountCheck
-  ): { events: Extract<StoredEvent, { type: 'log' }>[]; truncated: boolean } | undefined {
+  ): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
     const entry = this.find(owner, id, canUse)
     if (!entry) {
       return undefined
     }
-    const events = entry.events.filter((event): event is Extract<StoredEvent, { type: 'log' }> => event.type === 'log')
-    return { events, truncated: entry.truncated }
+    // only the events since the last read are looked at
+    entry.index ??= new LogIndex()
+    entry.index.update(entry.events)
+    return { events: entry.events, index: entry.index, truncated: entry.truncated }
   }
 
   // Stops accepting runs and aborts the ones in flight.
@@ -719,9 +730,10 @@ export class RunRegistry {
       this.keepResult(entry, event)
     }
     // an executor that keeps talking can't fill the memory of the server or its disk; the
-    // state changes and what the tasks did, which are few, are always kept
-    if (!force && event.type !== 'state' && event.type !== 'task') {
-      const size = event.type === 'log' ? Buffer.byteLength(event.text) + 64 : 64
+    // state changes, which are few, are always kept, and the results above are kept apart
+    if (!force && event.type !== 'state') {
+      const size =
+        event.type === 'log' ? Buffer.byteLength(event.text) + 64 : event.type === 'task' ? taskEventSize(event) : 64
       if (entry.events.length >= this.maxEvents || entry.bytes + size > this.maxLogBytes) {
         if (!entry.truncated) {
           entry.truncated = true
@@ -755,6 +767,16 @@ export class RunRegistry {
     }
     const now = this.timestamp()
     const previous = results[event.task]
+    // A task the run names in several scopes is checked again as a dependency of a later
+    // one: it is then cached or not needed, or stopped with the scope. What it did the
+    // first time is what the caller asked about.
+    if (
+      previous &&
+      ['succeeded', 'failed', 'cached'].includes(previous.status) &&
+      ['cached', 'skipped', 'cancelled'].includes(event.state)
+    ) {
+      return
+    }
     const over = event.state !== 'running'
     const result: TaskResult = {
       status: event.state,
