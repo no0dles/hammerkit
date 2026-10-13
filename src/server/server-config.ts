@@ -11,6 +11,7 @@ import {
 } from '../schema/build-file-secret-provider-schema'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { isRepoPattern } from './repo'
+import { exceedsNetwork, formatNetwork, parseWorkNetwork } from '../planner/work-network'
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1']
 
@@ -446,6 +447,9 @@ export const serverConfigSchema = z
           })
           .strict()
           .default({}),
+        // the most any task or service of a run reaches besides its needs: none, open
+        // or { allow: [hosts] }. A version that asks for more is refused at publish.
+        network: networkSchema.default('open'),
       })
       .strict()
       .default({}),
@@ -546,6 +550,17 @@ export const serverConfigSchema = z
         }
       }
     })
+    const sandboxNetwork = parseWorkNetwork(config.sandboxes.network)
+    const runsNetwork = parseWorkNetwork(config.runs.network)
+    if (exceedsNetwork(sandboxNetwork, runsNetwork)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sandboxes', 'network'],
+        message: `runs on sandboxes get at most runs.network (${formatNetwork(runsNetwork)}), not ${formatNetwork(
+          sandboxNetwork
+        )}`,
+      })
+    }
     if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -626,6 +641,22 @@ export const serverConfigSchema = z
           message: 'local tasks run in the toolImage of a pool, give a pool one or remove local from runtimes',
         })
       }
+      // a limited network is a NetworkPolicy there, which only some network plugins enforce
+      if (config.runs.network !== 'open' && backend.networkPolicy !== 'enforced') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'networkPolicy'],
+          message:
+            'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them',
+        })
+      }
+    }
+    if (config.runs.network !== 'open' && config.runtimes.includes('local')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['runs', 'network'],
+        message: 'the network of a local task can not be limited, allow only the docker runtime with runs.network',
+      })
     }
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {
       ctx.addIssue({

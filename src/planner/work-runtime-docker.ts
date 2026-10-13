@@ -56,6 +56,8 @@ export function dockerTaskRuntime(
       })
     },
     async restore(environment: Environment, path: string): Promise<void> {
+      // the restored outputs aren't the ones the record names any more
+      await removeContainerTaskState(environment, task)
       await restoreContainer(docker, environment, task, path)
     },
     async archive(environment: Environment, path: string): Promise<void> {

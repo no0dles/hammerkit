@@ -6,7 +6,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { WorkerMessage, taskCauses, workerMain } from './run-worker'
-import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { hostEnvs } from '../testing/host-env'
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   const chunks: string[] = []
@@ -26,10 +26,6 @@ function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   }
 }
 
-// the variables a server lets its runs see: without PSModulePath every powershell a
-// task starts takes about 20 seconds on Windows
-const hostEnvs = Object.fromEntries(HOST_ENV_ALLOW.map((name) => [name, process.env[name]]))
-
 describe('workerMain', () => {
   let directory: string
 
@@ -47,7 +43,7 @@ describe('workerMain', () => {
     const stdin = new PassThrough()
     stdin.end(typeof input === 'string' ? input : JSON.stringify(input))
     const out = sink()
-    await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
+    await workerMain(stdin, out.stream, hostEnvs(), directory, new AbortController())
     return out.messages()
   }
 
@@ -136,7 +132,7 @@ describe('workerMain', () => {
           })
         )
         const out = sink()
-        await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
+        await workerMain(stdin, out.stream, hostEnvs(), directory, new AbortController())
         return out.messages().flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
       }
       expect(await once()).toContainEqual({
@@ -213,6 +209,49 @@ describe('workerMain', () => {
     ])
   })
 
+  it('appends the arguments to the last command of the task', async () => {
+    writeFileSync(join(directory, '.hammerkit.yaml'), 'tasks:\n  say:\n    cmds: [echo]\n')
+    const messages = await run({
+      ...base,
+      tasks: ['say'],
+      options: { ...base.options, args: ['from-the-arguments'] },
+      entry: join(directory, '.hammerkit.yaml'),
+    })
+    expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: true })
+    const text = messages.map((m) => (m.kind === 'event' && m.event.type === 'log' ? m.event.text : '')).join('')
+    expect(text).toContain('from-the-arguments')
+  })
+
+  it('runs a task with arguments uncached, unless the run names a cache method', async () => {
+    // a source of its own, so no cache entry of an earlier test run matches
+    writeFileSync(join(directory, 'input.txt'), directory)
+    writeFileSync(join(directory, '.hammerkit.yaml'), 'tasks:\n  say:\n    src: [input.txt]\n    cmds: [echo said]\n')
+    const states = async (options: Record<string, unknown>) => {
+      const messages = await run({ ...base, tasks: ['say'], options, entry: join(directory, '.hammerkit.yaml') })
+      expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: true })
+      return messages.flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event.state] : []))
+    }
+    // what a run without arguments caches, a run with them does not take, nor store
+    expect(await states({})).toContain('succeeded')
+    expect(await states({})).toEqual(['cached'])
+    expect(await states({ args: ['x'] })).toContain('succeeded')
+    expect(await states({ args: ['x'] })).toContain('succeeded')
+    // a method named in the run keeps the caching
+    expect(await states({ args: ['y'], cache: 'checksum' })).toContain('succeeded')
+    expect(await states({ args: ['y'], cache: 'checksum' })).toEqual(['cached'])
+  })
+
+  it('holds the run to the network ceiling of the server', async () => {
+    // a local task can not be limited, so the ceiling refuses it before it starts
+    const messages = await run({ ...base, network: 'none', entry: join(directory, '.hammerkit.yaml') })
+    expect(messages[messages.length - 1]).toEqual({
+      kind: 'result',
+      ok: false,
+      error: expect.stringContaining("can't limit the network of the local task hello"),
+    })
+    expect(messages.some((m) => m.kind === 'event' && m.event.type === 'task')).toBe(false)
+  })
+
   it('says when the build file has no such task', async () => {
     const messages = await run({ ...base, tasks: ['nope'], entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toMatchObject({ kind: 'result', ok: false })
@@ -255,6 +294,9 @@ describe('hammerkit server-run', () => {
       try {
         const out = memoryStream()
         environment.stdout = out.stream
+        // what the server hands the process; a copy of process.env loses its case-insensitive
+        // keys on Windows, where PATH is `Path`
+        environment.processEnvs = hostEnvs()
         await runProgram(environment, ['hammerkit', 'server-run'], true)
         const lines = out
           .read()

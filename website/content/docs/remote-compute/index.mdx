@@ -177,6 +177,7 @@ runs:
   env:
     allow: [PATH, DOCKER_HOST]   # the only variables of the server a run sees, none by default
     set: { CI: 'true' }
+  network: open      # default, the most any task reaches besides its needs
 backend:
   type: host
   platform: { os: macos, arch: arm64 }   # detected when left out
@@ -193,7 +194,7 @@ backend:
 | `entitlements` | Who may use or request which account, which repositories and what they may do with build files, see [Entitlements](/docs/remote-compute/entitlements). |
 | `approvals` | How long requested runs and proposals wait, see [Approvals](/docs/remote-compute/entitlements#approvals). |
 | `sources` | The repositories a run may get its code from, and the branches a sandbox may push to, see [Sources](/docs/remote-compute/sources). |
-| `runs` | Concurrency, limits per caller, durations and the environment of runs, see [Runs](/docs/remote-compute/runs#config). |
+| `runs` | Concurrency, limits per caller, durations, the environment and the network ceiling of runs, see [Runs](/docs/remote-compute/runs#config). |
 | `sandboxes` | The runtimes, network and limits of sandboxes, see [Sandboxes](/docs/remote-compute/sandboxes#config). |
 | `runtimes` | What tasks may run on, see [Backend](/docs/remote-compute/backend#runtimes). |
 | `backend` | Where tasks run and what the machine offers, see [Backend](/docs/remote-compute/backend). |
