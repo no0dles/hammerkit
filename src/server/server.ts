@@ -556,8 +556,8 @@ export async function startServer(
       envs: config.runs.env.allow,
       reserved: getSourceAccounts(config),
       runtimes: config.runtimes,
-      network: parseWorkNetwork(config.runs.network),
       backend: config.backend.type,
+      network: parseWorkNetwork(config.runs.network),
     },
   }
   const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')

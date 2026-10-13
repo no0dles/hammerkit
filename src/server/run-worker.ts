@@ -15,11 +15,11 @@ import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { runOptionsSchema } from './run-request'
+import { networkSchema } from '../schema/network-schema'
+import { parseWorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
 import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { RunEventData, TaskStatus } from './runs'
-import { networkSchema } from '../schema/network-schema'
-import { parseWorkNetwork } from '../planner/work-network'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
@@ -41,9 +41,6 @@ export const workerInputSchema = z
       .object({ read: z.string().min(1), work: z.string().min(1) })
       .strict()
       .optional(),
-    // the most open network a task or service of the run gets, see `run --network`: the
-    // server's `runs.network`, under `sandboxes.network` too on a sandbox
-    network: networkSchema.optional(),
     tasks: z.array(z.string()),
     options: runOptionsSchema,
     // the accounts the run was admitted for; a secret of any other is refused
@@ -56,6 +53,9 @@ export const workerInputSchema = z
         (value) => typeof value === 'object' && value !== null && (value as any).type === 'kubernetes'
       )
       .optional(),
+    // the most any task or service reaches besides its needs, as `--network`: `runs.network`,
+    // and for a run on a sandbox the lower of it and `sandboxes.network`
+    network: networkSchema.optional(),
   })
   .strict()
 

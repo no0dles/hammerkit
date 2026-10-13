@@ -6,7 +6,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { WorkerMessage, taskCauses, workerMain } from './run-worker'
-import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { hostEnvs } from '../testing/host-env'
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   const chunks: string[] = []
@@ -26,10 +26,6 @@ function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   }
 }
 
-// the variables a server lets its runs see: without PSModulePath every powershell a
-// task starts takes about 20 seconds on Windows
-const hostEnvs = Object.fromEntries(HOST_ENV_ALLOW.map((name) => [name, process.env[name]]))
-
 describe('workerMain', () => {
   let directory: string
 
@@ -47,7 +43,7 @@ describe('workerMain', () => {
     const stdin = new PassThrough()
     stdin.end(typeof input === 'string' ? input : JSON.stringify(input))
     const out = sink()
-    await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
+    await workerMain(stdin, out.stream, hostEnvs(), directory, new AbortController())
     return out.messages()
   }
 
@@ -136,7 +132,7 @@ describe('workerMain', () => {
           })
         )
         const out = sink()
-        await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
+        await workerMain(stdin, out.stream, hostEnvs(), directory, new AbortController())
         return out.messages().flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
       }
       expect(await once()).toContainEqual({
@@ -243,8 +239,7 @@ describe('workerMain', () => {
     // a method named in the run keeps the caching
     expect(await states({ args: ['y'], cache: 'checksum' })).toContain('succeeded')
     expect(await states({ args: ['y'], cache: 'checksum' })).toEqual(['cached'])
-    // six runs of the worker, each one takes several seconds on windows
-  }, 180_000)
+  })
 
   it('holds the run to the network ceiling of the server', async () => {
     // a local task can not be limited, so the ceiling refuses it before it starts
@@ -299,6 +294,9 @@ describe('hammerkit server-run', () => {
       try {
         const out = memoryStream()
         environment.stdout = out.stream
+        // what the server hands the process; a copy of process.env loses its case-insensitive
+        // keys on Windows, where PATH is `Path`
+        environment.processEnvs = hostEnvs()
         await runProgram(environment, ['hammerkit', 'server-run'], true)
         const lines = out
           .read()

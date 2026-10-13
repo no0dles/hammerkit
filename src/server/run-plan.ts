@@ -67,12 +67,22 @@ export async function planRun(
 // still take arguments.
 const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI']
 
+function readsOf(entry: PlannedRun['plan'][string]): string[] {
+  return [
+    ...entry.secrets.map((secret) => `the secret ${secret.target}`),
+    ...(entry.serverEnvs ?? [])
+      .filter((env) => !PLAIN_SERVER_ENVS.includes(env.toUpperCase()))
+      .map((env) => `$${env} of the server`),
+  ]
+}
+
 /**
  * Why a run may not pass its arguments, or null when it may. They go to a task, never a
- * service, and never to a task that reads a secret or takes a variable of the server
- * into its `envs`: an argument can make the command print what it holds, so a shell on
- * a server holds no account and no credential of the server. Its dependencies and the
- * services it needs are not covered; publishers keep secrets out of their outputs.
+ * service, and never to a run in which an item reads a secret or takes a variable of the
+ * server into its `envs`: an argument can make the command print what the task holds,
+ * and what its dependencies write into their outputs or its services serve, past the
+ * masking of secrets. So a shell on a server runs with no account and no credential of
+ * the server.
  */
 export function refuseArguments(
   run: { tasks: string[]; options: RunOptions },
@@ -87,14 +97,17 @@ export function refuseArguments(
   if (!entry || entry.kind !== 'task') {
     return `${name} is not a task of this version`
   }
-  const reads = [
-    ...entry.secrets.map((secret) => `the secret ${secret.target}`),
-    ...(entry.serverEnvs ?? [])
-      .filter((env) => !PLAIN_SERVER_ENVS.includes(env.toUpperCase()))
-      .map((env) => `$${env} of the server`),
-  ]
+  const reads = readsOf(entry)
   if (reads.length > 0) {
     return `${name} reads ${reads.join(', ')}, it takes no arguments on a server: an argument could make it print them`
+  }
+  // what a dependency or a service of the run holds reaches the task through its outputs or
+  // its answers, where an argument can print it in a form no mask knows (`rev token.txt`)
+  for (const [other, item] of Object.entries(plan).sort(([a], [b]) => a.localeCompare(b))) {
+    const held = (other === name ? [] : readsOf(item)).join(', ')
+    if (held.length > 0) {
+      return `${name} takes no arguments on a server: ${other} in its run reads ${held}, and an argument could make ${name} print what ${other} hands on`
+    }
   }
   return null
 }
