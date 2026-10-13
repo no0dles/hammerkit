@@ -585,6 +585,138 @@ describe('runs api', () => {
     }
   })
 
+  it('shows how each task of a real run went, and reads its log', async () => {
+    const repository = mkdtempSync(join(tmpdir(), 'hammerkit-api-results-'))
+    try {
+      execFileSync('git', ['init', '--quiet', '--initial-branch=main'], { cwd: repository })
+      writeFileSync(join(repository, 'input.txt'), 'from-the-ref')
+      execFileSync(
+        'git',
+        ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'add', '.'],
+        { cwd: repository }
+      )
+      execFileSync(
+        'git',
+        ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'one'],
+        { cwd: repository }
+      )
+      await withApi(
+        'runs-api-results',
+        undefined,
+        async (api) => {
+          const published = await api.call('PUT', '/v1/definitions/payments', {
+            sub: 'bob',
+            body: {
+              files: {
+                '.hammerkit.yaml': [
+                  'tasks:',
+                  '  build:',
+                  '    cmds: [cat input.txt]',
+                  '  test:',
+                  '    deps: [build]',
+                  '    cmds:',
+                  '      - echo checking',
+                  "      - echo 'expected 1 to be 2'",
+                  '      - exit 4',
+                  '',
+                ].join('\n'),
+              },
+            },
+          })
+          const hash = (await published.json()).hash
+          const run = await (
+            await api.submit({
+              ...request,
+              tasks: ['test'],
+              options: { skipDeps: false },
+              definition: { name: 'payments', hash },
+            })
+          ).json()
+          expect(run.results).toEqual({})
+          // waits until the run is over, however long the checkout takes
+          let finished = await (await api.call('GET', `/v1/runs/${run.id}?wait=60s`)).json()
+          while (!['succeeded', 'failed'].includes(finished.state)) {
+            finished = await (await api.call('GET', `/v1/runs/${run.id}?wait=60s`)).json()
+          }
+          expect(finished.state).toBe('failed')
+          expect(finished.results.build).toMatchObject({
+            status: 'succeeded',
+            durationMs: expect.any(Number),
+            cache: { hit: false },
+            lastLog: ['from-the-ref'],
+          })
+          expect(finished.results.test).toMatchObject({
+            status: 'failed',
+            exitCode: 4,
+            durationMs: expect.any(Number),
+            lastLog: ['checking', 'expected 1 to be 2'],
+          })
+
+          const logs = await api.call('GET', `/v1/runs/${run.id}/logs?task=test&grep=expected`)
+          expect(logs.status).toBe(200)
+          expect(await logs.json()).toEqual({
+            lines: [{ line: 2, task: 'test', stream: 'stdout', text: 'expected 1 to be 2', match: true }],
+            total: 2,
+            truncated: false,
+          })
+          const tail = await (await api.call('GET', `/v1/runs/${run.id}/logs?tail=1`)).json()
+          expect(tail.lines.map((line: { text: string }) => line.text)).toEqual(['expected 1 to be 2'])
+          // the list is short, the results are read one run at a time
+          const list = await (await api.call('GET', '/v1/runs')).json()
+          expect(list.runs[0].results).toBeUndefined()
+        },
+        '',
+        { url: () => repository }
+      )
+    } finally {
+      rmSync(repository, { recursive: true, force: true })
+    }
+  })
+
+  it('waits for a run to finish, or answers how it stands when the time is up', async () => {
+    const { executor, release } = gated()
+    await withApi('runs-api-wait', executor, async (api) => {
+      const run = await (await api.submit(request)).json()
+      await untilState(api, run.id, ['running'])
+      const started = Date.now()
+      const early = await (await api.call('GET', `/v1/runs/${run.id}?wait=200ms`)).json()
+      expect(early.state).toBe('running')
+      expect(Date.now() - started).toBeGreaterThanOrEqual(150)
+      expect(early.results.build).toMatchObject({ status: 'running', lastLog: ['compiling'] })
+
+      const waiting = api.call('GET', `/v1/runs/${run.id}?wait=30s`)
+      await sleep(50)
+      release()
+      expect((await (await waiting).json()).state).toBe('succeeded')
+
+      const wrong = await api.call('GET', `/v1/runs/${run.id}?wait=soon`)
+      expect(wrong.status).toBe(400)
+      expect((await wrong.json()).error).toBe('wait is a duration up to 50s, for example 30s')
+      expect((await api.call('GET', `/v1/runs/${run.id}?wait=1s`, { sub: 'carol' })).status).toBe(404)
+    })
+  })
+
+  it('shows the log of a run to its owner only, and says what is wrong with a query', async () => {
+    const { executor, release } = gated()
+    await withApi('runs-api-logs', executor, async (api) => {
+      const run = await (await api.submit(request)).json()
+      await untilState(api, run.id, ['running'])
+      const logs = await (await api.call('GET', `/v1/runs/${run.id}/logs`)).json()
+      expect(logs).toEqual({
+        lines: [{ line: 1, task: 'build', stream: 'stdout', text: 'compiling' }],
+        total: 1,
+        truncated: false,
+      })
+      expect((await api.call('GET', `/v1/runs/${run.id}/logs`, { sub: 'carol' })).status).toBe(404)
+      const wrong = await api.call('GET', `/v1/runs/${run.id}/logs?tail=1&from=1`)
+      expect(wrong.status).toBe(400)
+      expect((await wrong.json()).error).toMatch(/^tail and from do not go together/)
+      expect((await api.call('POST', `/v1/runs/${run.id}/logs`)).status).toBe(405)
+      release()
+      await untilState(api, run.id, ['succeeded'])
+    })
+  })
+
   it('answers 429 to a caller over their limits, and still takes the runs of others', async () => {
     const { executor } = gated()
     await withApi(
