@@ -1,8 +1,9 @@
 import { spawn } from 'child_process'
 import { createHash, randomBytes } from 'crypto'
-import { constants, ReadStream } from 'fs'
+import { constants } from 'fs'
 import { chmod, FileHandle, lstat, mkdir, open, readlink, realpath, rename, rm, writeFile } from 'fs/promises'
 import { dirname, join, normalize } from 'path'
+import { Readable } from 'stream'
 import { Minimatch } from 'minimatch'
 import { deniedSourcePath, MAX_SOURCE_FILE_BYTES } from '../remote/source-manifest'
 import { FilePatch, parsePatch, PatchError } from './sandbox-patch'
@@ -100,7 +101,7 @@ export interface RawFile {
   // the bytes of a file up to MAX_FILE_BYTES, else a stream of them
   content?: Buffer
   sha256?: string
-  stream?: ReadStream
+  stream?: Readable
 }
 
 export type SearchMode = 'files_with_matches' | 'content' | 'count'

@@ -13,6 +13,7 @@ import { Run, RunContext, RunExecutor } from './runs'
 import { PlanContext, planRun } from './run-plan'
 import { PlanPolicy } from './plan'
 import { SandboxRegistry } from './sandboxes'
+import { SandboxClaim } from './sandbox-storage'
 import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -72,7 +73,12 @@ export interface SandboxRunOptions {
  * it, and `release` when it ended, whatever the outcome.
  */
 export interface RunPlacement {
-  prepare(run: Run, context: RunContext): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
+  prepare(
+    run: Run,
+    context: RunContext,
+    // where the run works, and the claim its tasks mount for it on a sandbox
+    work: { root: string; claim?: SandboxClaim }
+  ): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
   release(run: Run, context: RunContext): Promise<void>
 }
 
@@ -154,6 +160,7 @@ export class HostExecutor implements RunExecutor {
     try {
       let cwd: string
       let input: Pick<WorkerInput, 'entry' | 'directory' | 'network'>
+      let claim: SandboxClaim | undefined
       if (source.type === 'ref') {
         cwd = join(root, 'source')
         const { repo, ref, commit: pinned } = source
@@ -171,8 +178,13 @@ export class HostExecutor implements RunExecutor {
         // the published files are read from a directory of the run and work on the
         // sandbox, whose own build files are just files
         const { registry, network } = sandboxes as SandboxRunOptions
-        cwd = await registry.attach(source.id)
         const state = await registry.state(source.id)
+        const attached = await registry.attach(source.id, join(root, 'sandbox'))
+        cwd = attached.directory
+        claim = attached.claim
+        if (claim && !this.options.placement) {
+          throw new Error(`the sandbox ${source.id} is a claim on a cluster, this server runs tasks on its own docker`)
+        }
         context.emit({
           type: 'log',
           task: 'hammerkit',
@@ -192,7 +204,7 @@ export class HostExecutor implements RunExecutor {
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
       const placement = this.options.placement
-      const placed = placement ? await placement.prepare(run, context) : undefined
+      const placed = placement ? await placement.prepare(run, context, { root: cwd, claim }) : undefined
       try {
         await this.runInProcess(
           worker,

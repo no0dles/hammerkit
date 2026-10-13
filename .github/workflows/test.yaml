@@ -131,6 +131,7 @@ jobs:
       REGISTRY: localhost:5000
       HAMMERKIT_FULL_INTEGRATION: 'true'
       HAMMERKIT_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      HAMMERKIT_SANDBOX_IMAGE: hammerkit:ci
       # native docker is fast, but the first pull of the node/postgres images into
       # the cluster still costs time; keep a generous per-spec ceiling
       HAMMERKIT_TEST_TIMEOUT: '600000'
@@ -221,6 +222,13 @@ jobs:
       - name: Install the Gateway API CRDs
         if: matrix.suite == 'kubernetes' && steps.plan.outputs.hit != 'true'
         run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
+      # The pod of a sandbox's files runs hammerkit itself (kubernetes-sandboxes.spec.ts),
+      # so the cluster gets the image of this tree.
+      - name: Build the hammerkit image for the cluster
+        if: matrix.suite == 'kubernetes' && steps.plan.outputs.hit != 'true'
+        run: |
+          docker build -t hammerkit:ci .
+          kind load docker-image hammerkit:ci --name hammerkit-ci
       # docker-package-registry.spec.ts only probes an externally provided REGISTRY
       # for liveness (it never manages one), so stand up a registry on localhost:5000.
       - name: Start local registry

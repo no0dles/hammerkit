@@ -417,7 +417,7 @@ describe('HostExecutor', () => {
       })
       const sandbox = await sandboxes.create(alice, REPO, 'main')
       sandboxId = sandbox.id
-      files = await sandboxes.attach(sandboxId)
+      files = (await sandboxes.attach(sandboxId, root)).directory
     })
 
     it('runs the published tasks on the files of the sandbox, which keep what they wrote', async () => {

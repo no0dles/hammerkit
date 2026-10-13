@@ -20,10 +20,12 @@ RUN node_modules/.bin/pkg . --targets node24-alpine --compress Brotli
 # @kubernetes/client-node — both bundled into the binary — so it needs only a
 # shell, CA certs and libstdc++ (for the embedded node), not the full
 # docker-cli image with buildx/compose. docker-cli is kept for users who exec
-# into the image. Cuts the image roughly in half vs docker:*-cli-alpine.
+# into the image. Cuts the image roughly in half vs docker:*-cli-alpine. git and
+# ripgrep are for a server: it checks out repositories, and on a cluster this
+# image is the pod that reads and edits the files of a sandbox.
 FROM alpine:3.21
 
-RUN apk add --no-cache docker-cli ca-certificates libstdc++
+RUN apk add --no-cache docker-cli ca-certificates libstdc++ git ripgrep
 
 WORKDIR /app
 COPY --from=build /app/hammerkit /usr/local/bin/hammerkit

@@ -7,7 +7,7 @@ import { Principal } from './oauth'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
 import { EditedFile, EditOp, SandboxFiles } from './sandbox-files'
-import { SandboxState, SandboxStorage } from './sandbox-storage'
+import { SandboxAttachment, SandboxKey, SandboxState, SandboxStorage } from './sandbox-storage'
 
 // How long creating a sandbox or moving it to another commit may take
 const FETCH_TIMEOUT_MS = 10 * 60 * 1000
@@ -102,7 +102,8 @@ export class SandboxRegistry {
   async load(): Promise<void> {
     const { storage, records } = this.options
     const names = await readdir(records).catch(() => [] as string[])
-    const stored = new Set(await storage.list())
+    const stored = await storage.list()
+    const ids = new Set(stored.map((entry) => entry.id))
     for (const name of names) {
       if (!name.endsWith('.json')) {
         await rm(join(records, name), { force: true })
@@ -113,7 +114,7 @@ export class SandboxRegistry {
         if (!SANDBOX_ID_PATTERN.test(sandbox.id) || `${sandbox.id}.json` !== name) {
           throw new Error('not a sandbox record')
         }
-        if (!stored.has(sandbox.id)) {
+        if (!ids.has(sandbox.id)) {
           this.options.log?.(`drop sandbox ${sandbox.id}: its files are gone`)
           await rm(join(records, name), { force: true })
           continue
@@ -123,9 +124,9 @@ export class SandboxRegistry {
         this.options.log?.(`skip sandbox record ${name}: it can not be read`)
       }
     }
-    for (const id of stored) {
-      if (!this.sandboxes.has(id)) {
-        await storage.remove(id)
+    for (const entry of stored) {
+      if (!this.sandboxes.has(entry.id)) {
+        await entry.remove()
       }
     }
   }
@@ -185,6 +186,7 @@ export class SandboxRegistry {
       throw new SandboxError(507, 'the server has no room for another sandbox')
     }
     const id = `sbx_${randomBytes(12).toString('base64url')}`
+    const key: SandboxKey = { id, owner: { iss: owner.iss, sub: owner.sub } }
     this.creating.set(id, { iss: owner.iss, sub: owner.sub })
     try {
       const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
@@ -192,11 +194,12 @@ export class SandboxRegistry {
       const credentials = await repos.credentials(repo)
       let commit: string
       try {
-        commit = await storage.create(id, { url: repos.url(repo), ref, env: credentials.env, signal })
+        commit = await storage.create(key, { url: repos.url(repo), ref, env: credentials.env, signal })
       } catch (e) {
-        throw new SandboxError(502, repos.scrub(e, credentials.values).message)
+        // the storage's own limits (a quota on a cluster) are said as they are
+        throw e instanceof SandboxError ? e : new SandboxError(502, repos.scrub(e, credentials.values).message)
       }
-      const bytes = await storage.usage(id)
+      const bytes = await storage.usage(key)
       const problem =
         usage.bytes + bytes > limits.bytes
           ? new SandboxError(
@@ -209,7 +212,7 @@ export class SandboxRegistry {
             ? new SandboxError(507, 'the server has no room for another sandbox')
             : undefined
       if (problem) {
-        await storage.remove(id)
+        await storage.remove(key)
         throw problem
       }
       const at = this.timestamp()
@@ -239,7 +242,7 @@ export class SandboxRegistry {
     return this.withLock(id, async () => {
       const sandbox = this.mine(owner, id)
       this.mustBeFree(id)
-      const state = await this.options.storage.state(id)
+      const state = await this.options.storage.state(keyOf(sandbox))
       if (!state.clean) {
         throw new SandboxError(409, `the sandbox ${id} has changes, a fetch would mix them with another commit`)
       }
@@ -248,7 +251,7 @@ export class SandboxRegistry {
       await this.resolve(sandbox.repo, ref, signal)
       const credentials = await repos.credentials(sandbox.repo)
       try {
-        sandbox.commit = await storage.fetch(id, {
+        sandbox.commit = await storage.fetch(keyOf(sandbox), {
           url: repos.url(sandbox.repo),
           ref,
           env: credentials.env,
@@ -258,7 +261,7 @@ export class SandboxRegistry {
         throw new SandboxError(502, repos.scrub(e, credentials.values).message)
       }
       sandbox.ref = ref
-      sandbox.bytes = await storage.usage(id)
+      sandbox.bytes = await storage.usage(keyOf(sandbox))
       sandbox.lastUsedAt = this.timestamp()
       await this.save(sandbox)
       return copy(sandbox)
@@ -267,14 +270,15 @@ export class SandboxRegistry {
 
   // Cancels the runs on the sandbox, waits for them to stop and removes its files.
   async remove(owner: Owner, id: string): Promise<boolean> {
-    if (!this.get(owner, id)) {
+    const sandbox = this.get(owner, id)
+    if (!sandbox) {
       return false
     }
     this.deleting.add(id)
     try {
       await this.runs.stop(id)
       await this.withLock(id, async () => {
-        await this.options.storage.remove(id)
+        await this.options.storage.remove(keyOf(sandbox))
         await rm(join(this.options.records, `${id}.json`), { force: true })
         this.sandboxes.delete(id)
       })
@@ -292,10 +296,14 @@ export class SandboxRegistry {
     return this.withLock(id, async () => fn(copy(this.mine(owner, id))))
   }
 
-  // The files of one of the owner's sandboxes, to read: reads work while a run holds it.
+  // The files of one of the owner's sandboxes, to read one: while a run holds it too,
+  // where the storage can read it then.
   files(owner: Owner, id: string): SandboxFiles {
-    this.mine(owner, id)
-    return this.options.storage.files(id)
+    const sandbox = this.mine(owner, id)
+    if (!this.options.storage.readsWhileHeld) {
+      this.mustBeFree(id)
+    }
+    return this.options.storage.files(keyOf(sandbox))
   }
 
   /**
@@ -305,9 +313,9 @@ export class SandboxRegistry {
    */
   async read<T>(owner: Owner, id: string, fn: (files: SandboxFiles) => Promise<T>): Promise<T> {
     return this.withLock(id, async () => {
-      this.mine(owner, id)
+      const sandbox = this.mine(owner, id)
       this.mustBeFree(id)
-      return fn(this.options.storage.files(id))
+      return fn(this.options.storage.files(keyOf(sandbox)))
     })
   }
 
@@ -319,7 +327,7 @@ export class SandboxRegistry {
     return this.withLock(id, async () => {
       const sandbox = this.mine(owner, id)
       this.mustBeFree(id)
-      const plan = await this.options.storage.files(id).plan(ops)
+      const plan = await this.options.storage.files(keyOf(sandbox)).plan(ops)
       if (dryRun || plan.files.length === 0) {
         return plan.files
       }
@@ -347,18 +355,16 @@ export class SandboxRegistry {
   }
 
   state(id: string): Promise<SandboxState> {
-    return this.options.storage.state(id)
+    return this.options.storage.state(keyOf(this.existing(id)))
   }
 
-  // The directory a run works in; the run is the sandbox's use.
-  async attach(id: string): Promise<string> {
-    const sandbox = this.sandboxes.get(id)
-    if (!sandbox || this.deleting.has(id)) {
-      throw new Error(`the sandbox ${id} was deleted`)
-    }
+  // What a run works on, `into` a directory of the run when the storage copies the files;
+  // the run is the sandbox's use.
+  async attach(id: string, into: string): Promise<SandboxAttachment> {
+    const sandbox = this.existing(id)
     sandbox.lastUsedAt = this.timestamp()
     await this.save(sandbox)
-    return this.options.storage.attach(id)
+    return this.options.storage.attach(keyOf(sandbox), into)
   }
 
   // What a sandbox takes after a run wrote to it.
@@ -367,8 +373,16 @@ export class SandboxRegistry {
     if (!sandbox || this.deleting.has(id)) {
       return
     }
-    sandbox.bytes = await this.options.storage.usage(id)
+    sandbox.bytes = await this.options.storage.usage(keyOf(sandbox))
     await this.save(sandbox)
+  }
+
+  private existing(id: string): Sandbox {
+    const sandbox = this.sandboxes.get(id)
+    if (!sandbox || this.deleting.has(id)) {
+      throw new Error(`the sandbox ${id} was deleted`)
+    }
+    return sandbox
   }
 
   private mine(owner: Owner, id: string): Sandbox {
@@ -434,6 +448,10 @@ export class SandboxRegistry {
 function owns(owner: Owner, sandbox: Owner | Sandbox): boolean {
   const of = 'owner' in sandbox ? sandbox.owner : sandbox
   return of.iss === owner.iss && of.sub === owner.sub
+}
+
+function keyOf(sandbox: Sandbox): SandboxKey {
+  return { id: sandbox.id, owner: sandbox.owner }
 }
 
 function copy(sandbox: Sandbox): Sandbox {

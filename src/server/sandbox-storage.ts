@@ -22,27 +22,61 @@ export interface SandboxFetch {
   signal: AbortSignal
 }
 
+// Which sandbox: its id, and its owner, whose namespace a cluster keeps it in.
+export interface SandboxKey {
+  id: string
+  owner: { iss: string; sub: string }
+}
+
+// What a run works on. On a host it is the sandbox's own directory; on a cluster it is a
+// copy of the files for the process of the run, which plans with it, while the tasks
+// mount the claim itself, so what they write lands in the sandbox.
+export interface SandboxAttachment {
+  directory: string
+  claim?: SandboxClaim
+}
+
+export interface SandboxClaim {
+  name: string
+  namespace: string
+  // where the files are in the claim; a source of a task below `directory` is mounted
+  // from below it
+  subPath: string
+  // the pods that mount the claim carry it as `hammerkit.dev/sandbox` and keep to one
+  // node: a claim that can be written by one node at a time
+  label: string
+}
+
+// Storage of a sandbox that a list found, with or without a record.
+export interface StoredSandbox {
+  id: string
+  remove(): Promise<void>
+}
+
 /**
  * Where the files of sandboxes are kept. The registry of sandboxes, the API and the
- * executor only know a sandbox id and, while a run uses it, a directory; how the files are
- * stored is this interface's. A host keeps a directory per sandbox; a cluster would keep a
- * volume and attach it to the run.
+ * executor only know a sandbox and, while a run uses it, what to attach; how the files
+ * are stored is this interface's. A host keeps a directory per sandbox
+ * (HostSandboxStorage); a cluster keeps a claim per sandbox in its caller's namespace
+ * (KubernetesSandboxStorage).
  */
 export interface SandboxStorage {
-  // fetches the ref into new storage for the id, and answers the commit
-  create(id: string, fetch: SandboxFetch): Promise<string>
+  // whether one file can be read while a run holds the sandbox; walks and edits never can
+  readonly readsWhileHeld: boolean
+  // fetches the ref into new storage for the sandbox, and answers the commit
+  create(key: SandboxKey, fetch: SandboxFetch): Promise<string>
   // moves the files to another commit; only for a sandbox without changes
-  fetch(id: string, fetch: SandboxFetch): Promise<string>
-  state(id: string, signal?: AbortSignal): Promise<SandboxState>
-  // the directory a run works in
-  attach(id: string): Promise<string>
+  fetch(key: SandboxKey, fetch: SandboxFetch): Promise<string>
+  state(key: SandboxKey, signal?: AbortSignal): Promise<SandboxState>
+  // what a run works on; `into` is a directory of the run, for a copy of the files
+  attach(key: SandboxKey, into: string): Promise<SandboxAttachment>
   // the bytes it takes, its git data included
-  usage(id: string): Promise<number>
+  usage(key: SandboxKey): Promise<number>
   // reading, searching and editing its files through the API
-  files(id: string): SandboxFiles
-  remove(id: string): Promise<void>
-  // the ids that have storage, to clean up what a crash left behind
-  list(): Promise<string[]>
+  files(key: SandboxKey): SandboxFiles
+  remove(key: SandboxKey): Promise<void>
+  // what has storage, to clean up what a crash left behind
+  list(): Promise<StoredSandbox[]>
 }
 
 /**
@@ -53,6 +87,8 @@ export interface SandboxStorage {
  * directory and work tree, and runs without hooks or a file system monitor.
  */
 export class HostSandboxStorage implements SandboxStorage {
+  readonly readsWhileHeld = true
+
   constructor(
     private readonly directory: string,
     // the environment of git when it reads a sandbox: the variables runs see
@@ -125,7 +161,7 @@ export class HostSandboxStorage implements SandboxStorage {
     }
   }
 
-  files(id: string): SandboxFiles {
+  files({ id }: SandboxKey): SandboxFiles {
     const timeout = () => AbortSignal.timeout(5 * 60 * 1000)
     return new HostSandboxFiles(
       this.workTree(id),
@@ -138,7 +174,7 @@ export class HostSandboxStorage implements SandboxStorage {
     )
   }
 
-  async create(id: string, fetch: SandboxFetch): Promise<string> {
+  async create({ id }: SandboxKey, fetch: SandboxFetch): Promise<string> {
     const root = this.root(id)
     // the sandboxes are their owners', nobody else on the machine reads them
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
@@ -147,12 +183,12 @@ export class HostSandboxStorage implements SandboxStorage {
       await git(['init', '--quiet', '--bare', join(root, 'git')], fetch.env, fetch.signal, `sandbox ${id}`, 'create')
       return await this.checkout(id, fetch, true)
     } catch (e) {
-      await this.remove(id)
+      await this.removeId(id)
       throw e
     }
   }
 
-  async fetch(id: string, fetch: SandboxFetch): Promise<string> {
+  async fetch({ id }: SandboxKey, fetch: SandboxFetch): Promise<string> {
     return this.checkout(id, fetch, false)
   }
 
@@ -179,7 +215,7 @@ export class HostSandboxStorage implements SandboxStorage {
 
   // The tree is written with an index of its own, so neither the sandbox's index nor its
   // files change.
-  async state(id: string, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
+  async state({ id }: SandboxKey, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
     return this.withIndex(id, signal, async (run) => {
       await run(['add', '--all', '--', '.'], 'read')
       const tree = (await run(['write-tree'], 'read')).trim()
@@ -188,17 +224,18 @@ export class HostSandboxStorage implements SandboxStorage {
     })
   }
 
-  async attach(id: string): Promise<string> {
+  // the run works in the sandbox itself
+  async attach({ id }: SandboxKey): Promise<SandboxAttachment> {
     const files = this.workTree(id)
     const stats = await lstat(files).catch(() => undefined)
     if (!stats?.isDirectory()) {
       throw new Error(`the sandbox ${id} has no files on this server`)
     }
-    return files
+    return { directory: files }
   }
 
   // Symbolic links are counted, not followed: a link a task made points anywhere.
-  async usage(id: string): Promise<number> {
+  async usage({ id }: SandboxKey): Promise<number> {
     let bytes = 0
     const pending = [this.root(id)]
     while (pending.length > 0) {
@@ -216,12 +253,18 @@ export class HostSandboxStorage implements SandboxStorage {
     return bytes
   }
 
-  async remove(id: string): Promise<void> {
+  async remove({ id }: SandboxKey): Promise<void> {
+    await this.removeId(id)
+  }
+
+  private async removeId(id: string): Promise<void> {
     await rm(this.root(id), { recursive: true, force: true, maxRetries: 3 })
   }
 
-  async list(): Promise<string[]> {
+  async list(): Promise<StoredSandbox[]> {
     const entries = await readdir(this.directory, { withFileTypes: true }).catch(() => [])
-    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({ id: entry.name, remove: () => this.removeId(entry.name) }))
   }
 }

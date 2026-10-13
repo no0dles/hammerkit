@@ -496,7 +496,20 @@ describe('server config policy', () => {
         namespacePrefix: 'hammerkit-',
         pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }],
         providers: {},
+        sandboxes: { image: `no0dles/hammerkit:${getVersion()}`, size: '4Gi', idle: '1m' },
       })
+    })
+
+    it('keeps sandboxes on a class of their own and within the limits of a caller', () => {
+      expect(message(kubernetes({ storageClass: 'fast', sandboxes: { storageClass: 'fast' } }))).toBe(
+        'give sandboxes a storage class of their own, or leave it out to use the one of tasks'
+      )
+      expect(message(kubernetes({ sandboxes: { size: '30Gi' } }))).toBe(
+        'a sandbox of 30Gi is more than sandboxes.limits.bytes of 20Gi'
+      )
+      expect(kubernetes({ storageClass: 'fast', sandboxes: { storageClass: 'sandboxes', size: '10Gi' } }).success).toBe(
+        true
+      )
     })
 
     it('takes pools, a quota as strings and default resources', () => {

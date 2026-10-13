@@ -26,7 +26,7 @@ import { formatDuration, formatSize, parseDuration, parseSize } from './utils/un
 import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
-import { registerRunWorkerCommand } from './server/run-worker-command'
+import { registerRunWorkerCommand, registerSandboxPodCommand } from './server/run-worker-command'
 import { parseNetworkOption, WorkNetwork } from './planner/work-network'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
@@ -125,6 +125,7 @@ export async function getProgram(
   const program = new Command()
   registerServerCommand(program, environment)
   registerRunWorkerCommand(program, environment)
+  registerSandboxPodCommand(program, environment)
 
   const parsed = parseSetArguments(argv)
   const args = parsed.args

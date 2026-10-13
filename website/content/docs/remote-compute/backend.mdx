@@ -76,6 +76,7 @@ backend:
     gsm: { image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim }
   quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20' }
   defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
+  sandboxes: { size: 4Gi, storageClass: sandboxes }
 ```
 
 The server runs as before (it checks the code out, plans the run with the engine in a process
@@ -92,6 +93,7 @@ service a Deployment, in a namespace of the caller.
 | `providers` | Per secret provider, the image its command runs in. Every provider an account reads needs one. |
 | `quota` | The `ResourceQuota` of each caller's namespace, as Kubernetes writes it (`requests.cpu`, `limits.memory`, `pods`, `persistentvolumeclaims`, `requests.storage`). |
 | `defaultResources` | `requests` and `limits` (`cpu`, `memory`) for containers without [`resources`](/docs/task#resources), as a `LimitRange`, so they are admitted under a quota that limits compute. |
+| `sandboxes` | Where [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes) are kept: a claim per sandbox in its caller's namespace, its size and storage class, and the image of the pod that reads and edits its files. |
 
 ### Namespaces
 
@@ -179,6 +181,13 @@ A task that reads a provider's secret keeps an open network for now: its init co
 the task's pod, so its policy would cut them off from the secret manager. Such a build file is
 refused when it is published, and a run whose ceiling would limit such a task fails that task.
 
+### Sandboxes
+
+A [sandbox](/docs/remote-compute/sandboxes#on-kubernetes) is a claim in its caller's
+namespace, next to the namespace's runs. A short pod of `backend.sandboxes.image` fetches into
+it, reads and edits its files, and the Jobs of a run on the sandbox mount it. The quota of
+sandboxes is a `ResourceQuota` on their storage class, when they have one of their own.
+
 ### What the server may do
 
 In its own namespace the server reads the Secrets of the accounts and creates tokens of their
@@ -206,7 +215,9 @@ rules:
   - { apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [get, list, create, patch, delete] }
 ```
 
-Bind the Role and the ClusterRole to the server's ServiceAccount.
+Bind the Role and the ClusterRole to the server's ServiceAccount, the ClusterRole with a
+`ClusterRoleBinding`: callers' namespaces are made as they come, and with
+[sandboxes](#sandboxes) the server lists their claims in all of them when it starts.
 
 Not yet: Windows nodes, a cache in a registry or a bucket, and a limited network for a task
 that reads a provider's secret.

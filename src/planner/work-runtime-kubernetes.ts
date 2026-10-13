@@ -18,7 +18,7 @@ import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernete
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
-import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
+import { getKubernetesPersistence, getVolumeName, getWorkspacePodSpec } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
@@ -165,7 +165,8 @@ export function kubernetesTaskRuntime(
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const envs = getEnvironmentVariables(task.data.envs)
 
-      const persistence = await getKubernetesPersistence(task)
+      const persistence = await getKubernetesPersistence(task, kubernetes)
+      const workspace = getWorkspacePodSpec(kubernetes, persistence)
 
       await ensureNamespace(instance, kubernetes.namespace)
       await ensurePersistentData(instance, kubernetes, environment, task, persistence)
@@ -187,6 +188,7 @@ export function kubernetesTaskRuntime(
         'hammerkit.dev/id': task.id(),
         'hammerkit.dev/state': options.stateKey,
         ...getRunLabels(kubernetes),
+        ...workspace.labels,
       }
       const placement = server ? getPodPlacement(server, task.data.pool) : null
 
@@ -255,7 +257,13 @@ export function kubernetesTaskRuntime(
                       ...getKubernetesResources(task.data.resources),
                     },
                   ],
-                  volumes: [...persistence.volumes, ...secrets.volumes, ...secretSpec.volumes],
+                  volumes: [
+                    ...persistence.volumes,
+                    ...persistence.workspace,
+                    ...secrets.volumes,
+                    ...secretSpec.volumes,
+                  ],
+                  ...(workspace.affinity ? { affinity: workspace.affinity } : {}),
                   hostAliases: network.hostAliases,
                   restartPolicy: 'Never',
                   // on a server the pod is the build's: no token of the namespace, and the
@@ -420,7 +428,7 @@ export function kubernetesServiceRuntime(
       await removeKubernetesItemNetwork(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
-      const persistence = await getKubernetesPersistence(service)
+      const persistence = await getKubernetesPersistence(service, kubernetes)
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)

@@ -7,7 +7,8 @@ import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply
 import { RUN_LABEL } from '../kubernetes/job-placement'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
-import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
+import { SandboxClaim } from './sandbox-storage'
 import { getVersion } from '../version'
 import { HostExecutor, HostExecutorOptions, RunPlacement } from './executor'
 import { Run, RunContext, RunExecutor } from './runs'
@@ -74,6 +75,7 @@ export class KubernetesExecutor implements RunExecutor {
   private readonly instance: KubernetesInstance
   private readonly access: ReturnType<typeof getClusterAccess>
   private readonly namespace: string
+  private readonly namespaces: CallerNamespaces
   // the run that executes, or the last one waiting, per caller namespace
   private readonly queues = new Map<string, Promise<void>>()
 
@@ -98,6 +100,7 @@ export class KubernetesExecutor implements RunExecutor {
       )
     }
     this.namespace = namespace
+    this.namespaces = new CallerNamespaces(this.instance, config.backend)
     this.host = new HostExecutor({ ...options, placement: this.placement() })
   }
 
@@ -126,9 +129,9 @@ export class KubernetesExecutor implements RunExecutor {
   private placement(): RunPlacement {
     const backend = this.config.backend
     return {
-      prepare: async (run: Run, context: RunContext) => {
+      prepare: async (run: Run, context: RunContext, work: { root: string; claim?: SandboxClaim }) => {
         const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
-        await this.prepareNamespace(namespace)
+        await this.namespaces.prepare(namespace)
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
         const kubernetes: WorkKubernetesEnvironment = {
           type: 'kubernetes',
@@ -147,6 +150,7 @@ export class KubernetesExecutor implements RunExecutor {
                 account.kubernetes ? [[name, account.kubernetes]] : []
               )
             ),
+            ...(work.claim ? { workspace: getWorkspace(work.root, work.claim, namespace) } : {}),
           },
         }
         return { kubernetes, env: this.access.env }
@@ -166,11 +170,26 @@ export class KubernetesExecutor implements RunExecutor {
       },
     }
   }
+}
+
+/**
+ * The namespaces of callers on the cluster: named by the caller (getCallerNamespace),
+ * made on first use, with the operator's quota.
+ */
+export class CallerNamespaces {
+  constructor(
+    private readonly instance: KubernetesInstance,
+    private readonly backend: KubernetesBackend
+  ) {}
+
+  name(owner: { iss: string; sub: string }): string {
+    return getCallerNamespace(this.backend.namespacePrefix, owner)
+  }
 
   // The caller's namespace with the operator's quota, and default requests for
   // containers without resources so they are admitted under a quota on compute.
-  private async prepareNamespace(namespace: string): Promise<void> {
-    const backend = this.config.backend
+  async prepare(namespace: string): Promise<void> {
+    const backend = this.backend
     try {
       await this.instance.coreApi.readNamespace({ name: namespace })
     } catch (e) {
@@ -225,6 +244,15 @@ export class KubernetesExecutor implements RunExecutor {
       await apply(this.instance, limits)
     }
   }
+}
+
+// The claim of a sandbox as the Jobs of its run mount it: the run's copy of the files is
+// `root`, a source below it is the same path below `subPath` in the claim.
+function getWorkspace(root: string, claim: SandboxClaim, namespace: string): WorkKubernetesWorkspace {
+  if (claim.namespace !== namespace) {
+    throw new Error(`the sandbox is in ${claim.namespace}, the run in ${namespace}`)
+  }
+  return { root, claim: claim.name, subPath: claim.subPath, label: claim.label }
 }
 
 // Everything a run made in the caller's namespace, by its label: Jobs with their

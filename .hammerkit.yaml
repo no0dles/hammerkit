@@ -128,6 +128,8 @@ tasks:
       - scripts
       - tsconfig.json
       - vitest.config.ts
+      # the image of the pod of a sandbox's files is built from it
+      - Dockerfile
     generates:
       - coverage/kubernetes
     envs:
@@ -139,6 +141,8 @@ tasks:
       CLUSTER_NAME: ${CLUSTER_NAME:-}
       HAMMERKIT_FULL_INTEGRATION: ${HAMMERKIT_FULL_INTEGRATION:-}
       HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+      # kubernetes-sandboxes.spec.ts: the image of this tree the cluster has loaded
+      HAMMERKIT_SANDBOX_IMAGE: ${HAMMERKIT_SANDBOX_IMAGE:-}
     cmds:
       - >-
         node_modules/.bin/vitest run --mode integration --no-file-parallelism
