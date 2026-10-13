@@ -118,8 +118,10 @@ the last command of each task as `command`, so a caller knows where the argument
   on the server's machine, as the code of the ref already does.
 * A server never takes `--set`; variables stay what the published build file says.
 
-Arguments are part of the task's cache key, as they are locally: a run with other
-arguments is not a cache hit of one without.
+As [locally](/docs/task/arguments), the task with arguments skips the cache: it reads no
+cache entry and stores none, and a later run without arguments doesn't take its outputs
+for a cache hit. Naming a method in `options.cache` (`"cache": "checksum"`) keeps its
+caching, as `--cache` before `--` does. Its dependencies cache as always.
 
 ## Events
 

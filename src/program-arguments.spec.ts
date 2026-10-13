@@ -47,6 +47,42 @@ describe('program arguments after --', () => {
     expect(existsSync(join(dir, 'pwned.txt'))).toBe(false)
   })
 
+  itExceptWindows('run with them skips the cache and leaves no stale hit for a run without them', async () => {
+    const t = createTestCase('cmd-run-arguments-cache', {
+      '.hammerkit.yaml': { tasks: { build: { cmds: ['node build.js'], src: ['build.js'], generates: ['out.json'] } } },
+      'build.js':
+        `require('fs').writeFileSync('out.json', JSON.stringify(process.argv.slice(2)))\n` +
+        `require('fs').appendFileSync('runs.txt', 'x')\n`,
+    })
+    const dir = join(process.cwd(), 'temp', 'cmd-run-arguments-cache')
+    const output = () => JSON.parse(readFileSync(join(dir, 'out.json')).toString())
+    const runs = () => (existsSync(join(dir, 'runs.txt')) ? readFileSync(join(dir, 'runs.txt')).length : 0)
+    await t.setup(async (cwd, environment) => {
+      const run = (...args: string[]) => runProgram(environment, [HK, 'run', 'build', ...args], true)
+
+      await run()
+      expect(output()).toEqual([])
+      await run('--', '--prod')
+      expect(output()).toEqual(['--prod'])
+      const before = runs()
+      await run('--', '--prod')
+      expect(runs()).toBe(before + 1)
+      // the outputs are the --prod ones now, so the record of the plain run is gone
+      await run()
+      expect(output()).toEqual([])
+
+      // an explicit --cache keeps the cache for a run with arguments
+      await run('--cache', 'checksum', '--', '--prod')
+      expect(output()).toEqual(['--prod'])
+      const cached = runs()
+      await run('--cache', 'checksum', '--', '--prod')
+      expect(runs()).toBe(cached)
+      expect(output()).toEqual(['--prod'])
+      await run()
+      expect(output()).toEqual([])
+    })
+  })
+
   it('run refuses them when several tasks are selected', async () => {
     const t = createTestCase('cmd-run-arguments-several', files)
     await expect(t.shell([HK, 'run', '--', 'x'])).rejects.toThrow(

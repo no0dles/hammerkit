@@ -5,18 +5,21 @@
 - **A sandbox is a caller's checkout that runs published tasks.**
   - Creating one is a fetch with the operator's `sources` credential, not a run. It belongs to the caller and stays until it is deleted, within quotas.
   - Runs on it execute the published, pinned build file with the sandbox as its directory, so an agent's edit to the sandbox's `.hammerkit.yaml` changes nothing until it is proposed and published.
-  - Accounts opt in with `source: [sandbox]`. Production accounts don't list it.
+  - Accounts opt in with `source: [sandbox]`. Production accounts don't list it. `env:` secrets opt in the same way, through `sandboxes.env.allow`.
+  - Its content is written by the caller for the engine too: every path a run derives from it is resolved without following links, and the git dir is never mountable. (Found in review: Docker followed a `src -> /` link into the host's root.)
 - **Files have two ways in.** Typed endpoints (tree, read, search, edits, changes) serve clients without tools of their own, and mirror the shapes models are trained on: exact-string replace, `apply_patch` and unified diffs, ripgrep's parameters, numbered reads. A raw read, write and stat surface serves harnesses that keep their own tools and only swap the backend. No vendor standard names these tools, but harnesses converge on the same operations.
 - **Arguments are passed through, raw, for every task and service.**
   - What follows `--` is appended to the last command, each argument quoted.
-  - The arguments are part of the cache key and never reach dependencies.
+  - A run with arguments skips the cache by default and leaves the task's outputs marked as not cached, so a later plain run never reports them as its own (Pascal, 2026-10-13). Arguments never reach dependencies.
   - A shell is a task whose last command is `sh -c`; there is no exec endpoint.
-  - On a server, a task that reads secrets takes no arguments, so a shell holds no account. A server never takes `--set`.
+  - On a server, a task that reads a secret or a credential from the server's environment takes no arguments, so a shell holds no account. Its dependencies and needed services may hold one: a publisher keeps secrets out of their outputs. A server never takes `--set`.
 - **Network limits are a field of every container task and service.**
-  - The levels are `none` and `open`, plus a host allowlist through an egress proxy per task or service that fails closed. The services in `needs` are reachable at every level, since a task names them because it uses them.
+  - The levels are `none` and `open`, plus a host allowlist through an egress proxy per limited item that fails closed. The services in `needs` are reachable at every level, since a task names them because it uses them.
   - A ceiling can be set from outside the build file: `run --network` on a laptop, and `runs.network` and `sandboxes.network` on a server.
   - Local tasks can't be limited and are refused under a ceiling.
+  - A limit holds or the run fails, never runs open: Docker 28 or later (internal networks without a route to the host), a proxy per limited item, and on Kubernetes a CNI the operator states enforces `NetworkPolicy`, policies on ingress and egress, removed only after the pods are gone.
 - **Sandbox runs use containers only** unless the operator names `local`. The run process is not a boundary (ADR-0010), and a local task could read every other caller's sandbox on the same host.
+- **No ambient credentials.** A push uses the required `sources[].push` secret and nothing git finds on the server. On Kubernetes an account without its own credentials is refused rather than run on the node's identity, and each caller's namespace is isolated (its own RoleBinding, default-deny policies, no metadata address, `restricted` Pod Security).
 
 ## Considered options
 
@@ -26,6 +29,8 @@
 - **Declared, typed arguments with defaults and a schema** — not chosen: passthrough is what `npm` and `make` users know and needs nothing in the build file. The cost is no input schema for MCP tools, which instead describe where the arguments land.
 - **Network levels first, host allowlist later** — rejected: without host rules an agent can't install packages without being fully open.
 - **A separate `needs` level** (only the needed services) — rejected: needed services are always reachable, so `none` already means that.
+- **Arguments in the cache key** — rejected for now: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. Caching argument runs needs the record of which run produced the outputs to be per output location.
+- **Refusing arguments when any item of the run reads a secret** — not chosen: a shell's dependencies routinely log in to a registry. The exemption is stated instead.
 
 ## Consequences
 

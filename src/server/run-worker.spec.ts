@@ -89,6 +89,25 @@ describe('workerMain', () => {
     expect(text).toContain('from-the-arguments')
   })
 
+  it('runs a task with arguments uncached, unless the run names a cache method', async () => {
+    // a source of its own, so no cache entry of an earlier test run matches
+    writeFileSync(join(directory, 'input.txt'), directory)
+    writeFileSync(join(directory, '.hammerkit.yaml'), 'tasks:\n  say:\n    src: [input.txt]\n    cmds: [echo said]\n')
+    const states = async (options: Record<string, unknown>) => {
+      const messages = await run({ ...base, tasks: ['say'], options, entry: join(directory, '.hammerkit.yaml') })
+      expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: true })
+      return messages.flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event.state] : []))
+    }
+    // what a run without arguments caches, a run with them does not take, nor store
+    expect(await states({})).toContain('succeeded')
+    expect(await states({})).toEqual(['cached'])
+    expect(await states({ args: ['x'] })).toContain('succeeded')
+    expect(await states({ args: ['x'] })).toContain('succeeded')
+    // a method named in the run keeps the caching
+    expect(await states({ args: ['y'], cache: 'checksum' })).toContain('succeeded')
+    expect(await states({ args: ['y'], cache: 'checksum' })).toEqual(['cached'])
+  })
+
   it('holds the run to the network ceiling of the server', async () => {
     // a local task can not be limited, so the ceiling refuses it before it starts
     const messages = await run({ ...base, network: 'none', entry: join(directory, '.hammerkit.yaml') })

@@ -47,7 +47,29 @@ export function appendArguments(command: WorkCommand, args: string[], quoting: A
       command: command.parsed.command,
       args: [...command.parsed.args, ...args],
     },
+    arguments: { cmd: command.cmd.length, args: command.parsed.args.length },
   }
+}
+
+// Kubernetes expands `$(NAME)` with the container's env and turns `$$` into `$`
+// in a container's command and args, before any shell sees them, so a quoted
+// argument isn't text there unless its `$` is doubled. The part of the command
+// the build file declares keeps its meaning.
+export function escapeKubernetesText(text: string): string {
+  return text.replace(/\$/g, '$$$$')
+}
+
+export function getKubernetesCommandText(command: WorkCommand): string {
+  if (!command.arguments) {
+    return command.cmd
+  }
+  const from = command.arguments.cmd
+  return command.cmd.slice(0, from) + escapeKubernetesText(command.cmd.slice(from))
+}
+
+export function getKubernetesCommandArgs(command: WorkCommand): string[] {
+  const from = command.arguments?.args ?? command.parsed.args.length
+  return command.parsed.args.map((arg, index) => (index >= from ? escapeKubernetesText(arg) : arg))
 }
 
 // The command arguments after `--` land in: the last command of a task, the
@@ -69,10 +91,12 @@ export interface ArgumentsSelection {
 
 // Appends the arguments to the one task or service a run selects, before
 // anything asks for its id: the last command is part of the task id, so the
-// arguments are part of its cache key. Dependencies and needed services are
-// planned items of their own and keep their commands. No arguments change
-// nothing, so a task run without them keeps its cache entries.
-export function applyArguments(selection: ArgumentsSelection, args: string[]): void {
+// arguments are part of its cache key. A run with arguments is a one-off (one
+// test, one flag), so the task skips the cache unless `keepCache`; even then the
+// key keeps runs with other arguments apart. Dependencies and needed services
+// are planned items of their own and keep their commands and caching. No
+// arguments change nothing, so a task run without them keeps its cache entries.
+export function applyArguments(selection: ArgumentsSelection, args: string[], keepCache = false): void {
   if (args.length === 0) {
     return
   }
@@ -103,11 +127,34 @@ export function applyArguments(selection: ArgumentsSelection, args: string[]): v
   }
 
   const quoting = getItemQuoting(item)
+  if (item.type === 'local-task' && quoting === 'powershell') {
+    const refused = args.find(isRefusedByWindowsPowerShell)
+    if (refused !== undefined) {
+      throw new Error(
+        `task ${item.name} runs in Windows PowerShell, which would split or run the argument ${JSON.stringify(
+          refused
+        )}, so it is refused: an empty argument, a " and the characters & | < > ^ % ! and line breaks`
+      )
+    }
+  }
   if (item.type === 'container-service') {
     item.cmd = appendArguments(target, args, quoting)
   } else {
     item.cmds = [...item.cmds.slice(0, -1), appendArguments(target, args, quoting)]
+    if (!keepCache) {
+      // not implicit, so the run's --cache default doesn't bring the method back
+      item.caching = { ...item.caching, method: 'none', implicit: false }
+    }
   }
+}
+
+// Windows PowerShell 5.1 builds a new command line for a native program, and
+// starts a .cmd or .bat shim (yarn.cmd, most of node_modules/.bin) through
+// cmd.exe. There an empty argument is dropped, a " splits or joins arguments,
+// and cmd reads & | < > ^ % ! and a line break as syntax, so such an argument
+// can't be passed as text.
+export function isRefusedByWindowsPowerShell(arg: string): boolean {
+  return arg === '' || /["&|<>^%!\r\n]/.test(arg)
 }
 
 function getItemQuoting(item: WorkTask | WorkService): ArgumentQuoting {

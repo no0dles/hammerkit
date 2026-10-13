@@ -11,9 +11,13 @@ function labels(values: string[] | undefined): LabelValues | undefined {
 }
 
 // The tasks in the order they were named, one scope each; by labels when none is.
-// The arguments, if any, go to the one task named (the request allows no more).
+// The arguments, if any, go to the one task named (the request allows no more). That
+// task runs uncached unless the request names a `cache` method, as `run --cache` does.
 export function getRunScopes(tasks: string[], options: RunOptions): { name: string; scope: WorkScope }[] {
-  const args = options.args && options.args.length > 0 ? { values: options.args, services: false } : undefined
+  const args =
+    options.args && options.args.length > 0
+      ? { values: options.args, services: false, cache: options.cache !== undefined }
+      : undefined
   return tasks.length > 0
     ? tasks.map((task) => ({
         name: task,
