@@ -169,7 +169,12 @@ export function kubernetesTaskRuntime(
       const workspace = getWorkspacePodSpec(kubernetes, persistence)
 
       await ensureNamespace(instance, kubernetes.namespace)
-      await ensurePersistentData(instance, kubernetes, environment, task, persistence)
+      try {
+        await ensurePersistentData(instance, kubernetes, environment, task, persistence)
+      } catch (e) {
+        options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+        return
+      }
       const server = kubernetes.server
       const { delivered, inJob } = splitJobSecrets(task.data.secrets, server)
       const secrets = getKubernetesSecretRefs(task, delivered)

@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { V1LimitRange, V1ResourceQuota } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
-import { RUN_LABEL } from '../kubernetes/job-placement'
+import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
@@ -71,6 +71,8 @@ function readInClusterNamespace(): string | undefined {
  * When a run ends, everything made for it is removed.
  */
 export class KubernetesExecutor implements RunExecutor {
+  // the registry keeps a caller's next run in its queue, not running and timed here
+  readonly runningPerCaller = 1
   private readonly host: HostExecutor
   private readonly instance: KubernetesInstance
   private readonly access: ReturnType<typeof getClusterAccess>
@@ -260,7 +262,7 @@ function getWorkspace(root: string, claim: SandboxClaim, namespace: string): Wor
 // the NetworkPolicies of limited networks, which go last so no pod of the run
 // outlives its policy.
 export async function removeRunObjects(instance: KubernetesInstance, namespace: string, run: string): Promise<void> {
-  const labelSelector = `${RUN_LABEL}=${run}`
+  const labelSelector = `${RUN_LABEL}=${getRunLabelValue(run)}`
   const selector = { namespace, labelSelector }
   await instance.batchApi.deleteCollectionNamespacedJob({ ...selector, propagationPolicy: 'Background' })
   await instance.appsApi.deleteCollectionNamespacedDeployment({ ...selector, propagationPolicy: 'Background' })

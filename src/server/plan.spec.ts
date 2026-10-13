@@ -202,6 +202,16 @@ tasks:
       'tasks:\n  a:\n    image: alpine\n    mounts: ["../outside:/x"]\n    cmds: [echo]\n',
       /a: mounts .*outside, which is outside of the bundle/
     )
+    // what a task reads would be uploaded or bound from the server: its cluster token
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    src: ["../../../../../../var/run/secrets/kubernetes.io/serviceaccount"]\n    cmds: [echo]\n',
+      'a: src ../../../../../../var/run/secrets/kubernetes.io/serviceaccount is outside of the bundle'
+    )
+    await refuse('tasks:\n  a:\n    src: ["../../**/*.conf"]\n    cmds: [echo]\n', 'a: src ../../**/*.conf is outside')
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    generates: ["../out"]\n    cmds: [echo]\n',
+      /a: generates .*out, which is outside of the bundle/
+    )
   })
 
   it('takes mounts inside the bundle', async () => {

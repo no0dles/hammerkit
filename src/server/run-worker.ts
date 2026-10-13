@@ -9,6 +9,7 @@ import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
+import { assertWorkTreePathsWithinRoot } from '../planner/utils/assert-item-paths'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
@@ -126,6 +127,7 @@ export async function runTasks(
         directory: input.directory,
       })
       const workTree = getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment)
+      await assertWorkTreePathsWithinRoot(workTree, cwd)
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0) {
         throw new Error(`no tasks found for ${name}`)
