@@ -10,7 +10,13 @@ import { AbortError } from '../executer/abort'
 import { KubernetesInstance } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
-const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', httpRoutes: [] } as WorkKubernetesEnvironment
+const env = {
+  type: 'kubernetes',
+  namespace: 'demo',
+  context: 'ctx',
+  httpRoutes: [],
+  networkPolicyEnforced: false,
+} as WorkKubernetesEnvironment
 
 function httpError(code: number): ApiException<undefined> {
   return new ApiException(code, `http ${code}`, undefined, {})
