@@ -66,7 +66,9 @@ function isInternal(address) {
   }
   return address === '::' || address === '::1' || /^f[cd]/i.test(address)
 }
-// The proxy resolves the name itself and connects to the address it checked.
+// The proxy resolves the name itself and connects only to the addresses it
+// checked, each in turn (a name can have an IPv6 address the network has no
+// route to).
 function resolve(host, rule, callback) {
   dns.lookup(host, { all: true }, (err, addresses) => {
     if (err || addresses.length === 0) {
@@ -74,8 +76,20 @@ function resolve(host, rule, callback) {
       return
     }
     const blocked = addresses.some((a) => isLinkLocal(a.address) || (rule !== 'exact' && isInternal(a.address)))
-    callback(null, blocked ? null : addresses[0].address)
+    callback(null, blocked ? null : addresses)
   })
+}
+// connection options that reach the checked addresses and nothing else
+function connectTo(host, addresses) {
+  const lookup = (hostname, options, callback) => {
+    const cb = typeof options === 'function' ? options : callback
+    if (typeof options === 'object' && options && options.all) {
+      cb(null, addresses)
+    } else {
+      cb(null, addresses[0].address, addresses[0].family)
+    }
+  }
+  return { host, lookup, autoSelectFamily: true }
 }
 function refuse(host) {
   if (!refused.has(host)) {
@@ -103,13 +117,13 @@ const server = http.createServer((req, res) => {
     res.end('hammerkit: network access to ' + url.hostname + ' is not allowed\\n')
     return
   }
-  resolve(url.hostname, rule, (err, address) => {
+  resolve(url.hostname, rule, (err, addresses) => {
     if (err) {
       res.writeHead(502, { 'content-type': 'text/plain' })
       res.end()
       return
     }
-    if (!address) {
+    if (!addresses) {
       refuse(url.hostname)
       res.writeHead(403, { 'content-type': 'text/plain' })
       res.end('hammerkit: ' + url.hostname + ' resolves to an address that is not allowed\\n')
@@ -121,7 +135,12 @@ const server = http.createServer((req, res) => {
     // the absolute URL wins over a Host header that disagrees
     headers.host = url.host
     const upstream = http.request(
-      { host: address, port: url.port || 80, method: req.method, path: url.pathname + url.search, headers },
+      Object.assign(connectTo(url.hostname, addresses), {
+        port: url.port || 80,
+        method: req.method,
+        path: url.pathname + url.search,
+        headers,
+      }),
       (response) => {
         res.writeHead(response.statusCode || 502, response.headers)
         response.pipe(res)
@@ -145,18 +164,18 @@ server.on('connect', (req, socket, head) => {
     socket.end('HTTP/1.1 403 Forbidden\\r\\ncontent-type: text/plain\\r\\n\\r\\nhammerkit: network access is not allowed\\n')
     return
   }
-  resolve(target.host, rule, (err, address) => {
+  resolve(target.host, rule, (err, addresses) => {
     if (err) {
       socket.end('HTTP/1.1 502 Bad Gateway\\r\\n\\r\\n')
       return
     }
-    if (!address) {
+    if (!addresses) {
       refuse(target.host)
       socket.end('HTTP/1.1 403 Forbidden\\r\\ncontent-type: text/plain\\r\\n\\r\\nhammerkit: network access is not allowed\\n')
       return
     }
     let established = false
-    const upstream = net.connect(target.port, address, () => {
+    const upstream = net.connect(Object.assign(connectTo(target.host, addresses), { port: target.port }), () => {
       established = true
       socket.write('HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
       if (head && head.length > 0) {
