@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { FilePatch, parsePatch, PatchError } from './sandbox-patch'
+import { FilePatch, MAX_COMPARED_LINES, parsePatch, PatchError } from './sandbox-patch'
 
 // The result of a patch on files given as { path: content }.
 function applyTo(files: { [path: string]: string }, patch: string): { [path: string]: string } {
@@ -24,6 +24,21 @@ function applyTo(files: { [path: string]: string }, patch: string): { [path: str
 }
 
 describe('patches', () => {
+  it('stops looking for a hunk that is nowhere in a large file', () => {
+    // every place in the file matches the hunk but for its last line
+    const file = 'a\n'.repeat(200_000)
+    const hunk = `${' a\n'.repeat(200)}-b\n`
+    const unified = `--- a/big.txt\n+++ b/big.txt\n@@ -1,201 +1,200 @@\n${hunk}`
+    const started = Date.now()
+    expect(() => applyTo({ 'big.txt': file }, unified)).toThrow(`compared with the file ${MAX_COMPARED_LINES} times`)
+    const v4a = `*** Begin Patch\n*** Update File: big.txt\n@@\n${hunk}*** End Patch\n`
+    expect(() => applyTo({ 'big.txt': file }, v4a)).toThrow(PatchError)
+    expect(Date.now() - started).toBeLessThan(30_000)
+    // in a smaller file, the same hunk is still found far from where it says
+    const moved = applyTo({ 'big.txt': `${'a\n'.repeat(20_000)}b\n` }, unified)
+    expect(moved['big.txt']).toBe('a\n'.repeat(20_000))
+  })
+
   describe('git diffs', () => {
     let repository: string
     const git = (...args: string[]) =>

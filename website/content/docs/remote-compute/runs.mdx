@@ -275,7 +275,8 @@ one it used last and `GET /v1/sources/<snapshot>` says it is complete.
   (not `.env.example`, `.env.sample`, `.env.template`), `.npmrc`, `.netrc`,
   `.pypirc`, `.git-credentials`, private keys (`id_rsa` and its kin, `*.pem`,
   `*.p12`, `*.pfx`) and anything below `.git/`, `.ssh/`, `.aws/`, `.gnupg/` or
-  `.kube/`. Secrets belong in a secret provider; there is no override.
+  `.kube/`, in any case and under the names Windows also opens (`.SSH`, `.git.`,
+  `GIT~1`). Secrets belong in a secret provider; there is no override.
 * **Quota.** A caller may keep 4 GiB; a file that would go over is `413`. Nothing
   is removed on its own, a caller deletes what they no longer need.
 * **Who may.** Callers with a `builds` level; others get `403`. An account can
