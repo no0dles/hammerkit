@@ -1,0 +1,122 @@
+---
+title: 'Arguments'
+description: 'Pass arguments to a task or service from the command line, after --.'
+---
+
+Narrowing a run to one test file, one test name or one flag doesn't need a task
+per variation. Whatever follows `--` on the command line is appended to the
+**last command** of the task you run, as `npm run test -- ...` does:
+
+```yaml
+tasks:
+  test:
+    image: node:24-alpine
+    deps: [install]
+    src: [src, package.json]
+    cmds:
+      - npm run generate
+      - npx vitest run
+```
+
+```bash
+hammerkit run test -- src/login.spec.ts -t "login flow"
+```
+
+The last command runs as `npx vitest run 'src/login.spec.ts' '-t' 'login flow'`;
+`npm run generate` runs unchanged. The build file declares nothing for this.
+
+## One argument stays one argument
+
+Each argument is quoted for the shell the command runs in, so shell syntax inside
+it is text:
+
+```bash
+hammerkit run test -- 'a; rm -rf /'
+```
+
+The task receives one argument, `a; rm -rf /`, and no second command runs. The
+quoting follows the task's [execution shell](/docs/task/container#execution-shell):
+`sh`, `bash`, `zsh`, `dash`, `ash`, `ksh` and `mksh` take single quotes, as does
+PowerShell, which runs local tasks on Windows. A task whose shell hammerkit can't
+quote for (`fish`, `cmd.exe`) refuses arguments rather than guess.
+
+Two runtimes read the command line once more, and hammerkit accounts for both:
+
+- On [Kubernetes](/docs/task/kubernetes) the kubelet expands `$(NAME)` and
+  `$$` before the shell runs, so each `$` in an argument is passed as `$$` and
+  arrives as typed.
+- On Windows, Windows PowerShell builds a new command line for the program it
+  starts, and starts `.cmd` and `.bat` shims (`yarn.cmd`, most of
+  `node_modules/.bin`) through `cmd.exe`. A local task there refuses an empty
+  argument, one with `"`, `&`, `|`, `<`, `>`, `^`, `%`, `!` or a line break, and
+  one with a space that ends in `\`, rather than let it split or run.
+
+To hand over a whole pipeline, make the last command a shell that takes it:
+
+```yaml
+tasks:
+  sh:
+    image: node:24-alpine
+    mounts: [.]
+    cmds:
+      - sh -c
+```
+
+```bash
+hammerkit run sh -- 'npm test 2>&1 | tail -20'
+```
+
+## Caching and dependencies
+
+A run with arguments is a one-off, so the task skips the
+[cache](/docs/task/caching): it always runs, and stores no cache entry. Its
+outputs replace the ones the task wrote before, so the next run without
+arguments isn't a cache hit either: it runs again, or restores its outputs from
+the cache.
+
+To cache a variant you run often, name a cache method on the command line:
+
+```bash
+hammerkit run test --cache checksum -- -t a
+```
+
+The arguments are part of the cache key, so `-- -t a` then hits only its own
+entry. Running a task without arguments (or with an empty `--`) keeps the cache
+entries it had before.
+
+Dependencies and needed services never get the arguments. In the example,
+`install` runs as declared and keeps its own cache entry.
+
+## Services
+
+[`up`](/docs/cli/up) appends the arguments to the `cmd` of the one service it
+starts:
+
+```yaml
+services:
+  api:
+    image: node:24-alpine
+    cmd: node server.js
+    labels: { app: api }
+```
+
+```bash
+hammerkit up --filter app=api -- --inspect
+```
+
+The service starts as `node server.js --inspect`. Without a
+[`shell`](/docs/service/container#shell) the `cmd` is an argument list, so the
+arguments are added to it as they are; with one, they are quoted for it like a
+task's. A service without `cmd`, and a Kubernetes service, take no arguments.
+
+## Rules
+
+- Arguments go to exactly one task or service. `run` with a filter that selects
+  two tasks fails before anything runs, naming them; `run` counts tasks only, `up`
+  counts tasks and services.
+- Only `run` and `up` take arguments; other commands refuse them.
+- Everything after the first `--` is an argument, including `--set` and `--file`,
+  which are hammerkit's own options only before it. [`--set`](/docs/build-file/environment-variables)
+  is unchanged and stays the way to fill a `$NAME` the build file references.
+- [`ls --json`](/docs/cli/ls#json) shows each task's last command and each service's
+  `cmd`, so a script or an agent can tell where its arguments land.
