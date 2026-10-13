@@ -19,8 +19,14 @@
     "!dist/**/*.spec.*",
     "!dist/testing",
     "!dist/**/*.map",
-    "build.schema.json"
+    "build.schema.json",
+    "harness"
   ],
+  "pi": {
+    "extensions": [
+      "./harness/pi.ts"
+    ]
+  },
   "bugs": {
     "url": "https://github.com/no0dles/hammerkit/issues"
   },

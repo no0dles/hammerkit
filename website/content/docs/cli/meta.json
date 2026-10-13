@@ -15,6 +15,7 @@
     "package",
     "remote",
     "server",
+    "mcp",
     "clean",
     "validate"
   ]
