@@ -534,7 +534,12 @@ describe('server config policy', () => {
         namespacePrefix: 'hammerkit-',
         pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }],
         providers: {},
-        sandboxes: { image: `no0dles/hammerkit:${getVersion()}`, size: '4Gi', idle: '1m' },
+        sandboxes: {
+          image: `no0dles/hammerkit:${getVersion()}`,
+          size: '4Gi',
+          idle: '1m',
+          resources: { requests: { cpu: '100m', memory: '256Mi' }, limits: { memory: '2Gi' } },
+        },
       })
     })
 

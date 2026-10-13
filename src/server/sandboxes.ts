@@ -8,7 +8,14 @@ import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
 import { matchesRef } from './repo'
 import { EditedFile, EditOp, PatchAuthor, SandboxFiles } from './sandbox-files'
-import { SandboxAttachment, SandboxKey, SandboxPushConflict, SandboxPushFailed, SandboxState, SandboxStorage } from './sandbox-storage'
+import {
+  SandboxAttachment,
+  SandboxKey,
+  SandboxPushConflict,
+  SandboxPushFailed,
+  SandboxState,
+  SandboxStorage,
+} from './sandbox-storage'
 
 // How long creating a sandbox or moving it to another commit may take
 const FETCH_TIMEOUT_MS = 10 * 60 * 1000
@@ -333,7 +340,14 @@ export class SandboxRegistry {
       }
       let commit: string | undefined
       try {
-        commit = await storage.push(keyOf(sandbox), { url, branch, expect: current ?? null, author, env: write.env, signal })
+        commit = await storage.push(keyOf(sandbox), {
+          url,
+          branch,
+          expect: current ?? null,
+          author,
+          env: write.env,
+          signal,
+        })
       } catch (e) {
         if (e instanceof SandboxPushConflict) {
           throw new SandboxError(409, e.message)

@@ -375,8 +375,12 @@ describe('SandboxRegistry', () => {
         env: { ...(process.env as { [key: string]: string }) },
         signal: AbortSignal.timeout(60_000),
       }
-      await expect(storage.push({ id: sandbox.id, owner: alice }, { ...request, expect: null })).rejects.toThrow(/unable to push/)
-      await expect(storage.push({ id: sandbox.id, owner: alice }, { ...request, expect: first })).rejects.toThrow(/unable to push/)
+      await expect(storage.push({ id: sandbox.id, owner: alice }, { ...request, expect: null })).rejects.toThrow(
+        /unable to push/
+      )
+      await expect(storage.push({ id: sandbox.id, owner: alice }, { ...request, expect: first })).rejects.toThrow(
+        /unable to push/
+      )
       expect(git(repository, 'rev-parse', 'agent/raced')).toBe(second)
       // nothing moved in the sandbox
       expect(await sandboxes.state(sandbox.id)).toMatchObject({ commit: first, clean: false })

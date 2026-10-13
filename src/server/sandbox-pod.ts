@@ -173,8 +173,8 @@ export async function sandboxPodMain(directory: string, input: Readable, out: Wr
       e instanceof SandboxFileError
         ? { status: e.status, message: e.message, details: e.details }
         : e instanceof GitOutputTooLarge
-        ? { kind: 'too-large', message: e.message }
-        : { message: e instanceof Error ? e.message : String(e) }
+          ? { kind: 'too-large', message: e.message }
+          : { message: e instanceof Error ? e.message : String(e) }
     await write(out, JSON.stringify({ ok: false, error } satisfies SandboxPodHeader) + '\n')
   }
 }

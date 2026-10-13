@@ -4,6 +4,7 @@ import { join } from 'path'
 import { PassThrough, Readable, Writable } from 'stream'
 import { finished } from 'stream/promises'
 import { V1NetworkPolicy, V1PersistentVolumeClaim, V1Pod, V1ResourceQuota, V1Status } from '@kubernetes/client-node'
+import type { WebSocket } from 'ws'
 import { create as createTar, extract as extractTar } from 'tar'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
@@ -16,6 +17,7 @@ import { git, isValidRef } from './git-checkout'
 import { CallerNamespaces, getClusterAccess } from './kubernetes-backend'
 import {
   ChangedFile,
+  deniedPath,
   EditedFile,
   EditOp,
   EditPlan,
@@ -42,6 +44,9 @@ import {
   SandboxAttachment,
   SandboxFetch,
   SandboxKey,
+  SandboxPush,
+  SandboxPushConflict,
+  SandboxPushFailed,
   SandboxState,
   SandboxStorage,
   StoredSandbox,
@@ -49,10 +54,20 @@ import {
 import { SandboxError, SandboxLimits } from './sandboxes'
 import { KubernetesBackend, ServerConfig } from './server-config'
 
-// where the pod of a sandbox mounts its claim; the sandbox is the directory of its id
-// below it (files, git), next to what the server fetched for it (incoming)
+// A sandbox has two claims. One holds its files (in `files/`), which the tasks of runs
+// mount; the other holds its git data, which only the pod of its files mounts, so nothing a
+// task does reaches the configuration or the hooks of git: a link a task makes in the files
+// leads at most to the root of the claim of the files.
+//
+// The pod mounts the claim of the git data where a host keeps its sandboxes, and the files
+// at `<id>/files` below it, so the code of a host (`hammerkit server-sandbox`) works on it
+// unchanged; what the server fetched for it goes to `incoming` there.
 const CLAIM_PATH = '/claim'
+const FILES_DIRECTORY = 'files'
 const MANAGED = { 'hammerkit.dev/managed': 'true' }
+// the claims of the sandboxes of one server (its prefix of caller namespaces and its own
+// namespace): another server on the cluster leaves them alone
+const SERVER_LABEL = 'hammerkit.dev/sandbox-server'
 // the pods of sandboxes' files: no network at all
 const FILES_LABEL = 'hammerkit.dev/sandbox-files'
 const FILES_POLICY = 'hammerkit-sandbox-files'
@@ -69,12 +84,19 @@ const FETCH_TIMEOUT_MS = 10 * 60 * 1000
 // an answer is read into memory up to this; a diff is up to 64 MiB, as JSON a bit more
 const MAX_ANSWER_BYTES = 160 * 1024 * 1024
 const MAX_STDERR = 16 * 1024
+// what is sent into a pod and not taken by the cluster yet, before the server waits
+const MAX_STDIN_BUFFERED = 4 * 1024 * 1024
 
 // The names of a sandbox on the cluster: its id has letters of both cases and `_`, which
 // names and labels can not all take, so they carry a hash of it.
-export function getSandboxNames(id: string): { claim: string; pod: string; label: string } {
+export function getSandboxNames(id: string): { claim: string; git: string; pod: string; label: string } {
   const label = createHash('sha256').update(id).digest('hex').slice(0, 20)
-  return { claim: `hammerkit-sandbox-${label}`, pod: `hammerkit-sandbox-${label}-files`, label }
+  return {
+    claim: `hammerkit-sandbox-${label}`,
+    git: `hammerkit-sandbox-${label}-git`,
+    pod: `hammerkit-sandbox-${label}-files`,
+    label,
+  }
 }
 
 interface FilesPod {
@@ -87,9 +109,9 @@ interface FilesPod {
 }
 
 /**
- * Sandboxes on a cluster: a PersistentVolumeClaim per sandbox in its caller's namespace,
- * mounted only while a task of a run on it or a short pod for its files runs. An idle
- * sandbox costs its storage only.
+ * Sandboxes on a cluster: PersistentVolumeClaims per sandbox in its caller's namespace (its
+ * files, and its git data), mounted only while a task of a run on it or a short pod for its
+ * files runs. An idle sandbox costs its storage only.
  *
  * - The server fetches the commit (it holds the read credential of `sources`, as for a
  *   ref run) and hands the repository to the pod of the sandbox, which takes it into
@@ -101,6 +123,9 @@ interface FilesPod {
  * - A run on the sandbox gets a copy of the files to plan with, and its tasks mount the
  *   claim itself (WorkKubernetesWorkspace). While a run holds the sandbox, no pod of its
  *   files runs: one file is not read then either.
+ * - A push is made by the server: the pod commits the changes, the server copies the
+ *   objects of the sandbox's git data, checks the commit and pushes it with the write
+ *   credential, which never enters the caller's namespace either.
  * - With `backend.sandboxes.storageClass`, a ResourceQuota on that class in the
  *   caller's namespace holds `sandboxes.limits` on the cluster as well.
  */
@@ -111,6 +136,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
   private readonly namespaces: CallerNamespaces
   private readonly backend: KubernetesBackend
   private readonly pods = new Map<string, FilesPod>()
+  private readonly server: string
   // the namespaces whose policy and quota for sandboxes this process has applied
   private readonly prepared = new Map<string, Promise<void>>()
 
@@ -135,6 +161,10 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         httpRoutes: [],
       })
     this.namespaces = new CallerNamespaces(this.instance, config.backend)
+    this.server = createHash('sha256')
+      .update(`${config.backend.namespacePrefix}\n${config.backend.namespace ?? ''}`)
+      .digest('hex')
+      .slice(0, 20)
   }
 
   async create(key: SandboxKey, fetch: SandboxFetch): Promise<string> {
@@ -142,14 +172,25 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     await this.namespaces.prepare(namespace)
     await this.prepare(namespace)
     const names = getSandboxNames(key.id)
+    try {
+      await this.createClaim(key, namespace, names.git)
+      await this.createClaim(key, namespace, names.claim)
+      return await this.receive(key, fetch, 'create')
+    } catch (e) {
+      await this.remove(key).catch(() => undefined)
+      throw e
+    }
+  }
+
+  private async createClaim(key: SandboxKey, namespace: string, name: string): Promise<void> {
     const sandboxes = this.backend.sandboxes
     const claim: V1PersistentVolumeClaim & KubernetesObjectHeader = {
       apiVersion: 'v1',
       kind: 'PersistentVolumeClaim',
       metadata: {
-        name: names.claim,
+        name,
         namespace,
-        labels: { ...MANAGED, [SANDBOX_LABEL]: names.label },
+        labels: { ...MANAGED, [SANDBOX_LABEL]: getSandboxNames(key.id).label, [SERVER_LABEL]: this.server },
         annotations: {
           'hammerkit.dev/version': getVersion(),
           [ID_ANNOTATION]: key.id,
@@ -175,12 +216,6 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       }
       throw e
     }
-    try {
-      return await this.receive(key, fetch, 'create')
-    } catch (e) {
-      await this.remove(key).catch(() => undefined)
-      throw e
-    }
   }
 
   async fetch(key: SandboxKey, fetch: SandboxFetch): Promise<string> {
@@ -193,6 +228,106 @@ export class KubernetesSandboxStorage implements SandboxStorage {
 
   async usage(key: SandboxKey): Promise<number> {
     return (await this.request<number>(key, { op: 'usage', id: key.id })).result
+  }
+
+  /**
+   * The pod commits the changes; the server takes the objects of the sandbox's git data
+   * (not its configuration), checks that the commit is one on top of the sandbox's that
+   * leaves out the deny list, and pushes it. The pod of the files can not make the server
+   * push something else, and the write credential stays with the server.
+   */
+  async push(key: SandboxKey, push: SandboxPush): Promise<string | undefined> {
+    const commit = (
+      await this.request<string | null>(key, { op: 'commit', id: key.id, author: push.author }, push.signal)
+    ).result
+    if (commit === null) {
+      return undefined
+    }
+    if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(commit)) {
+      throw new Error(`the pod of the sandbox ${key.id} did not answer a commit`)
+    }
+    const repository = join(this.staging, `${key.id}-push-${randomBytes(6).toString('hex')}.git`)
+    const what = `sandbox ${key.id}`
+    const env = defined(this.env)
+    const run = (args: string[], action: string, runEnv: { [key: string]: string } = env) =>
+      git(
+        [`--git-dir=${repository}`, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args],
+        runEnv,
+        push.signal,
+        what,
+        action
+      )
+    try {
+      await mkdir(this.staging, { recursive: true, mode: 0o700 })
+      await git(['init', '--quiet', '--bare', repository], env, push.signal, what, 'push')
+      // objects and where the shallow history ends, nothing that configures git or points
+      // it at other repositories (objects/info)
+      await this.copyOut(
+        key,
+        ['tar', 'cf', '-', '-C', `${CLAIM_PATH}/${key.id}/git`, '.'],
+        repository,
+        (path, type) =>
+          (type === 'File' &&
+            /^(\.\/)?(shallow|objects\/[0-9a-f]{2}\/[0-9a-f]+|objects\/pack\/pack-[0-9a-f]+\.(pack|idx))$/.test(
+              path
+            )) ||
+          (type === 'Directory' && /^(\.\/)?(objects(\/([0-9a-f]{2}|pack))?\/?)?$/.test(path)),
+        push.signal
+      )
+      const [found, ...parents] = (await run(['rev-list', '--parents', '-n', '1', commit], 'read')).trim().split(' ')
+      if (found !== commit || parents.length !== 1) {
+        throw new Error(`${commit} of the sandbox ${key.id} is not one commit on top of the sandbox's`)
+      }
+      const changed = (
+        await run(
+          ['diff-tree', '-r', '-z', '--no-commit-id', '--name-only', '--no-renames', parents[0], commit],
+          'read'
+        )
+      )
+        .split('\0')
+        .filter((path) => path.length > 0)
+      const denied = changed.find((path) => deniedPath(path))
+      if (denied) {
+        throw new Error(`the commit of the sandbox ${key.id} has ${denied}, which never leaves the server`)
+      }
+      // a branch this sandbox pushed before only moves forward
+      if (push.expect) {
+        const ancestor = await run(['merge-base', '--is-ancestor', push.expect, commit], 'read').then(
+          () => true,
+          () => false
+        )
+        if (!ancestor) {
+          throw new SandboxPushConflict(
+            `${push.branch} is at ${push.expect}, which the sandbox is no longer on: push to a new branch`
+          )
+        }
+      }
+      try {
+        await run(
+          [
+            'push',
+            '--quiet',
+            '--no-verify',
+            `--force-with-lease=refs/heads/${push.branch}:${push.expect ?? ''}`,
+            '--',
+            push.url,
+            `${commit}:refs/heads/${push.branch}`,
+          ],
+          'push',
+          // the write credential is in the environment of this one git process
+          push.env
+        )
+      } catch (e) {
+        throw new SandboxPushFailed(commit, e)
+      }
+      return commit
+    } finally {
+      await rm(repository, { recursive: true, force: true })
+    }
+  }
+
+  async moveTo(key: SandboxKey, commit: string): Promise<void> {
+    await this.request(key, { op: 'move', id: key.id, commit }, AbortSignal.timeout(FETCH_TIMEOUT_MS))
   }
 
   files(key: SandboxKey): SandboxFiles {
@@ -211,13 +346,34 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     const names = getSandboxNames(key.id)
     const namespace = this.namespaces.name(key.owner)
     await mkdir(into, { recursive: true })
+    await this.copyOut(
+      key,
+      ['tar', 'cf', '-', '-C', `${CLAIM_PATH}/${key.id}/files`, '.'],
+      into,
+      // what the run plans with: files, directories and links, nothing outside of it
+      (_path, type) => ['File', 'OldFile', 'ContiguousFile', 'Directory', 'SymbolicLink'].includes(type),
+      AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    )
+    await this.stopPod(key)
+    return {
+      directory: into,
+      claim: { name: names.claim, namespace, subPath: FILES_DIRECTORY, label: names.label },
+    }
+  }
+
+  // What a tar in the pod writes, extracted into `into`: the entries `keep` takes, up to
+  // the bytes a sandbox may take.
+  private async copyOut(
+    key: SandboxKey,
+    command: string[],
+    into: string,
+    keep: (path: string, type: string) => boolean,
+    signal: AbortSignal
+  ): Promise<void> {
     let bytes = 0
-    const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
     const extract = extractTar({
       cwd: into,
-      // what the run plans with: files, directories and links, nothing outside of it
-      filter: (_path, entry) =>
-        'type' in entry && ['File', 'OldFile', 'ContiguousFile', 'Directory', 'SymbolicLink'].includes(entry.type),
+      filter: (path, entry) => 'type' in entry && keep(path, entry.type),
     })
     const counted = new PassThrough()
     counted.on('data', (chunk: Buffer) => {
@@ -233,16 +389,9 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     })
     extracted.catch(() => undefined)
     counted.pipe(extract)
-    await this.withPod(key, (pod) =>
-      this.exec(pod, ['tar', 'cf', '-', '-C', `${CLAIM_PATH}/${key.id}/files`, '.'], null, counted, signal)
-    )
+    await this.withPod(key, (pod) => this.exec(pod, command, null, counted, signal))
     counted.end()
     await extracted
-    await this.stopPod(key)
-    return {
-      directory: into,
-      claim: { name: names.claim, namespace, subPath: `${key.id}/files`, label: names.label },
-    }
   }
 
   async remove(key: SandboxKey): Promise<void> {
@@ -252,22 +401,25 @@ export class KubernetesSandboxStorage implements SandboxStorage {
   private async removeIn(namespace: string, id: string): Promise<void> {
     const names = getSandboxNames(id)
     await this.stopPod({ id, owner: { iss: '', sub: '' } }, namespace)
-    try {
-      await this.instance.coreApi.deleteNamespacedPersistentVolumeClaim({ name: names.claim, namespace })
-    } catch (e) {
-      if (statusCodeOf(e) !== 404) {
-        throw e
+    for (const name of [names.claim, names.git]) {
+      try {
+        await this.instance.coreApi.deleteNamespacedPersistentVolumeClaim({ name, namespace })
+      } catch (e) {
+        if (statusCodeOf(e) !== 404) {
+          throw e
+        }
       }
     }
   }
 
-  // The claims of sandboxes of this server: in a namespace of one of its callers, the one
-  // the owner in their annotations has.
+  // The claims of sandboxes on the cluster. Those of this server, in the namespace their
+  // owner has, are removed when they have no record; the others are kept, and their records
+  // too (a server that changed its prefix still has them).
   async list(): Promise<StoredSandbox[]> {
     const claims = await this.instance.coreApi.listPersistentVolumeClaimForAllNamespaces({
       labelSelector: `hammerkit.dev/managed=true,${SANDBOX_LABEL}`,
     })
-    const stored: StoredSandbox[] = []
+    const found = new Map<string, StoredSandbox>()
     for (const claim of claims.items) {
       const annotations = claim.metadata?.annotations ?? {}
       const id = annotations[ID_ANNOTATION]
@@ -275,13 +427,21 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       if (!id || !namespace || claim.metadata?.deletionTimestamp) {
         continue
       }
-      const owner = { iss: annotations[ISS_ANNOTATION] ?? '', sub: annotations[SUB_ANNOTATION] ?? '' }
-      if (this.namespaces.name(owner) !== namespace || getSandboxNames(id).claim !== claim.metadata?.name) {
+      const names = getSandboxNames(id)
+      if (claim.metadata?.name !== names.claim && claim.metadata?.name !== names.git) {
         continue
       }
-      stored.push({ id, remove: () => this.removeIn(namespace, id) })
+      const owner = { iss: annotations[ISS_ANNOTATION] ?? '', sub: annotations[SUB_ANNOTATION] ?? '' }
+      const ours = claim.metadata?.labels?.[SERVER_LABEL] === this.server && this.namespaces.name(owner) === namespace
+      const created = claim.metadata?.creationTimestamp ? new Date(claim.metadata.creationTimestamp) : new Date()
+      const seen = found.get(id)
+      found.set(id, {
+        id,
+        ...((seen ? seen.remove : true) && ours ? { remove: () => this.removeIn(namespace, id) } : {}),
+        createdAt: seen?.createdAt && seen.createdAt > created ? seen.createdAt : created,
+      })
     }
-    return stored
+    return [...found.values()]
   }
 
   // The commit, fetched by the server and taken into the claim by the pod.
@@ -348,10 +508,15 @@ export class KubernetesSandboxStorage implements SandboxStorage {
   ): Promise<{ result: unknown; body: Buffer } | { result: unknown; stream: Readable }> {
     const encoded = request.op === 'edit' ? { ...request, ops: encodeEditOps(request.ops) } : request
     const reader = new AnswerReader(body)
+    // the process ends when the server stops waiting for it: closing the connection does
+    // not end a command in a pod
+    const seconds = Math.ceil(
+      (['create', 'fetch', 'move'].includes(request.op) ? FETCH_TIMEOUT_MS : REQUEST_TIMEOUT_MS) / 1000
+    )
     const done = this.withPod(key, (pod) =>
       this.exec(
         pod,
-        ['hammerkit', 'server-sandbox', CLAIM_PATH],
+        ['timeout', String(seconds), 'hammerkit', 'server-sandbox', CLAIM_PATH],
         Readable.from([Buffer.from(JSON.stringify(encoded))]),
         reader,
         signal
@@ -455,7 +620,10 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     if (existing) {
       await this.deletePod(namespace, names.pod)
     }
-    const tolerations = this.backend.pools.flatMap((pool) => pool.tolerations)
+    // where the pods of runs go: the first pool, which container tasks run on, so that a
+    // claim a zonal class provisions for this pod is where the tasks can mount it
+    const pool = this.backend.pools[0]
+    const resources = this.backend.sandboxes.resources
     const pod: V1Pod & KubernetesObjectHeader = {
       apiVersion: 'v1',
       kind: 'Pod',
@@ -471,20 +639,41 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         restartPolicy: 'Never',
         activeDeadlineSeconds: POD_DEADLINE_SECONDS,
         terminationGracePeriodSeconds: 0,
-        // wherever a pod of the run that mounts the claim is, on any pool
-        nodeSelector: { 'kubernetes.io/os': 'linux' },
-        ...(tolerations.length > 0 ? { tolerations } : {}),
+        nodeSelector: {
+          'kubernetes.io/os': pool.platform.os,
+          'kubernetes.io/arch': pool.platform.arch,
+          ...pool.nodeSelector,
+        },
+        ...(pool.tolerations.length > 0 ? { tolerations: pool.tolerations } : {}),
         affinity: getSandboxAffinity(names.label),
+        securityContext: { seccompProfile: { type: 'RuntimeDefault' } },
         containers: [
           {
             name: 'files',
             image: this.backend.sandboxes.image,
             command: ['sleep', String(POD_DEADLINE_SECONDS)],
             workingDir: CLAIM_PATH,
-            volumeMounts: [{ name: 'sandbox', mountPath: CLAIM_PATH }],
+            env: [{ name: 'HOME', value: '/tmp' }],
+            ...(resources.requests || resources.limits ? { resources } : {}),
+            // root, as tasks may run as root and write files only root may change, but
+            // with no more than the capabilities to own and change any file of the claims
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              readOnlyRootFilesystem: true,
+              capabilities: { drop: ['ALL'], add: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER'] },
+            },
+            volumeMounts: [
+              { name: 'git', mountPath: CLAIM_PATH },
+              { name: 'files', mountPath: `${CLAIM_PATH}/${key.id}/files`, subPath: FILES_DIRECTORY },
+              { name: 'tmp', mountPath: '/tmp' },
+            ],
           },
         ],
-        volumes: [{ name: 'sandbox', persistentVolumeClaim: { claimName: names.claim } }],
+        volumes: [
+          { name: 'git', persistentVolumeClaim: { claimName: names.git } },
+          { name: 'files', persistentVolumeClaim: { claimName: names.claim } },
+          { name: 'tmp', emptyDir: {} },
+        ],
       },
     }
     await this.instance.objectApi.create(pod)
@@ -542,8 +731,9 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         metadata: { ...metadata, name: QUOTA_NAME },
         spec: {
           hard: {
-            [`${scope}/requests.storage`]: String(this.limits.bytes),
-            [`${scope}/persistentvolumeclaims`]: String(this.limits.count),
+            // two claims of a sandbox, both of `size`
+            [`${scope}/requests.storage`]: String(2 * this.limits.bytes),
+            [`${scope}/persistentvolumeclaims`]: String(2 * this.limits.count),
           },
         },
       }
@@ -567,6 +757,8 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       },
     })
     let status: V1Status | undefined
+    // the stdin of the command waits on the connection, which is there once it started
+    const connection: { socket?: WebSocket } = {}
     const socket = await this.instance.exec.exec(
       pod.namespace,
       pod.name,
@@ -574,12 +766,16 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       command,
       stdout ?? new Writable({ write: (_chunk, _encoding, callback) => callback() }),
       errors,
-      stdin,
+      stdin && throttle(stdin, () => connection.socket),
       false,
       (received) => {
         status = received
       }
     )
+    connection.socket = socket
+    if (stdout) {
+      holdBack(socket, stdout)
+    }
     await new Promise<void>((resolve, reject) => {
       const abort = () => {
         socket.close()
@@ -605,6 +801,57 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       })
     })
   }
+}
+
+function defined(env: { [key: string]: string | undefined }): { [key: string]: string } {
+  const result: { [key: string]: string } = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+// The client of the cluster sends what stdin has as fast as it comes: this waits while the
+// connection has more than MAX_STDIN_BUFFERED not sent yet.
+function throttle(stdin: Readable, connection: () => WebSocket | undefined): Readable {
+  return Readable.from(
+    (async function* () {
+      for await (const chunk of stdin) {
+        while ((connection()?.bufferedAmount ?? 0) > MAX_STDIN_BUFFERED) {
+          await sleep(10)
+        }
+        yield chunk
+      }
+    })()
+  )
+}
+
+// The client of the cluster writes what the pod sends to stdout without waiting for it to
+// be taken: this stops reading from the connection while stdout is full, so a slow reader
+// of a file or of the files of a run holds the pod back instead of the server's memory.
+function holdBack(socket: WebSocket, stdout: Writable): void {
+  const tcp = (socket as unknown as { _socket?: { pause(): void; resume(): void } })._socket
+  if (!tcp) {
+    return
+  }
+  let paused = false
+  socket.on('message', () => {
+    if (paused || !stdout.writableNeedDrain) {
+      return
+    }
+    paused = true
+    tcp.pause()
+    const resume = () => {
+      paused = false
+      stdout.off('close', resume)
+      stdout.off('drain', resume)
+      tcp.resume()
+    }
+    stdout.once('drain', resume)
+    stdout.once('close', resume)
+  })
 }
 
 /**
@@ -645,12 +892,14 @@ class AnswerReader extends Writable {
     }
     this.chunks.push(chunk)
     if (!this.header) {
-      const all = Buffer.concat(this.chunks)
-      const newline = all.indexOf(10)
-      if (newline < 0) {
+      // what came before has no newline: only this chunk is searched
+      const found = chunk.indexOf(10)
+      if (found < 0) {
         callback()
         return
       }
+      const all = Buffer.concat(this.chunks)
+      const newline = this.size - chunk.length + found
       try {
         this.header = JSON.parse(all.subarray(0, newline).toString('utf8')) as SandboxPodHeader
       } catch {
@@ -736,6 +985,10 @@ class KubernetesSandboxFiles implements SandboxFiles {
 
   diff(format: 'diff' | 'patch', author: PatchAuthor): Promise<string> {
     return this.ask({ op: 'diff', format, author })
+  }
+
+  async commit(author: PatchAuthor): Promise<string | undefined> {
+    return (await this.ask<string | null>({ op: 'commit', author })) ?? undefined
   }
 
   // Planned in the pod and planned again when written: the sandbox does not change in

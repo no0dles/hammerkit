@@ -1,6 +1,16 @@
 import { execFileSync } from 'child_process'
 import { EventEmitter } from 'events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs'
 import { rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -32,8 +42,9 @@ function notFound(): Error {
 
 /**
  * A cluster in memory: claims and pods are objects, a claim is a directory, and a command
- * in a pod runs here, on the directory of the claim the pod mounts, as the pod would run
- * it (`hammerkit server-sandbox`, tar, sh).
+ * in a pod runs here, on the directory of the claim the pod mounts at /claim, as the pod
+ * would run it (`hammerkit server-sandbox`, tar, sh). A claim the pod mounts below /claim
+ * is a link there to the claim's directory.
  */
 function fakeCluster(root: string) {
   const objects = new Map<string, any>()
@@ -41,6 +52,8 @@ function fakeCluster(root: string) {
   const claimDirectory = (namespace: string, claim: string) => join(root, 'claims', namespace, claim)
   const commands: string[][] = []
   let quotaFull = false
+  // when the claims made next were made
+  let created = Date.now() - 2 * 60 * 60 * 1000
   const read = (kind: string, namespace: string, name: string) => {
     const object = objects.get(keyOf(kind, namespace, name))
     if (!object) {
@@ -57,7 +70,12 @@ function fakeCluster(root: string) {
           }
           mkdirSync(claimDirectory(spec.metadata.namespace, spec.metadata.name), { recursive: true })
         }
-        const object = spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec
+        const object =
+          spec.kind === 'Pod'
+            ? { ...spec, status: { phase: 'Running' } }
+            : spec.kind === 'PersistentVolumeClaim'
+              ? { ...spec, metadata: { ...spec.metadata, creationTimestamp: new Date(created) } }
+              : spec
         objects.set(keyOf(spec.kind, spec.metadata.namespace, spec.metadata.name), object)
         return object
       },
@@ -103,8 +121,29 @@ function fakeCluster(root: string) {
       ) {
         commands.push(command)
         const pod = read('Pod', namespace, podName)
-        const directory = claimDirectory(namespace, pod.spec.volumes[0].persistentVolumeClaim.claimName)
+        const claimOf = (volume: string) =>
+          claimDirectory(
+            namespace,
+            pod.spec.volumes.find((v: any) => v.name === volume).persistentVolumeClaim.claimName
+          )
+        const [root, ...below] = pod.spec.containers[0].volumeMounts.filter((m: any) =>
+          m.mountPath.startsWith('/claim')
+        )
+        const directory = claimOf(root.name)
         const local = (path: string) => join(directory, path.replace(/^\/claim\/?/, ''))
+        for (const mount of below) {
+          const target = join(claimOf(mount.name), mount.subPath ?? '')
+          mkdirSync(target, { recursive: true })
+          const at = local(mount.mountPath)
+          if (!existsSync(at)) {
+            mkdirSync(join(at, '..'), { recursive: true })
+            symlinkSync(target, at)
+          }
+        }
+        // the pod limits the time of a request with timeout
+        if (command[0] === 'timeout') {
+          command = command.slice(2)
+        }
         const socket = new EventEmitter() as EventEmitter & { close(): void }
         socket.close = () => undefined
         const run = async () => {
@@ -112,7 +151,7 @@ function fakeCluster(root: string) {
             await sandboxPodMain(directory, stdin as Readable, stdout)
           } else if (command[0] === 'tar') {
             await new Promise<void>((resolve, reject) =>
-              Readable.from(createTar({ cwd: local(command[4]), portable: true }, ['.']))
+              Readable.from(createTar({ cwd: realpathSync(local(command[4])), portable: true }, ['.']))
                 .on('error', reject)
                 .on('end', resolve)
                 .pipe(stdout, { end: false })
@@ -152,6 +191,7 @@ function fakeCluster(root: string) {
     commands,
     claimDirectory,
     fullQuota: () => (quotaFull = true),
+    makeClaimsAt: (time: number) => (created = time),
   }
 }
 
@@ -176,6 +216,8 @@ describe('sandboxes on a cluster', () => {
       repos: {
         url: () => repository,
         credentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
+        pushCredentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
+        source: () => ({ match: 'git.test/corp/*', push: { branches: ['agent/**'] } }) as any,
         resolve: async (_repo, ref) => git(repository, 'rev-parse', ref),
         scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
       },
@@ -210,25 +252,51 @@ describe('sandboxes on a cluster', () => {
     const sandbox = await registry.create(alice, REPO, 'main')
     expect(sandbox.commit).toBe(commit)
     const names = getSandboxNames(sandbox.id)
-    const claim = cluster.objects.get(`PersistentVolumeClaim/${namespace}/${names.claim}`)
-    expect(claim.spec).toMatchObject({
-      accessModes: ['ReadWriteOnce'],
-      storageClassName: 'sandboxes',
-      resources: { requests: { storage: String(4 * 1024 * 1024 * 1024) } },
-    })
-    expect(claim.metadata.annotations).toMatchObject({ 'hammerkit.dev/sandbox-id': sandbox.id })
-    // the files and the git data are next to each other in the claim, the fetched
-    // repository is gone
-    const directory = cluster.claimDirectory(namespace, names.claim)
-    expect(readFileSync(join(directory, sandbox.id, 'files', 'src', 'app.ts'), 'utf8')).toContain('41')
-    expect(existsSync(join(directory, sandbox.id, 'git', 'HEAD'))).toBe(true)
-    expect(existsSync(join(directory, 'incoming'))).toBe(false)
-    // the pod of the files: no network, no token, the claim, near the pods of runs
+    for (const name of [names.claim, names.git]) {
+      const claim = cluster.objects.get(`PersistentVolumeClaim/${namespace}/${name}`)
+      expect(claim.spec).toMatchObject({
+        accessModes: ['ReadWriteOnce'],
+        storageClassName: 'sandboxes',
+        resources: { requests: { storage: String(4 * 1024 * 1024 * 1024) } },
+      })
+      expect(claim.metadata.annotations).toMatchObject({ 'hammerkit.dev/sandbox-id': sandbox.id })
+    }
+    // the files are alone in their claim, which tasks mount; the git data is in the other,
+    // and the fetched repository is gone
+    const files = cluster.claimDirectory(namespace, names.claim)
+    const data = cluster.claimDirectory(namespace, names.git)
+    expect(readFileSync(join(files, 'files', 'src', 'app.ts'), 'utf8')).toContain('41')
+    expect(existsSync(join(files, 'files', '.git'))).toBe(false)
+    expect(existsSync(join(data, sandbox.id, 'git', 'HEAD'))).toBe(true)
+    expect(existsSync(join(data, 'incoming'))).toBe(false)
+    // the pod of the files: no network, no token, no more rights than it needs, both claims,
+    // on the pool of the tasks and near the pods of runs
     const pod = cluster.objects.get(`Pod/${namespace}/${names.pod}`)
     expect(pod.spec).toMatchObject({
       automountServiceAccountToken: false,
-      containers: [{ image: config.backend.sandboxes.image, volumeMounts: [{ mountPath: '/claim' }] }],
-      volumes: [{ persistentVolumeClaim: { claimName: names.claim } }],
+      nodeSelector: { 'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'amd64' },
+      securityContext: { seccompProfile: { type: 'RuntimeDefault' } },
+      containers: [
+        {
+          image: config.backend.sandboxes.image,
+          resources: { requests: { cpu: '100m', memory: '256Mi' }, limits: { memory: '2Gi' } },
+          securityContext: {
+            allowPrivilegeEscalation: false,
+            readOnlyRootFilesystem: true,
+            capabilities: { drop: ['ALL'] },
+          },
+          volumeMounts: [
+            { name: 'git', mountPath: '/claim' },
+            { name: 'files', mountPath: `/claim/${sandbox.id}/files`, subPath: 'files' },
+            { name: 'tmp', mountPath: '/tmp' },
+          ],
+        },
+      ],
+      volumes: [
+        { name: 'git', persistentVolumeClaim: { claimName: names.git } },
+        { name: 'files', persistentVolumeClaim: { claimName: names.claim } },
+        { name: 'tmp', emptyDir: {} },
+      ],
     })
     expect(pod.spec.affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution[0]).toMatchObject({
       labelSelector: { matchLabels: { 'hammerkit.dev/sandbox': names.label } },
@@ -241,11 +309,15 @@ describe('sandboxes on a cluster', () => {
     })
     const quota = cluster.objects.get(`ResourceQuota/${namespace}/hammerkit-sandboxes`)
     expect(quota.spec.hard).toEqual({
-      'sandboxes.storageclass.storage.k8s.io/requests.storage': String(limits.bytes),
-      'sandboxes.storageclass.storage.k8s.io/persistentvolumeclaims': '5',
+      'sandboxes.storageclass.storage.k8s.io/requests.storage': String(2 * limits.bytes),
+      'sandboxes.storageclass.storage.k8s.io/persistentvolumeclaims': '10',
     })
-    // the read credential stayed with the server: the pod only ran hammerkit and tar
-    expect(cluster.commands.map((command) => command[0])).toEqual(['sh', 'hammerkit', 'hammerkit'])
+    // the read credential stayed with the server: the pod only ran tar and hammerkit
+    expect(cluster.commands.map((command) => command.slice(0, 3))).toEqual([
+      ['sh', '-c', 'rm -rf "$1" && mkdir -p "$1" && tar xf - -C "$1"'],
+      ['timeout', '600', 'hammerkit'],
+      ['timeout', '300', 'hammerkit'],
+    ])
   })
 
   it('reads, edits and diffs the files in the pod with the rules of a host', async () => {
@@ -296,7 +368,7 @@ describe('sandboxes on a cluster', () => {
     const attached = await registry.attach(sandbox.id, join(root, 'run', 'sandbox'))
     expect(attached).toEqual({
       directory: join(root, 'run', 'sandbox'),
-      claim: { name: names.claim, namespace, subPath: `${sandbox.id}/files`, label: names.label },
+      claim: { name: names.claim, namespace, subPath: 'files', label: names.label },
     })
     expect(readFileSync(join(attached.directory, 'src', 'app.ts'), 'utf8')).toContain('41')
     expect(cluster.objects.has(`Pod/${namespace}/${names.pod}`)).toBe(false)
@@ -310,7 +382,7 @@ describe('sandboxes on a cluster', () => {
         pools: [],
         providers: {},
         accounts: {},
-        workspace: { root: attached.directory, claim: names.claim, subPath: `${sandbox.id}/files`, label: names.label },
+        workspace: { root: attached.directory, claim: names.claim, subPath: 'files', label: names.label },
       },
     }
     const task = {
@@ -334,7 +406,7 @@ describe('sandboxes on a cluster', () => {
       {
         name: 'hammerkit-sandbox',
         mountPath: join(attached.directory, 'src'),
-        subPath: `${sandbox.id}/files/src`,
+        subPath: 'files/src',
         readOnly: false,
       },
     ])
@@ -343,26 +415,50 @@ describe('sandboxes on a cluster', () => {
     expect(getWorkspacePodSpec(kubernetes, persistence).labels).toEqual({ 'hammerkit.dev/sandbox': names.label })
   })
 
-  it('removes the claim with the sandbox, and claims without a record when it starts', async () => {
+  it('removes the claims with the sandbox, and its own claims without a record when it starts', async () => {
     const registry = registryWith()
     const kept = await registry.create(alice, REPO, 'main')
     const removed = await registry.create(alice, REPO, 'main')
     await registry.remove(alice, removed.id)
-    expect(cluster.objects.has(`PersistentVolumeClaim/${namespace}/${getSandboxNames(removed.id).claim}`)).toBe(false)
+    const claimsOf = (id: string, at = namespace) =>
+      [getSandboxNames(id).claim, getSandboxNames(id).git].filter((name) =>
+        cluster.objects.has(`PersistentVolumeClaim/${at}/${name}`)
+      )
+    expect(claimsOf(removed.id)).toEqual([])
 
-    // a claim whose record is gone, and one of another server's prefix
+    // claims whose record is gone: one made a while ago, and one that is being made
     const orphan = await registry.create(alice, REPO, 'main')
     rmSync(join(root, 'records', `${orphan.id}.json`))
-    const foreign = { ...cluster.objects.get(`PersistentVolumeClaim/${namespace}/${getSandboxNames(kept.id).claim}`) }
-    foreign.metadata = { ...foreign.metadata, namespace: 'other-ns', name: getSandboxNames('sbx_foreign').claim }
-    foreign.metadata.annotations = { ...foreign.metadata.annotations, 'hammerkit.dev/sandbox-id': 'sbx_foreign' }
-    cluster.objects.set(`PersistentVolumeClaim/other-ns/${foreign.metadata.name}`, foreign)
+    cluster.makeClaimsAt(Date.now())
+    const fresh = await registry.create(alice, REPO, 'main')
+    rmSync(join(root, 'records', `${fresh.id}.json`))
+    // and claims of another server, and of another prefix of this one
+    const copyClaim = (id: string, at: string, labels: { [key: string]: string } = {}) => {
+      for (const name of [getSandboxNames(id).claim, getSandboxNames(id).git]) {
+        const claim = { ...cluster.objects.get(`PersistentVolumeClaim/${namespace}/${getSandboxNames(kept.id).claim}`) }
+        claim.metadata = {
+          ...claim.metadata,
+          namespace: at,
+          name,
+          labels: { ...claim.metadata.labels, ...labels },
+          annotations: { ...claim.metadata.annotations, 'hammerkit.dev/sandbox-id': id },
+        }
+        cluster.objects.set(`PersistentVolumeClaim/${at}/${name}`, claim)
+      }
+    }
+    copyClaim('sbx_otherServer1', namespace, { 'hammerkit.dev/sandbox-server': 'another' })
+    copyClaim('sbx_otherPrefix1', 'other-ns')
 
-    const restarted = registryWith()
+    const logged: string[] = []
+    const restarted = new SandboxRegistry({ ...(registry as any).options, log: (line: string) => logged.push(line) })
     await restarted.load()
     expect(restarted.list(alice).map((sandbox) => sandbox.id)).toEqual([kept.id])
-    expect(cluster.objects.has(`PersistentVolumeClaim/${namespace}/${getSandboxNames(orphan.id).claim}`)).toBe(false)
-    expect(cluster.objects.has(`PersistentVolumeClaim/other-ns/${foreign.metadata.name}`)).toBe(true)
+    expect(claimsOf(kept.id)).toHaveLength(2)
+    expect(claimsOf(orphan.id)).toEqual([])
+    expect(logged).toEqual([`remove the storage of sandbox ${orphan.id}: it has no record`])
+    expect(claimsOf(fresh.id)).toHaveLength(2)
+    expect(claimsOf('sbx_otherServer1')).toHaveLength(2)
+    expect(claimsOf('sbx_otherPrefix1', 'other-ns')).toHaveLength(2)
   })
 
   it('says the quota of the caller’s sandboxes is reached as a limit', async () => {
@@ -371,5 +467,81 @@ describe('sandboxes on a cluster', () => {
     const error = await registry.create(alice, REPO, 'main').catch((e) => e)
     expect(error).toBeInstanceOf(SandboxError)
     expect(error.status).toBe(413)
+  })
+
+  describe('push', () => {
+    const author = { name: 'Alice Agent', email: 'alice@corp.test', message: 'Agent work' }
+
+    it('commits in the pod, and pushes from the server what it checked', async () => {
+      const registry = registryWith()
+      const sandbox = await registry.create(alice, REPO, 'main')
+      await registry.edit(alice, sandbox.id, [
+        { op: 'replace', path: 'src/app.ts', old_string: '41', new_string: '42' },
+        { op: 'write', path: 'new.txt', content: 'new' },
+      ])
+      const before = cluster.commands.length
+      const pushed = await registry.push(alice, sandbox.id, 'agent/one', author)
+      const branch = git(repository, 'rev-parse', 'agent/one')
+      expect(pushed).toMatchObject({ commit: branch, ref: 'agent/one', pushed: { 'agent/one': branch } })
+      expect(git(repository, 'rev-parse', 'agent/one^')).toBe(commit)
+      expect(git(repository, 'show', 'agent/one:src/app.ts')).toContain('42')
+      expect(git(repository, 'log', '-1', '--format=%an <%ae>|%s', 'agent/one')).toBe(
+        'Alice Agent <alice@corp.test>|Agent work'
+      )
+      // the pod committed, the server copied its git data, the pod moved to the commit:
+      // git never ran in the pod with the write credential
+      expect(cluster.commands.slice(before).map((command) => command[command[0] === 'timeout' ? 2 : 0])).toEqual([
+        'hammerkit',
+        'hammerkit',
+        'tar',
+        'hammerkit',
+        'hammerkit',
+      ])
+      expect(await registry.state(sandbox.id)).toMatchObject({ commit: branch, clean: true })
+
+      // the next push adds to the branch
+      await registry.edit(alice, sandbox.id, [{ op: 'write', path: 'new.txt', content: 'newer' }])
+      const again = await registry.push(alice, sandbox.id, 'agent/one', { ...author, message: 'More' })
+      expect(git(repository, 'rev-parse', 'agent/one')).toBe(again.commit)
+      expect(git(repository, 'rev-parse', 'agent/one^')).toBe(branch)
+    })
+
+    it('refuses a commit of the pod that is not one on top of the sandbox’s, or has what never leaves', async () => {
+      const storage = storageWith()
+      const registry = registryWith(storage)
+      const sandbox = await registry.create(alice, REPO, 'main')
+      const key = { id: sandbox.id, owner: alice }
+      const data = join(cluster.claimDirectory(namespace, getSandboxNames(sandbox.id).git), sandbox.id, 'git')
+      const pod = (commitOf: () => string) => {
+        const request = (storage as any).request.bind(storage)
+        ;(storage as any).request = async (k: any, r: any, signal?: AbortSignal) =>
+          r.op === 'commit' ? { result: commitOf() } : request(k, r, signal)
+      }
+      // a pod that answers a commit with a file of the deny list in it
+      pod(() => {
+        const work = join(root, 'forged')
+        rmSync(work, { recursive: true, force: true })
+        execFileSync('git', ['--git-dir', data, 'worktree', 'add', '--quiet', '--detach', work, 'HEAD'])
+        writeFileSync(join(work, '.env'), 'TOKEN=s3cret')
+        git(work, 'add', '--force', '.env')
+        git(work, 'commit', '--quiet', '-m', 'forged')
+        return git(work, 'rev-parse', 'HEAD')
+      })
+      const request = {
+        url: repository,
+        branch: 'agent/forged',
+        expect: null,
+        author,
+        env: { ...(process.env as { [key: string]: string }) },
+        signal: AbortSignal.timeout(60_000),
+      }
+      await expect(storage.push(key, request)).rejects.toThrow(/has \.env, which never leaves the server/)
+      // a pod that answers a commit of somewhere else
+      pod(() => 'f'.repeat(40))
+      await expect(storage.push(key, request)).rejects.toThrow()
+      expect(git(repository, 'branch', '--list', 'agent/*')).toBe('')
+      // its git data was a link out of the claim: nothing of it is copied
+      expect(lstatSync(data).isDirectory()).toBe(true)
+    })
   })
 })
