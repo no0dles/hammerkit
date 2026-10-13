@@ -40,8 +40,9 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
     shell: task.shell ?? undefined,
     platform: task.type === 'container-task' ? task.image : platform(),
     // outputs hold native binaries, and docker pulls images for the host
-    // architecture, so container tasks are keyed by it too
-    arch: process.arch,
+    // architecture, so container tasks are keyed by it too; on a cluster it is the
+    // one of the nodes the task runs on
+    arch: (task.type === 'container-task' && task.arch) || process.arch,
     generates: task.generates.map((g) => portable(g.path)).sort() ?? undefined,
     src: task.src.map((s) => s.source).sort() ?? undefined,
     envs:

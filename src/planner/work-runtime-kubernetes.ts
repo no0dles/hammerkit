@@ -30,6 +30,7 @@ import { removePersistentData } from '../kubernetes/remove-persistent-data'
 import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 import {
+  assertJobAccounts,
   assertSecretsReachable,
   ensureJobCredentials,
   getJobSecretSpec,
@@ -38,9 +39,10 @@ import {
   removeJobCredentials,
   splitJobSecrets,
 } from '../kubernetes/job-secrets'
-import { getPodPlacement, getRunLabels } from '../kubernetes/job-placement'
+import { getContainerSecurity, getPodPlacement, getRunLabels } from '../kubernetes/job-placement'
 import {
   ensureKubernetesItemNetwork,
+  getNetworkLabels,
   KubernetesItemNetwork,
   removeKubernetesItemNetwork,
 } from '../kubernetes/network-policy'
@@ -177,12 +179,13 @@ export function kubernetesTaskRuntime(
       const server = kubernetes.server
       const { delivered, inJob } = splitJobSecrets(task.data.secrets, server)
       const secrets = getKubernetesSecretRefs(task, delivered)
-      let secretSpec: JobSecretSpec
+      const admitted = environment.hosted?.accounts
       try {
         assertSecretsReachable(task, inJob)
+        if (server) {
+          assertJobAccounts(inJob, server, admitted)
+        }
         await ensureKubernetesSecret(instance, kubernetes, task, delivered, environment)
-        const credentials = await ensureJobCredentials(instance, kubernetes, task, inJob)
-        secretSpec = getJobSecretSpec(task, inJob, server, credentials, environment)
       } catch (e) {
         await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
@@ -192,6 +195,7 @@ export function kubernetesTaskRuntime(
         'hammerkit.dev/id': task.id(),
         'hammerkit.dev/state': options.stateKey,
         ...getRunLabels(kubernetes),
+        ...getNetworkLabels(kubernetes, task),
       }
       const placement = server ? getPodPlacement(server, task.data.pool) : null
 
@@ -212,10 +216,20 @@ export function kubernetesTaskRuntime(
         return
       }
       try {
-        const podName = `${task.name}-${options.stateKey}`
+        const podName = getResourceName(task, '-job')
         let i = 0
         for (const cmd of task.data.cmds) {
           const container = `cmd-${++i}`
+          let secretSpec: JobSecretSpec
+          try {
+            // made for each Job right before it, so a later command's token is as fresh
+            const credentials = await ensureJobCredentials(instance, kubernetes, task, inJob, admitted)
+            secretSpec = getJobSecretSpec(task, inJob, server, credentials, environment)
+          } catch (e) {
+            await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
+            options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+            return
+          }
           const command = secretSpec.command(task.data.shell, cmd.cmd)
           const spec: V1Job & KubernetesObjectHeader = {
             kind: 'Job',
@@ -258,6 +272,7 @@ export function kubernetesTaskRuntime(
                         ...secretSpec.mounts,
                       ],
                       ...getKubernetesResources(task.data.resources),
+                      ...getContainerSecurity(kubernetes),
                     },
                   ],
                   volumes: [...persistence.volumes, ...secrets.volumes, ...secretSpec.volumes],
@@ -294,6 +309,8 @@ export function kubernetesTaskRuntime(
             }
             await writeJobLogs(instance, kubernetes, task, podName, container)
             task.status.write('debug', 'pod completed')
+            // its init containers are done with the credentials
+            await removeJobCredentials(instance, kubernetes, task)
             if (i < task.data.cmds.length) {
               await deleteJobAndWait(instance, kubernetes, podName, options.abort)
             }

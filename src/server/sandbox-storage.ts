@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto'
-import { chmod, copyFile, lstat, mkdir, readdir, rm } from 'fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
+import { devNull } from 'os'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
@@ -130,6 +131,10 @@ export class HostSandboxStorage implements SandboxStorage {
         env[key] = value
       }
     }
+    // reading the files needs no configuration of the server's: a filter or attributes the
+    // machine's git config names would run on files a task wrote
+    env.GIT_CONFIG_NOSYSTEM = '1'
+    env.GIT_CONFIG_GLOBAL = devNull
     return { ...env, ...extra }
   }
 
@@ -142,7 +147,17 @@ export class HostSandboxStorage implements SandboxStorage {
       const root = this.root(id)
       const index = join(root, `index-${randomBytes(6).toString('hex')}`)
       try {
-        await copyFile(join(root, 'git', 'index'), index).catch(() => undefined)
+        // Git takes a file whose size and time match its entry for unchanged, unless the entry
+        // is as new as the index ("racy"). A file changed right after a checkout keeps the
+        // second of its entry, so the copy is dated two seconds before the index: every entry
+        // of the last checkout is racy, and its content is compared.
+        const original = join(root, 'git', 'index')
+        const written = await stat(original).catch(() => undefined)
+        if (written) {
+          await copyFile(original, index)
+          const before = new Date(written.mtimeMs - 2000)
+          await utimes(index, before, before)
+        }
         return await fn((args, action, options = {}) =>
           this.git(id, args, this.readEnv({ ...options.env, GIT_INDEX_FILE: index }), signal, action, options.maxBuffer)
         )

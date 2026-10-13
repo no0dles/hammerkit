@@ -526,6 +526,26 @@ describe('sandbox files', () => {
   })
 
   describe('changes', () => {
+    it('sees an edit of the same size made in the second of the checkout', async () => {
+      // README.md keeps its size; git sees the change only by its content when the edit is in
+      // the second the files were checked out in
+      for (const word of ['earth', 'there', 'mars!', 'venus', 'pluto']) {
+        await (
+          await files.plan([
+            {
+              op: 'replace',
+              path: 'README.md',
+              old_string: /hello .{5}/.exec(readFileSync(join(work, 'README.md'), 'utf8'))?.[0] ?? '',
+              new_string: `hello ${word}`,
+            },
+          ])
+        ).commit()
+        expect(await files.changes()).toEqual([{ path: 'README.md', status: 'modified', additions: 1, deletions: 1 }])
+        expect(await files.diff('diff', { name: 'a', email: 'a@b', message: 'm' })).toContain(`+hello ${word}`)
+        expect((await storage.state(id)).clean).toBe(false)
+      }
+    })
+
     it('summarizes and diffs the files against the commit, without the deny list', async () => {
       await (
         await files.plan([

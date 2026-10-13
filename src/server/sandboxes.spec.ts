@@ -156,6 +156,42 @@ describe('SandboxRegistry', () => {
     expect(sandboxes.usage(alice)).toEqual({ count: 0, bytes: 0 })
   })
 
+  it('sees a same-size change made in the second of the checkout', async () => {
+    const sandboxes = registryWith()
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      // 'one' to 'onx' right away: same size, and most likely the same second as the index
+      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'onx')
+      await new Promise((resolve) => setTimeout(resolve, 1100))
+      expect((await sandboxes.state(sandbox.id)).clean).toBe(false)
+      await expect(sandboxes.fetch(alice, sandbox.id, 'next')).rejects.toMatchObject({ status: 409 })
+      await sandboxes.remove(alice, sandbox.id)
+    }
+  }, 30_000)
+
+  it('does not run a filter the git config of the machine defines when it reads the files', async () => {
+    const marker = join(root, 'filter-ran')
+    const config = join(root, 'gitconfig')
+    writeFileSync(config, `[filter "x"]\n\tclean = touch '${marker.replace(/\\/g, '/')}' && cat\n`)
+    const sandboxes = new SandboxRegistry({
+      storage: new HostSandboxStorage(join(root, 'files'), { ...process.env, GIT_CONFIG_GLOBAL: config }),
+      records: join(root, 'records'),
+      limits: { count: 5, bytes: 100 * 1024 * 1024, total: 1024 * 1024 * 1024 },
+      repos: {
+        url: () => repository,
+        credentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
+        resolve: async (_repo, ref) => git(repository, 'rev-parse', ref),
+        scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
+      },
+    })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    const files = await sandboxes.attach(sandbox.id)
+    writeFileSync(join(files, '.gitattributes'), '* filter=x\n')
+    writeFileSync(join(files, 'written.txt'), 'by a task')
+    expect((await sandboxes.state(sandbox.id)).clean).toBe(false)
+    expect(existsSync(marker)).toBe(false)
+  })
+
   it('keeps a caller within their count and bytes, and the server within its total', async () => {
     const counted = registryWith({ count: 1 })
     await counted.create(alice, REPO, 'main')
@@ -180,10 +216,14 @@ describe('SandboxRegistry', () => {
     const results = await Promise.allSettled([
       sandboxes.create(alice, REPO, 'main'),
       sandboxes.create(alice, REPO, 'main'),
+      sandboxes.create(alice, REPO, 'main'),
     ])
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { status: 413 } })
+    for (const result of results.filter((result) => result.status === 'rejected')) {
+      expect(result).toMatchObject({ reason: { status: 413 } })
+    }
     expect(sandboxes.usage(alice).count).toBe(1)
+    expect(sandboxes.usage(alice).bytes).toBeLessThanOrEqual(Math.floor(one.bytes * 1.5))
   })
 
   it('stops the runs of a sandbox it deletes, and its files go with it', async () => {
@@ -238,6 +278,21 @@ describe('SandboxRegistry', () => {
       expect(readdirSync(join(root, 'files'))).toEqual([])
     }
   )
+
+  it('lets a change wait for a delete, and then does not find the sandbox', async () => {
+    const sandboxes = registryWith()
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    let release = () => undefined as void
+    const held = sandboxes.withSandbox(alice, sandbox.id, () => new Promise<void>((resolve) => (release = resolve)))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const removed = sandboxes.remove(alice, sandbox.id)
+    // a submit that looked the sandbox up before the delete and now waits for it
+    const waiting = sandboxes.withSandbox(alice, sandbox.id, async () => 'ran').catch((e: unknown) => e)
+    release()
+    await held
+    expect(await removed).toBe(true)
+    expect(await waiting).toMatchObject({ status: 404 })
+  })
 
   it('measures what a run wrote', async () => {
     const sandboxes = registryWith()
