@@ -132,6 +132,11 @@ runs through `env` to empty the proxy variables.
 A `NetworkPolicy` only takes effect when the cluster's network plugin enforces it
 (Calico, Cilium, and recent versions of kind's kindnet do; some plain setups
 don't). Some plugins, kindnet among them, apply it a moment after a pod started,
-so a connection made in that first moment can still get out. A task's refused hosts show up in its log; a service outlives the run on
+so a limited pod starts with an init container that waits until the policy holds:
+until the cluster's DNS server, which the policy doesn't allow, stops answering.
+Neither the command nor anything else in the pod runs before that. If the policy
+isn't in force after 60 seconds, the pod fails with a message saying so, rather
+than run without limits. When a task is cancelled or times out, its pods are
+deleted and gone before its policy is. A task's refused hosts show up in its log; a service outlives the run on
 a cluster, so its refused hosts are in the log of its proxy, the Deployment named
 `hammerkit-proxy-<id>`.

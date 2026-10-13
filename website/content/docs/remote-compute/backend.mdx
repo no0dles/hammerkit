@@ -203,8 +203,9 @@ governed by the policy of the caller's namespace, see [Namespaces](#namespaces).
 
 The cluster's network plugin has to enforce `NetworkPolicy` (Calico and Cilium do, and recent
 kind), for `network:` and for keeping callers apart. Without it nothing is isolated. Some apply a
-policy a moment after the pod started, so `none` is not a hard boundary for the first moment of
-a task.
+policy a moment after the pod started, so a limited pod waits in an init container until its
+policy holds, and fails after 60 seconds if it never does (see
+[Kubernetes](/docs/task/network#kubernetes)). A run's policies go only after its pods are gone.
 
 A task that reads a provider's secret keeps an open network for now: its init containers are in
 the task's pod, so its policy would cut them off from the secret manager. Such a build file is
