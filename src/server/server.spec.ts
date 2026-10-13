@@ -74,6 +74,22 @@ describe('server config', () => {
     expect(serverConfigSchema.safeParse({ issuers, listen: { host: 'localhost' } }).success).toBe(true)
   })
 
+  it('takes a network ceiling for runs, which local tasks could not keep', () => {
+    const issuers = [{ issuer: 'https://idp.corp', audience: 'hammerkit' }]
+    expect(serverConfigSchema.parse({ issuers }).runs.network).toBe('open')
+    const allow = { network: { allow: ['registry.npmjs.org', '*.githubusercontent.com'] } }
+    expect(serverConfigSchema.parse({ issuers, runs: allow }).runs.network).toEqual(allow.network)
+    expect(serverConfigSchema.safeParse({ issuers, runs: { network: { allow: ['10.0.0.0/8'] } } }).success).toBe(false)
+    const local = serverConfigSchema.safeParse({ issuers, runs: { network: 'none' }, runtimes: ['docker', 'local'] })
+    expect(local.success ? [] : local.error.issues).toContainEqual(
+      expect.objectContaining({
+        path: ['runs', 'network'],
+        message: 'the network of a local task can not be limited, allow only the docker runtime with runs.network',
+      })
+    )
+    expect(serverConfigSchema.safeParse({ issuers, runs: { network: 'open' }, runtimes: ['local'] }).success).toBe(true)
+  })
+
   it('takes only the platforms it knows', () => {
     const issuers = [{ issuer: 'https://idp.corp', audience: 'hammerkit' }]
     const backend = { type: 'host', platform: { os: 'plan9', arch: 'amd64' } }
@@ -405,6 +421,23 @@ describe('server config policy', () => {
     ).toEqual(['local'])
   })
 
+  it('keeps the network of sandbox runs within runs.network', () => {
+    const within = {
+      ...base,
+      runs: { network: { allow: ['*.npmjs.org'] } },
+      sandboxes: { network: { allow: ['registry.npmjs.org'] } },
+    }
+    expect(serverConfigSchema.safeParse(within).success).toBe(true)
+    const result = serverConfigSchema.safeParse({
+      ...base,
+      runs: { network: 'none' },
+      sandboxes: { network: { allow: ['registry.npmjs.org'] } },
+    })
+    expect(!result.success && result.error.issues.map((issue) => issue.message)).toContain(
+      'runs on sandboxes get at most runs.network (none), not allow registry.npmjs.org'
+    )
+  })
+
   it('lets env secrets of sandbox runs read only what runs read', () => {
     const allowed = { ...base, runs: { env: { allow: ['NPM_TOKEN'] } }, sandboxes: { env: { allow: ['NPM_TOKEN'] } } }
     expect(serverConfigSchema.parse(allowed).sandboxes.env.allow).toEqual(['NPM_TOKEN'])
@@ -590,6 +623,14 @@ describe('server config policy', () => {
         'local tasks run in the toolImage of a pool, give a pool one or remove local from runtimes'
       )
       expect(kubernetes({ pools: [{ name: 'a', toolImage: 'tools:1' }] }, { runtimes: ['local'] }).success).toBe(true)
+    })
+
+    it('limits runs only on a cluster that enforces NetworkPolicies', () => {
+      const limited = { runs: { network: 'none' }, runtimes: ['docker'] }
+      expect(message(kubernetes({}, limited))).toBe(
+        'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them'
+      )
+      expect(kubernetes({ networkPolicy: 'enforced' }, limited).success).toBe(true)
     })
   })
 

@@ -9,6 +9,7 @@ import { startServer } from '../server/server'
 import { REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { describeApproval, describePlan } from './remote-work-commands'
 
 const HK = 'hammerkit'
 
@@ -20,6 +21,9 @@ const buildFile = `tasks:
     secrets:
       - { from: "echo:kube", account: op-payments-prod, env: KUBE_TOKEN }
     cmds: [echo deploy]
+  smoke:
+    deps: [deploy]
+    cmds: ["echo smoke ${'x'.repeat(400)} \u202e end"]
 includes:
   more: ./more.yaml
 `
@@ -134,11 +138,12 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
   }
 }
 
-async function submit(h: Harness, sub: string, task: string) {
+async function submit(h: Harness, sub: string, task: string, options: Record<string, unknown> = {}) {
   const response = await h.call(sub, 'POST', '/v1/runs', {
     definition: { name: 'payments' },
     tasks: [task],
     source: { type: 'ref', repo: REPO, ref: 'main' },
+    options,
   })
   expect(response.status).toBe(202)
   return response.body as { id: string; state: string }
@@ -150,7 +155,7 @@ describe('remote publish', () => {
       await h.run('remote', 'login', 'build')
       const first = await h.run('remote', 'publish', 'payments', 'build')
       expect(first).toMatch(/published payments to build: sha256:[0-9a-f]{64} \(2 files\)/)
-      expect(first).toContain('tasks and services: build, deploy, more:lint')
+      expect(first).toContain('tasks and services: build, deploy, more:lint, smoke')
 
       const again = await h.run('remote', 'publish', 'payments', 'build')
       expect(again).toContain('already published payments to build')
@@ -158,7 +163,7 @@ describe('remote publish', () => {
       expect(again).toContain(hash)
 
       const published = await h.call('bob', 'GET', '/v1/definitions/payments/latest')
-      expect(published.body).toMatchObject({ hash, tasks: ['build', 'deploy', 'more:lint'] })
+      expect(published.body).toMatchObject({ hash, tasks: ['build', 'deploy', 'more:lint', 'smoke'] })
     })
   })
 
@@ -260,6 +265,33 @@ describe('remote approvals', () => {
       }
       expect(h.executed).toEqual(['deploy'])
       expect((await h.call('alice', 'GET', `/v1/runs/${run.id}`)).body.approvals[0].approvedBy.sub).toBe('bob')
+    })
+  })
+
+  it('shows the approver the whole command, with format characters written out', async () => {
+    await withHarness('remote-approvals-arguments', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'publish', 'payments', 'build')
+      // smoke waits for deploy, which reads a secret of prod, so it takes no arguments
+      const refused = await h.call('alice', 'POST', '/v1/runs', {
+        definition: { name: 'payments', hash: 'latest' },
+        tasks: ['smoke'],
+        source: { type: 'ref', repo: REPO, ref: 'main' },
+        options: { args: ['--region', 'eu'] },
+      })
+      expect(refused.status).toBe(400)
+      expect(refused.body.error).toContain('smoke takes no arguments on a server: deploy in its run reads')
+      const run = await submit(h, 'alice', 'smoke', { cache: 'none' })
+      expect(run.state).toBe('awaiting-approval')
+
+      h.as('bob')
+      await h.run('remote', 'login', 'build')
+      const listing = await h.run('remote', 'approvals', 'build')
+      expect(listing).toContain('source ref main, cache=none')
+      const shown = await h.run('remote', 'show', run.id, 'build')
+      expect(shown).toContain(`$ echo smoke ${'x'.repeat(400)} \\u{202e} end\n`)
+      expect(shown).not.toContain('\u202e')
+      expect(shown).toContain('$ echo deploy\n')
     })
   })
 
@@ -404,5 +436,54 @@ describe('remote proposals', () => {
         'is not a run id or a proposed'
       )
     })
+  })
+})
+
+// the escapes of colors, which a terminal shows and a test does not
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
+
+describe('describePlan', () => {
+  it('shows a version stored before plans had a command and a network', () => {
+    const entry = { deps: [], needs: [], accounts: [], secrets: [], mounts: [], ports: [], generates: [], flags: [] }
+    expect(
+      describePlan({
+        old: { ...entry, kind: 'task', runtime: 'docker', image: 'node:22', cmds: ['npm test'] },
+        limited: {
+          ...entry,
+          kind: 'task',
+          runtime: 'docker',
+          cmds: ['npm ci'],
+          network: { allow: ['registry.npmjs.org'] },
+        },
+        open: { ...entry, kind: 'service', runtime: 'docker', cmds: [], network: 'open' },
+      }).map((line) => line.replace(ANSI, ''))
+    ).toEqual([
+      '  old  task, docker node:22',
+      '    $ npm test',
+      '  limited  task, docker',
+      '    $ npm ci',
+      '    network: {"allow":["registry.npmjs.org"]}',
+      '  open  service, docker',
+    ])
+  })
+})
+
+describe('describeApproval', () => {
+  it('shows every argument whole, each a JSON string, with format characters written out', () => {
+    const long = `eu ${'y'.repeat(400)}`
+    const lines = describeApproval({
+      id: 'run_AAAAAAAAAAAAAAAA',
+      requestedBy: { iss: 'https://idp', sub: 'alice' },
+      createdAt: '2026-10-13T00:00:00Z',
+      definition: { name: 'payments', hash: 'sha256:abc' },
+      tasks: ['smoke'],
+      accounts: [],
+      source: { type: 'ref', ref: 'main' },
+      options: { args: ['--region', long, 'a\u202eb', 'say "hi", twice'], cache: 'none' },
+      state: 'awaiting-approval',
+    }).map((line) => line.replace(ANSI, ''))
+    expect(lines).toContain('  accounts: none, source ref main, cache=none')
+    expect(lines).toContain(`  arguments: "--region" "${long}" "a\\u{202e}b" "say \\"hi\\", twice"`)
+    expect(lines.join('\n')).not.toContain('\u202e')
   })
 })

@@ -112,6 +112,9 @@ hosts, and a task with its own allow list keeps the hosts both lists allow. A
 service started by an earlier `up` is recreated when the ceiling changes its
 network.
 
+A [server](/docs/remote-compute/runs#network) sets the same ceiling for all of its runs
+with `runs.network`, and refuses to publish a build file that asks for more.
+
 ## Local tasks
 
 Hammerkit can't limit the network of a local task (one without an `image`), which
