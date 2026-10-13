@@ -9,6 +9,7 @@ import { startServer } from '../server/server'
 import { REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
+import { describeApproval, describePlan } from './remote-work-commands'
 
 const HK = 'hammerkit'
 
@@ -267,23 +268,29 @@ describe('remote approvals', () => {
     })
   })
 
-  it('shows the approver every argument and the whole command, with format characters written out', async () => {
+  it('shows the approver the whole command, with format characters written out', async () => {
     await withHarness('remote-approvals-arguments', async (h) => {
       await h.run('remote', 'login', 'build')
       await h.run('remote', 'publish', 'payments', 'build')
-      // smoke reads no secret and takes arguments; deploy, which it waits for, reads one of prod
-      const long = `eu ${'y'.repeat(400)}`
-      const run = await submit(h, 'alice', 'smoke', { args: ['--region', long, 'a\u202eb'], cache: 'none' })
+      // smoke waits for deploy, which reads a secret of prod, so it takes no arguments
+      const refused = await h.call('alice', 'POST', '/v1/runs', {
+        definition: { name: 'payments', hash: 'latest' },
+        tasks: ['smoke'],
+        source: { type: 'ref', repo: REPO, ref: 'main' },
+        options: { args: ['--region', 'eu'] },
+      })
+      expect(refused.status).toBe(400)
+      expect(refused.body.error).toContain('smoke takes no arguments on a server: deploy in its run reads')
+      const run = await submit(h, 'alice', 'smoke', { cache: 'none' })
       expect(run.state).toBe('awaiting-approval')
 
       h.as('bob')
       await h.run('remote', 'login', 'build')
       const listing = await h.run('remote', 'approvals', 'build')
       expect(listing).toContain('source ref main, cache=none')
-      expect(listing).toContain(`arguments: "--region" "${long}" "a\\u{202e}b"\n`)
-      expect(listing).not.toContain('\u202e')
       const shown = await h.run('remote', 'show', run.id, 'build')
-      expect(shown).toContain(`$ echo smoke ${'x'.repeat(400)} \\u{202e} end '--region' '${long}' 'a\\u{202e}b'\n`)
+      expect(shown).toContain(`$ echo smoke ${'x'.repeat(400)} \\u{202e} end\n`)
+      expect(shown).not.toContain('\u202e')
       expect(shown).toContain('$ echo deploy\n')
     })
   })
@@ -429,5 +436,54 @@ describe('remote proposals', () => {
         'is not a run id or a proposed'
       )
     })
+  })
+})
+
+// the escapes of colors, which a terminal shows and a test does not
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
+
+describe('describePlan', () => {
+  it('shows a version stored before plans had a command and a network', () => {
+    const entry = { deps: [], needs: [], accounts: [], secrets: [], mounts: [], ports: [], generates: [], flags: [] }
+    expect(
+      describePlan({
+        old: { ...entry, kind: 'task', runtime: 'docker', image: 'node:22', cmds: ['npm test'] },
+        limited: {
+          ...entry,
+          kind: 'task',
+          runtime: 'docker',
+          cmds: ['npm ci'],
+          network: { allow: ['registry.npmjs.org'] },
+        },
+        open: { ...entry, kind: 'service', runtime: 'docker', cmds: [], network: 'open' },
+      }).map((line) => line.replace(ANSI, ''))
+    ).toEqual([
+      '  old  task, docker node:22',
+      '    $ npm test',
+      '  limited  task, docker',
+      '    $ npm ci',
+      '    network: {"allow":["registry.npmjs.org"]}',
+      '  open  service, docker',
+    ])
+  })
+})
+
+describe('describeApproval', () => {
+  it('shows every argument whole, each a JSON string, with format characters written out', () => {
+    const long = `eu ${'y'.repeat(400)}`
+    const lines = describeApproval({
+      id: 'run_AAAAAAAAAAAAAAAA',
+      requestedBy: { iss: 'https://idp', sub: 'alice' },
+      createdAt: '2026-10-13T00:00:00Z',
+      definition: { name: 'payments', hash: 'sha256:abc' },
+      tasks: ['smoke'],
+      accounts: [],
+      source: { type: 'ref', ref: 'main' },
+      options: { args: ['--region', long, 'a\u202eb', 'say "hi", twice'], cache: 'none' },
+      state: 'awaiting-approval',
+    }).map((line) => line.replace(ANSI, ''))
+    expect(lines).toContain('  accounts: none, source ref main, cache=none')
+    expect(lines).toContain(`  arguments: "--region" "${long}" "a\\u{202e}b" "say \\"hi\\", twice"`)
+    expect(lines.join('\n')).not.toContain('\u202e')
   })
 })

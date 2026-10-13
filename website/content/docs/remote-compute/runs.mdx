@@ -95,25 +95,25 @@ does locally:
 
 They are appended to the last command of that task, each quoted for its shell, so
 shell syntax in an argument stays text. Its dependencies and the services it needs get
-none. The run's `plan` shows the command as it runs, so the caller and an approver see
+none. The run's `plan` shows the command as it runs, so the caller sees
 `npx vitest run 'src/login.spec.ts' '-t' 'login flow'`, and a published version shows
 the last command of each task as `command`, so a caller knows where the arguments land.
 
 * `tasks` names exactly one task; labels can not select it. Several tasks, a service, or
   only labels with arguments are `400`.
 * Up to 100 arguments, 16 KiB together, and none with a NUL character.
-* A task that reads a secret, or takes a variable of the server into its `envs` (`$NAME`
-  or `${NAME}` of [`runs.env`](#config)) other than `PATH`, `HOME` and `CI`, takes no
-  arguments: an argument could make its command print what it holds. The run is `400`
-  naming what the task reads, and the executor checks again before it starts. A shell
-  task (`cmds: [sh -c]`) on a server therefore holds no account and no credential of the server.
-* Its dependencies and the services it needs are not covered: they may read secrets, and
-  they never get the arguments. But the task with arguments reads their outputs and calls
-  the services, so a dependency of a shell must not write a secret into its outputs, and
-  a service holding a secret must not serve it. Keep that in mind when publishing.
-* An approver sees every argument whole: [`remote approvals`](/docs/cli/remote#approving-runs)
-  lists them as JSON strings, and `remote show` prints the command with them appended,
-  never cut, with control and bidi characters written out.
+* A run in which any task or service reads a secret, or takes a variable of the server
+  into its `envs` (`$NAME` or `${NAME}` of [`runs.env`](#config)) other than `PATH`,
+  `HOME` and `CI`, passes no arguments. That covers the task itself, its dependencies and
+  the services it needs: an argument could make the command print what the task holds,
+  and what a dependency wrote into its outputs or a service answers, in a form no mask of
+  secrets knows (`rev token.txt`). The run is `400` naming the item and what it reads,
+  and the executor checks again before it starts. A shell task (`cmds: [sh -c]`) on a
+  server therefore runs without any account or credential of the server, nor next to one.
+* Such a run never uses an account, so it never waits for an approval.
+* [`remote approvals`](/docs/cli/remote#approving-runs) still lists the arguments of a
+  run as JSON strings, and `remote show` prints every command whole, never cut, with
+  control and bidi characters written out.
 * On a server that allows the `local` runtime, arguments to a local task run as commands
   on the server's machine, as the code of the ref already does.
 * A server never takes `--set`; variables stay what the published build file says.

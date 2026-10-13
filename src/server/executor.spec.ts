@@ -199,6 +199,32 @@ describe('HostExecutor', () => {
     expect(events).toEqual([])
   })
 
+  it('refuses arguments for a task whose dependency reads secrets, before anything starts', async () => {
+    // the dependency writes the secret into its outputs, and `rev` would print it past the masking
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  login:',
+        '    secrets:',
+        '      - { from: "echo:s3cr3t-value", account: ci, env: TOKEN }',
+        `    cmds: ["node -e \\"require('fs').writeFileSync('token.txt', process.env.TOKEN)\\""]`,
+        '    generates: [token.txt]',
+        '  sh:',
+        '    deps: [login]',
+        '    cmds: [sh -c]',
+        '',
+      ].join('\n'),
+    })
+    const { events, error } = await execute(
+      run(hash, { tasks: ['sh'], accounts: ['ci'], options: { args: ['rev token.txt'] } })
+    )
+    expect(error?.message).toBe(
+      'sh takes no arguments on a server: login in its run reads the secret TOKEN, and an argument could make sh print what login hands on'
+    )
+    expect(events).toEqual([])
+    expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
+  })
+
   it('hands runs.network to the process of the run, and refuses what reaches more', async () => {
     const limited: PlanContext = {
       ...options.planning,
