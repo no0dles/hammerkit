@@ -1,61 +1,82 @@
-import { spawnSync } from 'child_process'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { spawn } from 'child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { AddressInfo, createServer, Server } from 'net'
 import { tmpdir } from 'os'
-import { delimiter, join } from 'path'
-import { getNetworkGateScript } from './network-gate'
+import { join } from 'path'
+import { getNetworkGateContainer, NETWORK_GATE_SCRIPT } from './network-gate'
 
-// The script of the gate with a fake `nc` that reaches the DNS server until a given
-// try, and a `sleep` that returns at once.
-describe('network gate', () => {
-  const itPosix = process.platform === 'win32' ? it.skip : it
-  let directory: string
-
-  beforeEach(() => {
-    directory = mkdtempSync(join(tmpdir(), 'hammerkit-network-gate-'))
-    writeFileSync(join(directory, 'resolv.conf'), '# made by the kubelet\nnameserver 10.96.0.10\nsearch svc\n')
-    const nc = join(directory, 'nc')
-    writeFileSync(
-      nc,
-      [
-        '#!/bin/sh',
-        `echo "$*" >> "${join(directory, 'calls')}"`,
-        `count=$(wc -l < "${join(directory, 'calls')}")`,
-        // reached until the policy holds, from then on blocked
-        '[ "$count" -lt "$BLOCKED_FROM" ]',
-      ].join('\n')
-    )
-    chmodSync(nc, 0o755)
-    writeFileSync(join(directory, 'sleep'), '#!/bin/sh\n')
-    chmodSync(join(directory, 'sleep'), 0o755)
-  })
-
-  afterEach(() => rmSync(directory, { recursive: true, force: true }))
-
-  function gate(seconds: number, blockedFrom: number) {
-    const result = spawnSync('sh', ['-c', getNetworkGateScript(seconds, join(directory, 'resolv.conf'))], {
-      env: { PATH: `${directory}${delimiter}${process.env.PATH}`, BLOCKED_FROM: String(blockedFrom) },
-      encoding: 'utf8',
+// the script as the init container runs it, against a stand-in nameserver
+function runGate(resolvConf: string, port: number, timeoutMs: number): Promise<{ code: number; stderr: string }> {
+  const dir = mkdtempSync(join(tmpdir(), 'hammerkit-gate-'))
+  const path = join(dir, 'resolv.conf')
+  writeFileSync(path, resolvConf)
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', NETWORK_GATE_SCRIPT], {
+      env: {
+        HAMMERKIT_GATE_RESOLV_CONF: path,
+        HAMMERKIT_GATE_PORT: `${port}`,
+        HAMMERKIT_GATE_TIMEOUT_MS: `${timeoutMs}`,
+      },
+      stdio: ['ignore', 'ignore', 'pipe'],
     })
-    const calls = readFileSync(join(directory, 'calls'), 'utf8').trim().split('\n')
-    return { status: result.status, stderr: result.stderr, calls }
-  }
+    let stderr = ''
+    child.stderr!.on('data', (data: Buffer) => (stderr += data.toString()))
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      rmSync(dir, { recursive: true, force: true })
+      resolve({ code: code ?? -1, stderr })
+    })
+  })
+}
 
-  itPosix('waits until the DNS server of the pod is out of reach', () => {
-    const { status, calls } = gate(60, 3)
-    expect(status).toBe(0)
-    expect(calls).toEqual(['-z -w 1 10.96.0.10 53', '-z -w 1 10.96.0.10 53', '-z -w 1 10.96.0.10 53'])
+async function listen(): Promise<Server> {
+  const server = createServer((socket) => socket.destroy())
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return server
+}
+
+const close = (server: Server) => new Promise<void>((resolve) => server.close(() => resolve()))
+
+describe('network gate', () => {
+  it('lets the pod start once the nameserver is out of reach', async () => {
+    const server = await listen()
+    const port = (server.address() as AddressInfo).port
+    await close(server)
+    const result = await runGate('search svc.cluster.local\nnameserver 127.0.0.1\n', port, 5000)
+    expect(result.code).toBe(0)
   })
 
-  itPosix('passes at once when the policy is in force from the start', () => {
-    const { status, calls } = gate(60, 1)
-    expect(status).toBe(0)
-    expect(calls).toHaveLength(1)
+  it('waits while the nameserver answers, and starts the pod once the policy holds', async () => {
+    const server = await listen()
+    const port = (server.address() as AddressInfo).port
+    const started = Date.now()
+    const gate = runGate('nameserver 127.0.0.1\n', port, 10000)
+    setTimeout(() => server.close(), 1500)
+    const result = await gate
+    expect(result.code).toBe(0)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1500)
   })
 
-  itPosix('fails the pod when the policy is not in force in time', () => {
-    const { status, stderr, calls } = gate(5, 1000)
-    expect(status).toBe(1)
-    expect(stderr).toContain('the network policy was not in force after 5s')
-    expect(calls).toHaveLength(5)
+  it('fails the pod when the policy never holds', async () => {
+    const server = await listen()
+    try {
+      const result = await runGate('nameserver 127.0.0.1\n', (server.address() as AddressInfo).port, 1000)
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain('the network policy of this pod is not enforced, it still reaches 127.0.0.1')
+    } finally {
+      await close(server)
+    }
+  })
+
+  it('fails the pod when it has no nameserver to check against', async () => {
+    const result = await runGate('search svc.cluster.local\n', 53, 1000)
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('the pod has no cluster DNS')
+  })
+
+  it('runs unprivileged from the proxy image', () => {
+    const container = getNetworkGateContainer()
+    expect(container.image).toMatch(/^node:24-alpine@sha256:/)
+    expect(container.securityContext).toMatchObject({ runAsNonRoot: true, allowPrivilegeEscalation: false })
   })
 })

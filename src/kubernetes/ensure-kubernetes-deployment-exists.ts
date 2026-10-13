@@ -1,3 +1,4 @@
+import { getServiceDefinitionHash } from '../planner/service-definition'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import {
@@ -21,6 +22,9 @@ import { getKubernetesResources } from './container-resources'
 import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
 import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
+
+// what the service was created from, to tell a changed one
+export const DEFINITION_LABEL = 'hammerkit.dev/definition'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
@@ -61,6 +65,7 @@ export async function ensureKubernetesDeploymentExists(
         'hammerkit.dev/id': service.id(),
         'hammerkit.dev/state': stateKey,
         ...getRunLabels(env),
+        [DEFINITION_LABEL]: getServiceDefinitionHash(service),
       },
     },
     spec: {
@@ -83,7 +88,7 @@ export async function ensureKubernetesDeploymentExists(
           // the pod resolves its own service name, as with Docker's Hostname
           hostname: getServiceHostname(service.name),
           hostAliases: network.hostAliases,
-          ...(network.initContainers.length > 0 ? { initContainers: network.initContainers } : {}),
+          initContainers: network.initContainers,
           // on a server the pod is the build's: no token of the namespace, and the
           // nodes of the first pool
           ...(placement
