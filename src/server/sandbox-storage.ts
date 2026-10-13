@@ -1,6 +1,5 @@
 import { randomBytes } from 'crypto'
 import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
-import { devNull } from 'os'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
@@ -134,7 +133,8 @@ export class HostSandboxStorage implements SandboxStorage {
     // reading the files needs no configuration of the server's: a filter or attributes the
     // machine's git config names would run on files a task wrote
     env.GIT_CONFIG_NOSYSTEM = '1'
-    env.GIT_CONFIG_GLOBAL = devNull
+    // a file that is never there, which git reads as empty: Git for Windows refuses `\\.\nul`
+    env.GIT_CONFIG_GLOBAL = join(this.directory, 'no-git-config')
     return { ...env, ...extra }
   }
 
