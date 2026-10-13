@@ -29,11 +29,24 @@ const createSchema = z
 
 const fetchSchema = z.object({ ref: refSchema }).strict()
 
+// trailers by which a person attests a commit, which a caller could otherwise put in another
+// person's name
+const ATTESTATION = /^\s*(signed-off-by|reviewed-by|acked-by|tested-by)\s*:/im
+
 const pushSchema = z
   .object({
     branch: refSchema,
-    // the message of the commit, as `git commit -m` takes it
-    message: z.string().trim().min(1).max(10_000),
+    // the message of the commit, as `git commit -m` takes it; it can not sign off for, or
+    // claim the review of, anybody
+    message: z
+      .string()
+      .trim()
+      .min(1)
+      .max(10_000)
+      .refine(
+        (message) => !ATTESTATION.test(message),
+        'the message may not carry Signed-off-by, Reviewed-by, Acked-by or Tested-by: the server pushes as the caller'
+      ),
   })
   .strict()
 
@@ -179,8 +192,9 @@ function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, body: unknown): T
 
 /**
  * Who the commit of a push is by: the caller, as their token names them (`name` and
- * `email`), else by their subject at the host of their issuer. Never what the request
- * says, so a commit can not claim to be somebody else's.
+ * `email`, unless the issuer says the address is not verified), else by their subject at the
+ * host of their issuer. Never what the request says, so a commit can not claim to be
+ * somebody else's.
  */
 export function author(principal: Principal): { name: string; email: string } {
   const clean = (value: string | undefined) =>
@@ -189,7 +203,8 @@ export function author(principal: Principal): { name: string; email: string } {
       .trim()
       .slice(0, 200)
   const name = clean(principal.claims.name) || clean(principal.claims.preferred_username) || clean(principal.sub)
-  const claimed = clean(principal.claims.email)
+  // an address the issuer says it did not verify is whatever the caller typed in
+  const claimed = principal.emailVerified === false ? '' : clean(principal.claims.email)
   if (/^[^\s@]+@[^\s@]+$/.test(claimed)) {
     return { name, email: claimed }
   }

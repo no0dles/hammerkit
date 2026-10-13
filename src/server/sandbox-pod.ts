@@ -34,7 +34,7 @@ export type SandboxPodRequest =
   // the commit of the changes, for the server to push; the sandbox stays where it is
   | { op: 'commit'; id: string; author: PatchAuthor }
   // moves the sandbox to a commit it has, its files stay: what the server pushed
-  | { op: 'adopt'; id: string; commit: string }
+  | { op: 'move'; id: string; commit: string }
 
 // The first line of the answer. A raw read sends the bytes of the file after it; `stream`
 // says there are more than an answer holds in memory.
@@ -117,8 +117,8 @@ async function answer(
       return send(await files().diff(request.format, request.author))
     case 'commit':
       return send((await files().commit(request.author)) ?? null)
-    case 'adopt':
-      await storage.adopt(key, request.commit)
+    case 'move':
+      await storage.moveTo(key, request.commit)
       return send(null)
     case 'edit': {
       const plan = await files().plan(request.ops)

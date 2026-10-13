@@ -105,6 +105,15 @@ export async function resolveRef(
   return commit
 }
 
+// A branch git takes as a name of its own: a ref, and no part of it starts or ends with a
+// dot or ends with `.lock` (`git check-ref-format` refuses those).
+export function isValidBranch(branch: string): boolean {
+  return (
+    isValidRef(branch) &&
+    branch.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.') && !part.endsWith('.lock'))
+  )
+}
+
 // The commit a branch of a repository points to now, none when there is no such branch.
 export async function remoteBranch(
   repository: string,

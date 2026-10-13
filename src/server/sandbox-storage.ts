@@ -72,6 +72,17 @@ export interface SandboxPush {
 
 export class SandboxPushConflict extends Error {}
 
+// A push that failed after its commit was written: the remote may have taken it anyway (a
+// timeout after it answered), which the caller checks against the branch.
+export class SandboxPushFailed extends Error {
+  constructor(
+    readonly commit: string,
+    readonly cause: unknown
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause))
+  }
+}
+
 /**
  * Where the files of sandboxes are kept. The registry of sandboxes, the API and the
  * executor only know a sandbox and, while a run uses it, what to attach; how the files
@@ -93,9 +104,12 @@ export interface SandboxStorage {
   usage(key: SandboxKey): Promise<number>
   // reading, searching and editing its files through the API
   files(key: SandboxKey): SandboxFiles
-  // commits the changes on top of the commit the sandbox is at, pushes that commit to the
-  // branch, and moves the sandbox to it; none when there is nothing to push
+  // commits the changes on top of the commit the sandbox is at and pushes that commit to
+  // the branch; none when there is nothing to push. The sandbox stays where it is.
   push(key: SandboxKey, push: SandboxPush): Promise<string | undefined>
+  // moves the sandbox to a commit it pushed, keeping its files: its changes are then what
+  // is not pushed yet
+  moveTo(key: SandboxKey, commit: string): Promise<void>
   remove(key: SandboxKey): Promise<void>
   // what has storage, to clean up what a crash left behind
   list(): Promise<StoredSandbox[]>
@@ -257,23 +271,33 @@ export class HostSandboxStorage implements SandboxStorage {
     }
     // the lease makes the remote refuse when the branch moved since it was read, and when
     // somebody created it meanwhile
-    await run(
-      [
+    try {
+      await run(
+        [
+          'push',
+          '--quiet',
+          '--no-verify',
+          `--force-with-lease=refs/heads/${push.branch}:${push.expect ?? ''}`,
+          '--',
+          push.url,
+          `${commit}:refs/heads/${push.branch}`,
+        ],
         'push',
-        '--quiet',
-        '--no-verify',
-        `--force-with-lease=refs/heads/${push.branch}:${push.expect ?? ''}`,
-        '--',
-        push.url,
-        `${commit}:refs/heads/${push.branch}`,
-      ],
-      'push',
-      // the write credential is in the environment of this one git process
-      this.readEnv(push.env)
-    )
-    // what was pushed is the sandbox's commit now: its changes are what is not pushed yet
-    await run(['reset', '--quiet', commit], 'move')
+        // the write credential is in the environment of this one git process, which is
+        // that environment alone: nothing of the server's own git configuration
+        push.env
+      )
+    } catch (e) {
+      throw new SandboxPushFailed(commit, e)
+    }
     return commit
+  }
+
+  async moveTo({ id }: SandboxKey, commit: string): Promise<void> {
+    if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(commit)) {
+      throw new Error(`${JSON.stringify(commit.slice(0, 80))} is not a commit`)
+    }
+    await this.git(id, ['reset', '--quiet', commit], this.readEnv(), AbortSignal.timeout(5 * 60 * 1000), 'move')
   }
 
   // The tree is written with an index of its own, so neither the sandbox's index nor its

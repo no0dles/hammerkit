@@ -23,9 +23,10 @@ secretProviders:
 accounts:
   dev: { providers: { echo: { env: {} } }, source: [ref, sandbox] }
   ci: { providers: { echo: { env: {} } } }
+  scm-push: { providers: { echo: { env: {} } } }
 sources:
   - match: github.com/corp/*
-    push: { branches: ['agent/**'] }
+    push: { secret: { from: "echo:push-token", account: scm-push }, branches: ['agent/**'] }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { dev: use, ci: use }
@@ -419,6 +420,10 @@ describe('sandboxes api', () => {
       expect((await push({ branch: 'main', message: 'Agent work' })).status).toBe(403)
       expect((await push({ branch: 'agent/one' })).status).toBe(400)
       expect((await push({ branch: 'agent/one', message: 'x', author: 'someone' })).status).toBe(400)
+      const signed = await push({ branch: 'agent/one', message: 'Agent work\n\nSigned-off-by: Bob <bob@corp.test>' })
+      expect(signed.status).toBe(400)
+      expect((await signed.json()).error).toMatch(/may not carry Signed-off-by/)
+      expect((await push({ branch: 'agent/.hidden', message: 'Agent work' })).status).toBe(400)
       expect((await push({ branch: 'agent/one', message: 'Agent work' }, 'carol')).status).toBe(404)
       expect((await api.call('GET', `${base}/push`)).status).toBe(405)
 
@@ -457,6 +462,14 @@ describe('the author of a push', () => {
       name: 'agent',
       email: 'agent-7@login.corp.test',
     })
+  })
+
+  it('does not take an address the issuer did not verify', () => {
+    expect(author({ ...principal('agent-7', { name: 'Eve', email: 'ceo@corp.test' }), emailVerified: false })).toEqual({
+      name: 'Eve',
+      email: 'agent-7@login.corp.test',
+    })
+    expect(author({ ...principal('a', { email: 'a@corp.test' }), emailVerified: true }).email).toBe('a@corp.test')
   })
 
   it('takes nothing from a claim that would break the commit header', () => {
