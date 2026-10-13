@@ -19,6 +19,10 @@ import type { RunEventData, TaskStatus } from './runs'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
+// what a task event says of why a task ran or failed: a change to thousands of source
+// files is a cause per file
+const MAX_CAUSES = 20
+const MAX_ERROR_TEXT = 2 * 1024
 
 /**
  * What the process that executes a run is told, on its standard input. A run executes
@@ -114,10 +118,11 @@ export async function runTasks(
       }
       const execution = cli.exec({ ...execOptions, workers: cli.defaultWorkers() })
       const seen = new Map<string, Seen>()
-      const watch = execution.state.on('run-events', () => reportTasks(emit, execution.state.current, seen))
+      const report = () => reportTasks(emit, execution.state.current, seen, (text) => secrets.redact(text))
+      const watch = execution.state.on('run-events', report)
       try {
         const result = await execution.start()
-        reportTasks(emit, execution.state.current, seen)
+        report()
         if (!result.success) {
           throw new Error(cancelled() ? 'the run was cancelled' : `${name} failed`)
         }
@@ -141,8 +146,19 @@ interface Seen {
 function reportTasks(
   emit: (event: RunEventData) => void,
   workTree: Parameters<typeof iterateWorkTasks>[0],
-  seen: Map<string, Seen>
+  seen: Map<string, Seen>,
+  // what leaves the process is masked like the log is: an error may quote a value
+  redact: (text: string) => string
 ): void {
+  const causesOf = (causes: string[] | undefined) =>
+    causes?.length
+      ? {
+          causes: [
+            ...causes.slice(0, MAX_CAUSES).map((cause) => redact(cause).slice(0, MAX_ERROR_TEXT)),
+            ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
+          ],
+        }
+      : {}
   for (const task of iterateWorkTasks(workTree)) {
     const state = task.state.current
     const before = seen.get(task.name)
@@ -158,12 +174,13 @@ function reportTasks(
         task: task.name,
         state: status,
         ...(status === 'skipped' ? {} : { durationMs: state.duration }),
-        ...(state.missCauses?.length ? { causes: state.missCauses } : {}),
+        ...causesOf(state.missCauses),
       }
     } else if (state.type === 'crash') {
       event = { type: 'task', task: task.name, state: 'failed', exitCode: state.exitCode, ...since() }
     } else if (state.type === 'error') {
-      event = { type: 'task', task: task.name, state: 'failed', error: state.errorMessage, ...since() }
+      const error = redact(state.errorMessage).slice(0, MAX_ERROR_TEXT)
+      event = { type: 'task', task: task.name, state: 'failed', error, ...since() }
     } else if (state.type === 'canceled') {
       event = { type: 'task', task: task.name, state: 'cancelled' }
     }

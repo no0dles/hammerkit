@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { PassThrough, Writable } from 'stream'
@@ -125,6 +125,47 @@ describe('workerMain', () => {
         state: 'cached',
         durationMs: expect.any(Number),
       })
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(cache, { recursive: true, force: true })
+    }
+  })
+
+  it('names at most 20 causes of a cache miss', async () => {
+    const cache = mkdtempSync(join(tmpdir(), 'hammerkit-worker-cache-'))
+    vi.stubEnv('HAMMERKIT_DIR', cache)
+    writeFileSync(
+      join(directory, '.hammerkit.yaml'),
+      [
+        'caches:',
+        `  default: { method: checksum, backend: { type: local, path: ${JSON.stringify(join(cache, 'backend'))} } }`,
+        'tasks:',
+        '  build:',
+        '    src: [src]',
+        '    cmds: [echo built]',
+        '',
+      ].join('\n')
+    )
+    mkdirSync(join(directory, 'src'))
+    const write = (content: string) => {
+      for (let i = 0; i < 25; i++) {
+        writeFileSync(join(directory, 'src', `file-${i}.txt`), content)
+      }
+    }
+    try {
+      const input = JSON.stringify({
+        ...base,
+        tasks: ['build'],
+        options: { cache: 'checksum' },
+        entry: join(directory, '.hammerkit.yaml'),
+      })
+      write('one')
+      await run(input)
+      write('two')
+      const events = (await run(input)).flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
+      const done = events.find((e) => e.state === 'succeeded')
+      expect(done?.causes).toHaveLength(21)
+      expect(done?.causes?.[20]).toBe('… and 5 more')
     } finally {
       vi.unstubAllEnvs()
       rmSync(cache, { recursive: true, force: true })

@@ -534,13 +534,50 @@ describe('RunRegistry results', () => {
     expect(result?.lastLog[18]).toBe('line 99')
     // a long line is cut, the result stays small
     expect(result?.lastLog[19]).toBe(`${'x'.repeat(1000)}…`)
-    // what the tasks did is kept like the state changes, past the cut
+    // the task event itself was cut off with the log, its result was not
     const events = registry.watch(alice, run.id, 0, () => undefined)?.events ?? []
-    expect(events.filter((e) => e.type === 'task').map((e) => (e.type === 'task' ? e.state : ''))).toEqual([
-      'running',
-      'failed',
-    ])
+    expect(events.filter((e) => e.type === 'task').map((e) => (e.type === 'task' ? e.state : ''))).toEqual(['running'])
     expect(registry.logs(alice, run.id)?.truncated).toBe(true)
+  })
+
+  it('keeps what a task did when a later scope of the run finds it cached, not needed or stopped', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test', 'lint'] })
+    await tick()
+    // scope build
+    pending[0].emit({ type: 'task', task: 'build', state: 'running' })
+    pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', durationMs: 900, causes: ['never cached'] })
+    // scope test: build is a dependency again and now cached
+    pending[0].emit({ type: 'task', task: 'build', state: 'cached', durationMs: 1 })
+    pending[0].emit({ type: 'task', task: 'test', state: 'running' })
+    pending[0].emit({ type: 'task', task: 'test', state: 'failed', exitCode: 1 })
+    // scope lint: build not needed, test stopped with it
+    pending[0].emit({ type: 'task', task: 'build', state: 'skipped' })
+    pending[0].emit({ type: 'task', task: 'test', state: 'cancelled' })
+    pending[0].resolve()
+    await tick()
+    const results = registry.get(alice, run.id)?.results
+    expect(results?.build).toMatchObject({
+      status: 'succeeded',
+      durationMs: 900,
+      cache: { hit: false, causes: ['never cached'] },
+    })
+    expect(results?.test).toMatchObject({ status: 'failed', exitCode: 1 })
+  })
+
+  it('weighs task events against the limits of the log, with all their causes', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxLogBytes: 1000 })
+    const run = registry.submit(alice, spec)
+    await tick()
+    const causes = Array.from({ length: 50 }, (_, i) => `source changed: src/file-${i}.ts`)
+    pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', causes })
+    pending[0].resolve()
+    await tick()
+    const events = registry.watch(alice, run.id, 0, () => undefined)?.events ?? []
+    expect(events.map((e) => e.type)).toEqual(['state', 'state', 'truncated', 'state'])
+    expect(registry.get(alice, run.id)?.results?.build.cache?.causes).toHaveLength(50)
   })
 
   it('calls a task cancelled that was running when the run ended', async () => {
@@ -596,10 +633,10 @@ describe('RunRegistry results', () => {
     const run = registry.submit(alice, spec)
     await tick()
     pending[0].emit({ type: 'log', task: 'build', stream: 'stdout', text: 'hello' })
-    expect(registry.logs(alice, run.id)).toEqual({
-      events: [expect.objectContaining({ type: 'log', task: 'build', text: 'hello', seq: 3 })],
-      truncated: false,
-    })
+    const logs = registry.logs(alice, run.id)
+    expect(logs?.truncated).toBe(false)
+    expect(logs?.index.size).toBe(1)
+    expect(logs?.index.text(logs.events, 0)).toEqual({ task: 'build', stream: 'stdout', text: 'hello' })
     expect(registry.logs(bob, run.id)).toBeUndefined()
     pending[0].resolve()
     await tick()
