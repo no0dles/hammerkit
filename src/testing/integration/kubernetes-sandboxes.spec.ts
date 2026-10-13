@@ -33,7 +33,9 @@ const suffix = Date.now().toString(36)
 const operatorNamespace = `hammerkit-sbx-ops-${suffix}`
 const prefix = `hk-sbx-${suffix}-`
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
+const bob = { iss: 'https://idp.corp', sub: 'bob' }
 const callerNamespace = getCallerNamespace(prefix, alice)
+const otherNamespace = getCallerNamespace(prefix, bob)
 const REPO = 'git.test/corp/payments'
 
 function git(cwd: string, ...args: string[]): string {
@@ -85,7 +87,7 @@ describe('sandboxes on a kubernetes backend', () => {
   afterAll(
     requiresKubernetes(async () => {
       const { core } = cluster()
-      for (const name of [operatorNamespace, callerNamespace]) {
+      for (const name of [operatorNamespace, callerNamespace, otherNamespace]) {
         await core.deleteNamespace({ name }).catch(() => undefined)
       }
     })
@@ -179,6 +181,25 @@ describe('sandboxes on a kubernetes backend', () => {
       ])
       const state = await registry.state(sandbox.id)
       expect(state.clean).toBe(false)
+      // the pod's image has ripgrep: a search runs there
+      const found = await registry.files(alice, sandbox.id).search({ pattern: 'answer = 42' })
+      expect(found.files).toEqual(['src/app.ts'])
+
+      // another caller neither sees the sandbox nor shares its namespace
+      expect(otherNamespace).not.toBe(callerNamespace)
+      expect(() => registry.files(bob, sandbox.id)).toThrow('not found')
+      const other = await registry.create(bob, REPO, 'main')
+      const otherClaim = getSandboxNames(other.id).claim
+      expect(
+        (await core.readNamespacedPersistentVolumeClaim({ name: otherClaim, namespace: otherNamespace })).metadata?.name
+      ).toBe(otherClaim)
+      expect(
+        await core.readNamespacedPersistentVolumeClaim({ name: otherClaim, namespace: callerNamespace }).then(
+          () => true,
+          () => false
+        )
+      ).toBe(false)
+      await registry.remove(bob, other.id)
 
       const execute = async (id: string, task: string) => {
         const current = await registry.state(sandbox.id)

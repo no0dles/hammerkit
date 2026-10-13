@@ -26,6 +26,7 @@ import { SandboxError, SandboxRegistry } from './sandboxes'
 import { KubernetesBackend, ServerConfig, serverConfigSchema } from './server-config'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
+const bob = { iss: 'https://idp.corp', sub: 'bob' }
 const REPO = 'git.test/corp/payments'
 
 function git(cwd: string, ...args: string[]): string {
@@ -359,6 +360,66 @@ describe('sandboxes on a cluster', () => {
     const sandbox = await registry.create(alice, REPO, 'main')
     holder = 'run_1'
     expect(() => registry.files(alice, sandbox.id)).toThrow(SandboxError)
+  })
+
+  it('keeps the sandboxes of callers apart, each in its own namespace', async () => {
+    const registry = registryWith()
+    const sandbox = await registry.create(alice, REPO, 'main')
+    const notMine = async (call: () => unknown) => {
+      const error: any = await Promise.resolve()
+        .then(call)
+        .catch((e) => e)
+      expect(error).toBeInstanceOf(SandboxError)
+      expect(error.status).toBe(404)
+    }
+    await notMine(() => registry.files(bob, sandbox.id))
+    await notMine(() => registry.read(bob, sandbox.id, (files) => files.changes()))
+    await notMine(() => registry.edit(bob, sandbox.id, [{ op: 'write', path: 'x.txt', content: 'x' }]))
+    await notMine(() => registry.fetch(bob, sandbox.id, 'main'))
+    await notMine(() => registry.push(bob, sandbox.id, 'agent/one', { name: 'bob', email: 'b@corp', message: 'm' }))
+    expect(await registry.remove(bob, sandbox.id)).toBe(false)
+    expect(registry.get(bob, sandbox.id)).toBeUndefined()
+    expect(registry.get(alice, sandbox.id)).toBeDefined()
+
+    const other = await registry.create(bob, REPO, 'main')
+    const theirs = getCallerNamespace('hammerkit-', bob)
+    expect(theirs).not.toBe(namespace)
+    for (const id of [sandbox.id, other.id]) {
+      const names = getSandboxNames(id)
+      const at = id === sandbox.id ? namespace : theirs
+      const elsewhere = id === sandbox.id ? theirs : namespace
+      expect(cluster.objects.has(`PersistentVolumeClaim/${at}/${names.claim}`)).toBe(true)
+      expect(cluster.objects.has(`PersistentVolumeClaim/${elsewhere}/${names.claim}`)).toBe(false)
+    }
+    expect(existsSync(join(cluster.claimDirectory(namespace, getSandboxNames(sandbox.id).claim), 'files'))).toBe(true)
+  })
+
+  it('does not follow a link a task made in the files, in the pod either', async () => {
+    const registry = registryWith()
+    const sandbox = await registry.create(alice, REPO, 'main')
+    const outside = join(root, 'outside')
+    mkdirSync(outside)
+    writeFileSync(join(outside, 'secret.txt'), 'outside-secret\n')
+    const files = join(cluster.claimDirectory(namespace, getSandboxNames(sandbox.id).claim), 'files')
+    try {
+      // as a task can: one link out of the claim, one to where the pod has the git data
+      symlinkSync(join(outside, 'secret.txt'), join(files, 'secret.txt'))
+      symlinkSync('../git/config', join(files, 'config'))
+    } catch {
+      // no links to make on this system, so no task makes them either
+      return
+    }
+    const api = registry.files(alice, sandbox.id)
+    for (const path of ['secret.txt', 'config']) {
+      expect(await api.stat(path)).toMatchObject({ type: 'symlink' })
+      expect((await api.read(path, {}).catch((e) => e)).message).toMatch(/is a symbolic link/)
+      expect((await api.raw(path).catch((e) => e)).status).toBe(400)
+      const replaced = await registry
+        .edit(alice, sandbox.id, [{ op: 'replace', path, old_string: 'o', new_string: 'x' }])
+        .catch((e) => e)
+      expect(replaced).toBeInstanceOf(SandboxFileError)
+    }
+    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('outside-secret\n')
   })
 
   it('copies the files for the run and hands its tasks the claim, without the pod of the files', async () => {
