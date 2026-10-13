@@ -16,8 +16,8 @@ import { SandboxRegistry } from './sandboxes'
 import { SandboxClaim } from './sandbox-storage'
 import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
-import { limitNetwork, parseWorkNetwork, toNetworkSchema } from '../planner/work-network'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { limitNetwork, parseWorkNetwork, toNetworkSchema } from '../planner/work-network'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -221,7 +221,7 @@ export class HostExecutor implements RunExecutor {
         input = {
           entry: join(published, version.entry),
           directory: { read: published, work },
-          // a sandbox run stays under both the sandbox and the server's runs.network
+          // the lower of sandboxes.network and runs.network
           network: toNetworkSchema(limitNetwork(parseWorkNetwork(network), planning.policy.network ?? null)),
         }
       }

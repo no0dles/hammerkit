@@ -195,10 +195,13 @@ describe('HostExecutor', () => {
     expect(ended?.state).toBe('failed')
     expect(ended?.results?.build).toMatchObject({ status: 'failed', lastLog: expect.arrayContaining(['out=***']) })
     const logs = registry.logs(alice, id)
-    const page = readLogs(logs!.events, logs!.index, parseLogQuery(new URLSearchParams('grep=out=')), false)
+    if (!logs) {
+      throw new Error('the owner reads the log of the run')
+    }
+    const page = readLogs(logs.events, logs.index, parseLogQuery(new URLSearchParams('grep=out=')), false)
     expect(page.lines.map((l) => l.text)).toEqual(['out=***'])
     expect(JSON.stringify(ended)).not.toContain('the-token-value')
-    expect(JSON.stringify(logs!.events)).not.toContain('the-token-value')
+    expect(JSON.stringify(logs.events)).not.toContain('the-token-value')
     await registry.close()
   })
 
@@ -242,6 +245,32 @@ describe('HostExecutor', () => {
       'build reads the secret TOKEN, it takes no arguments on a server: an argument could make it print them'
     )
     expect(events).toEqual([])
+  })
+
+  it('refuses arguments for a task whose dependency reads secrets, before anything starts', async () => {
+    // the dependency writes the secret into its outputs, and `rev` would print it past the masking
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  login:',
+        '    secrets:',
+        '      - { from: "echo:s3cr3t-value", account: ci, env: TOKEN }',
+        `    cmds: ["node -e \\"require('fs').writeFileSync('token.txt', process.env.TOKEN)\\""]`,
+        '    generates: [token.txt]',
+        '  sh:',
+        '    deps: [login]',
+        '    cmds: [sh -c]',
+        '',
+      ].join('\n'),
+    })
+    const { events, error } = await execute(
+      run(hash, { tasks: ['sh'], accounts: ['ci'], options: { args: ['rev token.txt'] } })
+    )
+    expect(error?.message).toBe(
+      'sh takes no arguments on a server: login in its run reads the secret TOKEN, and an argument could make sh print what login hands on'
+    )
+    expect(events).toEqual([])
+    expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
 
   it('hands runs.network to the process of the run, and refuses what reaches more', async () => {

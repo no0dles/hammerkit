@@ -150,7 +150,7 @@ tasks:
     expect(refuseArguments(run, planned.plan)).toBeNull()
   })
 
-  it('refuses arguments for a task that reads a secret or a variable of the server', async () => {
+  it('refuses arguments for a run in which an item reads a secret or a variable of the server', async () => {
     const refusal = async (yaml: string, task: string) => {
       const run = { tasks: [task], options: { args: ['-t', 'x'] } }
       return refuseArguments(run, (await planRun(bundle(yaml), run, hosted, policy)).plan)
@@ -185,8 +185,38 @@ tasks:
     envs: { P: $PATH, BIN: "\${PATH}/x" }
     cmds: [npm test]
 `
-    // the dependencies and needed services are not covered: they never get the arguments
-    expect(await refusal(yaml, 'test')).toBeNull()
+    // what a dependency or a service of the run holds reaches the task: the dependency through
+    // its outputs, the service through its answers
+    expect(await refusal(yaml, 'test')).toEqual(
+      'test takes no arguments on a server: login in its run reads the secret NPM_TOKEN, and an argument could make test print what login hands on'
+    )
+    const needs = `
+services:
+  signer:
+    image: node:22
+    cmd: node sign.js
+    secrets:
+      - { from: "gsm:signing-key", account: ci, env: KEY }
+tasks:
+  registry:
+    image: node:22
+    envs: { TOKEN: $SERVER_ONLY }
+    cmds: [npm ci]
+  sign:
+    image: node:22
+    needs: [signer]
+    cmds: [node client.js]
+  install:
+    image: node:22
+    deps: [registry]
+    cmds: [npm test]
+`
+    expect(await refusal(needs, 'sign')).toEqual(
+      'sign takes no arguments on a server: signer in its run reads the secret KEY, and an argument could make sign print what signer hands on'
+    )
+    expect(await refusal(needs, 'install')).toEqual(
+      'install takes no arguments on a server: registry in its run reads $SERVER_ONLY of the server, and an argument could make install print what registry hands on'
+    )
     // a variable of the server can be a credential as well, as `$NAME` or `${NAME}`
     expect(await refusal(yaml, 'token')).toEqual(
       'token reads $SERVER_ONLY of the server, it takes no arguments on a server: an argument could make it print them'
@@ -259,6 +289,15 @@ tasks:
         policy: { ...policy, network: { type: 'none' } },
       })
     ).rejects.toThrow('a: asks for network open, more than this server allows (runs.network: none)')
+    // services are held to it as well, whether a task needs them or not
+    const services = (network: string) =>
+      `services:\n  api:\n    image: node:22\n    cmd: node server.js${network}\ntasks:\n  a:\n    image: node:22\n    network: none\n    cmds: [echo]\n`
+    await expect(
+      planBundle(bundle(services('')), hosted, { policy: { ...policy, network: { type: 'none' } } })
+    ).rejects.toThrow('api: asks for network open, more than this server allows (runs.network: none)')
+    await expect(
+      planBundle(bundle(services('\n    network: none')), hosted, { policy: { ...policy, network: { type: 'none' } } })
+    ).resolves.toBeDefined()
   })
 
   it('refuses a local task under a runs.network below open', async () => {

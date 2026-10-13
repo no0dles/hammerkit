@@ -83,11 +83,11 @@ export interface PlanPolicy {
   reserved?: string[]
   // what tasks may run on; every runtime when left out
   runtimes?: ('docker' | 'local')[]
+  // where tasks run: on a cluster, the secrets of providers are read in the Job of a task
+  backend?: 'host' | 'kubernetes'
   // the most any task or service may reach besides its needs (`runs.network`);
   // open when left out
   network?: WorkNetwork
-  // where tasks run: on a cluster, the secrets of providers are read in the Job of a task
-  backend?: 'host' | 'kubernetes'
 }
 
 export interface PlanOptions {
@@ -256,6 +256,18 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
       )
     }
     const data = item.data
+    // what a task reads and writes is the bundle's: `src: ../..` would have the server
+    // copy its own files (its credentials, other callers' caches) into the task
+    for (const source of 'src' in data ? data.src : []) {
+      if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
+        problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
+      }
+    }
+    for (const generate of isWorkTask(data) ? data.generates : []) {
+      if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
+        problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
+      }
+    }
     const ceiling = policy.network
     if (ceiling && isLimitedNetwork(ceiling)) {
       if (data.type === 'local-task') {
@@ -272,18 +284,6 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
             data.network
           )}, more than this server allows (runs.network: ${formatNetwork(ceiling)})`
         )
-      }
-    }
-    // what a task reads and writes is the bundle's: `src: ../..` would have the server
-    // copy its own files (its credentials, other callers' caches) into the task
-    for (const source of 'src' in data ? data.src : []) {
-      if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
-        problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
-      }
-    }
-    for (const generate of isWorkTask(data) ? data.generates : []) {
-      if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
-        problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
       }
     }
     if (isContainerWorkTask(data) || isContainerWorkService(data)) {

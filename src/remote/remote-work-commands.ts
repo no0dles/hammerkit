@@ -56,7 +56,7 @@ function parseProposal(value: string): { name: string; hash: string } | undefine
   return match && HASH_PATTERN.test(match[2]) ? { name: match[1], hash: match[2] } : undefined
 }
 
-interface ApprovalView {
+export interface ApprovalView {
   id: string
   requestedBy: { iss: string; sub: string }
   createdAt: string
@@ -79,7 +79,7 @@ interface ApprovalView {
 }
 
 // what a task or service does, see the plan of a version on the server
-interface PlanView {
+export interface PlanView {
   kind: 'task' | 'service'
   runtime: string
   image?: string
@@ -98,7 +98,7 @@ interface PlanView {
 const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
 
 // What a person who approves is shown of a run: everything the decision rests on.
-function describe(run: ApprovalView): string[] {
+export function describeApproval(run: ApprovalView): string[] {
   const source =
     run.source.type === 'ref'
       ? `ref ${run.source.ref}`
@@ -151,7 +151,7 @@ function flagLines(run: { plan?: Record<string, PlanView> }): string[] {
 }
 
 // The tasks and services the run executes and what each does, never a secret's value.
-function describePlan(plan: Record<string, PlanView>): string[] {
+export function describePlan(plan: Record<string, PlanView>): string[] {
   return Object.entries(plan).flatMap(([name, entry]) => [
     `  ${colors.bold(printable(name))}  ${entry.kind}, ${printable(entry.runtime)}${
       entry.image ? ` ${printable(entry.image)}` : ''
@@ -232,7 +232,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         }
         environment.stdout.write(`${serverName}: ${body.approvals.length} waiting for your approval\n`)
         for (const run of body.approvals) {
-          for (const line of describe(run)) {
+          for (const line of describeApproval(run)) {
             environment.stdout.write(`${line}\n`)
           }
         }
@@ -249,7 +249,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         }
         const { server, token } = await connect(name)
         const view = (await callServer<ApprovalView>(server, token, 'GET', `/v1/approvals/${run}`)).body
-        for (const line of describe(view)) {
+        for (const line of describeApproval(view)) {
           environment.stdout.write(`${line}\n`)
         }
         environment.stdout.write(

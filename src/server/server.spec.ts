@@ -421,6 +421,23 @@ describe('server config policy', () => {
     ).toEqual(['local'])
   })
 
+  it('keeps the network of sandbox runs within runs.network', () => {
+    const within = {
+      ...base,
+      runs: { network: { allow: ['*.npmjs.org'] } },
+      sandboxes: { network: { allow: ['registry.npmjs.org'] } },
+    }
+    expect(serverConfigSchema.safeParse(within).success).toBe(true)
+    const result = serverConfigSchema.safeParse({
+      ...base,
+      runs: { network: 'none' },
+      sandboxes: { network: { allow: ['registry.npmjs.org'] } },
+    })
+    expect(!result.success && result.error.issues.map((issue) => issue.message)).toContain(
+      'runs on sandboxes get at most runs.network (none), not allow registry.npmjs.org'
+    )
+  })
+
   it('lets env secrets of sandbox runs read only what runs read', () => {
     const allowed = { ...base, runs: { env: { allow: ['NPM_TOKEN'] } }, sandboxes: { env: { allow: ['NPM_TOKEN'] } } }
     expect(serverConfigSchema.parse(allowed).sandboxes.env.allow).toEqual(['NPM_TOKEN'])
@@ -441,10 +458,7 @@ describe('server config policy', () => {
     ],
     ['a size that is not one', { limits: { bytes: 'lots' } }, /expected a size/],
   ])('rejects sandboxes with %s', (_name, sandboxes, message) => {
-    const entitlements = [
-      { subject: { iss: 'https://idp.corp', sub: 'a' }, sandboxes: true, repos: ['github.com/corp/*'] },
-    ]
-    const result = serverConfigSchema.safeParse({ ...base, entitlements, sandboxes })
+    const result = serverConfigSchema.safeParse({ ...base, sandboxes })
     expect(result.success).toBe(false)
     expect(!result.success && result.error.issues[0].message).toMatch(message)
   })
@@ -667,6 +681,14 @@ describe('server config policy', () => {
       expect(
         kubernetes({ pools: [{ name: 'a', toolImage: 'tools:1' }] }, { runtimes: ['docker', 'local'] }).success
       ).toBe(true)
+    })
+
+    it('limits runs only on a cluster that enforces NetworkPolicies', () => {
+      const limited = { runs: { network: 'none' }, runtimes: ['docker'] }
+      expect(message(kubernetes({}, limited))).toBe(
+        'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them'
+      )
+      expect(kubernetes({ networkPolicy: 'enforced' }, limited).success).toBe(true)
     })
   })
 

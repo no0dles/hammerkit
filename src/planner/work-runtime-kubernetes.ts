@@ -246,7 +246,7 @@ export function kubernetesTaskRuntime(
             options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
             return
           }
-          // `$(` of the arguments is escaped, so the kubelet leaves them as they are
+          // the arguments after `--` keep their `$` as text, Kubernetes expands `$(NAME)`
           const command = secretSpec.command(task.data.shell, getKubernetesCommandText(cmd))
           const spec: V1Job & KubernetesObjectHeader = {
             kind: 'Job',
