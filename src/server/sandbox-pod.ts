@@ -116,7 +116,7 @@ async function answer(
     case 'diff':
       return send(await files().diff(request.format, request.author))
     case 'commit':
-      return send((await files().commit(request.author)) ?? null)
+      return send((await storage.commit(key, request.author, AbortSignal.timeout(10 * 60_000))) ?? null)
     case 'move':
       await storage.moveTo(key, request.commit)
       return send(null)

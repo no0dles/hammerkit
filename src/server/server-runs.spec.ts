@@ -11,7 +11,7 @@ import { COMMIT, REPO, SOURCES_YAML, fakeRepos } from '../testing/repos'
 import { TEST_WORKER } from '../testing/worker'
 import { RepoAccessOptions } from './repo-access'
 import { Environment } from '../executer/environment'
-import { RunExecutor } from './runs'
+import { RunExecutor, RunRegistry } from './runs'
 import { RunningServer, startServer } from './server'
 
 // alice requests runs on prod, which bob approves; bob publishes the build files,
@@ -751,6 +751,48 @@ describe('runs api', () => {
       expect(wrong.status).toBe(400)
       expect((await wrong.json()).error).toBe('wait is a duration up to 50s, for example 30s')
       expect((await api.call('GET', `/v1/runs/${run.id}?wait=1s`, { sub: 'carol' })).status).toBe(404)
+    })
+  })
+
+  it('waits at most 50 seconds, and not at all for a run the caller can not see', async () => {
+    const { executor, release } = gated()
+    await withApi('runs-api-wait-bounds', executor, async (api) => {
+      const run = await (await api.submit(request)).json()
+      await untilState(api, run.id, ['running'])
+      // leaving it out is how not to wait
+      for (const wait of ['0s', '0', '']) {
+        expect((await api.call('GET', `/v1/runs/${run.id}?wait=${wait}`)).status).toBe(400)
+      }
+      const wait = vi.spyOn(RunRegistry.prototype, 'wait')
+      try {
+        const long = api.call('GET', `/v1/runs/${run.id}?wait=5m`)
+        await sleep(50)
+        release()
+        expect((await long).status).toBe(200)
+        expect(wait.mock.calls[0][2]).toBe(50_000)
+      } finally {
+        wait.mockRestore()
+      }
+      const started = Date.now()
+      expect((await api.call('GET', `/v1/runs/${run.id}?wait=30s`, { sub: 'carol' })).status).toBe(404)
+      expect(Date.now() - started).toBeLessThan(5_000)
+    })
+  })
+
+  it('shows the log of a run waiting for approval to who may approve it, and to nobody else', async () => {
+    await withApi('runs-api-approver-logs', done, async (api) => {
+      const run = await (await api.submit({ ...request, tasks: ['deploy'] })).json()
+      expect(run.state).toBe('awaiting-approval')
+      // bob uses prod, which the run waits for
+      expect((await api.call('GET', `/v1/runs/${run.id}/logs`, { sub: 'bob' })).status).toBe(200)
+      const started = Date.now()
+      const waited = await api.call('GET', `/v1/runs/${run.id}?wait=100ms`, { sub: 'bob' })
+      expect(waited.status).toBe(200)
+      expect((await waited.json()).state).toBe('awaiting-approval')
+      expect(Date.now() - started).toBeGreaterThanOrEqual(80)
+      // carol uses no account of the run
+      expect((await api.call('GET', `/v1/runs/${run.id}/logs`, { sub: 'carol' })).status).toBe(404)
+      expect((await api.call('GET', `/v1/runs/${run.id}?wait=10ms`, { sub: 'carol' })).status).toBe(404)
     })
   })
 

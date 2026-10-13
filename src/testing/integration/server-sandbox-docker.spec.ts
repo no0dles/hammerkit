@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process'
 import { mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { createTestCase } from '../test-case'
 import { createTestKey, signToken, startTestIssuer } from '../test-issuer'
 import { HOST_ENV_ALLOW } from '../host-env'
@@ -26,6 +26,9 @@ describe('sandbox runs (docker)', () => {
           ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args],
           { cwd: repository, encoding: 'utf8' }
         )
+      // a file of the server, outside of every sandbox
+      const outside = join(mkdtempSync(join(tmpdir(), 'hammerkit-sandbox-outside-')), 'secret.txt')
+      writeFileSync(outside, 'TOPSECRET-OF-SERVER')
       git('init', '--quiet', '--initial-branch=main')
       writeFileSync(join(repository, 'input.txt'), 'from-the-sandbox')
       git('add', '.')
@@ -86,7 +89,7 @@ describe('sandbox runs (docker)', () => {
                   '  plant:',
                   '    image: alpine:3.21',
                   '    src: [.]',
-                  '    cmds: [ln -s /etc escape]',
+                  `    cmds: [ln -s /etc escape, ${JSON.stringify(`ln -s ${outside} leak.txt`)}]`,
                   '  leak:',
                   '    image: alpine:3.21',
                   '    src: [escape]',
@@ -95,6 +98,10 @@ describe('sandbox runs (docker)', () => {
                   '    image: alpine:3.21',
                   '    mounts: [./escape:/data]',
                   '    cmds: [cat /data/hostname]',
+                  '  overwrite:',
+                  '    image: alpine:3.21',
+                  '    src: [leak.txt]',
+                  '    cmds: [cat leak.txt, echo OVERWRITTEN > leak.txt]',
                   '',
                 ].join('\n'),
               },
@@ -147,6 +154,14 @@ describe('sandbox runs (docker)', () => {
                 expect(leaked.events).not.toContain(hostname)
               }
             }
+            // and one to a file of the server: neither read nor written
+            const overwrite = await runTask('overwrite')
+            expect({ state: overwrite.state, error: overwrite.error }).toEqual({
+              state: 'failed',
+              error: expect.stringMatching(/symbolic link leak\.txt/),
+            })
+            expect(overwrite.events).not.toContain('TOPSECRET-OF-SERVER')
+            expect(readFileSync(outside, 'utf8')).toBe('TOPSECRET-OF-SERVER')
           } finally {
             await server.close()
           }
@@ -154,6 +169,7 @@ describe('sandbox runs (docker)', () => {
       } finally {
         await idp.close()
         rmSync(repository, { recursive: true, force: true })
+        rmSync(dirname(outside), { recursive: true, force: true })
       }
     }),
     180_000

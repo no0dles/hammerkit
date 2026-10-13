@@ -28,10 +28,14 @@ interface RunningProxy {
 
 // the script as the container runs it: `node -e`, with its allow list in the env
 // `preload` is a module the script runs after, to stand in for DNS
-async function startProxy(hosts: string[], bind?: string, preload?: string): Promise<RunningProxy> {
+async function startProxy(
+  hosts: string[],
+  options: { needs?: string[]; bind?: string; preload?: string } = {}
+): Promise<RunningProxy> {
   const port = await freePort()
-  const child = spawn(process.execPath, [...(preload ? ['-r', preload] : []), '-e', EGRESS_PROXY_SCRIPT], {
-    env: { ...getEgressProxyEnvironment(hosts, bind), HAMMERKIT_PROXY_PORT: `${port}` },
+  const preload = options.preload ? ['-r', options.preload] : []
+  const child = spawn(process.execPath, [...preload, '-e', EGRESS_PROXY_SCRIPT], {
+    env: { ...getEgressProxyEnvironment(hosts, options.needs ?? [], options.bind), HAMMERKIT_PROXY_PORT: `${port}` },
     stdio: ['ignore', 'pipe', 'inherit'],
   })
   const events: EgressProxyEvent[] = []
@@ -207,7 +211,7 @@ dns.lookup = (host, options, callback) => {
 }
 `
     )
-    proxy = await startProxy(['dual.test'], undefined, preload)
+    proxy = await startProxy(['dual.test'], { preload })
   })
 
   afterAll(async () => {
@@ -227,9 +231,28 @@ dns.lookup = (host, options, callback) => {
   })
 })
 
+describe('egress proxy for the needed services', () => {
+  it('passes a needed service by its exact name, never as a pattern', async () => {
+    const upstream = createServer((req, res) => res.end(`hello from ${req.headers.host}`))
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+    const upstreamPort = (upstream.address() as AddressInfo).port
+    // a name that would allow every .com host as a pattern
+    const proxy = await startProxy([], { needs: ['localhost', '*.com'] })
+    try {
+      const response = await get(proxy.port, `http://localhost:${upstreamPort}/`)
+      expect(response).toEqual({ status: 200, body: `hello from localhost:${upstreamPort}` })
+      expect((await get(proxy.port, 'http://example.com/')).status).toBe(403)
+      expect(await tunnel(proxy.port, 'example.com:443', 'example.com')).toContain('403 Forbidden')
+    } finally {
+      proxy.process.kill()
+      await new Promise<void>((resolve) => upstream.close(() => resolve()))
+    }
+  })
+})
+
 describe('egress proxy bound to one name', () => {
   it('listens on that address only', async () => {
-    const proxy = await startProxy([], 'localhost')
+    const proxy = await startProxy([], { bind: 'localhost' })
     try {
       // the address the name resolves to answers, another one of the host does not
       await expect(get(proxy.port, '/')).resolves.toMatchObject({ status: 400 })

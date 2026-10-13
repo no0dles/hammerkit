@@ -5,6 +5,8 @@
 // `refused` event on stdout. The script is passed to `node -e`, so the proxy
 // needs no image of its own, only a stock Node image.
 
+import { getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
+
 // Pinned, so the code behind the boundary is the same on every host. To bump
 // it, take the index digest of the tag (`docker buildx imagetools inspect
 // node:24-alpine`). The port relay runs in it too.
@@ -24,6 +26,9 @@ const http = require('http')
 const net = require('net')
 const dns = require('dns')
 const allow = JSON.parse(process.env.HAMMERKIT_ALLOW || '[]').map((h) => h.toLowerCase())
+// the names of the needed services, for tools that ignore NO_PROXY: exact
+// names only, never patterns
+const needs = JSON.parse(process.env.HAMMERKIT_NEEDS || '[]').map((h) => h.toLowerCase())
 const port = parseInt(process.env.HAMMERKIT_PROXY_PORT || '${EGRESS_PROXY_PORT}', 10)
 // the name whose address the proxy listens on, every address when unset
 const bind = process.env.HAMMERKIT_PROXY_BIND
@@ -34,7 +39,7 @@ function emit(event) {
 // the rule that allows a host: its exact name, a wildcard, or none
 function allowedBy(host) {
   const name = host.toLowerCase().replace(/\\.$/, '')
-  if (allow.includes(name)) {
+  if (allow.includes(name) || needs.includes(name)) {
     return 'exact'
   }
   return allow.some((rule) => rule.startsWith('*.') && name.endsWith(rule.substring(1))) ? 'wildcard' : null
@@ -215,14 +220,30 @@ export function getEgressProxyCommand(): string[] {
   return ['node', '-e', EGRESS_PROXY_SCRIPT]
 }
 
-// `bind` is the name the proxy listens on alone, so that nothing on its other
-// networks reaches it.
-export function getEgressProxyEnvironment(hosts: string[], bind?: string): { [key: string]: string } {
+// `needs` are the names of the needed services, allowed as exactly those
+// names. `bind` is the name the proxy listens on alone, so that nothing on its
+// other networks reaches it.
+export function getEgressProxyEnvironment(hosts: string[], needs: string[], bind?: string): { [key: string]: string } {
   return {
     HAMMERKIT_ALLOW: JSON.stringify(hosts),
+    HAMMERKIT_NEEDS: JSON.stringify(needs),
     HAMMERKIT_PROXY_PORT: `${EGRESS_PROXY_PORT}`,
     ...(bind ? { HAMMERKIT_PROXY_BIND: bind } : {}),
   }
+}
+
+// The proxy of a task or service: the hosts of its network in this run (under
+// the run's ceiling), and the names of the services it needs, on every runtime.
+export function getItemProxyEnvironment(
+  item: { data: { network: WorkNetwork; networkCeiling: WorkNetwork | null }; needs: { name: string }[] },
+  bind?: string
+): { [key: string]: string } {
+  const network = getEffectiveNetwork(item.data)
+  return getEgressProxyEnvironment(
+    network.type === 'allow' ? network.hosts : [],
+    item.needs.map((need) => need.name),
+    bind
+  )
 }
 
 // The variables that send the item's HTTP(S) through the proxy, both spellings

@@ -41,7 +41,6 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
-          # a busy windows runner takes up to a minute for the first task a test spawns
           HAMMERKIT_TEST_TIMEOUT: '120000'
       - name: Archive test artifacts
         if: failure()

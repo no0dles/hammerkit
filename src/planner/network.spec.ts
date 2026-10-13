@@ -10,6 +10,7 @@ import { ContainerWorkService } from './work-service'
 import { ParseError } from '../schema/parse-error'
 import { getServiceDefinitionHash } from './service-definition'
 import { applyNetworkCeiling, getEffectiveNetwork } from './work-network'
+import { getItemProxyEnvironment } from '../network/egress-proxy'
 import { buildCreateOptions } from '../executer/docker-task'
 import { buildServiceCreateOptions } from '../executer/docker-service'
 import { getItemNetworkName, prepareItemNetwork } from '../docker/item-network'
@@ -17,8 +18,9 @@ import {
   buildNetworkPolicy,
   buildProxyPolicy,
   ensureKubernetesItemNetwork,
+  getNetworkLabels,
   getProxyName,
-  getTaskNetworkScope,
+  removeAllKubernetesItemNetworks,
 } from '../kubernetes/network-policy'
 import { getRunLabelValue } from '../kubernetes/job-placement'
 import { ExecuteOptions } from '../runtime/runtime'
@@ -149,6 +151,50 @@ describe('network', () => {
           expect(getServiceDefinitionHash(db)).toEqual(openHash)
         }
       )
+    })
+
+    it("bounds the proxy's whole list, the needed services by their exact names", async () => {
+      await withCli(
+        'network-ceiling-proxy',
+        {
+          services: { db: { image: 'postgres:16' } },
+          tasks: {
+            install: {
+              image: 'node:22',
+              cmds: ['true'],
+              needs: [{ name: 'database', service: 'db' }],
+              network: { allow: ['a.com', 'b.com'] },
+            },
+          },
+        },
+        async (cli) => {
+          applyNetworkCeiling((cli as any).workTree, { type: 'allow', hosts: ['b.com'] })
+          expect(getItemProxyEnvironment(cli.task('install'))).toMatchObject({
+            HAMMERKIT_ALLOW: '["b.com"]',
+            HAMMERKIT_NEEDS: '["database"]',
+          })
+        }
+      )
+    })
+
+    it('refuses a limited item that needs a service under a name that is no host name', async () => {
+      const buildFile = (network: unknown) => ({
+        services: { web: { image: 'node:22' } },
+        tasks: {
+          fetch: { image: 'node:22', cmds: ['true'], needs: [{ name: '*.com', service: 'web' }], network },
+        },
+      })
+      const message = 'fetch: network allow b.com reaches a needed service by a host name, "*.com" is none'
+      await withCli('network-need-name', buildFile({ allow: ['a.com', 'b.com'] }), async (cli) => {
+        await expect(cli.runExec({ network: { type: 'allow', hosts: ['b.com'] } })).rejects.toThrow(message)
+        await expect(cli.runExec()).rejects.toThrow('fetch: network allow a.com, b.com reaches a needed service by')
+      })
+      // an open task keeps the name; a ceiling that limits it does not
+      await withCli('network-need-name-open', buildFile('open'), async (cli) => {
+        expect(() => applyNetworkCeiling((cli as any).workTree, null)).not.toThrow()
+        await expect(cli.runExec({ network: { type: 'allow', hosts: ['b.com'] } })).rejects.toThrow(message)
+        await expect(cli.runExec({ network: { type: 'none' } })).rejects.toThrow('fetch: network none reaches')
+      })
     })
 
     it('refuses a ceiling below open with a local task in the run', async () => {
@@ -330,23 +376,40 @@ describe('network', () => {
           expect(
             getProxyName(cli.service('db') as WorkItem<ContainerWorkService>, { run: null }).length
           ).toBeLessThanOrEqual(63)
+        }
+      )
+    })
 
-          // on a server the scope is the run's label, which the server puts on the pods it
-          // runs, and the policies carry it, so they go with the run's other objects
+    it('labels the limits of a server run with its run, and its limited pods and proxies', async () => {
+      await withCli(
+        'network-k8s-server',
+        {
+          tasks: {
+            offline: { image: 'node:22', cmds: ['true'], network: 'none' },
+            install: { image: 'node:22', cmds: ['true'], network: { allow: ['a.com'] } },
+            open: { image: 'node:22', cmds: ['true'] },
+          },
+        },
+        async (cli) => {
           const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {} }
-          const onServer = { ...env, server }
-          const scope = getTaskNetworkScope(onServer)
-          expect(scope).toEqual({ run: getRunLabelValue('run_1') })
-          const labelled = buildNetworkPolicy(onServer, offline, { type: 'none' }, scope)
-          expect(labelled.metadata.labels).toEqual({
+          const run = { run: getRunLabelValue('run_1') }
+          const offline = cli.task('offline') as WorkItem<ContainerWorkTask>
+          const policy = buildNetworkPolicy({ ...env, server }, offline, { type: 'none' }, run)
+          // removed with the run's other objects
+          expect(policy.metadata.labels).toEqual({
             'hammerkit.dev/network-of': offline.id(),
             'hammerkit.dev/run': getRunLabelValue('run_1'),
           })
-          expect(labelled.spec?.podSelector?.matchLabels?.['hammerkit.dev/run']).toBe(getRunLabelValue('run_1'))
-          expect(buildProxyPolicy(onServer, install, scope).metadata.labels).toEqual({
-            'hammerkit.dev/network-of': install.id(),
-            'hammerkit.dev/run': getRunLabelValue('run_1'),
+          expect(policy.spec?.podSelector).toEqual({
+            matchLabels: { 'hammerkit.dev/id': offline.id(), 'hammerkit.dev/run': getRunLabelValue('run_1') },
           })
+          // a server's run label is longer than a run id of the CLI
+          const install = cli.task('install') as WorkItem<ContainerWorkTask>
+          expect(getProxyName(install, run).length).toBeLessThanOrEqual(63)
+          // the namespace's default policies leave limited pods out
+          expect(getNetworkLabels({ ...env, server }, offline)).toEqual({ 'hammerkit.dev/network': 'limited' })
+          expect(getNetworkLabels({ ...env, server }, cli.task('open') as WorkItem<ContainerWorkTask>)).toEqual({})
+          expect(getNetworkLabels(env, offline)).toEqual({})
         }
       )
     })
@@ -387,6 +450,84 @@ describe('network', () => {
           const routed = { ...env, httpRoutes: [{ host: 'web.local', service: 'web', gateway: 'gw' }] }
           expect(buildNetworkPolicy(routed, web, { type: 'none' }, { run: null }).spec?.ingress).toEqual([{}])
           expect(buildNetworkPolicy(env, web, { type: 'none' }, { run: null }).spec?.ingress).toEqual([])
+        }
+      )
+    })
+
+    it('starts a limited pod behind the gate that waits until its policy holds', async () => {
+      await withCli(
+        'network-k8s-gate',
+        {
+          tasks: {
+            offline: { image: 'node:22', cmds: ['true'], network: 'none' },
+            deploy: { image: 'node:22', cmds: ['true'] },
+          },
+        },
+        async (cli) => {
+          const enforced = { ...env, networkPolicyEnforced: true }
+          const create = vi.fn().mockImplementation(async (spec) => spec)
+          const notFound = () => Promise.reject(Object.assign(new Error('not found'), { code: 404 }))
+          const instance = {
+            objectApi: { read: notFound, create, delete: notFound },
+            appsApi: { deleteNamespacedDeployment: notFound },
+            coreApi: { deleteNamespacedService: notFound },
+          } as any
+          const scope = { followLog: false, run: 'abcd1234' }
+
+          const offline = await ensureKubernetesItemNetwork(instance, enforced, cli.task('offline') as any, scope)
+          // the policy first, then the pod, whose first container is the gate
+          expect(create).toHaveBeenCalledWith(expect.objectContaining({ kind: 'NetworkPolicy' }))
+          expect(offline.initContainers.map((c) => c.name)).toEqual(['hammerkit-network'])
+          expect(offline.initContainers[0].command?.slice(0, 2)).toEqual(['node', '-e'])
+
+          const deploy = await ensureKubernetesItemNetwork(instance, enforced, cli.task('deploy') as any, scope)
+          expect(deploy.initContainers).toEqual([])
+        }
+      )
+    })
+
+    it("removes an item's policies and proxies once its pods ended", async () => {
+      await withCli(
+        'network-k8s-remove',
+        { services: { db: { image: 'postgres:16', network: { allow: ['a.com'] } } } },
+        async (cli) => {
+          const db = cli.service('db') as WorkItem<ContainerWorkService>
+          const calls: string[] = []
+          const pods = [{ status: { phase: 'Running' } }]
+          const instance = {
+            coreApi: {
+              listNamespacedPod: vi.fn().mockImplementation(async () => {
+                calls.push('list pods')
+                // the pod ends after the first look
+                return { items: pods.splice(0) }
+              }),
+              deleteNamespacedService: vi.fn().mockImplementation(async ({ name }) => calls.push(`service ${name}`)),
+            },
+            objectApi: {
+              // the items of a list come without kind and apiVersion
+              list: vi.fn().mockResolvedValue({ items: [{ metadata: { name: 'policy-a' } }] }),
+              delete: vi.fn().mockImplementation(async (spec) => calls.push(`${spec.kind} ${spec.metadata.name}`)),
+            },
+            appsApi: {
+              listNamespacedDeployment: vi.fn().mockResolvedValue({ items: [{ metadata: { name: 'proxy-a' } }] }),
+              deleteNamespacedDeployment: vi
+                .fn()
+                .mockImplementation(async ({ name }) => calls.push(`deployment ${name}`)),
+            },
+          } as any
+          await removeAllKubernetesItemNetworks(instance, env, db)
+          expect(calls).toEqual([
+            'list pods',
+            'list pods',
+            'NetworkPolicy policy-a',
+            'deployment proxy-a',
+            'service proxy-a',
+          ])
+          expect(instance.objectApi.delete).toHaveBeenCalledWith({
+            apiVersion: 'networking.k8s.io/v1',
+            kind: 'NetworkPolicy',
+            metadata: { name: 'policy-a', namespace: 'ns' },
+          })
         }
       )
     })

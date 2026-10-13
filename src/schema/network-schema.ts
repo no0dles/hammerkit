@@ -15,6 +15,12 @@ export function isAllowHost(value: string): boolean {
   return HOST_PATTERN.test(value) && !looksLikeAddress(value)
 }
 
+// The name a limited item reaches a needed service under: a plain host name,
+// which the egress proxy takes as exactly that name.
+export function isNeedName(value: string): boolean {
+  return !value.startsWith('*.') && isAllowHost(value)
+}
+
 export const allowHostSchema = string().refine(isAllowHost, (value) => ({
   message: `invalid host "${value}", expected a name such as registry.npmjs.org or *.githubusercontent.com`,
 }))

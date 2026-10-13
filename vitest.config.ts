@@ -19,8 +19,8 @@ export default defineConfig(({ mode }) => {
       environment: 'node',
       // Native runners finish each unit spec well under a minute, so a short
       // default surfaces a genuine hang quickly. Slow CI runners raise it via
-      // HAMMERKIT_TEST_TIMEOUT: the integration run, and the windows unit run, whose
-      // first spawned task can take most of a minute while the runner is busy.
+      // HAMMERKIT_TEST_TIMEOUT: the integration jobs, and the windows unit job, where
+      // the specs that start run processes compete for a few cores.
       testTimeout: Number(process.env.HAMMERKIT_TEST_TIMEOUT) || (integration ? 120000 : 45000),
       // Integration beforeAll/afterAll hooks provision real infra (e.g. a docker
       // registry container in docker-package-registry.spec.ts) — just as slow as the

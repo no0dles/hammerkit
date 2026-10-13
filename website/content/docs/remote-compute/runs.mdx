@@ -173,7 +173,7 @@ lines are not enough:
 `failed`, `cancelled` or `rejected`) or the time is up, and then answers the run as it
 is. A client that can not keep a stream of events open, such as a tool call of an agent,
 waits with it and asks again while the run is not over. The wait is a duration like
-`500ms` or `30s`, at most 50 seconds (a longer one is cut to 50 seconds, so the answer
+`500ms` or `30s` (leave `wait` out not to wait, `0s` is not a wait), at most 50 seconds (a longer one is cut to 50 seconds, so the answer
 comes before a proxy in front of the server closes the quiet connection, which nginx does
 after 60); anything else is `400`. A run that waits
 for an approval answers when the time is up, or when the server stops.
@@ -197,12 +197,12 @@ kept it. Without parameters it answers the first 200 lines:
 | Parameter | What it does |
 | --- | --- |
 | `task` | Only the lines of this task. The lines are numbered from 1 over what `task` selects, so a later call with the same `task` reads around a line it found. Without it, every task's lines, and the server's own (`hammerkit`, the checkout). |
-| `tail` | The last lines, up to 1000. With `grep`, the last matches with their context. |
+| `tail` | The last lines, up to 1000. With `grep`, the last lines of what it finds: the matches and their context, counted as lines. |
 | `from` | The first line to read, by its number. Not together with `tail`. |
 | `limit` | How many lines one answer has, up to 1000: 200 by default, or as many as `tail` asks for. When more follow, `next` is the `from` that continues; a match just before `from` still shows its lines after. |
 | `grep` | Only lines that contain this text. It is a fixed string, not a regular expression, so a pattern can not keep the server busy. It can not span lines. |
 | `i` | `true` to ignore case in `grep`. |
-| `context` | Lines before and after each match, up to 20, marked `"match": false`. |
+| `context` | Lines before and after each match, up to 20, marked `"match": false`. They are lines of the `task` asked for; without `task`, the lines around the match in the whole log, of any task. |
 
 `total` counts the lines `task` selects, `truncated` says the log of the run was cut off at
 `runs.maxLogBytes` and its end is not kept (the [results](#results-and-waiting) still have the
