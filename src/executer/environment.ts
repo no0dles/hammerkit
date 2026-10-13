@@ -13,6 +13,10 @@ export interface HostedPolicy {
   // the accounts the run may read secrets as; a secret of any other is refused when
   // it is fetched, whatever the plan said
   accounts?: string[]
+  // the directory of the run's files: its checkout, or a sandbox. A path a container
+  // binds or the engine writes has to be inside it, with no link on the way, see
+  // refuseLinks
+  root?: string
 }
 
 export interface Environment {

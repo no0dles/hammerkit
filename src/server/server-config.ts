@@ -305,14 +305,21 @@ export const serverConfigSchema = z
       .object({
         // what the tasks of a run on a sandbox may run on, out of `runtimes`. A local task
         // would run as the user of the server and could read every other sandbox, so
-        // `local` has to be named here too.
+        // `local` has to be named here too. Left out, `docker` when the server runs
+        // containers, see getSandboxRuntimes
         runtimes: z
           .array(z.enum(['docker', 'local']))
           .min(1)
-          .default(['docker']),
+          .optional(),
         // the most open network a task or service of a run on a sandbox gets, written as
         // a task's `network`: only the services it needs by default
         network: networkSchema.default('none'),
+        // the variables of `runs.env.allow` an `env:` secret of a run on a sandbox may
+        // read: none by default, a sandbox holds code nobody reviewed
+        env: z
+          .object({ allow: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_()]*$/)).default([]) })
+          .strict()
+          .default({}),
         // what one caller may keep; a sandbox over it can't be created
         limits: z
           .object({
@@ -413,14 +420,23 @@ export const serverConfigSchema = z
         }
       }
     })
-    if (config.sandboxes.runtimes.includes('local') && config.sandboxes.network !== 'open') {
+    if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['sandboxes', 'network'],
         message: 'hammerkit can not limit the network of a local task, set network: open to allow local in sandboxes',
       })
     }
-    config.sandboxes.runtimes.forEach((runtime, index) => {
+    config.sandboxes.env.allow.forEach((name, index) => {
+      if (!config.runs.env.allow.includes(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sandboxes', 'env', 'allow', index],
+          message: `${name} is not in runs.env.allow, no run can read it`,
+        })
+      }
+    })
+    config.sandboxes.runtimes?.forEach((runtime, index) => {
       if (!config.runtimes.includes(runtime)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -439,6 +455,13 @@ export const serverConfigSchema = z
   })
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>
+
+// What the tasks of a run on a sandbox may run on: `sandboxes.runtimes`, else containers
+// when the server runs them. Empty on a server with only `runtimes: [local]`, which then
+// runs nothing on sandboxes.
+export function getSandboxRuntimes(config: Pick<ServerConfig, 'runtimes' | 'sandboxes'>): ('docker' | 'local')[] {
+  return config.sandboxes.runtimes ?? config.runtimes.filter((runtime) => runtime === 'docker')
+}
 
 // The accounts that read repositories: no caller uses them and no build file names them.
 export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string[] {

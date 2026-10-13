@@ -15,7 +15,7 @@ import { removeContainerSecrets } from '../executer/container-secrets'
 import Dockerode from 'dockerode'
 import { usingContainer } from '../docker/using-container'
 import { getArchivePaths } from '../executer/event-cache'
-import { existsVolume, removeVolume } from '../executer/get-docker-executor'
+import { ensureVolumeExists, existsVolume, removeVolume, volumeLabels } from '../executer/get-docker-executor'
 import { basename, dirname } from 'path'
 import { create, extract } from 'tar'
 import { getVolumeName } from './utils/plan-work-volume'
@@ -25,6 +25,7 @@ import { Readable } from 'stream'
 import { getServiceDefinitionHash } from './service-definition'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
 import { getItemNetworkName, removeItemNetwork } from '../docker/item-network'
+import { refuseHostLinks } from '../executer/execution-steps'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -125,6 +126,19 @@ async function restoreContainer(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   path: string
 ) {
+  await refuseHostLinks(item, environment)
+  // on a server the volumes the outputs are restored into carry the run's files, so they
+  // are removed with a sandbox
+  const root = environment.hosted?.root
+  if (root) {
+    const names =
+      item.data.type === 'container-service'
+        ? item.data.volumes.filter((v) => !v.inherited).map((v) => v.name)
+        : item.data.generates.filter((v) => !v.inherited && !v.isFile).map((v) => v.volumeName)
+    for (const name of names) {
+      await ensureVolumeExists(docker, item.status, name, volumeLabels(root))
+    }
+  }
   await usingContainer(
     docker,
     item,
@@ -171,6 +185,7 @@ async function restoreContainer(
   )
 
   if (item.data.type === 'container-task') {
+    await refuseHostLinks(item, environment)
     const onHost = new Set(item.data.generates.filter((g) => !g.inherited && isOnHost(g)).map((g) => g.path))
     for (const generate of getArchivePaths(item.data, path)) {
       if (onHost.has(generate.path) && (await environment.file.exists(generate.filename))) {
@@ -278,6 +293,19 @@ async function archiveContainer(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   path: string
 ) {
+  await refuseHostLinks(item, environment)
+  // on a server the volumes the outputs are restored into carry the run's files, so they
+  // are removed with a sandbox
+  const root = environment.hosted?.root
+  if (root) {
+    const names =
+      item.data.type === 'container-service'
+        ? item.data.volumes.filter((v) => !v.inherited).map((v) => v.name)
+        : item.data.generates.filter((v) => !v.inherited && !v.isFile).map((v) => v.volumeName)
+    for (const name of names) {
+      await ensureVolumeExists(docker, item.status, name, volumeLabels(root))
+    }
+  }
   await usingContainer(
     docker,
     item,

@@ -11,14 +11,23 @@ export async function existsVolume(docker: Dockerode, volumeName: string): Promi
   }
 }
 
+// The label a volume gets when a server run made it for outputs in its files (a sandbox's),
+// so the server finds it again to measure it and to remove it with the sandbox.
+export const VOLUME_ROOT_LABEL = 'hammerkit-root'
+
+export function volumeLabels(root: string | undefined): { [key: string]: string } {
+  return root ? { [VOLUME_ROOT_LABEL]: root } : {}
+}
+
 export async function ensureVolumeExists(
   docker: Dockerode,
   scopedConsole: StatusScopedConsole,
-  volumeName: string
+  volumeName: string,
+  labels: { [key: string]: string } = {}
 ): Promise<void> {
   const volumeExists = await existsVolume(docker, volumeName)
   if (!volumeExists) {
-    await createVolume(docker, scopedConsole, volumeName)
+    await createVolume(docker, scopedConsole, volumeName, labels)
   } else {
     scopedConsole.write('debug', 'volume exists ' + volumeName)
   }
@@ -27,13 +36,14 @@ export async function ensureVolumeExists(
 export async function createVolume(
   docker: Dockerode,
   scopedConsole: StatusScopedConsole,
-  volumeName: string
+  volumeName: string,
+  labels: { [key: string]: string } = {}
 ): Promise<void> {
   scopedConsole.write('debug', 'create volume ' + volumeName)
   await docker.createVolume({
     Name: volumeName,
     Driver: 'local',
-    Labels: { app: 'hammerkit' },
+    Labels: { ...labels, app: 'hammerkit' },
   })
 }
 
@@ -56,8 +66,9 @@ export async function removeVolume(
 export async function recreateVolume(
   docker: Dockerode,
   scopedConsole: StatusScopedConsole,
-  volumeName: string
+  volumeName: string,
+  labels: { [key: string]: string } = {}
 ): Promise<void> {
   await removeVolume(docker, scopedConsole, volumeName)
-  await createVolume(docker, scopedConsole, volumeName)
+  await createVolume(docker, scopedConsole, volumeName, labels)
 }

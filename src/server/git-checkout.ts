@@ -121,7 +121,8 @@ export async function git(
   env.GIT_TERMINAL_PROMPT = '0'
   env.GIT_ALLOW_PROTOCOL = ALLOWED_PROTOCOLS
   try {
-    return (await execFileAsync('git', args, { env, signal })).stdout
+    // warnings of a large tree must not fail the command
+    return (await execFileAsync('git', args, { env, signal, maxBuffer: 64 * 1024 * 1024 })).stdout
   } catch (e) {
     const error = e as NodeJS.ErrnoException & { stderr?: string }
     if (error.code === 'ABORT_ERR') {
