@@ -103,6 +103,9 @@ describe('hammerkit server-run', () => {
       try {
         const out = memoryStream()
         environment.stdout = out.stream
+        // the copy of process.env names it Path on Windows, where PowerShell then
+        // takes the timeout to start
+        environment.processEnvs = { ...environment.processEnvs, PATH: process.env.PATH }
         await runProgram(environment, ['hammerkit', 'server-run'], true)
         const lines = out
           .read()
