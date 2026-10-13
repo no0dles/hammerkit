@@ -1,4 +1,4 @@
-import { devNull, tmpdir } from 'os'
+import { tmpdir } from 'os'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
@@ -81,7 +81,7 @@ describe('RepoAccess', () => {
       GIT_CONFIG_KEY_1: 'credential.helper',
       GIT_CONFIG_VALUE_1: '',
       GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_GLOBAL: devNull,
+      GIT_CONFIG_GLOBAL: '/dev/null',
     })
     // a source without push holds no token that writes, and is not pushed to
     await expect(repos.pushCredentials('github.com/corp/special')).rejects.toThrow(
