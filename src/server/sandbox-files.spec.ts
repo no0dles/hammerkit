@@ -377,6 +377,10 @@ describe('sandbox files', () => {
         // no pipes to make on this system
         return
       }
+      // the mkfifo of Git for Windows succeeds without making a pipe
+      if (!existsSync(join(work, 'pipe')) || !lstatSync(join(work, 'pipe')).isFIFO()) {
+        return
+      }
       expect(await files.stat('pipe')).toMatchObject({ type: 'other', size: 0, exec: false })
       expect((await failure(files.read('pipe', {}))).message).toBe('pipe is a pipe, a socket or a device, not a file')
       expect((await failure(files.raw('pipe'))).status).toBe(400)
