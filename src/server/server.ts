@@ -3,7 +3,7 @@ import { createServer as createHttpsServer } from 'https'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
+import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, getGrant, mayRun } from './policy'
@@ -12,6 +12,7 @@ import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSo
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
+import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, PlannedRun, planRun } from './run-plan'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
@@ -26,6 +27,7 @@ import { SourceStore } from './sources'
 import { handleSources } from './sources-api'
 import { Sandbox, SandboxError, SandboxRegistry } from './sandboxes'
 import { HostSandboxStorage } from './sandbox-storage'
+import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
 import { PlanPolicy } from './plan'
 import { parseDuration, parseSize } from '../utils/units'
@@ -46,7 +48,14 @@ export function getDiscoveryDocument(config: ServerConfig): DiscoveryDocument {
       ...(i.clientId ? { clientId: i.clientId } : {}),
       scope: i.scope,
     })),
-    backend: { type: config.backend.type, platform: config.backend.platform ?? detectPlatform() },
+    backend:
+      config.backend.type === 'kubernetes'
+        ? {
+            type: 'kubernetes',
+            platform: config.backend.pools[0].platform,
+            pools: config.backend.pools.map((pool) => ({ name: pool.name, platform: pool.platform })),
+          }
+        : { type: 'host', platform: config.backend.platform ?? detectPlatform() },
   }
 }
 
@@ -265,6 +274,12 @@ async function submitRun(
       send(res, 400, { error: `there is no sandbox ${request.source.id}, create one with POST /v1/sandboxes` })
       return
     }
+    if (sandboxes.policy.runtimes?.length === 0) {
+      send(res, 403, {
+        error: 'this server runs only local tasks, which it runs on no sandbox unless sandboxes.runtimes names local',
+      })
+      return
+    }
     const over = sandboxes.registry.overLimit(principal)
     if (over) {
       send(res, 413, { error: over })
@@ -343,7 +358,14 @@ async function submitRun(
       ? submit(source)
       : await sandboxes.registry.withSandbox(principal, (sandbox as Sandbox).id, async (current) => {
           const state = await sandboxes.registry.state(current.id)
-          return submit({ type: 'sandbox', id: current.id, repo: current.repo, commit: state.commit, tree: state.tree })
+          return submit({
+            type: 'sandbox',
+            id: current.id,
+            repo: current.repo,
+            commit: state.commit,
+            tree: state.tree,
+            clean: state.clean,
+          })
         })
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
@@ -465,7 +487,7 @@ export async function startServer(
   const write = options.log ?? (() => undefined)
   // request urls and subjects come from callers: no control characters, so no forged log lines
   const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
-  if (config.runtimes.includes('local')) {
+  if (config.runtimes.includes('local') && config.backend.type === 'host') {
     log(
       'warning: the local runtime is allowed, local tasks run as the user of this server and read all it can read; ' +
         'an account is then an approval class, not a credential boundary'
@@ -479,7 +501,12 @@ export async function startServer(
       processEnvs: runEnvironment(config, environment.processEnvs),
       hosted: { catalog: getSecretCatalog(config) },
     },
-    policy: { envs: config.runs.env.allow, reserved: getSourceAccounts(config), runtimes: config.runtimes },
+    policy: {
+      envs: config.runs.env.allow,
+      reserved: getSourceAccounts(config),
+      runtimes: config.runtimes,
+      backend: config.backend.type,
+    },
   }
   const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')
   const definitions = new DefinitionStore(join(storage, 'definitions'), planning.environment, {
@@ -487,9 +514,17 @@ export async function startServer(
   })
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
+  const sandboxRuntimes = getSandboxRuntimes(config)
   const sandboxes: SandboxContext = {
     registry: new SandboxRegistry({
-      storage: new HostSandboxStorage(join(storage, 'sandboxes', 'files'), planning.environment.processEnvs),
+      storage: new HostSandboxStorage(
+        join(storage, 'sandboxes', 'files'),
+        planning.environment.processEnvs,
+        // what containers of runs leave behind is given back and removed with a container
+        sandboxRuntimes.includes('docker')
+          ? new DockerSandboxContainers(planning.environment.processEnvs.DOCKER_HOST)
+          : undefined
+      ),
       records: join(storage, 'sandboxes', 'records'),
       limits: {
         count: config.sandboxes.limits.count,
@@ -499,20 +534,36 @@ export async function startServer(
       repos,
       log,
     }),
-    policy: { ...planning.policy, runtimes: config.sandboxes.runtimes },
+    // a sandbox holds code nobody reviewed: only the variables of `sandboxes.env`
+    policy: {
+      ...planning.policy,
+      envs: config.sandboxes.env.allow,
+      envsFrom: 'sandboxes.env.allow',
+      runtimes: sandboxRuntimes,
+    },
+  }
+  if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes)) {
+    log(
+      'warning: entitlements keep sandboxes, but this server runs only local tasks, which it runs on no sandbox; ' +
+        'runs on sandboxes are refused until sandboxes.runtimes names a runtime'
+    )
   }
   await sandboxes.registry.load()
+  const executorOptions = {
+    definitions,
+    planning,
+    repos,
+    directory: join(storage, 'runs'),
+    cache: join(storage, 'cache'),
+    worker: options.worker,
+  }
+  const backend = config.backend
+  // sandboxes on a cluster are kept as claims, which this server does not do yet
   const executor =
     options.executor ??
-    new HostExecutor({
-      definitions,
-      planning,
-      repos,
-      directory: join(storage, 'runs'),
-      cache: join(storage, 'cache'),
-      worker: options.worker,
-      sandboxes: { ...sandboxes, network: config.sandboxes.network },
-    })
+    (backend.type === 'kubernetes'
+      ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
+      : new HostExecutor({ ...executorOptions, sandboxes: { ...sandboxes, network: config.sandboxes.network } }))
   const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({
     executor,

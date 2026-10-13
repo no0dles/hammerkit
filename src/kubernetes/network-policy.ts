@@ -22,6 +22,7 @@ import {
   parseEgressProxyEvent,
 } from '../network/egress-proxy'
 import { getErrorMessage } from '../log'
+import { getPodPlacement, getRunLabels } from './job-placement'
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
@@ -62,7 +63,7 @@ export function buildNetworkPolicy(
       namespace: env.namespace,
       name: getNetworkPolicyName(item),
       annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { 'hammerkit.dev/network-of': item.id() },
+      labels: { 'hammerkit.dev/network-of': item.id(), ...getRunLabels(env) },
     },
     spec: {
       podSelector: { matchLabels: { [ID_LABEL]: item.id() } },
@@ -181,8 +182,10 @@ async function ensureProxy(
     namespace: env.namespace,
     name,
     annotations: { 'hammerkit.dev/version': getVersion() },
-    labels,
+    labels: { ...labels, ...getRunLabels(env) },
   }
+  // on a server the proxy runs on the nodes of the first pool, without a token
+  const placement = env.server ? getPodPlacement(env.server, undefined) : null
   const deployment: V1Deployment & KubernetesObjectHeader = {
     apiVersion: 'apps/v1',
     kind: 'Deployment',
@@ -191,9 +194,16 @@ async function ensureProxy(
       replicas: 1,
       selector: { matchLabels: labels },
       template: {
-        metadata: { labels },
+        metadata: { labels: { ...labels, ...getRunLabels(env) } },
         spec: {
           hostAliases,
+          ...(placement
+            ? {
+                automountServiceAccountToken: false,
+                nodeSelector: placement.nodeSelector,
+                tolerations: placement.tolerations,
+              }
+            : {}),
           containers: [
             {
               name: 'proxy',

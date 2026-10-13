@@ -37,7 +37,7 @@ const entitlements: Entitlement[] = [
 describe('getGrant', () => {
   it('denies by default', () => {
     const grant = getGrant(entitlements, { iss: IDP, sub: 'bob', groups: [], claims: {} })
-    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, sandboxes: false, matched: [] })
+    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, sandboxes: false, sandboxRepos: [], matched: [] })
     expect(getGrant([], alice).accounts).toEqual({})
   })
 
@@ -143,6 +143,7 @@ describe('decideRun', () => {
     repos: ['github.com/corp/*'],
     builds,
     sandboxes,
+    sandboxRepos: sandboxes ? ['github.com/corp/*'] : [],
     matched: [0],
   })
   const base = (over: Partial<RunDecisionInput>): RunDecisionInput => ({
@@ -225,7 +226,7 @@ describe('decideRun', () => {
     [
       'a sandbox of a repository the caller lost is refused',
       { source: { type: 'sandbox', repo: 'github.com/other/payments' } },
-      refuse(403, /may not run from github.com\/other\/payments/),
+      refuse(403, /may not run on a sandbox of github.com\/other\/payments/),
     ],
     [
       'a request nobody can approve is refused at once',
@@ -257,6 +258,7 @@ describe('decideSandbox', () => {
     repos: ['github.com/corp/*'],
     builds: 'run',
     sandboxes: true,
+    sandboxRepos: ['github.com/corp/*'],
     matched: [0],
     ...over,
   })
@@ -277,6 +279,30 @@ describe('decideSandbox', () => {
       status: 403,
       error: 'you may not keep a sandbox of github.com/other/x, your repositories are github.com/corp/*',
     })
+  })
+
+  it('only takes the repositories of the entitlements with sandboxes: true', () => {
+    const order: Entitlement[] = [
+      { group: { iss: IDP, name: 'eng-web' }, accounts: {}, repos: ['github.com/corp/playground'], sandboxes: true },
+      { subject: { iss: IDP, sub: 'alice' }, accounts: {}, repos: ['github.com/corp/payments'], builds: 'run' },
+    ]
+    const merged = getGrant(order, alice)
+    expect(merged.sandboxRepos).toEqual(['github.com/corp/playground'])
+    expect(decideSandbox(merged, 'github.com/corp/playground', () => true)).toBeNull()
+    expect(decideSandbox(merged, 'github.com/corp/payments', () => true)).toEqual({
+      status: 403,
+      error: 'you may not keep a sandbox of github.com/corp/payments, your repositories are github.com/corp/playground',
+    })
+    expect(
+      decideRun({
+        grant: merged,
+        accounts: [],
+        catalog: {},
+        source: { type: 'sandbox', repo: 'github.com/corp/payments' },
+        approvable: () => true,
+        readable: () => true,
+      })
+    ).toEqual({ type: 'refuse', status: 403, error: expect.stringMatching(/may not run on a sandbox of/) })
   })
 
   it('needs a repository the server reads', () => {

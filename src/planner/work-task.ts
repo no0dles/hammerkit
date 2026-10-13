@@ -68,6 +68,8 @@ export interface ContainerWorkTask extends BaseWorkTask {
   image: string
   user: string | null
   mounts: WorkMount[]
+  // on a server's cluster, the pool of a local task that runs in the pool's tool image
+  pool?: string
 }
 
 export const isContainerWorkTask = (val: WorkTask | WorkService): val is ContainerWorkTask =>
