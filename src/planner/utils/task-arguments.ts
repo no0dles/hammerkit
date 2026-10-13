@@ -133,7 +133,7 @@ export function applyArguments(selection: ArgumentsSelection, args: string[], ke
       throw new Error(
         `task ${item.name} runs in Windows PowerShell, which would split or run the argument ${JSON.stringify(
           refused
-        )}, so it is refused: an empty argument, a " and the characters & | < > ^ % ! and line breaks`
+        )}, so it is refused: an empty argument, a ", the characters & | < > ^ % !, line breaks, and a space with a trailing \\`
       )
     }
   }
@@ -151,10 +151,11 @@ export function applyArguments(selection: ArgumentsSelection, args: string[], ke
 // Windows PowerShell 5.1 builds a new command line for a native program, and
 // starts a .cmd or .bat shim (yarn.cmd, most of node_modules/.bin) through
 // cmd.exe. There an empty argument is dropped, a " splits or joins arguments,
-// and cmd reads & | < > ^ % ! and a line break as syntax, so such an argument
-// can't be passed as text.
+// an argument with a space that ends in \ is quoted as "a b\" and so escapes
+// its own closing quote, and cmd reads & | < > ^ % ! and a line break as
+// syntax, so such an argument can't be passed as text.
 export function isRefusedByWindowsPowerShell(arg: string): boolean {
-  return arg === '' || /["&|<>^%!\r\n]/.test(arg)
+  return arg === '' || /["&|<>^%!\r\n]/.test(arg) || (/\s/.test(arg) && arg.endsWith('\\'))
 }
 
 function getItemQuoting(item: WorkTask | WorkService): ArgumentQuoting {

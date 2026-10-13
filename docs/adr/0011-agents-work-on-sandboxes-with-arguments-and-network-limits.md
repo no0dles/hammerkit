@@ -17,7 +17,7 @@
   - The levels are `none` and `open`, plus a host allowlist through an egress proxy per limited item that fails closed. The services in `needs` are reachable at every level, since a task names them because it uses them.
   - A ceiling can be set from outside the build file: `run --network` on a laptop, and `runs.network` and `sandboxes.network` on a server.
   - Local tasks can't be limited and are refused under a ceiling.
-  - A limit holds or the run fails, never runs open: Docker 28 or later (internal networks without a route to the host), a proxy per limited item, and on Kubernetes a CNI the operator states enforces `NetworkPolicy`, policies on ingress and egress, removed only after the pods are gone.
+  - A limit holds or the run fails, never runs open: Docker 28 or later (internal networks without a route to the host), a proxy per limited item, and on Kubernetes a CNI whose enforcement of `NetworkPolicy` the configuration states (`networkPolicy: enforced`), policies on ingress and egress, removed only after the pods are gone. A limited item on Kubernetes gets no DNS, since cluster DNS forwards any name upstream and queries could carry data out.
 - **Sandbox runs use containers only** unless the operator names `local`. The run process is not a boundary (ADR-0010), and a local task could read every other caller's sandbox on the same host.
 - **No ambient credentials.** A push uses the required `sources[].push` secret and nothing git finds on the server. On Kubernetes an account without its own credentials is refused rather than run on the node's identity, and each caller's namespace is isolated (its own RoleBinding, default-deny policies, no metadata address, `restricted` Pod Security).
 
@@ -29,7 +29,7 @@
 - **Declared, typed arguments with defaults and a schema** — not chosen: passthrough is what `npm` and `make` users know and needs nothing in the build file. The cost is no input schema for MCP tools, which instead describe where the arguments land.
 - **Network levels first, host allowlist later** — rejected: without host rules an agent can't install packages without being fully open.
 - **A separate `needs` level** (only the needed services) — rejected: needed services are always reachable, so `none` already means that.
-- **Arguments in the cache key** — rejected for now: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. Caching argument runs needs the record of which run produced the outputs to be per output location.
+- **Arguments in the cache key by default** — rejected: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. An explicit `--cache` opts a run with arguments back in; the record of which run produced a task's outputs is kept per task name, so it names one variant at a time.
 - **Refusing arguments when any item of the run reads a secret** — not chosen: a shell's dependencies routinely log in to a registry. The exemption is stated instead.
 
 ## Consequences
