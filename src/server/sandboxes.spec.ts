@@ -192,6 +192,27 @@ describe('SandboxRegistry', () => {
     expect(existsSync(marker)).toBe(false)
   })
 
+  it('checks out the files as committed whatever line endings the git config of the machine asks for', async () => {
+    const config = join(root, 'crlf-gitconfig')
+    writeFileSync(config, '[core]\n\tautocrlf = true\n')
+    const env = { ...(process.env as { [key: string]: string }), GIT_CONFIG_GLOBAL: config }
+    const sandboxes = new SandboxRegistry({
+      storage: new HostSandboxStorage(join(root, 'files'), env),
+      records: join(root, 'records'),
+      limits: { count: 5, bytes: 100 * 1024 * 1024, total: 1024 * 1024 * 1024 },
+      repos: {
+        url: () => repository,
+        credentials: async () => ({ env, values: [] }),
+        resolve: async (_repo, ref) => git(repository, 'rev-parse', ref),
+        scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
+      },
+    })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    expect((await sandboxes.state(sandbox.id)).clean).toBe(true)
+    await sandboxes.fetch(alice, sandbox.id, 'next')
+    expect((await sandboxes.state(sandbox.id)).clean).toBe(true)
+  })
+
   it('keeps a caller within their count and bytes, and the server within its total', async () => {
     const counted = registryWith({ count: 1 })
     await counted.create(alice, REPO, 'main')
