@@ -226,7 +226,12 @@ export class KubernetesExecutor implements RunExecutor {
         await this.prepareNamespace(namespace)
         // what an earlier run left when the server stopped before its end; the runs
         // of a caller execute one at a time, so no other run is in the namespace
-        await removeRunObjects(this.instance, namespace, `${RUN_LABEL},${RUN_LABEL}!=${getRunLabelValue(run.id)}`)
+        await removeRunObjects(
+          this.instance,
+          namespace,
+          `${RUN_LABEL},${RUN_LABEL}!=${getRunLabelValue(run.id)}`,
+          RELEASE_TIMEOUT
+        )
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
         const kubernetes: WorkKubernetesEnvironment = {
           type: 'kubernetes',
@@ -253,9 +258,7 @@ export class KubernetesExecutor implements RunExecutor {
         const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
         try {
           const selector = `${RUN_LABEL}=${getRunLabelValue(run.id)}`
-          await removeRunObjects(this.instance, namespace, selector)
-          // the next run of the caller uses the same claim names
-          await awaitRunObjectsGone(this.instance, namespace, selector, RELEASE_TIMEOUT)
+          await removeRunObjects(this.instance, namespace, selector, RELEASE_TIMEOUT)
         } catch (e) {
           context.emit({
             type: 'log',
@@ -381,10 +384,13 @@ export class KubernetesExecutor implements RunExecutor {
 // Jobs with their pods, Deployments (services and egress proxies), Services, claims,
 // Secrets and the NetworkPolicies of limited networks, which go last so no pod of the
 // run outlives its policy.
+// Deletes what a run made. The NetworkPolicies go last, once the pods are: a limited
+// pod's own policy is all that limits it.
 export async function removeRunObjects(
   instance: KubernetesInstance,
   namespace: string,
-  labelSelector: string
+  labelSelector: string,
+  timeout: number
 ): Promise<void> {
   const selector = { namespace, labelSelector }
   await instance.batchApi.deleteCollectionNamespacedJob({ ...selector, propagationPolicy: 'Background' })
@@ -393,6 +399,8 @@ export async function removeRunObjects(
   await instance.coreApi.deleteCollectionNamespacedService(selector)
   await instance.coreApi.deleteCollectionNamespacedSecret(selector)
   await instance.coreApi.deleteCollectionNamespacedPersistentVolumeClaim(selector)
+  // the next run of the caller also uses the same claim names
+  await awaitRunObjectsGone(instance, namespace, labelSelector, timeout)
   const policies = await instance.objectApi.list(
     'networking.k8s.io/v1',
     'NetworkPolicy',

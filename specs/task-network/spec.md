@@ -57,6 +57,7 @@ The internal networks are created with `com.docker.network.bridge.inhibit_ipv4=t
   - Docker 28 or later, for `inhibit_ipv4`, which also has the fix for CVE-2024-29018 (DNS forwarded from internal networks). A limited item on an older daemon, or on a Windows daemon, is an error before anything starts.
   - On Kubernetes, a CNI that enforces `NetworkPolicy`. Hammerkit can't tell from the API, so the environment (or a server's `backend`) states `networkPolicy: enforced`, and a limited item without it is an error.
   - On Kubernetes, the policy and proxy are named per run and removed only after the item's pods have terminated, so cancel, timeout and failure don't leave pods running without limits. The metadata range (`169.254.0.0/16`) is never allowed.
+  - On Kubernetes, a pod's first init container waits until its policy is in force (the cluster's DNS server, which a limited policy doesn't allow, no longer answers on TCP 53), and fails the pod after 60s, since plugins apply a policy a moment after a pod started. As built, the policy allows no DNS at all: needed services and the proxy are host aliases of the pod.
 
 ## Out of scope
 

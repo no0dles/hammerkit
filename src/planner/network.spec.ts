@@ -14,6 +14,7 @@ import { buildCreateOptions } from '../executer/docker-task'
 import { buildServiceCreateOptions } from '../executer/docker-service'
 import { getItemNetworkName, prepareItemNetwork } from '../docker/item-network'
 import { buildNetworkPolicy, getProxyName } from '../kubernetes/network-policy'
+import { getNetworkGate, NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 import { getRunLabelValue } from '../kubernetes/job-placement'
 import { ExecuteOptions } from '../runtime/runtime'
 import { ServiceState } from '../executer/scheduler/service-state'
@@ -301,6 +302,34 @@ describe('network', () => {
             'hammerkit.dev/network-of': offline.id(),
             'hammerkit.dev/run': getRunLabelValue('run_1'),
           })
+        }
+      )
+    })
+
+    it('holds back the pods of a limited item until its policy is in force', async () => {
+      await withCli(
+        'network-k8s-gate',
+        {
+          tasks: {
+            open: { image: 'node:22', cmds: ['true'] },
+            offline: { image: 'node:22', cmds: ['true'], network: 'none' },
+            install: { image: 'node:22', cmds: ['true'], network: { allow: ['a.com'] } },
+          },
+        },
+        async (cli) => {
+          expect(getNetworkGate(env, cli.task('open') as WorkItem<ContainerWorkTask>)).toEqual([])
+          for (const name of ['offline', 'install']) {
+            const [gate, ...rest] = getNetworkGate(env, cli.task(name) as WorkItem<ContainerWorkTask>)
+            expect(rest).toEqual([])
+            expect(gate.name).toEqual(NETWORK_GATE_CONTAINER)
+            expect(gate.command?.slice(0, 2)).toEqual(['sh', '-c'])
+            expect(gate.command?.[2]).toContain('nc -z -w 1 "$ns" 53')
+            expect(gate.securityContext).toBeUndefined()
+          }
+          // on a server it runs as restricted as the task
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {} }
+          const [gate] = getNetworkGate({ ...env, server }, cli.task('offline') as WorkItem<ContainerWorkTask>)
+          expect(gate.securityContext?.allowPrivilegeEscalation).toBe(false)
         }
       )
     })

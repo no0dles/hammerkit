@@ -1,6 +1,6 @@
 ---
 title: "Runs"
-description: "Submit runs of published build files, upload source files, and the limits and environment runs execute with."
+description: "Submit runs of published build files, wait for them, read how each task went and search their logs, upload source files, and the limits and environment runs execute with."
 ---
 A run is a request to execute tasks of a published [build file](/docs/remote-compute/build-files). The server writes every run
 down in `storage` (`records/`, readable by the user of the server only), so a restart keeps them with their
@@ -17,10 +17,11 @@ there yet; a run is a `POST /v1/runs`.
 | Call | What it does |
 | --- | --- |
 | `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`, or `awaiting-approval` when the caller only has the account on [`request`](/docs/remote-compute/entitlements#approvals). |
-| `GET /v1/runs` | The caller's runs, newest first. |
-| `GET /v1/runs/<id>` | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. |
+| `GET /v1/runs` | The caller's runs, newest first, without the `results` of their tasks. |
+| `GET /v1/runs/<id>` | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. `results` says how each task went, and `?wait=30s` answers once the run is over, see [Results and waiting](#results-and-waiting). |
 | `POST /v1/runs/<id>/cancel` | Cancel a run: one that is queued or waits for an approval at once, a running one when its tasks have stopped. |
-| `GET /v1/runs/<id>/events` | The run's events as server-sent events, see below. |
+| `GET /v1/runs/<id>/events` | The run's events as server-sent events, see [Events](#events). |
+| `GET /v1/runs/<id>/logs` | The run's output as numbered lines, with a tail, a range and a search, see [Logs](#logs). |
 
 ```json
 {
@@ -79,6 +80,93 @@ What `POST /v1/runs` answers, in the order the server checks:
 | `502` | The server could not reach the repository to resolve the ref. |
 | `503` | The server is shutting down, or too many runs wait for an approval. |
 
+## Results and waiting
+
+A run says how each of its tasks went in `results`, by task name, from the moment the
+task starts. A client reads this first, and only reads the [log](#logs) when the last
+lines are not enough:
+
+```json
+{
+  "id": "run_4vJ0mT2cX9qLw1aB",
+  "state": "failed",
+  "error": "test failed",
+  "results": {
+    "build": {
+      "status": "succeeded",
+      "startedAt": "2026-10-12T20:47:14.569Z",
+      "finishedAt": "2026-10-12T20:47:14.588Z",
+      "durationMs": 42,
+      "cache": { "hit": false, "causes": ["source changed: src/index.ts"] },
+      "lastLog": ["compiled 12 files"]
+    },
+    "test": {
+      "status": "failed",
+      "startedAt": "2026-10-12T20:47:14.589Z",
+      "finishedAt": "2026-10-12T20:47:14.616Z",
+      "durationMs": 70,
+      "exitCode": 1,
+      "cache": { "hit": false },
+      "lastLog": ["FAIL src/index.spec.ts", "  expected 1 to be 2"]
+    }
+  }
+}
+```
+
+| Field | What it says |
+| --- | --- |
+| `status` | `running`, `succeeded`, `failed`, `cached` (taken from the cache, nothing ran), `skipped` (a dependency no task of the run needed, because every task depending on it was cached) or `cancelled` (stopped with the run, or never started because another task failed). A task the run names that is checked again as a dependency of a later one keeps what it did the first time. |
+| `startedAt`, `finishedAt` | When the server heard that the task started and ended. A cached task has no `startedAt`. |
+| `durationMs` | How long the task took, as the engine measured it. |
+| `exitCode` | The exit code of the command that failed. |
+| `error` | Why a task failed when no command exited, for example `timed out after 30m`. Masked like the log, up to 2 KiB. |
+| `cache` | `hit: true` for a cached task. For a task that ran, `causes` says why it was not taken from the cache, as [`--explain`](/docs/cli/explain) would: `never cached`, `source changed: <file>`, `command changed`, `no src declared (uncacheable)` and so on, at most 20 and then `… and N more`. |
+| `lastLog` | The last 20 lines the task printed, stdout and stderr as they came, the newest last, each cut at 1000 characters. They are kept even when the run's log was [cut off](#limits-and-restarts), so the end of a long log, where the error usually is, is never lost. |
+
+`GET /v1/runs/<id>?wait=30s` holds the answer until the run is over (`succeeded`,
+`failed`, `cancelled` or `rejected`) or the time is up, and then answers the run as it
+is. A client that can not keep a stream of events open, such as a tool call of an agent,
+waits with it and asks again while the run is not over. The wait is a duration like
+`500ms` or `30s` (leave `wait` out not to wait, `0s` is not a wait), at most 50 seconds (a longer one is cut to 50 seconds, so the answer
+comes before a proxy in front of the server closes the quiet connection, which nginx does
+after 60); anything else is `400`. A run that waits
+for an approval answers when the time is up, or when the server stops.
+
+## Logs
+
+`GET /v1/runs/<id>/logs` reads the output of a run as numbered lines, as far as the server
+kept it. Without parameters it answers the first 200 lines:
+
+```json
+{
+  "lines": [
+    { "line": 2, "task": "test", "stream": "stdout", "text": "  expected 1 to be 2", "match": true }
+  ],
+  "total": 214,
+  "next": 3,
+  "truncated": false
+}
+```
+
+| Parameter | What it does |
+| --- | --- |
+| `task` | Only the lines of this task. The lines are numbered from 1 over what `task` selects, so a later call with the same `task` reads around a line it found. Without it, every task's lines, and the server's own (`hammerkit`, the checkout). |
+| `tail` | The last lines, up to 1000. With `grep`, the last lines of what it finds: the matches and their context, counted as lines. |
+| `from` | The first line to read, by its number. Not together with `tail`. |
+| `limit` | How many lines one answer has, up to 1000: 200 by default, or as many as `tail` asks for. When more follow, `next` is the `from` that continues; a match just before `from` still shows its lines after. |
+| `grep` | Only lines that contain this text. It is a fixed string, not a regular expression, so a pattern can not keep the server busy. It can not span lines. |
+| `i` | `true` to ignore case in `grep`. |
+| `context` | Lines before and after each match, up to 20, marked `"match": false`. They are lines of the `task` asked for; without `task`, the lines around the match in the whole log, of any task. |
+
+`total` counts the lines `task` selects, `truncated` says the log of the run was cut off at
+`runs.maxLogBytes` and its end is not kept (the [results](#results-and-waiting) still have the
+last lines). An unknown parameter or a value out of range is `400` and says which, a run of
+somebody else's is `404`. A read costs the lines it answers, not the length of the log: the
+server notes where the lines are once, as the log grows.
+
+An agent that ran the tests reads `results.test.lastLog` first, then for example
+`?task=test&grep=FAIL&context=5` to see every failing test with what it printed around it.
+
 ## Events
 
 The events carry the sequence number as their `id`, so a client that lost the
@@ -86,10 +174,12 @@ connection continues with the `Last-Event-ID` header (or `?after=<n>`) and misse
 nothing. The stream replays what happened and then follows the run until it is over;
 a finished run's events are replayed and the stream ends. Event types are `state`
 (`awaiting-approval`, `queued`, `running` and the final state, with the `error` of a failed run), `approval`
-(who approved or rejected the run), `task` (a task started or finished)
-and `log` (a line of a task's output). A run that
-produces more than 5000 events is cut off with one `truncated` event, the state
-changes are always kept.
+(who approved or rejected the run), `task` (a task started or ended, with the `state` a
+[result](#results-and-waiting) has and, once it ended, `durationMs`, `exitCode`, `error`
+and `causes`) and `log` (a line of a task's output). A run that
+produces more than 5000 events is cut off with one `truncated` event; the state
+changes are always kept, and so are the results of the tasks, while their own events are
+cut off with the log.
 
 ## Source files
 
@@ -221,11 +311,11 @@ either is answered `429` and says which. At most `runs.limits.running` runs of o
 same time, and the next run in the queue whose caller has a place left starts first, so one caller with
 many runs does not keep the others waiting. A run that executes longer than `runs.maxDuration` is stopped
 and fails with that reason. The log of a run is cut off at `runs.maxLogBytes` with a `truncated` event;
-the state changes are always kept.
+the state changes and the results of the tasks, with their last lines, are always kept.
 
 Runs are written down when their state changes. On start the server takes them back:
 
-* finished runs keep their state, events and logs;
+* finished runs keep their state, the results of their tasks, events and logs;
 * runs that wait for an approval wait on, for the time that was left, and are rejected when it has passed;
 * runs that were queued or running when the server stopped have failed with it: `the server stopped while
   the run was running, submit it again`.
