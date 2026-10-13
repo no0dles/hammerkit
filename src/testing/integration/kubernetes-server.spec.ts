@@ -201,7 +201,10 @@ describe('kubernetes backend of a server', () => {
       const { core, batch, networking } = cluster()
       const quota = await core.readNamespacedResourceQuota({ name: 'hammerkit', namespace: callerNamespace })
       expect(quota.spec?.hard).toEqual({ pods: '20' })
-      const selector = { namespace: callerNamespace, labelSelector: `hammerkit.dev/run=${getRunLabelValue('run_k8s_one_-')}` }
+      const selector = {
+        namespace: callerNamespace,
+        labelSelector: `hammerkit.dev/run=${getRunLabelValue('run_k8s_one_-')}`,
+      }
       const left = async () =>
         [
           ...(await batch.listNamespacedJob(selector)).items,

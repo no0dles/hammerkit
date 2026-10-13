@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { BatchV1Api, CoreV1Api, KubeConfig } from '@kubernetes/client-node'
 import { requiresKubernetes } from '../requires-kubernetes'
+import { getRunLabelValue } from '../../kubernetes/job-placement'
 import { environmentMock } from '../../executer/environment-mock'
 import { DefinitionStore } from '../../server/definitions'
 import { getCallerNamespace, KubernetesExecutor } from '../../server/kubernetes-backend'
@@ -17,9 +18,10 @@ import { getSecretCatalog, KubernetesBackend, ServerConfig, serverConfigSchema }
 import { HOST_ENV_ALLOW } from '../host-env'
 import { TEST_WORKER } from '../worker'
 
-// A server with a Kubernetes backend keeps a sandbox as a claim in the caller's
-// namespace: its pod fetches and edits the files, the Jobs of a run on it mount the
-// claim, and what a task writes is in the sandbox afterwards.
+// A server with a Kubernetes backend keeps a sandbox as claims in the caller's namespace:
+// its pod fetches and edits the files, the Jobs of a run on it mount the claim of the
+// files, what a task writes is in the sandbox afterwards, and the server pushes it. A link
+// a task makes leads at most to the root of the claim of the files, never to git's data.
 //
 // The pod of the files runs hammerkit itself, so the cluster needs an image of this
 // source: `docker build -t hammerkit:dev . && kind load docker-image hammerkit:dev`, or
@@ -34,10 +36,12 @@ const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const callerNamespace = getCallerNamespace(prefix, alice)
 const REPO = 'git.test/corp/payments'
 
-function git(cwd: string, ...args: string[]): void {
-  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], {
-    cwd,
-  })
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync(
+    'git',
+    ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args],
+    { cwd, encoding: 'utf8' }
+  ).trim()
 }
 
 function cluster(): { core: CoreV1Api; batch: BatchV1Api } {
@@ -55,6 +59,18 @@ tasks:
     cmds:
       - cat src/app.ts
       - echo generated-in-the-job > src/generated.txt
+  plant:
+    image: alpine:3.19
+    src: [src]
+    cmds:
+      - rm -rf src/up
+      - ln -s ../.. src/up
+  peek:
+    image: alpine:3.19
+    deps: [plant]
+    src: [src/up]
+    cmds:
+      - echo "seen:$(ls -A src/up | tr '\\n' ',')"
 `
 
 describe('sandboxes on a kubernetes backend', () => {
@@ -85,11 +101,13 @@ describe('sandboxes on a kubernetes backend', () => {
     'fetches into a claim, edits in its pod, runs Jobs on the claim and removes it with the sandbox',
     requiresKubernetes(async () => {
       const repository = join(root, 'repository')
-      mkdirSync(join(repository, 'src'), { recursive: true })
+      mkdirSync(join(repository, 'src', 'up'), { recursive: true })
       git(repository, 'init', '--quiet', '--initial-branch=main')
       writeFileSync(join(repository, 'src', 'app.ts'), 'export const answer = 41\n')
+      writeFileSync(join(repository, 'src', 'up', 'keep.txt'), 'keep\n')
       git(repository, 'add', '.')
       git(repository, 'commit', '--quiet', '-m', 'one')
+      const first = git(repository, 'rev-parse', 'HEAD')
 
       const config = serverConfigSchema.parse({
         issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -114,11 +132,17 @@ describe('sandboxes on a kubernetes backend', () => {
       }
       const repos = new RepoAccess(config, planning.environment, { url: () => repository })
       const limits = { count: 5, bytes: 20 * 1024 * 1024 * 1024, total: 100 * 1024 * 1024 * 1024 }
+      // the sources push to agent/** with the environment of the test, which can write to
+      // the repository on disk
+      const pushing = Object.assign(Object.create(repos) as RepoAccess, {
+        source: () => ({ match: 'git.test/corp/*', push: { branches: ['agent/**'] } }),
+        pushCredentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
+      })
       const registry = new SandboxRegistry({
         storage: new KubernetesSandboxStorage(config, limits, process.env, join(root, 'staging')),
         records: join(root, 'records'),
         limits,
-        repos,
+        repos: pushing,
       })
       await registry.load()
       const store = new DefinitionStore(join(root, 'definitions'), planning.environment, { policy: planning.policy })
@@ -145,8 +169,10 @@ describe('sandboxes on a kubernetes backend', () => {
       const sandbox = await registry.create(alice, REPO, 'main')
       const { core, batch } = cluster()
       const names = getSandboxNames(sandbox.id)
-      const claim = await core.readNamespacedPersistentVolumeClaim({ name: names.claim, namespace: callerNamespace })
-      expect(claim.metadata?.annotations?.['hammerkit.dev/sandbox-id']).toBe(sandbox.id)
+      for (const name of [names.claim, names.git]) {
+        const claim = await core.readNamespacedPersistentVolumeClaim({ name, namespace: callerNamespace })
+        expect(claim.metadata?.annotations?.['hammerkit.dev/sandbox-id']).toBe(sandbox.id)
+      }
 
       await registry.edit(alice, sandbox.id, [
         { op: 'replace', path: 'src/app.ts', old_string: '41', new_string: '42' },
@@ -154,25 +180,29 @@ describe('sandboxes on a kubernetes backend', () => {
       const state = await registry.state(sandbox.id)
       expect(state.clean).toBe(false)
 
-      const run: Run = {
-        id: 'run_sbx_one',
-        owner: alice,
-        state: 'running',
-        createdAt: new Date().toISOString(),
-        definition: { name: 'payments', hash: version.hash },
-        tasks: ['build'],
-        accounts: [],
-        source: { type: 'sandbox', id: sandbox.id, repo: REPO, commit: sandbox.commit, tree: state.tree },
-        options: {},
+      const execute = async (id: string, task: string) => {
+        const current = await registry.state(sandbox.id)
+        const run: Run = {
+          id,
+          owner: alice,
+          state: 'running',
+          createdAt: new Date().toISOString(),
+          definition: { name: 'payments', hash: version.hash },
+          tasks: [task],
+          accounts: [],
+          source: { type: 'sandbox', id: sandbox.id, repo: REPO, commit: current.commit, tree: current.tree },
+          options: {},
+        }
+        const events: RunEventData[] = []
+        const error = await executor
+          .execute(run, { emit: (e) => events.push(e), signal: new AbortController().signal })
+          .then(
+            () => undefined,
+            (e: Error) => e
+          )
+        return { error, events, text: events.map((e) => (e.type === 'log' ? e.text : '')).join('\n') }
       }
-      const events: RunEventData[] = []
-      const error = await executor
-        .execute(run, { emit: (e) => events.push(e), signal: new AbortController().signal })
-        .then(
-          () => undefined,
-          (e: Error) => e
-        )
-      const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
+      const { error, events, text } = await execute('run_sbx_one_-', 'build')
       expect(error, text).toBeUndefined()
       // the Job read the edit and wrote into the claim
       expect(text).toContain('export const answer = 42')
@@ -187,19 +217,39 @@ describe('sandboxes on a kubernetes backend', () => {
       // what was made for the run is gone, the claim of the sandbox is not
       const jobs = await batch.listNamespacedJob({
         namespace: callerNamespace,
-        labelSelector: 'hammerkit.dev/run=run_sbx_one',
+        labelSelector: `hammerkit.dev/run=${getRunLabelValue('run_sbx_one_-')}`,
       })
       expect(jobs.items.filter((job) => !job.metadata?.deletionTimestamp)).toEqual([])
       expect(registry.get(alice, sandbox.id)?.bytes).toBeGreaterThan(0)
 
+      // the server pushes the changes, with nothing of git run in the caller's namespace
+      const pushed = await registry.push(alice, sandbox.id, 'agent/k8s', {
+        name: 'Alice Agent',
+        email: 'alice@corp.test',
+        message: 'Agent work',
+      })
+      expect(git(repository, 'rev-parse', 'agent/k8s')).toBe(pushed.commit)
+      expect(git(repository, 'rev-parse', 'agent/k8s^')).toBe(first)
+      expect(git(repository, 'show', 'agent/k8s:src/app.ts')).toContain('answer = 42')
+      expect(git(repository, 'show', 'agent/k8s:src/generated.txt')).toContain('generated-in-the-job')
+      expect(await registry.state(sandbox.id)).toMatchObject({ commit: pushed.commit, clean: true })
+
+      // a task turns a source of the next one into a link up and out of the files: it leads
+      // to the root of the claim of the files, which has nothing of git
+      const escape = await execute('run_sbx_two', 'peek')
+      expect(escape.error, escape.text).toBeUndefined()
+      const seen = escape.text.match(/seen:(.*)/)?.[1]
+      expect(seen, escape.text).toBeDefined()
+      expect((seen as string).split(',').filter((name) => name && name !== 'lost+found')).toEqual(['files'])
+
       await registry.remove(alice, sandbox.id)
-      const left = await core
-        .readNamespacedPersistentVolumeClaim({ name: names.claim, namespace: callerNamespace })
-        .then(
+      for (const name of [names.claim, names.git]) {
+        const left = await core.readNamespacedPersistentVolumeClaim({ name, namespace: callerNamespace }).then(
           (found) => !found.metadata?.deletionTimestamp,
           () => false
         )
-      expect(left).toBe(false)
+        expect(left).toBe(false)
+      }
     })
   )
 })
