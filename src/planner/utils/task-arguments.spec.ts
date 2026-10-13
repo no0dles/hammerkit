@@ -2,11 +2,21 @@ import { spawnSync } from 'child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { platform, tmpdir } from 'os'
 import { join } from 'path'
-import { appendArguments, getShellQuoting, quoteArgument } from './task-arguments'
+import {
+  appendArguments,
+  getKubernetesCommandArgs,
+  getKubernetesCommandText,
+  getShellQuoting,
+  isRefusedByWindowsPowerShell,
+  quoteArgument,
+} from './task-arguments'
 import { createTestCase } from '../../testing/test-case'
 import { createCli } from '../../program'
 import { WorkScope } from '../../executer/work-scope'
-import { getServiceCommand, WorkService } from '../work-service'
+import { ContainerWorkService, getServiceCommand, WorkService } from '../work-service'
+import { getServiceDefinitionHash } from '../service-definition'
+import { WorkItem } from '../work-item'
+import { getDeclaredWorkTaskId } from '../work-cache-id'
 
 const HOSTILE = [
   'a b',
@@ -53,9 +63,8 @@ describe('task arguments', () => {
       () => {
         // the shell executeCommand runs a local command in, with this process' env
         const windows = platform() === 'win32'
-        // Windows PowerShell hands an empty argument, a double quote and a newline
-        // to native programs its own way: no second command, but not the same text
-        const args = windows ? HOSTILE.filter((arg) => arg !== '' && !/["\n]/.test(arg)) : HOSTILE
+        // what a local task on Windows takes at all, see isRefusedByWindowsPowerShell
+        const args = windows ? HOSTILE.filter((arg) => !isRefusedByWindowsPowerShell(arg)) : HOSTILE
         const dir = mkdtempSync(join(tmpdir(), 'hammerkit-arguments-'))
         try {
           writeFileSync(join(dir, 'args.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)))')
@@ -74,6 +83,28 @@ describe('task arguments', () => {
       },
       SHELL_TIMEOUT
     )
+
+    it('refuses on Windows PowerShell what it would split or run', () => {
+      for (const arg of ['', 'say "hi"', 'a&calc', 'a|b', '<in', '>out', '^', '%PATH%', '!x!', 'two\nlines']) {
+        expect(isRefusedByWindowsPowerShell(arg)).toBe(true)
+      }
+      for (const arg of ['a b', '-t', "it's", '$HOME', '*', 'src\\login.spec.ts']) {
+        expect(isRefusedByWindowsPowerShell(arg)).toBe(false)
+      }
+    })
+
+    it('doubles $ in the arguments for Kubernetes, and only there', () => {
+      const command = appendArguments(
+        { cwd: '/', cmd: 'echo $HOME', parsed: { command: 'echo', args: ['$HOME'] } },
+        ['costs $(HOME) $$'],
+        'posix'
+      )
+      expect(getKubernetesCommandText(command)).toBe(`echo $HOME 'costs $$(HOME) $$$$'`)
+      expect(getKubernetesCommandArgs(command)).toEqual(['$HOME', 'costs $$(HOME) $$$$'])
+      const declared = { cwd: '/', cmd: 'echo $$', parsed: { command: 'echo', args: ['$$'] } }
+      expect(getKubernetesCommandText(declared)).toBe('echo $$')
+      expect(getKubernetesCommandArgs(declared)).toEqual(['$$'])
+    })
 
     it('appends the raw arguments to the parsed exec form', () => {
       const command = appendArguments(
@@ -94,11 +125,14 @@ describe('task arguments', () => {
         lint: { image: 'alpine', cmds: ['eslint .'], labels: { app: 'web' } },
         fish: { image: 'alpine', shell: 'fish', cmds: ['echo hi'] },
         empty: { image: 'alpine', deps: ['build'] },
+        local: { cmds: ['node args.js'] },
+        migrate: { image: 'alpine', cmds: ['migrate up'] },
       },
       services: {
         api: { image: 'node', cmd: 'node server.js', labels: { svc: 'api' } },
         shelled: { image: 'node', shell: 'bash', cmd: 'node server.js', labels: { svc: 'shelled' } },
         plain: { image: 'nginx', labels: { svc: 'plain' } },
+        db: { image: 'postgres', cmd: 'postgres', init: 'migrate', healthcheck: { cmd: 'pg_isready' } },
       },
     }
 
@@ -119,7 +153,42 @@ describe('task arguments', () => {
       })
     })
 
-    it('makes the arguments part of the cache key, and never of the dependencies', async () => {
+    it('skips the cache of the task, not of its dependencies, unless asked to keep it', async () => {
+      await plan({ taskName: 'test' }, (cli) => {
+        expect(cli.task('test').data.caching).toMatchObject({ method: 'checksum', implicit: true })
+      })
+      await plan(task(['-t', 'a']), (cli) => {
+        expect(cli.task('test').data.caching).toMatchObject({ name: 'default', method: 'none', implicit: false })
+        expect(cli.task('build').data.caching).toMatchObject({ method: 'checksum', implicit: true })
+      })
+      await plan({ taskName: 'test', args: { values: ['-t', 'a'], services: false, cache: true } }, (cli) => {
+        expect(cli.task('test').data.caching).toMatchObject({ method: 'checksum', implicit: true })
+      })
+    })
+
+    it('keeps the id the build file declares apart from the arguments', async () => {
+      let declared = ''
+      await plan({ taskName: 'test' }, (cli) => {
+        declared = cli.task('test').id()
+        expect(getDeclaredWorkTaskId(cli.task('test'))).toBe(declared)
+      })
+      await plan(task(['-t', 'a']), (cli) => {
+        expect(getDeclaredWorkTaskId(cli.task('test'))).toBe(declared)
+      })
+    })
+
+    it('refuses on Windows the local task arguments PowerShell would split or run', async () => {
+      const local = { taskName: 'local', args: { values: ['a&calc'], services: false } }
+      if (platform() === 'win32') {
+        await expect(plan(local, () => undefined)).rejects.toThrow('runs in Windows PowerShell')
+      } else {
+        await plan(local, (cli) => {
+          expect(cli.task('local').data.cmds.map((c) => c.cmd)).toEqual([`node args.js 'a&calc'`])
+        })
+      }
+    })
+
+    it('makes the arguments part of the task id, and never of the dependencies', async () => {
       let without = { test: '', build: '' }
       await plan({ taskName: 'test' }, (cli) => {
         without = { test: cli.task('test').id(), build: cli.task('build').id() }
@@ -181,6 +250,17 @@ describe('task arguments', () => {
           entrypoint: ['bash', '-c'],
           cmd: [`node server.js '--inspect' 'a b'`],
         })
+      })
+    })
+
+    it('leaves a service as it is when its init task runs with arguments', async () => {
+      let definition = ''
+      await plan({ taskName: 'migrate' }, (cli) => {
+        definition = getServiceDefinitionHash(cli.service('db') as WorkItem<ContainerWorkService>)
+      })
+      await plan({ taskName: 'migrate', args: { values: ['--dry-run'], services: false } }, (cli) => {
+        expect(cli.task('migrate').data.cmds.map((c) => c.cmd)).toEqual([`migrate up '--dry-run'`])
+        expect(getServiceDefinitionHash(cli.service('db') as WorkItem<ContainerWorkService>)).toBe(definition)
       })
     })
 

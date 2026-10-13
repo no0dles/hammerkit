@@ -144,6 +144,12 @@ function parseWorkLabelScope(options: unknown): WorkLabelScope {
   return scope
 }
 
+// A task given arguments after -- skips the cache, unless the caller asks for a
+// cache method on the command line.
+function keepsCache(command: commaner.Command): boolean {
+  return command.getOptionValueSource('cache') === 'cli'
+}
+
 export async function getProgram(
   environment: Environment,
   argv: string[]
@@ -719,9 +725,12 @@ export async function getProgram(
           parseDuration
         )
       )
-      .action(async (options) => {
+      .action(async (options, command: commaner.Command) => {
         try {
-          const scope = { ...parseWorkLabelScope(options), args: { values: passthrough, services: true } }
+          const scope = {
+            ...parseWorkLabelScope(options),
+            args: { values: passthrough, services: true, cache: keepsCache(command) },
+          }
           const cli = await createCli(fileName, environment, scope)
           const result = await cli.runUp({
             cacheDefault: options.cache,
@@ -822,14 +831,14 @@ export async function getProgram(
         )
       )
       .addOption(new Option('--no-skip-deps', 'run dependencies even when nothing needing them has to run'))
-      .action(async (task, options) => {
+      .action(async (task, options, command: commaner.Command) => {
         try {
           // For machine-readable JSON, suppress the human progress logger (which
           // also writes to stdout) so the only thing on stdout is the JSON.
           const runEnvironment: Environment = options.summaryJson
             ? { ...environment, stdout: emptyWritable(), console: consoleContext(emptyWritable()) }
             : environment
-          const args = { values: passthrough, services: false }
+          const args = { values: passthrough, services: false, cache: keepsCache(command) }
           const cli = await createCli(
             fileName,
             runEnvironment,
