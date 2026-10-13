@@ -13,7 +13,7 @@ import { PlanContext } from '../../server/run-plan'
 import { runEnvironment } from '../../server/run-environment'
 import { Run, RunEventData } from '../../server/runs'
 import { SandboxRegistry } from '../../server/sandboxes'
-import { KubernetesBackend, ServerConfig, serverConfigSchema } from '../../server/server-config'
+import { getSecretCatalog, KubernetesBackend, ServerConfig, serverConfigSchema } from '../../server/server-config'
 import { HOST_ENV_ALLOW } from '../host-env'
 import { TEST_WORKER } from '../worker'
 
@@ -105,7 +105,11 @@ describe('sandboxes on a kubernetes backend', () => {
         },
       }) as ServerConfig & { backend: KubernetesBackend }
       const planning: PlanContext = {
-        environment: { ...environmentMock(root), processEnvs: runEnvironment(config, process.env) },
+        environment: {
+          ...environmentMock(root),
+          processEnvs: runEnvironment(config, process.env),
+          hosted: { catalog: getSecretCatalog(config) },
+        },
         policy: { envs: config.runs.env.allow, runtimes: config.runtimes, backend: 'kubernetes' },
       }
       const repos = new RepoAccess(config, planning.environment, { url: () => repository })
