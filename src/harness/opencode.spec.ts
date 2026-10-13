@@ -10,7 +10,7 @@ describe('opencode tools on a sandbox', () => {
   it('takes the parameters of opencode and answers in its words', async () => {
     await withSandboxServer('harness-opencode-files', async ({ client }) => {
       const tools = createOpencodeTools(z, async () => client)
-      expect(Object.keys(tools)).toEqual(['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob'])
+      expect(Object.keys(tools)).toEqual(['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob', 'list'])
       // opencode builds a zod object of the args, as it does for its own
       expect(z.object(tools.edit.args as z.ZodRawShape).safeParse({ filePath: 'a', oldString: 'x' }).success).toBe(
         false
@@ -57,6 +57,12 @@ describe('opencode tools on a sandbox', () => {
       const grep = await tools.grep.execute({ pattern: 'answer', include: '*.ts' }, context())
       expect(grep).toBe(`Found 1 matches\n\n${file}:\n  Line 2: export const answer = 42`)
       expect(await tools.glob.execute({ pattern: '**/*.md' }, context())).toBe(join(directory, 'docs', 'a.md'))
+      expect(await tools.list.execute({}, context())).toBe(
+        [`${directory}/`, '  docs/', '    a.md', '  input.txt', '  src/', '    app.ts'].join('\n')
+      )
+      expect(await tools.list.execute({ path: join(directory, 'src'), ignore: ['*.ts'] }, context())).toBe(
+        `${join(directory, 'src')}/`
+      )
     })
   })
 

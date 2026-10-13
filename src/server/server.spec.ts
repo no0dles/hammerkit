@@ -109,6 +109,28 @@ describe('server', () => {
     })
   }
 
+  it('grants no sandboxes on a reload that the running server has no runtime for', async () => {
+    const yaml = `${minimal}runtimes: [local]\n`
+    await withServerConfig('server-reload-sandboxes', yaml, async (env, file) => {
+      const config = await readServerConfig(env, file)
+      const server = await startServer(config, env, { log: () => undefined })
+      try {
+        const entitlements = [
+          { subject: { iss: 'https://idp.corp', sub: 'a' }, sandboxes: true, repos: ['github.com/corp/*'] },
+        ]
+        const next = serverConfigSchema.parse({
+          issuers: config.issuers,
+          runtimes: ['local', 'docker'],
+          entitlements,
+        })
+        expect(() => server.reload(next)).toThrow(/does not run on docker of sandboxes\.runtimes/)
+        expect(server.reload({ ...next, entitlements: [] })).toMatchObject({ restart: expect.any(Array) })
+      } finally {
+        await server.close()
+      }
+    })
+  })
+
   it('publishes what it is and whom it trusts without a token', async () => {
     await withServer(
       'server-discovery',

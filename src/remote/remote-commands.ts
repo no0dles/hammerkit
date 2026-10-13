@@ -16,6 +16,7 @@ import { deviceLogin } from './device-login'
 import { getAccessToken, removeToken, saveToken } from './credentials'
 import { callServer, getMe, printable } from './server-client'
 import { registerWorkCommands } from './remote-work-commands'
+import { registerMcpCommand } from '../harness/mcp-command'
 
 // Host-level commands: they only touch the machine's config file, so they work
 // with or without a build file in the working directory.
@@ -190,4 +191,5 @@ export function registerRemoteCommands(program: Command, environment: Environmen
     )
 
   registerWorkCommands(remote, { environment, buildFile, getServer, guarded })
+  registerMcpCommand(remote, environment)
 }

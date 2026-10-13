@@ -214,7 +214,7 @@ export interface PiExtensionOptions {
 /**
  * The pi extension: pi's read, write, edit, bash, ls, find and grep tools, and the user's
  * `!` commands, work on a hammerkit sandbox. Configured with the same variables as
- * `hammerkit mcp` takes options: HAMMERKIT_SERVER, HAMMERKIT_SANDBOX (or HAMMERKIT_REPO and
+ * `hammerkit remote mcp` takes options: HAMMERKIT_SERVER, HAMMERKIT_SANDBOX (or HAMMERKIT_REPO and
  * HAMMERKIT_REF), HAMMERKIT_BUILD and HAMMERKIT_SHELL.
  */
 export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOptions = {}) {

@@ -1,6 +1,6 @@
 import { createInterface } from 'readline'
 import { Readable, Writable } from 'stream'
-import { formatSearch, formatTree } from './format'
+import { capOutput, formatSearch, formatTree } from './format'
 import { SandboxClient } from './sandbox-client'
 import type { TaskRun } from './sandbox-client'
 
@@ -45,6 +45,10 @@ function sandboxPath(path: string | undefined): string {
   return (path ?? '').replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
+function readLog(run: string, task: string): string {
+  return `read more of the log with run_logs { "run": "${run}", "task": "${task}" }`
+}
+
 function describeRun(task: string, ran: TaskRun): string {
   const result = ran.result
   const lines = [`run ${ran.run.id}: ${ran.run.state}`]
@@ -67,12 +71,12 @@ function describeRun(task: string, ran: TaskRun): string {
   if (result && result.lastLog.length > 0) {
     lines.push('last lines:', ...result.lastLog)
   }
-  lines.push(`read more of the log with run_logs { "run": "${ran.run.id}", "task": "${task}" }`)
+  lines.push(readLog(ran.run.id, task))
   return lines.join('\n')
 }
 
 /**
- * The tools of `hammerkit mcp`, for chat clients and agents without file and shell tools of
+ * The tools of `hammerkit remote mcp`, for chat clients and agents without file and shell tools of
  * their own. They take the shapes models are trained on: numbered reads with offset and
  * limit, exact-string replace, `apply_patch` or a git diff, ripgrep's parameters, a shell
  * command. Paths are relative to the root of the sandbox.
@@ -227,10 +231,13 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
       },
       annotations: { title: 'Run a command' },
       async call(args, signal) {
-        const ran = await (
-          await client()
-        ).exec(args.command, sandboxPath(args.workdir), { signal, timeoutSeconds: args.timeout })
-        const lines = ran.output ? [ran.output, ''] : []
+        const sandbox = await client()
+        const ran = await sandbox.exec(args.command, sandboxPath(args.workdir), {
+          signal,
+          timeoutSeconds: args.timeout,
+        })
+        const output = capOutput(ran.output, readLog(ran.run.id, sandbox.build.shell))
+        const lines = output ? [output, ''] : []
         if (ran.exitCode === null) {
           lines.push(`hammerkit: ${ran.result?.error ?? ran.run.error ?? `the run ended ${ran.run.state}`}`)
         } else {

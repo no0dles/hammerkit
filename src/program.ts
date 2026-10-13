@@ -27,7 +27,6 @@ import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
 import { registerRunWorkerCommand } from './server/run-worker-command'
-import { registerMcpCommand } from './harness/mcp-command'
 import { parseNetworkOption, WorkNetwork } from './planner/work-network'
 import { getArgumentsTarget } from './planner/utils/task-arguments'
 
@@ -153,7 +152,6 @@ export async function getProgram(
   const program = new Command()
   registerServerCommand(program, environment)
   registerRunWorkerCommand(program, environment)
-  registerMcpCommand(program, environment)
 
   // What follows `--` belongs to the one task or service of a run or up, not to
   // hammerkit: a `--set` or `--file` there is an argument like any other.
@@ -162,6 +160,11 @@ export async function getProgram(
   const parsed = parseSetArguments(separator >= 0 ? argv.slice(0, separator) : argv)
   const args = parsed.args
   environment.processEnvs = { ...environment.processEnvs, ...parsed.values }
+  const remote = args.indexOf('remote')
+  if (remote >= 0 && args[remote + 1] === 'mcp') {
+    // `remote mcp` speaks its protocol on stdout: a warning there would break it
+    environment.console = consoleContext(environment.stderr)
+  }
   const fileIndex = args.indexOf('--file')
   const fileName =
     fileIndex >= 0 ? join(environment.cwd, args[fileIndex + 1]) : await getBuildFilename(environment.cwd, environment)

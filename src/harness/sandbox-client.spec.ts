@@ -1,6 +1,16 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
-import { checkSandboxPath, exitCodeOf, quotePosix, SandboxClientError, toSandboxPath } from './sandbox-client'
+import {
+  checkSandboxPath,
+  exitCodeOf,
+  quotePosix,
+  SandboxClient,
+  SandboxClientError,
+  toSandboxPath,
+} from './sandbox-client'
+import { getHarnessEnvironment, getTokenSource } from './connect'
 
 describe('sandbox paths', () => {
   it('maps the working directory of a harness onto the root of the sandbox', () => {
@@ -26,6 +36,43 @@ describe('sandbox paths', () => {
     expect(exitCodeOf({ status: 'cached', lastLog: [] })).toBe(0)
     expect(exitCodeOf({ status: 'failed', exitCode: 2, lastLog: [] })).toBe(2)
     expect(exitCodeOf({ status: 'cancelled', lastLog: [] })).toBeNull()
+  })
+})
+
+describe('tokens', () => {
+  const secret = 'SECRET-refresh-token'
+
+  it('never sends or repeats a token that is more than one word', async () => {
+    for (const token of [`${secret}\nmore`, `Bearer ${secret}`, `${secret}\0x`]) {
+      const failure = SandboxClient.get({ url: 'http://127.0.0.1:1', token: async () => token }, 'sbx_1')
+      await expect(failure).rejects.toThrow('the token is not a single line of visible characters')
+      await expect(failure).rejects.not.toThrow(secret)
+    }
+  })
+
+  it('refuses the output of a token command that prints more than the token', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hammerkit-token-'))
+    try {
+      const command = (output: string) => {
+        const script = join(dir, 'token.js')
+        writeFileSync(script, `process.stdout.write(${JSON.stringify(output)})`)
+        return `node "${script}"`
+      }
+      const environment = getHarnessEnvironment()
+      const server = { url: 'http://127.0.0.1:1', issuer: 'https://idp.example.com' }
+      environment.processEnvs = {
+        ...environment.processEnvs,
+        HAMMERKIT_TOKEN_COMMAND: command(`{\n  "refresh_token": "${secret}"\n}\n`),
+      }
+      const failure = getTokenSource(environment, 'corp', server).token()
+      await expect(failure).rejects.toThrow('HAMMERKIT_TOKEN_COMMAND printed more than a token')
+      await expect(failure).rejects.not.toThrow(secret)
+
+      environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_TOKEN_COMMAND: command('abc.def\n') }
+      expect(await getTokenSource(environment, 'corp', server).token()).toBe('abc.def')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -80,6 +127,12 @@ describe('sandbox client', () => {
       const failed = await client.exec('echo out; echo err >&2; exit 7', '')
       expect(failed.exitCode).toBe(7)
       expect(failed.output.split('\n')).toEqual(expect.arrayContaining(['out', 'err']))
+
+      // a directory that is not there stops the whole command, not only its first part
+      const missing = await client.exec('true; echo ran > ran.txt', 'nowhere')
+      expect(missing.exitCode).toBe(1)
+      expect(await client.stat('ran.txt')).toBeUndefined()
+      expect(await client.stat('nowhere/ran.txt')).toBeUndefined()
 
       const task = await client.runTask('fail')
       expect(task.exitCode).toBe(3)

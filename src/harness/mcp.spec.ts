@@ -1,7 +1,8 @@
 import { Command } from 'commander'
 import { PassThrough } from 'stream'
 import { addServer } from '../remote/host-config'
-import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
+import { itExceptWindows, SANDBOX_REPO, withSandboxServer } from '../testing/sandbox-server'
+import { connectSandbox } from './connect'
 import { createMcpTools, McpTool, serveMcp } from './mcp'
 import { registerMcpCommand } from './mcp-command'
 
@@ -217,12 +218,16 @@ describe('mcp tools on a sandbox', () => {
       const errors: string[] = []
       environment.stderr = new PassThrough().on('data', (chunk) => errors.push(chunk.toString()))
       const program = new Command().exitOverride()
+      const remote = program.command('remote')
       const client = connect(async (input, output) => {
         environment.stdout = output
-        registerMcpCommand(program, environment, input)
-        await program.parseAsync(['mcp', '--server', 'corp', '--sandbox', sandbox.id, '--build', 'payments'], {
-          from: 'user',
-        })
+        registerMcpCommand(remote, environment, input)
+        await program.parseAsync(
+          ['remote', 'mcp', '--server', 'corp', '--sandbox', sandbox.id, '--build', 'payments'],
+          {
+            from: 'user',
+          }
+        )
       })
       const init = await client.request('initialize', { protocolVersion: '2025-06-18' })
       expect(init.result.instructions).toContain(`hammerkit sandbox ${sandbox.id}`)
@@ -230,7 +235,25 @@ describe('mcp tools on a sandbox', () => {
         '     1\tfrom-main\n\n(end of file, 1 lines)'
       )
       await client.close()
-      expect(errors.join('')).toContain(`hammerkit mcp: sandbox ${sandbox.id} of github.com/corp/payments`)
+      expect(errors.join('')).toContain(`hammerkit remote mcp: sandbox ${sandbox.id} of github.com/corp/payments`)
+    })
+  })
+
+  it('takes an unchanged sandbox of the repository and ref before it creates one', async () => {
+    await withSandboxServer('harness-reuse', async ({ client: first, url, environment, connection }) => {
+      await addServer(environment, 'corp', url, { issuer: 'https://idp.example.com' })
+      environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_TOKEN: await connection.token() }
+      const options = { server: 'corp', repo: SANDBOX_REPO, ref: 'main', build: 'payments' }
+      const said: string[] = []
+      expect((await connectSandbox(environment, options, (line) => said.push(line))).id).toBe(first.id)
+      expect(said).toEqual([expect.stringMatching(/^took sandbox .* it had no changes$/)])
+
+      await first.writeRaw('notes.txt', 'mine\n')
+      const second = await connectSandbox(environment, options, (line) => said.push(line))
+      expect(second.id).not.toBe(first.id)
+      expect(said[1]).toContain(`set HAMMERKIT_SANDBOX=${second.id} to come back to it`)
+      expect((await first.readRaw('notes.txt')).toString()).toBe('mine\n')
+      expect((await connectSandbox(environment, options)).id).toBe(second.id)
     })
   })
 })

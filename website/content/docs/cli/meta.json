@@ -14,8 +14,8 @@
     "store-restore",
     "package",
     "remote",
+    "remote-mcp",
     "server",
-    "mcp",
     "clean",
     "validate"
   ]

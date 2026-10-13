@@ -647,6 +647,14 @@ export async function startServer(
           }
         }
       })
+      // the subset check of the config only holds for sandboxes granted at start
+      const outside = config.sandboxes.runtimes.filter((runtime) => !config.runtimes.includes(runtime))
+      if (next.entitlements.some((entitlement) => entitlement.sandboxes) && outside.length > 0) {
+        throw new Error(
+          `entitlements grant sandboxes, but the running server does not run on ${outside.join(', ')} of ` +
+            'sandboxes.runtimes, restart it with the new config'
+        )
+      }
       const restart = Object.keys(next).filter(
         (key) =>
           key !== 'entitlements' &&

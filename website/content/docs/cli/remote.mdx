@@ -52,6 +52,7 @@ so they work with or without a build file in the working directory.
 | `remote yank <name@hash> [server]` | Pull a published version back: no run starts from it and it is not `latest`. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
 | `remote unyank <name@hash> [server]` | Let a yanked version go on. Needs `builds: publish`. |
 | `remote reject <run or name@hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
+| `remote mcp` | Serve a sandbox on a server as MCP tools over stdio for a coding agent, see [remote mcp](/docs/cli/remote-mcp). |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
 name at a different server pass `--force`, so a typo can't silently redirect your

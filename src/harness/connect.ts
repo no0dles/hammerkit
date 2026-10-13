@@ -7,7 +7,7 @@ import { getAccessToken } from '../remote/credentials'
 import { hasServer, readHostConfig } from '../remote/host-config'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
-import { SandboxClient, ServerConnection } from './sandbox-client'
+import { isToken, SandboxClient, SandboxView, ServerConnection } from './sandbox-client'
 
 export const DEFAULT_SHELL_TASK = 'sh'
 
@@ -63,6 +63,9 @@ export function getTokenSource(
           const token = String(stdout).trim()
           if (error || !token) {
             reject(new Error('HAMMERKIT_TOKEN_COMMAND printed no token'))
+          } else if (!isToken(token)) {
+            // never the output itself: it can hold more secrets than the token
+            reject(new Error('HAMMERKIT_TOKEN_COMMAND printed more than a token, it has to print the token alone'))
           } else {
             resolve(token)
           }
@@ -79,9 +82,16 @@ export function getTokenSource(
       },
     }
   }
-  const fixed = environment.processEnvs.HAMMERKIT_TOKEN
+  const fixed = environment.processEnvs.HAMMERKIT_TOKEN?.trim()
   if (fixed) {
-    return { token: async () => fixed }
+    return {
+      token: async () => {
+        if (!isToken(fixed)) {
+          throw new Error('HAMMERKIT_TOKEN holds more than a token, it has to be the token alone')
+        }
+        return fixed
+      },
+    }
   }
   return { token: () => getAccessToken(environment, name, server) }
 }
@@ -109,14 +119,39 @@ export async function connectSandbox(
   if (options.sandbox) {
     sandbox = await SandboxClient.get(connection, options.sandbox)
   } else if (options.repo && options.ref) {
-    sandbox = await SandboxClient.create(connection, options.repo, options.ref)
-    log(`created sandbox ${sandbox.id} of ${sandbox.repo} at ${sandbox.commit} on ${name}`)
+    sandbox = await reuseSandbox(connection, options.repo, options.ref)
+    if (sandbox) {
+      log(`took sandbox ${sandbox.id} of ${sandbox.repo} at ${sandbox.commit} on ${name}, it had no changes`)
+    } else {
+      sandbox = await SandboxClient.create(connection, options.repo, options.ref)
+      log(
+        `created sandbox ${sandbox.id} of ${sandbox.repo} at ${sandbox.commit} on ${name}, ` +
+          `set HAMMERKIT_SANDBOX=${sandbox.id} to come back to it`
+      )
+    }
   } else {
     throw new Error(
       'name a sandbox (HAMMERKIT_SANDBOX or --sandbox), or a repository and ref to create one from (HAMMERKIT_REPO and HAMMERKIT_REF, or --repo and --ref)'
     )
   }
   return new SandboxClient(connection, sandbox, { name: options.build, shell: options.shell ?? DEFAULT_SHELL_TASK })
+}
+
+// A client that starts with a repository and ref takes a sandbox of the caller's of the same
+// that nobody changed and no run holds, checked out at the ref again, rather than creating
+// one on every start: sandboxes stay until they are deleted, and only a few are allowed.
+async function reuseSandbox(connection: ServerConnection, repo: string, ref: string): Promise<SandboxView | undefined> {
+  const build = { name: '', shell: DEFAULT_SHELL_TASK }
+  for (const candidate of await SandboxClient.list(connection)) {
+    if (candidate.repo !== repo || candidate.ref !== ref || candidate.busy) {
+      continue
+    }
+    const changes = await new SandboxClient(connection, candidate, build).changes()
+    if (changes.files.length === 0) {
+      return SandboxClient.fetch(connection, candidate.id, ref)
+    }
+  }
+  return undefined
 }
 
 // What hammerkit needs of its environment to read the host config and the sign-in, for a

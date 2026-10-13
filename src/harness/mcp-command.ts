@@ -6,10 +6,14 @@ import { getVersion } from '../version'
 import { connectSandbox, DEFAULT_SHELL_TASK } from './connect'
 import { createMcpTools, serveMcp } from './mcp'
 
-// `hammerkit mcp`: a Model Context Protocol server on stdio for one sandbox of a server.
-// Like `remote`, it needs no build file of its own: the tasks are the published ones.
-export function registerMcpCommand(program: Command, environment: Environment, input: Readable = process.stdin): void {
-  program
+// `hammerkit remote mcp`: a Model Context Protocol server on stdio for one sandbox of a
+// server. It lives under `remote`, which already is a command: a top-level `mcp` would hide a
+// task named `mcp`, since `hammerkit <task>` runs a task. Like the other `remote` commands it
+// needs no build file of its own: the tasks are the published ones.
+export function registerMcpCommand(remote: Command, environment: Environment, input: Readable = process.stdin): void {
+  // errors go through the program, like those of the other remote commands: it carries the exit handling
+  const program = remote.parent ?? remote
+  remote
     .command('mcp')
     .description('serve the files, shell and tasks of a sandbox on a server as MCP tools over stdio (experimental)')
     .addOption(
@@ -27,7 +31,7 @@ export function registerMcpCommand(program: Command, environment: Environment, i
     .action(async (options) => {
       try {
         // stdout carries the protocol only, everything else goes to stderr
-        const log = (line: string) => environment.stderr.write(`hammerkit mcp: ${line}\n`)
+        const log = (line: string) => environment.stderr.write(`hammerkit remote mcp: ${line}\n`)
         const sandbox = await connectSandbox(environment, options, log)
         log(`sandbox ${sandbox.id} of ${sandbox.sandbox.repo} at ${sandbox.sandbox.commit}`)
         const instructions =

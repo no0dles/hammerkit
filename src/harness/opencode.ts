@@ -1,7 +1,8 @@
+import { Minimatch } from 'minimatch'
 import { join } from 'path'
 import { Environment } from '../executer/environment'
 import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
-import { formatTree, toColonNumbers } from './format'
+import { capOutput, formatTree, toColonNumbers } from './format'
 import { SandboxClient, toSandboxPath } from './sandbox-client'
 
 // What opencode passes a tool (`ToolContext` of `@opencode-ai/plugin`), the parts used here.
@@ -31,10 +32,11 @@ export interface OpencodePluginOptions {
 }
 
 const DEFAULT_READ_LINES = 2000
+const LIST_LIMIT = 100
 
 /**
  * The tools of opencode on a hammerkit sandbox: `read`, `write`, `edit`, `apply_patch`,
- * `bash`, `grep` and `glob` with the parameters of opencode's own, which a plugin replaces
+ * `bash`, `grep`, `glob` and `list` with the parameters of opencode's own, which a plugin replaces
  * by registering tools of the same name. opencode resolves paths against its directory,
  * which stands for the root of the sandbox. `schema` is the zod of opencode
  * (`tool.schema` of `@opencode-ai/plugin`), so it reads the parameters as its own.
@@ -190,7 +192,7 @@ export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>
           signal: context.abort,
           timeoutSeconds: args.timeout ? args.timeout / 1000 : undefined,
         })
-        const lines = [ran.output]
+        const lines = [capOutput(ran.output, 'narrow the command down, for example with grep, head or tail')]
         if (ran.exitCode === null) {
           lines.push(`hammerkit: ${ran.result?.error ?? ran.run.error ?? `the run ended ${ran.run.state}`}`)
         } else if (ran.exitCode !== 0) {
@@ -261,6 +263,40 @@ export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>
         const lines = tree.entries.map((entry) => join(context.directory, ...entry.path.split('/')))
         if (tree.truncated) {
           lines.push('', '(Results are truncated. Consider using a more specific path or pattern.)')
+        }
+        return lines.join('\n')
+      },
+    },
+
+    // opencode's list: a tree of the first files below a directory
+    list: {
+      description:
+        'List the files and directories below a directory of the hammerkit sandbox, as a tree. Prefer glob and ' +
+        'grep when you know what you look for.',
+      args: {
+        path: z
+          .string()
+          .optional()
+          .describe('The absolute path to the directory to list (must be absolute, not relative)'),
+        ignore: z.array(z.string()).optional().describe('List of glob patterns to ignore'),
+      },
+      async execute(args: { path?: string; ignore?: string[] }, context) {
+        const sandbox = await client()
+        const path = where(context, args.path)
+        const tree = await sandbox.tree({ path: path || undefined, depth: 64, limit: LIST_LIMIT })
+        const prefix = path ? `${path}/` : ''
+        const ignore = (args.ignore ?? []).map((pattern) => new Minimatch(pattern, { dot: true, matchBase: true }))
+        const lines = [`${args.path ?? context.directory}/`]
+        for (const entry of tree.entries) {
+          const relative = entry.path.startsWith(prefix) ? entry.path.slice(prefix.length) : entry.path
+          if (ignore.some((pattern) => pattern.match(relative))) {
+            continue
+          }
+          const parts = relative.split('/')
+          lines.push(`${'  '.repeat(parts.length)}${parts[parts.length - 1]}${entry.type === 'directory' ? '/' : ''}`)
+        }
+        if (tree.truncated) {
+          lines.push('', `(${tree.entries.length} of ${tree.total} shown, list a directory below it or use glob)`)
         }
         return lines.join('\n')
       },

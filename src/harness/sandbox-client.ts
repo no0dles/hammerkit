@@ -107,6 +107,15 @@ export class SandboxClient {
     return json(await call(connection, 'GET', `/v1/sandboxes/${encodeURIComponent(id)}`))
   }
 
+  static async list(connection: ServerConnection): Promise<SandboxView[]> {
+    return (await json<{ sandboxes: SandboxView[] }>(await call(connection, 'GET', '/v1/sandboxes'))).sandboxes
+  }
+
+  // checks out the ref again, what changed in the sandbox is gone
+  static async fetch(connection: ServerConnection, id: string, ref: string): Promise<SandboxView> {
+    return json(await call(connection, 'POST', `/v1/sandboxes/${encodeURIComponent(id)}/fetch`, { body: { ref } }))
+  }
+
   async stat(path: string): Promise<FileStat | undefined> {
     if (checkSandboxPath(path) === '') {
       // the root is there as long as the sandbox is
@@ -255,7 +264,8 @@ export class SandboxClient {
    * its argument. `cwd` is a directory of the sandbox, `''` for its root.
    */
   async exec(command: string, cwd: string, options: Omit<RunTaskOptions, 'args'> = {}): Promise<TaskRun> {
-    const script = cwd && cwd !== '.' ? `cd ${quotePosix(cwd)} && ${command}` : command
+    // on its own line: `cd dir && a; b` would run b in the root when dir is missing
+    const script = cwd && cwd !== '.' ? `cd ${quotePosix(cwd)} || exit 1\n${command}` : command
     return this.runTask(this.build.shell, { ...options, args: [script] })
   }
 
@@ -311,6 +321,16 @@ export function toSandboxPath(root: string, path: string): string {
   }
 }
 
+// A bearer token is one word of visible ASCII; anything else is output of a token command
+// that holds more than the token, which must never reach an error message.
+export function isToken(value: string): boolean {
+  return /^[\x21-\x7e]+$/.test(value)
+}
+
+function redact(message: string, token: string): string {
+  return message.split(token).join('***')
+}
+
 export function quotePosix(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
@@ -339,26 +359,31 @@ async function call(
       url.searchParams.set(key, String(value))
     }
   }
-  const send = async () =>
-    fetch(url, {
+  const send = async () => {
+    const token = await connection.token()
+    if (!isToken(token)) {
+      // a header refuses such a value and would quote it whole in its error
+      throw new SandboxClientError('the token is not a single line of visible characters')
+    }
+    return fetch(url, {
       method,
       headers: {
-        authorization: `Bearer ${await connection.token()}`,
+        authorization: `Bearer ${token}`,
         ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
         ...(options.raw !== undefined ? { 'content-type': 'application/octet-stream' } : {}),
       },
       body: options.body !== undefined ? JSON.stringify(options.body) : options.raw,
       signal: AbortSignal.timeout(TIMEOUT_MS),
+    }).catch((e) => {
+      throw new SandboxClientError(
+        `unable to reach ${connection.url}: ${redact(e instanceof Error ? e.message : String(e), token)}`
+      )
     })
-  let response: Response
-  try {
+  }
+  let response = await send()
+  if (response.status === 401 && connection.renew) {
+    await connection.renew()
     response = await send()
-    if (response.status === 401 && connection.renew) {
-      await connection.renew()
-      response = await send()
-    }
-  } catch (e) {
-    throw new SandboxClientError(`unable to reach ${connection.url}: ${e instanceof Error ? e.message : String(e)}`)
   }
   if (response.ok || (options.missing && response.status === 404)) {
     return response
