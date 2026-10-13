@@ -85,7 +85,26 @@ function oldSide(block: Line[]): string[] {
   return block.filter((line) => line.kind !== '+').map((line) => line.text)
 }
 
+// Lines one file's patch may compare to place its hunks. A hunk that is nowhere in a large
+// file would otherwise be compared with every place in it, its whole length at each.
+export const MAX_COMPARED_LINES = 20_000_000
+
+let compared = 0
+
+function startComparing(): void {
+  compared = 0
+}
+
+function compare(path: string): void {
+  if (++compared > MAX_COMPARED_LINES) {
+    throw new PatchError(
+      `${path}: the patch's lines were compared with the file ${MAX_COMPARED_LINES} times without finding their place; give its hunks more lines of context or the line numbers of the file as it is`
+    )
+  }
+}
+
 function matchesAt(
+  path: string,
   lines: string[],
   at: number,
   wanted: string[],
@@ -94,7 +113,10 @@ function matchesAt(
   if (at < 0 || at + wanted.length > lines.length) {
     return false
   }
-  return wanted.every((line, offset) => same(lines[at + offset], line))
+  return wanted.every((line, offset) => {
+    compare(path)
+    return same(lines[at + offset], line)
+  })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -269,6 +291,7 @@ function filePatch(header: Header, hunks: Hunk[]): FilePatch {
   return {
     ...header,
     apply(content: string): string {
+      startComparing()
       const file = splitLines(content)
       let delta = 0
       let cursor = 0
@@ -276,7 +299,7 @@ function filePatch(header: Header, hunks: Hunk[]): FilePatch {
         const old = oldSide(hunk.lines)
         // where the hunk says it is, moved by what the hunks before it added or removed
         const expected = Math.max(cursor, nominal(hunk) + delta)
-        const at = findNear(file.lines, old, expected, cursor)
+        const at = findNear(path, file.lines, old, expected, cursor)
         if (at < 0) {
           throw new PatchError(
             `${path}: hunk ${index + 1} (@@ -${hunk.oldStart},${
@@ -306,13 +329,13 @@ function nominal(hunk: Hunk): number {
 
 // The match closest to `expected` at or after `from`, the way git apply moves a hunk
 // whose lines moved.
-function findNear(lines: string[], wanted: string[], expected: number, from: number): number {
+function findNear(path: string, lines: string[], wanted: string[], expected: number, from: number): number {
   const last = lines.length - wanted.length
   for (let distance = 0; expected - distance >= from || expected + distance <= last; distance++) {
-    if (matchesAt(lines, expected - distance, wanted) && expected - distance >= from) {
+    if (expected - distance >= from && matchesAt(path, lines, expected - distance, wanted)) {
       return expected - distance
     }
-    if (distance > 0 && matchesAt(lines, expected + distance, wanted)) {
+    if (distance > 0 && matchesAt(path, lines, expected + distance, wanted)) {
       return expected + distance
     }
   }
@@ -506,13 +529,22 @@ const trimmed = (a: string, b: string) => a.trim() === b.trim()
 // The way apply_patch finds its lines: after the chunk before it, exactly, then with
 // trailing and then all surrounding whitespace ignored.
 function applyChunks(path: string, content: string, chunks: Chunk[]): string {
+  startComparing()
   const file = splitLines(content)
   let cursor = 0
   chunks.forEach((chunk, index) => {
     if (chunk.anchor !== undefined) {
       const anchor = chunk.anchor
       const found = [exact, trimmed]
-        .map((same) => file.lines.findIndex((line, at) => at >= cursor && same(line, anchor)))
+        .map((same) =>
+          file.lines.findIndex((line, at) => {
+            if (at < cursor) {
+              return false
+            }
+            compare(path)
+            return same(line, anchor)
+          })
+        )
         .find((at) => at >= 0)
       if (found === undefined) {
         throw new PatchError(
@@ -530,7 +562,7 @@ function applyChunks(path: string, content: string, chunks: Chunk[]): string {
     const old = oldSide(chunk.lines)
     let at = -1
     for (const same of [exact, trailing, trimmed]) {
-      if (chunk.endOfFile && matchesAt(file.lines, file.lines.length - old.length, old, same)) {
+      if (chunk.endOfFile && matchesAt(path, file.lines, file.lines.length - old.length, old, same)) {
         at = file.lines.length - old.length
         break
       }
@@ -539,7 +571,7 @@ function applyChunks(path: string, content: string, chunks: Chunk[]): string {
           ? chunk.endOfFile
             ? file.lines.length
             : cursor
-          : file.lines.findIndex((_, start) => start >= cursor && matchesAt(file.lines, start, old, same))
+          : file.lines.findIndex((_, start) => start >= cursor && matchesAt(path, file.lines, start, old, same))
       if (at >= 0) {
         break
       }

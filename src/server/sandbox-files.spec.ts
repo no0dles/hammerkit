@@ -1,5 +1,15 @@
 import { execFileSync } from 'child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { SandboxFileError, SandboxFiles } from './sandbox-files'
@@ -320,6 +330,95 @@ describe('sandbox files', () => {
       }
       expect((await failure(files.plan([{ op: 'write', path: '.npmrc', content: 'x' }]))).status).toBe(403)
       expect((await failure(files.plan([{ op: 'move', path: 'README.md', to: '.git/config' }]))).status).toBe(403)
+    })
+  })
+
+  describe('what a task leaves behind', () => {
+    it('never reads or writes through a link out of the sandbox', async () => {
+      const outside = join(root, 'outside')
+      mkdirSync(outside)
+      writeFileSync(join(outside, 'secret.txt'), 'outside-secret\n')
+      if (!link(outside, join(work, 'escape')) || !link(join(outside, 'secret.txt'), join(work, 'secret.txt'))) {
+        return
+      }
+      for (const path of ['escape/secret.txt', 'secret.txt']) {
+        expect((await failure(files.read(path, {}))).status).toBe(400)
+        expect((await failure(files.raw(path))).status).toBe(400)
+      }
+      expect(await files.stat('escape')).toMatchObject({ type: 'symlink' })
+      expect((await failure(files.stat('escape/secret.txt'))).status).toBe(400)
+      expect((await failure(files.tree({ path: 'escape' }))).status).toBe(400)
+      expect((await failure(files.search({ pattern: 'outside', path: 'escape' }))).status).toBe(400)
+      expect((await files.search({ pattern: 'outside-secret' })).files).toEqual([])
+      const ops = [
+        { op: 'write', path: 'escape/new.txt', content: 'x' },
+        { op: 'replace', path: 'escape/secret.txt', old_string: 'outside', new_string: 'x' },
+        { op: 'replace', path: 'secret.txt', old_string: 'outside', new_string: 'x' },
+        { op: 'delete', path: 'escape/secret.txt' },
+        { op: 'move', path: 'README.md', to: 'escape/README.md' },
+        { op: 'move', path: 'escape/secret.txt', to: 'stolen.txt' },
+        { op: 'patch', patch: '--- /dev/null\n+++ b/escape/new.txt\n@@ -0,0 +1 @@\n+x\n' },
+        { op: 'patch', patch: '--- a/escape/secret.txt\n+++ b/escape/secret.txt\n@@ -1 +1 @@\n-outside-secret\n+x\n' },
+        { op: 'patch', patch: '*** Begin Patch\n*** Add File: escape/new.txt\n+x\n*** End Patch\n' },
+      ] as const
+      for (const op of ops) {
+        expect((await failure(files.plan([op]))).status).toBeGreaterThanOrEqual(400)
+      }
+      expect(readdirSync(outside)).toEqual(['secret.txt'])
+      expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('outside-secret\n')
+      expect(await files.diff('diff', { name: 'a', email: 'a@b', message: 'm' })).not.toContain('outside-secret')
+    })
+
+    it('refuses pipes instead of waiting on them', async () => {
+      try {
+        execFileSync('mkfifo', [join(work, 'pipe')])
+      } catch {
+        // no pipes to make on this system
+        return
+      }
+      expect(await files.stat('pipe')).toMatchObject({ type: 'other', size: 0, exec: false })
+      expect((await failure(files.read('pipe', {}))).message).toBe('pipe is a pipe, a socket or a device, not a file')
+      expect((await failure(files.raw('pipe'))).status).toBe(400)
+      expect((await failure(files.search({ pattern: 'x', path: 'pipe' }))).status).toBe(400)
+      expect(
+        (await failure(files.plan([{ op: 'replace', path: 'pipe', old_string: 'a', new_string: 'b' }]))).status
+      ).toBe(400)
+      // git does not see pipes, so tree does not list them
+      expect((await files.tree({})).entries.map((entry) => entry.path)).not.toContain('pipe')
+    })
+
+    it('denies credential directories in any case', async () => {
+      mkdirSync(join(work, '.SSH'))
+      writeFileSync(join(work, '.SSH', 'config'), 'Host *\n')
+      expect((await failure(files.read('.SSH/config', {}))).status).toBe(403)
+      expect((await failure(files.plan([{ op: 'write', path: '.Git/config', content: 'x' }]))).status).toBe(403)
+      expect((await failure(files.plan([{ op: 'write', path: '.aws./credentials', content: 'x' }]))).status).toBe(403)
+      expect((await files.search({ pattern: 'Host' })).files).toEqual([])
+      expect((await files.tree({})).entries.map((entry) => entry.path)).not.toContain('.SSH')
+    })
+
+    it('leaves a repository a task made out of the changes', async () => {
+      const nested = join(work, 'nested')
+      mkdirSync(nested)
+      writeFileSync(join(nested, 'file.txt'), 'nested\n')
+      git(nested, 'init', '--quiet')
+      git(nested, 'add', '--all')
+      git(nested, 'commit', '--quiet', '-m', 'nested')
+      const commit = git(nested, 'rev-parse', 'HEAD').trim()
+      writeFileSync(join(work, 'added.txt'), 'added\n')
+      expect((await files.changes()).map((file) => file.path)).toEqual(['added.txt'])
+      const diff = await files.diff('diff', { name: 'a', email: 'a@b', message: 'm' })
+      expect(diff).not.toContain(commit)
+      expect(diff).not.toContain('Subproject')
+      expect(await files.diff('patch', { name: 'a', email: 'a@b', message: 'm' })).not.toContain(commit)
+    })
+
+    it('reads a file of many lines without splitting all of it', async () => {
+      writeFileSync(join(work, 'lines.txt'), '\n'.repeat(4 * 1024 * 1024))
+      const read = await files.read('lines.txt', { offset: 3, limit: 2 })
+      expect(read).toMatchObject({ lines: 4 * 1024 * 1024, content: '     3\t\n     4\t', nextOffset: 5 })
+      const all = await Promise.all([1, 2, 3, 4, 5, 6].map(() => files.raw('lines.txt')))
+      expect(all.map((raw) => raw.content?.length)).toEqual(Array(6).fill(4 * 1024 * 1024))
     })
   })
 
