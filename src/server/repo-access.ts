@@ -78,13 +78,28 @@ export class RepoAccess {
    * values are what the run has to mask.
    */
   async credentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
+    return this.withSecret(repo, this.source(repo)?.secret)
+  }
+
+  /**
+   * The same for pushing a sandbox to the repository, with the write credential of the
+   * source's `push`, which is a secret and an account of its own: a server that only reads
+   * never holds a token that writes.
+   */
+  async pushCredentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
+    return this.withSecret(repo, this.source(repo)?.push?.secret)
+  }
+
+  private async withSecret(
+    repo: string,
+    secret: Source['secret']
+  ): Promise<{ env: { [key: string]: string }; values: string[] }> {
     const env: { [key: string]: string } = {}
     for (const [key, value] of Object.entries(this.environment.processEnvs)) {
       if (value !== undefined) {
         env[key] = value
       }
     }
-    const secret = this.source(repo)?.secret
     if (!secret) {
       return { env, values: [] }
     }

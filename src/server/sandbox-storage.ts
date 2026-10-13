@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto'
 import { copyFile, lstat, mkdir, readdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
-import { HostSandboxFiles, SandboxFiles, SandboxGit } from './sandbox-files'
+import { HostSandboxFiles, PatchAuthor, SandboxFiles, SandboxGit } from './sandbox-files'
 
 // What a sandbox's files are at a moment: the commit it was fetched at, and the git tree
 // of its files as they are (what `.gitignore` leaves out is not part of it). The two are
@@ -22,6 +22,20 @@ export interface SandboxFetch {
   signal: AbortSignal
 }
 
+// How to push the changes of a sandbox: where to, the commit the branch has to be at now
+// (none: the branch must not exist), and the environment of the git process that holds
+// the write credential.
+export interface SandboxPush {
+  url: string
+  branch: string
+  expect: string | null
+  author: PatchAuthor
+  env: { [key: string]: string }
+  signal: AbortSignal
+}
+
+export class SandboxPushConflict extends Error {}
+
 /**
  * Where the files of sandboxes are kept. The registry of sandboxes, the API and the
  * executor only know a sandbox id and, while a run uses it, a directory; how the files are
@@ -40,6 +54,9 @@ export interface SandboxStorage {
   usage(id: string): Promise<number>
   // reading, searching and editing its files through the API
   files(id: string): SandboxFiles
+  // commits the changes on top of the commit the sandbox is at, pushes that commit to the
+  // branch, and moves the sandbox to it; none when there is nothing to push
+  push(id: string, push: SandboxPush): Promise<string | undefined>
   remove(id: string): Promise<void>
   // the ids that have storage, to clean up what a crash left behind
   list(): Promise<string[]>
@@ -175,6 +192,46 @@ export class HostSandboxStorage implements SandboxStorage {
       'check out'
     )
     return (await this.git(id, ['rev-parse', 'HEAD'], fetch.env, fetch.signal, 'read')).trim()
+  }
+
+  async push(id: string, push: SandboxPush): Promise<string | undefined> {
+    const commit = await this.files(id).commit(push.author)
+    if (!commit) {
+      return undefined
+    }
+    const run = (args: string[], action: string, env = this.readEnv()) => this.git(id, args, env, push.signal, action)
+    // a branch this sandbox pushed before only moves forward: the sandbox is at what it
+    // pushed last, or it was moved since and its changes are on another commit
+    if (push.expect) {
+      const ancestor = await run(['merge-base', '--is-ancestor', push.expect, commit], 'read').then(
+        () => true,
+        () => false
+      )
+      if (!ancestor) {
+        throw new SandboxPushConflict(
+          `${push.branch} is at ${push.expect}, which the sandbox is no longer on: push to a new branch`
+        )
+      }
+    }
+    // the lease makes the remote refuse when the branch moved since it was read, and when
+    // somebody created it meanwhile
+    await run(
+      [
+        'push',
+        '--quiet',
+        '--no-verify',
+        `--force-with-lease=refs/heads/${push.branch}:${push.expect ?? ''}`,
+        '--',
+        push.url,
+        `${commit}:refs/heads/${push.branch}`,
+      ],
+      'push',
+      // the write credential is in the environment of this one git process
+      this.readEnv(push.env)
+    )
+    // what was pushed is the sandbox's commit now: its changes are what is not pushed yet
+    await run(['reset', '--quiet', commit], 'move')
+    return commit
   }
 
   // The tree is written with an index of its own, so neither the sandbox's index nor its
