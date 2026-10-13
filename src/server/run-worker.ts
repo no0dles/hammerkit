@@ -15,14 +15,11 @@ import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { runOptionsSchema } from './run-request'
 import { getRunScopes } from './run-plan'
+import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { RunEventData, TaskStatus } from './runs'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
-// what a task event says of why a task ran or failed: a change to thousands of source
-// files is a cause per file
-const MAX_CAUSES = 20
-const MAX_ERROR_TEXT = 2 * 1024
 
 /**
  * What the process that executes a run is told, on its standard input. A run executes
@@ -146,7 +143,7 @@ export function taskCauses(causes: string[] | undefined, redact: (text: string) 
   return causes?.length
     ? {
         causes: [
-          ...causes.slice(0, MAX_CAUSES).map((cause) => redact(cause).slice(0, MAX_ERROR_TEXT)),
+          ...causes.slice(0, MAX_CAUSES).map((cause) => redact(cause).slice(0, MAX_TASK_ERROR)),
           ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
         ],
       }
@@ -182,7 +179,7 @@ function reportTasks(
     } else if (state.type === 'crash') {
       event = { type: 'task', task: task.name, state: 'failed', exitCode: state.exitCode, ...since() }
     } else if (state.type === 'error') {
-      const error = redact(state.errorMessage).slice(0, MAX_ERROR_TEXT)
+      const error = redact(state.errorMessage).slice(0, MAX_TASK_ERROR)
       event = { type: 'task', task: task.name, state: 'failed', error, ...since() }
     } else if (state.type === 'canceled') {
       event = { type: 'task', task: task.name, state: 'cancelled' }

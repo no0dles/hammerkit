@@ -470,6 +470,26 @@ describe('RunRegistry limits', () => {
 })
 
 describe('RunRegistry results', () => {
+  it('keeps a result small whatever an executor says of its causes and error', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({ executor, maxLogBytes: 1024, maxEvents: 10 })
+    const run = registry.submit(alice, { ...spec, tasks: ['build', 'test'] })
+    await tick()
+    const causes = Array.from({ length: 10_000 }, (_, i) => `source changed: src/${i}.ts`)
+    pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', durationMs: 1, causes })
+    pending[0].emit({ type: 'task', task: 'test', state: 'failed', error: 'e'.repeat(1_000_000) })
+    pending[0].reject(new Error('test failed'))
+    await tick()
+
+    const stored = registry.get(alice, run.id)
+    expect(JSON.stringify(stored).length).toBeLessThan(64 * 1024)
+    expect(stored?.results?.build.cache?.causes).toHaveLength(21)
+    expect(stored?.results?.build.cache?.causes?.[20]).toBe('… and 9980 more')
+    expect(stored?.results?.test.error).toHaveLength(2048)
+    const events = registry.logs(alice, run.id)?.events ?? []
+    expect(JSON.stringify(events).length).toBeLessThan(64 * 1024)
+  })
+
   it('keeps a result per task: how it ended, how long it took, the cache and its last lines', async () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({ executor })
@@ -571,13 +591,13 @@ describe('RunRegistry results', () => {
     const registry = new RunRegistry({ executor, maxLogBytes: 1000 })
     const run = registry.submit(alice, spec)
     await tick()
-    const causes = Array.from({ length: 50 }, (_, i) => `source changed: src/file-${i}.ts`)
+    const causes = Array.from({ length: 20 }, (_, i) => `source changed: src/${'x'.repeat(60)}-${i}.ts`)
     pending[0].emit({ type: 'task', task: 'build', state: 'succeeded', causes })
     pending[0].resolve()
     await tick()
     const events = registry.watch(alice, run.id, 0, () => undefined)?.events ?? []
     expect(events.map((e) => e.type)).toEqual(['state', 'state', 'truncated', 'state'])
-    expect(registry.get(alice, run.id)?.results?.build.cache?.causes).toHaveLength(50)
+    expect(registry.get(alice, run.id)?.results?.build.cache?.causes).toEqual(causes)
   })
 
   it('calls a task cancelled that was running when the run ended', async () => {

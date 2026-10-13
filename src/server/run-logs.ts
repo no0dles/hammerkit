@@ -82,6 +82,9 @@ export function parseLogQuery(params: URLSearchParams): LogQuery {
     throw new Error('i is true or false')
   }
   const task = params.get('task') ?? undefined
+  if (task === '') {
+    throw new Error('task is the name of a task, leave it out for the lines of every task')
+  }
   return {
     ...(task !== undefined ? { task } : {}),
     tail,

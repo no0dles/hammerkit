@@ -82,6 +82,27 @@ describe('readLogs', () => {
     ])
   })
 
+  it('counts lines with tail and grep, the context of a match included', () => {
+    expect(read('task=test&grep=FAIL&context=1&tail=1').lines.map((l) => [l.line, l.match])).toEqual([[3, false]])
+    expect(read('task=test&grep=FAIL&context=1&tail=3').lines.map((l) => [l.line, l.match])).toEqual([
+      [1, false],
+      [2, true],
+      [3, false],
+    ])
+  })
+
+  it('keeps the context within the task asked for, and around the whole log without one', () => {
+    expect(read('task=build&grep=done&context=1').lines.map((l) => [l.task, l.text])).toEqual([
+      ['build', 'compiling'],
+      ['build', 'done'],
+    ])
+    expect(read('grep=done&context=1').lines.map((l) => [l.task, l.text])).toEqual([
+      ['test', 'PASS a.spec.ts'],
+      ['build', 'done'],
+      ['test', 'FAIL b.spec.ts'],
+    ])
+  })
+
   it('pages through matches, with the lines after a match on the page before', () => {
     const page = read('task=test&grep=spec&context=1&limit=2')
     expect(page.lines.map((l) => l.line)).toEqual([1, 2])
@@ -141,6 +162,7 @@ describe('parseLogQuery', () => {
     expect(() => query('i=yes')).toThrow('i is true or false')
     expect(() => query('tail=1&tail=2')).toThrow('tail is given more than once')
     expect(() => query('task=a&task=b')).toThrow('task is given more than once')
+    expect(() => query('task=')).toThrow('task is the name of a task')
     expect(() => query('lines=5')).toThrow('there is no parameter lines')
   })
 })
