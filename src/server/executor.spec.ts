@@ -177,10 +177,13 @@ describe('HostExecutor', () => {
     expect(ended?.state).toBe('failed')
     expect(ended?.results?.build).toMatchObject({ status: 'failed', lastLog: expect.arrayContaining(['out=***']) })
     const logs = registry.logs(alice, id)
-    const page = readLogs(logs!.events, logs!.index, parseLogQuery(new URLSearchParams('grep=out=')), false)
+    if (!logs) {
+      throw new Error('the owner reads the log of the run')
+    }
+    const page = readLogs(logs.events, logs.index, parseLogQuery(new URLSearchParams('grep=out=')), false)
     expect(page.lines.map((l) => l.text)).toEqual(['out=***'])
     expect(JSON.stringify(ended)).not.toContain('the-token-value')
-    expect(JSON.stringify(logs!.events)).not.toContain('the-token-value')
+    expect(JSON.stringify(logs.events)).not.toContain('the-token-value')
     await registry.close()
   })
 
