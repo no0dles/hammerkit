@@ -236,7 +236,7 @@ describe('sandboxes on a kubernetes backend', () => {
       expect(error, text).toBeUndefined()
       // the Job read the edit and wrote into the claim
       expect(text).toContain('export const answer = 42')
-      expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+      expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
       const files = registry.files(alice, sandbox.id)
       expect((await files.read('src/generated.txt', {})).content).toContain('generated-in-the-job')
       const changes = await registry.read(alice, sandbox.id, (sandboxFiles) => sandboxFiles.changes())
