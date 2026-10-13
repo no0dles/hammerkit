@@ -3,6 +3,7 @@ import { Principal } from './oauth'
 import type { RunOptions } from './run-request'
 import type { TaskPlan } from './plan'
 import type { RunStore } from './run-store'
+import { LogIndex } from './run-logs'
 import { formatDuration } from '../utils/units'
 
 export type RunState =
@@ -57,6 +58,29 @@ export interface RunSpec {
   options: RunOptions
 }
 
+// How a task of a run went, or goes. `skipped` is a dependency no task of the run needed,
+// because every task that depends on it was taken from the cache; `cancelled` did not
+// finish because the run was stopped or another task failed.
+export type TaskStatus = 'running' | 'succeeded' | 'failed' | 'cached' | 'skipped' | 'cancelled'
+
+// What a client needs to know about one task without reading the log: an agent reads
+// this first and only asks for more of the log when it has to.
+export interface TaskResult {
+  status: TaskStatus
+  startedAt?: string
+  finishedAt?: string
+  durationMs?: number
+  // of the command that failed
+  exitCode?: number
+  // why it failed when there is no exit code, a timeout for example
+  error?: string
+  // whether it was taken from the cache, and if not, why it ran (as `--explain` says it)
+  cache?: { hit: boolean; causes?: string[] }
+  // the last lines the task printed, stdout and stderr as they came, the newest last. They
+  // are kept even when the log of the run was cut off, so the error is always there.
+  lastLog: string[]
+}
+
 export interface Run extends RunSpec {
   id: string
   // who submitted it: only they see it
@@ -68,12 +92,24 @@ export interface Run extends RunSpec {
   finishedAt?: string
   // why a failed run failed
   error?: string
+  // per task, by its name, from the moment it starts
+  results?: Record<string, TaskResult>
 }
 
 // What an executor reports while it works. `seq` and `time` are added by the registry.
 export type RunEventData =
   | { type: 'log'; task: string; stream: 'stdout' | 'stderr'; text: string }
-  | { type: 'task'; task: string; state: 'running' | 'succeeded' | 'failed' | 'cached' }
+  | {
+      type: 'task'
+      task: string
+      state: TaskStatus
+      // once the task is over
+      durationMs?: number
+      exitCode?: number
+      error?: string
+      // why a task that ran was not taken from the cache
+      causes?: string[]
+    }
 
 export type RunEvent =
   | RunEventData
@@ -154,6 +190,10 @@ interface Entry {
   abort: AbortController
   truncated: boolean
   bytes: number
+  // the last lines of each task, kept apart from the capped log
+  tails: Map<string, string[]>
+  // where the lines of the log are, made when the log is first read
+  index?: LogIndex
   timer?: NodeJS.Timeout
   // the run was stopped because it took too long
   timedOut?: boolean
@@ -164,6 +204,37 @@ interface Entry {
 type AccountCheck = (account: string) => boolean
 
 export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
+
+// how much of the end of a task's output its result carries
+const TAIL_LINES = 20
+const TAIL_LINE_LENGTH = 1000
+// what a task event says of why a task ran or failed: a change to thousands of source
+// files is a cause per file. The process of a run cuts them already; an executor that
+// does not can still not make a result of any size.
+export const MAX_CAUSES = 20
+export const MAX_TASK_ERROR = 2 * 1024
+
+function bounded(event: Extract<RunEvent, { type: 'task' }>): Extract<RunEvent, { type: 'task' }> {
+  const causes = event.causes
+  return {
+    ...event,
+    ...(causes
+      ? {
+          causes: [
+            ...causes.slice(0, MAX_CAUSES).map((cause) => cause.slice(0, MAX_TASK_ERROR)),
+            ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
+          ],
+        }
+      : {}),
+    ...(event.error !== undefined ? { error: event.error.slice(0, MAX_TASK_ERROR) } : {}),
+  }
+}
+
+// what a task event weighs against the log limits of a run
+function taskEventSize(event: Extract<RunEvent, { type: 'task' }>): number {
+  const causes = (event.causes ?? []).reduce((sum, cause) => sum + Buffer.byteLength(cause) + 4, 0)
+  return 64 + causes + Buffer.byteLength(event.error ?? '')
+}
 
 // Where runs are kept while the server is up. Everything is scoped to the
 // caller that submitted the run: the same id asked for by someone else is
@@ -180,6 +251,8 @@ export class RunRegistry {
   private readonly approvalTimeout: number
   private readonly now: () => number
   private readonly maxLogBytes: number
+  // callers that wait for a run to finish, let go when the server stops
+  private readonly waiters = new Set<() => void>()
 
   constructor(private readonly options: RunRegistryOptions) {
     this.maxConcurrent = options.maxConcurrent ?? 4
@@ -211,6 +284,7 @@ export class RunRegistry {
         abort: new AbortController(),
         truncated: events.some((event) => event.type === 'truncated'),
         bytes: 0,
+        tails: new Map(Object.entries(run.results ?? {}).map(([task, result]) => [task, result.lastLog])),
         saving: Promise.resolve(),
       }
       this.entries.set(run.id, entry)
@@ -254,6 +328,7 @@ export class RunRegistry {
       abort: new AbortController(),
       truncated: false,
       bytes: 0,
+      tails: new Map(),
       saving: Promise.resolve(),
     }
     this.entries.set(run.id, entry)
@@ -398,6 +473,61 @@ export class RunRegistry {
     return { events, finished, stop: () => entry.listeners.delete(listener) }
   }
 
+  /**
+   * The run once it is over, or as it is after `ms` or when `signal` aborts, for clients
+   * that can not hold a stream of events open (a tool call of an agent).
+   */
+  async wait(
+    owner: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    ms: number,
+    canUse?: AccountCheck,
+    signal?: AbortSignal
+  ): Promise<Run | undefined> {
+    const entry = this.find(owner, id, canUse)
+    if (!entry) {
+      return undefined
+    }
+    if (!isFinal(entry.run.state) && ms > 0 && !this.closed && !signal?.aborted) {
+      await new Promise<void>((resolve) => {
+        const listener = (event: StoredEvent) => {
+          if (event.type === 'state' && isFinal(event.state)) {
+            done()
+          }
+        }
+        const done = () => {
+          clearTimeout(timer)
+          entry.listeners.delete(listener)
+          this.waiters.delete(done)
+          signal?.removeEventListener('abort', done)
+          resolve()
+        }
+        const timer = setTimeout(done, ms)
+        timer.unref()
+        entry.listeners.add(listener)
+        this.waiters.add(done)
+        signal?.addEventListener('abort', done, { once: true })
+      })
+    }
+    return this.copy(entry.run)
+  }
+
+  // The log of a run as far as it was kept, and whether it was cut off.
+  logs(
+    owner: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    canUse?: AccountCheck
+  ): { events: StoredEvent[]; index: LogIndex; truncated: boolean } | undefined {
+    const entry = this.find(owner, id, canUse)
+    if (!entry) {
+      return undefined
+    }
+    // only the events since the last read are looked at
+    entry.index ??= new LogIndex()
+    entry.index.update(entry.events)
+    return { events: entry.events, index: entry.index, truncated: entry.truncated }
+  }
+
   // Stops accepting runs and aborts the ones in flight.
   async close(): Promise<void> {
     this.closed = true
@@ -413,6 +543,10 @@ export class RunRegistry {
           this.finish(entry, 'cancelled')
         }
       }
+    }
+    // who waits for a run that waits for an approval is told how it stands now
+    for (const done of [...this.waiters]) {
+      done()
     }
     for (const entry of this.entries.values()) {
       if (entry.run.state === 'running') {
@@ -463,6 +597,7 @@ export class RunRegistry {
       owner: { ...run.owner },
       accounts: [...run.accounts],
       ...(run.approvals ? { approvals: JSON.parse(JSON.stringify(run.approvals)) } : {}),
+      ...(run.results ? { results: JSON.parse(JSON.stringify(run.results)) } : {}),
     }
   }
 
@@ -554,16 +689,30 @@ export class RunRegistry {
     if (error) {
       entry.run.error = error
     }
+    // a task the executor did not see to its end did not finish
+    for (const result of Object.values(entry.run.results ?? {})) {
+      if (result.status === 'running') {
+        result.status = 'cancelled'
+        result.finishedAt = entry.run.finishedAt
+      }
+    }
     this.record(entry, { type: 'state', state, ...(error ? { error } : {}) }, true)
     entry.listeners.clear()
     this.evict()
   }
 
-  private record(entry: Entry, event: RunEvent, force = false): void {
+  private record(entry: Entry, recorded: RunEvent, force = false): void {
+    const event = recorded.type === 'task' ? bounded(recorded) : recorded
+    if (event.type === 'log') {
+      this.keepTail(entry, event.task, event.text)
+    } else if (event.type === 'task') {
+      this.keepResult(entry, event)
+    }
     // an executor that keeps talking can't fill the memory of the server or its disk; the
-    // state changes, which are few, are always kept
+    // state changes, which are few, are always kept, and the results above are kept apart
     if (!force && event.type !== 'state') {
-      const size = event.type === 'log' ? Buffer.byteLength(event.text) + 64 : 64
+      const size =
+        event.type === 'log' ? Buffer.byteLength(event.text) + 64 : event.type === 'task' ? taskEventSize(event) : 64
       if (entry.events.length >= this.maxEvents || entry.bytes + size > this.maxLogBytes) {
         if (!entry.truncated) {
           entry.truncated = true
@@ -574,6 +723,60 @@ export class RunRegistry {
       entry.bytes += size
     }
     this.push(entry, event)
+  }
+
+  private keepTail(entry: Entry, task: string, text: string): void {
+    let tail = entry.tails.get(task)
+    if (!tail) {
+      tail = []
+      entry.tails.set(task, tail)
+    }
+    for (const line of text.replace(/\r?\n$/, '').split(/\r?\n/)) {
+      tail.push(line.length > TAIL_LINE_LENGTH ? `${line.slice(0, TAIL_LINE_LENGTH)}…` : line)
+    }
+    tail.splice(0, Math.max(0, tail.length - TAIL_LINES))
+  }
+
+  private keepResult(entry: Entry, event: Extract<RunEvent, { type: 'task' }>): void {
+    const results = (entry.run.results ??= {})
+    let tail = entry.tails.get(event.task)
+    if (!tail) {
+      tail = []
+      entry.tails.set(event.task, tail)
+    }
+    const now = this.timestamp()
+    const previous = results[event.task]
+    // A task the run names in several scopes is checked again as a dependency of a later
+    // one: it is then cached or not needed, or stopped with the scope. What it did the
+    // first time is what the caller asked about.
+    if (
+      previous &&
+      ['succeeded', 'failed', 'cached'].includes(previous.status) &&
+      ['cached', 'skipped', 'cancelled'].includes(event.state)
+    ) {
+      return
+    }
+    const over = event.state !== 'running'
+    const result: TaskResult = {
+      status: event.state,
+      ...(event.state === 'running'
+        ? { startedAt: now }
+        : previous?.startedAt
+          ? { startedAt: previous.startedAt }
+          : {}),
+      ...(over ? { finishedAt: now } : {}),
+      ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),
+      ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+      ...(event.error ? { error: event.error } : {}),
+      ...(event.state === 'cached'
+        ? { cache: { hit: true } }
+        : event.state === 'succeeded' || event.state === 'failed'
+          ? { cache: { hit: false, ...(event.causes?.length ? { causes: [...event.causes] } : {}) } }
+          : {}),
+      // the same list the log adds to, so the result always has the newest lines
+      lastLog: tail,
+    }
+    results[event.task] = result
   }
 
   private push(entry: Entry, event: RunEvent): void {

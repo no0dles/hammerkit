@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { executeCommand } from './execute-command'
+import { executeCommand, processEnv } from './execute-command'
 import { environmentMock } from './environment-mock'
 import { AbortError } from './abort'
 import { sleep } from '../utils/sleep'
@@ -29,6 +29,23 @@ async function readPid(file: string): Promise<number> {
   }
   throw new Error('command did not start')
 }
+
+describe('processEnv', () => {
+  // a copy of process.env on Windows names PATH `Path`
+  const envs = { Path: 'C:\\Windows', PSModulePath: 'C:\\Modules' }
+
+  it('finds a variable whatever the case of its name on Windows', () => {
+    expect(processEnv(envs, 'PATH', true)).toBe('C:\\Windows')
+    expect(processEnv({ ...envs, PATH: 'exact' }, 'PATH', true)).toBe('exact')
+    expect(processEnv(envs, 'PSModulePath', true)).toBe('C:\\Modules')
+    expect(processEnv(envs, 'HOME', true)).toBeUndefined()
+  })
+
+  it('keeps names apart by their case elsewhere', () => {
+    expect(processEnv(envs, 'PATH', false)).toBeUndefined()
+    expect(processEnv({ PATH: '/usr/bin' }, 'PATH', false)).toBe('/usr/bin')
+  })
+})
 
 describe.skipIf(process.platform === 'win32')('executeCommand abort', () => {
   let cwd: string

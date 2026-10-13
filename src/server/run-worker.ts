@@ -17,7 +17,8 @@ import { runOptionsSchema } from './run-request'
 import { networkSchema } from '../schema/network-schema'
 import { parseWorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
-import type { RunEventData } from './runs'
+import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
+import type { RunEventData, TaskStatus } from './runs'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -106,6 +107,8 @@ export async function runTasks(
       timeout: options.timeout ? parseDuration(options.timeout) : null,
       skipDeps: options.skipDeps !== false,
       network: input.network ? parseWorkNetwork(input.network) : null,
+      // why a task was not taken from the cache goes into its result
+      explain: true,
     }
 
     for (const { name, scope } of getRunScopes(input.tasks, options)) {
@@ -116,11 +119,12 @@ export async function runTasks(
         throw new Error(`no tasks found for ${name}`)
       }
       const execution = cli.exec({ ...execOptions, workers: cli.defaultWorkers() })
-      const seen = new Map<string, string>()
-      const watch = execution.state.on('run-events', () => reportTasks(emit, execution.state.current, seen))
+      const seen = new Map<string, Seen>()
+      const report = () => reportTasks(emit, execution.state.current, seen, (text) => secrets.redact(text))
+      const watch = execution.state.on('run-events', report)
       try {
         const result = await execution.start()
-        reportTasks(emit, execution.state.current, seen)
+        report()
         if (!result.success) {
           throw new Error(cancelled() ? 'the run was cancelled' : `${name} failed`)
         }
@@ -133,25 +137,63 @@ export async function runTasks(
   }
 }
 
-// A task event when a task has moved on since the last look.
+interface Seen {
+  status?: TaskStatus
+  // when it started, which a failed task's state does not say anymore
+  started?: number
+}
+
+// Why a task ran, as a task event carries it: the first causes, masked and cut short.
+export function taskCauses(causes: string[] | undefined, redact: (text: string) => string): { causes?: string[] } {
+  return causes?.length
+    ? {
+        causes: [
+          ...causes.slice(0, MAX_CAUSES).map((cause) => redact(cause).slice(0, MAX_TASK_ERROR)),
+          ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
+        ],
+      }
+    : {}
+}
+
+// A task event when a task has moved on since the last look, with what its result needs
+// once it is over.
 function reportTasks(
   emit: (event: RunEventData) => void,
   workTree: Parameters<typeof iterateWorkTasks>[0],
-  seen: Map<string, string>
+  seen: Map<string, Seen>,
+  // what leaves the process is masked like the log is: an error may quote a value
+  redact: (text: string) => string
 ): void {
   for (const task of iterateWorkTasks(workTree)) {
     const state = task.state.current
-    let event: 'running' | 'succeeded' | 'failed' | 'cached' | null = null
+    const before = seen.get(task.name)
+    const started = 'started' in state ? state.started.getTime() : before?.started
+    const since = () => (started !== undefined ? { durationMs: Math.max(0, Date.now() - started) } : {})
+    let event: Extract<RunEventData, { type: 'task' }> | null = null
     if (state.type === 'running') {
-      event = 'running'
+      event = { type: 'task', task: task.name, state: 'running' }
     } else if (state.type === 'completed') {
-      event = state.skipped ? null : state.cached ? 'cached' : 'succeeded'
-    } else if (state.type === 'error' || state.type === 'crash') {
-      event = 'failed'
+      const status = state.skipped ? 'skipped' : state.cached ? 'cached' : 'succeeded'
+      event = {
+        type: 'task',
+        task: task.name,
+        state: status,
+        ...(status === 'skipped' ? {} : { durationMs: state.duration }),
+        ...taskCauses(state.missCauses, redact),
+      }
+    } else if (state.type === 'crash') {
+      event = { type: 'task', task: task.name, state: 'failed', exitCode: state.exitCode, ...since() }
+    } else if (state.type === 'error') {
+      const error = redact(state.errorMessage).slice(0, MAX_TASK_ERROR)
+      event = { type: 'task', task: task.name, state: 'failed', error, ...since() }
+    } else if (state.type === 'canceled') {
+      event = { type: 'task', task: task.name, state: 'cancelled' }
     }
-    if (event && seen.get(task.name) !== event) {
-      seen.set(task.name, event)
-      emit({ type: 'task', task: task.name, state: event })
+    if (event && before?.status !== event.state) {
+      seen.set(task.name, { status: event.state, started })
+      emit(event)
+    } else if (started !== undefined && before?.started === undefined) {
+      seen.set(task.name, { status: before?.status, started })
     }
   }
 }

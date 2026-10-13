@@ -9,7 +9,8 @@ import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
 import { runEnvironment } from './run-environment'
-import { Run, RunEventData } from './runs'
+import { Run, RunEventData, RunRegistry } from './runs'
+import { parseLogQuery, readLogs } from './run-logs'
 import { RepoAccess } from './repo-access'
 import { TEST_WORKER } from '../testing/worker'
 import { ServerConfig, serverConfigSchema } from './server-config'
@@ -122,8 +123,8 @@ describe('HostExecutor', () => {
     expect(logs.join('\n')).toContain('hello')
     expect(logs.join('\n')).toContain('published')
     expect(logs.join('\n')).not.toContain('from-the-repository')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'running' })
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'running' }))
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
   })
 
   it('does not hand its own environment to the commands', async () => {
@@ -154,7 +155,36 @@ describe('HostExecutor', () => {
     const text = events.map((e) => (e.type === 'log' ? e.text : '')).join('\n')
     expect(text).toContain('token=')
     expect(text).not.toContain('the-token-value')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
+  })
+
+  it('masks secrets in the results of a run and in its log', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    secrets:',
+        '      - { from: "echo:the-token-value", account: ci, env: TOKEN }',
+        '    cmds:',
+        `      - echo "out=${process.platform === 'win32' ? '$env:TOKEN' : '$TOKEN'}"`,
+        '      - exit 1',
+        '',
+      ].join('\n'),
+    })
+    const registry = new RunRegistry({ executor })
+    const { id } = registry.submit(alice, { ...run(hash, { accounts: ['ci'] }) })
+    const ended = await registry.wait(alice, id, 40_000)
+    expect(ended?.state).toBe('failed')
+    expect(ended?.results?.build).toMatchObject({ status: 'failed', lastLog: expect.arrayContaining(['out=***']) })
+    const logs = registry.logs(alice, id)
+    if (!logs) {
+      throw new Error('the owner reads the log of the run')
+    }
+    const page = readLogs(logs.events, logs.index, parseLogQuery(new URLSearchParams('grep=out=')), false)
+    expect(page.lines.map((l) => l.text)).toEqual(['out=***'])
+    expect(JSON.stringify(ended)).not.toContain('the-token-value')
+    expect(JSON.stringify(logs.events)).not.toContain('the-token-value')
+    await registry.close()
   })
 
   it('refuses a run that would use an account it was not admitted for, before anything starts', async () => {
@@ -281,7 +311,15 @@ describe('HostExecutor', () => {
     })
     const { events, error } = await execute(run(hash))
     expect(error?.message).toBe('build failed')
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'failed' })
+    // the exit code of the command that failed (on Windows the redirection fails first,
+    // run-worker.spec.ts checks the value), and how long it ran
+    expect(events).toContainEqual({
+      type: 'task',
+      task: 'build',
+      state: 'failed',
+      exitCode: expect.any(Number),
+      durationMs: expect.any(Number),
+    })
   })
 
   it('runs the tasks in the order they were named, and stops at the first failure', async () => {
@@ -301,7 +339,7 @@ describe('HostExecutor', () => {
     })
     const { events, error } = await execute(run(hash, { tasks: [], options: { filter: ['group=ci'] } }))
     expect(error).toBeUndefined()
-    expect(events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
     expect(events.filter((e) => e.type === 'task' && e.task === 'other')).toEqual([])
   })
 
