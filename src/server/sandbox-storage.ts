@@ -179,17 +179,16 @@ export class HostSandboxStorage implements SandboxStorage {
     base.GIT_CONFIG_GLOBAL = devNull
     const env = { ...base, GIT_INDEX_FILE: index }
     try {
-      // Git takes a file whose size and time match its entry for unchanged, unless the entry
-      // is as new as the index ("racy"). A file changed right after a checkout keeps the
-      // second of its entry, so the copy is dated two seconds before the index: every entry
-      // of the last checkout is racy, and its content is compared.
       const original = join(root, 'git', 'index')
-      const written = await stat(original).catch(() => undefined)
-      if (written) {
-        await copyFile(original, index)
-        const before = new Date(written.mtimeMs - 2000)
-        await utimes(index, before, before)
-      }
+      await copyFile(original, index).then(
+        // with the time of the index: git takes a file changed in the same second as it was
+        // written for changed only when the index is no newer than the file (racy git)
+        async () => {
+          const stats = await stat(original)
+          await utimes(index, stats.atime, stats.mtime)
+        },
+        () => undefined
+      )
       await this.git(id, ['add', '--all', '--', '.'], env, signal, 'read')
       const tree = (await this.git(id, ['write-tree'], env, signal, 'read')).trim()
       const [commit, base] = (await this.git(id, ['rev-parse', 'HEAD', 'HEAD^{tree}'], env, signal, 'read'))
