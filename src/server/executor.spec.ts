@@ -196,6 +196,19 @@ describe('HostExecutor', () => {
     expect(events.filter((e) => e.type === 'task' && e.task === 'never')).toEqual([])
   })
 
+  it('shares the cache of a repository between its runs', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml':
+        'tasks:\n  build:\n    src: [input.txt]\n    generates: [out]\n    cmds:\n      - mkdir -p out\n      - cp input.txt out/copy.txt\n',
+    })
+    const first = await execute(run(hash, { id: 'run_one' }))
+    expect(first.error).toBeUndefined()
+    expect(first.events).toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })
+    const second = await execute(run(hash, { id: 'run_two' }))
+    expect(second.error).toBeUndefined()
+    expect(second.events).toContainEqual({ type: 'task', task: 'build', state: 'cached' })
+  })
+
   it('runs the tasks a label selects', async () => {
     const hash = await publish({
       '.hammerkit.yaml':
@@ -421,6 +434,17 @@ describe('HostExecutor', () => {
       // the published build file is not written into the sandbox
       expect(readFileSync(join(files, '.hammerkit.yaml'), 'utf8')).toContain('from-the-repository')
       expect(existsSync(join(runs, 'run_test'))).toBe(false)
+    })
+
+    it('fails an approved run when the files are no longer the approved ones', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' })
+      const approved = (await sandboxes.state(sandboxId)).tree
+      const approvals = [{ account: 'dev', expiresAt: new Date(Date.now() + 60_000).toISOString() }]
+      writeFileSync(join(files, 'input.txt'), 'changed-after-the-approval')
+      const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
+      expect(error?.message).toMatch(/changed since the run was approved/)
+      expect(text).not.toContain('changed-after-the-approval')
     })
 
     it('works in the directory of the sandbox where the published build file is', async () => {

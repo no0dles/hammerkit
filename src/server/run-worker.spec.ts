@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { PassThrough, Writable } from 'stream'
@@ -66,6 +66,28 @@ describe('workerMain', () => {
   it('says which task failed, and that a failure is not a cancellation', async () => {
     const messages = await run({ ...base, tasks: ['broken'], entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: false, error: 'broken failed' })
+  })
+
+  it('refuses a task that reads through a symbolic link of the checkout, before anything runs', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'hammerkit-worker-outside-'))
+    try {
+      writeFileSync(join(outside, 'token'), 'server token')
+      mkdirSync(join(directory, 'data'))
+      symlinkSync(outside, join(directory, 'data', 'link'), 'junction')
+      writeFileSync(
+        join(directory, '.hammerkit.yaml'),
+        'tasks:\n  hello:\n    cmds: [echo hello-from-the-run]\n  leak:\n    deps: [hello]\n    src: [data/link/token]\n    cmds: [cat data/link/token]\n'
+      )
+      const messages = await run({ ...base, tasks: ['leak'], entry: join(directory, '.hammerkit.yaml') })
+      expect(messages[messages.length - 1]).toEqual({
+        kind: 'result',
+        ok: false,
+        error: 'leak: src data/link/token goes through the symbolic link data/link',
+      })
+      expect(messages.filter((m) => m.kind === 'event')).toEqual([])
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
   })
 
   it('says when the input is not a run', async () => {

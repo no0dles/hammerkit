@@ -14,6 +14,7 @@ import { buildCreateOptions } from '../executer/docker-task'
 import { buildServiceCreateOptions } from '../executer/docker-service'
 import { getItemNetworkName, prepareItemNetwork } from '../docker/item-network'
 import { buildNetworkPolicy, getProxyName } from '../kubernetes/network-policy'
+import { getRunLabelValue } from '../kubernetes/job-placement'
 import { ExecuteOptions } from '../runtime/runtime'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
@@ -293,6 +294,13 @@ describe('network', () => {
           ])
           // a Service name has at most 63 characters, whatever the task is called
           expect(getProxyName(install).length).toBeLessThanOrEqual(63)
+
+          // on a server the policy carries the run, which removes it with the run's other objects
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {} }
+          expect(buildNetworkPolicy({ ...env, server }, offline, { type: 'none' }).metadata.labels).toEqual({
+            'hammerkit.dev/network-of': offline.id(),
+            'hammerkit.dev/run': getRunLabelValue('run_1'),
+          })
         }
       )
     })

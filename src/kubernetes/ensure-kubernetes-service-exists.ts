@@ -6,6 +6,7 @@ import { apply, KubernetesObjectHeader } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
 import { getVersion } from '../version'
+import { getRunLabels } from './job-placement'
 
 export async function ensureKubernetesServiceExists(
   instance: KubernetesInstance,
@@ -25,6 +26,7 @@ export async function ensureKubernetesServiceExists(
       },
       labels: {
         'hammerkit.dev/id': service.id(),
+        ...getRunLabels(env),
       },
     },
     spec: {

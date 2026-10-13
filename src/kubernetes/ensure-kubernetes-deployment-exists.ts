@@ -18,6 +18,7 @@ import { awaitDeployRunningState } from './await-running-state'
 import { getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { getKubernetesResources } from './container-resources'
+import { getPodPlacement, getRunLabels } from './job-placement'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 
 export async function ensureKubernetesDeploymentExists(
@@ -44,6 +45,8 @@ export async function ensureKubernetesDeploymentExists(
         failureThreshold: 3,
       }
     : undefined
+  const server = env.server
+  const placement = server ? getPodPlacement(server, undefined) : null
   const deployment: V1Deployment & KubernetesObjectHeader = {
     kind: 'Deployment',
     apiVersion: 'apps/v1',
@@ -70,12 +73,22 @@ export async function ensureKubernetesDeploymentExists(
           labels: {
             'hammerkit.dev/id': service.id(),
             'hammerkit.dev/state': stateKey,
+            ...getRunLabels(env),
           },
         },
         spec: {
           // the pod resolves its own service name, as with Docker's Hostname
           hostname: getServiceHostname(service.name),
           hostAliases: network.hostAliases,
+          // on a server the pod is the build's: no token of the namespace, and the
+          // nodes of the first pool
+          ...(placement
+            ? {
+                automountServiceAccountToken: false,
+                nodeSelector: placement.nodeSelector,
+                tolerations: placement.tolerations,
+              }
+            : {}),
           containers: [
             {
               name: service.name.replace(/:/, '-'),

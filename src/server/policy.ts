@@ -10,8 +10,11 @@ export interface Grant {
   repos: string[]
   // what the caller may do with the build files, null for nothing
   builds: BuildsLevel | null
-  // may keep sandboxes of `repos`
+  // may keep sandboxes
   sandboxes: boolean
+  // the repositories (patterns) the caller may keep sandboxes of: the `repos` of the
+  // entitlements with `sandboxes: true` only
+  sandboxRepos: string[]
   // the entitlements that matched, for the log
   matched: number[]
 }
@@ -70,6 +73,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const matched: number[] = []
   const accounts: Grant['accounts'] = {}
   const repos: string[] = []
+  const sandboxRepos: string[] = []
   let builds: BuildsLevel | null = null
   let sandboxes = false
 
@@ -94,9 +98,12 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     ) {
       builds = entitlement.builds
     }
-    sandboxes = sandboxes || entitlement.sandboxes === true
+    if (entitlement.sandboxes === true) {
+      sandboxes = true
+      sandboxRepos.push(...entitlement.repos.filter((repo) => !sandboxRepos.includes(repo)))
+    }
   })
-  return { accounts, repos, builds, sandboxes, matched }
+  return { accounts, repos, builds, sandboxes, sandboxRepos, matched }
 }
 
 export type SubmittedSource =
@@ -105,8 +112,8 @@ export type SubmittedSource =
   // a sandbox of the caller's, of this repository
   | { type: 'sandbox'; repo: string }
 
-// Whether the caller may create a sandbox of a repository: `sandboxes: true` and the
-// repository in their `repos`, and the server able to read it. The answer is the
+// Whether the caller may create a sandbox of a repository: the repository in the `repos`
+// of an entitlement of theirs with `sandboxes: true`, and the server able to read it. The answer is the
 // reason when not.
 export function decideSandbox(
   grant: Grant,
@@ -116,22 +123,22 @@ export function decideSandbox(
   if (!grant.sandboxes) {
     return { status: 403, error: 'you are not entitled to keep sandboxes on this server' }
   }
-  return checkRepo(grant, repo, readable, 'keep a sandbox of')
+  return checkRepo(grant.sandboxRepos, repo, readable, 'keep a sandbox of')
 }
 
 // the caller's own list first: what they may not name is not told whether the server can read it
 function checkRepo(
-  grant: Grant,
+  repos: string[],
   repo: string,
   readable: (repo: string) => boolean,
   what: string
 ): { status: 400 | 403; error: string } | null {
-  if (!matchesAnyRepo(grant.repos, repo)) {
+  if (!matchesAnyRepo(repos, repo)) {
     return {
       status: 403,
       error:
-        grant.repos.length > 0
-          ? `you may not ${what} ${repo}, your repositories are ${grant.repos.join(', ')}`
+        repos.length > 0
+          ? `you may not ${what} ${repo}, your repositories are ${repos.join(', ')}`
           : `you may not ${what} ${repo}, no entitlement of yours lists a repository`,
     }
   }
@@ -179,7 +186,11 @@ export function decideRun(input: RunDecisionInput): RunDecision {
   if (source.type === 'sandbox' && !grant.sandboxes) {
     return { type: 'refuse', status: 403, error: 'you are not entitled to keep sandboxes on this server' }
   }
-  const repoProblem = checkRepo(grant, source.repo, readable, 'run from')
+  // runs on a sandbox: the repositories of the entitlements that keep sandboxes
+  const repoProblem =
+    source.type === 'sandbox'
+      ? checkRepo(grant.sandboxRepos, source.repo, readable, 'run on a sandbox of')
+      : checkRepo(grant.repos, source.repo, readable, 'run from')
   if (repoProblem) {
     return { type: 'refuse', ...repoProblem }
   }

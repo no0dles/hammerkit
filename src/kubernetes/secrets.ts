@@ -9,6 +9,7 @@ import { Environment } from '../executer/environment'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { getResourceName } from './resources'
 import { getVersion } from '../version'
+import { getRunLabels } from './job-placement'
 
 const SECRET_VOLUME_NAME = 'hammerkit-secrets'
 
@@ -76,6 +77,7 @@ export async function ensureKubernetesSecret(
       },
       labels: {
         'hammerkit.dev/id': item.id(),
+        ...getRunLabels(kubernetes),
       },
     },
     type: 'Opaque',

@@ -34,7 +34,16 @@ backend: this machine (docker, local tools)  |  Kubernetes (Jobs on node pools) 
 | Mode | The server runs on | Tasks run | Scale |
 |---|---|---|---|
 | **Host** | A machine (Linux, a Mac, Windows) | On that machine via the docker and local runtimes | One machine; runs queue when it is full |
-| **Kubernetes** | A cluster | As Jobs, one namespace per user, placed on node pools by node selector (`kubernetes.io/os`, `kubernetes.io/arch`, labels); Kubernetes queues what does not fit | The cluster |
+| **Kubernetes** (built, experimental) | A cluster | As Jobs, one namespace per user, placed on node pools by node selector (`kubernetes.io/os`, `kubernetes.io/arch`, labels); Kubernetes queues what does not fit | The cluster |
+
+**Kubernetes backend (built).** `backend.type: kubernetes`. The server plans and drives a run as on a host, in a process of its own; its container tasks become Jobs and its services Deployments, through the engine's Kubernetes runtime with the server's settings in place of a build file's environment.
+
+- A namespace per caller (`namespacePrefix` and a hash of issuer and subject) with the operator's `ResourceQuota` (`quota`) and a `LimitRange` of default requests (`defaultResources`). The runs of one caller execute one after the other (a task's objects are named after its cache id); different callers run side by side. Everything a run makes carries `hammerkit.dev/run` and is deleted when the run ends. Pods run without a token of the cluster.
+- `pools` place pods (`platform` linux/amd64 or arm64, `nodeSelector`, `tolerations`); container tasks and services use the first. A local task runs in the `toolImage` of the first pool that offers its declared `platform`; macOS and Windows tasks have no pool.
+- Secrets of providers are read in the Job, never by the server: an init container per secret in the provider's image (`backend.providers.<name>.image`), with that account's credential under `/var/run/hammerkit/account` from `accounts.<name>.kubernetes`: a token of a ServiceAccount of the server's namespace (TokenRequest, 10 minutes, `audience`, for workload identity federation) and/or the files of a Secret there. The task container mounts the values only, and its output is masked in the pod (`awk`), since the server never sees them. A provider secret on a service and one with `cache: true` are refused at publish for now.
+- The cache stays on the server, per source trust as on a host; outputs move between a task's claim and the cache, and sources from the checkout into the claim, with the engine's store and restore pods. The `!` exclusions of `src` are not applied by that copy yet.
+- `network` is the engine's `NetworkPolicy` and egress proxy (task-network spec), with the run label and the first pool's placement on the policy and proxy. A task that reads a provider's secret keeps an open network: its init containers share the pod's policy (refused at publish, and the task fails when a run's ceiling would limit it).
+- Not built: a limited network for a task with provider secrets (needs the secrets read in a pod of their own), Windows nodes, a cache in a registry or bucket, `cache: true` digests from a prepare Job, provider secrets on services.
 
 A run executes on **one server**. A graph needing a platform the server does not offer (a Mac task against a Linux cluster) fails at plan time naming the constraint; the Mac is its own server and a second invocation. Routing a run across several servers is a later step; every server publishes its capabilities (platforms, pools, resources) from the start so it can be built on.
 
@@ -71,10 +80,11 @@ runs:
   env: { allow: [PATH, DOCKER_HOST] }   # the only variables of the server a run sees
   limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
   maxDuration: 1h
-  network: { level: open }       # designed: the most open network a task gets
+  network: open                  # the most a task or service reaches besides its needs, as a task's `network`
 sandboxes:                        # ADR-0011
-  runtimes: [docker]
+  runtimes: [docker]              # default: docker when the server runs containers
   network: { allow: [registry.npmjs.org] }
+  env: { allow: [] }              # the variables of runs.env an env: secret of a sandbox run reads
   limits: { count: 5, bytes: 20Gi }
   total: 500Gi
 entitlements:
@@ -90,7 +100,7 @@ entitlements:
     repos: [github.com/corp/payments]
     builds: publish
 backend:
-  type: host                      # host | kubernetes
+  type: host                      # host | kubernetes (namespace, pools, providers, quota; see Deployment modes)
   platform: { os: linux, arch: amd64 }
 ```
 
@@ -129,7 +139,7 @@ The server holds the build file; a run names a published build file and the task
 
 **Sandbox (ADR-0011; on a host: create, list, get, delete, fetch, runs, files and push are built, Kubernetes is not).** A sandbox is a caller's own checkout on the server, which runs published tasks. It is for an agent with no machine and for a person whose laptop should not build, not for production.
 
-- **Create** (`POST /v1/sandboxes { repo, ref }`) resolves the ref to a commit and fetches it with the read credential of the operator's `sources`, like a ref run. It is a fetch, not a run: no container and no slot of the run limits. An entitlement with `sandboxes: true` may create sandboxes of its `repos`. A sandbox belongs to its caller (`404` for anybody else), stays until it is deleted (no TTL, nothing evicted), and counts against `sandboxes.limits` (count and bytes per caller, a total).
+- **Create** (`POST /v1/sandboxes { repo, ref }`) resolves the ref to a commit and fetches it with the read credential of the operator's `sources`, like a ref run. It is a fetch, not a run: no container and no slot of the run limits. An entitlement with `sandboxes: true` may create sandboxes of its `repos`, and only of those: the `repos` of the caller's other entitlements are for ref runs. A sandbox belongs to its caller (`404` for anybody else), stays until it is deleted (no TTL, nothing evicted), and counts against `sandboxes.limits` (count and bytes per caller, a total).
 - **Files.** Two ways in. The first is typed endpoints for clients without tools of their own (MCP): `tree`, `files` (`offset`/`limit`, numbered lines), `search` (ripgrep's parameters), `edits` (atomic batches of `replace` with `old_string`/`new_string`, `write`, `delete`, `move`, and `patch` as a git diff or an `apply_patch` body), and `changes` (summary, diff or patch against the base commit). The second is a raw surface for harnesses that bring their own tools and only swap the backend (pi's tool operations): read and write bytes, and stat. Every list, read and search is capped, with a total and a cursor. No symbolic link is followed, `.git/` and the upload deny list are never read or written, and edits while a run holds the sandbox are `409`.
 - **Runs** name `source: { type: sandbox, id }`. The published, pinned build file runs: its files are read from the run's private directory with the sandbox as their directory, so the sandbox's own `.hammerkit.yaml` is just a file. Rules for these runs:
   - One run per sandbox at a time.
@@ -150,6 +160,9 @@ The server holds the build file; a run names a published build file and the task
   - Reading one file (`files/<path>`, `HEAD`) works while a run holds the sandbox: it is opened without following a link and checked to be the file in the sandbox (by its descriptor on Linux, by path and inode elsewhere). `tree`, `search` and `changes` walk the files with git and ripgrep, which would follow a directory a task swaps for a link while they read, so they are `409` while a run holds the sandbox, like edits and `PUT`. They also wait for a batch of edits to finish.
   - Push (built on a host): commits what `changes` shows (deny list left out) on top of the sandbox's commit, as the caller (`name` and `email` of the token, else `<sub>@<issuer host>`, author and committer), and pushes it with the `push.secret` of the source, which is required (its account is reserved like the read account). The push's git gets that token and nothing else: no global or system config, `credential.helper` emptied, no `HOME` (`.netrc`) or ssh agent, so it never falls back to the server user's identity. A message with `Signed-off-by`, `Reviewed-by`, `Acked-by` or `Tested-by` is `400`; an `email` the token marks `email_verified: false` is not used. Branch parts that start or end with `.` or end with `.lock` are `400`. The branch is recorded as the sandbox's as soon as the remote has it (also when the push failed late but the remote shows the commit), before the sandbox moves to it; the provider's error text goes to the server log only. The branch has to match `push.branches` (`403`) and be new, or one this sandbox pushed and still at the commit it pushed (`409` else); the server reads it with the read credential, then pushes with `--force-with-lease=<branch>:<expected or nothing>` so a branch created or moved in between is refused by the remote (`409`), and a branch it pushed only moves forward (a sandbox fetched elsewhere since is `409`). Afterwards the sandbox is at the pushed commit and `ref` is the branch, so `changes` shows what is not pushed yet; `pushed` in the record keeps the last commit per branch. Like edits: under the sandbox's lock, `409` while a run holds it, `sandboxes: true` and the repository again. No pull request is opened.
   - Engine: `createParseContext(file, environment, { directory: { read, work } })` reads build files below `read` and works below `work`.
+  - The files are written by tasks and by whoever pushed the commit, so nothing on the server trusts them. Every `src`, mount and output of a run has to stay inside the files with no symbolic link on the way, checked when the run starts and again before each container is made, outputs are copied and cached outputs are restored (the check is #97's, shared with ref runs). The run's process starts in the run's private directory, not in the files. Files a task made unreadable are made readable again before they are measured, read for the tree or deleted, and what a container left as another user is given back through a short container; the docker volumes of a sandbox run's outputs are labelled with its files, counted against its bytes and removed with it.
+  - `sandboxes.runtimes` defaults to `docker` when the server runs containers and to nothing on a server with only `runtimes: [local]`, which then starts as before and refuses runs on sandboxes. `env:` secrets of sandbox runs read only `sandboxes.env.allow`, nothing by default. A run that waited for an approval fails when the tree of the files is no longer the one it was approved with; approvers see whether the files hold changes.
+  - On a Kubernetes backend sandboxes are not kept yet (`501` on create).
 
 ## Approvals
 
@@ -169,7 +182,7 @@ The server holds the build file; a run names a published build file and the task
 - Precedence of the location, highest first: `--on <name>` / `--local`, `HAMMERKIT_ON`, the task's `runner:`, `run.on` in the host config, `local`.
 - No silent fallback to local when a server is unknown or unreachable.
 - One invocation resolves to one server. A dependency naming a different runner is a plan-time error.
-- Kubernetes mode: a local task runs in the pool's `toolImage`; macOS is not a Kubernetes node platform.
+- Kubernetes mode: a local task runs in the pool's `toolImage`; macOS is not a Kubernetes node platform (built, see Deployment modes).
 - Cache identity uses the platform the task runs on.
 
 ## Host config and the `remote` commands
