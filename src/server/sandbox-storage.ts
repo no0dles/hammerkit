@@ -156,7 +156,8 @@ export class HostSandboxStorage implements SandboxStorage {
     })
   }
 
-  files(id: string): SandboxFiles {
+  // `maxChangesBytes` is for tests, which make changes larger than it without writing 64 MiB
+  files(id: string, maxChangesBytes?: number): SandboxFiles {
     const timeout = () => AbortSignal.timeout(5 * 60 * 1000)
     return new HostSandboxFiles(
       this.workTree(id),
@@ -165,7 +166,8 @@ export class HostSandboxStorage implements SandboxStorage {
           this.git(id, args, this.readEnv(options.env), timeout(), action, options.maxBuffer),
         withIndex: (fn) => this.withIndex(id, timeout(), fn),
       },
-      this.env
+      this.env,
+      maxChangesBytes
     )
   }
 

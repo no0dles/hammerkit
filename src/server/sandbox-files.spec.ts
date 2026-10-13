@@ -7,11 +7,13 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { GitOutputTooLarge } from './git-checkout'
 import { SandboxFileError, SandboxFiles } from './sandbox-files'
 import { HostSandboxStorage } from './sandbox-storage'
 
@@ -391,12 +393,60 @@ describe('sandbox files', () => {
       expect((await files.tree({})).entries.map((entry) => entry.path)).not.toContain('pipe')
     })
 
+    it('does not write through a directory swapped for a link after the edits were planned', async () => {
+      const outside = join(root, 'outside')
+      mkdirSync(outside)
+      writeFileSync(join(outside, 'app.ts'), 'outside\n')
+      const plan = await files.plan([
+        { op: 'write', path: 'src/new.ts', content: 'x' },
+        { op: 'replace', path: 'src/app.ts', old_string: 'return 1', new_string: 'return 2' },
+      ])
+      rmSync(join(work, 'src'), { recursive: true })
+      if (!link(outside, join(work, 'src'))) {
+        return
+      }
+      const before = statSync(outside).mtimeMs
+      await expect(plan.commit()).rejects.toMatchObject({ status: 409, message: 'src is not a directory any more' })
+      // not even moved aside and back
+      expect(statSync(outside).mtimeMs).toBe(before)
+      expect(readdirSync(outside)).toEqual(['app.ts'])
+      expect(readFileSync(join(outside, 'app.ts'), 'utf8')).toBe('outside\n')
+    })
+
+    it('takes what a search asks for as data, never as flags of ripgrep', async () => {
+      const outside = join(root, 'outside')
+      mkdirSync(outside)
+      writeFileSync(join(outside, 'flags.txt'), '--pre=sh --follow -L --search-zip\n')
+      const linked = link(outside, join(work, 'linked'))
+      for (const flag of ['--pre=sh', '--follow', '-L', '--search-zip']) {
+        const found = await files.search({ pattern: flag, fixed_strings: true })
+        expect(found.files).toEqual([])
+        expect((await files.search({ pattern: 'export', glob: [flag] })).files).toEqual([])
+        expect((await failure(files.search({ pattern: 'export', type: flag }))).status).toBe(400)
+      }
+      if (linked) {
+        // ripgrep does not go into the linked directory, with any of them
+        expect((await files.search({ pattern: 'pre' })).files ?? []).not.toContainEqual(
+          expect.stringMatching(/^linked/)
+        )
+      }
+    })
+
     it('denies credential directories in any case', async () => {
       mkdirSync(join(work, '.SSH'))
       writeFileSync(join(work, '.SSH', 'config'), 'Host *\n')
       expect((await failure(files.read('.SSH/config', {}))).status).toBe(403)
       expect((await failure(files.plan([{ op: 'write', path: '.Git/config', content: 'x' }]))).status).toBe(403)
-      expect((await failure(files.plan([{ op: 'write', path: '.aws./credentials', content: 'x' }]))).status).toBe(403)
+      for (const path of [
+        '.Git/HEAD',
+        '.aws./credentials',
+        '.git /config',
+        'GIT~1/config',
+        '.git::$INDEX_ALLOCATION/x',
+      ]) {
+        expect((await failure(files.plan([{ op: 'write', path, content: 'x' }]))).status).toBe(403)
+        expect((await failure(files.read(path, {}))).status).toBe(403)
+      }
       expect((await files.search({ pattern: 'Host' })).files).toEqual([])
       expect((await files.tree({})).entries.map((entry) => entry.path)).not.toContain('.SSH')
     })
@@ -415,6 +465,55 @@ describe('sandbox files', () => {
       expect(diff).not.toContain(commit)
       expect(diff).not.toContain('Subproject')
       expect(await files.diff('patch', { name: 'a', email: 'a@b', message: 'm' })).not.toContain(commit)
+    })
+
+    it('caps what one read answers', async () => {
+      writeFileSync(join(work, 'many.txt'), Array.from({ length: 12_000 }, (_, i) => `line ${i + 1}`).join('\n'))
+      const first = await files.read('many.txt', {})
+      expect(first).toMatchObject({ lines: 12_000, truncated: true, nextOffset: 2001 })
+      expect(first.content.split('\n')).toHaveLength(2000)
+      const most = await files.read('many.txt', { limit: 99_999 })
+      expect(most).toMatchObject({ truncated: true, nextOffset: 10_001 })
+      expect(most.content.split('\n')).toHaveLength(10_000)
+      const rest = await files.read('many.txt', { offset: 10_001, limit: 99_999 })
+      expect(rest).toMatchObject({ truncated: false, nextOffset: null })
+      expect(rest.content.split('\n')[1999]).toBe(' 12000\tline 12000')
+
+      writeFileSync(join(work, 'wide.txt'), `${'x'.repeat(3000)}\n`.repeat(200))
+      const wide = await files.read('wide.txt', {})
+      expect(wide.content.split('\n')[0]).toBe(`     1\t${'x'.repeat(2000)}… [3000 chars]`)
+      // at most 256 KiB of lines
+      expect(wide.truncated).toBe(true)
+      expect(Buffer.byteLength(wide.content)).toBeLessThanOrEqual(256 * 1024)
+      expect(wide.nextOffset).toBe(wide.content.split('\n').length + 1)
+    })
+
+    it('stops counting a search past its limit', async () => {
+      for (let i = 0; i < 30; i++) {
+        writeFileSync(join(work, `match-${String(i).padStart(2, '0')}.txt`), 'needle\n')
+      }
+      const page = await files.search({ pattern: 'needle', head_limit: 5 })
+      expect(page).toMatchObject({ total: 30, exact: true, truncated: true })
+      expect(page.files).toHaveLength(5)
+      expect(page.cursor).not.toBeNull()
+      // 20 000 matches past the page, ripgrep is stopped and the total is a floor
+      writeFileSync(join(work, 'needles.txt'), 'needle\n'.repeat(25_000))
+      const many = await files.search({ pattern: 'needle', output_mode: 'content', head_limit: 10 })
+      expect(many.matches).toHaveLength(10)
+      expect(many).toMatchObject({ exact: false, truncated: true })
+      expect(many.total).toBeGreaterThanOrEqual(20_010)
+    })
+
+    it('answers that changes are too large instead of reading all of them', async () => {
+      writeFileSync(join(work, 'large.txt'), 'changed\n'.repeat(1000))
+      const small = storage.files(id, 1000)
+      expect(await small.changes()).toEqual([{ path: 'large.txt', status: 'added', additions: 1000, deletions: 0 }])
+      await expect(small.diff('diff', { name: 'a', email: 'a@b', message: 'm' })).rejects.toBeInstanceOf(
+        GitOutputTooLarge
+      )
+      await expect(small.diff('patch', { name: 'a', email: 'a@b', message: 'm' })).rejects.toBeInstanceOf(
+        GitOutputTooLarge
+      )
     })
 
     it('reads a file of many lines without splitting all of it', async () => {

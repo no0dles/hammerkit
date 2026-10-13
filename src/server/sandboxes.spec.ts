@@ -248,6 +248,25 @@ describe('SandboxRegistry', () => {
     expect(registryWith({ bytes: sandbox.bytes }).overLimit(alice)).toBeUndefined()
   })
 
+  it('keeps edits within the server total, and counts what they free', async () => {
+    const sandbox = await registryWith().create(alice, REPO, 'main')
+    const full = registryWith({ total: sandbox.bytes + 10 })
+    await full.load()
+    const write = (content: string) => [{ op: 'write' as const, path: 'notes/new.txt', content }]
+    await expect(full.edit(alice, sandbox.id, write('x'.repeat(100)))).rejects.toMatchObject({
+      status: 507,
+      message: 'the server has no room for these edits',
+    })
+    expect(await full.files(alice, sandbox.id).stat('notes/new.txt')).toBeUndefined()
+    await full.edit(alice, sandbox.id, write('x'.repeat(10)))
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes + 10)
+    // a batch that frees bytes makes room again
+    await full.edit(alice, sandbox.id, [{ op: 'delete', path: 'notes/new.txt' }])
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes)
+    await full.edit(alice, sandbox.id, [{ op: 'delete', path: 'input.txt' }])
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes - 3)
+  })
+
   it("edits only an owner's sandbox that no run holds, within their bytes", async () => {
     const sandboxes = registryWith({ bytes: 1024 * 1024 })
     const sandbox = await sandboxes.create(alice, REPO, 'main')

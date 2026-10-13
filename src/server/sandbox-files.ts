@@ -353,7 +353,9 @@ export class HostSandboxFiles implements SandboxFiles {
     private readonly root: string,
     private readonly git: SandboxGit,
     // the environment of ripgrep: the variables runs see
-    private readonly env: { [key: string]: string | undefined }
+    private readonly env: { [key: string]: string | undefined },
+    // the most a diff or patch of the changes may take
+    private readonly maxChangesBytes = MAX_CHANGES_BYTES
   ) {}
 
   private absolute(path: string): string {
@@ -876,7 +878,7 @@ export class HostSandboxFiles implements SandboxFiles {
   async diff(format: 'diff' | 'patch', author: PatchAuthor): Promise<string> {
     return this.withFilesIndex(async (run) => {
       if (format === 'diff') {
-        return run(['diff', '--cached', '-M', 'HEAD'], 'read', { maxBuffer: MAX_CHANGES_BYTES })
+        return run(['diff', '--cached', '-M', 'HEAD'], 'read', { maxBuffer: this.maxChangesBytes })
       }
       // a commit of the changes on top of the commit the sandbox is at, which no branch
       // points to, written out as `git format-patch` writes it
@@ -891,7 +893,7 @@ export class HostSandboxFiles implements SandboxFiles {
         await run(['commit-tree', tree, '-p', 'HEAD', '-m', author.message], 'read', { env: identity })
       ).trim()
       return run(['format-patch', '-1', '--stdout', '--binary', '-M', commit], 'read', {
-        maxBuffer: MAX_CHANGES_BYTES,
+        maxBuffer: this.maxChangesBytes,
       })
     })
   }
@@ -962,6 +964,10 @@ export class HostSandboxFiles implements SandboxFiles {
   async write(changes: [string, State, State][]): Promise<void> {
     const backups: [string, string][] = []
     const written: string[] = []
+    // the directories above every path are still the ones the edits were planned in
+    for (const [path] of changes) {
+      await this.sameParents(path)
+    }
     try {
       for (const [path, before] of changes) {
         if (before.kind === 'file' || before.kind === 'link') {
@@ -996,6 +1002,21 @@ export class HostSandboxFiles implements SandboxFiles {
     }
     for (const [, backup] of backups) {
       await rm(backup, { force: true })
+    }
+  }
+
+  private async sameParents(path: string): Promise<void> {
+    const parts = path.split('/')
+    let current = this.root
+    for (let i = 0; i < parts.length - 1; i++) {
+      current = join(current, parts[i])
+      const stats = await lstat(current).catch(() => undefined)
+      if (!stats) {
+        return
+      }
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new SandboxFileError(409, `${parts.slice(0, i + 1).join('/')} is not a directory any more`)
+      }
     }
   }
 
