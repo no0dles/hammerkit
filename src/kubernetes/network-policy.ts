@@ -323,8 +323,16 @@ export async function removeAllKubernetesItemNetworks(
     }
     throw e
   }
-  for (const policy of policies) {
-    await ignoreStatus(instance.objectApi.delete(policy), [404])
+  // the items of a list carry no kind of their own
+  for (const name of policies.map((policy) => policy.metadata?.name).filter((name): name is string => !!name)) {
+    await ignoreStatus(
+      instance.objectApi.delete({
+        apiVersion: 'networking.k8s.io/v1',
+        kind: 'NetworkPolicy',
+        metadata: { name, namespace: env.namespace },
+      }),
+      [404]
+    )
   }
   const deployments = await instance.appsApi.listNamespacedDeployment({ namespace: env.namespace, labelSelector })
   for (const deployment of deployments.items) {
