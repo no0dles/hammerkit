@@ -10,9 +10,10 @@ import { getArchivePaths } from '../executer/event-cache'
 import { getOutputsToReset } from './utils/get-outputs-to-reset'
 import findProcess from 'find-process'
 import { Readable } from 'stream'
+import { formatStateRecord, getStateRecordName, parseStateRecord } from './work-state-record'
 
-function getStateFilename(task: WorkItem<LocalWorkTask>) {
-  return join(task.data.cwd, '.hammerkit', `${task.id()}`)
+export function getStateFilename(task: WorkItem<LocalWorkTask>) {
+  return join(task.data.cwd, '.hammerkit', 'state', getStateRecordName(task))
 }
 
 function getPidFilename(task: WorkItem<LocalWorkTask>) {
@@ -42,6 +43,8 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
       // pidfile check happens in execute (initialize has no Environment in scope)
     },
     async restore(environment: Environment, path: string): Promise<void> {
+      // the restored outputs aren't the ones the record names any more
+      await removeStateFile(environment, task)
       await restoreLocal(environment, task.data, path)
     },
     async archive(environment: Environment, path: string): Promise<void> {
@@ -57,7 +60,7 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
         })
         return
       }
-      await environment.file.createDirectory(join(task.data.cwd, '.hammerkit'))
+      await environment.file.createDirectory(join(task.data.cwd, '.hammerkit', 'state'))
       const pidFile = getPidFilename(task)
       await environment.file.writeFile(pidFile, `${process.pid}`)
       try {
@@ -65,16 +68,14 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
         // fails overwrites outputs, so the previous record goes first, and only
         // a run that succeeded writes a new one.
         const stateFile = getStateFilename(task)
-        if (await environment.file.exists(stateFile)) {
-          await environment.file.remove(stateFile)
-        }
+        await removeStateFile(environment, task)
         for (const generate of getOutputsToReset(task.data)) {
           await environment.file.remove(generate.path)
         }
         await localTask(task, environment, options)
         const failed = ['crash', 'error', 'canceled'].includes(options.state.current.type)
         if (!failed) {
-          await environment.file.writeFile(stateFile, options.stateKey)
+          await environment.file.writeFile(stateFile, formatStateRecord(task, options.stateKey))
         }
       } finally {
         if (await environment.file.exists(pidFile)) {
@@ -97,7 +98,7 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
           return null
         }
       }
-      return await environment.file.read(stateFileName)
+      return parseStateRecord(task, await environment.file.read(stateFileName))
     },
     async remove(environment: Environment): Promise<void> {
       for (const generate of task.data.generates) {
@@ -108,6 +109,13 @@ export function getLocalWorkRuntime(task: WorkItem<LocalWorkTask>): WorkRuntime<
         await environment.file.remove(generate.path)
       }
     },
+  }
+}
+
+async function removeStateFile(environment: Environment, task: WorkItem<LocalWorkTask>) {
+  const stateFile = getStateFilename(task)
+  if (await environment.file.exists(stateFile)) {
+    await environment.file.remove(stateFile)
   }
 }
 

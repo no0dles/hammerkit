@@ -56,6 +56,8 @@ there yet; a run is a `POST /v1/runs`.
   `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
   parallel and how much of the machine they use stay with the server, and `watch` and
   the log mode are for terminals only, so they are not accepted.
+* `options.args` are [arguments](/docs/task/arguments), what `hammerkit run <task> -- ...`
+  passes after `--`. See [Arguments](#arguments).
 
 The request names the work, it does not contain it: what the tasks do comes from the
 published build file, and the files they work on come from `source`. A `ref` is
@@ -70,7 +72,7 @@ What `POST /v1/runs` answers, in the order the server checks:
 | Status | When |
 | --- | --- |
 | `202` | The run is accepted, `queued` or `awaiting-approval`. |
-| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
+| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
 | `401` | The token is missing or invalid. |
 | `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs `sandboxes: true`. |
 | `409` | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request. |
@@ -79,6 +81,50 @@ What `POST /v1/runs` answers, in the order the server checks:
 | `501` | The run is from an `upload`, which the executor does not support yet. |
 | `502` | The server could not reach the repository to resolve the ref. |
 | `503` | The server is shutting down, or too many runs wait for an approval. |
+
+## Arguments
+
+A run can pass arguments to one task, as `hammerkit run test -- src/login.spec.ts -t "login flow"`
+does locally:
+
+```json
+{
+  "definition": { "name": "payments" },
+  "tasks": ["test"],
+  "source": { "type": "ref", "repo": "github.com/corp/payments", "ref": "main" },
+  "options": { "args": ["src/login.spec.ts", "-t", "login flow"] }
+}
+```
+
+They are appended to the last command of that task, each quoted for its shell, so
+shell syntax in an argument stays text. Its dependencies and the services it needs get
+none. The run's `plan` shows the command as it runs, so the caller sees
+`npx vitest run 'src/login.spec.ts' '-t' 'login flow'`, and a published version shows
+the last command of each task as `command`, so a caller knows where the arguments land.
+
+* `tasks` names exactly one task; labels can not select it. Several tasks, a service, or
+  only labels with arguments are `400`.
+* Up to 100 arguments, 16 KiB together, and none with a NUL character.
+* A run in which any task or service reads a secret, or takes a variable of the server
+  into its `envs` (`$NAME` or `${NAME}` of [`runs.env`](#config)) other than `PATH`,
+  `HOME` and `CI`, passes no arguments. That covers the task itself, its dependencies and
+  the services it needs: an argument could make the command print what the task holds,
+  and what a dependency wrote into its outputs or a service answers, in a form no mask of
+  secrets knows (`rev token.txt`). The run is `400` naming the item and what it reads,
+  and the executor checks again before it starts. A shell task (`cmds: [sh -c]`) on a
+  server therefore runs without any account or credential of the server, nor next to one.
+* Such a run never uses an account, so it never waits for an approval.
+* [`remote approvals`](/docs/cli/remote#approving-runs) still lists the arguments of a
+  run as JSON strings, and `remote show` prints every command whole, never cut, with
+  control and bidi characters written out.
+* On a server that allows the `local` runtime, arguments to a local task run as commands
+  on the server's machine, as the code of the ref already does.
+* A server never takes `--set`; variables stay what the published build file says.
+
+As [locally](/docs/task/arguments), the task with arguments skips the cache: it reads no
+cache entry and stores none, and a later run without arguments doesn't take its outputs
+for a cache hit. Naming a method in `options.cache` (`"cache": "checksum"`) keeps its
+caching, as `--cache` before `--` does. Its dependencies cache as always.
 
 ## Results and waiting
 
@@ -340,6 +386,7 @@ runs:
   env:
     allow: [PATH, DOCKER_HOST]   # the only variables of the server a run sees, none by default
     set: { CI: 'true' }
+  network: { allow: [registry.npmjs.org] }   # open by default
 ```
 
 | Key | What it does |
@@ -351,3 +398,33 @@ runs:
 | `maxLogBytes` | The log of a run that says more is cut off. 1 MiB by default. |
 | `env.allow` | The variables of the server process that a run, its provider commands and the git fetch can see. Nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
 | `env.set` | Fixed values that are set in addition. |
+| `network` | The most any task or service of a run reaches besides the services it needs: `open` (the default), `none` or `{ allow: [hosts] }`, as the [`network`](/docs/task/network) of a task. See [Network](#network). |
+
+## Network
+
+`runs.network` is a ceiling for every run of the server, as `hammerkit run --network`
+is for a run on a laptop:
+
+```yaml title="server.yaml"
+runtimes: [docker]
+runs:
+  network: { allow: [registry.npmjs.org, '*.githubusercontent.com'] }
+```
+
+* A version whose tasks or services ask for more is refused when it is published (or
+  proposed): with the ceiling above, a task without `network` (which is `open`), or one
+  that allows `pypi.org`, can't be published. The error names the task and what it asks for.
+  A wildcard of the server covers the names under it; a name does not cover a wildcard.
+* So a build file published to such a server names its `network` on every task and
+  service, which is also what a reviewer reads: the [plan](/docs/remote-compute/build-files) of a version shows each
+  one's `network`.
+* Every run executes under the ceiling as well, and a version published before the
+  ceiling was set, which asks for more, is refused when a run of it is submitted.
+* The services a task needs are reachable at every level.
+* Local tasks can't be limited, so a server with a ceiling below `open` allows only the
+  `docker` runtime; `runtimes: [docker, local]` with it is a config error.
+* On a [Kubernetes backend](/docs/remote-compute/backend#network) the ceiling is a NetworkPolicy
+  on every pod, so it needs `backend.networkPolicy: enforced`; without that it is a config error.
+  A task that reads a provider's secret there keeps an open network, so it can't be published
+  under a ceiling.
+

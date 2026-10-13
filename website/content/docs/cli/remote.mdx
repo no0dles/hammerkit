@@ -190,6 +190,14 @@ The line `look at:` of the list names the tasks with a flag: `local-task` runs o
 and not in a container, `host-port` binds a port of the host and `remote-include`
 includes a file from git. A secret's value is never shown, only where it is read from.
 
+A run that passes [arguments](/docs/remote-compute/runs#arguments) uses no account, so it
+waits for nobody; one stored before that rule lists them on a line of their own, each as a
+JSON string (`arguments: "--region" "eu, us"`). `remote show` prints each command as it
+runs. Arguments and commands are never cut; other text longer than 300 characters ends in `… (+N chars)`. Control
+characters show as `?`, and bidi and zero-width characters are written out
+(`\u{202e}`), so what you read is the order it runs in. A task that isn't `open` shows
+its `network`.
+
 What you see is what the decision rests on: who asked, which version of which build
 file, the tasks, the service accounts they read secrets as and where the code comes
 from. The version is the one the run is pinned to, so what you approve is what runs.

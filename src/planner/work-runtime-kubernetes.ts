@@ -26,6 +26,7 @@ import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kub
 import findProcess from 'find-process'
 import { getErrorMessage } from '../log'
 import { getVersion } from '../version'
+import { getKubernetesCommandText } from './utils/task-arguments'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
@@ -243,7 +244,8 @@ export function kubernetesTaskRuntime(
             options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
             return
           }
-          const command = secretSpec.command(task.data.shell, cmd.cmd)
+          // the arguments after `--` keep their `$` as text, Kubernetes expands `$(NAME)`
+          const command = secretSpec.command(task.data.shell, getKubernetesCommandText(cmd))
           const spec: V1Job & KubernetesObjectHeader = {
             kind: 'Job',
             apiVersion: 'batch/v1',

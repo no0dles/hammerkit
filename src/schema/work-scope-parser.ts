@@ -12,6 +12,7 @@ import { appendWorkEnvironment } from '../planner/utils/append-work-environment'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { WorkEnvironment } from '../planner/work-environment'
+import { applyArguments } from '../planner/utils/task-arguments'
 
 export function defaultEnvironment(context: ReferencedContext): WorkEnvironment {
   if ('default' in context.environments) {
@@ -61,17 +62,29 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     appendWorkService(workTree, service, environment, context)
   )
 
+  const selectedTasks: WorkTask[] = []
+  const selectedServices: WorkService[] = []
   for (const item of tasks) {
     if (matchesTaskWorkScope(item, scope)) {
       requested.push(item.name)
+      selectedTasks.push(item.data)
       applyTask(filteredWorkTree, item)
     }
   }
 
   for (const item of services) {
     if (matchesServiceWorkScope(item.data, scope)) {
+      selectedServices.push(item.data)
       applyService(filteredWorkTree, item)
     }
+  }
+
+  if (scope.args) {
+    applyArguments(
+      { tasks: selectedTasks, services: scope.args.services ? selectedServices : [] },
+      scope.args.values,
+      scope.args.cache
+    )
   }
 
   keepRequirersInScope(filteredWorkTree)
