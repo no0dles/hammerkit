@@ -31,6 +31,10 @@ describe('pi operations on a sandbox', () => {
 
       const grep = await ops.grep({ pattern: 'ANSWER', ignoreCase: true, path: 'src' })
       expect(grep.content[0].text).toBe('src/app.ts:2: export const answer = 42')
+      // pi's own grep takes `@src` for `src`
+      expect((await ops.grep({ pattern: 'answer', path: '@src' })).content[0].text).toBe(
+        'src/app.ts:2: export const answer = 42'
+      )
     })
   })
 

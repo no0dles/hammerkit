@@ -265,7 +265,7 @@ export class SandboxClient {
    */
   async exec(command: string, cwd: string, options: Omit<RunTaskOptions, 'args'> = {}): Promise<TaskRun> {
     // on its own line: `cd dir && a; b` would run b in the root when dir is missing
-    const script = cwd && cwd !== '.' ? `cd ${quotePosix(cwd)} || exit 1\n${command}` : command
+    const script = cwd && cwd !== '.' ? `cd -- ${quotePosix(cwd)} || exit 1\n${command}` : command
     return this.runTask(this.build.shell, { ...options, args: [script] })
   }
 
@@ -374,6 +374,8 @@ async function call(
       },
       body: options.body !== undefined ? JSON.stringify(options.body) : options.raw,
       signal: AbortSignal.timeout(TIMEOUT_MS),
+      // an answer from anywhere else is not the server's, and a PUT would send its file on
+      redirect: 'error',
     }).catch((e) => {
       throw new SandboxClientError(
         `unable to reach ${connection.url}: ${redact(e instanceof Error ? e.message : String(e), token)}`

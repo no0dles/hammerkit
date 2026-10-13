@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import { copyFile, lstat, mkdir, readdir, rm } from 'fs/promises'
+import { copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { HostSandboxFiles, SandboxFiles, SandboxGit } from './sandbox-files'
@@ -116,7 +116,16 @@ export class HostSandboxStorage implements SandboxStorage {
     const root = this.root(id)
     const index = join(root, `index-${randomBytes(6).toString('hex')}`)
     try {
-      await copyFile(join(root, 'git', 'index'), index).catch(() => undefined)
+      const original = join(root, 'git', 'index')
+      await copyFile(original, index).then(
+        // with the time of the index: git takes a file changed in the same second as it was
+        // written for changed only when the index is no newer than the file (racy git)
+        async () => {
+          const stats = await stat(original)
+          await utimes(index, stats.atime, stats.mtime)
+        },
+        () => undefined
+      )
       return await fn((args, action, options = {}) =>
         this.git(id, args, this.readEnv({ ...options.env, GIT_INDEX_FILE: index }), signal, action, options.maxBuffer)
       )

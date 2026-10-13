@@ -378,8 +378,8 @@ export async function serveMcp(
       running.get(message.params?.requestId)?.abort()
       return
     }
-    if (id === undefined || id === null) {
-      // a notification, nothing to answer
+    if (id === undefined || id === null || message.method === undefined) {
+      // a notification, or an answer of the client to a request this server never sends
       return
     }
     if (message.method === 'initialize') {

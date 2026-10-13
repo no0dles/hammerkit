@@ -1,13 +1,16 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { createServer, IncomingMessage, ServerResponse } from 'http'
+import { AddressInfo } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
+import { itExceptWindows, SANDBOX_REPO, withSandboxServer } from '../testing/sandbox-server'
 import {
   checkSandboxPath,
   exitCodeOf,
   quotePosix,
   SandboxClient,
   SandboxClientError,
+  ServerConnection,
   toSandboxPath,
 } from './sandbox-client'
 import { getHarnessEnvironment, getTokenSource } from './connect'
@@ -39,6 +42,23 @@ describe('sandbox paths', () => {
   })
 })
 
+const VIEW = { id: 'sbx_1', repo: 'r', ref: 'main', commit: 'c', bytes: 0, busy: false, run: null }
+
+// a server of the test's own, for answers the hammerkit server never gives
+async function withHttp(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  fn: (url: string) => Promise<void>
+): Promise<void> {
+  const server = createServer(handler)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+  try {
+    await fn(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+  } finally {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  }
+}
+
 describe('tokens', () => {
   const secret = 'SECRET-refresh-token'
 
@@ -48,6 +68,61 @@ describe('tokens', () => {
       await expect(failure).rejects.toThrow('the token is not a single line of visible characters')
       await expect(failure).rejects.not.toThrow(secret)
     }
+  })
+
+  it('asks for a new token once when the server stops taking one, never twice', async () => {
+    const seen: (string | undefined)[] = []
+    await withHttp(
+      (req, res) => {
+        seen.push(req.headers.authorization)
+        const ok = req.headers.authorization === 'Bearer tok-2'
+        res.writeHead(ok ? 200 : 401, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(ok ? VIEW : { error: 'expired' }))
+      },
+      async (url) => {
+        let renewed = 0
+        const connection: ServerConnection = {
+          url,
+          token: async () => `tok-${renewed + 1}`,
+          renew: async () => {
+            renewed++
+          },
+        }
+        expect(await SandboxClient.get(connection, 'sbx_1')).toEqual(VIEW)
+        expect(seen).toEqual(['Bearer tok-1', 'Bearer tok-2'])
+        expect(renewed).toBe(1)
+
+        // a server that takes no token at all: one renew, then the answer
+        seen.length = 0
+        const refused = SandboxClient.get({ url, token: async () => 'tok-1', renew: async () => undefined }, 'sbx_1')
+        await expect(refused).rejects.toMatchObject({ status: 401 })
+        expect(seen).toEqual(['Bearer tok-1', 'Bearer tok-1'])
+      }
+    )
+  })
+
+  it('never follows a redirect, so the token and files stay with the server', async () => {
+    const elsewhere: (string | undefined)[] = []
+    await withHttp(
+      (req, res) => {
+        elsewhere.push(req.headers.authorization)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(VIEW))
+      },
+      async (other) =>
+        withHttp(
+          (req, res) => {
+            res.writeHead(307, { location: `${other.replace('127.0.0.1', 'localhost')}${req.url}` })
+            res.end()
+          },
+          async (url) => {
+            await expect(SandboxClient.get({ url, token: async () => 'tok-1' }, 'sbx_1')).rejects.toThrow(
+              /unable to reach/
+            )
+            expect(elsewhere).toEqual([])
+          }
+        )
+    )
   })
 
   it('refuses the output of a token command that prints more than the token', async () => {
@@ -109,6 +184,18 @@ describe('sandbox client', () => {
     })
   })
 
+  it('sees an edit of the same size made in the second the sandbox was created', async () => {
+    await withSandboxServer('harness-client-racy', async ({ connection }) => {
+      const view = await SandboxClient.create(connection, SANDBOX_REPO, 'main')
+      const client = new SandboxClient(connection, view, { name: 'payments', shell: 'sh' })
+      await client.edit([{ op: 'replace', path: 'src/app.ts', old_string: '41', new_string: '42' }])
+      // past the second of the checkout, where git would take the file for unchanged
+      await new Promise((resolve) => setTimeout(resolve, 1100))
+      expect((await client.changes()).files.map((file) => file.path)).toEqual(['src/app.ts'])
+      expect(await client.diff('diff')).toContain('+export const answer = 42')
+    })
+  })
+
   itExceptWindows('runs a shell command on the sandbox and follows its output to the exit code', async () => {
     await withSandboxServer('harness-client-exec', async ({ client }) => {
       const lines: string[] = []
@@ -129,10 +216,14 @@ describe('sandbox client', () => {
       expect(failed.output.split('\n')).toEqual(expect.arrayContaining(['out', 'err']))
 
       // a directory that is not there stops the whole command, not only its first part
-      const missing = await client.exec('true; echo ran > ran.txt', 'nowhere')
+      const missing = await client.exec('true; echo ran > ran.txt; echo b', 'nowhere')
       expect(missing.exitCode).toBe(1)
+      expect(missing.output.split('\n')).not.toContain('b')
       expect(await client.stat('ran.txt')).toBeUndefined()
       expect(await client.stat('nowhere/ran.txt')).toBeUndefined()
+      // and a directory that looks like an option of cd is a directory
+      await client.writeRaw('-P/f.txt', 'f\n')
+      expect((await client.exec('ls', '-P')).output).toBe('f.txt')
 
       const task = await client.runTask('fail')
       expect(task.exitCode).toBe(3)

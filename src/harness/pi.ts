@@ -188,7 +188,8 @@ export function createPiOperations(client: () => Promise<SandboxClient>, root: s
     const sandbox = await client()
     const result = await sandbox.search({
       pattern: params.pattern,
-      path: params.path ? path(params.path) || undefined : undefined,
+      // pi takes `@src` for `src`, as its own grep does
+      path: params.path ? path(params.path.replace(/^@/, '')) || undefined : undefined,
       glob: params.glob ? [params.glob] : undefined,
       i: params.ignoreCase,
       fixed_strings: params.literal,

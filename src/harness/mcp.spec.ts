@@ -4,6 +4,7 @@ import { addServer } from '../remote/host-config'
 import { itExceptWindows, SANDBOX_REPO, withSandboxServer } from '../testing/sandbox-server'
 import { connectSandbox } from './connect'
 import { createMcpTools, McpTool, serveMcp } from './mcp'
+import { SandboxClient } from './sandbox-client'
 import { registerMcpCommand } from './mcp-command'
 
 // A client on the other end of the pipes: one request at a time, the answer by its id.
@@ -121,6 +122,54 @@ describe('mcp server', () => {
   })
 })
 
+describe('mcp framing', () => {
+  it('reads messages however the lines arrive, and answers requests only', async () => {
+    const input = new PassThrough()
+    const output = new PassThrough()
+    const answers: any[] = []
+    let buffered = ''
+    output.on('data', (chunk) => {
+      buffered += chunk.toString()
+      let end: number
+      while ((end = buffered.indexOf('\n')) >= 0) {
+        answers.push(JSON.parse(buffered.slice(0, end)))
+        buffered = buffered.slice(end + 1)
+      }
+    })
+    const echo: McpTool = {
+      name: 'echo',
+      description: 'echo',
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      annotations: {},
+      call: async (args) => args.text,
+    }
+    const served = serveMcp(input, output, [echo], { name: 't', version: '1' })
+    const big = 'x'.repeat(1_000_000)
+    // two messages in one chunk, one split across chunks and ended with CRLF
+    input.write(
+      '{"jsonrpc":"2.0","id":1,"method":"ping"}\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n{"jsonrpc":"2.0","id":3,'
+    )
+    input.write('"method":"ping"}\r\n')
+    // a notification and an answer of the client get no answer
+    input.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+    input.write('{"jsonrpc":"2.0","id":9,"result":{}}\n')
+    input.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'tools/call',
+        params: { name: 'echo', arguments: { text: big } },
+      })}\n`
+    )
+    input.write('{"jsonrpc":"2.0","id":"s","method":"ping"}\n')
+    input.end()
+    await served
+    expect(answers.map((answer) => answer.id).sort()).toEqual([0, 1, 2, 3, 's'])
+    expect(answers.every((answer) => answer.error === undefined)).toBe(true)
+    expect(answers.find((answer) => answer.id === 0).result.content[0].text).toBe(big)
+  })
+})
+
 describe('mcp tools on a sandbox', () => {
   it('reads, edits, searches and shows the changes of a sandbox', async () => {
     await withSandboxServer('harness-mcp-files', async ({ client: sandbox }) => {
@@ -190,7 +239,7 @@ describe('mcp tools on a sandbox', () => {
   })
 
   itExceptWindows('runs commands and tasks, and reads their logs', async () => {
-    await withSandboxServer('harness-mcp-runs', async ({ client: sandbox }) => {
+    await withSandboxServer('harness-mcp-runs', async ({ client: sandbox, connection }) => {
       const client = connect((input, output) =>
         serveMcp(
           input,
@@ -200,12 +249,21 @@ describe('mcp tools on a sandbox', () => {
         )
       )
       expect((await client.call('bash', { command: 'ls', workdir: 'src' })).text).toBe('app.ts\n\nexit code 0')
+
+      // an edit while a command holds the sandbox is an answer for the model, not a crash
+      const sleeping = client.call('bash', { command: 'sleep 3' })
+      while (!(await SandboxClient.get(connection, sandbox.id)).busy) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      const busy = await client.call('write', { path: 'busy.txt', content: 'x' })
+      expect(busy).toEqual({ isError: true, text: expect.stringMatching(/holds the sandbox/) })
+      expect((await sleeping).text).toBe('exit code 0')
       const failed = await client.call('run_task', { task: 'fail' })
       expect(failed.text).toMatch(/^run run_[\w-]+: failed\ntask fail: failed, exit code 3/)
       expect(failed.text).toContain('last lines:\nbroken')
       const run = /^run (run_[\w-]+)/.exec(failed.text)?.[1]
       expect((await client.call('run_logs', { run, task: 'fail', grep: 'broken' })).text).toBe(
-        '1: broken\n\n(1 lines, 1 match)'
+        '1: broken\n\n(1 lines searched, 1 match here)'
       )
       await client.close()
     })
