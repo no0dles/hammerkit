@@ -77,15 +77,17 @@ export function buildServiceCreateOptions(
       ],
       // host ports are for `hammerkit up` and local tasks; container tasks
       // reach the service over its link, and a run publishing them would
-      // collide with another run on the same host
-      PortBindings: options.publishPorts
-        ? item.data.ports
-            .filter((p) => !!p.hostPort)
-            .reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-              map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-              return map
-            }, {})
-        : {},
+      // collide with another run on the same host. A limited service's are
+      // published by its relay.
+      PortBindings:
+        options.publishPorts && !network.relayPorts
+          ? item.data.ports
+              .filter((p) => !!p.hostPort)
+              .reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
+                map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
+                return map
+              }, {})
+          : {},
       ...resources,
     },
   }
@@ -110,7 +112,10 @@ export async function dockerService(
     await prepareVolume(item, docker)
     checkForAbort(options.abort)
 
-    network = await prepareItemNetwork(docker, item, environment, { daemon: options.daemon })
+    network = await prepareItemNetwork(docker, item, environment, {
+      daemon: options.daemon,
+      publish: options.publishPorts ? item.data.ports : [],
+    })
     checkForAbort(options.abort)
 
     item.status.write('debug', `create container with image ${item.data.image}`)

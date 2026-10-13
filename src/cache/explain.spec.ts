@@ -10,6 +10,8 @@ import { ExplainCause, TaskExplanation } from './explain'
 import { memoryStream } from '../testing/test-streams'
 import { statusConsole } from '../planner/work-item-status'
 import { runProgram } from '../run-program'
+import { getStateFilename } from '../planner/work-runtime-local'
+import { formatStateRecord } from '../planner/work-state-record'
 
 // Exercises the cache-explain engine end-to-end against a real parsed work tree.
 // Rather than spawning a process (local-task execution is mocked elsewhere and is
@@ -20,8 +22,8 @@ import { runProgram } from '../run-program'
 async function simulateRun(cli: Cli, environment: Environment, taskName: string): Promise<void> {
   const item = cli.task(taskName)
   const { stateKey, stats } = await computeStateKey(item, 'checksum', environment)
-  await environment.file.createDirectory(join(item.data.cwd, '.hammerkit'))
-  await environment.file.writeFile(join(item.data.cwd, '.hammerkit', item.id()), stateKey)
+  await environment.file.createDirectory(join(item.data.cwd, '.hammerkit', 'state'))
+  await environment.file.writeFile(getStateFilename(item as any), formatStateRecord(item, stateKey))
   await writeLastResolvedRecord(environment, item, {
     description: getWorkTaskCacheDescription(item),
     stats,

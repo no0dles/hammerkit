@@ -22,9 +22,12 @@
 - **FR-001**: `run` and `up` take arguments after `--`. They are appended to the last command of the one task, or to the `cmd` of the one service, the command line names or selects. A run that selects several items with arguments fails before it starts.
 - **FR-002**: Each argument is quoted for the shell the command runs in (the task's `shell`, else `sh`), so shell syntax inside an argument is text. A shell hammerkit can't quote for (fish, cmd, csh) is an error. Two places parse the line again and are handled:
   - On Kubernetes the kubelet expands `$(NAME)` and `$$` in a container's command before the shell runs, so `$` in an argument is written as `$$`.
-  - On Windows local tasks the quoting follows PowerShell, but Windows PowerShell 5.1 builds a new command line for a native program and starts `.cmd`/`.bat` shims through `cmd.exe`. There an empty argument, an argument with `"`, or one with `&|<>^%!` is refused rather than split or run.
+  - On Windows local tasks the quoting follows PowerShell, but Windows PowerShell 5.1 builds a new command line for a native program and starts `.cmd`/`.bat` shims through `cmd.exe`. There an empty argument, an argument with `"`, or one with `&|<>^%!` or a line break is refused rather than split or run.
 - **FR-003**: Dependencies and needed services never receive the arguments.
 - **FR-004**: A run with arguments skips the cache by default (Pascal, 2026-10-13): the task reads no cache entry and writes none. Its outputs land where the task's outputs always do, so before it writes them it removes the task's record of a cached run, and the next run without arguments is a miss. Without arguments (or with an empty list) the cache works as today, and existing entries stay valid. The arguments are part of the task's id, so logs and run results tell the variants apart.
+  - The record of which run produced a task's outputs is kept per task name and holds the id of that run, so it names one variant at a time, and restoring outputs from a cache removes it.
+  - An explicit `--cache <method>` on the command line keeps the cache for a run with arguments; that variant then hits only its own entry.
+  - A service's definition takes its `init` task by the id without arguments, so running the init with arguments doesn't recreate the service.
 - **FR-005**: The build file declares nothing for arguments. `--set` is unchanged and stays a separate, local mechanism.
 - **FR-006**: `hammerkit ls --json` and the published versions of a server show each task's last command (and each service's `cmd`), so a caller can tell where arguments land.
 - **FR-007 (server)**: The run request takes `options.args: string[]` with exactly one entry in `tasks`. Limits: 100 arguments, 16 KiB together, no NUL. A server never takes `--set`. An approver sees every argument in full: nothing is cut without a marker, and control and bidi characters are escaped.
@@ -34,13 +37,12 @@
 ## Implementation notes (server)
 
 - **Where the check sits.** The arguments are applied while the run is planned, so the run's `plan` (what the caller and an approver see) carries the command as it runs. The secrets check reads that plan at submit, and again in the executor before anything starts.
-- **Only the named task counts.** A dependency or needed service that reads secrets does not refuse the run: it never gets the arguments.
+- **What the named task reads.** A version's plan records, per item, the variables of the server its `envs` read (`serverEnvs`), taken from where `$NAME` and `${NAME}` resolved while the build file was read. The task's secrets and any of those other than `PATH`, `HOME` and `CI` refuse arguments. Its dependencies and needed services are not covered (FR-008); the runs docs tell publishers to keep secrets out of what they hand on.
 - **Not a service.** A run request names tasks; arguments with a service in `tasks` are `400`.
 - **No NUL.** An argument with a NUL character is `400` at the schema, as locally.
-- **The approver's view.** `hammerkit remote approvals` and `remote show` list the arguments as JSON strings on a line of their own, so commas and spaces in one stay visible.
+- **The approver's view.** `hammerkit remote approvals` and `remote show` list the arguments as JSON strings on a line of their own, so commas and spaces in one stay visible. Arguments and command lines are never cut; other text is cut at 300 characters with a `… (+N chars)` marker. Control characters print as `?`, format characters (bidi, zero-width) as `\u{…}`.
 
 ## Out of scope
 
 - Declared, typed arguments with defaults and a schema (considered and not chosen, ADR-0011).
 - Arguments for more than one task in a run.
-- Caching runs with arguments. An opt-in would key the record of which run produced the outputs by output location as well as by id.

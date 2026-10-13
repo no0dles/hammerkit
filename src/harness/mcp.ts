@@ -303,9 +303,11 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
         )
         lines.push(
           '',
-          `(${page.total} lines${page.matches !== undefined ? `, ${page.matches} match` : ''}${
-            page.next ? `, read on with from ${page.next}` : ''
-          }${page.truncated ? ', the server cut the log off at its limit' : ''})`
+          `(${page.total} lines${
+            args.grep ? ` searched, ${page.lines.filter((line) => line.match !== false).length} match here` : ''
+          }${page.next ? `, read on with from ${page.next}` : ''}${
+            page.truncated ? ', the server cut the log off at its limit' : ''
+          })`
         )
         return lines.join('\n')
       },

@@ -72,7 +72,7 @@ What `POST /v1/runs` answers, in the order the server checks:
 | Status | When |
 | --- | --- |
 | `202` | The run is accepted, `queued` or `awaiting-approval`. |
-| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secrets, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
+| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
 | `401` | The token is missing or invalid. |
 | `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs `sandboxes: true`. |
 | `409` | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request. |
@@ -105,13 +105,26 @@ the last command of each task as `command`, so a caller knows where the argument
 * `tasks` names exactly one task; labels can not select it. Several tasks, a service, or
   only labels with arguments are `400`.
 * Up to 100 arguments, 16 KiB together, and none with a NUL character.
-* A task that reads secrets takes no arguments: an argument could make its command print
-  them, so the run is `400` naming the secrets. A dependency that reads secrets is fine,
-  it never gets the arguments. A shell task (`cmds: [sh -c]`) on a server therefore holds no account.
+* A task that reads a secret, or takes a variable of the server into its `envs` (`$NAME`
+  or `${NAME}` of [`runs.env`](#config)) other than `PATH`, `HOME` and `CI`, takes no
+  arguments: an argument could make its command print what it holds. The run is `400`
+  naming what the task reads, and the executor checks again before it starts. A shell
+  task (`cmds: [sh -c]`) on a server therefore holds no account and no credential of the server.
+* Its dependencies and the services it needs are not covered: they may read secrets, and
+  they never get the arguments. But the task with arguments reads their outputs and calls
+  the services, so a dependency of a shell must not write a secret into its outputs, and
+  a service holding a secret must not serve it. Keep that in mind when publishing.
+* An approver sees every argument whole: [`remote approvals`](/docs/cli/remote#approving-runs)
+  lists them as JSON strings, and `remote show` prints the command with them appended,
+  never cut, with control and bidi characters written out.
+* On a server that allows the `local` runtime, arguments to a local task run as commands
+  on the server's machine, as the code of the ref already does.
 * A server never takes `--set`; variables stay what the published build file says.
 
-Arguments are part of the task's cache key, as they are locally: a run with other
-arguments is not a cache hit of one without.
+As [locally](/docs/task/arguments), the task with arguments skips the cache: it reads no
+cache entry and stores none, and a later run without arguments doesn't take its outputs
+for a cache hit. Naming a method in `options.cache` (`"cache": "checksum"`) keeps its
+caching, as `--cache` before `--` does. Its dependencies cache as always.
 
 ## Results and waiting
 

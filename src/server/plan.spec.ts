@@ -57,6 +57,7 @@ describe('planBundle on a server', () => {
       needs: [],
       accounts: ['prod'],
       secrets: [{ from: 'gsm:kube-token', account: 'prod', target: 'KUBE_TOKEN' }],
+      serverEnvs: [],
       mounts: [],
       ports: [],
       generates: [],
@@ -149,14 +150,21 @@ tasks:
     expect(refuseArguments(run, planned.plan)).toBeNull()
   })
 
-  it('refuses arguments for a task that reads secrets, and for a service', async () => {
-    const files = bundle(build)
-    const run = { tasks: ['test'], options: { args: ['-t', 'x'] } }
-    expect(refuseArguments(run, (await planRun(files, run, hosted, policy)).plan)).toEqual(
-      'test reads secrets (DB), it takes no arguments on a server: an argument could make it print them'
+  it('refuses arguments for a task that reads a secret or a variable of the server', async () => {
+    const refusal = async (yaml: string, task: string) => {
+      const run = { tasks: [task], options: { args: ['-t', 'x'] } }
+      return refuseArguments(run, (await planRun(bundle(yaml), run, hosted, policy)).plan)
+    }
+    expect(await refusal(build, 'test')).toEqual(
+      'test reads the secret DB, it takes no arguments on a server: an argument could make it print them'
     )
-    // a dependency that reads secrets does not get the arguments
     const yaml = `
+services:
+  signer:
+    image: node:22
+    cmd: node sign.js
+    secrets:
+      - { from: "gsm:signing-key", account: ci, env: KEY }
 tasks:
   login:
     image: node:22
@@ -166,18 +174,33 @@ tasks:
   test:
     image: node:22
     deps: [login]
+    needs: [signer]
     cmds: [npx vitest run]
-services:
-  db:
-    image: postgres:16
-    cmd: postgres
+  token:
+    image: node:22
+    envs: { TOKEN: $SERVER_ONLY, URL: "https://\${SERVER_ONLY}@registry" }
+    cmds: [npm ci]
+  plain:
+    image: node:22
+    envs: { P: $PATH, BIN: "\${PATH}/x" }
+    cmds: [npm test]
 `
-    const test = { tasks: ['test'], options: { args: ['-t', 'x'] } }
-    expect(refuseArguments(test, (await planRun(bundle(yaml), test, hosted, policy)).plan)).toBeNull()
-    const db = { tasks: ['db'], options: { args: ['-c', 'fsync=off'] } }
-    expect(refuseArguments(db, (await planRun(bundle(yaml), db, hosted, policy)).plan)).toEqual(
-      'db is a service, arguments go to a task'
+    // the dependencies and needed services are not covered: they never get the arguments
+    expect(await refusal(yaml, 'test')).toBeNull()
+    // a variable of the server can be a credential as well, as `$NAME` or `${NAME}`
+    expect(await refusal(yaml, 'token')).toEqual(
+      'token reads $SERVER_ONLY of the server, it takes no arguments on a server: an argument could make it print them'
     )
+    // where tools are is not a credential
+    expect(await refusal(yaml, 'plain')).toBeNull()
+    expect(await refusal(yaml, 'signer')).toEqual('signer is not a task of this version')
+    expect(await refusal(yaml, 'nope')).toEqual('nope is not a task of this version')
+  })
+
+  it('records the variables of the server each item reads', async () => {
+    const yaml =
+      'tasks:\n  a:\n    image: node:22\n    envs: { A: $SERVER_ONLY, B: "${PATH}:x", C: literal }\n    cmds: [echo]\n'
+    expect((await planBundle(bundle(yaml), hosted, { policy })).plan.a.serverEnvs).toEqual(['PATH', 'SERVER_ONLY'])
   })
 
   it('refuses a version that reaches more than runs.network allows', async () => {
@@ -207,6 +230,12 @@ tasks:
     await expect(planBundle(bundle(yaml), hosted, { policy: allow('registry.npmjs.org') })).rejects.toThrow(
       'install: asks for network allow *.githubusercontent.com, registry.npmjs.org, more than this server allows (runs.network: allow registry.npmjs.org)'
     )
+    // a redundant name of the server takes nothing from a task that asks for exactly what it allows
+    await expect(
+      planBundle(bundle(yaml), hosted, {
+        policy: allow('*.githubusercontent.com', 'raw.githubusercontent.com', 'registry.npmjs.org'),
+      })
+    ).resolves.toBeDefined()
     // a name of the server does not cover the wildcard of the build file
     await expect(
       planBundle(bundle(yaml), hosted, { policy: allow('raw.githubusercontent.com', 'registry.npmjs.org') })
@@ -214,7 +243,12 @@ tasks:
     await expect(
       planBundle(bundle(yaml), hosted, { policy: { ...policy, network: { type: 'none' } } })
     ).rejects.toThrow(/^install: asks for network allow .*\(runs.network: none\)$/)
-    // a task that asks for nothing passes, one that sets no network is open
+    // an empty allow list reaches nothing; a task that asks for nothing passes, one that sets no network is open
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    image: node:22\n    network: { allow: [] }\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'none' } },
+      })
+    ).resolves.toBeDefined()
     await expect(
       planBundle(bundle('tasks:\n  a:\n    image: node:22\n    network: none\n    cmds: [echo]\n'), hosted, {
         policy: { ...policy, network: { type: 'none' } },

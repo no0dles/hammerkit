@@ -1,7 +1,8 @@
 ---
-title: "Arguments"
-description: "Pass arguments to a task or service from the command line, after --."
+title: 'Arguments'
+description: 'Pass arguments to a task or service from the command line, after --.'
 ---
+
 Narrowing a run to one test file, one test name or one flag doesn't need a task
 per variation. Whatever follows `--` on the command line is appended to the
 **last command** of the task you run, as `npm run test -- ...` does:
@@ -39,6 +40,17 @@ quoting follows the task's [execution shell](/docs/task/container#execution-shel
 PowerShell, which runs local tasks on Windows. A task whose shell hammerkit can't
 quote for (`fish`, `cmd.exe`) refuses arguments rather than guess.
 
+Two runtimes read the command line once more, and hammerkit accounts for both:
+
+- On [Kubernetes](/docs/task/kubernetes) the kubelet expands `$(NAME)` and
+  `$$` before the shell runs, so each `$` in an argument is passed as `$$` and
+  arrives as typed.
+- On Windows, Windows PowerShell builds a new command line for the program it
+  starts, and starts `.cmd` and `.bat` shims (`yarn.cmd`, most of
+  `node_modules/.bin`) through `cmd.exe`. A local task there refuses an empty
+  argument, and one with `"`, `&`, `|`, `<`, `>`, `^`, `%`, `!` or a line break,
+  rather than let it split or run.
+
 To hand over a whole pipeline, make the last command a shell that takes it:
 
 ```yaml
@@ -56,10 +68,21 @@ hammerkit run sh -- 'npm test 2>&1 | tail -20'
 
 ## Caching and dependencies
 
-The arguments are part of the task's [cache key](/docs/task/caching): a run with
-`-- -t a` and one with `-- -t b` are different results, and running `-- -t a`
-again is a cache hit. Running a task without arguments (or with an empty `--`)
-keeps the cache entries it had before.
+A run with arguments is a one-off, so the task skips the
+[cache](/docs/task/caching): it always runs, and stores no cache entry. Its
+outputs replace the ones the task wrote before, so the next run without
+arguments isn't a cache hit either: it runs again, or restores its outputs from
+the cache.
+
+To cache a variant you run often, name a cache method on the command line:
+
+```bash
+hammerkit run test --cache checksum -- -t a
+```
+
+The arguments are part of the cache key, so `-- -t a` then hits only its own
+entry. Running a task without arguments (or with an empty `--`) keeps the cache
+entries it had before.
 
 Dependencies and needed services never get the arguments. In the example,
 `install` runs as declared and keeps its own cache entry.
@@ -99,4 +122,4 @@ task's. A service without `cmd`, and a Kubernetes service, take no arguments.
   `cmd`, so a script or an agent can tell where its arguments land. A version published
   to a server shows it as `command` in its plan.
 - A run on a [server](/docs/remote-compute/runs#arguments) takes them as `options.args`,
-  for one task that reads no secrets.
+  for one task that reads no secret and no credential of the server.

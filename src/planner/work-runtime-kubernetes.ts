@@ -24,12 +24,20 @@ import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kub
 import findProcess from 'find-process'
 import { getErrorMessage } from '../log'
 import { getVersion } from '../version'
+import { getKubernetesCommandText } from './utils/task-arguments'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
 import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
-import { ensureKubernetesItemNetwork, removeKubernetesItemNetwork } from '../kubernetes/network-policy'
+import {
+  ensureKubernetesItemNetwork,
+  releaseKubernetesItemNetwork,
+  removeAllKubernetesItemNetworks,
+  RUN_LABEL,
+} from '../kubernetes/network-policy'
+import { getRunId } from '../utils/run-id'
+import { getEffectiveNetwork, isLimitedNetwork } from './work-network'
 
 async function listJobNames(
   instance: ReturnType<typeof createKubernetesInstances>,
@@ -80,8 +88,9 @@ export function kubernetesTaskRuntime(
       }
 
       // the services the task needs by the names it lists them under, and the
-      // NetworkPolicy and proxy of a limited network
-      const network = await ensureKubernetesItemNetwork(instance, kubernetes, task, { followLog: true })
+      // NetworkPolicy and proxy of a limited network, both of this run
+      const scope = { run: getRunId() }
+      const network = await ensureKubernetesItemNetwork(instance, kubernetes, task, { followLog: true, ...scope })
       try {
         const podName = `${task.name}-${options.stateKey}`
         let i = 0
@@ -109,6 +118,7 @@ export function kubernetesTaskRuntime(
                   labels: {
                     'hammerkit.dev/id': task.id(),
                     'hammerkit.dev/state': options.stateKey,
+                    [RUN_LABEL]: scope.run,
                   },
                 },
                 spec: {
@@ -117,7 +127,7 @@ export function kubernetesTaskRuntime(
                       image: task.data.image,
                       // through the task's shell, as on Docker
                       command: [task.data.shell, '-c'],
-                      args: [cmd.cmd],
+                      args: [getKubernetesCommandText(cmd)],
                       workingDir: cmd.cwd,
                       env: [
                         ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
@@ -167,20 +177,26 @@ export function kubernetesTaskRuntime(
         await removeKubernetesSecret(instance, kubernetes, task)
       } finally {
         network.close()
-        await removeKubernetesItemNetwork(instance, kubernetes, task).catch((e) =>
-          task.status.write('error', `remove of network policy failed ${getErrorMessage(e)}`)
-        )
+        // once the run's pods ended: a cancelled job's pod is still terminating
+        if (isLimitedNetwork(getEffectiveNetwork(task.data))) {
+          await releaseKubernetesItemNetwork(instance, kubernetes, task, scope).catch((e) =>
+            task.status.write('error', `remove of network policy failed ${getErrorMessage(e)}`)
+          )
+        }
       }
     },
     async stop(): Promise<void> {
-      await removeKubernetesItemNetwork(instance, kubernetes, task)
       const jobs = await instance.batchApi.listNamespacedJob({
         namespace: kubernetes.namespace,
         labelSelector: `hammerkit.dev/id=${task.id()}`,
       })
       for (const pod of jobs.items) {
         if (pod.metadata?.name) {
-          await instance.batchApi.deleteNamespacedJob({ name: pod.metadata.name, namespace: kubernetes.namespace })
+          await instance.batchApi.deleteNamespacedJob({
+            name: pod.metadata.name,
+            namespace: kubernetes.namespace,
+            propagationPolicy: 'Background',
+          })
         }
       }
 
@@ -206,6 +222,8 @@ export function kubernetesTaskRuntime(
           await instance.coreApi.deleteNamespacedPod({ name: pod.metadata.name, namespace: kubernetes.namespace })
         }
       }
+      // the limits go last, once no pod of the task runs
+      await removeAllKubernetesItemNetworks(instance, kubernetes, task)
     },
     async remove(): Promise<void> {
       await this.stop()
@@ -272,7 +290,8 @@ export function kubernetesServiceRuntime(
         }
       }
       await removeKubernetesSecret(instance, kubernetes, service)
-      await removeKubernetesItemNetwork(instance, kubernetes, service)
+      // the limits go last, once the service's pods ended
+      await removeAllKubernetesItemNetworks(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const persistence = await getKubernetesPersistence(service)
@@ -280,7 +299,7 @@ export function kubernetesServiceRuntime(
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)
       await ensureKubernetesSecret(instance, kubernetes, service, service.data.secrets, environment)
-      const network = await ensureKubernetesItemNetwork(instance, kubernetes, service, { followLog: false })
+      const network = await ensureKubernetesItemNetwork(instance, kubernetes, service, { followLog: false, run: null })
       await ensureKubernetesDeploymentExists(
         instance,
         kubernetes,

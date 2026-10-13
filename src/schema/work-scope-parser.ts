@@ -75,7 +75,11 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
   }
 
   if (scope.args) {
-    applyArguments({ tasks: selectedTasks, services: scope.args.services ? selectedServices : [] }, scope.args.values)
+    applyArguments(
+      { tasks: selectedTasks, services: scope.args.services ? selectedServices : [] },
+      scope.args.values,
+      scope.args.cache
+    )
   }
 
   keepRequirersInScope(filteredWorkTree)

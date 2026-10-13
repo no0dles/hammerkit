@@ -10,6 +10,7 @@ import { getServiceContainers } from '../executer/get-service-containers'
 import { isHostServiceDns } from '../executer/service-dns'
 import { Environment } from '../executer/environment'
 import { getRunLabels } from './run-labels'
+import { getRunId } from '../utils/run-id'
 import { pull } from './pull'
 import { removeContainer } from './remove-container'
 import {
@@ -21,12 +22,18 @@ import {
   getProxyClientEnvironment,
   parseEgressProxyEvent,
 } from '../network/egress-proxy'
+import { getPortRelayCommand, getPortRelayEnvironment } from '../network/port-relay'
+import { WorkPort } from '../planner/work-port'
 import { getErrorMessage } from '../log'
 import { sleep } from '../utils/sleep'
 import { isDockerUnreachable, isOfStoppedRun, isProcessAlive } from './remove-orphaned-containers'
 
 const PROXY_READY_TIMEOUT_MS = 60000
 const NETWORK_REMOVE_ATTEMPTS = 20
+// the first release with com.docker.network.bridge.inhibit_ipv4, which keeps
+// an internal network from reaching the host through its gateway; it also
+// has the fix for CVE-2024-29018 (DNS forwarded from internal networks)
+const MIN_DOCKER_MAJOR = 28
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
@@ -38,6 +45,8 @@ export interface ContainerNetworkOptions {
   links?: string[]
   hosts?: string[]
   env?: { [key: string]: string }
+  // a limited service's ports are published by a relay, not by its container
+  relayPorts?: boolean
 }
 
 export interface DockerItemNetwork {
@@ -51,21 +60,76 @@ export interface DockerItemNetwork {
 
 // The internal network of a task or service with a limited network. Services
 // always have one when limited, since what needs them joins it; a task only
-// when it needs a service or allows hosts.
+// when it needs a service or allows hosts. The name carries the run, so
+// concurrent runs never share or remove each other's networks.
 export function getItemNetworkName(item: ContainerItem): string {
-  return `hammerkit-${getWorkInstanceId(item)}`
+  return `hammerkit-${getWorkInstanceId(item)}-${getRunId()}`
+}
+
+// The network between an `allow` item and its proxy, which nothing else joins:
+// the services the item needs don't get to use its proxy.
+export function getProxyNetworkName(networkName: string): string {
+  return `${networkName}-proxy`
+}
+
+const daemonVersions = new WeakMap<Dockerode, Promise<{ Version: string; Os: string }>>()
+
+// Limits rely on internal networks without a gateway on the host, which only
+// Linux containers on Docker 28 or later have. Anything else would run the
+// item with a hole, so it is refused.
+export async function checkNetworkLimitSupport(docker: Dockerode, item: ContainerItem): Promise<void> {
+  let version = daemonVersions.get(docker)
+  if (!version) {
+    version = docker.version()
+    daemonVersions.set(docker, version)
+  }
+  const { Version, Os } = await version
+  const level = getEffectiveNetwork(item.data).type
+  if (Os !== 'linux') {
+    throw new Error(`${item.name}: network ${level} needs Linux containers, the docker daemon runs ${Os} containers`)
+  }
+  const major = parseInt(Version, 10)
+  if (!(major >= MIN_DOCKER_MAJOR)) {
+    throw new Error(
+      `${item.name}: network ${level} needs Docker ${MIN_DOCKER_MAJOR} or later, the daemon is ${Version}`
+    )
+  }
+}
+
+// Internal (no route out) and without an address on the host, so the host's
+// services can't be reached through it either.
+async function createInternalNetwork(
+  docker: Dockerode,
+  name: string,
+  labels: { [key: string]: string }
+): Promise<void> {
+  await docker.createNetwork({
+    Name: name,
+    Internal: true,
+    Options: { 'com.docker.network.bridge.inhibit_ipv4': 'true' },
+    Labels: labels,
+  })
+}
+
+// What the proxy and relay may do: serve, nothing else.
+const HELPER_HOST_CONFIG = {
+  CapDrop: ['ALL'],
+  SecurityOpt: ['no-new-privileges'],
+  ReadonlyRootfs: true,
+  Memory: 256 * 1024 * 1024,
+  PidsLimit: 64,
 }
 
 // Where the container of a service is reached: on the default bridge (open)
-// or on its own internal network (limited).
-function getNeedNetwork(need: WorkItemNeed): string | null {
+// or on its own internal network (limited), which may be of an earlier run
+// (`up --daemon`).
+async function getNeedNetwork(docker: Dockerode, need: WorkItemNeed, containerId: string): Promise<string | null> {
   const service = need.service
-  if (!isContainerWorkService(service.data)) {
+  if (!isContainerWorkService(service.data) || !isLimitedNetwork(getEffectiveNetwork(service.data))) {
     return null
   }
-  return isLimitedNetwork(getEffectiveNetwork(service.data))
-    ? getItemNetworkName(service as WorkItem<ContainerWorkService>)
-    : null
+  const info = await docker.getContainer(containerId).inspect()
+  return info.HostConfig.NetworkMode ?? null
 }
 
 // Docker options for the network of a task or service. `open` is the default
@@ -77,7 +141,8 @@ export async function prepareItemNetwork(
   docker: Dockerode,
   item: ContainerItem,
   environment: Environment,
-  options: { daemon: boolean }
+  // `publish`: the ports a service publishes on the host
+  options: { daemon: boolean; publish?: WorkPort[] }
 ): Promise<DockerItemNetwork> {
   const network = getEffectiveNetwork(item.data)
   const dns = getServiceContainers(item.needs)
@@ -91,7 +156,11 @@ export async function prepareItemNetwork(
     if (isHostServiceDns(target)) {
       hosts.push(`${need.name}:${target.host}`)
     } else {
-      containers.push({ need, containerId: target.containerId, network: getNeedNetwork(need) })
+      containers.push({
+        need,
+        containerId: target.containerId,
+        network: await getNeedNetwork(docker, need, target.containerId),
+      })
     }
   }
 
@@ -127,18 +196,15 @@ export async function prepareItemNetwork(
     }
   }
 
+  await checkNetworkLimitSupport(docker, item)
   const name = getItemNetworkName(item)
-  await removeItemNetwork(docker, name)
-  await docker.createNetwork({
-    Name: name,
-    Internal: true,
-    Labels: {
-      app: 'hammerkit',
-      'hammerkit-network-of': getWorkInstanceId(item),
-      ...getRunLabels(),
-      'hammerkit-daemon': options.daemon ? 'true' : 'false',
-    },
-  })
+  const labels = {
+    app: 'hammerkit',
+    'hammerkit-network-of': getWorkInstanceId(item),
+    ...getRunLabels(),
+    'hammerkit-daemon': options.daemon ? 'true' : 'false',
+  }
+  await createInternalNetwork(docker, name, labels)
   try {
     for (const target of containers) {
       await docker.getNetwork(name).connect({
@@ -147,57 +213,85 @@ export async function prepareItemNetwork(
       })
     }
     if (network.type === 'allow') {
-      await startEgressProxy(docker, item, environment, name, network, options)
+      await createInternalNetwork(docker, getProxyNetworkName(name), labels)
+      await startEgressProxy(docker, item, environment, name, network, options, containers.length > 0)
     }
   } catch (e) {
     await removeItemNetwork(docker, name)
     throw e
   }
 
+  const publish = (options.publish ?? []).filter((port) => !!port.hostPort)
   return {
     options: {
       mode: name,
       hosts,
       env: network.type === 'allow' ? getProxyClientEnvironment(item.needs.map((need) => need.name)) : {},
+      relayPorts: isContainerWorkService(item.data),
     },
-    async connect() {},
+    async connect(container: Container) {
+      try {
+        if (network.type === 'allow') {
+          await docker.getNetwork(getProxyNetworkName(name)).connect({ Container: container.id })
+        }
+        if (publish.length > 0) {
+          await startPortRelay(docker, item, environment, name, container, publish, options)
+        }
+      } catch (e) {
+        await removeItemNetwork(docker, name)
+        throw e
+      }
+    },
     async release() {
       await removeItemNetwork(docker, name)
     },
   }
 }
 
-// Connected to the item's network under EGRESS_PROXY_HOST, and to the default
-// bridge for the way out. Refused hosts show up in the item's log.
+function getHelperLabels(networkName: string, options: { daemon: boolean }): { [key: string]: string } {
+  return {
+    app: 'hammerkit',
+    // goes with the task or service it serves
+    'hammerkit-type': 'proxy',
+    'hammerkit-network': networkName,
+    ...getRunLabels(),
+    'hammerkit-daemon': options.daemon ? 'true' : 'false',
+  }
+}
+
+// On the default bridge for the way out, and on the proxy network under
+// EGRESS_PROXY_HOST, the only address it listens on: neither the bridge nor
+// the services on the item's network reach it. It joins the item's network
+// to reach the needed services (for tools that ignore NO_PROXY), but doesn't
+// listen there. Refused hosts show up in the item's log.
 async function startEgressProxy(
   docker: Dockerode,
   item: ContainerItem,
   environment: Environment,
   networkName: string,
   network: Extract<WorkNetwork, { type: 'allow' }>,
-  options: { daemon: boolean }
+  options: { daemon: boolean },
+  reachNeeds: boolean
 ): Promise<void> {
   await pull(item.status, docker, EGRESS_PROXY_IMAGE, environment)
   const createOptions: ContainerCreateOptions = {
     Image: EGRESS_PROXY_IMAGE,
     Cmd: getEgressProxyCommand(),
-    // the needed services too, for tools that ignore NO_PROXY
-    Env: Object.entries(getEgressProxyEnvironment([...network.hosts, ...item.needs.map((need) => need.name)])).map(
-      ([key, value]) => `${key}=${value}`
-    ),
-    Labels: {
-      app: 'hammerkit',
-      'hammerkit-type': 'proxy',
-      'hammerkit-network': networkName,
-      ...getRunLabels(),
-      'hammerkit-daemon': options.daemon ? 'true' : 'false',
-    },
+    User: 'node',
+    Env: Object.entries(
+      getEgressProxyEnvironment([...network.hosts, ...item.needs.map((need) => need.name)], EGRESS_PROXY_HOST)
+    ).map(([key, value]) => `${key}=${value}`),
+    Labels: getHelperLabels(networkName, options),
+    HostConfig: HELPER_HOST_CONFIG,
   }
   const container = await docker.createContainer(createOptions)
-  await docker.getNetwork(networkName).connect({
+  await docker.getNetwork(getProxyNetworkName(networkName)).connect({
     Container: container.id,
     EndpointConfig: { Aliases: [EGRESS_PROXY_HOST] },
   })
+  if (reachNeeds) {
+    await docker.getNetwork(networkName).connect({ Container: container.id })
+  }
   const stream = await container.attach({ stream: true, stdout: true, stderr: true })
   const stdout = new PassThrough()
   const stderr = new PassThrough()
@@ -233,13 +327,53 @@ async function startEgressProxy(
   item.status.write('debug', `egress proxy allows ${network.hosts.join(', ') || 'no host'}`)
 }
 
-// The network, its proxy and every endpoint on it: what an earlier run left
-// behind, or what the item used.
+// On the default bridge, where Docker publishes ports, and on the service's
+// network, from where it passes connections on to the service.
+async function startPortRelay(
+  docker: Dockerode,
+  item: ContainerItem,
+  environment: Environment,
+  networkName: string,
+  service: Container,
+  ports: WorkPort[],
+  options: { daemon: boolean }
+): Promise<void> {
+  await pull(item.status, docker, EGRESS_PROXY_IMAGE, environment)
+  // a container is found by its name on a user-defined network
+  const host = (await service.inspect()).Name.replace(/^\//, '')
+  const container = await docker.createContainer({
+    Image: EGRESS_PROXY_IMAGE,
+    Cmd: getPortRelayCommand(),
+    User: 'node',
+    Env: Object.entries(
+      getPortRelayEnvironment(ports.map((port) => ({ port: port.containerPort, host, targetPort: port.containerPort })))
+    ).map(([key, value]) => `${key}=${value}`),
+    Labels: getHelperLabels(networkName, options),
+    ExposedPorts: Object.fromEntries(ports.map((port) => [`${port.containerPort}/tcp`, {}])),
+    HostConfig: {
+      ...HELPER_HOST_CONFIG,
+      PortBindings: Object.fromEntries(
+        ports.map((port) => [`${port.containerPort}/tcp`, [{ HostPort: `${port.hostPort}` }]])
+      ),
+    },
+  })
+  await docker.getNetwork(networkName).connect({ Container: container.id })
+  await container.start()
+  item.status.write('debug', `ports ${ports.map((port) => port.hostPort).join(', ')} published by a relay`)
+}
+
+// The network, its proxy network, its proxy and relay, and every endpoint on
+// them: what an earlier run left behind, or what the item used.
 export async function removeItemNetwork(docker: Dockerode, name: string): Promise<void> {
-  const proxies = await docker.listContainers({ all: true, filters: { label: [`hammerkit-network=${name}`] } })
-  for (const proxy of proxies) {
-    await removeContainer(docker.getContainer(proxy.Id))
+  const helpers = await docker.listContainers({ all: true, filters: { label: [`hammerkit-network=${name}`] } })
+  for (const helper of helpers) {
+    await removeContainer(docker.getContainer(helper.Id))
   }
+  await removeNetwork(docker, getProxyNetworkName(name))
+  await removeNetwork(docker, name)
+}
+
+async function removeNetwork(docker: Dockerode, name: string): Promise<void> {
   const network = docker.getNetwork(name)
   let info: { Containers?: { [id: string]: unknown } }
   try {
@@ -283,6 +417,17 @@ export function getNetworkHostConfig(network: ContainerNetworkOptions): {
     ...(network.mode ? { NetworkMode: network.mode } : {}),
     Links: network.links ?? [],
     ExtraHosts: network.hosts ?? [],
+  }
+}
+
+// Every network of the item, of this run or another one: what `down` and
+// `clean` remove.
+export async function removeItemNetworks(docker: Dockerode, item: ContainerItem): Promise<void> {
+  const networks = await docker.listNetworks({
+    filters: { label: [`hammerkit-network-of=${getWorkInstanceId(item)}`] },
+  })
+  for (const network of networks) {
+    await removeItemNetwork(docker, network.Name)
   }
 }
 

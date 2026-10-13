@@ -3,6 +3,7 @@ import { describeSecretSource, getSecretName } from './work-secret'
 import { WorkItem } from './work-item'
 import { ContainerWorkService, isContainerWorkService } from './work-service'
 import { getEffectiveNetwork, isLimitedNetwork } from './work-network'
+import { getDeclaredWorkTaskId } from './work-cache-id'
 
 // Everything a running container of the service was created from, plus the
 // definitions of the services it needs: a dependent links to the container it
@@ -33,8 +34,8 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
         : `${s.source.type}:${getSecretName(s)}`
     ),
     // the init task's id covers its image, commands, envs and mounts: a changed
-    // init recreates the service, so it runs again
-    init: service.init ? service.init.task.id() : null,
+    // init recreates the service, so it runs again (arguments after -- don't)
+    init: service.init ? getDeclaredWorkTaskId(service.init.task) : null,
     needs: item.needs
       .filter((need) => isContainerWorkService(need.service.data))
       .map((need) => `${need.name}=${getServiceDefinitionHash(need.service as WorkItem<ContainerWorkService>)}`),
