@@ -12,7 +12,7 @@
   - What follows `--` is appended to the last command, each argument quoted.
   - A run with arguments skips the cache by default and leaves the task's outputs marked as not cached, so a later plain run never reports them as its own (Pascal, 2026-10-13). Arguments never reach dependencies.
   - A shell is a task whose last command is `sh -c`; there is no exec endpoint.
-  - On a server, a task that reads a secret or a credential from the server's environment takes no arguments, so a shell holds no account. Its dependencies and needed services may hold one: a publisher keeps secrets out of their outputs. A server never takes `--set`.
+  - On a server, a run passes no arguments when its task, a dependency or a needed service reads a secret or a credential from the server's environment (Pascal, 2026-10-13). A dependency can write a secret into its outputs and a service can answer with one, and an argument such as `rev token.txt` prints it past the masking. So a shell runs without any account, nor next to one. A server never takes `--set`.
 - **Network limits are a field of every container task and service.**
   - The levels are `none` and `open`, plus a host allowlist through an egress proxy per limited item that fails closed. The services in `needs` are reachable at every level, since a task names them because it uses them.
   - A ceiling can be set from outside the build file: `run --network` on a laptop, and `runs.network` and `sandboxes.network` on a server.
@@ -30,7 +30,7 @@
 - **Network levels first, host allowlist later** — rejected: without host rules an agent can't install packages without being fully open.
 - **A separate `needs` level** (only the needed services) — rejected: needed services are always reachable, so `none` already means that.
 - **Arguments in the cache key by default** — rejected: every variant writes the same output paths, so a cache hit could hand back another variant's outputs. An explicit `--cache` opts a run with arguments back in; the record of which run produced a task's outputs is kept per task name, so it names one variant at a time.
-- **Refusing arguments when any item of the run reads a secret** — not chosen: a shell's dependencies routinely log in to a registry. The exemption is stated instead.
+- **Covering only the task that gets the arguments** — rejected: a dependency that logs in to a registry writes the credential into what the task reads (an `.npmrc`, a docker `config.json`), and a transform of it slips past the masking. A shell that needs such a dependency runs without arguments, or the dependency's output is published another way.
 
 ## Consequences
 
