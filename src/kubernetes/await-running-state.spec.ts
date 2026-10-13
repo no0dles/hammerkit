@@ -5,6 +5,7 @@ import {
   awaitRunningState,
   deleteJob,
   deleteJobAndWait,
+  stopJob,
 } from './await-running-state'
 import { AbortError } from '../executer/abort'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -205,5 +206,43 @@ describe('deleteJobAndWait', () => {
     const instance = { batchApi: { deleteNamespacedJob, readNamespacedJob } } as unknown as KubernetesInstance
 
     await expect(deleteJobAndWait(instance, env, 'job', new AbortController().signal, 0)).rejects.toThrow()
+  })
+})
+
+describe('stopJob', () => {
+  it('deletes the pods without a grace period and returns once they are gone', async () => {
+    const deleteNamespacedJob = vi.fn().mockResolvedValue({})
+    const pod = { metadata: { name: 'job-abc', deletionTimestamp: new Date() } }
+    const listNamespacedPod = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [pod] })
+      .mockResolvedValueOnce({ items: [pod] })
+      .mockResolvedValueOnce({ items: [] })
+    const deleteNamespacedPod = vi.fn().mockRejectedValueOnce(httpError(404)).mockResolvedValue({})
+    const instance = {
+      batchApi: { deleteNamespacedJob },
+      coreApi: { listNamespacedPod, deleteNamespacedPod },
+    } as unknown as KubernetesInstance
+
+    await stopJob(instance, env, 'job', 1000, 0)
+
+    expect(deleteNamespacedJob).toHaveBeenCalled()
+    expect(listNamespacedPod).toHaveBeenCalledWith({ namespace: 'demo', labelSelector: 'job-name=job' })
+    expect(listNamespacedPod).toHaveBeenCalledTimes(3)
+    // also a pod the Job's deletion already ends with the default grace period
+    expect(deleteNamespacedPod).toHaveBeenCalledTimes(2)
+    expect(deleteNamespacedPod).toHaveBeenCalledWith({ name: 'job-abc', namespace: 'demo', gracePeriodSeconds: 0 })
+  })
+
+  it('fails when a pod is still there after the timeout', async () => {
+    const instance = {
+      batchApi: { deleteNamespacedJob: vi.fn().mockResolvedValue({}) },
+      coreApi: {
+        listNamespacedPod: vi.fn().mockResolvedValue({ items: [{ metadata: { name: 'job-abc' } }] }),
+        deleteNamespacedPod: vi.fn().mockResolvedValue({}),
+      },
+    } as unknown as KubernetesInstance
+
+    await expect(stopJob(instance, env, 'job', 0, 0)).rejects.toThrow('the pods of job were still there after 0s')
   })
 })

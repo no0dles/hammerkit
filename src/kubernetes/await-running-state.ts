@@ -162,3 +162,41 @@ export async function deleteJobAndWait(
     await sleep(pollInterval, abort)
   }
 }
+
+// Stops a Job at once: its pods go without a grace period, and this returns once they
+// are gone, so what limited them (the item's NetworkPolicy) can go after them.
+export async function stopJob(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  timeout = 30_000,
+  pollInterval = 500
+): Promise<void> {
+  await deleteJob(instance, env, name)
+  const deadline = Date.now() + timeout
+  for (;;) {
+    const pods = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: `job-name=${name}`,
+    })
+    if (pods.items.length === 0) {
+      return
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`the pods of ${name} were still there after ${Math.round(timeout / 1000)}s`)
+    }
+    for (const pod of pods.items) {
+      // also one the Job's deletion already ends, with the default grace period
+      if (pod.metadata?.name) {
+        await instance.coreApi
+          .deleteNamespacedPod({ name: pod.metadata.name, namespace: env.namespace, gracePeriodSeconds: 0 })
+          .catch((e) => {
+            if (statusCodeOf(e) !== 404) {
+              throw e
+            }
+          })
+      }
+    }
+    await delay(pollInterval)
+  }
+}

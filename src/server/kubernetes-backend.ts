@@ -8,7 +8,7 @@ import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/app
 import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
-import { NETWORK_LABEL } from '../kubernetes/network-policy'
+import { NETWORK_LABEL, NETWORK_LIMITED } from '../kubernetes/network-policy'
 import { sleep } from '../utils/sleep'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getVersion } from '../version'
@@ -70,11 +70,13 @@ function readInClusterNamespace(): string | undefined {
  * The NetworkPolicies of a caller's namespace. A namespace is no network boundary on its
  * own: without them a task could connect to the pods of other callers, to the server
  * and to the metadata endpoint of the cloud, which hands out the node's identity.
- * - ingress: every pod accepts connections from the pods of its namespace only (the
- *   services a task needs, an egress proxy)
- * - egress of a pod with an open network: its namespace, DNS, and any address but the
- *   denied ranges. A pod of a limited item is left out, its own policy (see
- *   buildNetworkPolicy) is all it may reach, since policies add up.
+ * - ingress of a pod with an open network: connections from the pods of its namespace
+ *   only (the services a task needs)
+ * - egress of a pod with an open network, and of an egress proxy: its namespace, DNS,
+ *   and any address but the denied ranges
+ * Policies add up, so neither selects the pods of a limited item: its own policy (see
+ * buildNetworkPolicy) is all it may reach, DNS left out, and all that may reach it. An
+ * egress proxy takes connections from its item only (buildProxyPolicy).
  */
 export function getNamespacePolicies(
   namespace: string,
@@ -92,14 +94,18 @@ export function getNamespacePolicies(
       apiVersion: 'networking.k8s.io/v1',
       kind: 'NetworkPolicy',
       metadata: metadata('hammerkit-ingress'),
-      spec: { podSelector: {}, policyTypes: ['Ingress'], ingress: [{ _from: [{ podSelector: {} }] }] },
+      spec: {
+        podSelector: { matchExpressions: [{ key: NETWORK_LABEL, operator: 'DoesNotExist' }] },
+        policyTypes: ['Ingress'],
+        ingress: [{ _from: [{ podSelector: {} }] }],
+      },
     },
     {
       apiVersion: 'networking.k8s.io/v1',
       kind: 'NetworkPolicy',
       metadata: metadata('hammerkit-egress'),
       spec: {
-        podSelector: { matchExpressions: [{ key: NETWORK_LABEL, operator: 'DoesNotExist' }] },
+        podSelector: { matchExpressions: [{ key: NETWORK_LABEL, operator: 'NotIn', values: [NETWORK_LIMITED] }] },
         policyTypes: ['Egress'],
         egress: [
           { to: [{ podSelector: {} }] },
@@ -184,7 +190,7 @@ export class KubernetesExecutor implements RunExecutor {
       kubeConfig: this.access.kubeConfig,
       context: this.access.context,
       httpRoutes: [],
-      networkPolicyEnforced: true,
+      networkPolicyEnforced: config.backend.networkPolicy === 'enforced',
     })
     const namespace = config.backend.namespace ?? readInClusterNamespace()
     if (!namespace) {
@@ -227,7 +233,12 @@ export class KubernetesExecutor implements RunExecutor {
         await this.prepareNamespace(namespace)
         // what an earlier run left when the server stopped before its end; the runs
         // of a caller execute one at a time, so no other run is in the namespace
-        await removeRunObjects(this.instance, namespace, `${RUN_LABEL},${RUN_LABEL}!=${getRunLabelValue(run.id)}`)
+        await removeRunObjects(
+          this.instance,
+          namespace,
+          `${RUN_LABEL},${RUN_LABEL}!=${getRunLabelValue(run.id)}`,
+          RELEASE_TIMEOUT
+        )
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
         const kubernetes: WorkKubernetesEnvironment = {
           type: 'kubernetes',
@@ -236,9 +247,7 @@ export class KubernetesExecutor implements RunExecutor {
           context: this.access.context,
           httpRoutes: [],
           storageClass: backend.storageClass,
-          // the backend isolates callers with NetworkPolicy, so it needs a cluster that
-          // enforces it, and the limits of a task's network hold there too
-          networkPolicyEnforced: true,
+          networkPolicyEnforced: backend.networkPolicy === 'enforced',
           server: {
             run: run.id,
             namespace: this.namespace,
@@ -257,9 +266,7 @@ export class KubernetesExecutor implements RunExecutor {
         const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
         try {
           const selector = `${RUN_LABEL}=${getRunLabelValue(run.id)}`
-          await removeRunObjects(this.instance, namespace, selector)
-          // the next run of the caller uses the same claim names
-          await awaitRunObjectsGone(this.instance, namespace, selector, RELEASE_TIMEOUT)
+          await removeRunObjects(this.instance, namespace, selector, RELEASE_TIMEOUT)
         } catch (e) {
           context.emit({
             type: 'log',
@@ -385,10 +392,13 @@ export class KubernetesExecutor implements RunExecutor {
 // Jobs with their pods, Deployments (services and egress proxies), Services, claims,
 // Secrets and the NetworkPolicies of limited networks, which go last so no pod of the
 // run outlives its policy.
+// Deletes what a run made. The NetworkPolicies go last, once the pods are: a limited
+// pod's own policy is all that limits it.
 export async function removeRunObjects(
   instance: KubernetesInstance,
   namespace: string,
-  labelSelector: string
+  labelSelector: string,
+  timeout: number
 ): Promise<void> {
   const selector = { namespace, labelSelector }
   await instance.batchApi.deleteCollectionNamespacedJob({ ...selector, propagationPolicy: 'Background' })
@@ -397,6 +407,8 @@ export async function removeRunObjects(
   await instance.coreApi.deleteCollectionNamespacedService(selector)
   await instance.coreApi.deleteCollectionNamespacedSecret(selector)
   await instance.coreApi.deleteCollectionNamespacedPersistentVolumeClaim(selector)
+  // the next run of the caller also uses the same claim names
+  await awaitRunObjectsGone(instance, namespace, labelSelector, timeout)
   const policies = await instance.objectApi.list(
     'networking.k8s.io/v1',
     'NetworkPolicy',

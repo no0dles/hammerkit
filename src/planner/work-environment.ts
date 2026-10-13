@@ -16,8 +16,7 @@ export interface WorkKubernetesEnvironment {
   context?: string
   httpRoutes: BuildFileEnvironmentSchemaHttpRoute[]
   storageClass?: string
-  // the cluster enforces NetworkPolicy, as the build file states (a server's cluster
-  // has to)
+  // the cluster enforces NetworkPolicy, as the build file states
   networkPolicyEnforced: boolean
   // set when a hammerkit server runs the tasks of a run on its cluster
   server?: WorkKubernetesServer

@@ -194,6 +194,71 @@ describe('SandboxRegistry', () => {
     expect(sandboxes.usage(alice)).toEqual({ count: 0, bytes: 0 })
   })
 
+  it('sees a same-size change made in the second of the checkout', async () => {
+    const sandboxes = registryWith()
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      // 'one' to 'onx' right away: same size, and most likely the same second as the index
+      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'onx')
+      await new Promise((resolve) => setTimeout(resolve, 1100))
+      expect((await sandboxes.state(sandbox.id)).clean).toBe(false)
+      await expect(sandboxes.fetch(alice, sandbox.id, 'next')).rejects.toMatchObject({ status: 409 })
+      await sandboxes.remove(alice, sandbox.id)
+    }
+  }, 30_000)
+
+  it('does not run a filter the git config of the machine defines when it reads the files', async () => {
+    const marker = join(root, 'filter-ran')
+    const config = join(root, 'gitconfig')
+    writeFileSync(config, `[filter "x"]\n\tclean = touch '${marker.replace(/\\/g, '/')}' && cat\n`)
+    const sandboxes = new SandboxRegistry({
+      storage: new HostSandboxStorage(join(root, 'files'), { ...process.env, GIT_CONFIG_GLOBAL: config }),
+      records: join(root, 'records'),
+      limits: { count: 5, bytes: 100 * 1024 * 1024, total: 1024 * 1024 * 1024 },
+      repos: {
+        url: () => repository,
+        credentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
+        pushCredentials: async () => {
+          throw new Error('this server does not push')
+        },
+        source: () => undefined,
+        resolve: async (_repo, ref) => git(repository, 'rev-parse', ref),
+        scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
+      },
+    })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    const files = await sandboxes.attach(sandbox.id)
+    writeFileSync(join(files, '.gitattributes'), '* filter=x\n')
+    writeFileSync(join(files, 'written.txt'), 'by a task')
+    expect((await sandboxes.state(sandbox.id)).clean).toBe(false)
+    expect(existsSync(marker)).toBe(false)
+  })
+
+  it('checks out the files as committed whatever line endings the git config of the machine asks for', async () => {
+    const config = join(root, 'crlf-gitconfig')
+    writeFileSync(config, '[core]\n\tautocrlf = true\n')
+    const env = { ...(process.env as { [key: string]: string }), GIT_CONFIG_GLOBAL: config }
+    const sandboxes = new SandboxRegistry({
+      storage: new HostSandboxStorage(join(root, 'files'), env),
+      records: join(root, 'records'),
+      limits: { count: 5, bytes: 100 * 1024 * 1024, total: 1024 * 1024 * 1024 },
+      repos: {
+        url: () => repository,
+        credentials: async () => ({ env, values: [] }),
+        pushCredentials: async () => {
+          throw new Error('this server does not push')
+        },
+        source: () => undefined,
+        resolve: async (_repo, ref) => git(repository, 'rev-parse', ref),
+        scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
+      },
+    })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    expect((await sandboxes.state(sandbox.id)).clean).toBe(true)
+    await sandboxes.fetch(alice, sandbox.id, 'next')
+    expect((await sandboxes.state(sandbox.id)).clean).toBe(true)
+  })
+
   it('keeps a caller within their count and bytes, and the server within its total', async () => {
     const counted = registryWith({ count: 1 })
     await counted.create(alice, REPO, 'main')
@@ -218,10 +283,14 @@ describe('SandboxRegistry', () => {
     const results = await Promise.allSettled([
       sandboxes.create(alice, REPO, 'main'),
       sandboxes.create(alice, REPO, 'main'),
+      sandboxes.create(alice, REPO, 'main'),
     ])
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { status: 413 } })
+    for (const result of results.filter((result) => result.status === 'rejected')) {
+      expect(result).toMatchObject({ reason: { status: 413 } })
+    }
     expect(sandboxes.usage(alice).count).toBe(1)
+    expect(sandboxes.usage(alice).bytes).toBeLessThanOrEqual(Math.floor(one.bytes * 1.5))
   })
 
   it('stops the runs of a sandbox it deletes, and its files go with it', async () => {
@@ -277,6 +346,21 @@ describe('SandboxRegistry', () => {
     }
   )
 
+  it('lets a change wait for a delete, and then does not find the sandbox', async () => {
+    const sandboxes = registryWith()
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    let release = () => undefined as void
+    const held = sandboxes.withSandbox(alice, sandbox.id, () => new Promise<void>((resolve) => (release = resolve)))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const removed = sandboxes.remove(alice, sandbox.id)
+    // a submit that looked the sandbox up before the delete and now waits for it
+    const waiting = sandboxes.withSandbox(alice, sandbox.id, async () => 'ran').catch((e: unknown) => e)
+    release()
+    await held
+    expect(await removed).toBe(true)
+    expect(await waiting).toMatchObject({ status: 404 })
+  })
+
   it('measures what a run wrote', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
@@ -284,6 +368,25 @@ describe('SandboxRegistry', () => {
     await sandboxes.measure(sandbox.id)
     expect(sandboxes.get(alice, sandbox.id)?.bytes).toBeGreaterThanOrEqual(sandbox.bytes + 64 * 1024)
     expect(registryWith({ bytes: sandbox.bytes }).overLimit(alice)).toBeUndefined()
+  })
+
+  it('keeps edits within the server total, and counts what they free', async () => {
+    const sandbox = await registryWith().create(alice, REPO, 'main')
+    const full = registryWith({ total: sandbox.bytes + 10 })
+    await full.load()
+    const write = (content: string) => [{ op: 'write' as const, path: 'notes/new.txt', content }]
+    await expect(full.edit(alice, sandbox.id, write('x'.repeat(100)))).rejects.toMatchObject({
+      status: 507,
+      message: 'the server has no room for these edits',
+    })
+    expect(await full.files(alice, sandbox.id).stat('notes/new.txt')).toBeUndefined()
+    await full.edit(alice, sandbox.id, write('x'.repeat(10)))
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes + 10)
+    // a batch that frees bytes makes room again
+    await full.edit(alice, sandbox.id, [{ op: 'delete', path: 'notes/new.txt' }])
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes)
+    await full.edit(alice, sandbox.id, [{ op: 'delete', path: 'input.txt' }])
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes - 3)
   })
 
   it("edits only an owner's sandbox that no run holds, within their bytes", async () => {
@@ -466,6 +569,8 @@ describe('SandboxRegistry', () => {
       const late: SandboxStorage = Object.create(storage)
       late.push = async (id, request) => {
         const commit = (await storage.push(id, request)) as string
+        // a read of the sandbox meanwhile prunes what no ref keeps
+        await storage.state(id)
         throw new SandboxPushFailed(commit, new Error('the push timed out'))
       }
       const sandboxes = registryWith({}, late)
@@ -473,6 +578,7 @@ describe('SandboxRegistry', () => {
       writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
       const pushed = await sandboxes.push(alice, sandbox.id, 'agent/late', author)
       expect(pushed).toMatchObject({ commit: git(repository, 'rev-parse', 'agent/late'), ref: 'agent/late' })
+      expect(await sandboxes.state(sandbox.id)).toMatchObject({ commit: pushed.commit, clean: true })
     })
 
     it('keeps the branch as its own when the sandbox can not be moved after the push', async () => {

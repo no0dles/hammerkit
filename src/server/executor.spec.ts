@@ -9,7 +9,8 @@ import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
 import { runEnvironment } from './run-environment'
-import { Run, RunEventData } from './runs'
+import { Run, RunEventData, RunRegistry } from './runs'
+import { parseLogQuery, readLogs } from './run-logs'
 import { RepoAccess } from './repo-access'
 import { TEST_WORKER } from '../testing/worker'
 import { ServerConfig, serverConfigSchema } from './server-config'
@@ -175,6 +176,32 @@ describe('HostExecutor', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
   })
 
+  it('masks secrets in the results of a run and in its log', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml': [
+        'tasks:',
+        '  build:',
+        '    secrets:',
+        '      - { from: "echo:the-token-value", account: ci, env: TOKEN }',
+        '    cmds:',
+        `      - echo "out=${process.platform === 'win32' ? '$env:TOKEN' : '$TOKEN'}"`,
+        '      - exit 1',
+        '',
+      ].join('\n'),
+    })
+    const registry = new RunRegistry({ executor })
+    const { id } = registry.submit(alice, { ...run(hash, { accounts: ['ci'] }) })
+    const ended = await registry.wait(alice, id, 40_000)
+    expect(ended?.state).toBe('failed')
+    expect(ended?.results?.build).toMatchObject({ status: 'failed', lastLog: expect.arrayContaining(['out=***']) })
+    const logs = registry.logs(alice, id)
+    const page = readLogs(logs!.events, logs!.index, parseLogQuery(new URLSearchParams('grep=out=')), false)
+    expect(page.lines.map((l) => l.text)).toEqual(['out=***'])
+    expect(JSON.stringify(ended)).not.toContain('the-token-value')
+    expect(JSON.stringify(logs!.events)).not.toContain('the-token-value')
+    await registry.close()
+  })
+
   it('refuses a run that would use an account it was not admitted for, before anything starts', async () => {
     const hash = await publish({
       '.hammerkit.yaml': [
@@ -265,13 +292,15 @@ describe('HostExecutor', () => {
     expect(error?.message).toBe('build failed')
     // the exit code of the command that failed (on Windows the redirection fails first,
     // run-worker.spec.ts checks the value), and how long it ran
-    expect(events).toContainEqual({
-      type: 'task',
-      task: 'build',
-      state: 'failed',
-      exitCode: expect.any(Number),
-      durationMs: expect.any(Number),
-    })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'task',
+        task: 'build',
+        state: 'failed',
+        exitCode: expect.any(Number),
+        durationMs: expect.any(Number),
+      })
+    )
   })
 
   it('runs the tasks in the order they were named, and stops at the first failure', async () => {
@@ -586,6 +615,30 @@ describe('HostExecutor', () => {
       const spaces = readdirSync(join(root, 'cache')).sort()
       expect(spaces).toHaveLength(2)
       expect(spaces.filter((name) => name.startsWith('sandbox-'))).toHaveLength(1)
+    })
+
+    it('gives a ref run of the same repository a cache miss after a sandbox run', async () => {
+      const hash = await publish({
+        '.hammerkit.yaml':
+          'tasks:\n  build:\n    src: [input.txt]\n    generates: [out]\n    cmds:\n      - mkdir -p out\n      - cp input.txt out/copy.txt\n',
+      })
+      // the same files as the repository: a shared cache would hand the sandbox's outputs over
+      const onTheSandbox = await executeWith(onSandbox(), sandboxRun(hash, { id: 'run_sandbox' }))
+      expect(onTheSandbox.error).toBeUndefined()
+      expect(onTheSandbox.events).toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' })
+      )
+      const fromTheRef = await execute(run(hash, { id: 'run_ref' }))
+      expect(fromTheRef.error).toBeUndefined()
+      expect(fromTheRef.events).toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' })
+      )
+      expect(fromTheRef.events).not.toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'build', state: 'cached' })
+      )
+      const spaces = readdirSync(join(root, 'cache'))
+      expect(spaces.some((name) => name.startsWith('sandbox-'))).toBe(true)
+      expect(spaces.some((name) => name.startsWith('ref-'))).toBe(true)
     })
 
     it('fails a run on a sandbox that was deleted, and one without sandboxes', async () => {

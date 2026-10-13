@@ -45,7 +45,9 @@ services:
 | `allow: [hosts]` | HTTP and HTTPS to the listed hosts, through an egress proxy. |
 
 The services in `needs` are reachable at every level, under the names the task
-needs them by: a task lists a service because it uses it. `network` works the same
+needs them by: a task lists a service because it uses it. Under a limit, those
+names must be host names (`db`, `api-v2`), never patterns: the egress proxy passes
+a needed service by exactly its name. `network` works the same
 on [container services](/docs/service/container#network), and the tasks and
 services that need a limited service still reach it.
 
@@ -170,9 +172,14 @@ environments:
       networkPolicy: enforced
 ```
 
-Without it, a task or service with a limited network is an error. Some plugins,
-kindnet among them, apply a policy a moment after a pod started, so a connection
-made in that first moment can still get out.
+Without it, a task or service with a limited network is an error.
+
+Some plugins, kindnet among them, apply a policy a moment after a pod started. So a
+limited pod starts with an init container, `hammerkit-network`, that waits until the
+pod no longer reaches the cluster DNS, which its policy denies; the task's or
+service's own containers start after it. When the policy doesn't take hold within a
+minute, the pod fails rather than run without limits. The init container runs from
+the proxy's image.
 
 A task's policy and proxy belong to its run, so concurrent runs of the same task
 keep their own. They are removed only once the run's pods have ended, so a

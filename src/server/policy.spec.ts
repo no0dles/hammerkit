@@ -219,6 +219,12 @@ describe('decideRun', () => {
       { type: 'run' },
     ],
     [
+      // the default source of an account names upload, but no upload run gets that far yet
+      'an account without a source is not what refuses an upload run',
+      { accounts: ['ci'], source: { type: 'upload' } },
+      refuse(501, /runs from an upload are not supported/),
+    ],
+    [
       'a sandbox run needs sandboxes: true',
       { grant: grantOf({ dev: 'use' }, 'run', false), source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
       refuse(403, /not entitled to keep sandboxes/),

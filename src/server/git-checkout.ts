@@ -146,8 +146,7 @@ export async function git(
   signal: AbortSignal,
   what: string,
   action = 'fetch',
-  // what git may print: warnings of a large tree must not fail the command, and a diff of
-  // a sandbox can be larger still
+  // what git may print; a diff of a sandbox can be larger than the default
   maxBuffer = 64 * 1024 * 1024
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
@@ -159,6 +158,7 @@ export async function git(
   env.GIT_TERMINAL_PROMPT = '0'
   env.GIT_ALLOW_PROTOCOL = ALLOWED_PROTOCOLS
   try {
+    // warnings of a large tree must not fail the command
     return (await execFileAsync('git', args, { env, signal, maxBuffer })).stdout
   } catch (e) {
     const error = e as NodeJS.ErrnoException & { stderr?: string }
