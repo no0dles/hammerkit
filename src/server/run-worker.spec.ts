@@ -42,7 +42,9 @@ describe('workerMain', () => {
     const stdin = new PassThrough()
     stdin.end(typeof input === 'string' ? input : JSON.stringify(input))
     const out = sink()
-    await workerMain(stdin, out.stream, { PATH: process.env.PATH }, directory, new AbortController())
+    // PSModulePath too: Windows PowerShell takes half a minute to start without it
+    const envs = { PATH: process.env.PATH, PSModulePath: process.env.PSModulePath }
+    await workerMain(stdin, out.stream, envs, directory, new AbortController())
     return out.messages()
   }
 
