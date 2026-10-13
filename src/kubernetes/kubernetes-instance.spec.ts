@@ -28,7 +28,14 @@ vi.mock('@kubernetes/client-node', () => {
 })
 
 function makeEnv(overrides: Partial<WorkKubernetesEnvironment> = {}): WorkKubernetesEnvironment {
-  return { type: 'kubernetes', namespace: 'ns', context: 'ctx', httpRoutes: [], ...overrides }
+  return {
+    type: 'kubernetes',
+    namespace: 'ns',
+    context: 'ctx',
+    httpRoutes: [],
+    networkPolicyEnforced: false,
+    ...overrides,
+  }
 }
 
 beforeEach(() => {

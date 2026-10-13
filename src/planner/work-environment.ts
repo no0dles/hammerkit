@@ -14,4 +14,6 @@ export interface WorkKubernetesEnvironment {
   context: string
   httpRoutes: BuildFileEnvironmentSchemaHttpRoute[]
   storageClass?: string
+  // the cluster enforces NetworkPolicy, as the build file states
+  networkPolicyEnforced: boolean
 }

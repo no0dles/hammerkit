@@ -3,7 +3,13 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 
-const env = { type: 'kubernetes', namespace: 'demo', context: 'ctx', httpRoutes: [] } as WorkKubernetesEnvironment
+const env = {
+  type: 'kubernetes',
+  namespace: 'demo',
+  context: 'ctx',
+  httpRoutes: [],
+  networkPolicyEnforced: false,
+} as WorkKubernetesEnvironment
 
 const service = {
   name: 'api',

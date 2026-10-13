@@ -54,6 +54,7 @@ tasks:
 | `namespace`  | no       | Namespace the jobs and deployments are created in.                        |
 | `kubeconfig` | no       | Path to a kubeconfig file. Defaults to `$HOME/.kube/config`.              |
 | `httpRoutes` | no       | Gateway API routes that expose services, see [HTTP routes](#http-routes). |
+| `networkPolicy` | no    | `enforced`: the cluster's network plugin enforces NetworkPolicy, which a task or service with a limited [network](/docs/task/network#kubernetes) needs. |
 
 <Callout type="info">
 

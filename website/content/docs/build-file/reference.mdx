@@ -125,7 +125,7 @@ Each environment is a [run target](/docs/task/kubernetes) — exactly one of:
 
 | Key | Fields | Description |
 |-----|--------|-------------|
-| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]` | Run tasks as jobs and services as deployments on a cluster. |
+| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]`, `networkPolicy` | Run tasks as jobs and services as deployments on a cluster. `networkPolicy: enforced` states that the cluster enforces NetworkPolicy, which [network limits](/docs/task/network#kubernetes) need. |
 | `docker` | `host` | Run against a remote Docker daemon. |
 
 An `httpRoutes` entry has `host`, `service` and `gateway` (all required),

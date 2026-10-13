@@ -24,10 +24,10 @@ interface RunningProxy {
 }
 
 // the script as the container runs it: `node -e`, with its allow list in the env
-async function startProxy(hosts: string[]): Promise<RunningProxy> {
+async function startProxy(hosts: string[], bind?: string): Promise<RunningProxy> {
   const port = await freePort()
   const child = spawn(process.execPath, ['-e', EGRESS_PROXY_SCRIPT], {
-    env: { ...getEgressProxyEnvironment(hosts), HAMMERKIT_PROXY_PORT: `${port}` },
+    env: { ...getEgressProxyEnvironment(hosts, bind), HAMMERKIT_PROXY_PORT: `${port}` },
     stdio: ['ignore', 'pipe', 'inherit'],
   })
   const events: EgressProxyEvent[] = []
@@ -147,6 +147,54 @@ describe('egress proxy', () => {
   it('answers a request that is no proxy request with 400', async () => {
     const response = await get(proxy.port, '/')
     expect(response.status).toBe(400)
+  })
+})
+
+describe('egress proxy destinations', () => {
+  // the script's own env, past the schema, which takes no addresses: the
+  // proxy resolves an address to itself
+  it('refuses a name a wildcard allows when it resolves to the host', async () => {
+    const proxy = await startProxy(['*.0.0.1'])
+    try {
+      const response = await tunnel(proxy.port, '127.0.0.1:80', '127.0.0.1')
+      expect(response).toContain('403 Forbidden')
+      await waitFor(() => proxy.events.some((e) => e.type === 'refused'))
+      expect(proxy.events).toContainEqual({ type: 'refused', host: '127.0.0.1' })
+      expect((await get(proxy.port, 'http://127.0.0.1/')).status).toBe(403)
+    } finally {
+      proxy.process.kill()
+    }
+  })
+
+  it('refuses link-local addresses even for an exact name', async () => {
+    const proxy = await startProxy(['169.254.169.254'])
+    try {
+      expect(await tunnel(proxy.port, '169.254.169.254:80', '169.254.169.254')).toContain('403 Forbidden')
+      expect((await get(proxy.port, 'http://169.254.169.254/latest/meta-data')).status).toBe(403)
+    } finally {
+      proxy.process.kill()
+    }
+  })
+})
+
+describe('egress proxy bound to one name', () => {
+  it('listens on that address only', async () => {
+    const proxy = await startProxy([], 'localhost')
+    try {
+      // the address the name resolves to answers, another one of the host does not
+      await expect(get(proxy.port, '/')).resolves.toMatchObject({ status: 400 })
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          const socket = connect(proxy.port, '127.0.0.2', () => {
+            socket.destroy()
+            resolve()
+          })
+          socket.on('error', reject)
+        })
+      ).rejects.toThrow()
+    } finally {
+      proxy.process.kill()
+    }
   })
 })
 
