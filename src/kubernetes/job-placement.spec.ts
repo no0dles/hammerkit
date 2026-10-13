@@ -1,6 +1,6 @@
 import { WorkKubernetesServer } from '../planner/work-environment'
 import { LocalWorkTask } from '../planner/work-task'
-import { getLocalTaskPool, getPodPlacement, getRunLabels, runInToolImage } from './job-placement'
+import { getLocalTaskPool, getPodPlacement, getRunLabels, getRunLabelValue, runInToolImage } from './job-placement'
 
 const server: WorkKubernetesServer = {
   run: 'run_1',
@@ -71,7 +71,24 @@ describe('job placement', () => {
   })
 
   it('labels what a run makes on a server only', () => {
-    expect(getRunLabels({ server })).toEqual({ 'hammerkit.dev/run': 'run_1' })
+    expect(getRunLabels({ server })).toEqual({ 'hammerkit.dev/run': getRunLabelValue('run_1') })
     expect(getRunLabels({})).toEqual({})
+  })
+
+  // https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+  const LABEL_VALUE = /^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$/
+  const BASE64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+
+  it('labels a run with a valid label value whatever its id starts or ends with', () => {
+    // a run id is `run_` and 16 base64url characters (RUN_ID_PATTERN)
+    for (const first of BASE64URL) {
+      for (const last of BASE64URL) {
+        const run = `run_${first}${'a'.repeat(14)}${last}`
+        const value = getRunLabels({ server: { ...server, run } })['hammerkit.dev/run']
+        expect(value, run).toMatch(LABEL_VALUE)
+        expect(value.length).toBeLessThanOrEqual(63)
+      }
+    }
+    expect(getRunLabelValue('run_AAAAAAAAAAAAAAA-')).not.toBe(getRunLabelValue('run_AAAAAAAAAAAAAAA_'))
   })
 })

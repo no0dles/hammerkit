@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { BatchV1Api, CoreV1Api, KubeConfig, NetworkingV1Api } from '@kubernetes/client-node'
 import { requiresKubernetes } from '../requires-kubernetes'
+import { getRunLabelValue } from '../../kubernetes/job-placement'
 import { environmentMock } from '../../executer/environment-mock'
 import { DefinitionStore } from '../../server/definitions'
 import { KubernetesExecutor, getCallerNamespace } from '../../server/kubernetes-backend'
@@ -183,7 +184,8 @@ describe('kubernetes backend of a server', () => {
         alice
       )
 
-      const first = await execute('run_k8s_one', version.hash)
+      // run ids may end in `-` or `_`, which a label value can't
+      const first = await execute('run_k8s_one_-', version.hash)
       expect(first.error).toBeUndefined()
       expect(first.text).toContain(`runs in the namespace ${callerNamespace}`)
       expect(first.text).toContain('key=***')
@@ -199,7 +201,7 @@ describe('kubernetes backend of a server', () => {
       const { core, batch, networking } = cluster()
       const quota = await core.readNamespacedResourceQuota({ name: 'hammerkit', namespace: callerNamespace })
       expect(quota.spec?.hard).toEqual({ pods: '20' })
-      const selector = { namespace: callerNamespace, labelSelector: 'hammerkit.dev/run=run_k8s_one' }
+      const selector = { namespace: callerNamespace, labelSelector: `hammerkit.dev/run=${getRunLabelValue('run_k8s_one_-')}` }
       const left = async () =>
         [
           ...(await batch.listNamespacedJob(selector)).items,
@@ -212,7 +214,7 @@ describe('kubernetes backend of a server', () => {
       // the outputs went to the server's cache, so the next run of the same code hits
       // on build and restores its outputs into a new claim; offline has no sources,
       // runs again, and so does check, which reads what was restored
-      const second = await execute('run_k8s_two', version.hash)
+      const second = await execute('run_k8s_two_', version.hash)
       expect(second.error).toBeUndefined()
       expect(second.events).toContainEqual({ type: 'task', task: 'build', state: 'cached' })
       expect(second.events).not.toContainEqual({ type: 'task', task: 'build', state: 'succeeded' })

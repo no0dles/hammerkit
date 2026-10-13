@@ -441,6 +441,30 @@ describe('RunRegistry limits', () => {
     await registry.close()
   })
 
+  it('keeps a caller’s runs queued, without a timer, while the backend runs one at a time per caller', async () => {
+    const { executor, pending } = manual()
+    const registry = new RunRegistry({
+      executor: { ...executor, runningPerCaller: 1 },
+      maxConcurrent: 4,
+      maxDuration: 200,
+      limits: { waiting: 5, queued: 5, running: 2 },
+    })
+    const first = registry.submit(alice, spec)
+    const second = registry.submit(alice, spec)
+    const other = registry.submit(bob, spec)
+    await tick()
+    expect(pending).toHaveLength(2)
+    expect(registry.get(alice, second.id)?.state).toBe('queued')
+    expect(registry.get(bob, other.id)?.state).toBe('running')
+    while (registry.get(alice, first.id)?.state === 'running') {
+      await tick()
+    }
+    // the first one ran out of time; the second only starts now, with a timer of its own
+    expect(registry.get(alice, first.id)?.state).toBe('failed')
+    expect(registry.get(alice, second.id)?.state).toBe('running')
+    await registry.close()
+  })
+
   it('stops a run that takes longer than the maximum, and says why', async () => {
     const { executor } = manual()
     const registry = new RunRegistry({ executor, maxDuration: 20 })

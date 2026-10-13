@@ -1,4 +1,5 @@
 import { V1Toleration } from '@kubernetes/client-node'
+import { createHash } from 'crypto'
 import { WorkKubernetesEnvironment, WorkKubernetesPool, WorkKubernetesServer } from '../planner/work-environment'
 import { ContainerWorkTask, LocalWorkTask } from '../planner/work-task'
 
@@ -80,6 +81,14 @@ export function getPodPlacement(server: WorkKubernetesServer, pool: string | und
 // it when the run ends, and a NetworkPolicy can select the pods of a run.
 export const RUN_LABEL = 'hammerkit.dev/run'
 
+/**
+ * The value of the run label. A run id is base64url and may end in `-` or `_`, which a
+ * label value can't, so the label carries a hex digest of it.
+ */
+export function getRunLabelValue(run: string): string {
+  return createHash('sha256').update(run).digest('hex').slice(0, 40)
+}
+
 export function getRunLabels(kubernetes: Pick<WorkKubernetesEnvironment, 'server'>): { [label: string]: string } {
-  return kubernetes.server ? { [RUN_LABEL]: kubernetes.server.run } : {}
+  return kubernetes.server ? { [RUN_LABEL]: getRunLabelValue(kubernetes.server.run) } : {}
 }
