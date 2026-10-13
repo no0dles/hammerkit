@@ -1,3 +1,4 @@
+import { getServiceDefinitionHash } from '../planner/service-definition'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import {
@@ -19,6 +20,9 @@ import { getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { getKubernetesResources } from './container-resources'
 import { getProxylessEnvironment } from '../network/egress-proxy'
+
+// what the service was created from, to tell a changed one
+export const DEFINITION_LABEL = 'hammerkit.dev/definition'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
@@ -56,6 +60,7 @@ export async function ensureKubernetesDeploymentExists(
       labels: {
         'hammerkit.dev/id': service.id(),
         'hammerkit.dev/state': stateKey,
+        [DEFINITION_LABEL]: getServiceDefinitionHash(service),
       },
     },
     spec: {

@@ -19,6 +19,7 @@ import {
   buildProxyPolicy,
   ensureKubernetesItemNetwork,
   getProxyName,
+  removeAllKubernetesItemNetworks,
 } from '../kubernetes/network-policy'
 import { ExecuteOptions } from '../runtime/runtime'
 import { ServiceState } from '../executer/scheduler/service-state'
@@ -445,6 +446,52 @@ describe('network', () => {
 
           const deploy = await ensureKubernetesItemNetwork(instance, enforced, cli.task('deploy') as any, scope)
           expect(deploy.initContainers).toEqual([])
+        }
+      )
+    })
+
+    it("removes an item's policies and proxies once its pods ended", async () => {
+      await withCli(
+        'network-k8s-remove',
+        { services: { db: { image: 'postgres:16', network: { allow: ['a.com'] } } } },
+        async (cli) => {
+          const db = cli.service('db') as WorkItem<ContainerWorkService>
+          const calls: string[] = []
+          const pods = [{ status: { phase: 'Running' } }]
+          const instance = {
+            coreApi: {
+              listNamespacedPod: vi.fn().mockImplementation(async () => {
+                calls.push('list pods')
+                // the pod ends after the first look
+                return { items: pods.splice(0) }
+              }),
+              deleteNamespacedService: vi.fn().mockImplementation(async ({ name }) => calls.push(`service ${name}`)),
+            },
+            objectApi: {
+              // the items of a list come without kind and apiVersion
+              list: vi.fn().mockResolvedValue({ items: [{ metadata: { name: 'policy-a' } }] }),
+              delete: vi.fn().mockImplementation(async (spec) => calls.push(`${spec.kind} ${spec.metadata.name}`)),
+            },
+            appsApi: {
+              listNamespacedDeployment: vi.fn().mockResolvedValue({ items: [{ metadata: { name: 'proxy-a' } }] }),
+              deleteNamespacedDeployment: vi
+                .fn()
+                .mockImplementation(async ({ name }) => calls.push(`deployment ${name}`)),
+            },
+          } as any
+          await removeAllKubernetesItemNetworks(instance, env, db)
+          expect(calls).toEqual([
+            'list pods',
+            'list pods',
+            'NetworkPolicy policy-a',
+            'deployment proxy-a',
+            'service proxy-a',
+          ])
+          expect(instance.objectApi.delete).toHaveBeenCalledWith({
+            apiVersion: 'networking.k8s.io/v1',
+            kind: 'NetworkPolicy',
+            metadata: { name: 'policy-a', namespace: 'ns' },
+          })
         }
       )
     })

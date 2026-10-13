@@ -14,7 +14,8 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { V1EnvVar, V1Job } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
-import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
+import { DEFINITION_LABEL, ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
+import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
@@ -268,8 +269,29 @@ export function kubernetesServiceRuntime(
 ): WorkRuntime<ServiceState> {
   const instance = createKubernetesInstances(kubernetes)
   return {
-    initialize(): Promise<void> {
-      return Promise.resolve()
+    // A Deployment left by an earlier `up` is the running service, so `down`
+    // stops it and a run reuses it, as with a container on Docker. One whose
+    // definition changed goes, with its limits, and is created anew.
+    async initialize(state: State<ServiceState>): Promise<void> {
+      const deployments = await instance.appsApi.listNamespacedDeployment({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${service.id()}`,
+      })
+      const deployment = deployments.items[0]
+      if (!deployment?.metadata?.name) {
+        return
+      }
+      if (deployment.metadata.labels?.[DEFINITION_LABEL] !== getServiceDefinitionHash(service)) {
+        service.status.write('info', `${service.name} changed since it was started, recreating it`)
+        await this.stop()
+        return
+      }
+      state.set({
+        type: 'running',
+        dns: { containerId: deployment.metadata.name },
+        stateKey: deployment.metadata.labels?.['hammerkit.dev/state'] ?? '',
+        remote: null,
+      })
     },
     async restore(environment: Environment, path: string): Promise<void> {
       await restoreKubernetesData(service, kubernetes, instance, environment, path)

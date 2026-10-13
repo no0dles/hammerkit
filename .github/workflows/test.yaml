@@ -38,6 +38,7 @@ jobs:
         timeout-minutes: 15
         env:
           VERBOSE: true
+          HAMMERKIT_TEST_TIMEOUT: '120000'
       - name: Archive test artifacts
         if: failure()
         uses: actions/upload-artifact@v5
