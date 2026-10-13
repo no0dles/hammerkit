@@ -26,6 +26,15 @@ describe('work network', () => {
     expect(() => parseNetworkOption('allow:10.0.0.1')).toThrow('invalid host "10.0.0.1"')
   })
 
+  it('refuses names a resolver reads as an address', () => {
+    for (const host of ['0x7f000001', '0x7f.1', '127.1', '0xa9fea9fe', '*.0x7f.1', 'a.b.123']) {
+      expect(() => parseNetworkOption(`allow:${host}`)).toThrow(`invalid host "${host}"`)
+    }
+    expect(parseNetworkOption('allow:0xide.dev,1password.com,x0.io')).toEqual(
+      allow('0xide.dev', '1password.com', 'x0.io')
+    )
+  })
+
   it('matches a name or the names under a wildcard domain', () => {
     expect(matchesHost('registry.npmjs.org', 'registry.npmjs.org')).toBe(true)
     expect(matchesHost('registry.npmjs.org', 'REGISTRY.npmjs.org.')).toBe(true)

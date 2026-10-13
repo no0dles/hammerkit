@@ -33,7 +33,7 @@ describe('network limits (kubernetes)', () => {
       await createTestCase('k8s-network-none', {
         '.git/HEAD': 'ref: refs/heads/main\n',
         '.hammerkit.yaml': {
-          environments: { default: { kubernetes: { context, namespace } } },
+          environments: { default: { kubernetes: { context, namespace, networkPolicy: 'enforced' } } },
           services: { web },
           tasks: {
             // two jobs, so a failure names the check that failed
@@ -75,7 +75,7 @@ describe('network limits (kubernetes)', () => {
       await createTestCase('k8s-network-allow', {
         '.git/HEAD': 'ref: refs/heads/main\n',
         '.hammerkit.yaml': {
-          environments: { default: { kubernetes: { context, namespace } } },
+          environments: { default: { kubernetes: { context, namespace, networkPolicy: 'enforced' } } },
           tasks: {
             install: {
               image: 'node:24-alpine',

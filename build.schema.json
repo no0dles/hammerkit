@@ -665,6 +665,11 @@
                           "additionalProperties": false
                         }
                       },
+                      "networkPolicy": {
+                        "type": "string",
+                        "const": "enforced",
+                        "description": "the cluster enforces NetworkPolicy, which limited networks need"
+                      },
                       "ingresses": {
                         "not": {}
                       }
