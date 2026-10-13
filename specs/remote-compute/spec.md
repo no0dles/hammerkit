@@ -102,7 +102,7 @@ backend:
 - A run from `source: ref` names a repository (`host/path`) and a ref in the request, never a url. The caller's `repos` and the operator's `sources` both have to cover it. The ref is pinned to a commit when the run is submitted and the executor fails if the ref moved, so what was approved is what runs. The read credential is a secret of a provider read as a reserved account, handed to git for one fetch through its environment, and masked in logs.
 - A run executes in a process of its own with a private home directory, a cache namespace per source trust, the allowlisted environment, and no other secret than those of its accounts. A published build file may not name an environment, a Kubernetes service, a cache backend, a mount or a `src` outside the bundle or a runtime the operator did not allow, and a `file:` secret is refused: where things run and what is read from the machine is the operator's.
 - **On a Kubernetes backend** (designed, the task executor):
-  - Each caller's namespace is its own tenant. The server holds a `RoleBinding` per caller namespace, never a cluster-wide binding. Each caller namespace gets a default-deny ingress and egress `NetworkPolicy` that allows DNS and the server explicitly and never the metadata range (`169.254.0.0/16`), and the `restricted` Pod Security level.
+  - Each caller's namespace is its own tenant. The server holds a `RoleBinding` per caller namespace, never a cluster-wide binding. Each caller namespace gets a default-deny ingress and egress `NetworkPolicy` that allows DNS and the server explicitly to pods without a network limit (policies add up, so a limited pod's own policy alone decides what it reaches) and never the metadata range (`169.254.0.0/16`), and the `restricted` Pod Security level.
   - An account is resolved in the Job with credentials minted for that account (workload identity, or a token minted per Job just before it starts, so a long first command or a pending pod doesn't outlive it). An account without `kubernetes` credentials is refused on a Kubernetes backend; nothing falls back to the node's or the server's own identity.
 - Per caller (issuer and subject) the server limits the runs that wait for an approval, that wait in the queue and that execute at once (`429` over the first two); a run is stopped after `runs.maxDuration` and its log is capped. Runs are written to the storage directory when their state changes: a restart keeps finished runs, lets waiting runs wait on, and fails the ones that were queued or running with the server. SIGHUP reloads the entitlements only; the rest of the config needs a restart.
 
@@ -201,7 +201,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 - `grep` and `glob` run on the backend (ripgrep) and return matches only.
 - `fetch <handle> <glob> --to <dir>` is the only command that copies files locally, and only the selected ones.
 - Reads are limited to declared outputs, `src` and logs of the handle, with path traversal rejected, and are checked against the caller.
-- The same operations are exposed as MCP tools by `hammerkit mcp` (stdio first, streamable HTTP later).
+- The same operations are exposed as MCP tools by `hammerkit remote mcp` (stdio first, streamable HTTP later).
 
 ## Security properties
 
