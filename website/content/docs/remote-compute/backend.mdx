@@ -210,7 +210,9 @@ governed by the policy of the caller's namespace, see [Namespaces](#namespaces).
 The cluster's network plugin has to enforce `NetworkPolicy` (Calico and Cilium do, and recent
 kind), for `network:` and for keeping callers apart. Without it nothing is isolated. Hammerkit
 can't tell from the API, so `backend.networkPolicy: enforced` states it; without it a task with a
-limited network fails instead of running open. Some apply a
+limited network fails instead of running open. With
+[sandboxes](/docs/remote-compute/sandboxes#on-kubernetes), whose runs are limited by
+`sandboxes.network`, a config without it is refused unless that is `open`. Some apply a
 policy a moment after the pod started, so a limited pod waits in an init container until its
 policy holds, and fails after 60 seconds if it never does (see
 [Kubernetes](/docs/task/network#kubernetes)). A run's policies go only after its pods are gone.

@@ -496,6 +496,9 @@ above are the same.
   files' claim itself where their sources are, read and write, so what a task writes is in
   the sandbox afterwards, as on a host. A source outside of the sandbox goes into the task's
   own claim as before. A source or mount that goes through a link is refused, as on a host.
+* **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
+  `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a
+  `sandboxes.network` other than `open`, the config needs `backend.networkPolicy: enforced`.
 * **One file while a run works.** The pods of the run have the claim then, so reading a file
   is `409` too, like the other file endpoints.
 * **One node.** A claim is usually `ReadWriteOnce`: several pods share it only on one node.

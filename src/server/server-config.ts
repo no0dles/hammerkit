@@ -692,6 +692,18 @@ export const serverConfigSchema = z
             'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them',
         })
       }
+      if (
+        config.sandboxes.network !== 'open' &&
+        backend.networkPolicy !== 'enforced' &&
+        config.entitlements.some((entitlement) => entitlement.sandboxes)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'networkPolicy'],
+          message:
+            'sandboxes.network limits the tasks of sandboxes with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them, or sandboxes.network: open',
+        })
+      }
     }
     if (config.runs.network !== 'open' && config.runtimes.includes('local')) {
       ctx.addIssue({

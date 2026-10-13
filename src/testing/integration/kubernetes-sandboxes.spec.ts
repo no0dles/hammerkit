@@ -129,6 +129,8 @@ describe('sandboxes on a kubernetes backend', () => {
           runRole,
           namespace: operatorNamespace,
           namespacePrefix: prefix,
+          // runs on sandboxes have no network but the services they need (sandboxes.network)
+          networkPolicy: 'enforced',
           defaultResources: { requests: { cpu: '10m', memory: '16Mi' } },
           sandboxes: { image, size: '1Gi' },
         },

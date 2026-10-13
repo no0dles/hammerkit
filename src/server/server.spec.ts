@@ -690,6 +690,17 @@ describe('server config policy', () => {
       )
       expect(kubernetes({ networkPolicy: 'enforced' }, limited).success).toBe(true)
     })
+
+    it('runs on sandboxes with a limited network only on a cluster that enforces NetworkPolicies', () => {
+      const entitlements = [{ subject: { iss: 'https://idp.corp', sub: 'a' }, repos: ['git.test/*'], sandboxes: true }]
+      expect(message(kubernetes({}, { entitlements }))).toBe(
+        'sandboxes.network limits the tasks of sandboxes with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them, or sandboxes.network: open'
+      )
+      expect(kubernetes({ networkPolicy: 'enforced' }, { entitlements }).success).toBe(true)
+      expect(kubernetes({}, { entitlements, sandboxes: { network: 'open' } }).success).toBe(true)
+      // without sandboxes the default sandboxes.network asks for nothing
+      expect(kubernetes({}).success).toBe(true)
+    })
   })
 
   it('accepts issuers over https, and http only on loopback', () => {
