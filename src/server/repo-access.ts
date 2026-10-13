@@ -1,4 +1,3 @@
-import { devNull } from 'os'
 import { Environment } from '../executer/environment'
 import { createSecretRegistry } from '../utils/redact'
 import { fetchProviderValue } from '../secrets/provider-values'
@@ -104,7 +103,8 @@ export class RepoAccess {
     env[`GIT_CONFIG_VALUE_${count}`] = ''
     env.GIT_CONFIG_COUNT = String(count + 1)
     env.GIT_CONFIG_NOSYSTEM = '1'
-    env.GIT_CONFIG_GLOBAL = devNull
+    // an empty file on every platform: git for Windows opens `/dev/null` as `nul`
+    env.GIT_CONFIG_GLOBAL = '/dev/null'
     return { env, values: credentials.values }
   }
 

@@ -428,9 +428,11 @@ describe('sandboxes api', () => {
       expect((await api.call('GET', `${base}/push`)).status).toBe(405)
 
       const pushed = await push({ branch: 'agent/one', message: 'Agent work' })
-      expect(pushed.status).toBe(200)
+      const answer = await pushed.json()
+      // the error, when there is one, says why
+      expect({ status: pushed.status, error: answer.error }).toEqual({ status: 200, error: undefined })
       const commit = git('rev-parse', 'agent/one')
-      expect(await pushed.json()).toMatchObject({
+      expect(answer).toMatchObject({
         branch: 'agent/one',
         commit,
         sandbox: { id: sandbox.id, ref: 'agent/one', commit, pushed: { 'agent/one': commit } },
