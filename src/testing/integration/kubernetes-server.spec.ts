@@ -229,10 +229,12 @@ tasks:
     cmds:
       # an open network reaches beyond the namespace, but not a denied address. An open
       # pod has no gate: on kindnet the namespace's policy applies a moment after it
-      # started, so the denied address is blocked from then on, five tries in a row
+      # started, so the denied address is blocked from then on, five tries in a row (in
+      # one command, since every command is a pod of its own)
       - for i in $(seq 30); do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && exit 0; sleep 1; done; exit 1
-      - for i in $(seq 30); do nc -z -w 2 ${denied} 8080 || break; sleep 1; done
-      - for i in $(seq 5); do if nc -z -w 2 ${denied} 8080; then echo "reached on try $i"; exit 1; fi; done
+      - >-
+        for i in $(seq 30); do nc -z -w 2 ${denied} 8080 || break; sleep 1; done;
+        for i in $(seq 5); do if nc -z -w 2 ${denied} 8080; then echo "reached on try $i"; exit 1; fi; done
       - echo denied-ok
   check:
     deps: [build, offline, reach]
