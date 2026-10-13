@@ -106,7 +106,8 @@ describe('workerMain', () => {
     // a method named in the run keeps the caching
     expect(await states({ args: ['y'], cache: 'checksum' })).toContain('succeeded')
     expect(await states({ args: ['y'], cache: 'checksum' })).toEqual(['cached'])
-  })
+    // six runs of the worker, each one takes several seconds on windows
+  }, 180_000)
 
   it('holds the run to the network ceiling of the server', async () => {
     // a local task can not be limited, so the ceiling refuses it before it starts
