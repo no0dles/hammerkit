@@ -5,7 +5,8 @@ import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
-import { WorkerMessage, workerMain } from './run-worker'
+import { WorkerMessage, taskCauses, workerMain } from './run-worker'
+import { HOST_ENV_ALLOW } from '../testing/host-env'
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   const chunks: string[] = []
@@ -25,6 +26,10 @@ function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   }
 }
 
+// the variables a server lets its runs see: without PSModulePath every powershell a
+// task starts takes about 20 seconds on Windows
+const hostEnvs = Object.fromEntries(HOST_ENV_ALLOW.map((name) => [name, process.env[name]]))
+
 describe('workerMain', () => {
   let directory: string
 
@@ -42,7 +47,7 @@ describe('workerMain', () => {
     const stdin = new PassThrough()
     stdin.end(typeof input === 'string' ? input : JSON.stringify(input))
     const out = sink()
-    await workerMain(stdin, out.stream, { PATH: process.env.PATH }, directory, new AbortController())
+    await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
     return out.messages()
   }
 
@@ -58,8 +63,8 @@ describe('workerMain', () => {
     const messages = await run({ ...base, entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: true })
     const events = messages.flatMap((m) => (m.kind === 'event' ? [m.event] : []))
-    expect(events).toContainEqual({ type: 'task', task: 'hello', state: 'running' })
-    expect(events).toContainEqual({ type: 'task', task: 'hello', state: 'succeeded' })
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'hello', state: 'running' }))
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'hello', state: 'succeeded' }))
     expect(events.map((e) => (e.type === 'log' ? e.text : '')).join('')).toContain('hello-from-the-run')
   })
 
@@ -90,6 +95,116 @@ describe('workerMain', () => {
     }
   })
 
+  it('reports the exit code of a failed task and how long it ran', async () => {
+    const messages = await run({ ...base, tasks: ['broken'], entry: join(directory, '.hammerkit.yaml') })
+    const events = messages.flatMap((m) => (m.kind === 'event' ? [m.event] : []))
+    expect(events).toContainEqual({
+      type: 'task',
+      task: 'broken',
+      state: 'failed',
+      exitCode: 3,
+      durationMs: expect.any(Number),
+    })
+  })
+
+  it('says why a task ran, and when it came from the cache', async () => {
+    // the process of a run finds its caches through its environment, as the server sets it
+    const cache = mkdtempSync(join(tmpdir(), 'hammerkit-worker-cache-'))
+    vi.stubEnv('HAMMERKIT_DIR', cache)
+    writeFileSync(
+      join(directory, '.hammerkit.yaml'),
+      [
+        'caches:',
+        `  default: { method: checksum, backend: { type: local, path: ${JSON.stringify(join(cache, 'backend'))} } }`,
+        'tasks:',
+        '  build:',
+        '    src: [input.txt]',
+        '    cmds: [echo built]',
+        '',
+      ].join('\n')
+    )
+    writeFileSync(join(directory, 'input.txt'), 'one')
+    try {
+      const once = async () => {
+        const stdin = new PassThrough()
+        stdin.end(
+          JSON.stringify({
+            ...base,
+            tasks: ['build'],
+            options: { cache: 'checksum' },
+            entry: join(directory, '.hammerkit.yaml'),
+          })
+        )
+        const out = sink()
+        await workerMain(stdin, out.stream, hostEnvs, directory, new AbortController())
+        return out.messages().flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
+      }
+      expect(await once()).toContainEqual({
+        type: 'task',
+        task: 'build',
+        state: 'succeeded',
+        durationMs: expect.any(Number),
+        causes: ['never cached'],
+      })
+      expect(await once()).toContainEqual({
+        type: 'task',
+        task: 'build',
+        state: 'cached',
+        durationMs: expect.any(Number),
+      })
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(cache, { recursive: true, force: true })
+    }
+  })
+
+  const taskEvents = (messages: WorkerMessage[]) =>
+    messages.flatMap((m) => (m.kind === 'event' && m.event.type === 'task' ? [m.event] : []))
+
+  it('calls the tasks after a failed one cancelled, and never running', async () => {
+    writeFileSync(
+      join(directory, '.hammerkit.yaml'),
+      'tasks:\n  a:\n    cmds: [exit 3]\n  b:\n    deps: [a]\n    cmds: [echo b]\n'
+    )
+    const events = taskEvents(await run({ ...base, tasks: ['b'], entry: join(directory, '.hammerkit.yaml') }))
+    expect(events).toContainEqual(expect.objectContaining({ task: 'a', state: 'failed', exitCode: 3 }))
+    expect(events.filter((e) => e.task === 'b')).toEqual([{ type: 'task', task: 'b', state: 'cancelled' }])
+  })
+
+  it('reports a dependency no task needed as skipped, without a duration', async () => {
+    const cache = mkdtempSync(join(tmpdir(), 'hammerkit-worker-cache-'))
+    vi.stubEnv('HAMMERKIT_DIR', cache)
+    writeFileSync(
+      join(directory, '.hammerkit.yaml'),
+      [
+        'caches:',
+        `  default: { method: checksum, backend: { type: local, path: ${JSON.stringify(join(cache, 'backend'))} } }`,
+        'tasks:',
+        '  a:',
+        '    src: [a.txt]',
+        '    cmds: [echo a]',
+        '  b:',
+        '    deps: [a]',
+        '    src: [b.txt]',
+        '    cmds: [echo b]',
+        '',
+      ].join('\n')
+    )
+    writeFileSync(join(directory, 'a.txt'), 'a')
+    writeFileSync(join(directory, 'b.txt'), 'b')
+    try {
+      const input = { ...base, tasks: ['b'], options: { cache: 'checksum' }, entry: join(directory, '.hammerkit.yaml') }
+      expect(taskEvents(await run(input))).toContainEqual(expect.objectContaining({ task: 'a', state: 'succeeded' }))
+      // b comes from the cache, so nothing needs a
+      const events = taskEvents(await run(input))
+      expect(events).toContainEqual(expect.objectContaining({ task: 'b', state: 'cached' }))
+      expect(events.filter((e) => e.task === 'a')).toEqual([{ type: 'task', task: 'a', state: 'skipped' }])
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(cache, { recursive: true, force: true })
+    }
+  })
+
   it('says when the input is not a run', async () => {
     const messages = await run('{"tasks": "build"}')
     expect(messages).toEqual([{ kind: 'result', ok: false, error: expect.stringContaining('could not be read') }])
@@ -101,6 +216,23 @@ describe('workerMain', () => {
   it('says when the build file has no such task', async () => {
     const messages = await run({ ...base, tasks: ['nope'], entry: join(directory, '.hammerkit.yaml') })
     expect(messages[messages.length - 1]).toMatchObject({ kind: 'result', ok: false })
+  })
+})
+
+describe('taskCauses', () => {
+  it('names at most 20 causes of a cache miss, masked and cut short', () => {
+    const causes = Array.from({ length: 25 }, (_, i) => `src/file-${i}.txt changed, token secret-${i}`)
+    causes[0] = 'x'.repeat(5000)
+    const result = taskCauses(causes, (text) => text.replace(/secret-\d+/g, '***'))
+    expect(result.causes).toHaveLength(21)
+    expect(result.causes?.[0]).toHaveLength(2048)
+    expect(result.causes?.[1]).toBe('src/file-1.txt changed, token ***')
+    expect(result.causes?.[20]).toBe('… and 5 more')
+  })
+
+  it('leaves the causes out when there are none', () => {
+    expect(taskCauses(undefined, (text) => text)).toEqual({})
+    expect(taskCauses([], (text) => text)).toEqual({})
   })
 })
 

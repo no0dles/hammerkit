@@ -17,7 +17,8 @@ import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-s
 import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
-import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
+import { describeNetworkGateFailure, NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
+import { awaitJobCompletion, deleteJob, deleteJobAndWait, stopJob } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence, getVolumeName } from '../kubernetes/volumes'
 import { getResourceName } from '../kubernetes/resources'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
@@ -124,12 +125,13 @@ async function writeJobLogs(
   }
 }
 
-// Why a Job failed when it was not the command: an init container that could not
-// read a secret names the secret, never its output (which is the provider's and
+// Why a Job failed when it was not the command: the network gate, or an init container
+// that could not read a secret, which names the secret, never its output (which is the provider's and
 // can hold the value).
-async function describeFailedJob(
+export async function describeFailedJob(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
+  task: string,
   job: string,
   secrets: JobSecret[]
 ): Promise<string | undefined> {
@@ -138,6 +140,9 @@ async function describeFailedJob(
     const terminated = status.state?.terminated ?? status.lastState?.terminated
     if (!terminated || terminated.exitCode === 0) {
       continue
+    }
+    if (status.name === NETWORK_GATE_CONTAINER) {
+      return describeNetworkGateFailure(task)
     }
     const secret = secrets.find((s) => `secret-${s.index}` === status.name)
     if (secret) {
@@ -215,6 +220,8 @@ export function kubernetesTaskRuntime(
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
         return
       }
+      // a pod that may still run keeps its policy
+      let keepPolicy = false
       try {
         const podName = getResourceName(task, '-job')
         let i = 0
@@ -251,7 +258,10 @@ export function kubernetesTaskRuntime(
                   labels,
                 },
                 spec: {
-                  ...(secretSpec.initContainers.length > 0 ? { initContainers: secretSpec.initContainers } : {}),
+                  // the network gate first: nothing runs before the item's policy holds
+                  ...(network.initContainers.length + secretSpec.initContainers.length > 0
+                    ? { initContainers: [...network.initContainers, ...secretSpec.initContainers] }
+                    : {}),
                   containers: [
                     {
                       image: task.data.image,
@@ -302,7 +312,9 @@ export function kubernetesTaskRuntime(
               } catch (e) {
                 if (!(e instanceof AbortError)) {
                   await writeJobLogs(instance, kubernetes, task, podName, container)
-                  throw new Error((await describeFailedJob(instance, kubernetes, podName, inJob)) ?? getErrorMessage(e))
+                  throw new Error(
+                    (await describeFailedJob(instance, kubernetes, task.name, podName, inJob)) ?? getErrorMessage(e)
+                  )
                 }
                 throw e
               }
@@ -316,6 +328,11 @@ export function kubernetesTaskRuntime(
             }
           } catch (e) {
             if (e instanceof AbortError) {
+              // the pod goes before its policy does (in finally)
+              await stopJob(instance, kubernetes, podName).catch((e) => {
+                keepPolicy = true
+                task.status.write('error', `the job could not be stopped: ${getErrorMessage(e)}`)
+              })
               await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
               options.state.set({ stateKey: options.stateKey, type: 'canceled' })
               return
@@ -334,20 +351,21 @@ export function kubernetesTaskRuntime(
         await removeTaskSecrets(instance, kubernetes, task)
       } finally {
         network.close()
-        await removeKubernetesItemNetwork(instance, kubernetes, task).catch((e) =>
-          task.status.write('error', `remove of network policy failed ${getErrorMessage(e)}`)
-        )
+        if (!keepPolicy) {
+          await removeKubernetesItemNetwork(instance, kubernetes, task).catch((e) =>
+            task.status.write('error', `remove of network policy failed ${getErrorMessage(e)}`)
+          )
+        }
       }
     },
     async stop(): Promise<void> {
-      await removeKubernetesItemNetwork(instance, kubernetes, task)
       const jobs = await instance.batchApi.listNamespacedJob({
         namespace: kubernetes.namespace,
         labelSelector: `hammerkit.dev/id=${task.id()}`,
       })
-      for (const pod of jobs.items) {
-        if (pod.metadata?.name) {
-          await instance.batchApi.deleteNamespacedJob({ name: pod.metadata.name, namespace: kubernetes.namespace })
+      for (const job of jobs.items) {
+        if (job.metadata?.name) {
+          await stopJob(instance, kubernetes, job.metadata.name)
         }
       }
 
@@ -373,6 +391,8 @@ export function kubernetesTaskRuntime(
           await instance.coreApi.deleteNamespacedPod({ name: pod.metadata.name, namespace: kubernetes.namespace })
         }
       }
+      // once its jobs' pods are gone
+      await removeKubernetesItemNetwork(instance, kubernetes, task)
     },
     async remove(): Promise<void> {
       await this.stop()

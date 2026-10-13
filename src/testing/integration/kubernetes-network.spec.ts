@@ -5,10 +5,11 @@ import { createCli } from '../../program'
 import { expectSuccessfulResult } from '../expect'
 
 // A limited job gets a NetworkPolicy: egress to the pods of the services it
-// needs and, under `allow`, to its egress proxy. Nothing else answers, so
-// the request to an outside address times out. kind's kindnet applies a
-// policy to a pod a moment after the pod started, so the job retries until
-// the outside address stops answering, and fails if it keeps answering.
+// needs and, under `allow`, to its egress proxy. Nothing else answers, so a
+// connection to an outside address times out. A network plugin applies a policy
+// to a pod a moment after it started; the pod's first init container holds it
+// back until then, so every try of the job fails, not only the later ones. An
+// open job reaches the same address, so the tries don't fail for another reason.
 
 const context = process.env.CLUSTER_NAME || 'docker-desktop'
 const namespace = `hammerkit-k8s-net-${(process.env.HAMMERKIT_TEST_RUN_ID ?? 'local').slice(0, 30)}`
@@ -23,8 +24,8 @@ const web = {
   healthcheck: { cmd: 'wget -q -O /dev/null http://127.0.0.1:8080', timeout: '60s' },
 }
 const reachWeb = 'test "$(wget -q -T 5 -O - http://web:8080)" = ok'
-const noRoute = (wget = 'wget') =>
-  `for i in $(seq 30); do ${wget} -q -T 2 -O /dev/null http://1.1.1.1 || exit 0; sleep 1; done; exit 1`
+const noRoute = `for i in $(seq 5); do if nc -z -w 2 1.1.1.1 80; then echo "reached on try $i"; exit 1; fi; done`
+const route = `for i in $(seq 30); do nc -z -w 2 1.1.1.1 80 && exit 0; sleep 1; done; exit 1`
 
 describe('network limits (kubernetes)', () => {
   it(
@@ -49,11 +50,17 @@ describe('network limits (kubernetes)', () => {
               src: ['input.txt'],
               network: 'none',
               needs: ['web'],
-              cmds: [noRoute()],
+              cmds: [noRoute],
+            },
+            // an open job reaches the address the others can't
+            open: {
+              image: 'alpine:3.21',
+              src: ['input.txt'],
+              cmds: [route],
             },
             use: {
               image: 'alpine:3.21',
-              deps: ['reach', 'isolated'],
+              deps: ['reach', 'isolated', 'open'],
               cmds: ['true'],
             },
           },
@@ -85,7 +92,7 @@ describe('network limits (kubernetes)', () => {
                 [
                   'npm view left-pad version',
                   'wget -q -T 5 -O - http://example.com 2>&1 | grep -q Forbidden',
-                  noRoute('env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY wget'),
+                  noRoute,
                 ].join(' && '),
               ],
             },

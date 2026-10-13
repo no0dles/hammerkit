@@ -1,4 +1,4 @@
-import { V1Deployment, V1EnvVar, V1HostAlias, V1NetworkPolicy, V1Service } from '@kubernetes/client-node'
+import { V1Container, V1Deployment, V1EnvVar, V1HostAlias, V1NetworkPolicy, V1Service } from '@kubernetes/client-node'
 import { PassThrough, Writable } from 'stream'
 import { createInterface } from 'readline'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -23,6 +23,7 @@ import {
 } from '../network/egress-proxy'
 import { getErrorMessage } from '../log'
 import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
+import { getNetworkGate } from './network-gate'
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
@@ -41,6 +42,8 @@ export interface KubernetesItemNetwork {
   env: V1EnvVar[]
   // the needed services, and the proxy under `allow`, by name
   hostAliases: V1HostAlias[]
+  // the first init containers of the item's pods: they wait for its policy
+  initContainers: V1Container[]
   // stops following the proxy's log
   close(): void
 }
@@ -93,7 +96,8 @@ export function buildNetworkPolicy(
 }
 
 // What the item's pods are created with, after its policy (and proxy) are in
-// place, so a pod never runs unlimited. An open item gets what it had before:
+// place, so a pod never runs unlimited: its first init container waits until the
+// policy holds (see getNetworkGate). An open item gets what it had before:
 // whatever an earlier limited run left goes.
 // A task follows the proxy's log while its jobs run. A service outlives the
 // run on a cluster, so its refused hosts are in the proxy's own log.
@@ -108,13 +112,14 @@ export async function ensureKubernetesItemNetwork(
   if (network.type === 'open') {
     // without the rights to manage NetworkPolicies, hammerkit never made one
     await removeKubernetesItemNetwork(instance, env, item, { ignoreForbidden: true })
-    return { env: [], hostAliases, close() {} }
+    return { env: [], hostAliases, initContainers: [], close() {} }
   }
 
   await apply(instance, buildNetworkPolicy(env, item, network))
+  const initContainers = getNetworkGate(env, item)
   if (network.type === 'none') {
     await removeProxy(instance, env, item, [404])
-    return { env: [], hostAliases, close() {} }
+    return { env: [], hostAliases, initContainers, close() {} }
   }
 
   let proxyIp: string
@@ -131,6 +136,7 @@ export async function ensureKubernetesItemNetwork(
       value,
     })),
     hostAliases: [...hostAliases, { ip: proxyIp, hostnames: [EGRESS_PROXY_HOST] }],
+    initContainers,
     close: () => follow?.abort(),
   }
 }
