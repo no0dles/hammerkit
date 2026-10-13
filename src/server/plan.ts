@@ -241,6 +241,18 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
       )
     }
     const data = item.data
+    // what a task reads and writes is the bundle's: `src: ../..` would have the server
+    // copy its own files (its credentials, other callers' caches) into the task
+    for (const source of 'src' in data ? data.src : []) {
+      if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
+        problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
+      }
+    }
+    for (const generate of isWorkTask(data) ? data.generates : []) {
+      if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
+        problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
+      }
+    }
     if (isContainerWorkTask(data) || isContainerWorkService(data)) {
       for (const mount of data.mounts) {
         // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
