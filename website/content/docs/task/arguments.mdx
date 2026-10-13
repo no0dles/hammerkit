@@ -48,8 +48,8 @@ Two runtimes read the command line once more, and hammerkit accounts for both:
 - On Windows, Windows PowerShell builds a new command line for the program it
   starts, and starts `.cmd` and `.bat` shims (`yarn.cmd`, most of
   `node_modules/.bin`) through `cmd.exe`. A local task there refuses an empty
-  argument, and one with `"`, `&`, `|`, `<`, `>`, `^`, `%`, `!` or a line break,
-  rather than let it split or run.
+  argument, one with `"`, `&`, `|`, `<`, `>`, `^`, `%`, `!` or a line break, and
+  one with a space that ends in `\`, rather than let it split or run.
 
 To hand over a whole pipeline, make the last command a shell that takes it:
 
