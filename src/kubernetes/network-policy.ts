@@ -31,18 +31,26 @@ import {
 } from '../network/egress-proxy'
 import { getErrorMessage } from '../log'
 import { sleep } from '../utils/sleep'
+import { getRunId } from '../utils/run-id'
+import { getPodPlacement, getRunLabels, getRunLabelValue, RUN_LABEL } from './job-placement'
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
 const ID_LABEL = 'hammerkit.dev/id'
-// the run a task's pods belong to
-export const RUN_LABEL = 'hammerkit.dev/run'
 const PROXY_LABEL = 'hammerkit.dev/proxy-for'
 const NETWORK_OF_LABEL = 'hammerkit.dev/network-of'
 const PROXY_READY_TIMEOUT_MS = 60000
 // how long the pods of an item may take to end before their policy goes
 const POD_END_TIMEOUT_MS = 120000
 const POD_END_POLL_MS = 500
+
+// on the pods of a limited item on a server: its own policy governs their egress, the
+// one of the caller's namespace (see getNamespacePolicies) leaves them out
+export const NETWORK_LABEL = 'hammerkit.dev/network'
+
+export function getNetworkLabels(env: WorkKubernetesEnvironment, item: ContainerItem): { [label: string]: string } {
+  return env.server && getEffectiveNetwork(item.data).type !== 'open' ? { [NETWORK_LABEL]: 'limited' } : {}
+}
 
 export interface KubernetesItemNetwork {
   // the proxy variables under `allow`
@@ -60,9 +68,16 @@ export interface KubernetesNetworkScope {
   run: string | null
 }
 
+// The scope of a task's limits: the run's label on a server, which the server puts on
+// everything of the run, so the policy selects the pods it labelled; this process's run
+// elsewhere.
+export function getTaskNetworkScope(env: WorkKubernetesEnvironment): KubernetesNetworkScope {
+  return { run: env.server ? getRunLabelValue(env.server.run) : getRunId() }
+}
+
 // A key short enough for a Service name (63 characters) with its prefix.
 function getNetworkKey(item: ContainerItem, scope: KubernetesNetworkScope): string {
-  return scope.run ? `${item.id().substring(0, 32)}-${scope.run}` : item.id()
+  return scope.run ? `${item.id().substring(0, 32)}-${scope.run.substring(0, 12)}` : item.id()
 }
 
 export function getProxyName(item: ContainerItem, scope: KubernetesNetworkScope): string {
@@ -121,7 +136,7 @@ export function buildNetworkPolicy(
       namespace: env.namespace,
       name: getNetworkPolicyName(item, scope),
       annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { [NETWORK_OF_LABEL]: item.id() },
+      labels: { [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) },
     },
     spec: {
       podSelector: { matchLabels: getItemPodLabels(item, scope) },
@@ -158,7 +173,7 @@ export function buildProxyPolicy(
       namespace: env.namespace,
       name: getProxyName(item, scope),
       annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { [NETWORK_OF_LABEL]: item.id() },
+      labels: { [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) },
     },
     spec: {
       podSelector: { matchLabels: { [PROXY_LABEL]: getNetworkKey(item, scope) } },
@@ -366,8 +381,10 @@ async function ensureProxy(
     namespace: env.namespace,
     name,
     annotations: { 'hammerkit.dev/version': getVersion() },
-    labels: { ...labels, [NETWORK_OF_LABEL]: item.id() },
+    labels: { ...labels, [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) },
   }
+  // on a server the proxy runs on the nodes of the first pool, without a token
+  const placement = env.server ? getPodPlacement(env.server, undefined) : null
   const deployment: V1Deployment & KubernetesObjectHeader = {
     apiVersion: 'apps/v1',
     kind: 'Deployment',
@@ -376,10 +393,11 @@ async function ensureProxy(
       replicas: 1,
       selector: { matchLabels: labels },
       template: {
-        metadata: { labels },
+        metadata: { labels: { ...labels, ...getRunLabels(env) } },
         spec: {
           hostAliases,
           automountServiceAccountToken: false,
+          ...(placement ? { nodeSelector: placement.nodeSelector, tolerations: placement.tolerations } : {}),
           containers: [
             {
               name: 'proxy',
@@ -407,6 +425,7 @@ async function ensureProxy(
                 allowPrivilegeEscalation: false,
                 readOnlyRootFilesystem: true,
                 capabilities: { drop: ['ALL'] },
+                ...(env.server ? { seccompProfile: { type: 'RuntimeDefault' } } : {}),
               },
               resources: { limits: { memory: '256Mi' } },
             },

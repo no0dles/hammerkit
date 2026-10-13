@@ -1,6 +1,6 @@
 ---
 title: "Sources"
-description: "The repositories a server may read the code of a run from, and the token it reads them with."
+description: "The repositories a server may read the code of a run from, the token it reads them with, and the branches a sandbox may push to."
 ---
 `sources` lists the repositories a run with `source: ref` may get its code from, and how
 the server reads each. The caller names a repository and a ref, never a URL, and the server
@@ -20,6 +20,8 @@ sources:                            # the repositories a run may get its code fr
 | `secret.from` | The token, as `provider:reference` of a secret provider. Without `secret` the repository is read anonymously. |
 | `secret.account` | The [account](/docs/remote-compute/accounts) the token is read as. It needs credentials for that provider. |
 | `secret.username` | The user name of the basic authentication the token is sent with, `x-access-token` by default. A GitLab token is commonly sent as `oauth2`. |
+| `push.branches` | The branches a [sandbox may push](/docs/remote-compute/sandboxes#pushing) to, see [Pushing](#pushing). Without `push`, sandboxes of these repositories do not push. |
+| `push.secret` | The token that writes, with `from`, `account` and `username` as `secret`. Required: a push never falls back to a credential of the server's user. |
 
 ## Which repositories a run may use
 
@@ -64,3 +66,48 @@ executor fetches the ref and fails the run if it no longer points to that commit
 branch that moved after the approval does not run other code than the one approved. A
 40-digit commit hash is taken as it is; an account with `refs` refuses one, because it
 names no branch.
+
+## Pushing
+
+`push` lets [sandboxes](/docs/remote-compute/sandboxes#pushing) of the repositories an entry
+covers push their changes, to the branches it lists and no others:
+
+```yaml title="server.yaml"
+sources:
+  - match: github.com/corp/*
+    secret: { from: 'gsm:github-readonly-token', account: scm-read }
+    push:
+      secret: { from: 'gsm:github-agent-push', account: scm-push }
+      branches: ['agent/**']        # agent/fix-login, agent/team/x; not main
+```
+
+A branch pattern is written like an account's `refs`: a name (`agent/fix`), `*` for a part
+of one level (`agent/*`) and `**` as the last level for everything below (`agent/**`). Keep
+the patterns to branches that nobody else writes to and that no deployment runs from: a
+sandbox holds changes nobody reviewed, the push is how they get to a review.
+
+The write token is its own secret, read as its own account, so a server that only reads
+never holds a token that writes. Like the read token it goes to one git process through its
+environment, is masked, and the account is the server's own: no entitlement may name it and
+no build file may use it. That git process gets nothing else to sign in with: no global or
+system git configuration, no credential helper, no `.netrc` of a home directory and no ssh
+agent, so a push is always the service account's and never the identity of whoever runs the
+server. A provider command can mint a short-lived token of a GitHub App
+with write access to the repository's contents. A token can not be limited to branches on
+the host's side, so protect the branches people work on (`main`, releases) in the
+repository as well: a pattern that is too wide is then caught twice.
+
+<Callout type="warn">
+
+**Pushed branches run in your CI.** Most repositories run CI on a push to any branch, with
+the repository's secrets: GitHub Actions `on: push`, GitLab pipelines, Buildkite. A branch a
+sandbox pushed holds code nobody reviewed, including the build scripts and tests CI runs, and
+the workflow files themselves when the token may write them. Before you allow `push`:
+
+* keep the push patterns out of CI that holds secrets (`branches-ignore: ['agent/**']`), or
+  put the jobs with secrets behind a review (environments with required reviewers, protected
+  variables);
+* give the token no permission over workflow files (a GitHub App without `workflows: write`),
+  so a push that changes them is refused by the host.
+
+</Callout>

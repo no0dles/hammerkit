@@ -192,6 +192,9 @@ export interface SandboxFiles {
   search(query: SearchQuery): Promise<SearchResult>
   changes(): Promise<ChangedFile[]>
   diff(format: 'diff' | 'patch', author: PatchAuthor): Promise<string>
+  // a commit of the changes on top of the commit the sandbox is at, in its git data, which
+  // no branch points to; none when nothing changed
+  commit(author: PatchAuthor): Promise<string | undefined>
   plan(ops: EditOp[]): Promise<EditPlan>
 }
 
@@ -262,6 +265,18 @@ function decodeCursor<T extends string | number>(cursor: string | undefined, typ
 
 function clamp(value: number | undefined, fallback: number, max: number): number {
   return Math.min(Math.max(1, Math.floor(value ?? fallback)), max)
+}
+
+// A commit of `tree` (the index when left out) on top of the commit the sandbox is at.
+async function writeCommit(run: SandboxGit['run'], author: PatchAuthor, tree?: string): Promise<string> {
+  const identity = {
+    GIT_AUTHOR_NAME: author.name,
+    GIT_AUTHOR_EMAIL: author.email,
+    GIT_COMMITTER_NAME: author.name,
+    GIT_COMMITTER_EMAIL: author.email,
+  }
+  const written = tree ?? (await run(['write-tree'], 'read')).trim()
+  return (await run(['commit-tree', written, '-p', 'HEAD', '-m', author.message], 'read', { env: identity })).trim()
 }
 
 function sha256(content: Buffer): string {
@@ -880,19 +895,18 @@ export class HostSandboxFiles implements SandboxFiles {
       }
       // a commit of the changes on top of the commit the sandbox is at, which no branch
       // points to, written out as `git format-patch` writes it
-      const tree = (await run(['write-tree'], 'read')).trim()
-      const identity = {
-        GIT_AUTHOR_NAME: author.name,
-        GIT_AUTHOR_EMAIL: author.email,
-        GIT_COMMITTER_NAME: author.name,
-        GIT_COMMITTER_EMAIL: author.email,
-      }
-      const commit = (
-        await run(['commit-tree', tree, '-p', 'HEAD', '-m', author.message], 'read', { env: identity })
-      ).trim()
+      const commit = await writeCommit(run, author)
       return run(['format-patch', '-1', '--stdout', '--binary', '-M', commit], 'read', {
         maxBuffer: MAX_CHANGES_BYTES,
       })
+    })
+  }
+
+  async commit(author: PatchAuthor): Promise<string | undefined> {
+    return this.withFilesIndex(async (run) => {
+      const tree = (await run(['write-tree'], 'read')).trim()
+      const base = (await run(['rev-parse', 'HEAD^{tree}'], 'read')).trim()
+      return tree === base ? undefined : writeCommit(run, author, tree)
     })
   }
 

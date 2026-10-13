@@ -18,7 +18,9 @@ import {
   buildProxyPolicy,
   ensureKubernetesItemNetwork,
   getProxyName,
+  getTaskNetworkScope,
 } from '../kubernetes/network-policy'
+import { getRunLabelValue } from '../kubernetes/job-placement'
 import { ExecuteOptions } from '../runtime/runtime'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
@@ -328,6 +330,23 @@ describe('network', () => {
           expect(
             getProxyName(cli.service('db') as WorkItem<ContainerWorkService>, { run: null }).length
           ).toBeLessThanOrEqual(63)
+
+          // on a server the scope is the run's label, which the server puts on the pods it
+          // runs, and the policies carry it, so they go with the run's other objects
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {} }
+          const onServer = { ...env, server }
+          const scope = getTaskNetworkScope(onServer)
+          expect(scope).toEqual({ run: getRunLabelValue('run_1') })
+          const labelled = buildNetworkPolicy(onServer, offline, { type: 'none' }, scope)
+          expect(labelled.metadata.labels).toEqual({
+            'hammerkit.dev/network-of': offline.id(),
+            'hammerkit.dev/run': getRunLabelValue('run_1'),
+          })
+          expect(labelled.spec?.podSelector?.matchLabels?.['hammerkit.dev/run']).toBe(getRunLabelValue('run_1'))
+          expect(buildProxyPolicy(onServer, install, scope).metadata.labels).toEqual({
+            'hammerkit.dev/network-of': install.id(),
+            'hammerkit.dev/run': getRunLabelValue('run_1'),
+          })
         }
       )
     })

@@ -8,10 +8,14 @@ const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
   // the provider prints the reference it is asked for, the "token" of repo X is X
   secretProviders: { echo: { command: [process.execPath, '-e', 'process.stdout.write(process.argv[1])', '{{ref}}'] } },
-  accounts: { 'scm-read': { providers: { echo: { env: {} } } } },
+  accounts: { 'scm-read': { providers: { echo: { env: {} } } }, 'scm-push': { providers: { echo: { env: {} } } } },
   sources: [
     { match: 'github.com/corp/special', secret: { from: 'echo:special-token', account: 'scm-read' } },
-    { match: 'github.com/corp/*', secret: { from: 'echo:github-token-value', account: 'scm-read' } },
+    {
+      match: 'github.com/corp/*',
+      secret: { from: 'echo:github-token-value', account: 'scm-read' },
+      push: { secret: { from: 'echo:github-push-token', account: 'scm-push' }, branches: ['agent/**'] },
+    },
     {
       match: 'gitlab.corp.com/platform/**',
       secret: { from: 'echo:gitlab-token', account: 'scm-read', username: 'oauth2' },
@@ -61,6 +65,28 @@ describe('RepoAccess', () => {
     const gitlab = await new RepoAccess(config, environment).credentials('gitlab.corp.com/platform/a/b')
     expect(gitlab.env.GIT_CONFIG_KEY_0).toBe('http.https://gitlab.corp.com/.extraHeader')
     expect(gitlab.env.GIT_CONFIG_VALUE_0).toBe(basic('oauth2', 'gitlab-token'))
+  })
+
+  it('pushes with the write credential of the source, never with the one that reads', async () => {
+    const repos = new RepoAccess(config, environment)
+    const push = await repos.pushCredentials('github.com/corp/payments')
+    expect(push.env.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraHeader')
+    expect(push.env.GIT_CONFIG_VALUE_0).toBe(basic('x-access-token', 'github-push-token'))
+    expect(push.values).toEqual(['github-push-token', basic('x-access-token', 'github-push-token')])
+    // nothing of the server user's own git: no global or system config, credential helper,
+    // .netrc in the home directory or ssh agent
+    expect(push.env.HOME).toBeUndefined()
+    expect(push.env).toMatchObject({
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+    })
+    // a source without push holds no token that writes, and is not pushed to
+    await expect(repos.pushCredentials('github.com/corp/special')).rejects.toThrow(
+      'this server does not push to github.com/corp/special'
+    )
   })
 
   it('sends nothing for a public repository, and nothing of the server beyond its allowlist', async () => {

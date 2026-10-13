@@ -17,7 +17,7 @@ import { removeContainer } from '../docker/remove-container'
 import { checkReadiness } from './check-readiness'
 import { getMainProcessUser } from './main-process-user'
 import { Environment } from './environment'
-import { prepareMounts, prepareVolume, pullImage } from './execution-steps'
+import { prepareMounts, prepareVolume, pullImage, refuseHostLinks } from './execution-steps'
 import {
   ContainerNetworkOptions,
   DockerItemNetwork,
@@ -109,7 +109,7 @@ export async function dockerService(
     await pullImage(item, docker, environment)
     checkForAbort(options.abort)
 
-    await prepareVolume(item, docker)
+    await prepareVolume(item, docker, environment)
     checkForAbort(options.abort)
 
     network = await prepareItemNetwork(docker, item, environment, {
@@ -121,6 +121,7 @@ export async function dockerService(
     item.status.write('debug', `create container with image ${item.data.image}`)
     const secrets = await prepareContainerSecrets(item.data.secrets, getWorkInstanceId(item), environment)
     const resources = await resolveDockerResources(docker, item.data.resources, item.status)
+    await refuseHostLinks(item, environment)
     container = await docker.createContainer(
       buildServiceCreateOptions(item, options, network.options, secrets, resources)
     )

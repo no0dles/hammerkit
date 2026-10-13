@@ -78,13 +78,46 @@ export class RepoAccess {
    * values are what the run has to mask.
    */
   async credentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
+    return this.withSecret(repo, this.source(repo)?.secret)
+  }
+
+  /**
+   * The same for pushing a sandbox to the repository, with the write credential of the
+   * source's `push`, which is a secret and an account of its own: a server that only reads
+   * never holds a token that writes.
+   */
+  async pushCredentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
+    const secret = this.source(repo)?.push?.secret
+    if (!secret) {
+      throw new Error(`this server does not push to ${repo}`)
+    }
+    const credentials = await this.withSecret(repo, secret)
+    // nothing but that token: no configuration, credential helper, .netrc or ssh agent of
+    // the server's user, which would push as whoever that user is
+    const env = { ...credentials.env }
+    for (const key of ['HOME', 'XDG_CONFIG_HOME', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_SSH_COMMAND']) {
+      delete env[key]
+    }
+    const count = Number(env.GIT_CONFIG_COUNT ?? '0')
+    env[`GIT_CONFIG_KEY_${count}`] = 'credential.helper'
+    env[`GIT_CONFIG_VALUE_${count}`] = ''
+    env.GIT_CONFIG_COUNT = String(count + 1)
+    env.GIT_CONFIG_NOSYSTEM = '1'
+    // an empty file on every platform: git for Windows opens `/dev/null` as `nul`
+    env.GIT_CONFIG_GLOBAL = '/dev/null'
+    return { env, values: credentials.values }
+  }
+
+  private async withSecret(
+    repo: string,
+    secret: Source['secret']
+  ): Promise<{ env: { [key: string]: string }; values: string[] }> {
     const env: { [key: string]: string } = {}
     for (const [key, value] of Object.entries(this.environment.processEnvs)) {
       if (value !== undefined) {
         env[key] = value
       }
     }
-    const secret = this.source(repo)?.secret
     if (!secret) {
       return { env, values: [] }
     }

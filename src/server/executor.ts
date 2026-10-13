@@ -16,6 +16,7 @@ import { SandboxRegistry } from './sandboxes'
 import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { limitNetwork, parseWorkNetwork, toNetworkSchema } from '../planner/work-network'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -53,6 +54,8 @@ export interface HostExecutorOptions {
   worker?: string[]
   // the sandboxes runs may work on, and what such a run may do
   sandboxes?: SandboxRunOptions
+  // where container tasks run when not on this machine's docker daemon
+  placement?: RunPlacement
 }
 
 export interface SandboxRunOptions {
@@ -61,6 +64,17 @@ export interface SandboxRunOptions {
   policy: PlanPolicy
   // the most open network a task or service of such a run gets
   network: NetworkSchema
+}
+
+/**
+ * Where the container tasks and services of a run execute when it is not this
+ * machine (see KubernetesExecutor): `prepare` before the process of the run starts,
+ * which says the cluster and namespace and the variables the process needs to reach
+ * it, and `release` when it ended, whatever the outcome.
+ */
+export interface RunPlacement {
+  prepare(run: Run, context: RunContext): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
+  release(run: Run, context: RunContext): Promise<void>
 }
 
 // The cache a run shares with others is the one of its source: the runs of a repository
@@ -143,6 +157,9 @@ export class HostExecutor implements RunExecutor {
 
     const root = join(this.options.directory, run.id)
     try {
+      // where the process of the run starts: the checkout of a ref, or for a sandbox the
+      // published files, so what the process and the secret providers it starts read of
+      // their directory is never what a task wrote
       let cwd: string
       let input: Pick<WorkerInput, 'entry' | 'directory' | 'network'>
       if (source.type === 'ref') {
@@ -166,8 +183,15 @@ export class HostExecutor implements RunExecutor {
         // the published files are read from a directory of the run and work on the
         // sandbox, whose own build files are just files
         const { registry, network } = sandboxes as SandboxRunOptions
-        cwd = await registry.attach(source.id)
-        const state = await registry.state(source.id)
+        const files = await registry.attach(source.id)
+        const state = await registry.state(source.id, abortCtrl.signal)
+        // what was approved is what runs: the files may have changed since, by a run
+        // before this one on the sandbox
+        if (run.approvals?.length && state.tree !== source.tree) {
+          throw new Error(
+            `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
+          )
+        }
         context.emit({
           type: 'log',
           task: 'hammerkit',
@@ -179,9 +203,10 @@ export class HostExecutor implements RunExecutor {
         const published = join(root, 'bundle')
         await mkdir(published, { recursive: true })
         await this.writeBundle(published, bundle.files)
+        cwd = published
         input = {
           entry: join(published, version.entry),
-          directory: { read: published, work: cwd },
+          directory: { read: published, work: files },
           // a sandbox run stays under both the sandbox and the server's runs.network
           network: toNetworkSchema(limitNetwork(parseWorkNetwork(network), planning.policy.network ?? null)),
         }
@@ -191,20 +216,29 @@ export class HostExecutor implements RunExecutor {
       await mkdir(home, { recursive: true })
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
-      await this.runInProcess(
-        worker,
-        {
-          ...input,
-          tasks: run.tasks,
-          options: run.options,
-          accounts: run.accounts,
-          catalog: planning.environment.hosted?.catalog as SecretCatalog,
-        },
-        cwd,
-        this.processEnvironment(home, cache),
-        context,
-        abortCtrl.signal
-      )
+      const placement = this.options.placement
+      const placed = placement ? await placement.prepare(run, context) : undefined
+      try {
+        await this.runInProcess(
+          worker,
+          {
+            ...input,
+            tasks: run.tasks,
+            options: run.options,
+            accounts: run.accounts,
+            catalog: planning.environment.hosted?.catalog as SecretCatalog,
+            ...(placed ? { kubernetes: placed.kubernetes } : {}),
+          },
+          cwd,
+          { ...this.processEnvironment(home, cache), ...placed?.env },
+          context,
+          abortCtrl.signal
+        )
+      } finally {
+        if (placement && placed) {
+          await placement.release(run, context)
+        }
+      }
     } finally {
       context.signal.removeEventListener('abort', abort)
       await rm(root, { recursive: true, force: true })

@@ -105,6 +105,39 @@ export async function resolveRef(
   return commit
 }
 
+// A branch git takes as a name of its own: a ref, and no part of it starts or ends with a
+// dot or ends with `.lock` (`git check-ref-format` refuses those).
+export function isValidBranch(branch: string): boolean {
+  return (
+    isValidRef(branch) &&
+    branch
+      .split('/')
+      .every((part) => !part.startsWith('.') && !part.startsWith('-') && !part.endsWith('.') && !part.endsWith('.lock'))
+  )
+}
+
+// The commit a branch of a repository points to now, none when there is no such branch.
+export async function remoteBranch(
+  repository: string,
+  branch: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string | undefined> {
+  const output = await git(
+    ['ls-remote', '--heads', '--', repository, `refs/heads/${branch}`],
+    env,
+    signal,
+    `the branches of ${repository}`
+  )
+  for (const line of output.split('\n')) {
+    const [commit, name] = line.split('\t')
+    if (commit && name === `refs/heads/${branch}`) {
+      return commit
+    }
+  }
+  return undefined
+}
+
 // Runs git without a prompt and with the network transports only. Errors say what could
 // not be done (`unable to <action> <what>`) with the last line git printed.
 export async function git(
@@ -113,8 +146,9 @@ export async function git(
   signal: AbortSignal,
   what: string,
   action = 'fetch',
-  // what git may print; a diff of a sandbox can be larger than the default
-  maxBuffer = 1024 * 1024
+  // what git may print: warnings of a large tree must not fail the command, and a diff of
+  // a sandbox can be larger still
+  maxBuffer = 64 * 1024 * 1024
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {

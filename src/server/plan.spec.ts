@@ -305,6 +305,28 @@ tasks:
     )
   })
 
+  it('refuses on a cluster what the Job of a task can not read itself yet', async () => {
+    const onCluster = { policy: { ...policy, backend: 'kubernetes' as const } }
+    const cached =
+      'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X, cache: true }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(cached), hosted, onCluster)).rejects.toThrow(
+      'a: the secret X has cache: true, its digest would need the value before the Job of the task reads it'
+    )
+    const service =
+      'services:\n  db:\n    image: postgres:16\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n'
+    await expect(planBundle(bundle(service), hosted, onCluster)).rejects.toThrow(
+      'db: the secret X is read from gsm, which this server does for tasks only'
+    )
+    const offline =
+      'tasks:\n  a:\n    image: alpine:3.19\n    network: none\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(offline), hosted, onCluster)).rejects.toThrow(
+      'a: the secret X is read from gsm in the Job of the task, which network none would cut off from it'
+    )
+    await expect(planBundle(bundle(build), hosted, onCluster)).resolves.toBeTruthy()
+    await expect(planBundle(bundle(cached), hosted, { policy })).resolves.toBeTruthy()
+    await expect(planBundle(bundle(offline), hosted, { policy })).resolves.toBeTruthy()
+  })
+
   it('refuses a task whose runtime the server does not allow', async () => {
     const yaml = 'tasks:\n  a:\n    cmds: [echo]\n  b:\n    image: node:22\n    cmds: [echo]\n'
     await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, runtimes: ['docker'] } })).rejects.toThrow(
@@ -344,6 +366,16 @@ tasks:
     await refuse(
       'tasks:\n  a:\n    image: alpine\n    mounts: ["../outside:/x"]\n    cmds: [echo]\n',
       /a: mounts .*outside, which is outside of the bundle/
+    )
+    // what a task reads would be uploaded or bound from the server: its cluster token
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    src: ["../../../../../../var/run/secrets/kubernetes.io/serviceaccount"]\n    cmds: [echo]\n',
+      'a: src ../../../../../../var/run/secrets/kubernetes.io/serviceaccount is outside of the bundle'
+    )
+    await refuse('tasks:\n  a:\n    src: ["../../**/*.conf"]\n    cmds: [echo]\n', 'a: src ../../**/*.conf is outside')
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    generates: ["../out"]\n    cmds: [echo]\n',
+      /a: generates .*out, which is outside of the bundle/
     )
   })
 

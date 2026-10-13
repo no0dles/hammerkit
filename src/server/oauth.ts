@@ -9,6 +9,8 @@ export interface Principal {
   groups: string[]
   // the claims with a string value, for matching a CI job's repository or ref
   claims: Record<string, string>
+  // `email_verified` of the token, when it says
+  emailVerified?: boolean
 }
 
 // The reason is for the operator's log, never for the caller.
@@ -139,6 +141,7 @@ export class TokenVerifier {
           ? [groups]
           : [],
       claims,
+      ...(typeof payload.email_verified === 'boolean' ? { emailVerified: payload.email_verified } : {}),
     }
   }
 

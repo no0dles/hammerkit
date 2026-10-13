@@ -9,6 +9,7 @@ import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
+import { assertWorkTreePathsWithinRoot } from '../planner/utils/assert-item-paths'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
@@ -18,6 +19,7 @@ import { networkSchema } from '../schema/network-schema'
 import { parseWorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
 import type { RunEventData, TaskStatus } from './runs'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -51,6 +53,12 @@ export const workerInputSchema = z
     accounts: z.array(z.string()),
     // the operator's providers and accounts, as the server read them from its config
     catalog: z.custom<SecretCatalog>((value) => typeof value === 'object' && value !== null),
+    // the cluster and namespace container tasks and services run in, on a Kubernetes backend
+    kubernetes: z
+      .custom<WorkKubernetesEnvironment>(
+        (value) => typeof value === 'object' && value !== null && (value as any).type === 'kubernetes'
+      )
+      .optional(),
   })
   .strict()
 
@@ -75,14 +83,16 @@ export async function runTasks(
 ): Promise<void> {
   const secrets = createSecretRegistry()
   const status = statusConsole(emptyWritable(), secrets)
+  // the process starts in a directory of the server, the tasks work on the run's files
+  const work = input.directory?.work ?? cwd
   // what the engine would print to a terminal is not wanted, its status console
   // is what is streamed: it is redacted with the secrets of this run
   const environment: Environment = {
     processEnvs,
-    hosted: { catalog: input.catalog, accounts: input.accounts },
+    hosted: { catalog: input.catalog, accounts: input.accounts, kubernetes: input.kubernetes },
     abortCtrl,
-    cwd,
-    file: getFileContext(cwd),
+    cwd: work,
+    file: getFileContext(work),
     console: consoleContext(emptyWritable()),
     status,
     secrets,
@@ -126,6 +136,7 @@ export async function runTasks(
         directory: input.directory,
       })
       const workTree = getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment)
+      await assertWorkTreePathsWithinRoot(workTree, work)
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0) {
         throw new Error(`no tasks found for ${name}`)

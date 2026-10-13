@@ -4,7 +4,7 @@ import Dockerode, { Container, ContainerCreateOptions } from 'dockerode'
 import { clearContainerDirectory, convertToPosixPath, execCommand } from './execute-docker'
 import { AbortError, checkForAbort } from './abort'
 import { getErrorMessage } from '../log'
-import { prepareMounts, prepareVolume, pullImage, setUserPermissions } from './execution-steps'
+import { prepareMounts, prepareVolume, pullImage, refuseHostLinks, setUserPermissions } from './execution-steps'
 import { usingContainer } from '../docker/using-container'
 import { printContainerOptions } from './print-container-options'
 import { extract } from 'tar'
@@ -93,7 +93,7 @@ export async function dockerTask(
     await pullImage(item, docker, environment)
     checkForAbort(options.abort)
 
-    await prepareVolume(item, docker)
+    await prepareVolume(item, docker, environment)
     checkForAbort(options.abort)
 
     network = await prepareItemNetwork(docker, item, environment, { daemon: false })
@@ -110,6 +110,7 @@ export async function dockerTask(
       resources
     )
     printContainerOptions(item.status, containerOptions)
+    await refuseHostLinks(item, environment)
 
     const itemNetwork = network
     const succeeded = await usingContainer(docker, item, containerOptions, async (container) => {
@@ -145,6 +146,7 @@ export async function dockerTask(
         }
 
         if (result.result.ExitCode !== 0) {
+          await refuseHostLinks(item, environment)
           await exportGenerates(
             environment,
             container,
@@ -159,6 +161,7 @@ export async function dockerTask(
         }
       }
 
+      await refuseHostLinks(item, environment)
       await exportGenerates(
         environment,
         container,

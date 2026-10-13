@@ -1,3 +1,4 @@
+import { isIP } from 'net'
 import { z } from 'zod'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
@@ -90,6 +91,10 @@ const accountNameSchema = z
   .string()
   .regex(/^[A-Za-z][A-Za-z0-9_-]*$/, 'a name starts with a letter and holds letters, digits, - and _')
 
+const kubernetesNameSchema = z
+  .string()
+  .regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/, 'a Kubernetes name: lower case letters, digits and -')
+
 export const accountSchema = z
   .object({
     description: z.string().min(1).max(200).optional(),
@@ -105,6 +110,24 @@ export const accountSchema = z
     // the refs (branches or tags, `release/*` for a level) a run using this account
     // may be started from; a commit is not accepted then, it names no branch
     refs: z.array(z.string().min(1).max(200)).min(1).optional(),
+    // On a Kubernetes backend: the credential the commands of the account's secrets
+    // get in the Job of a task, under /var/run/hammerkit/account. The server holds
+    // none of the secret manager's credentials.
+    kubernetes: z
+      .object({
+        // a ServiceAccount of the server's namespace: a token of it (an hour, made for
+        // each Job, for `audience`) is put at /var/run/hammerkit/account/token, for a cloud that
+        // trusts the cluster's issuer (workload identity federation)
+        serviceAccount: kubernetesNameSchema.optional(),
+        audience: z.string().min(1).optional(),
+        // a Secret of the server's namespace, each key a file of the directory, such
+        // as a key file or the federation config that reads the token
+        secret: kubernetesNameSchema.optional(),
+      })
+      .strict()
+      .refine((value) => value.serviceAccount || value.secret, 'name a serviceAccount, a secret or both')
+      .refine((value) => !value.audience || value.serviceAccount, 'audience is the one of the serviceAccount token')
+      .optional(),
   })
   .strict()
   .superRefine((account, ctx) => {
@@ -118,6 +141,102 @@ export const accountSchema = z
   })
 
 export type Account = z.infer<typeof accountSchema>
+
+// The tasks of runs execute on this machine, with its docker daemon and local tools.
+const hostBackendSchema = z
+  .object({
+    type: z.literal('host'),
+    // what this machine offers; detected when left out
+    platform: serverPlatformSchema.optional(),
+  })
+  .strict()
+
+const tolerationSchema = z
+  .object({
+    key: z.string().min(1).optional(),
+    operator: z.enum(['Exists', 'Equal']).optional(),
+    value: z.string().optional(),
+    effect: z.enum(['NoSchedule', 'PreferNoSchedule', 'NoExecute']).optional(),
+    tolerationSeconds: z.number().int().min(0).optional(),
+  })
+  .strict()
+
+// an IPv4 or IPv6 range, such as 10.0.0.0/8
+const cidrSchema = z.string().refine((value) => {
+  const [address, prefix, ...rest] = value.split('/')
+  const family = isIP(address)
+  return (
+    rest.length === 0 && family !== 0 && /^\d{1,3}$/.test(prefix ?? '') && Number(prefix) <= (family === 4 ? 32 : 128)
+  )
+}, 'expected an address range, such as 10.0.0.0/8 or fd00::/8')
+
+const quantitiesSchema = z.object({ cpu: z.string().min(1).optional(), memory: z.string().min(1).optional() }).strict()
+
+// Nodes the tasks of runs are placed on. Container tasks go to the first pool; a
+// local task runs in the `toolImage` of the pool that offers the platform it declares.
+export const kubernetesPoolSchema = z
+  .object({
+    name: kubernetesNameSchema,
+    // Linux only: macOS is not a node platform, Windows nodes are not supported yet
+    platform: z
+      .object({ os: z.literal('linux'), arch: z.enum(['amd64', 'arm64']) })
+      .strict()
+      .default({ os: 'linux', arch: 'amd64' }),
+    // labels the nodes of the pool carry, besides kubernetes.io/os and kubernetes.io/arch
+    nodeSelector: z.record(z.string()).default({}),
+    tolerations: z.array(tolerationSchema).default([]),
+    // the image local tasks run in on this pool
+    toolImage: z.string().min(1).optional(),
+  })
+  .strict()
+
+export type KubernetesPool = z.infer<typeof kubernetesPoolSchema>
+
+// The tasks of runs execute as Jobs on a cluster, in a namespace per caller.
+const kubernetesBackendSchema = z
+  .object({
+    type: z.literal('kubernetes'),
+    // the cluster: a context of a kubeconfig, or the cluster the server runs in when
+    // both are left out
+    kubeconfig: z.string().min(1).optional(),
+    context: z.string().min(1).optional(),
+    // the server's own namespace, where the Secrets and ServiceAccounts of the accounts
+    // are; the namespace of the server's pod when left out
+    namespace: kubernetesNameSchema.optional(),
+    // a caller's namespace is this and a hash of their identity, so two servers on
+    // one cluster keep their callers apart with a prefix each
+    namespacePrefix: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]{0,30}$/, 'lower case letters, digits and -, at most 31')
+      .default('hammerkit-'),
+    // of the claims tasks get; the cluster's default when left out
+    storageClass: z.string().min(1).optional(),
+    pools: z
+      .array(kubernetesPoolSchema)
+      .min(1)
+      .default([{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }]),
+    // per secret provider, the image its command runs in: secrets are read in the
+    // Job of the task, not by the server
+    providers: z.record(z.object({ image: z.string().min(1) }).strict()).default({}),
+    // the ResourceQuota of every caller's namespace, such as `requests.cpu: '8'`
+    quota: z.record(z.union([z.string().min(1), z.number()]).transform(String)).optional(),
+    // what a container without `resources` requests (a LimitRange), so it is
+    // admitted under a quota that limits compute
+    defaultResources: z
+      .object({ requests: quantitiesSchema.optional(), limits: quantitiesSchema.optional() })
+      .strict()
+      .optional(),
+    // the ClusterRole the server binds to itself in each caller's namespace, so it needs
+    // no rights in the namespaces of others (see the docs on RBAC)
+    runRole: kubernetesNameSchema.default('hammerkit-runs'),
+    // where the pods of runs with an open network may not connect to: the link-local
+    // range with the metadata endpoints of the clouds (and the node's identity) by
+    // default; add the pod and service ranges of the cluster to keep them off it
+    deniedEgress: z.array(cidrSchema).default(['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32']),
+  })
+  .strict()
+
+export type KubernetesBackend = z.infer<typeof kubernetesBackendSchema>
 
 export const accountLevelSchema = z.enum(['use', 'request'])
 export type AccountLevel = z.infer<typeof accountLevelSchema>
@@ -163,15 +282,42 @@ export const entitlementSchema = z
 // A repository the server can read: `github.com/corp/*` for an organisation,
 // `gitlab.corp.com/platform/**` for a group with its subgroups. The credential is a
 // secret of a provider, read as `account`, and handed to git for that fetch only.
+const sourceSecretSchema = z
+  .object({
+    from: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'expected provider:reference'),
+    account: accountNameSchema,
+    // the user name of the basic authentication the token is sent with
+    username: z.string().min(1).default('x-access-token'),
+  })
+  .strict()
+
+// A branch a sandbox may push to, as written: `agent/**`, `agent/*` (one level) or a name.
+const branchPatternSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) =>
+      /^[A-Za-z0-9._*/-]+$/.test(value) &&
+      !value.startsWith('-') &&
+      !value.startsWith('/') &&
+      !value.endsWith('/') &&
+      !value.includes('//') &&
+      !value.includes('..'),
+    'expected a branch or a pattern of branches, such as agent/**'
+  )
+
 export const sourceSchema = z
   .object({
     match: repoPatternSchema,
-    secret: z
+    secret: sourceSecretSchema.optional(),
+    // pushing the changes of a sandbox: a credential that may write, and the only
+    // branches a sandbox may push to. The credential is required: a push never falls back
+    // to a credential git finds on the server, which would be somebody's own identity.
+    push: z
       .object({
-        from: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'expected provider:reference'),
-        account: accountNameSchema,
-        // the user name of the basic authentication the token is sent with
-        username: z.string().min(1).default('x-access-token'),
+        secret: sourceSecretSchema,
+        branches: z.array(branchPatternSchema).min(1),
       })
       .strict()
       .optional(),
@@ -308,14 +454,21 @@ export const serverConfigSchema = z
       .object({
         // what the tasks of a run on a sandbox may run on, out of `runtimes`. A local task
         // would run as the user of the server and could read every other sandbox, so
-        // `local` has to be named here too.
+        // `local` has to be named here too. Left out, `docker` when the server runs
+        // containers, see getSandboxRuntimes
         runtimes: z
           .array(z.enum(['docker', 'local']))
           .min(1)
-          .default(['docker']),
+          .optional(),
         // the most open network a task or service of a run on a sandbox gets, written as
         // a task's `network`: only the services it needs by default
         network: networkSchema.default('none'),
+        // the variables of `runs.env.allow` an `env:` secret of a run on a sandbox may
+        // read: none by default, a sandbox holds code nobody reviewed
+        env: z
+          .object({ allow: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_()]*$/)).default([]) })
+          .strict()
+          .default({}),
         // what one caller may keep; a sandbox over it can't be created
         limits: z
           .object({
@@ -329,14 +482,7 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
-    backend: z
-      .object({
-        type: z.literal('host'),
-        // what this machine offers; detected when left out
-        platform: serverPlatformSchema.optional(),
-      })
-      .strict()
-      .default({ type: 'host' }),
+    backend: z.discriminatedUnion('type', [hostBackendSchema, kubernetesBackendSchema]).default({ type: 'host' }),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -377,31 +523,14 @@ export const serverConfigSchema = z
       }
     })
     config.sources.forEach((source, index) => {
-      if (!source.secret) {
-        return
-      }
-      const { from, account } = source.secret
-      const kind = from.substring(0, from.indexOf(':'))
-      const where = ['sources', index, 'secret'] as (string | number)[]
-      if (!config.accounts[account]) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [...where, 'account'],
-          message: `unknown account ${account}`,
-        })
-      } else if (!config.accounts[account].providers[kind]) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [...where, 'from'],
-          message: `account ${account} has no credentials for the provider ${kind}`,
-        })
-      }
-      if (!config.secretProviders[kind]) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [...where, 'from'],
-          message: `secret provider ${kind} is not declared in secretProviders`,
-        })
+      const secrets: [(string | number)[], z.infer<typeof sourceSecretSchema> | undefined][] = [
+        [['sources', index, 'secret'], source.secret],
+        [['sources', index, 'push', 'secret'], source.push?.secret],
+      ]
+      for (const [where, secret] of secrets) {
+        if (secret) {
+          checkSourceSecret(config, secret, where, ctx)
+        }
       }
     })
     const readers = getSourceAccounts(config)
@@ -411,7 +540,7 @@ export const serverConfigSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['entitlements', index, 'accounts', account],
-            message: `the account ${account} reads the sources, no entitlement may name it`,
+            message: `the account ${account} reads or pushes the sources, no entitlement may name it`,
           })
         }
       }
@@ -423,17 +552,24 @@ export const serverConfigSchema = z
         message: 'the network of a local task can not be limited, allow only the docker runtime with runs.network',
       })
     }
-    if (config.sandboxes.runtimes.includes('local') && config.sandboxes.network !== 'open') {
+    if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['sandboxes', 'network'],
         message: 'hammerkit can not limit the network of a local task, set network: open to allow local in sandboxes',
       })
     }
-    // a server that runs only local tasks and grants no sandboxes keeps the default
-    const sandboxesGranted = config.entitlements.some((entitlement) => entitlement.sandboxes)
-    config.sandboxes.runtimes.forEach((runtime, index) => {
-      if (sandboxesGranted && !config.runtimes.includes(runtime)) {
+    config.sandboxes.env.allow.forEach((name, index) => {
+      if (!config.runs.env.allow.includes(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sandboxes', 'env', 'allow', index],
+          message: `${name} is not in runs.env.allow, no run can read it`,
+        })
+      }
+    })
+    config.sandboxes.runtimes?.forEach((runtime, index) => {
+      if (!config.runtimes.includes(runtime)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['sandboxes', 'runtimes', index],
@@ -441,6 +577,62 @@ export const serverConfigSchema = z
         })
       }
     })
+    const backend = config.backend
+    for (const [name, account] of Object.entries(config.accounts)) {
+      if (account.kubernetes && backend.type !== 'kubernetes') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accounts', name, 'kubernetes'],
+          message: 'kubernetes credentials are for backend.type: kubernetes',
+        })
+      }
+    }
+    if (backend.type === 'kubernetes') {
+      const pools = new Set<string>()
+      backend.pools.forEach((pool, index) => {
+        if (pools.has(pool.name)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['backend', 'pools', index, 'name'],
+            message: `the pool ${pool.name} is named twice`,
+          })
+        }
+        pools.add(pool.name)
+      })
+      // the secrets of tasks are read in their Job, with the image of the provider; the
+      // ones of the sources are read by the server, which checks the code out itself
+      const readers = getSourceAccounts(config)
+      for (const [name, account] of Object.entries(config.accounts)) {
+        if (readers.includes(name)) {
+          continue
+        }
+        // the commands run as the account's own identity, never the one of the node
+        // or of the provider's image, which every account would share
+        if (Object.keys(account.providers).length > 0 && !account.kubernetes) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['accounts', name, 'kubernetes'],
+            message: `the account ${name} reads secrets in the Jobs of tasks, name the serviceAccount or secret it reads them as`,
+          })
+        }
+        for (const provider of Object.keys(account.providers)) {
+          if (!backend.providers[provider]) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['backend', 'providers', provider],
+              message: `the account ${name} reads ${provider} in the Jobs of tasks, name the image to run it in`,
+            })
+          }
+        }
+      }
+      if (config.runtimes.includes('local') && !backend.pools.some((pool) => pool.toolImage)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'pools'],
+          message: 'local tasks run in the toolImage of a pool, give a pool one or remove local from runtimes',
+        })
+      }
+    }
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -452,9 +644,58 @@ export const serverConfigSchema = z
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>
 
-// The accounts that read repositories: no caller uses them and no build file names them.
+// The credential of a source is read as an account of the catalog, through a provider of it.
+function checkSourceSecret(
+  config: {
+    accounts: { [name: string]: { providers: { [kind: string]: unknown } } }
+    secretProviders: { [kind: string]: unknown }
+  },
+  secret: z.infer<typeof sourceSecretSchema>,
+  where: (string | number)[],
+  ctx: z.RefinementCtx
+): void {
+  const { from, account } = secret
+  const kind = from.substring(0, from.indexOf(':'))
+  if (!config.accounts[account]) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...where, 'account'],
+      message: `unknown account ${account}`,
+    })
+  } else if (!config.accounts[account].providers[kind]) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...where, 'from'],
+      message: `account ${account} has no credentials for the provider ${kind}`,
+    })
+  }
+  if (!config.secretProviders[kind]) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...where, 'from'],
+      message: `secret provider ${kind} is not declared in secretProviders`,
+    })
+  }
+}
+
+// What the tasks of a run on a sandbox may run on: `sandboxes.runtimes`, else containers
+// when the server runs them. Empty on a server with only `runtimes: [local]`, which then
+// runs nothing on sandboxes.
+export function getSandboxRuntimes(config: Pick<ServerConfig, 'runtimes' | 'sandboxes'>): ('docker' | 'local')[] {
+  return config.sandboxes.runtimes ?? config.runtimes.filter((runtime) => runtime === 'docker')
+}
+
+// The accounts that read or push repositories: no caller uses them and no build file
+// names them.
 export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string[] {
-  return [...new Set(config.sources.flatMap((source) => (source.secret ? [source.secret.account] : [])))]
+  return [
+    ...new Set(
+      config.sources.flatMap((source) => [
+        ...(source.secret ? [source.secret.account] : []),
+        ...(source.push ? [source.push.secret.account] : []),
+      ])
+    ),
+  ]
 }
 export type ServerPlatform = z.infer<typeof serverPlatformSchema>
 
