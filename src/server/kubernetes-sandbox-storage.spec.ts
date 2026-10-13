@@ -53,6 +53,8 @@ function fakeCluster(root: string) {
   const claimDirectory = (namespace: string, claim: string) => join(root, 'claims', namespace, claim)
   const commands: string[][] = []
   let quotaFull = false
+  // namespaces the server can not read: those of another server
+  const forbidden = new Set<string>()
   // when the claims made next were made
   let created = Date.now() - 2 * 60 * 60 * 1000
   const read = (kind: string, namespace: string, name: string) => {
@@ -83,14 +85,35 @@ function fakeCluster(root: string) {
       async read(spec: any) {
         return read(spec.kind, spec.metadata.namespace, spec.metadata.name)
       },
-      async patch(spec: any) {
+      async replace(spec: any) {
+        read(spec.kind, spec.metadata.namespace, spec.metadata.name)
         objects.set(keyOf(spec.kind, spec.metadata.namespace, spec.metadata.name), spec)
         return spec
       },
+      async delete(spec: any) {
+        read(spec.kind, spec.metadata.namespace, spec.metadata.name)
+        objects.delete(keyOf(spec.kind, spec.metadata.namespace, spec.metadata.name))
+      },
+    },
+    authApi: {
+      async createSelfSubjectReview() {
+        return { status: { userInfo: { username: 'system:serviceaccount:hammerkit:hammerkit' } } }
+      },
     },
     coreApi: {
-      async readNamespace() {
-        return {}
+      async readNamespace({ name }: any) {
+        return read('Namespace', '', name)
+      },
+      async createNamespace({ body }: any) {
+        objects.set(keyOf('Namespace', '', body.metadata.name), { kind: 'Namespace', ...body })
+      },
+      async listNamespace({ labelSelector }: any) {
+        const [key, value] = labelSelector.split('=')
+        return {
+          items: [...objects.values()].filter(
+            (object) => object.kind === 'Namespace' && object.metadata.labels?.[key] === value
+          ),
+        }
       },
       async readNamespacedPod({ name, namespace }: any) {
         return read('Pod', namespace, name)
@@ -104,8 +127,15 @@ function fakeCluster(root: string) {
         objects.delete(keyOf('PersistentVolumeClaim', namespace, name))
         await rm(claimDirectory(namespace, name), { recursive: true, force: true })
       },
-      async listPersistentVolumeClaimForAllNamespaces() {
-        return { items: [...objects.values()].filter((object) => object.kind === 'PersistentVolumeClaim') }
+      async listNamespacedPersistentVolumeClaim({ namespace }: any) {
+        if (forbidden.has(namespace)) {
+          throw Object.assign(new Error('forbidden'), { code: 403 })
+        }
+        return {
+          items: [...objects.values()].filter(
+            (object) => object.kind === 'PersistentVolumeClaim' && object.metadata.namespace === namespace
+          ),
+        }
       },
     },
     exec: {
@@ -192,6 +222,7 @@ function fakeCluster(root: string) {
     commands,
     claimDirectory,
     fullQuota: () => (quotaFull = true),
+    forbid: (namespace: string) => forbidden.add(namespace),
     makeClaimsAt: (time: number) => (created = time),
   }
 }
@@ -273,6 +304,8 @@ describe('sandboxes on a cluster', () => {
     // the pod of the files: no network, no token, no more rights than it needs, both claims,
     // on the pool of the tasks and near the pods of runs
     const pod = cluster.objects.get(`Pod/${namespace}/${names.pod}`)
+    // left out by the namespace's policy for pods with an open network
+    expect(pod.metadata.labels).toMatchObject({ 'hammerkit.dev/network': 'none' })
     expect(pod.spec).toMatchObject({
       automountServiceAccountToken: false,
       nodeSelector: { 'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'amd64' },
@@ -509,6 +542,15 @@ describe('sandboxes on a cluster', () => {
     }
     copyClaim('sbx_otherServer1', namespace, { 'hammerkit.dev/sandbox-server': 'another' })
     copyClaim('sbx_otherPrefix1', 'other-ns')
+    // a namespace of this server under another prefix, and one of another server, which
+    // this one has no rights in
+    const managed = { 'hammerkit.dev/managed': 'true' }
+    cluster.objects.set('Namespace//other-ns', { kind: 'Namespace', metadata: { name: 'other-ns', labels: managed } })
+    cluster.objects.set('Namespace//foreign-ns', {
+      kind: 'Namespace',
+      metadata: { name: 'foreign-ns', labels: managed },
+    })
+    cluster.forbid('foreign-ns')
 
     const logged: string[] = []
     const restarted = new SandboxRegistry({ ...(registry as any).options, log: (line: string) => logged.push(line) })
@@ -574,8 +616,8 @@ describe('sandboxes on a cluster', () => {
       const key = { id: sandbox.id, owner: alice }
       const data = join(cluster.claimDirectory(namespace, getSandboxNames(sandbox.id).git), sandbox.id, 'git')
       const pod = (commitOf: () => string) => {
-        const request = (storage as any).request.bind(storage)
-        ;(storage as any).request = async (k: any, r: any, signal?: AbortSignal) =>
+        const request = (storage as any).requestNow.bind(storage)
+        ;(storage as any).requestNow = async (k: any, r: any, signal: AbortSignal) =>
           r.op === 'commit' ? { result: commitOf() } : request(k, r, signal)
       }
       // a pod that answers a commit with a file of the deny list in it

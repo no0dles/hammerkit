@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { RefError } from './git-checkout'
@@ -192,6 +192,18 @@ describe('SandboxRegistry', () => {
     await expect(full.create(alice, REPO, 'main')).rejects.toMatchObject({ status: 507 })
   })
 
+  it('counts creates under way against the bytes, so parallel creates can not pass the limit together', async () => {
+    const one = await registryWith().create(alice, REPO, 'main')
+    const sandboxes = registryWith({ bytes: Math.floor(one.bytes * 1.5) })
+    const results = await Promise.allSettled([
+      sandboxes.create(alice, REPO, 'main'),
+      sandboxes.create(alice, REPO, 'main'),
+    ])
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({ reason: { status: 413 } })
+    expect(sandboxes.usage(alice).count).toBe(1)
+  })
+
   it('stops the runs of a sandbox it deletes, and its files go with it', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
@@ -211,6 +223,39 @@ describe('SandboxRegistry', () => {
     expect(restarted.list(alice)).toEqual([sandbox])
     expect(readdirSync(join(root, 'files'))).toEqual([sandbox.id])
   })
+
+  it('keeps the files of a record it can not read, and does not start on records it can not list', async () => {
+    const sandboxes = registryWith()
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    writeFileSync(join(root, 'records', `${sandbox.id}.json`), '{ not json')
+    const restarted = registryWith()
+    await restarted.load()
+    expect(restarted.list(alice)).toEqual([])
+    expect(readdirSync(join(root, 'files'))).toEqual([sandbox.id])
+
+    rmSync(join(root, 'records'), { recursive: true })
+    writeFileSync(join(root, 'records'), 'not a directory')
+    await expect(registryWith().load()).rejects.toThrow()
+    expect(readdirSync(join(root, 'files'))).toEqual([sandbox.id])
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'counts, reads and removes what a task took its own permissions away from',
+    async () => {
+      const sandboxes = registryWith()
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      const files = (await sandboxes.attach(sandbox.id, root)).directory
+      mkdirSync(join(files, 'hidden'))
+      writeFileSync(join(files, 'hidden', 'big.bin'), Buffer.alloc(64 * 1024))
+      chmodSync(join(files, 'hidden', 'big.bin'), 0)
+      chmodSync(join(files, 'hidden'), 0)
+      await sandboxes.measure(sandbox.id)
+      expect(sandboxes.get(alice, sandbox.id)?.bytes).toBeGreaterThanOrEqual(sandbox.bytes + 64 * 1024)
+      expect((await sandboxes.state(sandbox.id)).clean).toBe(false)
+      expect(await sandboxes.remove(alice, sandbox.id)).toBe(true)
+      expect(readdirSync(join(root, 'files'))).toEqual([])
+    }
+  )
 
   it('measures what a run wrote', async () => {
     const sandboxes = registryWith()

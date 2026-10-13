@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { BatchV1Api, CoreV1Api, KubeConfig } from '@kubernetes/client-node'
+import { createServerAccount, ServerAccount } from '../kubernetes-server-account'
 import { requiresKubernetes } from '../requires-kubernetes'
 import { getRunLabelValue } from '../../kubernetes/job-placement'
 import { environmentMock } from '../../executer/environment-mock'
@@ -46,11 +47,11 @@ function git(cwd: string, ...args: string[]): string {
   ).trim()
 }
 
-function cluster(): { core: CoreV1Api; batch: BatchV1Api } {
+function cluster(): { config: KubeConfig; core: CoreV1Api; batch: BatchV1Api } {
   const config = new KubeConfig()
   config.loadFromDefault()
   config.setCurrentContext(context)
-  return { core: config.makeApiClient(CoreV1Api), batch: config.makeApiClient(BatchV1Api) }
+  return { config, core: config.makeApiClient(CoreV1Api), batch: config.makeApiClient(BatchV1Api) }
 }
 
 const BUILD_FILE = `
@@ -77,10 +78,15 @@ tasks:
 
 describe('sandboxes on a kubernetes backend', () => {
   let root: string
+  // the server is a ServiceAccount with the rights of the docs only
+  let account: ServerAccount | undefined
+  const runRole = `${prefix}runs`
 
   beforeAll(
     requiresKubernetes(async () => {
-      await cluster().core.createNamespace({ body: { metadata: { name: operatorNamespace } } })
+      const { config, core } = cluster()
+      await core.createNamespace({ body: { metadata: { name: operatorNamespace } } })
+      account = await createServerAccount(config, operatorNamespace, { server: `${prefix}server`, runs: runRole })
     })
   )
 
@@ -90,6 +96,7 @@ describe('sandboxes on a kubernetes backend', () => {
       for (const name of [operatorNamespace, callerNamespace, otherNamespace]) {
         await core.deleteNamespace({ name }).catch(() => undefined)
       }
+      await account?.remove()
     })
   )
 
@@ -117,7 +124,9 @@ describe('sandboxes on a kubernetes backend', () => {
         sources: [{ match: 'git.test/corp/*' }],
         backend: {
           type: 'kubernetes',
-          context,
+          kubeconfig: account?.kubeconfig,
+          context: account ? 'hammerkit' : context,
+          runRole,
           namespace: operatorNamespace,
           namespacePrefix: prefix,
           defaultResources: { requests: { cpu: '10m', memory: '16Mi' } },

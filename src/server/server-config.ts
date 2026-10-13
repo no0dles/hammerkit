@@ -1,3 +1,4 @@
+import { isIP } from 'net'
 import { z } from 'zod'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
@@ -115,8 +116,8 @@ export const accountSchema = z
     // none of the secret manager's credentials.
     kubernetes: z
       .object({
-        // a ServiceAccount of the server's namespace: a token of it (10 minutes, for
-        // `audience`) is put at /var/run/hammerkit/account/token, for a cloud that
+        // a ServiceAccount of the server's namespace: a token of it (an hour, made for
+        // each Job, for `audience`) is put at /var/run/hammerkit/account/token, for a cloud that
         // trusts the cluster's issuer (workload identity federation)
         serviceAccount: kubernetesNameSchema.optional(),
         audience: z.string().min(1).optional(),
@@ -160,6 +161,15 @@ const tolerationSchema = z
     tolerationSeconds: z.number().int().min(0).optional(),
   })
   .strict()
+
+// an IPv4 or IPv6 range, such as 10.0.0.0/8
+const cidrSchema = z.string().refine((value) => {
+  const [address, prefix, ...rest] = value.split('/')
+  const family = isIP(address)
+  return (
+    rest.length === 0 && family !== 0 && /^\d{1,3}$/.test(prefix ?? '') && Number(prefix) <= (family === 4 ? 32 : 128)
+  )
+}, 'expected an address range, such as 10.0.0.0/8 or fd00::/8')
 
 const quantitiesSchema = z.object({ cpu: z.string().min(1).optional(), memory: z.string().min(1).optional() }).strict()
 
@@ -258,6 +268,13 @@ const kubernetesBackendSchema = z
       .strict()
       .optional(),
     sandboxes: kubernetesSandboxesSchema,
+    // the ClusterRole the server binds to itself in each caller's namespace, so it needs
+    // no rights in the namespaces of others (see the docs on RBAC)
+    runRole: kubernetesNameSchema.default('hammerkit-runs'),
+    // where the pods of runs with an open network may not connect to: the link-local
+    // range with the metadata endpoints of the clouds (and the node's identity) by
+    // default; add the pod and service ranges of the cluster to keep them off it
+    deniedEgress: z.array(cidrSchema).default(['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32']),
   })
   .strict()
 
@@ -460,14 +477,21 @@ export const serverConfigSchema = z
       .object({
         // what the tasks of a run on a sandbox may run on, out of `runtimes`. A local task
         // would run as the user of the server and could read every other sandbox, so
-        // `local` has to be named here too.
+        // `local` has to be named here too. Left out, `docker` when the server runs
+        // containers, see getSandboxRuntimes
         runtimes: z
           .array(z.enum(['docker', 'local']))
           .min(1)
-          .default(['docker']),
+          .optional(),
         // the most open network a task or service of a run on a sandbox gets, written as
         // a task's `network`: only the services it needs by default
         network: networkSchema.default('none'),
+        // the variables of `runs.env.allow` an `env:` secret of a run on a sandbox may
+        // read: none by default, a sandbox holds code nobody reviewed
+        env: z
+          .object({ allow: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_()]*$/)).default([]) })
+          .strict()
+          .default({}),
         // what one caller may keep; a sandbox over it can't be created
         limits: z
           .object({
@@ -544,14 +568,23 @@ export const serverConfigSchema = z
         }
       }
     })
-    if (config.sandboxes.runtimes.includes('local') && config.sandboxes.network !== 'open') {
+    if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['sandboxes', 'network'],
         message: 'hammerkit can not limit the network of a local task, set network: open to allow local in sandboxes',
       })
     }
-    config.sandboxes.runtimes.forEach((runtime, index) => {
+    config.sandboxes.env.allow.forEach((name, index) => {
+      if (!config.runs.env.allow.includes(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sandboxes', 'env', 'allow', index],
+          message: `${name} is not in runs.env.allow, no run can read it`,
+        })
+      }
+    })
+    config.sandboxes.runtimes?.forEach((runtime, index) => {
       if (!config.runtimes.includes(runtime)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -588,6 +621,15 @@ export const serverConfigSchema = z
       for (const [name, account] of Object.entries(config.accounts)) {
         if (readers.includes(name)) {
           continue
+        }
+        // the commands run as the account's own identity, never the one of the node
+        // or of the provider's image, which every account would share
+        if (Object.keys(account.providers).length > 0 && !account.kubernetes) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['accounts', name, 'kubernetes'],
+            message: `the account ${name} reads secrets in the Jobs of tasks, name the serviceAccount or secret it reads them as`,
+          })
         }
         for (const provider of Object.keys(account.providers)) {
           if (!backend.providers[provider]) {
@@ -666,6 +708,13 @@ function checkSourceSecret(
       message: `secret provider ${kind} is not declared in secretProviders`,
     })
   }
+}
+
+// What the tasks of a run on a sandbox may run on: `sandboxes.runtimes`, else containers
+// when the server runs them. Empty on a server with only `runtimes: [local]`, which then
+// runs nothing on sandboxes.
+export function getSandboxRuntimes(config: Pick<ServerConfig, 'runtimes' | 'sandboxes'>): ('docker' | 'local')[] {
+  return config.sandboxes.runtimes ?? config.runtimes.filter((runtime) => runtime === 'docker')
 }
 
 // The accounts that read or push repositories: no caller uses them and no build file

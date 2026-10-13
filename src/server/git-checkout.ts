@@ -144,8 +144,9 @@ export async function git(
   signal: AbortSignal,
   what: string,
   action = 'fetch',
-  // what git may print; a diff of a sandbox can be larger than the default
-  maxBuffer = 1024 * 1024
+  // what git may print: warnings of a large tree must not fail the command, and a diff of
+  // a sandbox can be larger still
+  maxBuffer = 64 * 1024 * 1024
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {

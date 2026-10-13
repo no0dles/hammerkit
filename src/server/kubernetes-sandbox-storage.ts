@@ -6,8 +6,9 @@ import { finished } from 'stream/promises'
 import { V1NetworkPolicy, V1PersistentVolumeClaim, V1Pod, V1ResourceQuota, V1Status } from '@kubernetes/client-node'
 import type { WebSocket } from 'ws'
 import { create as createTar, extract as extractTar } from 'tar'
-import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
+import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
+import { NETWORK_LABEL } from '../kubernetes/network-policy'
 import { getSandboxAffinity, SANDBOX_LABEL } from '../kubernetes/volumes'
 import { getErrorMessage } from '../log'
 import { sleep } from '../utils/sleep'
@@ -139,6 +140,9 @@ export class KubernetesSandboxStorage implements SandboxStorage {
   private readonly server: string
   // the namespaces whose policy and quota for sandboxes this process has applied
   private readonly prepared = new Map<string, Promise<void>>()
+  // one request at a time per sandbox, as a host has it: the objects `state` writes are
+  // pruned again in the pod, which must not meet another request that still needs them
+  private readonly queues = new Map<string, Promise<unknown>>()
 
   constructor(
     config: ServerConfig & { backend: KubernetesBackend },
@@ -237,8 +241,13 @@ export class KubernetesSandboxStorage implements SandboxStorage {
    * push something else, and the write credential stays with the server.
    */
   async push(key: SandboxKey, push: SandboxPush): Promise<string | undefined> {
+    // the commit is copied out and pushed before a `state` may prune it again
+    return this.exclusive(key.id, () => this.commitAndPush(key, push))
+  }
+
+  private async commitAndPush(key: SandboxKey, push: SandboxPush): Promise<string | undefined> {
     const commit = (
-      await this.request<string | null>(key, { op: 'commit', id: key.id, author: push.author }, push.signal)
+      await this.requestNow<string | null>(key, { op: 'commit', id: key.id, author: push.author }, push.signal)
     ).result
     if (commit === null) {
       return undefined
@@ -416,11 +425,29 @@ export class KubernetesSandboxStorage implements SandboxStorage {
   // owner has, are removed when they have no record; the others are kept, and their records
   // too (a server that changed its prefix still has them).
   async list(): Promise<StoredSandbox[]> {
-    const claims = await this.instance.coreApi.listPersistentVolumeClaimForAllNamespaces({
-      labelSelector: `hammerkit.dev/managed=true,${SANDBOX_LABEL}`,
-    })
+    // the server has rights in the namespaces it made only (runRole, bound there): it looks
+    // for claims in those, and passes over one it can not read, another server's
+    const namespaces = await this.instance.coreApi.listNamespace({ labelSelector: 'hammerkit.dev/managed=true' })
+    const claims: V1PersistentVolumeClaim[] = []
+    for (const namespace of namespaces.items) {
+      const name = namespace.metadata?.name
+      if (!name || namespace.metadata?.deletionTimestamp) {
+        continue
+      }
+      try {
+        const listed = await this.instance.coreApi.listNamespacedPersistentVolumeClaim({
+          namespace: name,
+          labelSelector: `hammerkit.dev/managed=true,${SANDBOX_LABEL}`,
+        })
+        claims.push(...listed.items)
+      } catch (e) {
+        if (statusCodeOf(e) !== 403) {
+          throw e
+        }
+      }
+    }
     const found = new Map<string, StoredSandbox>()
-    for (const claim of claims.items) {
+    for (const claim of claims) {
       const annotations = claim.metadata?.annotations ?? {}
       const id = annotations[ID_ANNOTATION]
       const namespace = claim.metadata?.namespace
@@ -489,13 +516,34 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     return 'stream' in answer ? { stat: result.stat, stream: answer.stream } : { ...result, content: answer.body }
   }
 
-  private async request<T>(
+  private request<T>(
     key: SandboxKey,
     request: SandboxPodRequest,
     signal: AbortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   ): Promise<{ result: T }> {
+    return this.exclusive(key.id, () => this.requestNow<T>(key, request, signal))
+  }
+
+  private async requestNow<T>(
+    key: SandboxKey,
+    request: SandboxPodRequest,
+    signal: AbortSignal
+  ): Promise<{ result: T }> {
     const answer = await this.call(key, request, signal, false)
     return { result: answer.result as T }
+  }
+
+  private exclusive<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(id) ?? Promise.resolve()
+    const next = previous.then(fn, fn)
+    const settled = next.catch(() => undefined)
+    this.queues.set(id, settled)
+    void settled.then(() => {
+      if (this.queues.get(id) === settled) {
+        this.queues.delete(id)
+      }
+    })
+    return next
   }
 
   // One request to `hammerkit server-sandbox` in the pod: the first line of its answer
@@ -630,7 +678,9 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       metadata: {
         name: names.pod,
         namespace,
-        labels: { ...MANAGED, [SANDBOX_LABEL]: names.label, [FILES_LABEL]: 'true' },
+        // the NetworkPolicy of the caller's namespace for pods with an open network leaves
+        // it out: its own policy, no network at all, is all it gets
+        labels: { ...MANAGED, [SANDBOX_LABEL]: names.label, [FILES_LABEL]: 'true', [NETWORK_LABEL]: 'none' },
         annotations: { 'hammerkit.dev/version': getVersion() },
       },
       spec: {
@@ -721,9 +771,14 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       metadata: { ...metadata, name: FILES_POLICY },
       spec: { podSelector: { matchLabels: { [FILES_LABEL]: 'true' } }, policyTypes: ['Ingress', 'Egress'] },
     }
-    await apply(this.instance, policy)
+    await replace(this.instance, policy)
     const storageClass = this.backend.sandboxes.storageClass
-    if (storageClass) {
+    if (!storageClass) {
+      // one an earlier config had
+      await this.instance.objectApi
+        .delete({ apiVersion: 'v1', kind: 'ResourceQuota', metadata: { ...metadata, name: QUOTA_NAME } })
+        .catch((e) => (statusCodeOf(e) === 404 ? undefined : Promise.reject(e)))
+    } else {
       const scope = `${storageClass}.storageclass.storage.k8s.io`
       const quota: V1ResourceQuota & KubernetesObjectHeader = {
         apiVersion: 'v1',
@@ -737,7 +792,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
           },
         },
       }
-      await apply(this.instance, quota)
+      await replace(this.instance, quota)
     }
   }
 

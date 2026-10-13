@@ -40,12 +40,12 @@ export interface RunApproval {
 //
 // A sandbox run names a sandbox of its owner. What it started from is recorded when it was
 // submitted: the commit the sandbox was fetched at and the git tree of its files, which
-// together name the changes it held. A run before it on the same sandbox may still change
-// the files, so the tree is what an approver saw, not a promise.
+// together name the changes it held, and whether it held any. A run that waited for an
+// approval fails when the files are no longer the ones that were approved.
 export type RunSource =
   | { type: 'ref'; repo: string; ref: string; commit: string }
   | { type: 'upload'; snapshot: string }
-  | { type: 'sandbox'; id: string; repo: string; commit: string; tree: string }
+  | { type: 'sandbox'; id: string; repo: string; commit: string; tree: string; clean?: boolean }
 
 export interface RunSpec {
   // the version of the published build file the run executes

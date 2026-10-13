@@ -87,8 +87,9 @@ export interface SandboxRegistryOptions {
  */
 export class SandboxRegistry {
   private readonly sandboxes = new Map<string, Sandbox>()
-  // creates that are under way, so they count against the limit of their owner
-  private readonly creating = new Map<string, Owner>()
+  // creates that are under way, so they count against the limit of their owner, with the
+  // bytes they take once they were measured
+  private readonly creating = new Map<string, { owner: Owner; bytes: number }>()
   private readonly deleting = new Set<string>()
   private readonly locks = new Map<string, Promise<unknown>>()
   private readonly now: () => number
@@ -113,7 +114,16 @@ export class SandboxRegistry {
    */
   async load(): Promise<void> {
     const { storage, records } = this.options
-    const names = await readdir(records).catch(() => [] as string[])
+    // no records at all only on a first start: a directory that can't be read is an error,
+    // not a reason to remove every sandbox
+    const names = await readdir(records).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+        return [] as string[]
+      }
+      throw e
+    })
+    // a record that can't be read keeps its files, for the operator to look at
+    const recorded = new Set(names.filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -5)))
     const stored = await storage.list()
     const ids = new Set(stored.map((entry) => entry.id))
     for (const name of names) {
@@ -138,7 +148,7 @@ export class SandboxRegistry {
     }
     const now = Date.now()
     for (const entry of stored) {
-      if (this.sandboxes.has(entry.id) || !entry.remove) {
+      if (recorded.has(entry.id) || !entry.remove) {
         continue
       }
       // a sandbox being created has storage before its record
@@ -169,9 +179,10 @@ export class SandboxRegistry {
 
   usage(owner: Owner): { count: number; bytes: number } {
     const mine = this.list(owner)
+    const creating = [...this.creating.values()].filter((create) => owns(owner, create.owner))
     return {
-      count: mine.length + [...this.creating.values()].filter((creator) => owns(owner, creator)).length,
-      bytes: mine.reduce((sum, sandbox) => sum + sandbox.bytes, 0),
+      count: mine.length + creating.length,
+      bytes: [...mine, ...creating].reduce((sum, sandbox) => sum + sandbox.bytes, 0),
     }
   }
 
@@ -206,7 +217,7 @@ export class SandboxRegistry {
     }
     const id = `sbx_${randomBytes(12).toString('base64url')}`
     const key: SandboxKey = { id, owner: { iss: owner.iss, sub: owner.sub } }
-    this.creating.set(id, { iss: owner.iss, sub: owner.sub })
+    this.creating.set(id, { owner: { iss: owner.iss, sub: owner.sub }, bytes: 0 })
     try {
       const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS)
       await this.resolve(repo, ref, signal)
@@ -219,8 +230,11 @@ export class SandboxRegistry {
         throw e instanceof SandboxError ? e : new SandboxError(502, repos.scrub(e, credentials.values).message)
       }
       const bytes = await storage.usage(key)
+      // checked against what is there now, other creates of the owner included, and taken
+      // before anything else can check: no await between the two
+      const used = this.usage(owner).bytes
       const problem =
-        usage.bytes + bytes > limits.bytes
+        used + bytes > limits.bytes
           ? new SandboxError(
               413,
               `${repo} at ${ref} takes ${formatSize(bytes)}, more than is left of your limit of ${formatSize(
@@ -234,6 +248,7 @@ export class SandboxRegistry {
         await storage.remove(key)
         throw problem
       }
+      this.creating.set(id, { owner: { iss: owner.iss, sub: owner.sub }, bytes })
       const at = this.timestamp()
       const sandbox: Sandbox = {
         id,
@@ -473,8 +488,8 @@ export class SandboxRegistry {
     })
   }
 
-  state(id: string): Promise<SandboxState> {
-    return this.options.storage.state(keyOf(this.existing(id)))
+  state(id: string, signal?: AbortSignal): Promise<SandboxState> {
+    return this.options.storage.state(keyOf(this.existing(id)), signal)
   }
 
   // What a run works on, `into` a directory of the run when the storage copies the files;
@@ -531,7 +546,7 @@ export class SandboxRegistry {
   }
 
   private total(): number {
-    return [...this.sandboxes.values()].reduce((sum, sandbox) => sum + sandbox.bytes, 0)
+    return [...this.sandboxes.values(), ...this.creating.values()].reduce((sum, sandbox) => sum + sandbox.bytes, 0)
   }
 
   private withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {

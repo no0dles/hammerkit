@@ -49,7 +49,10 @@ a server whose users you trust with the machine. The storage directory and the o
 a server are inside what a `local` task can read.
 
 On a cluster every task is a pod of its own in the caller's namespace, without a token of the
-cluster, so the boundary is the container and the namespace. The server still holds the
+cluster. The boundary is the container, the namespace and the network policies the server puts
+in it (see [Namespaces](#namespaces)), which only hold on a network plugin that enforces
+`NetworkPolicy`. Keep the server off the nodes of the pools, so a task that escapes its
+container does not share a node with the server's token. The server still holds the
 right to mint the tokens of every account (see [Secrets in the Job](#secrets-in-the-job)), so
 the advice stands: one server, and one set of accounts, per trust level.
 
@@ -77,6 +80,8 @@ backend:
   quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20' }
   defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
   sandboxes: { size: 4Gi, storageClass: sandboxes }
+  # runRole: hammerkit-runs           # the ClusterRole the server binds in each caller's namespace
+  deniedEgress: [169.254.0.0/16, fe80::/10, fd00:ec2::/32, 10.0.0.0/8]   # the default, and the cluster's ranges
 ```
 
 The server runs as before (it checks the code out, plans the run with the engine in a process
@@ -94,18 +99,37 @@ service a Deployment, in a namespace of the caller.
 | `quota` | The `ResourceQuota` of each caller's namespace, as Kubernetes writes it (`requests.cpu`, `limits.memory`, `pods`, `persistentvolumeclaims`, `requests.storage`). |
 | `defaultResources` | `requests` and `limits` (`cpu`, `memory`) for containers without [`resources`](/docs/task#resources), as a `LimitRange`, so they are admitted under a quota that limits compute. |
 | `sandboxes` | Where [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes) are kept: two claims per sandbox in its caller's namespace, their size and storage class, and the image and resources of the pod that reads and edits its files. |
+| `runRole` | The ClusterRole the server binds to itself in each caller's namespace, `hammerkit-runs` by default, see [What the server may do](#what-the-server-may-do). |
+| `deniedEgress` | Address ranges a pod of a run with an open network may not connect to. By default the link-local ranges, where the clouds' metadata endpoints hand out the node's identity (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::/32`). Add the pod and service ranges of the cluster to keep tasks off its other workloads, the server's included. |
 
 ### Namespaces
 
-The first run of a caller makes their namespace and applies `quota` and `defaultResources` to
-it on every run. What a run makes there carries the label `hammerkit.dev/run` and is deleted
-when the run ends, whether it succeeded or not: an idle caller costs nothing on the cluster.
-The runs of one caller execute one after the other, since the Jobs and claims of a task are
-named after its cache id; the runs of different callers run side by side. Kubernetes queues
-pods that do not fit the quota or the nodes.
+The first run of a caller makes their namespace, labelled `hammerkit.dev/managed`. A namespace
+of that name without the label is refused, the server runs no task in a namespace it did not
+make. On every run the server puts in it, replacing what was there:
 
-Pods of runs run with `automountServiceAccountToken: false`, so a task holds no token of the
-cluster.
+- a RoleBinding of `runRole` to itself, its only rights in the namespace;
+- a `NetworkPolicy` that lets each pod accept connections from the pods of its namespace only
+  (the services a task needs, an egress proxy), so callers can not reach each other's pods;
+- a `NetworkPolicy` for the pods with an open network: they reach their namespace, DNS and any
+  address outside `deniedEgress`. A pod with a limited [network](#network) is left out, its own
+  policy is all it reaches;
+- `quota` and `defaultResources`; removing one from the config removes it from the namespace.
+
+The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
+no privileged pods, host paths or host network. Every container of a run runs with
+`allowPrivilegeEscalation: false` (so `sudo` and other setuid programs do not work), without
+the `NET_RAW` capability (no `ping`) and with the runtime's seccomp profile, and without a token
+of the cluster.
+
+What a run makes there carries the label `hammerkit.dev/run` and is deleted when the run ends,
+whether it succeeded or not, and the end of the run waits until its pods and claims are gone:
+an idle caller costs nothing on the cluster. What a run left because the server stopped before
+its end is deleted when the caller's next run starts. The runs of one caller execute one after
+the other, since the Jobs and claims of a task are named after its cache id; the next waits in
+the queue, without counting against `runs.maxDuration`. The runs of different callers run side
+by side. A pod that does not fit the nodes waits for one, and a pod over the quota is not
+created until the quota has room: the task waits in both cases, until `runs.maxDuration`.
 
 ### Pools
 
@@ -141,9 +165,13 @@ accounts:
 
 | Key | What it does |
 | --- | --- |
-| `serviceAccount` | A ServiceAccount of the server's namespace. When the task starts, the server asks for a token of it (10 minutes, for `audience`) and puts it at `token`. A cloud that trusts the cluster's issuer for that ServiceAccount (GCP workload identity federation, AWS `AssumeRoleWithWebIdentity`, Azure federated credentials) exchanges it for the account's credentials. Short-lived, and one trust binding per account whoever the caller is. |
+| `serviceAccount` | A ServiceAccount of the server's namespace. Right before each Job of the task, the server asks for a token of it (an hour, for `audience`) and puts it at `token`; the Secret that carries it is deleted when the Job is done. A cloud that trusts the cluster's issuer for that ServiceAccount (GCP workload identity federation, AWS `AssumeRoleWithWebIdentity`, Azure federated credentials) exchanges it for the account's credentials. Short-lived, and one trust binding per account whoever the caller is. |
 | `audience` | The audience of that token; the cluster's default when left out. |
 | `secret` | A Secret of the server's namespace, each key a file of the directory: the federation config that points at `token`, or a key file where nothing else works (long-lived, so the second choice). |
+
+On a cluster every account with `providers` needs `kubernetes`, or the server does not start:
+its commands would otherwise run as whatever identity the node or the provider's image has,
+the same for every account.
 
 The values never reach the server, so it can not mask them in the log. The task's output is
 masked in the pod instead, with `awk`, line by line, before it leaves the pod: the image of a
@@ -169,13 +197,16 @@ of the server (`storage.directory`) belongs on a volume of its own.
 A task's [`network`](/docs/task/network) works on a cluster as in a
 [Kubernetes environment](/docs/task/network#kubernetes): a limited task's Jobs get a `NetworkPolicy`
 that lets them reach only the services they need and, under `allow`, their egress proxy, a
-Deployment on the first pool. A task without an image limits its network the same way, since it
-runs in a container of the tool image. The policy, the proxy and its Service carry
-`hammerkit.dev/run` and go with the rest of the run.
+Deployment on the first pool. A task without an image takes no `network` of its own yet (the
+build file is refused when it is read), but a run's `--network` ceiling limits it like a
+container task, since it runs in a container of the tool image. The policy, the proxy and its
+Service carry `hammerkit.dev/run` and go with the rest of the run. Pods with an open network are
+governed by the policy of the caller's namespace, see [Namespaces](#namespaces).
 
 The cluster's network plugin has to enforce `NetworkPolicy` (Calico and Cilium do, and recent
-kind). Some apply a policy a moment after the pod started, so `none` is not a hard boundary for
-the first moment of a task.
+kind), for `network:` and for keeping callers apart. Without it nothing is isolated. Some apply a
+policy a moment after the pod started, so `none` is not a hard boundary for the first moment of
+a task.
 
 A task that reads a provider's secret keeps an open network for now: its init containers are in
 the task's pod, so its policy would cut them off from the secret manager. Such a build file is
@@ -193,34 +224,75 @@ allows it, `restricted` does not).
 
 ### What the server may do
 
-In its own namespace the server reads the Secrets of the accounts and creates tokens of their
-ServiceAccounts. In the namespaces of callers it manages what runs need:
+Across the cluster the server makes namespaces and binds `runRole` in the ones it made. With
+[sandboxes](#sandboxes) it also lists namespaces when it starts, to find the claims of sandboxes
+in the ones it made. It needs
+no rights on Secrets or pods outside of them: those come from `runRole`, which it binds in each
+caller's namespace (Kubernetes lets it bind that role only, by `bind`). In its own namespace it
+reads the Secrets of the accounts and makes tokens of their ServiceAccounts, by name. The
+processes of runs use the same identity.
 
 ```yaml title="rbac.yaml"
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata: { name: hammerkit-accounts, namespace: hammerkit }
+kind: ClusterRole
+metadata: { name: hammerkit-server }
 rules:
-  - { apiGroups: [''], resources: [secrets], verbs: [get] }
-  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create] }
+  - { apiGroups: [''], resources: [namespaces], verbs: [get, list, create] }   # list: with sandboxes
+  - { apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, create, update] }
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames: [hammerkit-runs]
 ---
+# bound by the server in each caller's namespace, never across the cluster
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: hammerkit-runs }
 rules:
-  - { apiGroups: [''], resources: [namespaces], verbs: [get, create] }
-  - { apiGroups: [''], resources: [resourcequotas, limitranges], verbs: [get, create, patch] }
+  - { apiGroups: [''], resources: [resourcequotas, limitranges], verbs: [get, create, update, delete] }
   - apiGroups: ['']
     resources: [pods, pods/exec, pods/log, persistentvolumeclaims, secrets, services]
     verbs: [get, list, create, patch, delete, deletecollection]
-  - { apiGroups: [batch], resources: [jobs, jobs/status], verbs: [get, list, create, patch, delete, deletecollection] }
+  - apiGroups: [batch]
+    resources: [jobs, jobs/status]
+    verbs: [get, list, create, patch, delete, deletecollection]
   - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
-  - { apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [get, list, create, patch, delete] }
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: hammerkit-accounts, namespace: hammerkit }
+rules:
+  # the secret and serviceAccount of each account
+  - { apiGroups: [''], resources: [secrets], verbs: [get], resourceNames: [payments-dev-federation] }
+  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create], resourceNames: [payments-dev] }
+```
+Bind `hammerkit-server` with a ClusterRoleBinding and `hammerkit-accounts` with a RoleBinding to
+the server's ServiceAccount; do not bind `hammerkit-runs` yourself. Making RoleBindings across the
+cluster still lets the server bind `hammerkit-runs` in a namespace it did not make. To rule that
+out, admit its RoleBindings in managed namespaces only:
+
+```yaml title="admission.yaml"
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: hammerkit-managed-namespaces }
+spec:
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [rbac.authorization.k8s.io], apiVersions: ['*'], operations: [CREATE, UPDATE], resources: [rolebindings] }
+  matchConditions:
+    - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:hammerkit:hammerkit'" }
+  validations:
+    - expression: "namespaceObject.metadata.?labels['hammerkit.dev/managed'].orValue('') == 'true'"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: hammerkit-managed-namespaces }
+spec: { policyName: hammerkit-managed-namespaces, validationActions: [Deny] }
 ```
 
-Bind the Role and the ClusterRole to the server's ServiceAccount, the ClusterRole with a
-`ClusterRoleBinding`: callers' namespaces are made as they come, and with
-[sandboxes](#sandboxes) the server lists their claims in all of them when it starts.
-
-Not yet: Windows nodes, a cache in a registry or a bucket, and a limited network for a task
-that reads a provider's secret.
+Not yet: Windows nodes, a cache in a registry or a bucket, a limited network for a task
+that reads a provider's secret, and failing a task early whose pod can not start (an image that
+can not be pulled, no node for its pool).

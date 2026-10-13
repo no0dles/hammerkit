@@ -77,7 +77,7 @@ export interface RunPlacement {
     run: Run,
     context: RunContext,
     // where the run works, and the claim its tasks mount for it on a sandbox
-    work: { root: string; claim?: SandboxClaim }
+    work?: { root: string; claim?: SandboxClaim }
   ): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
   release(run: Run, context: RunContext): Promise<void>
 }
@@ -158,9 +158,14 @@ export class HostExecutor implements RunExecutor {
 
     const root = join(this.options.directory, run.id)
     try {
+      // where the process of the run starts: the checkout of a ref, or for a sandbox the
+      // published files, so what the process and the secret providers it starts read of
+      // their directory is never what a task wrote
       let cwd: string
       let input: Pick<WorkerInput, 'entry' | 'directory' | 'network'>
       let claim: SandboxClaim | undefined
+      // the files of the sandbox the tasks work on
+      let work: string | undefined
       if (source.type === 'ref') {
         cwd = join(root, 'source')
         const { repo, ref, commit: pinned } = source
@@ -178,9 +183,16 @@ export class HostExecutor implements RunExecutor {
         // the published files are read from a directory of the run and work on the
         // sandbox, whose own build files are just files
         const { registry, network } = sandboxes as SandboxRunOptions
-        const state = await registry.state(source.id)
+        const state = await registry.state(source.id, abortCtrl.signal)
+        // what was approved is what runs: the files may have changed since, by a run
+        // before this one on the sandbox
+        if (run.approvals?.length && state.tree !== source.tree) {
+          throw new Error(
+            `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
+          )
+        }
         const attached = await registry.attach(source.id, join(root, 'sandbox'))
-        cwd = attached.directory
+        work = attached.directory
         claim = attached.claim
         if (claim && !this.options.placement) {
           throw new Error(`the sandbox ${source.id} is a claim on a cluster, this server runs tasks on its own docker`)
@@ -196,7 +208,8 @@ export class HostExecutor implements RunExecutor {
         const published = join(root, 'bundle')
         await mkdir(published, { recursive: true })
         await this.writeBundle(published, bundle.files)
-        input = { entry: join(published, version.entry), directory: { read: published, work: cwd }, network }
+        cwd = published
+        input = { entry: join(published, version.entry), directory: { read: published, work }, network }
       }
 
       const home = join(root, 'home')
@@ -204,7 +217,7 @@ export class HostExecutor implements RunExecutor {
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
       const placement = this.options.placement
-      const placed = placement ? await placement.prepare(run, context, { root: cwd, claim }) : undefined
+      const placed = placement ? await placement.prepare(run, context, { root: work ?? cwd, claim }) : undefined
       try {
         await this.runInProcess(
           worker,

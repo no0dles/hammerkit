@@ -1,7 +1,8 @@
 import { randomBytes } from 'crypto'
-import { copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
+import { SandboxContainers } from './sandbox-docker'
 import { HostSandboxFiles, PatchAuthor, SandboxFiles, SandboxGit } from './sandbox-files'
 
 // What a sandbox's files are at a moment: the commit it was fetched at, and the git tree
@@ -124,12 +125,30 @@ export interface SandboxStorage {
  */
 export class HostSandboxStorage implements SandboxStorage {
   readonly readsWhileHeld = true
+  // one git command or walk at a time per sandbox: the objects `state` writes are pruned
+  // again, which must not meet another command that still needs them
+  private readonly queues = new Map<string, Promise<unknown>>()
 
   constructor(
     private readonly directory: string,
     // the environment of git when it reads a sandbox: the variables runs see
-    private readonly env: { [key: string]: string | undefined }
+    private readonly env: { [key: string]: string | undefined },
+    // what containers left of a sandbox, when runs on it use containers
+    private readonly containers?: SandboxContainers
   ) {}
+
+  private exclusive<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(id) ?? Promise.resolve()
+    const next = previous.then(fn, fn)
+    const settled = next.catch(() => undefined)
+    this.queues.set(id, settled)
+    settled.then(() => {
+      if (this.queues.get(id) === settled) {
+        this.queues.delete(id)
+      }
+    })
+    return next
+  }
 
   private root(id: string): string {
     return join(this.directory, id)
@@ -158,6 +177,8 @@ export class HostSandboxStorage implements SandboxStorage {
         'core.fsmonitor=false',
         '-c',
         'advice.detachedHead=false',
+        '-c',
+        'advice.addEmbeddedRepo=false',
         // the files are what the repository holds, on a Windows server too: the API answers
         // their bytes, and tasks read them in Linux containers
         '-c',
@@ -206,14 +227,20 @@ export class HostSandboxStorage implements SandboxStorage {
     }
   }
 
+  // What git writes with an index of its own waits for a `state` that prunes, and the other way around.
   files({ id }: SandboxKey): SandboxFiles {
+    return this.filesOf(id, true)
+  }
+
+  private filesOf(id: string, exclusive: boolean): SandboxFiles {
     const timeout = () => AbortSignal.timeout(5 * 60 * 1000)
     return new HostSandboxFiles(
       this.workTree(id),
       {
         run: (args, action, options = {}) =>
           this.git(id, args, this.readEnv(options.env), timeout(), action, options.maxBuffer),
-        withIndex: (fn) => this.withIndex(id, timeout(), fn),
+        withIndex: (fn) =>
+          exclusive ? this.exclusive(id, () => this.withIndex(id, timeout(), fn)) : this.withIndex(id, timeout(), fn),
       },
       this.env
     )
@@ -234,7 +261,7 @@ export class HostSandboxStorage implements SandboxStorage {
   }
 
   async fetch({ id }: SandboxKey, fetch: SandboxFetch): Promise<string> {
-    return this.checkout(id, fetch, false)
+    return this.exclusive(id, () => this.checkout(id, fetch, false))
   }
 
   private async checkout(id: string, fetch: SandboxFetch, force: boolean): Promise<string> {
@@ -258,9 +285,13 @@ export class HostSandboxStorage implements SandboxStorage {
     return (await this.git(id, ['rev-parse', 'HEAD'], fetch.env, fetch.signal, 'read')).trim()
   }
 
-  async push(key: SandboxKey, push: SandboxPush): Promise<string | undefined> {
-    const { id } = key
-    const commit = await this.files(key).commit(push.author)
+  // The commit is pushed before a `state` may prune it again.
+  async push({ id }: SandboxKey, push: SandboxPush): Promise<string | undefined> {
+    return this.exclusive(id, () => this.commitAndPush(id, push))
+  }
+
+  private async commitAndPush(id: string, push: SandboxPush): Promise<string | undefined> {
+    const commit = await this.filesOf(id, false).commit(push.author)
     if (!commit) {
       return undefined
     }
@@ -306,18 +337,36 @@ export class HostSandboxStorage implements SandboxStorage {
     if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(commit)) {
       throw new Error(`${JSON.stringify(commit.slice(0, 80))} is not a commit`)
     }
-    await this.git(id, ['reset', '--quiet', commit], this.readEnv(), AbortSignal.timeout(5 * 60 * 1000), 'move')
+    await this.exclusive(id, () =>
+      this.git(id, ['reset', '--quiet', commit], this.readEnv(), AbortSignal.timeout(5 * 60 * 1000), 'move')
+    )
   }
 
   // The tree is written with an index of its own, so neither the sandbox's index nor its
-  // files change.
+  // files change, and what it wrote to the git data is pruned again. Files a task made
+  // unreadable are made readable first: git would leave them out and call the sandbox
+  // clean.
   async state({ id }: SandboxKey, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
-    return this.withIndex(id, signal, async (run) => {
-      await run(['add', '--all', '--', '.'], 'read')
-      const tree = (await run(['write-tree'], 'read')).trim()
-      const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
-      return { commit, tree, clean: tree === base }
+    return this.exclusive(id, async () => {
+      await this.reclaim(id)
+      return this.readState(id, signal)
     })
+  }
+
+  private async readState(id: string, signal: AbortSignal): Promise<SandboxState> {
+    try {
+      return await this.withIndex(id, signal, async (run) => {
+        await run(['add', '--all', '--', '.'], 'read')
+        const tree = (await run(['write-tree'], 'read')).trim()
+        const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
+        return { commit, tree, clean: tree === base }
+      })
+    } finally {
+      // the sandbox's own index and HEAD keep what they need
+      await this.git(id, ['prune', '--expire=now'], this.readEnv(), AbortSignal.timeout(60_000), 'read').catch(
+        () => undefined
+      )
+    }
   }
 
   // the run works in the sandbox itself
@@ -330,23 +379,13 @@ export class HostSandboxStorage implements SandboxStorage {
     return { directory: files }
   }
 
-  // Symbolic links are counted, not followed: a link a task made points anywhere.
+  // What a task wrote is counted whatever it did to the modes, and with the volumes of its
+  // outputs. Symbolic links are counted, not followed: a link a task made points anywhere.
   async usage({ id }: SandboxKey): Promise<number> {
-    let bytes = 0
-    const pending = [this.root(id)]
-    while (pending.length > 0) {
-      const current = pending.pop() as string
-      const entries = await readdir(current, { withFileTypes: true }).catch(() => [])
-      for (const entry of entries) {
-        const path = join(current, entry.name)
-        if (entry.isDirectory()) {
-          pending.push(path)
-        } else {
-          bytes += (await lstat(path).catch(() => undefined))?.size ?? 0
-        }
-      }
-    }
-    return bytes
+    return this.exclusive(id, async () => {
+      const bytes = await this.reclaim(id)
+      return bytes + ((await this.containers?.volumeBytes(this.workTree(id)).catch(() => 0)) ?? 0)
+    })
   }
 
   async remove({ id }: SandboxKey): Promise<void> {
@@ -354,13 +393,80 @@ export class HostSandboxStorage implements SandboxStorage {
   }
 
   private async removeId(id: string): Promise<void> {
-    await rm(this.root(id), { recursive: true, force: true, maxRetries: 3 })
+    await this.exclusive(id, async () => {
+      await this.reclaim(id).catch(() => undefined)
+      await rm(this.root(id), { recursive: true, force: true, maxRetries: 3 })
+      // without docker there is nothing to remove now; volumes stay labelled with the files
+      await this.containers?.removeVolumes(this.workTree(id)).catch(() => undefined)
+    })
+  }
+
+  // Walks the sandbox, makes every directory and file the server's user can read and write
+  // (a task runs as that user and may have taken its own permissions away) and answers the
+  // bytes. What a container left as another user is given back through a container first.
+  private async reclaim(id: string): Promise<number> {
+    try {
+      return await this.walk(this.root(id))
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (!this.containers || (code !== 'EPERM' && code !== 'EACCES')) {
+        throw e
+      }
+      await this.containers.reclaim(this.root(id))
+      return await this.walk(this.root(id))
+    }
+  }
+
+  private async walk(root: string): Promise<number> {
+    let bytes = 0
+    const pending = [root]
+    while (pending.length > 0) {
+      const current = pending.pop() as string
+      await ensureMode(current, 0o700)
+      const entries = await readdir(current, { withFileTypes: true }).catch((e) => {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT' && current !== root) {
+          return []
+        }
+        throw e
+      })
+      for (const entry of entries) {
+        const path = join(current, entry.name)
+        if (entry.isDirectory()) {
+          pending.push(path)
+          continue
+        }
+        if (entry.isFile()) {
+          await ensureMode(path, 0o600)
+        }
+        bytes += (await lstat(path).catch(() => undefined))?.size ?? 0
+      }
+    }
+    return bytes
   }
 
   async list(): Promise<StoredSandbox[]> {
-    const entries = await readdir(this.directory, { withFileTypes: true }).catch(() => [])
+    // only a server that never kept a sandbox has no directory; any other error is one
+    const entries = await readdir(this.directory, { withFileTypes: true }).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+        return []
+      }
+      throw e
+    })
     return entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => ({ id: entry.name, remove: () => this.removeId(entry.name) }))
+  }
+}
+
+// adds the bits of the owner a path lacks; a path that is gone since it was listed is fine
+async function ensureMode(path: string, bits: number): Promise<void> {
+  const stats = await lstat(path).catch((e) => {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    throw e
+  })
+  if (stats && (stats.mode & bits) !== bits) {
+    await chmod(path, (stats.mode & 0o7777) | bits)
   }
 }

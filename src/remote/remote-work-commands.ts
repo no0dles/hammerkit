@@ -63,7 +63,15 @@ interface ApprovalView {
   definition: { name: string; hash: string }
   tasks: string[]
   accounts: string[]
-  source: { type: string; ref?: string; snapshot?: string; repo?: string; commit?: string; tree?: string }
+  source: {
+    type: string
+    ref?: string
+    snapshot?: string
+    repo?: string
+    commit?: string
+    tree?: string
+    clean?: boolean
+  }
   options: Record<string, unknown>
   approvals?: { account: string; expiresAt: string; approvedBy?: { sub: string } }[]
   plan?: Record<string, PlanView>
@@ -94,7 +102,9 @@ function describe(run: ApprovalView): string[] {
     run.source.type === 'ref'
       ? `ref ${run.source.ref}`
       : run.source.type === 'sandbox'
-        ? `sandbox of ${run.source.repo} at ${run.source.commit}, files ${run.source.tree}`
+        ? `sandbox of ${run.source.repo} at ${run.source.commit}, ${
+            run.source.clean ? 'unchanged' : `with changes, files ${run.source.tree}`
+          } (files .gitignore leaves out are not shown)`
         : `snapshot ${run.source.snapshot}`
   const options = Object.entries(run.options)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)

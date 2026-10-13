@@ -18,7 +18,8 @@ import { awaitDeployRunningState } from './await-running-state'
 import { getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { getKubernetesResources } from './container-resources'
-import { getPodPlacement, getRunLabels } from './job-placement'
+import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
+import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 
 export async function ensureKubernetesDeploymentExists(
@@ -60,6 +61,7 @@ export async function ensureKubernetesDeploymentExists(
       labels: {
         'hammerkit.dev/id': service.id(),
         'hammerkit.dev/state': stateKey,
+        ...getRunLabels(env),
       },
     },
     spec: {
@@ -76,6 +78,7 @@ export async function ensureKubernetesDeploymentExists(
             'hammerkit.dev/state': stateKey,
             ...getRunLabels(env),
             ...workspace.labels,
+            ...getNetworkLabels(env, service),
           },
         },
         spec: {
@@ -113,6 +116,7 @@ export async function ensureKubernetesDeploymentExists(
               livenessProbe: probe,
               ...getKubernetesResources(service.data.resources),
               volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
+              ...getContainerSecurity(env),
             },
             {
               name: 'debug',
@@ -120,6 +124,7 @@ export async function ensureKubernetesDeploymentExists(
               command: ['sleep'],
               args: ['3600'],
               volumeMounts: persistence.mounts.map((m) => m.mount),
+              ...getContainerSecurity(env),
             },
           ],
           volumes: [...persistence.volumes, ...persistence.workspace, ...secrets.volumes],

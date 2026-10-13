@@ -7,6 +7,7 @@ import { pullImage, prepareVolume, prepareMounts, setUserPermissions } from './e
 vi.mock('./get-docker-executor', () => ({
   recreateVolume: vi.fn(),
   ensureVolumeExists: vi.fn(),
+  volumeLabels: (root: string | undefined) => (root ? { 'hammerkit-root': root } : {}),
 }))
 vi.mock('../docker/pull', () => ({
   pull: vi.fn(),
@@ -56,7 +57,7 @@ describe('prepareVolume', () => {
       volumes: [{ name: 'vol', containerPath: '/v', resetOnChange: true, inherited: null }],
     })
     await prepareVolume(item, docker)
-    expect(recreateVolume).toHaveBeenCalledWith(docker, item.status, 'vol')
+    expect(recreateVolume).toHaveBeenCalledWith(docker, item.status, 'vol', {})
     expect(ensureVolumeExists).not.toHaveBeenCalled()
   })
 
@@ -68,7 +69,7 @@ describe('prepareVolume', () => {
       volumes: [{ name: 'vol', containerPath: '/v', resetOnChange: true, inherited: {} as any }],
     })
     await prepareVolume(item, docker)
-    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol')
+    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol', {})
     expect(recreateVolume).not.toHaveBeenCalled()
   })
 
@@ -82,7 +83,7 @@ describe('prepareVolume', () => {
       generates: [{ volumeName: 'vol', path: '/g', isFile: false, resetOnChange: false, inherited: null }],
     })
     await prepareVolume(item, docker)
-    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol')
+    expect(ensureVolumeExists).toHaveBeenCalledWith(docker, item.status, 'vol', {})
     expect(recreateVolume).not.toHaveBeenCalled()
   })
 

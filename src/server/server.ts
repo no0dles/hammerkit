@@ -3,7 +3,7 @@ import { createServer as createHttpsServer } from 'https'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
+import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, getGrant, mayRun } from './policy'
@@ -28,6 +28,7 @@ import { handleSources } from './sources-api'
 import { Sandbox, SandboxError, SandboxRegistry } from './sandboxes'
 import { HostSandboxStorage } from './sandbox-storage'
 import { KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
+import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
 import { PlanPolicy } from './plan'
 import { parseDuration, parseSize } from '../utils/units'
@@ -274,6 +275,12 @@ async function submitRun(
       send(res, 400, { error: `there is no sandbox ${request.source.id}, create one with POST /v1/sandboxes` })
       return
     }
+    if (sandboxes.policy.runtimes?.length === 0) {
+      send(res, 403, {
+        error: 'this server runs only local tasks, which it runs on no sandbox unless sandboxes.runtimes names local',
+      })
+      return
+    }
     const over = sandboxes.registry.overLimit(principal)
     if (over) {
       send(res, 413, { error: over })
@@ -352,7 +359,14 @@ async function submitRun(
       ? submit(source)
       : await sandboxes.registry.withSandbox(principal, (sandbox as Sandbox).id, async (current) => {
           const state = await sandboxes.registry.state(current.id)
-          return submit({ type: 'sandbox', id: current.id, repo: current.repo, commit: state.commit, tree: state.tree })
+          return submit({
+            type: 'sandbox',
+            id: current.id,
+            repo: current.repo,
+            commit: state.commit,
+            tree: state.tree,
+            clean: state.clean,
+          })
         })
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
@@ -501,6 +515,7 @@ export async function startServer(
   })
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
+  const sandboxRuntimes = getSandboxRuntimes(config)
   const sandboxLimits = {
     count: config.sandboxes.limits.count,
     bytes: parseSize(config.sandboxes.limits.bytes),
@@ -517,15 +532,34 @@ export async function startServer(
               planning.environment.processEnvs,
               join(storage, 'sandboxes', 'staging')
             )
-          : new HostSandboxStorage(join(storage, 'sandboxes', 'files'), planning.environment.processEnvs),
+          : new HostSandboxStorage(
+              join(storage, 'sandboxes', 'files'),
+              planning.environment.processEnvs,
+              // what containers of runs leave behind is given back and removed with a container
+              sandboxRuntimes.includes('docker')
+                ? new DockerSandboxContainers(planning.environment.processEnvs.DOCKER_HOST)
+                : undefined
+            ),
       records: join(storage, 'sandboxes', 'records'),
       limits: sandboxLimits,
       repos,
       log,
     }),
-    policy: { ...planning.policy, runtimes: config.sandboxes.runtimes },
+    // a sandbox holds code nobody reviewed: only the variables of `sandboxes.env`
+    policy: {
+      ...planning.policy,
+      envs: config.sandboxes.env.allow,
+      envsFrom: 'sandboxes.env.allow',
+      runtimes: sandboxRuntimes,
+    },
   }
-  // on a cluster that lists the claims of sandboxes in every caller's namespace, which a
+  if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes)) {
+    log(
+      'warning: entitlements keep sandboxes, but this server runs only local tasks, which it runs on no sandbox; ' +
+        'runs on sandboxes are refused until sandboxes.runtimes names a runtime'
+    )
+  }
+  // on a cluster that lists the claims of sandboxes in the namespaces of callers, which a
   // server without sandboxes need not be allowed to
   if (config.backend.type === 'host' || config.entitlements.some((entitlement) => entitlement.sandboxes)) {
     await sandboxes.registry.load()

@@ -4,7 +4,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { Environment } from '../executer/environment'
-import { readServerConfig, serverConfigSchema } from './server-config'
+import { getSandboxRuntimes, readServerConfig, serverConfigSchema } from './server-config'
 import { DISCOVERY_PATH, RunningServer, SERVER_PROTOCOL, startServer } from './server'
 import { getVersion } from '../version'
 import { HOST_ENV_YAML } from '../testing/host-env'
@@ -381,17 +381,37 @@ describe('server config policy', () => {
   it('keeps sandboxes on containers with no network, unless the operator says otherwise', () => {
     const config = serverConfigSchema.parse(base)
     expect(config.sandboxes).toEqual({
-      runtimes: ['docker'],
       network: 'none',
+      env: { allow: [] },
       limits: { count: 5, bytes: '20Gi' },
       total: '500Gi',
     })
+    expect(getSandboxRuntimes(config)).toEqual(['docker'])
     expect(
       serverConfigSchema.safeParse({
         ...base,
         sandboxes: { network: { allow: ['registry.npmjs.org', '*.github.com'] } },
       }).success
     ).toBe(true)
+  })
+
+  it('starts a server that runs only local tasks, which then runs nothing on sandboxes', () => {
+    const config = serverConfigSchema.parse({ ...base, runtimes: ['local'] })
+    expect(getSandboxRuntimes(config)).toEqual([])
+    expect(
+      getSandboxRuntimes(
+        serverConfigSchema.parse({ ...base, runtimes: ['local'], sandboxes: { runtimes: ['local'], network: 'open' } })
+      )
+    ).toEqual(['local'])
+  })
+
+  it('lets env secrets of sandbox runs read only what runs read', () => {
+    const allowed = { ...base, runs: { env: { allow: ['NPM_TOKEN'] } }, sandboxes: { env: { allow: ['NPM_TOKEN'] } } }
+    expect(serverConfigSchema.parse(allowed).sandboxes.env.allow).toEqual(['NPM_TOKEN'])
+    const result = serverConfigSchema.safeParse({ ...base, sandboxes: { env: { allow: ['NPM_TOKEN'] } } })
+    expect(!result.success && result.error.issues[0].message).toBe(
+      'NPM_TOKEN is not in runs.env.allow, no run can read it'
+    )
   })
 
   it.each([
@@ -534,6 +554,8 @@ describe('server config policy', () => {
         namespacePrefix: 'hammerkit-',
         pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }],
         providers: {},
+        runRole: 'hammerkit-runs',
+        deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32'],
         sandboxes: {
           image: `no0dles/hammerkit:${getVersion()}`,
           size: '4Gi',
@@ -553,6 +575,27 @@ describe('server config policy', () => {
       expect(kubernetes({ storageClass: 'fast', sandboxes: { storageClass: 'sandboxes', size: '10Gi' } }).success).toBe(
         true
       )
+    })
+
+    it('takes address ranges the pods of runs may not reach', () => {
+      expect(kubernetes({ deniedEgress: ['10.0.0.0/8', 'fd00::/8'] }).success).toBe(true)
+      for (const range of ['10.0.0.0', '10.0.0.0/33', 'fd00::/129', 'cluster/8', '10.0.0.0/8/1', '']) {
+        expect(message(kubernetes({ deniedEgress: [range] })), range).toBe(
+          'expected an address range, such as 10.0.0.0/8 or fd00::/8'
+        )
+      }
+    })
+
+    it('reads the secrets of an account as its own credential, never as the node or the image', () => {
+      const extra = (account: object) => ({
+        secretProviders: { gsm: { command: ['gcloud', '{{ref}}'] } },
+        accounts: { dev: { providers: { gsm: { env: {} } }, ...account } },
+      })
+      const providers = { gsm: { image: 'cloud-sdk:slim' } }
+      expect(message(kubernetes({ providers }, extra({})))).toBe(
+        'the account dev reads secrets in the Jobs of tasks, name the serviceAccount or secret it reads them as'
+      )
+      expect(kubernetes({ providers }, extra({ kubernetes: { serviceAccount: 'dev' } })).success).toBe(true)
     })
 
     it('takes pools, a quota as strings and default resources', () => {

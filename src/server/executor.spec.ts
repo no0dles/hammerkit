@@ -436,6 +436,17 @@ describe('HostExecutor', () => {
       expect(existsSync(join(runs, 'run_test'))).toBe(false)
     })
 
+    it('fails an approved run when the files are no longer the approved ones', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' })
+      const approved = (await sandboxes.state(sandboxId)).tree
+      const approvals = [{ account: 'dev', expiresAt: new Date(Date.now() + 60_000).toISOString() }]
+      writeFileSync(join(files, 'input.txt'), 'changed-after-the-approval')
+      const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
+      expect(error?.message).toMatch(/changed since the run was approved/)
+      expect(text).not.toContain('changed-after-the-approval')
+    })
+
     it('works in the directory of the sandbox where the published build file is', async () => {
       const hash = await publish(
         {

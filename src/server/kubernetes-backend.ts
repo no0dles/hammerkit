@@ -2,11 +2,14 @@ import { createHash } from 'crypto'
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { V1LimitRange, V1ResourceQuota } from '@kubernetes/client-node'
-import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
+import { isIPv4 } from 'net'
+import { RbacV1Subject, V1LimitRange, V1NetworkPolicy, V1ResourceQuota, V1RoleBinding } from '@kubernetes/client-node'
+import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
+import { NETWORK_LABEL } from '../kubernetes/network-policy'
+import { sleep } from '../utils/sleep'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { SandboxClaim } from './sandbox-storage'
 import { getVersion } from '../version'
@@ -16,6 +19,9 @@ import { KubernetesBackend, ServerConfig } from './server-config'
 
 // the name of the quota and limit range the server keeps in a caller's namespace
 const POLICY_NAME = 'hammerkit'
+const MANAGED_LABEL = 'hammerkit.dev/managed'
+// how long the end of a run waits for its pods and claims to be gone
+const RELEASE_TIMEOUT = 120_000
 // where a pod of the cluster finds the token and certificate of its ServiceAccount
 const IN_CLUSTER_NAMESPACE = '/var/run/secrets/kubernetes.io/serviceaccount/namespace'
 
@@ -58,6 +64,91 @@ function readInClusterNamespace(): string | undefined {
     return readFileSync(IN_CLUSTER_NAMESPACE, 'utf8').trim() || undefined
   } catch {
     return undefined
+  }
+}
+
+/**
+ * The NetworkPolicies of a caller's namespace. A namespace is no network boundary on its
+ * own: without them a task could connect to the pods of other callers, to the server
+ * and to the metadata endpoint of the cloud, which hands out the node's identity.
+ * - ingress: every pod accepts connections from the pods of its namespace only (the
+ *   services a task needs, an egress proxy)
+ * - egress of a pod with an open network: its namespace, DNS, and any address but the
+ *   denied ranges. A pod of a limited item is left out, its own policy (see
+ *   buildNetworkPolicy) is all it may reach, since policies add up.
+ */
+export function getNamespacePolicies(
+  namespace: string,
+  deniedEgress: string[]
+): (V1NetworkPolicy & KubernetesObjectHeader)[] {
+  const metadata = (name: string) => ({
+    name,
+    namespace,
+    annotations: { 'hammerkit.dev/version': getVersion() },
+    labels: { [MANAGED_LABEL]: 'true' },
+  })
+  const block = (cidr: string, except: string[]) => ({ ipBlock: { cidr, ...(except.length ? { except } : {}) } })
+  return [
+    {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: metadata('hammerkit-ingress'),
+      spec: { podSelector: {}, policyTypes: ['Ingress'], ingress: [{ _from: [{ podSelector: {} }] }] },
+    },
+    {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: metadata('hammerkit-egress'),
+      spec: {
+        podSelector: { matchExpressions: [{ key: NETWORK_LABEL, operator: 'DoesNotExist' }] },
+        policyTypes: ['Egress'],
+        egress: [
+          { to: [{ podSelector: {} }] },
+          // to whatever resolver the pod is given, a node-local cache included
+          {
+            ports: [
+              { protocol: 'UDP', port: 53 },
+              { protocol: 'TCP', port: 53 },
+            ],
+          },
+          {
+            to: [
+              block(
+                '0.0.0.0/0',
+                deniedEgress.filter((range) => isIPv4(range.split('/')[0]))
+              ),
+              block(
+                '::/0',
+                deniedEgress.filter((range) => !isIPv4(range.split('/')[0]))
+              ),
+            ],
+          },
+        ],
+      },
+    },
+  ]
+}
+
+/**
+ * The server's rights in a caller's namespace: the operator's ClusterRole, bound there
+ * only, so the server needs no rights on Secrets or pods anywhere else.
+ */
+export function getRunRoleBinding(
+  namespace: string,
+  role: string,
+  subject: RbacV1Subject
+): V1RoleBinding & KubernetesObjectHeader {
+  return {
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'RoleBinding',
+    metadata: {
+      name: 'hammerkit-runs',
+      namespace,
+      annotations: { 'hammerkit.dev/version': getVersion() },
+      labels: { [MANAGED_LABEL]: 'true' },
+    },
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: role },
+    subjects: [subject],
   }
 }
 
@@ -131,9 +222,12 @@ export class KubernetesExecutor implements RunExecutor {
   private placement(): RunPlacement {
     const backend = this.config.backend
     return {
-      prepare: async (run: Run, context: RunContext, work: { root: string; claim?: SandboxClaim }) => {
+      prepare: async (run: Run, context: RunContext, work?: { root: string; claim?: SandboxClaim }) => {
         const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
         await this.namespaces.prepare(namespace)
+        // what an earlier run left when the server stopped before its end; the runs
+        // of a caller execute one at a time, so no other run is in the namespace
+        await removeRunObjects(this.instance, namespace, `${RUN_LABEL},${RUN_LABEL}!=${getRunLabelValue(run.id)}`)
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
         const kubernetes: WorkKubernetesEnvironment = {
           type: 'kubernetes',
@@ -152,7 +246,7 @@ export class KubernetesExecutor implements RunExecutor {
                 account.kubernetes ? [[name, account.kubernetes]] : []
               )
             ),
-            ...(work.claim ? { workspace: getWorkspace(work.root, work.claim, namespace) } : {}),
+            ...(work?.claim ? { workspace: getWorkspace(work.root, work.claim, namespace) } : {}),
           },
         }
         return { kubernetes, env: this.access.env }
@@ -160,7 +254,10 @@ export class KubernetesExecutor implements RunExecutor {
       release: async (run: Run, context: RunContext) => {
         const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
         try {
-          await removeRunObjects(this.instance, namespace, run.id)
+          const selector = `${RUN_LABEL}=${getRunLabelValue(run.id)}`
+          await removeRunObjects(this.instance, namespace, selector)
+          // the next run of the caller uses the same claim names
+          await awaitRunObjectsGone(this.instance, namespace, selector, RELEASE_TIMEOUT)
         } catch (e) {
           context.emit({
             type: 'log',
@@ -179,6 +276,9 @@ export class KubernetesExecutor implements RunExecutor {
  * made on first use, with the operator's quota.
  */
 export class CallerNamespaces {
+  // who the server is to the cluster, the subject of its RoleBinding in a caller's namespace
+  private subject: Promise<RbacV1Subject> | undefined
+
   constructor(
     private readonly instance: KubernetesInstance,
     private readonly backend: KubernetesBackend
@@ -188,22 +288,36 @@ export class CallerNamespaces {
     return getCallerNamespace(this.backend.namespacePrefix, owner)
   }
 
-  // The caller's namespace with the operator's quota, and default requests for
-  // containers without resources so they are admitted under a quota on compute.
+  // The caller's namespace: made by the server and kept apart from the others. The
+  // server binds its rights there, isolates the network of the pods, applies the
+  // operator's quota and gives containers without resources default requests, so they
+  // are admitted under a quota on compute. All of it is replaced on every run, so the
+  // namespace follows the config.
   async prepare(namespace: string): Promise<void> {
     const backend = this.backend
+    let existing
     try {
-      await this.instance.coreApi.readNamespace({ name: namespace })
+      existing = await this.instance.coreApi.readNamespace({ name: namespace })
     } catch (e) {
       if (statusCodeOf(e) !== 404) {
         throw e
       }
+    }
+    if (existing && existing.metadata?.labels?.[MANAGED_LABEL] !== 'true') {
+      throw new Error(`the namespace ${namespace} was not made by hammerkit, the server does not run tasks in it`)
+    }
+    if (!existing) {
       try {
         await this.instance.coreApi.createNamespace({
           body: {
             metadata: {
               name: namespace,
-              labels: { 'hammerkit.dev/managed': 'true', 'hammerkit.dev/caller': namespace },
+              labels: {
+                [MANAGED_LABEL]: 'true',
+                'hammerkit.dev/caller': namespace,
+                // no privileged pods, host paths or host network, whatever a build asks
+                'pod-security.kubernetes.io/enforce': 'baseline',
+              },
             },
           },
         })
@@ -213,38 +327,73 @@ export class CallerNamespaces {
         }
       }
     }
+    await replace(this.instance, getRunRoleBinding(namespace, backend.runRole, await this.whoAmI()))
+    const [first, ...policies] = getNamespacePolicies(namespace, backend.deniedEgress)
+    // the API server may refuse what the binding allows for a moment after it was made
+    await untilAllowed(() => replace(this.instance, first))
+    for (const policy of policies) {
+      await replace(this.instance, policy)
+    }
     const metadata = {
       name: POLICY_NAME,
       namespace,
       annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { 'hammerkit.dev/managed': 'true' },
+      labels: { [MANAGED_LABEL]: 'true' },
     }
-    if (backend.quota) {
-      const quota: V1ResourceQuota & KubernetesObjectHeader = {
-        apiVersion: 'v1',
-        kind: 'ResourceQuota',
-        metadata,
-        spec: { hard: backend.quota },
+    const quota: V1ResourceQuota & KubernetesObjectHeader = {
+      apiVersion: 'v1',
+      kind: 'ResourceQuota',
+      metadata,
+      spec: { hard: backend.quota },
+    }
+    const defaults = backend.defaultResources
+    const limits: V1LimitRange & KubernetesObjectHeader = {
+      apiVersion: 'v1',
+      kind: 'LimitRange',
+      metadata,
+      spec: {
+        limits: [
+          {
+            type: 'Container',
+            ...(defaults?.requests ? { defaultRequest: defaults.requests } : {}),
+            ...(defaults?.limits ? { _default: defaults.limits } : {}),
+          },
+        ],
+      },
+    }
+    for (const [object, wanted] of [
+      [quota, !!backend.quota],
+      [limits, !!defaults],
+    ] as const) {
+      if (wanted) {
+        await replace(this.instance, object)
+      } else {
+        // one the config had before
+        await this.instance.objectApi.delete(object).catch((e) => {
+          if (statusCodeOf(e) !== 404) {
+            throw e
+          }
+        })
       }
-      await apply(this.instance, quota)
     }
-    if (backend.defaultResources) {
-      const limits: V1LimitRange & KubernetesObjectHeader = {
-        apiVersion: 'v1',
-        kind: 'LimitRange',
-        metadata,
-        spec: {
-          limits: [
-            {
-              type: 'Container',
-              ...(backend.defaultResources.requests ? { defaultRequest: backend.defaultResources.requests } : {}),
-              ...(backend.defaultResources.limits ? { _default: backend.defaultResources.limits } : {}),
-            },
-          ],
-        },
-      }
-      await apply(this.instance, limits)
+  }
+
+  private whoAmI(): Promise<RbacV1Subject> {
+    if (!this.subject) {
+      this.subject = this.instance.authApi
+        .createSelfSubjectReview({ body: { apiVersion: 'authentication.k8s.io/v1', kind: 'SelfSubjectReview' } })
+        .then((review) => {
+          const name = review.status?.userInfo?.username
+          if (!name) {
+            throw new Error('the cluster did not say who the server is (SelfSubjectReview)')
+          }
+          return { kind: 'User', apiGroup: 'rbac.authorization.k8s.io', name }
+        })
+      this.subject.catch(() => {
+        this.subject = undefined
+      })
     }
+    return this.subject
   }
 }
 
@@ -257,12 +406,15 @@ function getWorkspace(root: string, claim: SandboxClaim, namespace: string): Wor
   return { root, claim: claim.name, subPath: claim.subPath, label: claim.label }
 }
 
-// Everything a run made in the caller's namespace, by its label: Jobs with their
-// pods, Deployments (services and egress proxies), Services, claims, Secrets and
-// the NetworkPolicies of limited networks, which go last so no pod of the run
-// outlives its policy.
-export async function removeRunObjects(instance: KubernetesInstance, namespace: string, run: string): Promise<void> {
-  const labelSelector = `${RUN_LABEL}=${getRunLabelValue(run)}`
+// Everything a run made in the caller's namespace, by the label selector of the run:
+// Jobs with their pods, Deployments (services and egress proxies), Services, claims,
+// Secrets and the NetworkPolicies of limited networks, which go last so no pod of the
+// run outlives its policy.
+export async function removeRunObjects(
+  instance: KubernetesInstance,
+  namespace: string,
+  labelSelector: string
+): Promise<void> {
   const selector = { namespace, labelSelector }
   await instance.batchApi.deleteCollectionNamespacedJob({ ...selector, propagationPolicy: 'Background' })
   await instance.appsApi.deleteCollectionNamespacedDeployment({ ...selector, propagationPolicy: 'Background' })
@@ -290,5 +442,40 @@ export async function removeRunObjects(instance: KubernetesInstance, namespace: 
           throw e
         }
       })
+  }
+}
+
+async function untilAllowed<T>(fn: () => Promise<T>, attempts = 20): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn()
+    } catch (e) {
+      if (statusCodeOf(e) !== 403 || attempt >= attempts) {
+        throw e
+      }
+      await sleep(500)
+    }
+  }
+}
+
+// Until the pods and claims of a run are gone: a claim is kept while a pod uses it.
+export async function awaitRunObjectsGone(
+  instance: KubernetesInstance,
+  namespace: string,
+  labelSelector: string,
+  timeout: number
+): Promise<void> {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    const pods = await instance.coreApi.listNamespacedPod({ namespace, labelSelector })
+    const claims = await instance.coreApi.listNamespacedPersistentVolumeClaim({ namespace, labelSelector })
+    const left = [...pods.items, ...claims.items].map((item) => `${item.kind ?? ''} ${item.metadata?.name}`.trim())
+    if (left.length === 0) {
+      return
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`still there after ${Math.round(timeout / 1000)}s: ${left.join(', ')}`)
+    }
+    await sleep(1000)
   }
 }

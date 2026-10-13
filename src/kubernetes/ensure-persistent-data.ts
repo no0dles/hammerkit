@@ -16,7 +16,7 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
 import { Readable } from 'stream'
-import { getPodPlacement, getRunLabels } from './job-placement'
+import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
 import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
 
 // A previous run that crashed between creating an upload/download pod and its
@@ -115,6 +115,7 @@ export async function getPodForPersistence(
           command: ['sh'],
           tty: true,
           volumeMounts: mounts,
+          ...getContainerSecurity(env),
         },
       ],
       volumes: persistence.volumes,
