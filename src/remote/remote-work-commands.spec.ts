@@ -22,7 +22,7 @@ const buildFile = `tasks:
     cmds: [echo deploy]
   smoke:
     deps: [deploy]
-    cmds: [echo smoke]
+    cmds: ["echo smoke ${'x'.repeat(400)} \u202e end"]
 includes:
   more: ./more.yaml
 `
@@ -267,21 +267,23 @@ describe('remote approvals', () => {
     })
   })
 
-  it('shows the approver the arguments of a run and the command they make', async () => {
+  it('shows the approver every argument and the whole command, with format characters written out', async () => {
     await withHarness('remote-approvals-arguments', async (h) => {
       await h.run('remote', 'login', 'build')
       await h.run('remote', 'publish', 'payments', 'build')
-      // the task that takes them reads no secrets, the one it waits for does
-      const run = await submit(h, 'alice', 'smoke', { args: ['--region', 'eu, us'], cache: 'none' })
+      // smoke reads no secret and takes arguments; deploy, which it waits for, reads one of prod
+      const long = `eu ${'y'.repeat(400)}`
+      const run = await submit(h, 'alice', 'smoke', { args: ['--region', long, 'a\u202eb'], cache: 'none' })
       expect(run.state).toBe('awaiting-approval')
 
       h.as('bob')
       await h.run('remote', 'login', 'build')
       const listing = await h.run('remote', 'approvals', 'build')
       expect(listing).toContain('source ref main, cache=none')
-      expect(listing).toContain('arguments: "--region" "eu, us"')
+      expect(listing).toContain(`arguments: "--region" "${long}" "a\\u{202e}b"\n`)
+      expect(listing).not.toContain('\u202e')
       const shown = await h.run('remote', 'show', run.id, 'build')
-      expect(shown).toContain(`$ echo smoke '--region' 'eu, us'`)
+      expect(shown).toContain(`$ echo smoke ${'x'.repeat(400)} \\u{202e} end '--region' '${long}' 'a\\u{202e}b'\n`)
       expect(shown).toContain('$ echo deploy\n')
     })
   })

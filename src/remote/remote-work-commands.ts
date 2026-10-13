@@ -5,7 +5,7 @@ import { getAccessToken } from './credentials'
 import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Bundle, HASH_PATTERN } from './bundle'
-import { callServer, printable } from './server-client'
+import { callServer, printable, printableWhole } from './server-client'
 import { diffBundles } from './text-diff'
 
 export interface WorkCommandContext {
@@ -92,7 +92,8 @@ const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
 // What a person who approves is shown of a run: everything the decision rests on.
 function describe(run: ApprovalView): string[] {
   const source = run.source.type === 'ref' ? `ref ${run.source.ref}` : `snapshot ${run.source.snapshot}`
-  // the arguments are listed on their own line, each as a JSON string: commas and spaces stay visible
+  // the arguments are shown whole on a line of their own, each as a JSON string,
+  // so commas, spaces and quotes inside one stay visible
   const { args, ...settings } = run.options
   const options = Object.entries(settings)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)
@@ -107,7 +108,7 @@ function describe(run: ApprovalView): string[] {
       source
     )}${options ? `, ${printable(options)}` : ''}`,
     ...(Array.isArray(args) && args.length > 0
-      ? [`  arguments: ${args.map((arg) => printable(JSON.stringify(arg))).join(' ')}`]
+      ? [`  arguments: ${args.map((arg) => printableWhole(JSON.stringify(arg))).join(' ')}`]
       : []),
     ...(run.approvals ?? []).map(
       (approval) =>
@@ -140,7 +141,8 @@ function describePlan(plan: Record<string, PlanView>): string[] {
     `  ${colors.bold(printable(name))}  ${entry.kind}, ${printable(entry.runtime)}${
       entry.image ? ` ${printable(entry.image)}` : ''
     }${entry.flags.length > 0 ? `  [${entry.flags.map(printable).join(', ')}]` : ''}`,
-    ...entry.cmds.map((cmd) => `    $ ${printable(cmd)}`),
+    // a command is what is decided on: shown whole, however long
+    ...entry.cmds.map((cmd) => `    $ ${printableWhole(cmd)}`),
     ...(entry.network !== undefined && entry.network !== 'open'
       ? [`    network: ${printable(typeof entry.network === 'string' ? entry.network : JSON.stringify(entry.network))}`]
       : []),

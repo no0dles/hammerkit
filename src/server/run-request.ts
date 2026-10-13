@@ -41,7 +41,8 @@ export const runOptionsSchema = z
     // as --no-skip-deps when false
     skipDeps: z.boolean().optional(),
     // as the text after `--`: appended to the last command of the one task the run
-    // names, each quoted for its shell. A task that reads secrets takes none.
+    // names, each quoted for its shell. A task that reads a secret or a variable of the
+    // server takes none (see refuseArguments).
     args: z
       .array(z.string().refine((arg) => !arg.includes('\0'), 'an argument can not contain a NUL character'))
       .max(MAX_ARGS)

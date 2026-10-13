@@ -194,7 +194,7 @@ describe('HostExecutor', () => {
     })
     const { events, error } = await execute(run(hash, { accounts: ['ci'], options: { args: ['$TOKEN'] } }))
     expect(error?.message).toBe(
-      'build reads secrets (TOKEN), it takes no arguments on a server: an argument could make it print them'
+      'build reads the secret TOKEN, it takes no arguments on a server: an argument could make it print them'
     )
     expect(events).toEqual([])
   })

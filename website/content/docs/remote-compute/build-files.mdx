@@ -87,6 +87,7 @@ or an agent sees `deploy` uses `op-payments-prod` before anything runs:
     "deps": [], "needs": [],
     "accounts": ["op-payments-prod"],
     "secrets": [{ "from": "gsm:kube-token", "account": "op-payments-prod", "target": "KUBE_TOKEN" }],
+    "serverEnvs": [],
     "mounts": [], "ports": [], "generates": [],
     "flags": ["local-task"]
   }
@@ -95,6 +96,7 @@ or an agent sees `deploy` uses `op-payments-prod` before anything runs:
 
 `command` is the last command of a task (the `cmd` of a service), where a run's
 [arguments](/docs/remote-compute/runs#arguments) land; `null` when there is none.
+`serverEnvs` are the variables of the server its `envs` read (`$NAME`, `${NAME}`).
 `network` is what it reaches besides its needs, as the build file declares it (`open`
 when it declares nothing). Versions published before these were recorded have neither.
 

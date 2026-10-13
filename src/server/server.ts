@@ -232,6 +232,11 @@ async function submitRun(
     send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
+  const argued = (request.options.args ?? []).length > 0 ? request.tasks[0] : undefined
+  if (argued !== undefined && version.services.includes(argued)) {
+    send(res, 400, { error: `${argued} is a service, arguments go to a task` })
+    return
+  }
   if (request.source.type === 'upload') {
     // a run starts from files the server has all of, never from a half-sent tree
     const tree = await sources.get(principal, request.source.snapshot)

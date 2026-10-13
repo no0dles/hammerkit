@@ -166,6 +166,9 @@ const bundle = {
       '    secrets:',
       '      - { from: "echo:prod", account: op-payments-prod, env: KUBE_TOKEN }',
       '    cmds: [echo deploy]',
+      'services:',
+      '  db:',
+      '    image: postgres:16',
       '',
     ].join('\n'),
   },
@@ -442,9 +445,9 @@ describe('runs api', () => {
       const response = await api.submit({ ...request, tasks: ['deploy'], options: { args: ['--dry-run'] } })
       expect(response.status).toBe(400)
       expect((await response.json()).error).toBe(
-        'deploy reads secrets (KUBE_TOKEN), it takes no arguments on a server: an argument could make it print them'
+        'deploy reads the secret KUBE_TOKEN, it takes no arguments on a server: an argument could make it print them'
       )
-      expect(api.log.some((line) => line.includes('refuse run') && line.includes('deploy reads secrets'))).toBe(true)
+      expect(api.log.some((line) => line.includes('refuse run') && line.includes('deploy reads the secret'))).toBe(true)
 
       // a dependency that reads secrets is fine, it does not get them
       const integration = await api.submit({ ...request, tasks: ['integration'], options: { args } })
@@ -461,6 +464,7 @@ describe('runs api', () => {
         expect((await refused.json()).error).toMatch(message)
       }
       await refuse({ ...request, tasks: ['build', 'test'], options: { args } }, /arguments go to one task/)
+      await refuse({ ...request, tasks: ['db'], options: { args } }, 'db is a service, arguments go to a task')
       await refuse(
         { definition: request.definition, source: request.source, options: { filter: ['group=slow'], args } },
         /arguments go to one task/

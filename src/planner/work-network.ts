@@ -62,13 +62,19 @@ export function getEffectiveNetwork(item: { network: WorkNetwork; networkCeiling
   return limitNetwork(item.network, item.networkCeiling)
 }
 
-// Whether `network` reaches more than `ceiling` allows: the ceiling would clamp it.
+// Whether `network` reaches more than `ceiling` allows: a host it allows that no
+// host of the ceiling covers. Redundant hosts of the ceiling don't count.
 export function exceedsNetwork(network: WorkNetwork, ceiling: WorkNetwork): boolean {
-  const limited = limitNetwork(network, ceiling)
-  if (limited.type !== network.type) {
+  if (ceiling.type === 'open' || network.type === 'none') {
+    return false
+  }
+  if (network.type === 'open') {
     return true
   }
-  return network.type === 'allow' && limited.type === 'allow' && limited.hosts.join(',') !== network.hosts.join(',')
+  if (ceiling.type === 'none') {
+    return network.hosts.length > 0
+  }
+  return network.hosts.some((host) => !ceiling.hosts.some((limit) => coversHost(limit, host)))
 }
 
 // The setting as a build file writes it.

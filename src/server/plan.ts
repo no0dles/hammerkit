@@ -55,6 +55,9 @@ export interface TaskPlan {
   // the accounts its secrets are read as
   accounts: string[]
   secrets: { from: string; account: string | null; target: string }[]
+  // the variables of the server its `envs` read (`$NAME`, `${NAME}`); versions
+  // published before this was recorded have none
+  serverEnvs?: string[]
   mounts: string[]
   ports: string[]
   generates: string[]
@@ -333,6 +336,7 @@ function toPlan(root: string, item: Item): TaskPlan {
     needs: item.needs.map((need) => need.name).sort(),
     accounts,
     secrets,
+    serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
     mounts,
     ports,
     generates: 'generates' in data ? data.generates.map((generate) => generate.path) : [],

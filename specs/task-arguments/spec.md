@@ -30,10 +30,10 @@
 ## Implementation notes (server)
 
 - **Where the check sits.** The arguments are applied while the run is planned, so the run's `plan` (what the caller and an approver see) carries the command as it runs. The secrets check reads that plan at submit, and again in the executor before anything starts.
-- **Only the named task counts.** A dependency or needed service that reads secrets does not refuse the run: it never gets the arguments.
+- **What the named task reads.** A version's plan records, per item, the variables of the server its `envs` read (`serverEnvs`), taken from where `$NAME` and `${NAME}` resolved while the build file was read. The task's secrets and any of those other than `PATH`, `HOME` and `CI` refuse arguments. Its dependencies and needed services are not covered (FR-008); the runs docs tell publishers to keep secrets out of what they hand on.
 - **Not a service.** A run request names tasks; arguments with a service in `tasks` are `400`.
 - **No NUL.** An argument with a NUL character is `400` at the schema, as locally.
-- **The approver's view.** `hammerkit remote approvals` and `remote show` list the arguments as JSON strings on a line of their own, so commas and spaces in one stay visible.
+- **The approver's view.** `hammerkit remote approvals` and `remote show` list the arguments as JSON strings on a line of their own, so commas and spaces in one stay visible. Arguments and command lines are never cut; other text is cut at 300 characters with a `… (+N chars)` marker. Control characters print as `?`, format characters (bidi, zero-width) as `\u{…}`.
 
 ## Out of scope
 
