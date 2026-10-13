@@ -681,7 +681,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         namespace,
         // the NetworkPolicy of the caller's namespace for pods with an open network leaves
         // it out: its own policy, no network at all, is all it gets
-        labels: { ...MANAGED, [SANDBOX_LABEL]: names.label, [FILES_LABEL]: 'true', [NETWORK_LABEL]: 'none' },
+        labels: { ...MANAGED, [SANDBOX_LABEL]: names.label, [FILES_LABEL]: 'true', [NETWORK_LABEL]: 'limited' },
         annotations: { 'hammerkit.dev/version': getVersion() },
       },
       spec: {

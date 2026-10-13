@@ -305,7 +305,7 @@ describe('sandboxes on a cluster', () => {
     // on the pool of the tasks and near the pods of runs
     const pod = cluster.objects.get(`Pod/${namespace}/${names.pod}`)
     // left out by the namespace's policy for pods with an open network
-    expect(pod.metadata.labels).toMatchObject({ 'hammerkit.dev/network': 'none' })
+    expect(pod.metadata.labels).toMatchObject({ 'hammerkit.dev/network': 'limited' })
     expect(pod.spec).toMatchObject({
       automountServiceAccountToken: false,
       nodeSelector: { 'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'amd64' },
