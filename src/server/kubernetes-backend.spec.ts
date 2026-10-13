@@ -167,7 +167,10 @@ describe('kubernetes backend', () => {
           deleteCollectionNamespacedService: collection('Service'),
           deleteCollectionNamespacedSecret: collection('Secret'),
           deleteCollectionNamespacedPersistentVolumeClaim: collection('PersistentVolumeClaim'),
-          listNamespacedPod: async () => ({ items: [] }),
+          listNamespacedPod: async (request: any) => {
+            calls.push(`await Pod ${request.labelSelector}`)
+            return { items: [] }
+          },
           listNamespacedPersistentVolumeClaim: async () => ({ items: [] }),
         },
         batchApi: { deleteCollectionNamespacedJob: collection('Job') },
@@ -190,7 +193,7 @@ describe('kubernetes backend', () => {
             calls.push(`delete ${spec.kind} ${spec.metadata.name}`)
             return notFound()
           },
-          list: async () => ({ items: [] }),
+          list: async () => ({ items: [{ metadata: { name: 'hammerkit-network-build' } }] }),
         },
       }
       return { calls, instance }
@@ -225,15 +228,20 @@ describe('kubernetes backend', () => {
         ...['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
           (kind) => `delete ${kind} hammerkit.dev/run,hammerkit.dev/run!=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`
         ),
+        // the policy of a limited pod goes once the pod is gone
+        `await Pod hammerkit.dev/run,hammerkit.dev/run!=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`,
+        'delete NetworkPolicy hammerkit-network-build',
       ])
 
       calls.length = 0
       await placement.release({ id: 'run_AAAAAAAAAAAAAAA-', owner } as Run, context)
-      expect(calls).toEqual(
-        ['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
+      expect(calls).toEqual([
+        ...['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
           (kind) => `delete ${kind} hammerkit.dev/run=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`
-        )
-      )
+        ),
+        `await Pod hammerkit.dev/run=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`,
+        'delete NetworkPolicy hammerkit-network-build',
+      ])
     })
 
     it('refuses a namespace of the same name that hammerkit did not make', async () => {
