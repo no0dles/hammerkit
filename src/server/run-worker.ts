@@ -141,6 +141,18 @@ interface Seen {
   started?: number
 }
 
+// Why a task ran, as a task event carries it: the first causes, masked and cut short.
+export function taskCauses(causes: string[] | undefined, redact: (text: string) => string): { causes?: string[] } {
+  return causes?.length
+    ? {
+        causes: [
+          ...causes.slice(0, MAX_CAUSES).map((cause) => redact(cause).slice(0, MAX_ERROR_TEXT)),
+          ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
+        ],
+      }
+    : {}
+}
+
 // A task event when a task has moved on since the last look, with what its result needs
 // once it is over.
 function reportTasks(
@@ -150,15 +162,6 @@ function reportTasks(
   // what leaves the process is masked like the log is: an error may quote a value
   redact: (text: string) => string
 ): void {
-  const causesOf = (causes: string[] | undefined) =>
-    causes?.length
-      ? {
-          causes: [
-            ...causes.slice(0, MAX_CAUSES).map((cause) => redact(cause).slice(0, MAX_ERROR_TEXT)),
-            ...(causes.length > MAX_CAUSES ? [`… and ${causes.length - MAX_CAUSES} more`] : []),
-          ],
-        }
-      : {}
   for (const task of iterateWorkTasks(workTree)) {
     const state = task.state.current
     const before = seen.get(task.name)
@@ -174,7 +177,7 @@ function reportTasks(
         task: task.name,
         state: status,
         ...(status === 'skipped' ? {} : { durationMs: state.duration }),
-        ...causesOf(state.missCauses),
+        ...taskCauses(state.missCauses, redact),
       }
     } else if (state.type === 'crash') {
       event = { type: 'task', task: task.name, state: 'failed', exitCode: state.exitCode, ...since() }
