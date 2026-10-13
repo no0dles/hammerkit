@@ -8,29 +8,28 @@ import { WorkItem } from '../planner/work-item'
 import { ContainerWorkTask, isContainerWorkTask } from '../planner/work-task'
 import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
 import { getContainerBinds } from './get-container-binds'
-import { refuseLinks } from '../file/refuse-links'
+import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
+
+// The files a server run works on: its checkout, or a sandbox. Somebody else wrote them.
+export function hostedRoot(environment: Environment): string | undefined {
+  return environment.hosted ? environment.cwd : undefined
+}
 
 /**
- * On a server, every path of the host an item binds into its container or the engine
- * writes for it (sources, mounts, file outputs, exported outputs) has to be inside the
- * run's files with no link on the way: tasks of this or an earlier run on a sandbox, or
- * the commit of a ref, could have left one pointing anywhere on the server. Checked
- * before anything is written and again right before the container is made.
+ * On a server, every path of the host an item binds into its container, or the engine
+ * reads or writes for it, has to stay inside the run's files with no link on the way:
+ * tasks of this or an earlier run on a sandbox, or the commit of a ref, could have left
+ * one pointing anywhere on the server. The runtime checks before an item runs; this is
+ * checked again right before a container is made and before outputs are copied, after
+ * other tasks of the run had their turn.
  */
 export async function refuseHostLinks(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
   environment: Environment
 ): Promise<void> {
-  const root = environment.hosted?.root
-  if (!root) {
-    return
-  }
-  const paths = [...item.data.mounts.map((mount) => mount.localPath), ...item.data.src.map((src) => src.absolutePath)]
-  if (isContainerWorkTask(item.data)) {
-    paths.push(...item.data.generates.filter((g) => g.isFile || g.export).map((g) => g.path))
-  }
-  for (const path of paths) {
-    await refuseLinks(root, path)
+  const root = hostedRoot(environment)
+  if (root) {
+    await assertItemPathsWithinRoot(item, root)
   }
 }
 
@@ -47,7 +46,7 @@ export async function prepareVolume(
   docker: Dockerode,
   environment?: Environment
 ): Promise<void> {
-  const labels = volumeLabels(environment?.hosted?.root)
+  const labels = volumeLabels(environment ? hostedRoot(environment) : undefined)
   if (isContainerWorkService(item.data)) {
     for (const volume of item.data.volumes) {
       if (volume.resetOnChange && !volume.inherited) {

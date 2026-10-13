@@ -101,7 +101,6 @@ export async function dockerService(
   let network: DockerItemNetwork | null = null
 
   try {
-    await refuseHostLinks(item, environment)
     await prepareMounts(item, environment)
     checkForAbort(options.abort)
 

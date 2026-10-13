@@ -99,6 +99,8 @@ export interface RunContext {
 // succeeds when `execute` resolves and fails when it throws.
 export interface RunExecutor {
   execute(run: Run, context: RunContext): Promise<void>
+  // runs of one caller it executes at a time; the others wait in the queue
+  readonly runningPerCaller?: number
 }
 
 // The server can not take the run now; `status` is what the caller is told
@@ -535,10 +537,12 @@ export class RunRegistry {
   // waits for it.
   private dispatch(): void {
     while (this.running < this.maxConcurrent) {
+      const perCaller = Math.min(
+        this.options.limits?.running ?? Infinity,
+        this.options.executor.runningPerCaller ?? Infinity
+      )
       const index = this.queue.findIndex(
-        (entry) =>
-          (!this.options.limits || this.runningOf(entry.run.owner) < this.options.limits.running) &&
-          !this.sandboxBusy(entry.run)
+        (entry) => this.runningOf(entry.run.owner) < perCaller && !this.sandboxBusy(entry.run)
       )
       if (index < 0) {
         return

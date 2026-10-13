@@ -81,7 +81,6 @@ export async function dockerTask(
     // A run that fails overwrites outputs, so the previous record goes first,
     // and only a run that succeeded writes a new one.
     await removeContainerTaskState(environment, item)
-    await refuseHostLinks(item, environment)
     const outputsToReset = getOutputsToReset(item.data)
     // outputs on the host: file outputs (bind mounts) and exported directories
     for (const generate of outputsToReset.filter((g) => g.isFile || g.export)) {

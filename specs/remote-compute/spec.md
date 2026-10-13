@@ -34,7 +34,16 @@ backend: this machine (docker, local tools)  |  Kubernetes (Jobs on node pools) 
 | Mode | The server runs on | Tasks run | Scale |
 |---|---|---|---|
 | **Host** | A machine (Linux, a Mac, Windows) | On that machine via the docker and local runtimes | One machine; runs queue when it is full |
-| **Kubernetes** | A cluster | As Jobs, one namespace per user, placed on node pools by node selector (`kubernetes.io/os`, `kubernetes.io/arch`, labels); Kubernetes queues what does not fit | The cluster |
+| **Kubernetes** (built, experimental) | A cluster | As Jobs, one namespace per user, placed on node pools by node selector (`kubernetes.io/os`, `kubernetes.io/arch`, labels); Kubernetes queues what does not fit | The cluster |
+
+**Kubernetes backend (built).** `backend.type: kubernetes`. The server plans and drives a run as on a host, in a process of its own; its container tasks become Jobs and its services Deployments, through the engine's Kubernetes runtime with the server's settings in place of a build file's environment.
+
+- A namespace per caller (`namespacePrefix` and a hash of issuer and subject) with the operator's `ResourceQuota` (`quota`) and a `LimitRange` of default requests (`defaultResources`). The runs of one caller execute one after the other (a task's objects are named after its cache id); different callers run side by side. Everything a run makes carries `hammerkit.dev/run` and is deleted when the run ends. Pods run without a token of the cluster.
+- `pools` place pods (`platform` linux/amd64 or arm64, `nodeSelector`, `tolerations`); container tasks and services use the first. A local task runs in the `toolImage` of the first pool that offers its declared `platform`; macOS and Windows tasks have no pool.
+- Secrets of providers are read in the Job, never by the server: an init container per secret in the provider's image (`backend.providers.<name>.image`), with that account's credential under `/var/run/hammerkit/account` from `accounts.<name>.kubernetes`: a token of a ServiceAccount of the server's namespace (TokenRequest, 10 minutes, `audience`, for workload identity federation) and/or the files of a Secret there. The task container mounts the values only, and its output is masked in the pod (`awk`), since the server never sees them. A provider secret on a service and one with `cache: true` are refused at publish for now.
+- The cache stays on the server, per source trust as on a host; outputs move between a task's claim and the cache, and sources from the checkout into the claim, with the engine's store and restore pods. The `!` exclusions of `src` are not applied by that copy yet.
+- `network` is the engine's `NetworkPolicy` and egress proxy (task-network spec), with the run label and the first pool's placement on the policy and proxy. A task that reads a provider's secret keeps an open network: its init containers share the pod's policy (refused at publish, and the task fails when a run's ceiling would limit it).
+- Not built: a limited network for a task with provider secrets (needs the secrets read in a pod of their own), Windows nodes, a cache in a registry or bucket, `cache: true` digests from a prepare Job, provider secrets on services.
 
 A run executes on **one server**. A graph needing a platform the server does not offer (a Mac task against a Linux cluster) fails at plan time naming the constraint; the Mac is its own server and a second invocation. Routing a run across several servers is a later step; every server publishes its capabilities (platforms, pools, resources) from the start so it can be built on.
 
@@ -90,7 +99,7 @@ entitlements:
     repos: [github.com/corp/payments]
     builds: publish
 backend:
-  type: host                      # host | kubernetes
+  type: host                      # host | kubernetes (namespace, pools, providers, quota; see Deployment modes)
   platform: { os: linux, arch: amd64 }
 ```
 
@@ -166,7 +175,7 @@ The server holds the build file; a run names a published build file and the task
 - Precedence of the location, highest first: `--on <name>` / `--local`, `HAMMERKIT_ON`, the task's `runner:`, `run.on` in the host config, `local`.
 - No silent fallback to local when a server is unknown or unreachable.
 - One invocation resolves to one server. A dependency naming a different runner is a plan-time error.
-- Kubernetes mode: a local task runs in the pool's `toolImage`; macOS is not a Kubernetes node platform.
+- Kubernetes mode: a local task runs in the pool's `toolImage`; macOS is not a Kubernetes node platform (built, see Deployment modes).
 - Cache identity uses the platform the task runs on.
 
 ## Host config and the `remote` commands

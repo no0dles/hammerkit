@@ -1,3 +1,4 @@
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { FileContext } from '../file/file-context'
 import { ConsoleContext } from '../console/console-context'
 import { StatusConsole } from '../planner/work-item-status'
@@ -13,10 +14,9 @@ export interface HostedPolicy {
   // the accounts the run may read secrets as; a secret of any other is refused when
   // it is fetched, whatever the plan said
   accounts?: string[]
-  // the directory of the run's files: its checkout, or a sandbox. A path a container
-  // binds or the engine writes has to be inside it, with no link on the way, see
-  // refuseLinks
-  root?: string
+  // where container tasks and services run: the cluster of the server's Kubernetes
+  // backend, in place of the build file's environment
+  kubernetes?: WorkKubernetesEnvironment
 }
 
 export interface Environment {

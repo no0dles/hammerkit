@@ -25,7 +25,9 @@ import { Readable } from 'stream'
 import { getServiceDefinitionHash } from './service-definition'
 import { readContainerTaskState, removeContainerTaskState } from '../executer/container-task-state'
 import { getItemNetworkName, removeItemNetwork } from '../docker/item-network'
-import { refuseHostLinks } from '../executer/execution-steps'
+import { hostedRoot, refuseHostLinks } from '../executer/execution-steps'
+import { assertItemPathsWithinRoot } from './utils/assert-item-paths'
+import { getErrorMessage } from '../log'
 
 export function dockerTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
@@ -72,6 +74,14 @@ export function dockerTaskRuntime(
       await removeItemNetwork(docker, getItemNetworkName(task))
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
+      if (environment.hosted) {
+        try {
+          await assertItemPathsWithinRoot(task, environment.cwd)
+        } catch (e) {
+          options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+          return
+        }
+      }
       await dockerTask(docker, task, environment, options)
     },
     async remove(environment: Environment): Promise<void> {
@@ -129,7 +139,7 @@ async function restoreContainer(
   await refuseHostLinks(item, environment)
   // on a server the volumes the outputs are restored into carry the run's files, so they
   // are removed with a sandbox
-  const root = environment.hosted?.root
+  const root = hostedRoot(environment)
   if (root) {
     const names =
       item.data.type === 'container-service'
@@ -258,6 +268,15 @@ export function dockerServiceRuntime(
       }
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
+      if (environment.hosted) {
+        try {
+          await assertItemPathsWithinRoot(service, environment.cwd)
+        } catch (e) {
+          service.status.write('error', getErrorMessage(e))
+          options.state.set({ type: 'end', reason: 'crash', stateKey: options.stateKey })
+          return
+        }
+      }
       await dockerService(docker, service, options, environment)
     },
     async restore(environment: Environment, path: string): Promise<void> {
@@ -294,18 +313,6 @@ async function archiveContainer(
   path: string
 ) {
   await refuseHostLinks(item, environment)
-  // on a server the volumes the outputs are restored into carry the run's files, so they
-  // are removed with a sandbox
-  const root = environment.hosted?.root
-  if (root) {
-    const names =
-      item.data.type === 'container-service'
-        ? item.data.volumes.filter((v) => !v.inherited).map((v) => v.name)
-        : item.data.generates.filter((v) => !v.inherited && !v.isFile).map((v) => v.volumeName)
-    for (const name of names) {
-      await ensureVolumeExists(docker, item.status, name, volumeLabels(root))
-    }
-  }
   await usingContainer(
     docker,
     item,

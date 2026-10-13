@@ -46,6 +46,11 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
       workTree.environment = filteredWorkTree.environment
     }
   }
+  // on a server the operator says where things run (a build file there has no environments)
+  if (environment.hosted?.kubernetes) {
+    workTree.environment = environment.hosted.kubernetes
+    filteredWorkTree.environment = environment.hosted.kubernetes
+  }
 
   // everything is planned before the run is narrowed: planning a service adds
   // its init task's need on it, which narrowing follows

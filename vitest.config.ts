@@ -18,9 +18,10 @@ export default defineConfig(({ mode }) => {
       globals: true,
       environment: 'node',
       // Native runners finish each unit spec well under a minute, so a short
-      // default surfaces a genuine hang quickly. The integration run is slower and
-      // raises this on slow CI runners via HAMMERKIT_TEST_TIMEOUT.
-      testTimeout: integration ? Number(process.env.HAMMERKIT_TEST_TIMEOUT) || 120000 : 45000,
+      // default surfaces a genuine hang quickly. Slow CI runners raise it via
+      // HAMMERKIT_TEST_TIMEOUT: the integration jobs, and the windows unit job, where
+      // the specs that start run processes compete for a few cores.
+      testTimeout: Number(process.env.HAMMERKIT_TEST_TIMEOUT) || (integration ? 120000 : 45000),
       // Integration beforeAll/afterAll hooks provision real infra (e.g. a docker
       // registry container in docker-package-registry.spec.ts) — just as slow as the
       // tests themselves. Vitest's 10s hook default is far too tight for an emulated

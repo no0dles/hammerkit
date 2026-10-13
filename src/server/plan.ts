@@ -12,12 +12,13 @@ import { getWorkContext } from '../schema/work-scope-parser'
 import { WorkScope } from '../executer/work-scope'
 import { WorkTree } from '../planner/work-tree'
 import { WorkSecret } from '../planner/work-secret'
-import { isContainerWorkTask } from '../planner/work-task'
+import { isContainerWorkTask, isWorkTask } from '../planner/work-task'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { WorkTask } from '../planner/work-task'
 import { Bundle } from '../remote/bundle'
 import { getErrorMessage } from '../log'
 import { ParseError } from '../schema/parse-error'
+import { formatNetwork } from '../planner/work-network'
 
 export class DefinitionError extends Error {}
 
@@ -70,6 +71,8 @@ export interface PlanPolicy {
   reserved?: string[]
   // what tasks may run on; every runtime when left out
   runtimes?: ('docker' | 'local')[]
+  // where tasks run: on a cluster, the secrets of providers are read in the Job of a task
+  backend?: 'host' | 'kubernetes'
 }
 
 export interface PlanOptions {
@@ -238,6 +241,18 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
       )
     }
     const data = item.data
+    // what a task reads and writes is the bundle's: `src: ../..` would have the server
+    // copy its own files (its credentials, other callers' caches) into the task
+    for (const source of 'src' in data ? data.src : []) {
+      if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
+        problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
+      }
+    }
+    for (const generate of isWorkTask(data) ? data.generates : []) {
+      if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
+        problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
+      }
+    }
     if (isContainerWorkTask(data) || isContainerWorkService(data)) {
       for (const mount of data.mounts) {
         // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
@@ -248,6 +263,27 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
     }
     for (const secret of secretsOf(item)) {
       const source = secret.source
+      if (policy.backend === 'kubernetes' && source.type === 'provider') {
+        // the server reads no secret of a provider on a cluster: the Job of a task does
+        if (!isWorkTask(item.data)) {
+          problems.push(
+            `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider}, which ` +
+              'this server does for tasks only, a service on its cluster gets no provider secret yet'
+          )
+        } else if (secret.cache) {
+          problems.push(
+            `${item.name}: the secret ${describeSecret(secret).target} has cache: true, its digest would need ` +
+              'the value before the Job of the task reads it, which this server does not support yet'
+          )
+        } else if (item.data.network.type !== 'open') {
+          // the init containers that read it share the pod's NetworkPolicy
+          problems.push(
+            `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider} in the ` +
+              `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it, ` +
+              'a task that reads secrets of a provider keeps an open network on this server'
+          )
+        }
+      }
       if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
         problems.push(
           `${item.name}: the secret ${describeSecret(secret).target} is read as ${
