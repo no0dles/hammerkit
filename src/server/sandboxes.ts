@@ -2,13 +2,13 @@ import { randomBytes } from 'crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { formatSize } from '../utils/units'
-import { isValidRef, RefError, remoteBranch } from './git-checkout'
+import { isValidBranch, RefError, remoteBranch } from './git-checkout'
 import { Principal } from './oauth'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
 import { matchesRef } from './repo'
 import { EditedFile, EditOp, PatchAuthor, SandboxFiles } from './sandbox-files'
-import { SandboxPushConflict, SandboxState, SandboxStorage } from './sandbox-storage'
+import { SandboxPushConflict, SandboxPushFailed, SandboxState, SandboxStorage } from './sandbox-storage'
 
 // How long creating a sandbox or moving it to another commit may take
 const FETCH_TIMEOUT_MS = 10 * 60 * 1000
@@ -283,7 +283,7 @@ export class SandboxRegistry {
       if (!allowed) {
         throw new SandboxError(403, `this server does not push to ${sandbox.repo}`)
       }
-      if (!isValidRef(branch)) {
+      if (!isValidBranch(branch)) {
         throw new SandboxError(400, `${JSON.stringify(branch.slice(0, 80))} is not a branch name`)
       }
       if (!matchesRef(allowed, branch)) {
@@ -311,9 +311,14 @@ export class SandboxRegistry {
             : `${branch} exists and this sandbox did not push it, push to a new branch`
         )
       }
-      const write = await repos.pushCredentials(sandbox.repo).catch((e) => {
-        throw new SandboxError(502, e instanceof Error ? e.message : String(e))
-      })
+      let write: { env: { [key: string]: string }; values: string[] }
+      try {
+        write = await repos.pushCredentials(sandbox.repo)
+      } catch (e) {
+        // what the provider said is the operator's: it can name accounts, projects and paths
+        this.options.log?.(`sandbox push ${id}: ${e instanceof Error ? e.message : e}`)
+        throw new SandboxError(502, 'the server could not read its credential to push')
+      }
       let commit: string | undefined
       try {
         commit = await storage.push(id, { url, branch, expect: current ?? null, author, env: write.env, signal })
@@ -321,22 +326,36 @@ export class SandboxRegistry {
         if (e instanceof SandboxPushConflict) {
           throw new SandboxError(409, e.message)
         }
-        // the lease refuses a branch that somebody created or moved since it was read
-        const now = await remoteBranch(url, branch, read.env, signal).catch(() => current)
-        if (now !== current) {
+        // the lease refuses a branch that somebody created or moved since it was read; and a
+        // push that failed late (a timeout after the remote answered) may have gone through
+        const now = await remoteBranch(url, branch, read.env, AbortSignal.timeout(30 * 1000)).catch(() => current)
+        if (e instanceof SandboxPushFailed && now === e.commit) {
+          commit = e.commit
+        } else if (now !== current) {
           throw new SandboxError(409, `${branch} changed while the sandbox pushed to it, push to a new branch`)
+        } else {
+          throw new SandboxError(502, repos.scrub(e, [...write.values, ...read.values]).message)
         }
-        throw new SandboxError(502, repos.scrub(e, [...write.values, ...read.values]).message)
       }
       if (!commit) {
         // only files the API never reads changed: the deny list stays on the server
         throw new SandboxError(409, `the sandbox ${id} has no changes to push`)
       }
+      // the branch is this sandbox's from now on, whatever happens next
+      sandbox.pushed = { ...sandbox.pushed, [branch]: commit }
+      sandbox.lastUsedAt = this.timestamp()
+      await this.save(sandbox)
+      try {
+        await storage.moveTo(id, commit)
+      } catch (e) {
+        throw new SandboxError(
+          502,
+          `pushed ${commit} to ${branch}, but could not move the sandbox to it: ${e instanceof Error ? e.message : e}`
+        )
+      }
       sandbox.commit = commit
       sandbox.ref = branch
-      sandbox.pushed = { ...sandbox.pushed, [branch]: commit }
       sandbox.bytes = await storage.usage(id)
-      sandbox.lastUsedAt = this.timestamp()
       await this.save(sandbox)
       return copy(sandbox)
     })

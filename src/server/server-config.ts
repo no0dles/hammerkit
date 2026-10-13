@@ -193,10 +193,11 @@ export const sourceSchema = z
     match: repoPatternSchema,
     secret: sourceSecretSchema.optional(),
     // pushing the changes of a sandbox: a credential that may write, and the only
-    // branches a sandbox may push to
+    // branches a sandbox may push to. The credential is required: a push never falls back
+    // to a credential git finds on the server, which would be somebody's own identity.
     push: z
       .object({
-        secret: sourceSecretSchema.optional(),
+        secret: sourceSecretSchema,
         branches: z.array(branchPatternSchema).min(1),
       })
       .strict()
@@ -490,7 +491,7 @@ export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string
     ...new Set(
       config.sources.flatMap((source) => [
         ...(source.secret ? [source.secret.account] : []),
-        ...(source.push?.secret ? [source.push.secret.account] : []),
+        ...(source.push ? [source.push.secret.account] : []),
       ])
     ),
   ]

@@ -364,8 +364,11 @@ never to `main`.
   not what `.gitignore` leaves out, and nothing of the deny list (an `.env` a task wrote stays
   on the server). The commit's parent is the commit the sandbox is at.
 * **By whom.** The commit's author and committer are the caller, as their token names them
-  (`name` and `email`), else their subject at the host of their issuer
-  (`agent-7@login.example.com`). A request can not name somebody else.
+  (`name`, and `email` unless the token says it is not verified), else their subject at the
+  host of their issuer (`agent-7@login.example.com`). A request can not set the author, and
+  a message with `Signed-off-by`, `Reviewed-by`, `Acked-by` or `Tested-by` is refused: those
+  would attest the commit in somebody else's name. Other trailers, such as `Co-authored-by`,
+  are the caller's text.
 * **Only new branches, or its own.** The branch must not exist yet, or be one this sandbox
   pushed and still at the commit it pushed there. A branch somebody else created or pushed
   to since is `409`: push to a new branch. A sandbox never writes over other work, and it
@@ -384,14 +387,16 @@ is `409` too.
 
 | Status | When |
 | --- | --- |
-| `400` | The body is malformed, or the branch is not a branch name. |
+| `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start or end with `.` or end with `.lock`). |
 | `403` | The branch is not in `push.branches`, the server does not push to the repository at all, or as for a fetch, the caller has no `sandboxes: true` or the repository any more. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
-| `502` | The server could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access). |
+| `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access). Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |
 
 Opening a pull request from the branch is left to the caller: hammerkit holds a token that
-writes branches, not one that reviews them.
+writes branches, not one that reviews them. A pushed branch runs in the repository's CI like
+any other, with its secrets unless the operator keeps those branches out, see
+[Sources](/docs/remote-compute/sources#pushing).
 
 ## Accounts
 

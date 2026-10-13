@@ -476,7 +476,8 @@ describe('server config policy', () => {
         secret: { from: 'gsm:push', account: 'scm-push', username: 'x-access-token' },
         branches: ['agent/**'],
       })
-      expect(withPush({ branches: ['agent/*', 'claude/**'] }).success).toBe(true)
+      // never without a credential of its own: git would find the server user's
+      expect(withPush({ branches: ['agent/*', 'claude/**'] }).success).toBe(false)
       expect(withPush({ branches: [] }).success).toBe(false)
       expect(withPush({}).success).toBe(false)
       expect(withPush({ branches: ['../main'] }).success).toBe(false)

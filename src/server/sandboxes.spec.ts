@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { RefError } from './git-checkout'
-import { HostSandboxStorage, SandboxStorage } from './sandbox-storage'
+import { HostSandboxStorage, SandboxPushFailed, SandboxStorage } from './sandbox-storage'
 import { SandboxError, SandboxLimits, SandboxRegistry } from './sandboxes'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -26,7 +26,9 @@ describe('SandboxRegistry', () => {
   let holder: string | undefined
   let stopped: string[]
   // what the operator lets sandboxes push to
-  let push: { branches: string[] } | undefined
+  let pushCredentialFails: boolean
+  let logged: string[]
+  let push: { secret: { from: string; account: string; username: string }; branches: string[] } | undefined
 
   const registryWith = (
     limits: Partial<SandboxLimits> = {},
@@ -35,11 +37,17 @@ describe('SandboxRegistry', () => {
     const sandboxes = new SandboxRegistry({
       storage,
       records: join(root, 'records'),
+      log: (line) => logged.push(line),
       limits: { count: 5, bytes: 100 * 1024 * 1024, total: 1024 * 1024 * 1024, ...limits },
       repos: {
         url: () => repository,
         credentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: ['s3cret'] }),
-        pushCredentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: ['wr1te'] }),
+        pushCredentials: async () => {
+          if (pushCredentialFails) {
+            throw new Error('could not read the source credential echo:push: project secret-vault-7 denied')
+          }
+          return { env: { ...(process.env as { [key: string]: string }) }, values: ['wr1te'] }
+        },
         source: (repo) => (repo === REPO ? { match: 'git.test/corp/*', push } : undefined),
         resolve: async (_repo, ref) => {
           if (ref === 'missing') {
@@ -64,7 +72,9 @@ describe('SandboxRegistry', () => {
     repository = join(root, 'repository')
     holder = undefined
     stopped = []
-    push = { branches: ['agent/**'] }
+    pushCredentialFails = false
+    logged = []
+    push = { secret: { from: 'echo:push', account: 'scm-push', username: 'x-access-token' }, branches: ['agent/**'] }
     mkdirSync(repository)
     git(repository, 'init', '--quiet', '--initial-branch=main')
     writeFileSync(join(repository, 'input.txt'), 'one')
@@ -384,6 +394,54 @@ describe('SandboxRegistry', () => {
         message: 'agent/late changed while the sandbox pushed to it, push to a new branch',
       })
       expect(git(repository, 'rev-parse', 'agent/late')).toBe(second)
+    })
+
+    it('takes the branch as pushed when the remote has it, though the push failed late', async () => {
+      const storage = new HostSandboxStorage(join(root, 'files'), process.env)
+      const late: SandboxStorage = Object.create(storage)
+      late.push = async (id, request) => {
+        const commit = (await storage.push(id, request)) as string
+        throw new SandboxPushFailed(commit, new Error('the push timed out'))
+      }
+      const sandboxes = registryWith({}, late)
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      const pushed = await sandboxes.push(alice, sandbox.id, 'agent/late', author)
+      expect(pushed).toMatchObject({ commit: git(repository, 'rev-parse', 'agent/late'), ref: 'agent/late' })
+    })
+
+    it('keeps the branch as its own when the sandbox can not be moved after the push', async () => {
+      const storage = new HostSandboxStorage(join(root, 'files'), process.env)
+      const stuck: SandboxStorage = Object.create(storage)
+      stuck.moveTo = async () => {
+        throw new Error('disk full')
+      }
+      const sandboxes = registryWith({}, stuck)
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      const commitPattern = '[0-9a-f]{40}'
+      await expect(sandboxes.push(alice, sandbox.id, 'agent/stuck', author)).rejects.toMatchObject({
+        status: 502,
+        message: expect.stringMatching(new RegExp(`^pushed ${commitPattern} to agent/stuck, but could not move`)),
+      })
+      expect(sandboxes.get(alice, sandbox.id)?.pushed).toEqual({
+        'agent/stuck': git(repository, 'rev-parse', 'agent/stuck'),
+      })
+    })
+
+    it('tells the caller neither the branch git refuses nor what the credential provider said', async () => {
+      const sandboxes = registryWith()
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      for (const branch of ['agent/.x', 'agent/x.', 'agent/x.lock', 'agent/x.lock/y']) {
+        await expect(sandboxes.push(alice, sandbox.id, branch, author)).rejects.toMatchObject({ status: 400 })
+      }
+      pushCredentialFails = true
+      await expect(sandboxes.push(alice, sandbox.id, 'agent/x', author)).rejects.toMatchObject({
+        status: 502,
+        message: 'the server could not read its credential to push',
+      })
+      expect(logged.some((line) => line.includes('secret-vault-7'))).toBe(true)
     })
 
     it('does not push while a run holds the sandbox, nor a sandbox without changes', async () => {

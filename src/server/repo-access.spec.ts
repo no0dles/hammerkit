@@ -1,4 +1,4 @@
-import { tmpdir } from 'os'
+import { devNull, tmpdir } from 'os'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
@@ -73,8 +73,20 @@ describe('RepoAccess', () => {
     expect(push.env.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraHeader')
     expect(push.env.GIT_CONFIG_VALUE_0).toBe(basic('x-access-token', 'github-push-token'))
     expect(push.values).toEqual(['github-push-token', basic('x-access-token', 'github-push-token')])
-    // a source without push holds no token that writes
-    expect((await repos.pushCredentials('github.com/corp/special')).values).toEqual([])
+    // nothing of the server user's own git: no global or system config, credential helper,
+    // .netrc in the home directory or ssh agent
+    expect(push.env.HOME).toBeUndefined()
+    expect(push.env).toMatchObject({
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_1: 'credential.helper',
+      GIT_CONFIG_VALUE_1: '',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: devNull,
+    })
+    // a source without push holds no token that writes, and is not pushed to
+    await expect(repos.pushCredentials('github.com/corp/special')).rejects.toThrow(
+      'this server does not push to github.com/corp/special'
+    )
   })
 
   it('sends nothing for a public repository, and nothing of the server beyond its allowlist', async () => {
