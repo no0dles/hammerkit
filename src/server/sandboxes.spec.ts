@@ -316,6 +316,31 @@ describe('SandboxRegistry', () => {
     }
   )
 
+  it('measures a large node_modules exactly, and walks a sandbox once per run', async () => {
+    const storage = new HostSandboxStorage(join(root, 'files'), process.env)
+    const signal = AbortSignal.timeout(60_000)
+    await storage.create('sbx_large', { url: repository, ref: 'main', env: process.env as any, signal })
+    const files = await storage.attach('sbx_large')
+    const before = await storage.usage('sbx_large')
+    // what `npm ci` leaves: ignored, and tens of thousands of files in a real project
+    for (let pkg = 0; pkg < 40; pkg++) {
+      mkdirSync(join(files, 'node_modules', `pkg-${pkg}`, 'lib'), { recursive: true })
+      for (let file = 0; file < 250; file++) {
+        writeFileSync(join(files, 'node_modules', `pkg-${pkg}`, 'lib', `${file}.js`), 'x'.repeat(10))
+      }
+    }
+    const walk = vi.spyOn(storage as any, 'walk')
+    // what a run ends with
+    expect(await storage.usage('sbx_large')).toBe(before + 40 * 250 * 10)
+    expect(walk).toHaveBeenCalledTimes(1)
+    // the next run starts on what that walk left, nothing ran in between
+    expect(await storage.state('sbx_large')).toMatchObject({ clean: true })
+    expect(walk).toHaveBeenCalledTimes(1)
+    // a run did, so the one after walks again before git reads the files
+    expect(await storage.state('sbx_large')).toMatchObject({ clean: true })
+    expect(walk).toHaveBeenCalledTimes(2)
+  }, 60_000)
+
   it('lets a change wait for a delete, and then does not find the sandbox', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
