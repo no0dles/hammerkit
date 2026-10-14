@@ -74,7 +74,7 @@ What `POST /v1/runs` answers, in the order the server checks:
 | `202` | The run is accepted, `queued` or `awaiting-approval`. |
 | `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
 | `401` | The token is missing or invalid. |
-| `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs `sandboxes: true`. |
+| `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs the repository in the `sandboxes` of an entitlement. |
 | `409` | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request. |
 | `413` | The caller's [sandboxes](/docs/remote-compute/sandboxes) take more than their limit (runs on a sandbox only). |
 | `429` | The caller is over their [limits](#limits-and-restarts). |

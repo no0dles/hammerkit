@@ -29,11 +29,11 @@ entitlements:
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: true
+    sandboxes: [{ repo: github.com/corp/* }]
   - subject: { iss: ISSUER, sub: carol }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: true
+    sandboxes: [{ repo: github.com/corp/* }]
   - subject: { iss: ISSUER, sub: bob }
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
@@ -224,6 +224,8 @@ describe('sandboxes api', () => {
       const bob = await create(api, 'bob')
       expect(bob.status).toBe(403)
       expect((await bob.json()).error).toBe('you are not entitled to keep sandboxes on this server')
+      expect((await (await api.call('GET', '/v1/me', { sub: 'bob' })).json()).sandboxes).toEqual([])
+      expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual(['github.com/corp/*'])
       const other = await api.call('POST', '/v1/sandboxes', { body: { repo: 'github.com/other/x', ref: 'main' } })
       expect(other.status).toBe(403)
       expect((await create(api, 'alice', 'missing')).status).toBe(400)
