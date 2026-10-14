@@ -104,7 +104,12 @@ describe('sandboxes api', () => {
     // command line quotes differently in every shell
     writeFileSync(
       join(repository, 'plant.js'),
-      "require('fs').symlinkSync(require('path').parse(process.cwd()).root, 'rootlink', 'junction')\n"
+      [
+        "const { symlinkSync, readdirSync } = require('fs')",
+        "symlinkSync(require('path').parse(process.cwd()).root, 'rootlink', 'junction')",
+        "console.log('planted rootlink in', process.cwd(), readdirSync('.').join(','))",
+        '',
+      ].join('\n')
     )
     git('add', '.')
     git('commit', '--quiet', '-m', 'one')
@@ -320,7 +325,11 @@ describe('sandboxes api', () => {
         // the read of the files walks the server's disk
         const plant = await (await runOn(api, sandbox.id, ['plant'])).json()
         expect(await untilState(api, plant.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
-        expect(lstatSync(join(api.files(sandbox.id), 'rootlink')).isSymbolicLink()).toBe(true)
+        const planted = await (await api.call('GET', `/v1/runs/${plant.id}/logs`)).text()
+        expect(
+          lstatSync(join(api.files(sandbox.id), 'rootlink'), { throwIfNoEntry: false })?.isSymbolicLink(),
+          planted
+        ).toBe(true)
         const all = await (await runOn(api, sandbox.id, ['all'])).json()
         expect(await untilState(api, all.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
       } finally {
