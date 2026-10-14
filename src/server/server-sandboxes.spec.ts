@@ -29,15 +29,17 @@ entitlements:
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: [{ repo: github.com/corp/* }]
+    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull } }]
   - subject: { iss: ISSUER, sub: carol }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: [{ repo: github.com/corp/* }]
+    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull } }]
   - subject: { iss: ISSUER, sub: bob }
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: publish
+  - claims: { iss: ISSUER, match: { team: release } }
+    sandboxes: [{ repo: github.com/corp/*, branches: { 'release/*': pull } }]
 `
 
 const buildFile = [
@@ -67,7 +69,11 @@ interface JsonResponse extends Response {
 }
 
 interface Api {
-  call: (method: string, path: string, options?: { sub?: string; body?: unknown }) => Promise<JsonResponse>
+  call: (
+    method: string,
+    path: string,
+    options?: { sub?: string; body?: unknown; claims?: Record<string, string> }
+  ) => Promise<JsonResponse>
   url: string
   // the authorization header of alice
   auth: () => string
@@ -98,6 +104,7 @@ describe('sandboxes api', () => {
     writeFileSync(join(repository, 'input.txt'), 'from-main')
     git('add', '.')
     git('commit', '--quiet', '-m', 'one')
+    git('tag', 'feature/v1')
     git('checkout', '--quiet', '-b', 'next')
     writeFileSync(join(repository, 'input.txt'), 'from-next')
     git('commit', '--quiet', '-am', 'two')
@@ -129,8 +136,9 @@ describe('sandboxes api', () => {
           repos: { url: () => repository },
           worker: TEST_WORKER,
         })
-        const auth = (sub = 'alice') =>
+        const auth = (sub = 'alice', claims: Record<string, string> = {}) =>
           `Bearer ${signToken(key, {
+            ...claims,
             iss: idp.url,
             sub,
             aud: 'hammerkit',
@@ -140,7 +148,7 @@ describe('sandboxes api', () => {
           fetch(`${server.url}${path}`, {
             method,
             headers: {
-              authorization: auth(options.sub),
+              authorization: auth(options.sub, options.claims),
               ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
             },
             body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -212,6 +220,8 @@ describe('sandboxes api', () => {
       const moved = await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'next' } })
       expect(moved.status).toBe(200)
       expect(await moved.json()).toMatchObject({ ref: 'next', commit: git('rev-parse', 'next') })
+      // a branch the caller has no type for
+      expect((await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'other' } })).status).toBe(403)
 
       expect((await api.call('DELETE', `/v1/sandboxes/${sandbox.id}`)).status).toBe(200)
       expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}`)).status).toBe(404)
@@ -225,10 +235,19 @@ describe('sandboxes api', () => {
       expect(bob.status).toBe(403)
       expect((await bob.json()).error).toBe('you are not entitled to keep sandboxes on this server')
       expect((await (await api.call('GET', '/v1/me', { sub: 'bob' })).json()).sandboxes).toEqual([])
-      expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual(['github.com/corp/*'])
+      expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual([
+        { repo: 'github.com/corp/*', branches: { main: 'pull', next: 'pull', 'feature/*': 'pull' } },
+      ])
+      const tag = await create(api, 'alice', 'v1')
+      expect(tag.status).toBe(403)
+      expect((await tag.json()).error).toMatch(/may not keep a sandbox of github.com\/corp\/payments from v1/)
       const other = await api.call('POST', '/v1/sandboxes', { body: { repo: 'github.com/other/x', ref: 'main' } })
       expect(other.status).toBe(403)
-      expect((await create(api, 'alice', 'missing')).status).toBe(400)
+      expect((await create(api, 'alice', 'feature/missing')).status).toBe(400)
+      // a tag a granted pattern covers is still not a branch
+      const tagged = await create(api, 'alice', 'feature/v1')
+      expect(tagged.status).toBe(400)
+      expect((await tagged.json()).error).toBe('there is no branch feature/v1')
       expect((await api.call('POST', '/v1/sandboxes', { body: { repo: 'not a repo', ref: 'main' } })).status).toBe(400)
       expect((await api.call('POST', '/v1/sandboxes', { body: { repo: REPO } })).status).toBe(400)
       // the limit of two
@@ -362,6 +381,33 @@ describe('sandboxes api', () => {
         state: 'cancelled',
         error: 'the sandbox was deleted',
       })
+    })
+  })
+
+  it('refuses the files of a sandbox once the caller lost its branch', async () => {
+    await withApi('sandboxes-api-files-branch', undefined, async (api) => {
+      git('branch', 'release/1')
+      const release = { team: 'release' }
+      const created = await api.call('POST', '/v1/sandboxes', {
+        body: { repo: REPO, ref: 'release/1' },
+        claims: release,
+      })
+      expect(created.status).toBe(201)
+      const base = `/v1/sandboxes/${(await created.json()).id}`
+      expect((await api.call('GET', `${base}/files/input.txt`, { claims: release })).status).toBe(200)
+      // the same caller, whose token no longer grants release branches
+      for (const [method, path] of [
+        ['GET', `${base}/files/input.txt`],
+        ['GET', `${base}/tree`],
+        ['GET', `${base}/changes`],
+      ]) {
+        const refused = await api.call(method, path)
+        expect(refused.status).toBe(403)
+      }
+      const edit = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'write', path: 'x.txt', content: 'x' }] },
+      })
+      expect(edit.status).toBe(403)
     })
   })
 

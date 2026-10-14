@@ -18,7 +18,7 @@ export interface RepoAccessOptions {
   // where a repository is fetched from; `https://<host>/<path>.git` when left out
   url?: (repo: string) => string
   // how a ref is resolved to a commit; `git ls-remote` when left out
-  resolve?: (repo: string, ref: string, signal: AbortSignal) => Promise<string>
+  resolve?: (repo: string, ref: string, signal: AbortSignal, only?: 'branch') => Promise<string>
   now?: () => number
 }
 
@@ -57,16 +57,17 @@ export class RepoAccess {
     return this.options.url ? this.options.url(repo) : `https://${repo}.git`
   }
 
-  // The commit a ref points to now, or an error that says what is wrong with the ref.
-  async resolve(repo: string, ref: string, signal?: AbortSignal): Promise<string> {
+  // The commit a ref points to now, or an error that says what is wrong with the ref. With
+  // `branch`, only a branch.
+  async resolve(repo: string, ref: string, signal?: AbortSignal, only?: 'branch'): Promise<string> {
     const timeout = AbortSignal.timeout(RESOLVE_TIMEOUT_MS)
     const abort = signal ? AbortSignal.any([signal, timeout]) : timeout
     if (this.options.resolve) {
-      return this.options.resolve(repo, ref, abort)
+      return this.options.resolve(repo, ref, abort, only)
     }
     const credentials = await this.credentials(repo)
     try {
-      return await resolveRef(this.url(repo), ref, credentials.env, abort)
+      return await resolveRef(this.url(repo), ref, credentials.env, abort, only)
     } catch (e) {
       throw this.scrub(e, credentials.values)
     }

@@ -23,6 +23,7 @@ const createSchema = z
       }
       return repo
     }),
+    // a branch: a sandbox never starts from a tag or a commit
     ref: refSchema,
   })
   .strict()
@@ -32,11 +33,11 @@ const fetchSchema = z.object({ ref: refSchema }).strict()
 /**
  * The sandboxes of a caller: checkouts on the server that runs work on.
  *
- *   POST   /v1/sandboxes              { repo, ref }  fetch a ref into a new sandbox
+ *   POST   /v1/sandboxes              { repo, ref }  fetch a branch into a new sandbox
  *   GET    /v1/sandboxes              the caller's sandboxes, their limits and usage
  *   GET    /v1/sandboxes/<id>         one sandbox
  *   DELETE /v1/sandboxes/<id>         cancel its runs and remove it
- *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to another commit
+ *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to a branch's commit
  *   ...    /v1/sandboxes/<id>/tree, files/<path>, search, edits, changes: its files, see
  *          `handleSandboxFiles`
  *
@@ -77,7 +78,7 @@ export async function handleSandboxes(
           send(res, 501, { error: 'this server keeps sandboxes only on a host backend' })
           return true
         }
-        const refused = decideSandbox(getGrant(config.entitlements, principal), body.repo, (repo) =>
+        const refused = decideSandbox(getGrant(config.entitlements, principal), body.repo, body.ref, (repo) =>
           repos.readable(repo)
         )
         if (refused) {
@@ -99,8 +100,8 @@ export async function handleSandboxes(
       return true
     }
     if (action && action !== 'fetch') {
-      // the caller may have lost the repository since they created the sandbox
-      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, (repo) =>
+      // the caller may have lost the repository, or the sandbox's branch, since they created it
+      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, sandbox.ref, (repo) =>
         repos.readable(repo)
       )
       if (refused) {
@@ -124,8 +125,8 @@ export async function handleSandboxes(
         return true
       }
       const body = parse(fetchSchema, await readJson(req))
-      // the caller may have lost the repository since they created the sandbox
-      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, (repo) =>
+      // the caller may have lost the repository since they created the sandbox, and needs the new branch
+      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, body.ref, (repo) =>
         repos.readable(repo)
       )
       if (refused) {
