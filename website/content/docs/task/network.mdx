@@ -1,6 +1,6 @@
 ---
 title: "Network"
-description: "Limit what a container task or service reaches: only the services it needs, a list of hosts through an egress proxy, or everything."
+description: "Limit what a container task or service reaches: only the services it needs, a list of hosts and ports through an egress proxy, or everything."
 ---
 A container task reaches whatever the machine it runs on reaches. That is fine for
 most builds, but not for a step that should not need the network (a test suite), or
@@ -26,6 +26,12 @@ tasks:
       allow: [registry.npmjs.org, '*.githubusercontent.com']
     cmds: [npm ci]
 
+  migrate:
+    image: node:24-alpine
+    network:
+      allow: ['db.example.com:5432']   # raw TCP to one host and port
+    cmds: [npm run migrate]
+
   deploy:
     image: node:24-alpine
     network: open                 # the default
@@ -42,7 +48,7 @@ services:
 |---|---|
 | `open` (default) | Everything the host reaches, as without `network`. |
 | `none` | Nothing. |
-| `allow: [hosts]` | HTTP and HTTPS to the listed hosts, through an egress proxy. |
+| `allow: [hosts]` | HTTP and HTTPS to the listed hosts, and raw TCP to a listed host and port, through an egress proxy. |
 
 The services in `needs` are reachable at every level, under the names the task
 needs them by: a task lists a service because it uses it. Under a limit, those
@@ -63,9 +69,10 @@ with a limited network is an error before it starts, never a run without limits.
 
 A host is a name (`registry.npmjs.org`) or `*.` and a domain for every name under
 it (`*.githubusercontent.com` allows `raw.githubusercontent.com`, not
-`githubusercontent.com` itself). Names only: no ports and no IP addresses (nor names
-a resolver reads as one, such as `0x7f000001` or `127.1`), and any port of an allowed
-host is allowed.
+`githubusercontent.com` itself). Names only, no IP addresses (nor names a resolver
+reads as one, such as `0x7f000001` or `127.1`), and any port of an allowed host is
+allowed through the proxy. A name with a port (`db.example.com:5432`) is a
+[TCP forward](#tcp-forwards).
 
 The proxy resolves an allowed name itself and connects to the address it checked. A
 name a wildcard allows must not resolve to the host, a private network or the
@@ -91,8 +98,33 @@ that ignores `NO_PROXY` (busybox `wget`, say) still reaches the needed services,
 through the proxy. A service's healthcheck checks the service itself, so it runs
 without the proxy variables.
 
-Only HTTP and HTTPS go by host name. A database or anything else a task talks to
-over plain TCP belongs in its `needs` as a [service](/docs/service).
+## TCP forwards
+
+Databases, caches and most other clients that don't speak HTTP ignore the proxy
+variables, so they can't use an allowed host. For them, an entry names a host and a
+port:
+
+```yaml
+tasks:
+  migrate:
+    image: node:24-alpine
+    network:
+      allow: ['db.example.com:5432', 'cache.example.com:6379']
+    cmds: [npm run migrate]
+```
+
+The proxy listens on that port and forwards each connection, as raw TCP, to that
+port of that host, and the task reaches the proxy under the host's own name: `psql
+-h db.example.com` connects as it would without a limit, and TLS stays between the
+client and the host. The proxy resolves the name itself and checks every address,
+as for a name listed exactly. Nothing else of that host is reachable without the
+proxy variables; with them, a `CONNECT` to that host and port passes too.
+
+A forward names one host, never a `*.` pattern, and two hosts can't share a port in
+one allow list, since the proxy listens on it for one of them. Port `3128` is the
+proxy's own, and a forward can't use the name of a service the task needs. A
+database the task runs itself still belongs in its `needs` as a
+[service](/docs/service): those are reached directly, on any port.
 
 ## A ceiling for the run
 
@@ -103,14 +135,16 @@ of code you didn't write gets limited without changing the build file:
 ```bash
 hammerkit run test --network none
 hammerkit run install --network allow:registry.npmjs.org,*.npmjs.com
+hammerkit run migrate --network allow:db.example.com:5432
 ```
 
 The levels are ordered `none` < `allow` < `open`, and the ceiling clamps a more open
 setting down to it: under `--network none` every task reaches its needed services
 and nothing else. Under an `allow:` ceiling, an `open` task gets the ceiling's
-hosts, and a task with its own allow list keeps the hosts both lists allow. A
-service started by an earlier `up` is recreated when the ceiling changes its
-network.
+hosts, and a task with its own allow list keeps the hosts both lists allow. A host
+without a port allows its forwards (`db.example.com` and `*.example.com` both keep
+`db.example.com:5432`), while a forward only allows itself. A service started by an
+earlier `up` is recreated when the ceiling changes its network.
 
 A [server](/docs/remote-compute/runs#network) sets the same ceiling for all of its runs
 with `runs.network`, and refuses to publish a build file that asks for more.
@@ -133,7 +167,8 @@ only the loopback interface.
 
 Under `allow`, the task or service and its proxy share a second internal network
 that nothing else joins, and the proxy listens there only: the services it needs
-can't use its allow list. The proxy is also on the default bridge, to reach the
+can't use its allow list. The host of each TCP forward is an entry in the
+container's `/etc/hosts` that points at the proxy there. The proxy is also on the default bridge, to reach the
 allowed hosts. It is a small Node.js script run in a stock `node:24-alpine`
 container, pinned by digest, so there is no hammerkit image to pull; it runs
 unprivileged, on a read-only root.
@@ -152,8 +187,8 @@ the same task never share them.
 On a [Kubernetes environment](/docs/task/kubernetes), a limited task's jobs and a
 limited service's pods get a `NetworkPolicy` that allows egress to the pods of the
 services they need and, under `allow`, to their proxy, which runs as its own
-Deployment and Service. Everything else is denied, DNS included: the needed
-services and the proxy are host aliases of the pod. The policy limits ingress too:
+Deployment and Service, with a port for each TCP forward. Everything else is denied, DNS included: the needed
+services, the proxy and the hosts of TCP forwards are host aliases of the pod. The policy limits ingress too:
 a task takes no connections, a service takes them from the tasks and services that
 need it, and from anywhere when one of the environment's `httpRoutes` points at it.
 The proxy takes connections from its own task's or service's pods only. A service's
