@@ -174,6 +174,35 @@ describe('network limits (docker)', () => {
   )
 
   it(
+    'forwards raw TCP to a host and port of the allow list, and nothing else',
+    requiresLinuxContainers(async () => {
+      await createTestCase('network-docker-forward', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            query: {
+              image,
+              network: { allow: ['example.com:80'] },
+              cmds: [
+                // a client that knows no proxy, by the host's own name
+                `printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n' | ` +
+                  `env -u http_proxy -u HTTP_PROXY nc -w 5 example.com 80 | grep -q '^HTTP/1'`,
+                // another port of that host goes nowhere
+                '! nc -w 3 example.com 443 </dev/null',
+                noRouteWithoutProxy,
+              ],
+            },
+          },
+        },
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'query' })
+        await expectSuccessfulResult(await cli.runExec(), environment)
+      })
+    }),
+    180_000
+  )
+
+  it(
     'keeps the network and proxy of a daemon service until down',
     requiresLinuxContainers(async () => {
       await createTestCase('network-docker-daemon', {

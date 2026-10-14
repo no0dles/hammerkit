@@ -4,7 +4,7 @@ import { PassThrough } from 'stream'
 import { WorkItem, WorkItemNeed } from '../planner/work-item'
 import { ContainerWorkTask } from '../planner/work-task'
 import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
-import { getEffectiveNetwork, isLimitedNetwork, WorkNetwork } from '../planner/work-network'
+import { getEffectiveNetwork, getTcpForwards, isLimitedNetwork, WorkNetwork } from '../planner/work-network'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getServiceContainers } from '../executer/get-service-containers'
 import { isHostServiceDns } from '../executer/service-dns'
@@ -214,7 +214,11 @@ export async function prepareItemNetwork(
     }
     if (network.type === 'allow') {
       await createInternalNetwork(docker, getProxyNetworkName(name), labels)
-      await startEgressProxy(docker, item, environment, name, network, options, containers.length > 0)
+      const proxyIp = await startEgressProxy(docker, item, environment, name, network, options, containers.length > 0)
+      // the item reaches each TCP forward under its host's name, at the proxy
+      for (const forward of getTcpForwards(network)) {
+        hosts.push(`${forward.host}:${proxyIp}`)
+      }
     }
   } catch (e) {
     await removeItemNetwork(docker, name)
@@ -263,7 +267,8 @@ function getHelperLabels(networkName: string, options: { daemon: boolean }): { [
 // EGRESS_PROXY_HOST, the only address it listens on: neither the bridge nor
 // the services on the item's network reach it. It joins the item's network
 // to reach the needed services (for tools that ignore NO_PROXY), but doesn't
-// listen there. Refused hosts show up in the item's log.
+// listen there. Refused hosts show up in the item's log. Returns its address
+// on the proxy network, where it also listens for the TCP forwards.
 async function startEgressProxy(
   docker: Dockerode,
   item: ContainerItem,
@@ -272,7 +277,7 @@ async function startEgressProxy(
   network: Extract<WorkNetwork, { type: 'allow' }>,
   options: { daemon: boolean },
   reachNeeds: boolean
-): Promise<void> {
+): Promise<string> {
   await pull(item.status, docker, EGRESS_PROXY_IMAGE, environment)
   const createOptions: ContainerCreateOptions = {
     Image: EGRESS_PROXY_IMAGE,
@@ -280,7 +285,8 @@ async function startEgressProxy(
     User: 'node',
     Env: Object.entries(getItemProxyEnvironment(item, EGRESS_PROXY_HOST)).map(([key, value]) => `${key}=${value}`),
     Labels: getHelperLabels(networkName, options),
-    HostConfig: HELPER_HOST_CONFIG,
+    // unprivileged, it still listens on the port of a TCP forward below 1024
+    HostConfig: { ...HELPER_HOST_CONFIG, Sysctls: { 'net.ipv4.ip_unprivileged_port_start': '0' } },
   }
   const container = await docker.createContainer(createOptions)
   await docker.getNetwork(getProxyNetworkName(networkName)).connect({
@@ -322,7 +328,12 @@ async function startEgressProxy(
 
   await container.start()
   await ready
+  const ip = (await container.inspect()).NetworkSettings.Networks[getProxyNetworkName(networkName)]?.IPAddress
+  if (!ip) {
+    throw new Error(`the egress proxy of ${item.name} has no address on its network`)
+  }
   item.status.write('debug', `egress proxy allows ${network.hosts.join(', ') || 'no host'}`)
+  return ip
 }
 
 // On the default bridge, where Docker publishes ports, and on the service's

@@ -287,7 +287,7 @@
                         "additionalProperties": false
                       }
                     ],
-                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts] }"
+                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
                   },
                   "runner": {
                     "type": "string",
@@ -502,7 +502,7 @@
                   },
                   "network": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network",
-                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts] }"
+                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
                   }
                 },
                 "required": [

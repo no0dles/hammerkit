@@ -2,17 +2,20 @@
 // It runs in its own container (a pod on Kubernetes) next to the item, on a
 // network only the item and the proxy join, and is the item's only way out: HTTP requests and
 // `CONNECT` tunnels to an allowed host pass, everything else gets a 403 and a
-// `refused` event on stdout. The script is passed to `node -e`, so the proxy
+// `refused` event on stdout. For each `host:port` entry it also listens on that
+// port and forwards raw TCP to that host, which the item reaches under the
+// host's name. The script is passed to `node -e`, so the proxy
 // needs no image of its own, only a stock Node image.
 
-import { getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
+import { getEffectiveNetwork, getTcpForwards, WorkNetwork } from '../planner/work-network'
+import { PROXY_PORT } from '../schema/network-schema'
 
 // Pinned, so the code behind the boundary is the same on every host. To bump
 // it, take the index digest of the tag (`docker buildx imagetools inspect
 // node:24-alpine`). The port relay runs in it too.
 export const EGRESS_PROXY_IMAGE =
   'node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1'
-export const EGRESS_PROXY_PORT = 3128
+export const EGRESS_PROXY_PORT = PROXY_PORT
 // the name the item reaches the proxy under
 export const EGRESS_PROXY_HOST = 'hammerkit-proxy'
 
@@ -25,7 +28,13 @@ export const EGRESS_PROXY_SCRIPT = `
 const http = require('http')
 const net = require('net')
 const dns = require('dns')
-const allow = JSON.parse(process.env.HAMMERKIT_ALLOW || '[]').map((h) => h.toLowerCase())
+const entries = JSON.parse(process.env.HAMMERKIT_ALLOW || '[]').map((h) => h.toLowerCase())
+// names and patterns for HTTP(S)
+const allow = entries.filter((e) => !e.includes(':'))
+// names and ports for raw TCP, each forwarded on its port
+const forwards = entries
+  .filter((e) => e.includes(':'))
+  .map((e) => ({ host: e.substring(0, e.lastIndexOf(':')), port: parseInt(e.substring(e.lastIndexOf(':') + 1), 10) }))
 // the names of the needed services, for tools that ignore NO_PROXY: exact
 // names only, never patterns
 const needs = JSON.parse(process.env.HAMMERKIT_NEEDS || '[]').map((h) => h.toLowerCase())
@@ -36,10 +45,10 @@ const refused = new Set()
 function emit(event) {
   process.stdout.write(JSON.stringify(event) + '\\n')
 }
-// the rule that allows a host: its exact name, a wildcard, or none
-function allowedBy(host) {
+// the rule that allows a host and port: its exact name, a wildcard, or none
+function allowedBy(host, port) {
   const name = host.toLowerCase().replace(/\\.$/, '')
-  if (allow.includes(name) || needs.includes(name)) {
+  if (allow.includes(name) || needs.includes(name) || forwards.some((f) => f.host === name && f.port === port)) {
     return 'exact'
   }
   return allow.some((rule) => rule.startsWith('*.') && name.endsWith(rule.substring(1))) ? 'wildcard' : null
@@ -115,7 +124,7 @@ const server = http.createServer((req, res) => {
     res.end('hammerkit: only proxy requests are served\\n')
     return
   }
-  const rule = url.protocol === 'http:' ? allowedBy(url.hostname) : null
+  const rule = url.protocol === 'http:' ? allowedBy(url.hostname, parseInt(url.port || '80', 10)) : null
   if (!rule) {
     refuse(url.hostname)
     res.writeHead(403, { 'content-type': 'text/plain' })
@@ -163,7 +172,7 @@ const server = http.createServer((req, res) => {
 server.on('connect', (req, socket, head) => {
   const target = parseAuthority(req.url || '')
   socket.on('error', () => socket.destroy())
-  const rule = target ? allowedBy(target.host) : null
+  const rule = target ? allowedBy(target.host, target.port) : null
   if (!rule) {
     refuse(target ? target.host : String(req.url))
     socket.end('HTTP/1.1 403 Forbidden\\r\\ncontent-type: text/plain\\r\\n\\r\\nhammerkit: network access is not allowed\\n')
@@ -199,8 +208,42 @@ server.on('connect', (req, socket, head) => {
     socket.on('close', () => upstream.destroy())
   })
 })
+// A TCP forward: each connection goes to the checked addresses of its host,
+// on the same port.
+function forward(target) {
+  return net.createServer({ allowHalfOpen: true }, (client) => {
+    client.on('error', () => client.destroy())
+    resolve(target.host, 'exact', (err, addresses) => {
+      if (err || !addresses) {
+        if (!err) {
+          refuse(target.host)
+        }
+        client.destroy()
+        return
+      }
+      const upstream = net.connect(Object.assign(connectTo(target.host, addresses), { port: target.port }))
+      upstream.on('error', () => client.destroy())
+      client.on('close', () => upstream.destroy())
+      client.pipe(upstream)
+      upstream.pipe(client)
+    })
+  })
+}
 function listen(address) {
-  server.listen(port, address, () => emit({ type: 'ready' }))
+  const servers = [{ server, port }].concat(forwards.map((f) => ({ server: forward(f), port: f.port })))
+  let pending = servers.length
+  for (const entry of servers) {
+    entry.server.on('error', (err) => {
+      process.stderr.write('hammerkit: unable to listen on port ' + entry.port + ': ' + err.message + '\\n')
+      process.exit(1)
+    })
+    entry.server.listen(entry.port, address, () => {
+      pending--
+      if (pending === 0) {
+        emit({ type: 'ready' })
+      }
+    })
+  }
 }
 if (bind) {
   dns.lookup(bind, { family: 4 }, (err, address) => {
@@ -248,6 +291,11 @@ export function getItemProxyEnvironment(
 
 // The variables that send the item's HTTP(S) through the proxy, both spellings
 // since tools read either. The services it needs are reached directly.
+// The ports the proxy of a network listens on: its own, and one per TCP forward.
+export function getEgressProxyPorts(network: WorkNetwork): number[] {
+  return [EGRESS_PROXY_PORT, ...getTcpForwards(network).map((forward) => forward.port)]
+}
+
 export function getProxyClientEnvironment(directHosts: string[]): { [key: string]: string } {
   const proxy = `http://${EGRESS_PROXY_HOST}:${EGRESS_PROXY_PORT}`
   const noProxy = ['localhost', '127.0.0.1', ...directHosts].join(',')
