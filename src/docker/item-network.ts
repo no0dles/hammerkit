@@ -16,7 +16,7 @@ import { removeContainer } from './remove-container'
 import {
   EGRESS_PROXY_HOST,
   EGRESS_PROXY_IMAGE,
-  formatRefusedHost,
+  formatEgressProxyEvent,
   getEgressProxyCommand,
   getItemProxyEnvironment,
   getProxyClientEnvironment,
@@ -314,8 +314,8 @@ async function startEgressProxy(
       if (event?.type === 'ready') {
         clearTimeout(timeout)
         resolve()
-      } else if (event?.type === 'refused') {
-        item.status.write('warn', formatRefusedHost(event.host))
+      } else if (event) {
+        item.status.write('warn', formatEgressProxyEvent(event))
       }
     })
     lines.on('close', () => {
