@@ -29,11 +29,11 @@ entitlements:
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: [{ repo: github.com/corp/* }]
+    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull } }]
   - subject: { iss: ISSUER, sub: carol }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: [{ repo: github.com/corp/* }]
+    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull } }]
   - subject: { iss: ISSUER, sub: bob }
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
@@ -95,6 +95,7 @@ describe('sandboxes api', () => {
     writeFileSync(join(repository, 'input.txt'), 'from-main')
     git('add', '.')
     git('commit', '--quiet', '-m', 'one')
+    git('tag', 'feature/v1')
     git('checkout', '--quiet', '-b', 'next')
     writeFileSync(join(repository, 'input.txt'), 'from-next')
     git('commit', '--quiet', '-am', 'two')
@@ -205,6 +206,8 @@ describe('sandboxes api', () => {
       const moved = await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'next' } })
       expect(moved.status).toBe(200)
       expect(await moved.json()).toMatchObject({ ref: 'next', commit: git('rev-parse', 'next') })
+      // a branch the caller has no type for
+      expect((await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'other' } })).status).toBe(403)
 
       expect((await api.call('DELETE', `/v1/sandboxes/${sandbox.id}`)).status).toBe(200)
       expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}`)).status).toBe(404)
@@ -218,10 +221,19 @@ describe('sandboxes api', () => {
       expect(bob.status).toBe(403)
       expect((await bob.json()).error).toBe('you are not entitled to keep sandboxes on this server')
       expect((await (await api.call('GET', '/v1/me', { sub: 'bob' })).json()).sandboxes).toEqual([])
-      expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual(['github.com/corp/*'])
+      expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual([
+        { repo: 'github.com/corp/*', branches: { main: 'pull', next: 'pull', 'feature/*': 'pull' } },
+      ])
+      const tag = await create(api, 'alice', 'v1')
+      expect(tag.status).toBe(403)
+      expect((await tag.json()).error).toMatch(/may not keep a sandbox of github.com\/corp\/payments from v1/)
       const other = await api.call('POST', '/v1/sandboxes', { body: { repo: 'github.com/other/x', ref: 'main' } })
       expect(other.status).toBe(403)
-      expect((await create(api, 'alice', 'missing')).status).toBe(400)
+      expect((await create(api, 'alice', 'feature/missing')).status).toBe(400)
+      // a tag a granted pattern covers is still not a branch
+      const tagged = await create(api, 'alice', 'feature/v1')
+      expect(tagged.status).toBe(400)
+      expect((await tagged.json()).error).toBe('there is no branch feature/v1')
       expect((await api.call('POST', '/v1/sandboxes', { body: { repo: 'not a repo', ref: 'main' } })).status).toBe(400)
       expect((await api.call('POST', '/v1/sandboxes', { body: { repo: REPO } })).status).toBe(400)
       // the limit of two

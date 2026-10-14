@@ -361,7 +361,7 @@ async function submitRun(
       request.source.type === 'ref'
         ? { type: 'ref', repo: request.source.repo, ref: request.source.ref }
         : sandbox
-          ? { type: 'sandbox', repo: sandbox.repo }
+          ? { type: 'sandbox', repo: sandbox.repo, branch: sandbox.ref }
           : { type: 'upload' },
     approvable: (account) => config.entitlements.some((entitlement) => entitlement.accounts[account] === 'use'),
     readable: (repo) => repos.readable(repo),

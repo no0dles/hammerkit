@@ -9,6 +9,7 @@ import {
   mayRun,
   maySeeDefinitions,
   RunDecisionInput,
+  sandboxBranchType,
   usedAccounts,
 } from './policy'
 import { Principal } from './oauth'
@@ -142,7 +143,7 @@ describe('decideRun', () => {
     accounts,
     repos: ['github.com/corp/*'],
     builds,
-    sandboxes: sandboxes ? [{ repo: 'github.com/corp/*' }] : [],
+    sandboxes: sandboxes ? [{ repo: 'github.com/corp/*', branches: { main: 'pull' } }] : [],
     matched: [0],
   })
   const base = (over: Partial<RunDecisionInput>): RunDecisionInput => ({
@@ -199,22 +200,22 @@ describe('decideRun', () => {
     ],
     [
       'a sandbox runs with an account that lists it',
-      { accounts: ['dev'], source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      { accounts: ['dev'], source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'main' } },
       { type: 'run' },
     ],
     [
       'an account without a source takes no sandbox runs',
-      { accounts: ['ci'], source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      { accounts: ['ci'], source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'main' } },
       refuse(403, /account ci is not used by runs from sandbox/),
     ],
     [
       'an account for refs only takes no sandbox runs',
-      { accounts: ['prod'], source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      { accounts: ['prod'], source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'main' } },
       refuse(403, /account prod is not used by runs from sandbox/),
     ],
     [
       'a sandbox run without an account runs',
-      { source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      { source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'main' } },
       { type: 'run' },
     ],
     [
@@ -225,12 +226,20 @@ describe('decideRun', () => {
     ],
     [
       'a sandbox run needs sandboxes',
-      { grant: grantOf({ dev: 'use' }, 'run', false), source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
+      {
+        grant: grantOf({ dev: 'use' }, 'run', false),
+        source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'main' },
+      },
       refuse(403, /not entitled to keep sandboxes/),
     ],
     [
+      'a sandbox of a branch the caller lost is refused',
+      { source: { type: 'sandbox', repo: 'github.com/corp/payments', branch: 'next' } },
+      refuse(403, /may not run on a sandbox of github.com\/corp\/payments from next/),
+    ],
+    [
       'a sandbox of a repository the caller lost is refused',
-      { source: { type: 'sandbox', repo: 'github.com/other/payments' } },
+      { source: { type: 'sandbox', repo: 'github.com/other/payments', branch: 'main' } },
       refuse(403, /may not run on a sandbox of github.com\/other\/payments/),
     ],
     [
@@ -262,27 +271,39 @@ describe('decideSandbox', () => {
     accounts: {},
     repos: ['github.com/corp/*'],
     builds: 'run',
-    sandboxes: [{ repo: 'github.com/corp/*' }],
+    sandboxes: [{ repo: 'github.com/corp/*', branches: { main: 'pull', 'agent/**': 'push' } }],
     matched: [0],
     ...over,
   })
+  const PAYMENTS = 'github.com/corp/payments'
 
-  it('lets a caller with sandboxes keep one of their repositories', () => {
-    expect(decideSandbox(grant(), 'github.com/corp/payments', () => true)).toBeNull()
+  it('lets a caller with sandboxes keep one of their repositories from a branch they pull or push', () => {
+    expect(decideSandbox(grant(), PAYMENTS, 'main', () => true)).toBeNull()
+    expect(decideSandbox(grant(), PAYMENTS, 'agent/fix/1', () => true)).toBeNull()
   })
 
   it('needs sandboxes', () => {
-    expect(decideSandbox(grant({ sandboxes: [] }), 'github.com/corp/payments', () => true)).toEqual({
+    expect(decideSandbox(grant({ sandboxes: [] }), PAYMENTS, 'main', () => true)).toEqual({
       status: 403,
       error: 'you are not entitled to keep sandboxes on this server',
     })
   })
 
   it('needs the repository in sandboxes, before telling whether the server reads it', () => {
-    expect(decideSandbox(grant(), 'github.com/other/x', () => false)).toEqual({
+    expect(decideSandbox(grant(), 'github.com/other/x', 'main', () => false)).toEqual({
       status: 403,
       error: 'you may not keep a sandbox of github.com/other/x, your repositories are github.com/corp/*',
     })
+  })
+
+  it('needs a branch the entries of the repository name', () => {
+    expect(decideSandbox(grant(), PAYMENTS, 'release/1', () => true)).toEqual({
+      status: 403,
+      error:
+        'you may not keep a sandbox of github.com/corp/payments from release/1, your branches of it are main, agent/**',
+    })
+    // `agent/**` is below agent/, not agent itself
+    expect(decideSandbox(grant(), PAYMENTS, 'agent', () => true)?.status).toBe(403)
   })
 
   it('only takes the repositories in sandboxes, not those for runs from a ref', () => {
@@ -291,20 +312,27 @@ describe('decideSandbox', () => {
         group: { iss: IDP, name: 'eng-web' },
         accounts: {},
         repos: ['github.com/corp/*'],
-        sandboxes: [{ repo: 'github.com/corp/playground' }],
+        sandboxes: [{ repo: 'github.com/corp/playground', branches: { main: 'pull' } }],
       },
       {
         subject: { iss: IDP, sub: 'alice' },
         accounts: {},
         repos: ['github.com/corp/payments'],
         builds: 'run',
-        sandboxes: [{ repo: 'github.com/corp/playground' }, { repo: 'github.com/corp/web' }],
+        sandboxes: [
+          { repo: 'github.com/corp/playground', branches: { main: 'push', 'agent/*': 'pull' } },
+          { repo: 'github.com/corp/web', branches: { main: 'pull' } },
+        ],
       },
     ]
     const merged = getGrant(order, alice)
-    expect(merged.sandboxes).toEqual([{ repo: 'github.com/corp/playground' }, { repo: 'github.com/corp/web' }])
-    expect(decideSandbox(merged, 'github.com/corp/playground', () => true)).toBeNull()
-    expect(decideSandbox(merged, 'github.com/corp/payments', () => true)).toEqual({
+    // one entry per repository pattern, the higher type of a branch both name
+    expect(merged.sandboxes).toEqual([
+      { repo: 'github.com/corp/playground', branches: { main: 'push', 'agent/*': 'pull' } },
+      { repo: 'github.com/corp/web', branches: { main: 'pull' } },
+    ])
+    expect(decideSandbox(merged, 'github.com/corp/playground', 'main', () => true)).toBeNull()
+    expect(decideSandbox(merged, PAYMENTS, 'main', () => true)).toEqual({
       status: 403,
       error:
         'you may not keep a sandbox of github.com/corp/payments, your repositories are github.com/corp/playground, github.com/corp/web',
@@ -314,7 +342,7 @@ describe('decideSandbox', () => {
         grant: merged,
         accounts: [],
         catalog: {},
-        source: { type: 'sandbox', repo: 'github.com/corp/payments' },
+        source: { type: 'sandbox', repo: PAYMENTS, branch: 'main' },
         approvable: () => true,
         readable: () => true,
       })
@@ -322,9 +350,34 @@ describe('decideSandbox', () => {
   })
 
   it('needs a repository the server reads', () => {
-    expect(decideSandbox(grant(), 'github.com/corp/payments', () => false)).toEqual({
+    expect(decideSandbox(grant(), PAYMENTS, 'main', () => false)).toEqual({
       status: 400,
       error: 'this server can not read github.com/corp/payments',
     })
+  })
+})
+
+describe('sandboxBranchType', () => {
+  const grant = (sandboxes: Grant['sandboxes']): Grant => ({
+    accounts: {},
+    repos: [],
+    builds: null,
+    sandboxes,
+    matched: [0],
+  })
+
+  it('takes the higher type of the patterns that match, in the entries of the repository only', () => {
+    const merged = grant([
+      { repo: 'github.com/corp/payments', branches: { 'agent/**': 'push', main: 'pull' } },
+      { repo: 'github.com/corp/*', branches: { 'agent/**': 'pull', 'release/*': 'push' } },
+      { repo: 'github.com/corp/web', branches: { main: 'push' } },
+    ])
+    expect(sandboxBranchType(merged, 'github.com/corp/payments', 'agent/x')).toBe('push')
+    expect(sandboxBranchType(merged, 'github.com/corp/payments', 'main')).toBe('pull')
+    expect(sandboxBranchType(merged, 'github.com/corp/payments', 'release/1')).toBe('push')
+    // web's main is push for web only
+    expect(sandboxBranchType(merged, 'github.com/corp/api', 'main')).toBeNull()
+    expect(sandboxBranchType(merged, 'github.com/corp/api', 'agent/x')).toBe('pull')
+    expect(sandboxBranchType(merged, 'github.com/other/payments', 'agent/x')).toBeNull()
   })
 })

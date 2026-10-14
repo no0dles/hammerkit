@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { formatSize } from '../utils/units'
-import { RefError } from './git-checkout'
+import { assertBranchName, RefError } from './git-checkout'
 import { Principal } from './oauth'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
@@ -176,7 +176,7 @@ export class SandboxRegistry {
   }
 
   /**
-   * Fetches a ref of a repository into a new sandbox of the owner. Whether they may is the
+   * Fetches a branch of a repository into a new sandbox of the owner. Whether they may is the
    * caller's to decide (`decideSandbox`); this checks the limits.
    */
   async create(owner: Owner, repo: string, ref: string): Promise<Sandbox> {
@@ -346,9 +346,11 @@ export class SandboxRegistry {
     }
   }
 
+  // a sandbox starts from a branch, never a tag or a commit
   private async resolve(repo: string, ref: string, signal: AbortSignal): Promise<string> {
     try {
-      return await this.options.repos.resolve(repo, ref, signal)
+      assertBranchName(ref)
+      return await this.options.repos.resolve(repo, ref, signal, 'branch')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       throw e instanceof RefError
