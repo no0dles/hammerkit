@@ -62,7 +62,7 @@ const buildFile = [
   '  plant:',
   // node by its path: on Windows a bare `node` has PowerShell look through its modules
   // first, which takes longer than the test waits in the fresh home of a run
-  `    cmds: [${JSON.stringify(`${process.execPath} plant.js`)}]`,
+  `    cmds: [echo plant-start, ${JSON.stringify(`${process.execPath} plant.js`)}]`,
   '  all:',
   "    src: ['**']",
   '    cmds: [cat input.txt]',
@@ -324,8 +324,11 @@ describe('sandboxes api', () => {
         // a link a task left inside what `**` matches is a source as a link: neither the run nor
         // the read of the files walks the server's disk
         const plant = await (await runOn(api, sandbox.id, ['plant'])).json()
-        expect(await untilState(api, plant.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
-        const planted = await (await api.call('GET', `/v1/runs/${plant.id}/logs`)).text()
+        const plantRun = await untilState(api, plant.id, ['succeeded', 'failed'])
+        expect(plantRun).toMatchObject({ state: 'succeeded' })
+        const planted = `${JSON.stringify(plantRun)}\n${await (
+          await api.call('GET', `/v1/runs/${plant.id}/logs`)
+        ).text()}\n${api.log.slice(-20).join('\n')}`
         expect(
           lstatSync(join(api.files(sandbox.id), 'rootlink'), { throwIfNoEntry: false })?.isSymbolicLink(),
           planted
