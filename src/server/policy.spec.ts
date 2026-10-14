@@ -37,7 +37,7 @@ const entitlements: Entitlement[] = [
 describe('getGrant', () => {
   it('denies by default', () => {
     const grant = getGrant(entitlements, { iss: IDP, sub: 'bob', groups: [], claims: {} })
-    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, sandboxes: false, sandboxRepos: [], matched: [] })
+    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, sandboxes: [], matched: [] })
     expect(getGrant([], alice).accounts).toEqual({})
   })
 
@@ -142,8 +142,7 @@ describe('decideRun', () => {
     accounts,
     repos: ['github.com/corp/*'],
     builds,
-    sandboxes,
-    sandboxRepos: sandboxes ? ['github.com/corp/*'] : [],
+    sandboxes: sandboxes ? [{ repo: 'github.com/corp/*' }] : [],
     matched: [0],
   })
   const base = (over: Partial<RunDecisionInput>): RunDecisionInput => ({
@@ -225,7 +224,7 @@ describe('decideRun', () => {
       refuse(501, /runs from an upload are not supported/),
     ],
     [
-      'a sandbox run needs sandboxes: true',
+      'a sandbox run needs sandboxes',
       { grant: grantOf({ dev: 'use' }, 'run', false), source: { type: 'sandbox', repo: 'github.com/corp/payments' } },
       refuse(403, /not entitled to keep sandboxes/),
     ],
@@ -263,8 +262,7 @@ describe('decideSandbox', () => {
     accounts: {},
     repos: ['github.com/corp/*'],
     builds: 'run',
-    sandboxes: true,
-    sandboxRepos: ['github.com/corp/*'],
+    sandboxes: [{ repo: 'github.com/corp/*' }],
     matched: [0],
     ...over,
   })
@@ -273,31 +271,43 @@ describe('decideSandbox', () => {
     expect(decideSandbox(grant(), 'github.com/corp/payments', () => true)).toBeNull()
   })
 
-  it('needs sandboxes: true', () => {
-    expect(decideSandbox(grant({ sandboxes: false }), 'github.com/corp/payments', () => true)).toEqual({
+  it('needs sandboxes', () => {
+    expect(decideSandbox(grant({ sandboxes: [] }), 'github.com/corp/payments', () => true)).toEqual({
       status: 403,
       error: 'you are not entitled to keep sandboxes on this server',
     })
   })
 
-  it('needs the repository in repos, before telling whether the server reads it', () => {
+  it('needs the repository in sandboxes, before telling whether the server reads it', () => {
     expect(decideSandbox(grant(), 'github.com/other/x', () => false)).toEqual({
       status: 403,
       error: 'you may not keep a sandbox of github.com/other/x, your repositories are github.com/corp/*',
     })
   })
 
-  it('only takes the repositories of the entitlements with sandboxes: true', () => {
+  it('only takes the repositories in sandboxes, not those for runs from a ref', () => {
     const order: Entitlement[] = [
-      { group: { iss: IDP, name: 'eng-web' }, accounts: {}, repos: ['github.com/corp/playground'], sandboxes: true },
-      { subject: { iss: IDP, sub: 'alice' }, accounts: {}, repos: ['github.com/corp/payments'], builds: 'run' },
+      {
+        group: { iss: IDP, name: 'eng-web' },
+        accounts: {},
+        repos: ['github.com/corp/*'],
+        sandboxes: [{ repo: 'github.com/corp/playground' }],
+      },
+      {
+        subject: { iss: IDP, sub: 'alice' },
+        accounts: {},
+        repos: ['github.com/corp/payments'],
+        builds: 'run',
+        sandboxes: [{ repo: 'github.com/corp/playground' }, { repo: 'github.com/corp/web' }],
+      },
     ]
     const merged = getGrant(order, alice)
-    expect(merged.sandboxRepos).toEqual(['github.com/corp/playground'])
+    expect(merged.sandboxes).toEqual([{ repo: 'github.com/corp/playground' }, { repo: 'github.com/corp/web' }])
     expect(decideSandbox(merged, 'github.com/corp/playground', () => true)).toBeNull()
     expect(decideSandbox(merged, 'github.com/corp/payments', () => true)).toEqual({
       status: 403,
-      error: 'you may not keep a sandbox of github.com/corp/payments, your repositories are github.com/corp/playground',
+      error:
+        'you may not keep a sandbox of github.com/corp/payments, your repositories are github.com/corp/playground, github.com/corp/web',
     })
     expect(
       decideRun({

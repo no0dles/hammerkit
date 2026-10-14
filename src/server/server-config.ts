@@ -253,6 +253,10 @@ export type BuildsLevel = z.infer<typeof buildsLevelSchema>
 
 const repoPatternSchema = z.string().refine(isRepoPattern, 'expected host/path, such as github.com/corp/*')
 
+// One repository (`host/path` pattern) an entitlement may keep sandboxes of.
+export const sandboxGrantSchema = z.object({ repo: repoPatternSchema }).strict()
+export type SandboxGrant = z.infer<typeof sandboxGrantSchema>
+
 export const entitlementSchema = z
   .object({
     ...whoShape,
@@ -262,24 +266,21 @@ export const entitlementSchema = z
     // the repositories (`host/path` patterns) the caller may run from a git ref
     repos: z.array(repoPatternSchema).default([]),
     builds: buildsLevelSchema.optional(),
-    // may keep sandboxes of the repositories in `repos`: checkouts on the server that
-    // runs work on
-    sandboxes: z.boolean().optional(),
+    // the repositories the caller may keep sandboxes of, checkouts on the server that runs
+    // work on: a list of its own, the `repos` above are for runs from a ref
+    sandboxes: z.array(sandboxGrantSchema).optional(),
   })
   .strict()
   .superRefine((entitlement, ctx) => {
     checkWho(entitlement, ctx)
-    if (Object.keys(entitlement.accounts).length === 0 && entitlement.builds === undefined && !entitlement.sandboxes) {
+    if (
+      Object.keys(entitlement.accounts).length === 0 &&
+      entitlement.builds === undefined &&
+      !entitlement.sandboxes?.length
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'name accounts to use or request, a builds level or sandboxes',
-      })
-    }
-    if (entitlement.sandboxes && entitlement.repos.length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['sandboxes'],
-        message: 'a sandbox is a checkout of a repository, list the repositories in repos',
       })
     }
   })
@@ -426,7 +427,7 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
-    // checkouts of callers on the server that runs work on (`sandboxes: true` on an
+    // checkouts of callers on the server that runs work on (the `sandboxes` of an
     // entitlement). They stay until they are deleted, within these limits.
     sandboxes: z
       .object({
