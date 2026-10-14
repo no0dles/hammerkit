@@ -30,6 +30,12 @@ const reachWeb = 'test "$(wget -q -T 5 -O - http://web:8080)" = ok'
 const outside = 'http://1.1.1.1'
 const noRoute = (wget = 'wget') => `! ${wget} -q -T 5 -O /dev/null ${outside}`
 
+// A client that knows no proxy, by the host's own name. Its stdin stays open
+// until the answer is in, and the answer is printed, so a failure shows it.
+const queryExample =
+  'grep example.com /etc/hosts; ' +
+  "(printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n'; sleep 5) | nc -w 10 example.com 80 > /tmp/answer; " +
+  "cat /tmp/answer; grep -q '^HTTP/1' /tmp/answer"
 function networkingApi(): NetworkingV1Api {
   const kc = new KubeConfig()
   kc.loadFromDefault()
@@ -133,20 +139,31 @@ describe('network limits (kubernetes)', () => {
         '.hammerkit.yaml': {
           environments: { default: { kubernetes: { context, namespace, networkPolicy: 'enforced' } } },
           tasks: {
-            query: {
+            // three jobs, so a failure names the check that failed
+            forward: {
               image: 'alpine:3.21',
               src: ['input.txt'],
               network: { allow: ['example.com:80'] },
-              cmds: [
-                [
-                  // a client that knows no proxy, by the host's own name
-                  `printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n' | ` +
-                    `env -u http_proxy -u HTTP_PROXY nc -w 5 example.com 80 | grep -q '^HTTP/1'`,
-                  // another port of that host goes nowhere
-                  '! nc -w 3 example.com 443 </dev/null',
-                  noRoute('env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY wget'),
-                ].join(' && '),
-              ],
+              // a client that knows no proxy, by the host's own name
+              cmds: [queryExample],
+            },
+            'other-port': {
+              image: 'alpine:3.21',
+              src: ['input.txt'],
+              network: { allow: ['example.com:80'] },
+              // another port of that host goes nowhere
+              cmds: ['! nc -w 3 example.com 443 </dev/null'],
+            },
+            isolated: {
+              image: 'alpine:3.21',
+              src: ['input.txt'],
+              network: { allow: ['example.com:80'] },
+              cmds: [noRoute('env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY wget')],
+            },
+            query: {
+              image: 'alpine:3.21',
+              deps: ['forward', 'other-port', 'isolated'],
+              cmds: ['true'],
             },
           },
         },
