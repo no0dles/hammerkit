@@ -5,7 +5,7 @@
 - **A sandbox is a caller's checkout that runs published tasks.**
   - Creating one is a fetch with the operator's `sources` credential, not a run. It belongs to the caller and stays until it is deleted, within quotas.
   - Runs on it execute the published, pinned build file with the sandbox as its directory, so an agent's edit to the sandbox's `.hammerkit.yaml` changes nothing until it is proposed and published.
-  - An entitlement grants them per repository: each entry names a repository and the branches its sandboxes may push to. A source only holds the server's credentials for its host, to read and to push.
+  - An entitlement grants them per repository, with a type per branch pattern: `pull` to start a sandbox from the branch, `push` to also push to it. A source only holds the server's credentials for its host, to read and to push.
   - Accounts opt in with `source: [sandbox]`. Production accounts don't list it. `env:` secrets opt in the same way, through `sandboxes.env.allow`.
   - Its content is written by the caller for the engine too: every path a run derives from it is resolved without following links, and the git dir is never mountable. (Found in review: Docker followed a `src -> /` link into the host's root.)
 - **Files have two ways in.** Typed endpoints (tree, read, search, edits, changes) serve clients without tools of their own, and mirror the shapes models are trained on: exact-string replace, `apply_patch` and unified diffs, ripgrep's parameters, numbered reads. A raw read, write and stat surface serves harnesses that keep their own tools and only swap the backend. No vendor standard names these tools, but harnesses converge on the same operations.
@@ -38,6 +38,6 @@
 ## Consequences
 
 - Arguments and network limits are engine features. They ship first, with their docs, and are useful without a server.
-- Run requests gain `source: { type: sandbox }` and `options.args`. Server config gains `sandboxes`, `runs.network`, `sources[].pushSecret`, a `sandboxes` list on entitlements (`repo` and its `push` branches per entry), and `sandbox` as a value of an account's `source`.
+- Run requests gain `source: { type: sandbox }` and `options.args`. Server config gains `sandboxes`, `runs.network`, `sources[].pushSecret`, a `sandboxes` list on entitlements (`repo` and a `pull` or `push` type per branch pattern), and `sandbox` as a value of an account's `source`.
 - Building it needs one engine change: a build file whose directory is not where it was read from.
 - Kubernetes sandboxes wait for the Kubernetes task executor.
