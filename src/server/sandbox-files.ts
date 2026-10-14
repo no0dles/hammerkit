@@ -244,6 +244,15 @@ export function deniedPath(path: string): string | null {
 
 const DENIED_DIRECTORIES = ['.git', '.ssh', '.aws', '.gnupg', '.kube']
 
+// What hammerkit itself writes next to a task while it runs: `.hammerkit/` in the task's
+// directory, at any depth (the last resolved cache entry, the state of local tasks). It is
+// the run's, not a change to the sandbox's files, so changes and pushes leave it out.
+export const RUN_STATE_DIRECTORY = '.hammerkit'
+
+export function isRunState(path: string): boolean {
+  return path.split('/').slice(0, -1).includes(RUN_STATE_DIRECTORY)
+}
+
 function encodeCursor(value: string | number): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url')
 }
@@ -837,7 +846,7 @@ export class HostSandboxFiles implements SandboxFiles {
   // The index of `fn` holds the files as they are, without what `.gitignore` leaves out and
   // without the deny list, so nothing on it leaves the sandbox through a diff. A repository a
   // task made inside the files is left out too: git adds it as a link to a commit of it,
-  // whose id is not the sandbox's to tell.
+  // whose id is not the sandbox's to tell. So is hammerkit's own run state (`isRunState`).
   private async withFilesIndex<T>(fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
     return this.git.withIndex(async (run) => {
       await run(['add', '--all', '--', '.'], 'read')
@@ -846,7 +855,7 @@ export class HostSandboxFiles implements SandboxFiles {
       const changed: string[] = []
       for (let i = 0; i + 1 < raw.length; i += 2) {
         const file = raw[i + 1]
-        if (deniedPath(file) || raw[i].split(' ')[1] === '160000') {
+        if (deniedPath(file) || isRunState(file) || raw[i].split(' ')[1] === '160000') {
           changed.push(file)
         }
       }
