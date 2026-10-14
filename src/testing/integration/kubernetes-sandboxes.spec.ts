@@ -150,7 +150,7 @@ describe('sandboxes on a kubernetes backend', () => {
       const pushing = Object.assign(Object.create(repos) as RepoAccess, {
         source: () => ({
           match: 'git.test/corp/*',
-          pushSecret: { from: 'echo:push', account: 'scm-push', username: 'x-access-token' },
+          secret: { from: 'echo:scm-token', account: 'scm', username: 'x-access-token' },
         }),
         pushCredentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
       })

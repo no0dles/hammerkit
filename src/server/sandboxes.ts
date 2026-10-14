@@ -315,7 +315,7 @@ export class SandboxRegistry {
     return this.withLock(id, async () => {
       const sandbox = this.mine(owner, id)
       const { storage, repos } = this.options
-      if (!repos.source(sandbox.repo)?.pushSecret) {
+      if (!repos.source(sandbox.repo)?.secret) {
         throw new SandboxError(403, `this server does not push to ${sandbox.repo}`)
       }
       if (allowed.length === 0) {

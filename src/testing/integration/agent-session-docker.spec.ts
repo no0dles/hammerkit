@@ -106,10 +106,10 @@ describe('agent session (docker)', () => {
                 process.execPath
               )}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }`,
               'accounts:',
-              '  scm-push: { providers: { echo: { env: {} } } }',
+              '  scm: { providers: { echo: { env: {} } } }',
               'sources:',
               '  - match: github.com/corp/*',
-              '    pushSecret: { from: "echo:push-token", account: scm-push }',
+              '    secret: { from: "echo:scm-token", account: scm }',
               'entitlements:',
               `  - { subject: { iss: "${idp.url}", sub: alice }, repos: [github.com/corp/*], builds: publish, sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, "agent/**": push } }] }`,
               '',

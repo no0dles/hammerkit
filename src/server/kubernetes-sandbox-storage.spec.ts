@@ -252,7 +252,7 @@ describe('sandboxes on a cluster', () => {
         source: () =>
           ({
             match: 'git.test/corp/*',
-            pushSecret: { from: 'echo:push', account: 'scm-push', username: 'x-access-token' },
+            secret: { from: 'echo:scm-token', account: 'scm', username: 'x-access-token' },
           }) as any,
         resolve: async (_repo, ref) => git(repository, 'rev-parse', ref),
         scrub: (e) => (e instanceof Error ? e : new Error(String(e))),

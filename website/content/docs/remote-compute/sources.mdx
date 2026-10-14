@@ -17,10 +17,9 @@ sources:                            # the repositories a run may get its code fr
 | Key | What it does |
 | --- | --- |
 | `match` | The repositories the entry covers, as a pattern of `host/path`. The first entry that matches decides. |
-| `secret.from` | The token, as `provider:reference` of a secret provider. Without `secret` the repository is read anonymously. |
+| `secret.from` | The token, as `provider:reference` of a secret provider. The server reads with it and [sandboxes push](#pushing) with it. Without `secret` the repository is read anonymously and nothing pushes to it. |
 | `secret.account` | The [account](/docs/remote-compute/accounts) the token is read as. It needs credentials for that provider. |
 | `secret.username` | The user name of the basic authentication the token is sent with, `x-access-token` by default. A GitLab token is commonly sent as `oauth2`. |
-| `pushSecret` | The token [sandboxes push](/docs/remote-compute/sandboxes#pushing) with, with `from`, `account` and `username` as `secret`, see [Pushing](#pushing). Without it, nothing pushes to these repositories. |
 
 ## Which repositories a run may use
 
@@ -68,16 +67,16 @@ names no branch.
 
 ## Pushing
 
-`pushSecret` is the token the server pushes the changes of
-[sandboxes](/docs/remote-compute/sandboxes#pushing) with, to the repositories the entry
-covers. Who may push to which branches is not the source's to say: the `sandboxes` of an
-[entitlement](/docs/remote-compute/entitlements) give a branch pattern the type `push`.
+The server pushes the changes of [sandboxes](/docs/remote-compute/sandboxes#pushing) with
+the `secret` of the source, the same token it reads the repository with. A repository the
+server reads anonymously is not pushed to. Who may push to which branches is not the
+source's to say: the `sandboxes` of an [entitlement](/docs/remote-compute/entitlements) give
+a branch pattern the type `push`.
 
 ```yaml title="server.yaml"
 sources:
   - match: github.com/corp/*
-    secret: { from: 'gsm:github-readonly-token', account: scm-read }
-    pushSecret: { from: 'gsm:github-agent-push', account: scm-push }
+    secret: { from: 'gsm:github-token', account: scm }   # reads, and pushes the sandboxes
 entitlements:
   - subject: { iss: https://idp.corp, sub: 4f1c... }
     sandboxes:
@@ -92,13 +91,13 @@ of one level (`agent/*`) and `**` as the last level for everything below (`agent
 the `push` patterns to branches that nobody else writes to and that no deployment runs from:
 a sandbox holds changes nobody reviewed, the push is how they get to a review.
 
-The write token is its own secret, read as its own account, so a server that only reads
-never holds a token that writes. Like the read token it goes to one git process through its
-environment, is masked, and the account is the server's own: no entitlement may name it and
-no build file may use it. That git process gets nothing else to sign in with: no global or
-system git configuration, no credential helper, no `.netrc` of a home directory and no ssh
-agent, so a push is always the service account's and never the identity of whoever runs the
-server. A provider command can mint a short-lived token of a GitHub App
+For a push the token needs write access to the repository's contents; a server that never
+pushes can keep a read-only one. As for a read, the token goes to one git process through
+its environment, is masked, and the account is the server's own: no entitlement may name it
+and no build file may use it. The pushing git process gets nothing else to sign in with: no
+global or system git configuration, no credential helper, no `.netrc` of a home directory
+and no ssh agent, so a push is always the service account's and never the identity of
+whoever runs the server. A provider command can mint a short-lived token of a GitHub App
 with write access to the repository's contents. A token can not be limited to branches on
 the host's side, so protect the branches people work on (`main`, releases) in the
 repository as well: a pattern that is too wide is then caught twice.

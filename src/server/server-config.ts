@@ -358,24 +358,18 @@ export const entitlementSchema = z
 // A repository the server can read: `github.com/corp/*` for an organisation,
 // `gitlab.corp.com/platform/**` for a group with its subgroups. The credential is a
 // secret of a provider, read as `account`, and handed to git for that fetch only.
-const sourceSecretSchema = z
-  .object({
-    from: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'expected provider:reference'),
-    account: accountNameSchema,
-    // the user name of the basic authentication the token is sent with
-    username: z.string().min(1).default('x-access-token'),
-  })
-  .strict()
-
 export const sourceSchema = z
   .object({
     match: repoPatternSchema,
-    secret: sourceSecretSchema.optional(),
-    // the server's credential that writes, for the pushes of sandboxes: a secret and an
-    // account of its own, so a server that only reads never holds a token that writes. Who
-    // may push which branches is on the entitlement. Without it, nothing pushes to these
-    // repositories: a push never falls back to a credential git finds on the server.
-    pushSecret: sourceSecretSchema.optional(),
+    secret: z
+      .object({
+        from: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'expected provider:reference'),
+        account: accountNameSchema,
+        // the user name of the basic authentication the token is sent with
+        username: z.string().min(1).default('x-access-token'),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
 
@@ -562,14 +556,31 @@ export const serverConfigSchema = z
       }
     })
     config.sources.forEach((source, index) => {
-      const secrets: [(string | number)[], z.infer<typeof sourceSecretSchema> | undefined][] = [
-        [['sources', index, 'secret'], source.secret],
-        [['sources', index, 'pushSecret'], source.pushSecret],
-      ]
-      for (const [where, secret] of secrets) {
-        if (secret) {
-          checkSourceSecret(config, secret, where, ctx)
-        }
+      if (!source.secret) {
+        return
+      }
+      const { from, account } = source.secret
+      const kind = from.substring(0, from.indexOf(':'))
+      const where = ['sources', index, 'secret'] as (string | number)[]
+      if (!config.accounts[account]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'account'],
+          message: `unknown account ${account}`,
+        })
+      } else if (!config.accounts[account].providers[kind]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'from'],
+          message: `account ${account} has no credentials for the provider ${kind}`,
+        })
+      }
+      if (!config.secretProviders[kind]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...where, 'from'],
+          message: `secret provider ${kind} is not declared in secretProviders`,
+        })
       }
     })
     const readers = getSourceAccounts(config)
@@ -579,7 +590,7 @@ export const serverConfigSchema = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['entitlements', index, 'accounts', account],
-            message: `the account ${account} reads or pushes the sources, no entitlement may name it`,
+            message: `the account ${account} reads the sources, no entitlement may name it`,
           })
         }
       }
@@ -731,40 +742,6 @@ export const serverConfigSchema = z
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>
 
-// The credential of a source is read as an account of the catalog, through a provider of it.
-function checkSourceSecret(
-  config: {
-    accounts: { [name: string]: { providers: { [kind: string]: unknown } } }
-    secretProviders: { [kind: string]: unknown }
-  },
-  secret: z.infer<typeof sourceSecretSchema>,
-  where: (string | number)[],
-  ctx: z.RefinementCtx
-): void {
-  const { from, account } = secret
-  const kind = from.substring(0, from.indexOf(':'))
-  if (!config.accounts[account]) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: [...where, 'account'],
-      message: `unknown account ${account}`,
-    })
-  } else if (!config.accounts[account].providers[kind]) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: [...where, 'from'],
-      message: `account ${account} has no credentials for the provider ${kind}`,
-    })
-  }
-  if (!config.secretProviders[kind]) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: [...where, 'from'],
-      message: `secret provider ${kind} is not declared in secretProviders`,
-    })
-  }
-}
-
 // What the tasks of a run on a sandbox may run on: `sandboxes.runtimes`, else containers
 // when the server runs them. Empty on a server with only `runtimes: [local]`, which then
 // runs nothing on sandboxes.
@@ -772,17 +749,9 @@ export function getSandboxRuntimes(config: Pick<ServerConfig, 'runtimes' | 'sand
   return config.sandboxes.runtimes ?? config.runtimes.filter((runtime) => runtime === 'docker')
 }
 
-// The accounts that read or push repositories: no caller uses them and no build file
-// names them.
+// The accounts that read repositories: no caller uses them and no build file names them.
 export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string[] {
-  return [
-    ...new Set(
-      config.sources.flatMap((source) => [
-        ...(source.secret ? [source.secret.account] : []),
-        ...(source.pushSecret ? [source.pushSecret.account] : []),
-      ])
-    ),
-  ]
+  return [...new Set(config.sources.flatMap((source) => (source.secret ? [source.secret.account] : [])))]
 }
 export type ServerPlatform = z.infer<typeof serverPlatformSchema>
 
