@@ -489,7 +489,7 @@ describe('SandboxRegistry', () => {
     it('never pushes the run state hammerkit keeps next to a build file', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      const files = await sandboxes.attach(sandbox.id)
+      const files = (await sandboxes.attach(sandbox.id, root)).directory
       writeFileSync(join(files, 'input.txt'), 'fixed')
       // what a run on the sandbox writes, at the root and next to a build file further down
       mkdirSync(join(files, '.hammerkit', 'last-resolved'), { recursive: true })
