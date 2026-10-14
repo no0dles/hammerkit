@@ -249,7 +249,11 @@ describe('sandboxes on a cluster', () => {
         url: () => repository,
         credentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
         pushCredentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
-        source: () => ({ match: 'git.test/corp/*', push: { branches: ['agent/**'] } }) as any,
+        source: () =>
+          ({
+            match: 'git.test/corp/*',
+            pushSecret: { from: 'echo:push', account: 'scm-push', username: 'x-access-token' },
+          }) as any,
         resolve: async (_repo, ref) => git(repository, 'rev-parse', ref),
         scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
       },
@@ -409,7 +413,9 @@ describe('sandboxes on a cluster', () => {
     await notMine(() => registry.read(bob, sandbox.id, (files) => files.changes()))
     await notMine(() => registry.edit(bob, sandbox.id, [{ op: 'write', path: 'x.txt', content: 'x' }]))
     await notMine(() => registry.fetch(bob, sandbox.id, 'main'))
-    await notMine(() => registry.push(bob, sandbox.id, 'agent/one', { name: 'bob', email: 'b@corp', message: 'm' }))
+    await notMine(() =>
+      registry.push(bob, sandbox.id, 'agent/one', { name: 'bob', email: 'b@corp', message: 'm' }, ['agent/**'])
+    )
     expect(await registry.remove(bob, sandbox.id)).toBe(false)
     expect(registry.get(bob, sandbox.id)).toBeUndefined()
     expect(registry.get(alice, sandbox.id)).toBeDefined()
@@ -583,7 +589,7 @@ describe('sandboxes on a cluster', () => {
         { op: 'write', path: 'new.txt', content: 'new' },
       ])
       const before = cluster.commands.length
-      const pushed = await registry.push(alice, sandbox.id, 'agent/one', author)
+      const pushed = await registry.push(alice, sandbox.id, 'agent/one', author, ['agent/**'])
       const branch = git(repository, 'rev-parse', 'agent/one')
       expect(pushed).toMatchObject({ commit: branch, ref: 'agent/one', pushed: { 'agent/one': branch } })
       expect(git(repository, 'rev-parse', 'agent/one^')).toBe(commit)
@@ -604,7 +610,7 @@ describe('sandboxes on a cluster', () => {
 
       // the next push adds to the branch
       await registry.edit(alice, sandbox.id, [{ op: 'write', path: 'new.txt', content: 'newer' }])
-      const again = await registry.push(alice, sandbox.id, 'agent/one', { ...author, message: 'More' })
+      const again = await registry.push(alice, sandbox.id, 'agent/one', { ...author, message: 'More' }, ['agent/**'])
       expect(git(repository, 'rev-parse', 'agent/one')).toBe(again.commit)
       expect(git(repository, 'rev-parse', 'agent/one^')).toBe(branch)
     })

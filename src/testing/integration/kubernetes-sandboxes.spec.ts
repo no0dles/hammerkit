@@ -148,7 +148,10 @@ describe('sandboxes on a kubernetes backend', () => {
       // the sources push to agent/** with the environment of the test, which can write to
       // the repository on disk
       const pushing = Object.assign(Object.create(repos) as RepoAccess, {
-        source: () => ({ match: 'git.test/corp/*', push: { branches: ['agent/**'] } }),
+        source: () => ({
+          match: 'git.test/corp/*',
+          pushSecret: { from: 'echo:push', account: 'scm-push', username: 'x-access-token' },
+        }),
         pushCredentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
       })
       const registry = new SandboxRegistry({
@@ -255,11 +258,17 @@ describe('sandboxes on a kubernetes backend', () => {
       expect(registry.get(alice, sandbox.id)?.bytes).toBeGreaterThan(0)
 
       // the server pushes the changes, with nothing of git run in the caller's namespace
-      const pushed = await registry.push(alice, sandbox.id, 'agent/k8s', {
-        name: 'Alice Agent',
-        email: 'alice@corp.test',
-        message: 'Agent work',
-      })
+      const pushed = await registry.push(
+        alice,
+        sandbox.id,
+        'agent/k8s',
+        {
+          name: 'Alice Agent',
+          email: 'alice@corp.test',
+          message: 'Agent work',
+        },
+        ['agent/**']
+      )
       expect(git(repository, 'rev-parse', 'agent/k8s')).toBe(pushed.commit)
       expect(git(repository, 'rev-parse', 'agent/k8s^')).toBe(first)
       expect(git(repository, 'show', 'agent/k8s:src/app.ts')).toContain('answer = 42')

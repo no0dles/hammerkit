@@ -26,21 +26,23 @@ accounts:
   scm-push: { providers: { echo: { env: {} } } }
 sources:
   - match: github.com/corp/*
-    push: { secret: { from: "echo:push-token", account: scm-push }, branches: ['agent/**'] }
+    pushSecret: { from: "echo:push-token", account: scm-push }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: [{ repo: github.com/corp/* }]
+    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull, 'agent/**': push } }]
   - subject: { iss: ISSUER, sub: carol }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: [{ repo: github.com/corp/* }]
+    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull } }]
   - subject: { iss: ISSUER, sub: bob }
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: publish
+  - claims: { iss: ISSUER, match: { team: release } }
+    sandboxes: [{ repo: github.com/corp/*, branches: { 'release/*': pull } }]
 `
 
 const buildFile = [
@@ -70,7 +72,11 @@ interface JsonResponse extends Response {
 }
 
 interface Api {
-  call: (method: string, path: string, options?: { sub?: string; body?: unknown }) => Promise<JsonResponse>
+  call: (
+    method: string,
+    path: string,
+    options?: { sub?: string; body?: unknown; claims?: Record<string, string> }
+  ) => Promise<JsonResponse>
   url: string
   // the authorization header of alice
   auth: () => string
@@ -103,6 +109,7 @@ describe('sandboxes api', () => {
     writeFileSync(join(repository, 'input.txt'), 'from-main')
     git('add', '.')
     git('commit', '--quiet', '-m', 'one')
+    git('tag', 'feature/v1')
     git('checkout', '--quiet', '-b', 'next')
     writeFileSync(join(repository, 'input.txt'), 'from-next')
     git('commit', '--quiet', '-am', 'two')
@@ -135,8 +142,9 @@ describe('sandboxes api', () => {
           repos: { url: () => repository },
           worker: TEST_WORKER,
         })
-        const auth = (sub = 'alice') =>
+        const auth = (sub = 'alice', claims: Record<string, string> = {}) =>
           `Bearer ${signToken(key, {
+            ...claims,
             iss: idp.url,
             sub,
             aud: 'hammerkit',
@@ -146,7 +154,7 @@ describe('sandboxes api', () => {
           fetch(`${server.url}${path}`, {
             method,
             headers: {
-              authorization: auth(options.sub),
+              authorization: auth(options.sub, options.claims),
               ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
             },
             body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -221,6 +229,8 @@ describe('sandboxes api', () => {
       const moved = await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'next' } })
       expect(moved.status).toBe(200)
       expect(await moved.json()).toMatchObject({ ref: 'next', commit: git('rev-parse', 'next') })
+      // a branch the caller has no type for
+      expect((await api.call('POST', `/v1/sandboxes/${sandbox.id}/fetch`, { body: { ref: 'other' } })).status).toBe(403)
 
       expect((await api.call('DELETE', `/v1/sandboxes/${sandbox.id}`)).status).toBe(200)
       expect((await api.call('GET', `/v1/sandboxes/${sandbox.id}`)).status).toBe(404)
@@ -234,10 +244,22 @@ describe('sandboxes api', () => {
       expect(bob.status).toBe(403)
       expect((await bob.json()).error).toBe('you are not entitled to keep sandboxes on this server')
       expect((await (await api.call('GET', '/v1/me', { sub: 'bob' })).json()).sandboxes).toEqual([])
-      expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual(['github.com/corp/*'])
+      expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual([
+        {
+          repo: 'github.com/corp/*',
+          branches: { main: 'pull', next: 'pull', 'feature/*': 'pull', 'agent/**': 'push' },
+        },
+      ])
+      const tag = await create(api, 'alice', 'v1')
+      expect(tag.status).toBe(403)
+      expect((await tag.json()).error).toMatch(/may not keep a sandbox of github.com\/corp\/payments from v1/)
       const other = await api.call('POST', '/v1/sandboxes', { body: { repo: 'github.com/other/x', ref: 'main' } })
       expect(other.status).toBe(403)
-      expect((await create(api, 'alice', 'missing')).status).toBe(400)
+      expect((await create(api, 'alice', 'feature/missing')).status).toBe(400)
+      // a tag a granted pattern covers is still not a branch
+      const tagged = await create(api, 'alice', 'feature/v1')
+      expect(tagged.status).toBe(400)
+      expect((await tagged.json()).error).toBe('there is no branch feature/v1')
       expect((await api.call('POST', '/v1/sandboxes', { body: { repo: 'not a repo', ref: 'main' } })).status).toBe(400)
       expect((await api.call('POST', '/v1/sandboxes', { body: { repo: REPO } })).status).toBe(400)
       // the limit of two
@@ -374,6 +396,33 @@ describe('sandboxes api', () => {
     })
   })
 
+  it('refuses the files of a sandbox once the caller lost its branch', async () => {
+    await withApi('sandboxes-api-files-branch', undefined, async (api) => {
+      git('branch', 'release/1')
+      const release = { team: 'release' }
+      const created = await api.call('POST', '/v1/sandboxes', {
+        body: { repo: REPO, ref: 'release/1' },
+        claims: release,
+      })
+      expect(created.status).toBe(201)
+      const base = `/v1/sandboxes/${(await created.json()).id}`
+      expect((await api.call('GET', `${base}/files/input.txt`, { claims: release })).status).toBe(200)
+      // the same caller, whose token no longer grants release branches
+      for (const [method, path] of [
+        ['GET', `${base}/files/input.txt`],
+        ['GET', `${base}/tree`],
+        ['GET', `${base}/changes`],
+      ]) {
+        const refused = await api.call(method, path)
+        expect(refused.status).toBe(403)
+      }
+      const edit = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'write', path: 'x.txt', content: 'x' }] },
+      })
+      expect(edit.status).toBe(403)
+    })
+  })
+
   it('reads, searches and edits the files of a sandbox, and answers its changes', async () => {
     await withApi('sandboxes-api-files', undefined, async (api) => {
       const sandbox = await (await create(api)).json()
@@ -493,6 +542,21 @@ describe('sandboxes api', () => {
       expect((await signed.json()).error).toMatch(/may not carry Signed-off-by/)
       expect((await push({ branch: 'agent/.hidden', message: 'Agent work' })).status).toBe(400)
       expect((await push({ branch: 'agent/one', message: 'Agent work' }, 'carol')).status).toBe(404)
+      // carol may only pull: her own sandbox does not push
+      const carols = await (await create(api, 'carol')).json()
+      await api.call('POST', `/v1/sandboxes/${carols.id}/edits`, {
+        sub: 'carol',
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'carol' }] },
+      })
+      const pulls = await api.call('POST', `/v1/sandboxes/${carols.id}/push`, {
+        sub: 'carol',
+        body: { branch: 'agent/one', message: 'Carol work' },
+      })
+      expect(pulls.status).toBe(403)
+      expect((await pulls.json()).error).toBe(`you may not push from sandboxes of ${REPO}`)
+      // main is alice's to pull from, not to push to
+      const toMain = await push({ branch: 'main', message: 'Agent work' })
+      expect((await toMain.json()).error).toBe(`you may only push to agent/** of ${REPO}`)
       expect((await api.call('GET', `${base}/push`)).status).toBe(405)
 
       const pushed = await push({ branch: 'agent/one', message: 'Agent work' })
@@ -519,7 +583,11 @@ describe('sandboxes api', () => {
       expect(again.status).toBe(200)
       const alice = (entitlement: ServerConfig['entitlements'][number]) => entitlement.subject?.sub === 'alice'
       api.entitle((entitlements) =>
-        entitlements.map((e) => (alice(e) ? { ...e, sandboxes: [{ repo: 'github.com/other/*' }] } : e))
+        entitlements.map((e) =>
+          alice(e)
+            ? { ...e, sandboxes: [{ repo: 'github.com/other/*', branches: { 'agent/**': 'push' as const } }] }
+            : e
+        )
       )
       const lostRepo = await push({ branch: 'agent/two', message: 'Agent work' })
       expect(lostRepo.status).toBe(403)

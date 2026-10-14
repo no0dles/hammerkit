@@ -18,7 +18,7 @@ export interface RepoAccessOptions {
   // where a repository is fetched from; `https://<host>/<path>.git` when left out
   url?: (repo: string) => string
   // how a ref is resolved to a commit; `git ls-remote` when left out
-  resolve?: (repo: string, ref: string, signal: AbortSignal) => Promise<string>
+  resolve?: (repo: string, ref: string, signal: AbortSignal, only?: 'branch') => Promise<string>
   now?: () => number
 }
 
@@ -57,16 +57,17 @@ export class RepoAccess {
     return this.options.url ? this.options.url(repo) : `https://${repo}.git`
   }
 
-  // The commit a ref points to now, or an error that says what is wrong with the ref.
-  async resolve(repo: string, ref: string, signal?: AbortSignal): Promise<string> {
+  // The commit a ref points to now, or an error that says what is wrong with the ref. With
+  // `branch`, only a branch.
+  async resolve(repo: string, ref: string, signal?: AbortSignal, only?: 'branch'): Promise<string> {
     const timeout = AbortSignal.timeout(RESOLVE_TIMEOUT_MS)
     const abort = signal ? AbortSignal.any([signal, timeout]) : timeout
     if (this.options.resolve) {
-      return this.options.resolve(repo, ref, abort)
+      return this.options.resolve(repo, ref, abort, only)
     }
     const credentials = await this.credentials(repo)
     try {
-      return await resolveRef(this.url(repo), ref, credentials.env, abort)
+      return await resolveRef(this.url(repo), ref, credentials.env, abort, only)
     } catch (e) {
       throw this.scrub(e, credentials.values)
     }
@@ -82,12 +83,12 @@ export class RepoAccess {
   }
 
   /**
-   * The same for pushing a sandbox to the repository, with the write credential of the
-   * source's `push`, which is a secret and an account of its own: a server that only reads
-   * never holds a token that writes.
+   * The same for pushing a sandbox to the repository, with the source's `pushSecret`, a
+   * secret and an account of its own: a server that only reads never holds a token that
+   * writes.
    */
   async pushCredentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
-    const secret = this.source(repo)?.push?.secret
+    const secret = this.source(repo)?.pushSecret
     if (!secret) {
       throw new Error(`this server does not push to ${repo}`)
     }

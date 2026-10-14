@@ -18,6 +18,7 @@ export interface SandboxState {
 // holds the read credential.
 export interface SandboxFetch {
   url: string
+  // a branch, without `refs/heads/`
   ref: string
   env: { [key: string]: string }
   signal: AbortSignal
@@ -94,7 +95,7 @@ export class SandboxPushFailed extends Error {
 export interface SandboxStorage {
   // whether one file can be read while a run holds the sandbox; walks and edits never can
   readonly readsWhileHeld: boolean
-  // fetches the ref into new storage for the sandbox, and answers the commit
+  // fetches the branch into new storage for the sandbox, and answers the commit
   create(key: SandboxKey, fetch: SandboxFetch): Promise<string>
   // moves the files to another commit; only for a sandbox without changes
   fetch(key: SandboxKey, fetch: SandboxFetch): Promise<string>
@@ -294,11 +295,12 @@ export class HostSandboxStorage implements SandboxStorage {
 
   private async checkout(id: string, fetch: SandboxFetch, force: boolean): Promise<string> {
     if (!isValidRef(fetch.ref)) {
-      throw new Error(`${JSON.stringify(fetch.ref.slice(0, 80))} is not a branch, tag or commit`)
+      throw new Error(`${JSON.stringify(fetch.ref.slice(0, 80))} is not a branch`)
     }
+    // the branch by its full name: a tag of the same name is never taken
     await this.git(
       id,
-      ['fetch', '--quiet', '--depth', '1', '--', fetch.url, fetch.ref],
+      ['fetch', '--quiet', '--depth', '1', '--', fetch.url, `refs/heads/${fetch.ref}`],
       fetch.env,
       fetch.signal,
       'fetch'

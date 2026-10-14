@@ -295,8 +295,36 @@ export type BuildsLevel = z.infer<typeof buildsLevelSchema>
 
 const repoPatternSchema = z.string().refine(isRepoPattern, 'expected host/path, such as github.com/corp/*')
 
-// One repository (`host/path` pattern) an entitlement may keep sandboxes of.
-export const sandboxGrantSchema = z.object({ repo: repoPatternSchema }).strict()
+// A branch of a sandbox grant, as written: `agent/**`, `agent/*` (one level) or a name.
+const branchPatternSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) =>
+      /^[A-Za-z0-9._*/-]+$/.test(value) &&
+      !value.startsWith('-') &&
+      !value.startsWith('/') &&
+      !value.endsWith('/') &&
+      !value.includes('//') &&
+      !value.includes('..'),
+    'expected a branch or a pattern of branches, such as agent/**'
+  )
+
+// `pull`: a sandbox may start from (and fetch) a matching branch; `push` also pushes to it.
+export const sandboxBranchTypeSchema = z.enum(['pull', 'push'])
+export type SandboxBranchType = z.infer<typeof sandboxBranchTypeSchema>
+
+// One repository (`host/path` pattern) an entitlement may keep sandboxes of, with a type
+// per branch pattern. Its branches count for this repository only.
+export const sandboxGrantSchema = z
+  .object({
+    repo: repoPatternSchema,
+    branches: z
+      .record(branchPatternSchema, sandboxBranchTypeSchema)
+      .refine((branches) => Object.keys(branches).length > 0, 'name the branches a sandbox may start from'),
+  })
+  .strict()
 export type SandboxGrant = z.infer<typeof sandboxGrantSchema>
 
 export const entitlementSchema = z
@@ -339,36 +367,15 @@ const sourceSecretSchema = z
   })
   .strict()
 
-// A branch a sandbox may push to, as written: `agent/**`, `agent/*` (one level) or a name.
-const branchPatternSchema = z
-  .string()
-  .min(1)
-  .max(200)
-  .refine(
-    (value) =>
-      /^[A-Za-z0-9._*/-]+$/.test(value) &&
-      !value.startsWith('-') &&
-      !value.startsWith('/') &&
-      !value.endsWith('/') &&
-      !value.includes('//') &&
-      !value.includes('..'),
-    'expected a branch or a pattern of branches, such as agent/**'
-  )
-
 export const sourceSchema = z
   .object({
     match: repoPatternSchema,
     secret: sourceSecretSchema.optional(),
-    // pushing the changes of a sandbox: a credential that may write, and the only
-    // branches a sandbox may push to. The credential is required: a push never falls back
-    // to a credential git finds on the server, which would be somebody's own identity.
-    push: z
-      .object({
-        secret: sourceSecretSchema,
-        branches: z.array(branchPatternSchema).min(1),
-      })
-      .strict()
-      .optional(),
+    // the server's credential that writes, for the pushes of sandboxes: a secret and an
+    // account of its own, so a server that only reads never holds a token that writes. Who
+    // may push which branches is on the entitlement. Without it, nothing pushes to these
+    // repositories: a push never falls back to a credential git finds on the server.
+    pushSecret: sourceSecretSchema.optional(),
   })
   .strict()
 
@@ -557,7 +564,7 @@ export const serverConfigSchema = z
     config.sources.forEach((source, index) => {
       const secrets: [(string | number)[], z.infer<typeof sourceSecretSchema> | undefined][] = [
         [['sources', index, 'secret'], source.secret],
-        [['sources', index, 'push', 'secret'], source.push?.secret],
+        [['sources', index, 'pushSecret'], source.pushSecret],
       ]
       for (const [where, secret] of secrets) {
         if (secret) {
@@ -772,7 +779,7 @@ export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string
     ...new Set(
       config.sources.flatMap((source) => [
         ...(source.secret ? [source.secret.account] : []),
-        ...(source.push ? [source.push.secret.account] : []),
+        ...(source.pushSecret ? [source.pushSecret.account] : []),
       ])
     ),
   ]
