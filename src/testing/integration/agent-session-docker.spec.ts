@@ -111,7 +111,7 @@ describe('agent session (docker)', () => {
               '  - match: github.com/corp/*',
               '    push: { secret: { from: "echo:push-token", account: scm-push }, branches: [agent/**] }',
               'entitlements:',
-              `  - { subject: { iss: "${idp.url}", sub: alice }, repos: [github.com/corp/*], builds: publish, sandboxes: true }`,
+              `  - { subject: { iss: "${idp.url}", sub: alice }, repos: [github.com/corp/*], builds: publish, sandboxes: [{ repo: github.com/corp/* }] }`,
               '',
             ].join('\n')
           )

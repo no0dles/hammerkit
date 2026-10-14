@@ -1,4 +1,4 @@
-import { Account, AccountLevel, BuildsLevel, Entitlement, Who } from './server-config'
+import { Account, AccountLevel, BuildsLevel, Entitlement, SandboxGrant, Who } from './server-config'
 import { Principal } from './oauth'
 import { matchesAnyRepo, matchesRef } from './repo'
 
@@ -10,11 +10,9 @@ export interface Grant {
   repos: string[]
   // what the caller may do with the build files, null for nothing
   builds: BuildsLevel | null
-  // may keep sandboxes
-  sandboxes: boolean
-  // the repositories (patterns) the caller may keep sandboxes of: the `repos` of the
-  // entitlements with `sandboxes: true` only
-  sandboxRepos: string[]
+  // the repositories (patterns) the caller may keep sandboxes of: the entries of the
+  // `sandboxes` of their entitlements, none for no sandboxes
+  sandboxes: SandboxGrant[]
   // the entitlements that matched, for the log
   matched: number[]
 }
@@ -73,9 +71,8 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const matched: number[] = []
   const accounts: Grant['accounts'] = {}
   const repos: string[] = []
-  const sandboxRepos: string[] = []
+  const sandboxes: SandboxGrant[] = []
   let builds: BuildsLevel | null = null
-  let sandboxes = false
 
   entitlements.forEach((entitlement, index) => {
     if (!matches(entitlement, principal)) {
@@ -98,12 +95,13 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     ) {
       builds = entitlement.builds
     }
-    if (entitlement.sandboxes === true) {
-      sandboxes = true
-      sandboxRepos.push(...entitlement.repos.filter((repo) => !sandboxRepos.includes(repo)))
+    for (const sandbox of entitlement.sandboxes ?? []) {
+      if (!sandboxes.some((known) => known.repo === sandbox.repo)) {
+        sandboxes.push(sandbox)
+      }
     }
   })
-  return { accounts, repos, builds, sandboxes, sandboxRepos, matched }
+  return { accounts, repos, builds, sandboxes, matched }
 }
 
 export type SubmittedSource =
@@ -112,18 +110,21 @@ export type SubmittedSource =
   // a sandbox of the caller's, of this repository
   | { type: 'sandbox'; repo: string }
 
-// Whether the caller may create a sandbox of a repository: the repository in the `repos`
-// of an entitlement of theirs with `sandboxes: true`, and the server able to read it. The answer is the
-// reason when not.
+// Whether the caller may create a sandbox of a repository: the repository in the `sandboxes`
+// of an entitlement of theirs, and the server able to read it. The answer is the reason when not.
 export function decideSandbox(
   grant: Grant,
   repo: string,
   readable: (repo: string) => boolean
 ): { status: 400 | 403; error: string } | null {
-  if (!grant.sandboxes) {
+  if (grant.sandboxes.length === 0) {
     return { status: 403, error: 'you are not entitled to keep sandboxes on this server' }
   }
-  return checkRepo(grant.sandboxRepos, repo, readable, 'keep a sandbox of')
+  return checkRepo(sandboxRepos(grant), repo, readable, 'keep a sandbox of')
+}
+
+export function sandboxRepos(grant: Grant): string[] {
+  return grant.sandboxes.map((sandbox) => sandbox.repo)
 }
 
 // the caller's own list first: what they may not name is not told whether the server can read it
@@ -183,13 +184,13 @@ export function decideRun(input: RunDecisionInput): RunDecision {
       error: 'runs from an upload are not supported by this server yet, use a git ref',
     }
   }
-  if (source.type === 'sandbox' && !grant.sandboxes) {
+  if (source.type === 'sandbox' && grant.sandboxes.length === 0) {
     return { type: 'refuse', status: 403, error: 'you are not entitled to keep sandboxes on this server' }
   }
-  // runs on a sandbox: the repositories of the entitlements that keep sandboxes
+  // runs on a sandbox: the repositories in the `sandboxes` of the entitlements
   const repoProblem =
     source.type === 'sandbox'
-      ? checkRepo(grant.sandboxRepos, source.repo, readable, 'run on a sandbox of')
+      ? checkRepo(sandboxRepos(grant), source.repo, readable, 'run on a sandbox of')
       : checkRepo(grant.repos, source.repo, readable, 'run from')
   if (repoProblem) {
     return { type: 'refuse', ...repoProblem }

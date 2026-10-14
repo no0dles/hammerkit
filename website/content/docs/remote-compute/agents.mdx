@@ -68,9 +68,9 @@ in this order:
 | `HAMMERKIT_TOKEN`                 | Such a token, as the agent's platform hands it over.                                                                                                                                                                                                                         |
 | `hammerkit remote login <server>` | The sign-in stored on the machine, for an agent a person starts on their own machine.                                                                                                                                                                                        |
 
-Give the agent's identity an [entitlement](/docs/remote-compute/entitlements) with
-`sandboxes: true`, `builds: run` and its repositories, and no account that holds production
-secrets.
+Give the agent's identity an [entitlement](/docs/remote-compute/entitlements) with its
+repositories under `sandboxes` (`[{ repo: github.com/corp/* }]`), `builds: run`, and no
+account that holds production secrets.
 
 ## Settings
 

@@ -605,7 +605,7 @@ export async function startServer(
       runtimes: sandboxRuntimes,
     },
   }
-  if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes)) {
+  if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
     log(
       'warning: entitlements keep sandboxes, but this server runs only local tasks, which it runs on no sandbox; ' +
         'runs on sandboxes are refused until sandboxes.runtimes names a runtime'

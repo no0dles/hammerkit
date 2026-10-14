@@ -75,7 +75,7 @@ export async function withSandboxServer(name: string, fn: (server: SandboxServer
           `  - subject: { iss: "${idp.url}", sub: alice }`,
           '    repos: [github.com/corp/*]',
           '    builds: publish',
-          '    sandboxes: true',
+          '    sandboxes: [{ repo: github.com/corp/* }]',
           '',
         ].join('\n')
       )
