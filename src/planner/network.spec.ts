@@ -1,4 +1,6 @@
 import { join } from 'path'
+import { spawn } from 'child_process'
+import { AddressInfo, createServer } from 'net'
 import Dockerode from 'dockerode'
 import { createTestCase } from '../testing/test-case'
 import { createCli } from '../program'
@@ -20,6 +22,7 @@ import {
   ensureKubernetesItemNetwork,
   getNetworkLabels,
   getProxyName,
+  getProxyReadinessScript,
   removeAllKubernetesItemNetworks,
 } from '../kubernetes/network-policy'
 import { getRunLabelValue } from '../kubernetes/job-placement'
@@ -439,6 +442,30 @@ describe('network', () => {
           expect(getNetworkLabels(env, offline)).toEqual({})
         }
       )
+    })
+
+    it('takes the proxy as ready once it listens on every port', async () => {
+      const server = createServer((socket) => socket.destroy())
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const port = (server.address() as AddressInfo).port
+      const probe = (ports: number[]) =>
+        new Promise<number | null>((resolve) =>
+          spawn(process.execPath, ['-e', getProxyReadinessScript(ports)]).on('exit', resolve)
+        )
+      try {
+        expect(await probe([port])).toBe(0)
+        // a forward's port that nothing listens on yet
+        const closed = await new Promise<number>((resolve) => {
+          const other = createServer()
+          other.listen(0, '127.0.0.1', () => {
+            const free = (other.address() as AddressInfo).port
+            other.close(() => resolve(free))
+          })
+        })
+        expect(await probe([port, closed])).toBe(1)
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
     })
 
     it('lets a limited service take connections from what needs it, or from its route', async () => {
