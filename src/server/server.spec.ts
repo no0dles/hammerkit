@@ -383,18 +383,26 @@ describe('server config policy', () => {
     expect(serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] }).success).toBe(false)
   })
 
-  it('takes the repositories of sandboxes as a list of their own', () => {
+  it('takes sandboxes as repositories of their own, with a pull or push type per branch pattern', () => {
     const entitlement = { subject: { iss: 'https://idp.corp', sub: 'a' } }
     const parse = (sandboxes: unknown) =>
       serverConfigSchema.safeParse({ ...base, entitlements: [{ ...entitlement, sandboxes }] })
-    const parsed = parse([{ repo: 'github.com/corp/payments' }, { repo: 'github.com/corp/*' }])
+    const parsed = parse([
+      { repo: 'github.com/corp/payments', branches: { 'agent/**': 'push', main: 'pull' } },
+      { repo: 'github.com/corp/*', branches: { main: 'pull' } },
+    ])
     expect(parsed.success && parsed.data.entitlements[0].sandboxes).toEqual([
-      { repo: 'github.com/corp/payments' },
-      { repo: 'github.com/corp/*' },
+      { repo: 'github.com/corp/payments', branches: { 'agent/**': 'push', main: 'pull' } },
+      { repo: 'github.com/corp/*', branches: { main: 'pull' } },
     ])
     expect(parse(true).success).toBe(false)
-    expect(parse([{ repo: 'payments' }]).success).toBe(false)
+    expect(parse([{ repo: 'payments', branches: { main: 'pull' } }]).success).toBe(false)
+    // every entry names its branches, each with a type
+    expect(parse([{ repo: 'github.com/corp/*' }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: {} }]).success).toBe(false)
     expect(parse([{ repo: 'github.com/corp/*', branches: ['main'] }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: { main: 'write' } }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: { '../main': 'pull' } }]).success).toBe(false)
     // an empty list grants nothing, so the entitlement names nothing either
     expect(parse([]).success).toBe(false)
   })

@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { RefError } from './git-checkout'
+import { resolveRef } from './git-checkout'
 import { HostSandboxStorage, SandboxPushFailed, SandboxStorage } from './sandbox-storage'
 import { SandboxError, SandboxLimits, SandboxRegistry } from './sandboxes'
 
@@ -69,12 +69,8 @@ describe('SandboxRegistry', () => {
           }
         },
         source: (repo) => (repo === REPO ? { match: 'git.test/corp/*', push } : undefined),
-        resolve: async (_repo, ref) => {
-          if (ref === 'missing') {
-            throw new RefError('there is no branch or tag missing')
-          }
-          return git(repository, 'rev-parse', ref)
-        },
+        resolve: (_repo, ref, signal, only) =>
+          resolveRef(repository, ref, process.env, signal ?? AbortSignal.timeout(60_000), only),
         scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
       },
     })
@@ -189,9 +185,29 @@ describe('SandboxRegistry', () => {
     const sandboxes = registryWith()
     await expect(sandboxes.create(alice, REPO, 'missing')).rejects.toMatchObject({
       status: 400,
-      message: 'there is no branch or tag missing',
+      message: 'there is no branch missing',
     })
     expect(sandboxes.usage(alice)).toEqual({ count: 0, bytes: 0 })
+  })
+
+  it('starts from a branch only, never from a tag or a commit', async () => {
+    git(repository, 'tag', 'v1', first)
+    // a tag with the name of a branch is not what a sandbox of that branch gets
+    git(repository, 'tag', 'next', first)
+    const sandboxes = registryWith()
+    const sandbox = await sandboxes.create(alice, REPO, 'next')
+    expect(sandbox.commit).toBe(second)
+    expect(readFileSync(join(root, 'files', sandbox.id, 'files', 'input.txt'), 'utf8')).toBe('two')
+    for (const [ref, message] of [
+      ['v1', 'there is no branch v1'],
+      [first, `a sandbox starts from a branch, ${first} is a commit`],
+      ['refs/heads/main', '"refs/heads/main" is not a branch'],
+    ]) {
+      await expect(sandboxes.create(alice, REPO, ref)).rejects.toMatchObject({ status: 400, message })
+      await expect(sandboxes.fetch(alice, sandbox.id, ref)).rejects.toMatchObject({ status: 400, message })
+    }
+    expect(sandboxes.usage(alice).count).toBe(1)
+    expect((await sandboxes.fetch(alice, sandbox.id, 'main')).commit).toBe(first)
   })
 
   it('sees a same-size change made in the second of the checkout', async () => {

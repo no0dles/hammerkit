@@ -57,14 +57,19 @@ const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 /**
  * The commit a branch or tag of a repository points to now: `refs/heads/<ref>`, else
  * `refs/tags/<ref>` (the commit of an annotated tag). A name that is both a branch and
- * a tag is ambiguous. A full commit hash is taken as it is.
+ * a tag is ambiguous. A full commit hash is taken as it is. With `branch`, only a
+ * branch: a sandbox starts from one.
  */
 export async function resolveRef(
   repository: string,
   ref: string,
   env: { [key: string]: string | undefined },
-  signal: AbortSignal
+  signal: AbortSignal,
+  only?: 'branch'
 ): Promise<string> {
+  if (only === 'branch') {
+    return resolveBranch(repository, ref, env, signal)
+  }
   if (!isValidRef(ref)) {
     throw new RefError(`${JSON.stringify(ref.slice(0, 80))} is not a branch, tag or commit`)
   }
@@ -103,6 +108,30 @@ export async function resolveRef(
     throw new RefError(`there is no branch or tag ${ref}`)
   }
   return commit
+}
+
+async function resolveBranch(
+  repository: string,
+  branch: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string> {
+  assertBranchName(branch)
+  const commit = await remoteBranch(repository, branch, env, signal)
+  if (!commit) {
+    throw new RefError(`there is no branch ${branch}`)
+  }
+  return commit
+}
+
+// A name a sandbox can start from: a branch, never a tag or a commit, written without `refs/heads/`.
+export function assertBranchName(branch: string): void {
+  if (!isValidRef(branch) || branch.startsWith('refs/')) {
+    throw new RefError(`${JSON.stringify(branch.slice(0, 80))} is not a branch`)
+  }
+  if (COMMIT.test(branch.toLowerCase())) {
+    throw new RefError(`a sandbox starts from a branch, ${branch} is a commit`)
+  }
 }
 
 // A branch git takes as a name of its own: a ref, and no part of it starts or ends with a

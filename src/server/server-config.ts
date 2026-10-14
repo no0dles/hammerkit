@@ -253,8 +253,36 @@ export type BuildsLevel = z.infer<typeof buildsLevelSchema>
 
 const repoPatternSchema = z.string().refine(isRepoPattern, 'expected host/path, such as github.com/corp/*')
 
-// One repository (`host/path` pattern) an entitlement may keep sandboxes of.
-export const sandboxGrantSchema = z.object({ repo: repoPatternSchema }).strict()
+// A branch of a sandbox grant, as written: `agent/**`, `agent/*` (one level) or a name.
+const branchPatternSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) =>
+      /^[A-Za-z0-9._*/-]+$/.test(value) &&
+      !value.startsWith('-') &&
+      !value.startsWith('/') &&
+      !value.endsWith('/') &&
+      !value.includes('//') &&
+      !value.includes('..'),
+    'expected a branch or a pattern of branches, such as agent/**'
+  )
+
+// `pull`: a sandbox may start from (and fetch) a matching branch; `push` also pushes to it.
+export const sandboxBranchTypeSchema = z.enum(['pull', 'push'])
+export type SandboxBranchType = z.infer<typeof sandboxBranchTypeSchema>
+
+// One repository (`host/path` pattern) an entitlement may keep sandboxes of, with a type
+// per branch pattern. Its branches count for this repository only.
+export const sandboxGrantSchema = z
+  .object({
+    repo: repoPatternSchema,
+    branches: z
+      .record(branchPatternSchema, sandboxBranchTypeSchema)
+      .refine((branches) => Object.keys(branches).length > 0, 'name the branches a sandbox may start from'),
+  })
+  .strict()
 export type SandboxGrant = z.infer<typeof sandboxGrantSchema>
 
 export const entitlementSchema = z
@@ -296,22 +324,6 @@ const sourceSecretSchema = z
     username: z.string().min(1).default('x-access-token'),
   })
   .strict()
-
-// A branch a sandbox may push to, as written: `agent/**`, `agent/*` (one level) or a name.
-const branchPatternSchema = z
-  .string()
-  .min(1)
-  .max(200)
-  .refine(
-    (value) =>
-      /^[A-Za-z0-9._*/-]+$/.test(value) &&
-      !value.startsWith('-') &&
-      !value.startsWith('/') &&
-      !value.endsWith('/') &&
-      !value.includes('//') &&
-      !value.includes('..'),
-    'expected a branch or a pattern of branches, such as agent/**'
-  )
 
 export const sourceSchema = z
   .object({
