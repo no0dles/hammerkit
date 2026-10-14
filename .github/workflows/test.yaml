@@ -33,9 +33,16 @@ jobs:
           cache: 'npm'
       - name: Install npm packages
         run: npm ci
-      # sandbox search runs ripgrep, which the image does not have
+      # sandbox search runs ripgrep, which the image does not have. From its release, not
+      # Chocolatey: choco exits 0 having installed nothing when its feed is down.
       - name: Install ripgrep
-        run: choco install ripgrep --no-progress -y
+        shell: pwsh
+        run: |
+          $name = 'ripgrep-14.1.1-x86_64-pc-windows-msvc'
+          Invoke-WebRequest "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/$name.zip" -OutFile "$env:RUNNER_TEMP\rg.zip" -MaximumRetryCount 3
+          Expand-Archive "$env:RUNNER_TEMP\rg.zip" -DestinationPath $env:RUNNER_TEMP
+          "$env:RUNNER_TEMP\$name" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & "$env:RUNNER_TEMP\$name\rg.exe" --version
       - name: Run tests
         run: npm test
         timeout-minutes: 15
