@@ -39,7 +39,7 @@ describe('SandboxRegistry', () => {
   // what the operator lets sandboxes push to
   let pushCredentialFails: boolean
   let logged: string[]
-  let pushSecret: { from: string; account: string; username: string } | undefined
+  let secret: { from: string; account: string; username: string } | undefined
   // what the caller's entitlements let them push to
   let allowed: string[]
 
@@ -70,7 +70,7 @@ describe('SandboxRegistry', () => {
             values: [PUSH_TOKEN],
           }
         },
-        source: (repo) => (repo === REPO ? { match: 'git.test/corp/*', pushSecret } : undefined),
+        source: (repo) => (repo === REPO ? { match: 'git.test/corp/*', secret } : undefined),
         resolve: (_repo, ref, signal, only) =>
           resolveRef(repository, ref, process.env, signal ?? AbortSignal.timeout(60_000), only),
         scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
@@ -92,7 +92,7 @@ describe('SandboxRegistry', () => {
     stopped = []
     pushCredentialFails = false
     logged = []
-    pushSecret = { from: 'echo:push', account: 'scm-push', username: 'x-access-token' }
+    secret = { from: 'echo:scm', account: 'scm', username: 'x-access-token' }
     allowed = ['agent/**']
     mkdirSync(repository)
     git(repository, 'init', '--quiet', '--initial-branch=main')
@@ -515,7 +515,7 @@ describe('SandboxRegistry', () => {
         status: 403,
         message: `you may not push from sandboxes of ${REPO}`,
       })
-      pushSecret = undefined
+      secret = undefined
       await expect(sandboxes.push(alice, sandbox.id, 'agent/x', author, allowed)).rejects.toMatchObject({
         status: 403,
         message: `this server does not push to ${REPO}`,

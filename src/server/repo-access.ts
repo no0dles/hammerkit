@@ -79,20 +79,35 @@ export class RepoAccess {
    * values are what the run has to mask.
    */
   async credentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
-    return this.withSecret(repo, this.source(repo)?.secret)
+    const env: { [key: string]: string } = {}
+    for (const [key, value] of Object.entries(this.environment.processEnvs)) {
+      if (value !== undefined) {
+        env[key] = value
+      }
+    }
+    const secret = this.source(repo)?.secret
+    if (!secret) {
+      return { env, values: [] }
+    }
+    const token = await this.token(secret)
+    const host = repo.split('/')[0]
+    const header = `Authorization: Basic ${Buffer.from(`${secret.username}:${token}`).toString('base64')}`
+    env.GIT_CONFIG_COUNT = '1'
+    env.GIT_CONFIG_KEY_0 = `http.https://${host}/.extraHeader`
+    env.GIT_CONFIG_VALUE_0 = header
+    return { env, values: [token, header] }
   }
 
   /**
-   * The same for pushing a sandbox to the repository, with the source's `pushSecret`, a
-   * secret and an account of its own: a server that only reads never holds a token that
-   * writes.
+   * The same for pushing a sandbox to the repository, with the source's `secret`. A
+   * repository the server reads without one is not pushed to: a push never falls back to
+   * a credential git finds on the server.
    */
   async pushCredentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
-    const secret = this.source(repo)?.pushSecret
-    if (!secret) {
+    if (!this.source(repo)?.secret) {
       throw new Error(`this server does not push to ${repo}`)
     }
-    const credentials = await this.withSecret(repo, secret)
+    const credentials = await this.credentials(repo)
     // nothing but that token: no configuration, credential helper, .netrc or ssh agent of
     // the server's user, which would push as whoever that user is
     const env = { ...credentials.env }
@@ -107,28 +122,6 @@ export class RepoAccess {
     // an empty file on every platform: git for Windows opens `/dev/null` as `nul`
     env.GIT_CONFIG_GLOBAL = '/dev/null'
     return { env, values: credentials.values }
-  }
-
-  private async withSecret(
-    repo: string,
-    secret: Source['secret']
-  ): Promise<{ env: { [key: string]: string }; values: string[] }> {
-    const env: { [key: string]: string } = {}
-    for (const [key, value] of Object.entries(this.environment.processEnvs)) {
-      if (value !== undefined) {
-        env[key] = value
-      }
-    }
-    if (!secret) {
-      return { env, values: [] }
-    }
-    const token = await this.token(secret)
-    const host = repo.split('/')[0]
-    const header = `Authorization: Basic ${Buffer.from(`${secret.username}:${token}`).toString('base64')}`
-    env.GIT_CONFIG_COUNT = '1'
-    env.GIT_CONFIG_KEY_0 = `http.https://${host}/.extraHeader`
-    env.GIT_CONFIG_VALUE_0 = header
-    return { env, values: [token, header] }
   }
 
   private async token(secret: NonNullable<Source['secret']>): Promise<string> {
