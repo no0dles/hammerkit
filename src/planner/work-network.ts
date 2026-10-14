@@ -3,8 +3,13 @@ import { WorkTree } from './work-tree'
 
 // What a task or service reaches besides the services it needs, which it
 // reaches at every level. Ordered none < allow < open. The hosts of `allow`
-// are names, `*.` patterns, and names with a port for raw TCP.
-export type WorkNetwork = { type: 'open' } | { type: 'none' } | { type: 'allow'; hosts: string[] }
+// are names, `*.` patterns, and names with a port for raw TCP. A name reaches
+// private addresses, a pattern doesn't; `publicOnly` lists the names that
+// don't either, because a ceiling allows them only through a pattern.
+export type WorkNetwork =
+  | { type: 'open' }
+  | { type: 'none' }
+  | { type: 'allow'; hosts: string[]; publicOnly?: string[] }
 
 export const OPEN_NETWORK: WorkNetwork = { type: 'open' }
 
@@ -46,7 +51,8 @@ export function parseNetworkOption(value: string): WorkNetwork {
 }
 
 // The setting under a ceiling: a more open setting is clamped down to it, and
-// an allow list under an allow ceiling keeps the hosts both lists allow.
+// an allow list under an allow ceiling keeps the hosts both lists allow. A
+// name one list allows only through a pattern reaches no private address.
 export function limitNetwork(network: WorkNetwork, ceiling: WorkNetwork | null): WorkNetwork {
   if (!ceiling || ceiling.type === 'open' || network.type === 'none') {
     return network
@@ -61,7 +67,19 @@ export function limitNetwork(network: WorkNetwork, ceiling: WorkNetwork | null):
     ...network.hosts.filter((host) => ceiling.hosts.some((limit) => coversHost(limit, host))),
     ...ceiling.hosts.filter((limit) => network.hosts.some((host) => coversHost(host, limit))),
   ]
-  return { type: 'allow', hosts: normalizeHosts(hosts) }
+  const normalized = normalizeHosts(hosts)
+  const publicOnly = normalized.filter(
+    (host) => !host.startsWith('*.') && !(coversByName(network, host) && coversByName(ceiling, host))
+  )
+  return publicOnly.length > 0 ? { type: 'allow', hosts: normalized, publicOnly } : { type: 'allow', hosts: normalized }
+}
+
+// Whether a name (not a pattern) of the list covers `host` and may reach
+// private addresses.
+function coversByName(network: Extract<WorkNetwork, { type: 'allow' }>, host: string): boolean {
+  return network.hosts.some(
+    (entry) => !entry.startsWith('*.') && !network.publicOnly?.includes(entry) && coversHost(entry, host)
+  )
 }
 
 // The network of a task or service in this run: its own setting under the
@@ -151,7 +169,8 @@ export function formatNetwork(network: WorkNetwork): string {
 // error before anything runs. So is a limited item that needs a service under
 // a name that is no host name: the proxy passes the names of the needed
 // services, and `*.com` would pass every .com host. A TCP forward under the
-// name of a needed service would hide that service, so it is an error too.
+// name of a needed service would hide that service, so it is an error too, as
+// are two forwards on one port, which the ceiling can leave from two lists.
 export function applyNetworkCeiling(workTree: WorkTree, ceiling: WorkNetwork | null): void {
   const limit = ceiling && isLimitedNetwork(ceiling) ? ceiling : null
   if (limit) {
@@ -182,6 +201,11 @@ export function applyNetworkCeiling(workTree: WorkTree, ceiling: WorkNetwork | n
         `${item.name}: network ${formatNetwork(network)} reaches a needed service by a host name, ` +
           `"${invalid.name}" is none (name it like db or api-v2)`
       )
+    }
+    const shared = network.type === 'allow' ? getAllowListError(network.hosts) : null
+    if (shared) {
+      const under = limit ? ` under --network ${formatNetwork(limit)}` : ''
+      throw new Error(`${item.name}: network ${formatNetwork(network)}${under}, ${shared}`)
     }
     const hidden = getTcpForwards(network).find((forward) =>
       item.needs.some((need) => need.name.toLowerCase() === forward.host.toLowerCase())

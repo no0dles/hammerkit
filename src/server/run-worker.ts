@@ -16,7 +16,7 @@ import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { runOptionsSchema } from './run-request'
 import { networkSchema } from '../schema/network-schema'
-import { parseWorkNetwork } from '../planner/work-network'
+import { limitNetwork, parseWorkNetwork, WorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
 import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { RunEventData, TaskStatus } from './runs'
@@ -53,13 +53,21 @@ export const workerInputSchema = z
         (value) => typeof value === 'object' && value !== null && (value as any).type === 'kubernetes'
       )
       .optional(),
-    // the most any task or service reaches besides its needs, as `--network`: `runs.network`,
-    // and for a run on a sandbox the lower of it and `sandboxes.network`
+    // the most any task or service reaches besides its needs, as `--network`: `runs.network`
     network: networkSchema.optional(),
+    // for a run on a sandbox, `sandboxes.network`: the run gets the lower of the two
+    sandboxNetwork: networkSchema.optional(),
   })
   .strict()
 
 export type WorkerInput = z.infer<typeof workerInputSchema>
+
+// The ceiling of the run, combined here and not in the server: the lower of two allow lists
+// marks what one allows only through a pattern, which a build file's `network` can't say.
+export function getRunNetwork(input: Pick<WorkerInput, 'network' | 'sandboxNetwork'>): WorkNetwork | null {
+  const runs = input.network ? parseWorkNetwork(input.network) : null
+  return input.sandboxNetwork ? limitNetwork(parseWorkNetwork(input.sandboxNetwork), runs) : runs
+}
 
 // What the process says, one JSON object per line on its standard output.
 export type WorkerMessage = { kind: 'event'; event: RunEventData } | { kind: 'result'; ok: boolean; error?: string }
@@ -123,7 +131,7 @@ export async function runTasks(
       cacheReadOnly: options.cacheReadOnly ?? false,
       timeout: options.timeout ? parseDuration(options.timeout) : null,
       skipDeps: options.skipDeps !== false,
-      network: input.network ? parseWorkNetwork(input.network) : null,
+      network: getRunNetwork(input),
       // why a task was not taken from the cache goes into its result
       explain: true,
     }

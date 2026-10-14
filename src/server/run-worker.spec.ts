@@ -5,7 +5,9 @@ import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
-import { WorkerMessage, taskCauses, workerMain } from './run-worker'
+import { getRunNetwork, WorkerMessage, taskCauses, workerMain } from './run-worker'
+import { limitNetwork, parseWorkNetwork } from '../planner/work-network'
+import { NetworkSchema } from '../schema/network-schema'
 import { hostEnvs } from '../testing/host-env'
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
@@ -250,6 +252,30 @@ describe('workerMain', () => {
       error: expect.stringContaining("can't limit the network of the local task hello"),
     })
     expect(messages.some((m) => m.kind === 'event' && m.event.type === 'task')).toBe(false)
+  })
+
+  it('holds a run on a sandbox to the lower of the two ceilings, combined in the process', async () => {
+    const messages = await run({
+      ...base,
+      network: 'open',
+      sandboxNetwork: 'none',
+      entry: join(directory, '.hammerkit.yaml'),
+    })
+    expect(messages[messages.length - 1]).toEqual({
+      kind: 'result',
+      ok: false,
+      error: expect.stringContaining('--network none needs every task in a container'),
+    })
+    const runs: NetworkSchema = { allow: ['*.corp.com', 'registry.npmjs.org'] }
+    const sandbox: NetworkSchema = { allow: ['vault.corp.com:8200', '*.npmjs.org'] }
+    expect(getRunNetwork({ network: runs })).toEqual(parseWorkNetwork(runs))
+    expect(getRunNetwork({ sandboxNetwork: sandbox })).toEqual(parseWorkNetwork(sandbox))
+    // the combination itself, with whatever it marks, not a build file's `network` written from it
+    const combined = getRunNetwork({ network: runs, sandboxNetwork: sandbox })
+    expect(combined).toEqual(limitNetwork(parseWorkNetwork(sandbox), parseWorkNetwork(runs)))
+    expect(combined).toMatchObject({ type: 'allow', hosts: ['registry.npmjs.org', 'vault.corp.com:8200'] })
+    // each name is allowed by one list only through a pattern: the run keeps both off private addresses
+    expect(combined).toMatchObject({ publicOnly: ['registry.npmjs.org', 'vault.corp.com:8200'] })
   })
 
   it('says when the build file has no such task', async () => {

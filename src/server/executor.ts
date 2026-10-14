@@ -17,7 +17,7 @@ import { SandboxClaim } from './sandbox-storage'
 import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { limitNetwork, parseWorkNetwork, toNetworkSchema } from '../planner/work-network'
+import { toNetworkSchema } from '../planner/work-network'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -167,7 +167,7 @@ export class HostExecutor implements RunExecutor {
       // published files, so what the process and the secret providers it starts read of
       // their directory is never what a task wrote
       let cwd: string
-      let input: Pick<WorkerInput, 'entry' | 'directory' | 'network'>
+      let input: Pick<WorkerInput, 'entry' | 'directory' | 'network' | 'sandboxNetwork'>
       let claim: SandboxClaim | undefined
       // the files of the sandbox the tasks work on
       let work: string | undefined
@@ -221,8 +221,9 @@ export class HostExecutor implements RunExecutor {
         input = {
           entry: join(published, version.entry),
           directory: { read: published, work },
-          // the lower of sandboxes.network and runs.network
-          network: toNetworkSchema(limitNetwork(parseWorkNetwork(network), planning.policy.network ?? null)),
+          // the worker takes the lower of sandboxes.network and runs.network
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+          sandboxNetwork: network,
         }
       }
 

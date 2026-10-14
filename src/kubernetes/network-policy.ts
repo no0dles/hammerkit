@@ -23,7 +23,7 @@ import { awaitDeployRunningState } from './await-running-state'
 import {
   EGRESS_PROXY_HOST,
   EGRESS_PROXY_IMAGE,
-  formatRefusedHost,
+  formatEgressProxyEvent,
   getEgressProxyCommand,
   getEgressProxyPorts,
   getItemProxyEnvironment,
@@ -499,8 +499,8 @@ async function followProxyLog(
     output.on('pipe', (source) => source.on('error', () => undefined))
     createInterface({ input: output }).on('line', (line) => {
       const event = parseEgressProxyEvent(line)
-      if (event?.type === 'refused') {
-        item.status.write('warn', formatRefusedHost(event.host))
+      if (event && event.type !== 'ready') {
+        item.status.write('warn', formatEgressProxyEvent(event))
       }
     })
     return await instance.log.log(env.namespace, pod.metadata.name, 'proxy', output as Writable, { follow: true })
