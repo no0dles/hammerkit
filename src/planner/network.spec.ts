@@ -1,4 +1,6 @@
 import { join } from 'path'
+import { spawn } from 'child_process'
+import { AddressInfo, createServer } from 'net'
 import Dockerode from 'dockerode'
 import { createTestCase } from '../testing/test-case'
 import { createCli } from '../program'
@@ -20,6 +22,7 @@ import {
   ensureKubernetesItemNetwork,
   getNetworkLabels,
   getProxyName,
+  getProxyReadinessScript,
   removeAllKubernetesItemNetworks,
 } from '../kubernetes/network-policy'
 import { getRunLabelValue } from '../kubernetes/job-placement'
@@ -93,7 +96,9 @@ describe('network', () => {
 
     it.each<[string, unknown, RegExp]>([
       ['network-level', 'closed', /invalid_union/],
-      ['network-port', { allow: ['a.com:443'] }, /invalid host \\"a.com:443\\"/],
+      ['network-port', { allow: ['a.com:3128'] }, /invalid host \\"a.com:3128\\"/],
+      ['network-forward-wildcard', { allow: ['*.a.com:5432'] }, /invalid host \\"\*.a.com:5432\\"/],
+      ['network-forward-shared-port', { allow: ['a.com:5432', 'b.com:5432'] }, /share a port/],
       ['network-ip', { allow: ['10.0.0.1'] }, /invalid host \\"10.0.0.1\\"/],
       ['network-url', { allow: ['https://a.com'] }, /invalid host \\"https:\/\/a.com\\"/],
       ['network-unknown', { allow: [], deny: [] }, /Unrecognized key.*deny/],
@@ -195,6 +200,23 @@ describe('network', () => {
         await expect(cli.runExec({ network: { type: 'allow', hosts: ['b.com'] } })).rejects.toThrow(message)
         await expect(cli.runExec({ network: { type: 'none' } })).rejects.toThrow('fetch: network none reaches')
       })
+    })
+
+    it('refuses a TCP forward under the name of a service the item needs', async () => {
+      await withCli(
+        'network-forward-need',
+        {
+          services: { db: { image: 'postgres:16' } },
+          tasks: {
+            migrate: { image: 'node:22', cmds: ['true'], needs: ['db'], network: { allow: ['db:5432'] } },
+          },
+        },
+        async (cli) => {
+          await expect(cli.runExec()).rejects.toThrow(
+            'migrate: network allow db:5432 forwards db:5432, which is the name of a service it needs'
+          )
+        }
+      )
     })
 
     it('refuses a ceiling below open with a local task in the run', async () => {
@@ -357,7 +379,7 @@ describe('network', () => {
             },
           ])
           // the proxy takes connections from the task's pods of this run only
-          expect(buildProxyPolicy(env, install, run).spec).toEqual({
+          expect(buildProxyPolicy(env, install, { type: 'allow', hosts: ['a.com'] }, run).spec).toEqual({
             podSelector: { matchLabels: { 'hammerkit.dev/proxy-for': key } },
             policyTypes: ['Ingress'],
             ingress: [
@@ -371,6 +393,14 @@ describe('network', () => {
               },
             ],
           })
+          // a TCP forward is one more port of the proxy, both ways
+          const forwarding = { type: 'allow' as const, hosts: ['a.com', 'db.example.com:5432'] }
+          const ports = [
+            { protocol: 'TCP', port: 3128 },
+            { protocol: 'TCP', port: 5432 },
+          ]
+          expect(buildNetworkPolicy(env, install, forwarding, run).spec?.egress?.[0].ports).toEqual(ports)
+          expect(buildProxyPolicy(env, install, forwarding, run).spec?.ingress?.[0].ports).toEqual(ports)
           // a Service name has at most 63 characters, whatever the task is called
           expect(getProxyName(install, run).length).toBeLessThanOrEqual(63)
           expect(
@@ -412,6 +442,30 @@ describe('network', () => {
           expect(getNetworkLabels(env, offline)).toEqual({})
         }
       )
+    })
+
+    it('takes the proxy as ready once it listens on every port', async () => {
+      const server = createServer((socket) => socket.destroy())
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const port = (server.address() as AddressInfo).port
+      const probe = (ports: number[]) =>
+        new Promise<number | null>((resolve) =>
+          spawn(process.execPath, ['-e', getProxyReadinessScript(ports)]).on('exit', resolve)
+        )
+      try {
+        expect(await probe([port])).toBe(0)
+        // a forward's port that nothing listens on yet
+        const closed = await new Promise<number>((resolve) => {
+          const other = createServer()
+          other.listen(0, '127.0.0.1', () => {
+            const free = (other.address() as AddressInfo).port
+            other.close(() => resolve(free))
+          })
+        })
+        expect(await probe([port, closed])).toBe(1)
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
     })
 
     it('lets a limited service take connections from what needs it, or from its route', async () => {

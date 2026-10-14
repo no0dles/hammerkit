@@ -27,6 +27,12 @@ const web = {
   cmd: `node -e "require('http').createServer((req, res) => res.end('ok')).listen(8080)"`,
   healthcheck: { cmd: 'wget -q -O /dev/null http://127.0.0.1:8080', timeout: '30s' },
 }
+// A client that knows no proxy, by the host's own name. Its stdin stays open
+// until the answer is in, and the answer is printed, so a failure shows it.
+const queryExample =
+  'grep example.com /etc/hosts; ' +
+  "(printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n'; sleep 5) | nc -w 10 example.com 80 > /tmp/answer; " +
+  "cat /tmp/answer; grep -q '^HTTP/1' /tmp/answer"
 const reachWeb = (name: string) => `test "$(wget -q -T 5 -O - http://${name}:8080)" = ok`
 
 async function listen(server: Server): Promise<number> {
@@ -168,6 +174,33 @@ describe('network limits (docker)', () => {
         }
         const updates = Array.from(result.state.tasks['install'].status.read()).map((s) => `${s.level}: ${s.message}`)
         expect(updates).toContain('warn: network: refused example.com')
+      })
+    }),
+    180_000
+  )
+
+  it(
+    'forwards raw TCP to a host and port of the allow list, and nothing else',
+    requiresLinuxContainers(async () => {
+      await createTestCase('network-docker-forward', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          tasks: {
+            query: {
+              image,
+              network: { allow: ['example.com:80'] },
+              cmds: [
+                queryExample,
+                // another port of that host goes nowhere
+                '! nc -w 3 example.com 443 </dev/null',
+                noRouteWithoutProxy,
+              ],
+            },
+          },
+        },
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'query' })
+        await expectSuccessfulResult(await cli.runExec(), environment)
       })
     }),
     180_000
