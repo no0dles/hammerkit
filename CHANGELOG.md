@@ -1,3 +1,10 @@
+# [1.26.0](https://github.com/no0dles/hammerkit/compare/v1.25.0...v1.26.0) (2026-10-14)
+
+
+### Features
+
+* pass arguments to a task or service after -- ([#95](https://github.com/no0dles/hammerkit/issues/95)) ([52745e5](https://github.com/no0dles/hammerkit/commit/52745e5c4b3b88ebb9a320d6aa92b188c70600bf))
+
 # [1.25.0](https://github.com/no0dles/hammerkit/compare/v1.24.0...v1.25.0) (2026-10-11)
 
 
