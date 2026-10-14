@@ -478,7 +478,8 @@ sandboxes:
 | `limits.bytes` | What one caller's sandboxes may take together, their git data included. A create that would go over is `413` and leaves nothing behind. |
 | `total` | What all sandboxes on the server may take. Over it, a create is `507`. |
 
-The bytes of a sandbox are measured after it is fetched and after each run on it. The files
+The bytes of a sandbox are measured after it is fetched and after each run on it. A run's
+result does not wait for that measure, but the owner's next run or create does. The files
 are kept below `storage` (`sandboxes/`, readable by the user of the server only), with the
 git data of each sandbox next to its files rather than in them: tasks write to the files,
 and git on the server never reads a configuration or a hook a task could have written.
