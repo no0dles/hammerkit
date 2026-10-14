@@ -353,7 +353,10 @@ or more lines around the change.
 
 `GET /v1/sandboxes/<id>/changes` compares the files with the commit the sandbox was fetched
 at, the way a run sees them: new files count, what `.gitignore` leaves out does not, and
-neither does a git repository a task made inside the files.
+neither does a git repository a task made inside the files. Neither does what hammerkit
+writes next to a task while it runs: a `.hammerkit/` directory at any depth (the last
+cache entry it resolved, the state of local tasks) is the run's, not a change. The build
+file `.hammerkit.yaml` is a change like any other file.
 
 | `format` | What it answers |
 | --- | --- |
