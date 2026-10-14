@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process'
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { lstatSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join, parse } from 'path'
+import { join } from 'path'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
@@ -61,6 +61,9 @@ const buildFile = [
   '  leak:',
   '    src: [escape]',
   '    cmds: [cat escape/secret.txt]',
+  // what `ln -s / rootlink` in a task does, a junction on Windows
+  '  plant:',
+  "    cmds: ['node -e \"require(''fs'').symlinkSync(require(''path'').parse(process.cwd()).root, ''rootlink'', ''junction'')\"']",
   '  all:',
   "    src: ['**']",
   '    cmds: [cat input.txt]',
@@ -313,8 +316,11 @@ describe('sandboxes api', () => {
         const events = await (await api.call('GET', `/v1/runs/${run.id}/events`)).text()
         expect(events).not.toContain('server-secret')
 
-        // a link inside what `**` matches is a source as a link: the run does not walk the server's disk
-        symlinkSync(parse(tmpdir()).root, join(api.files(sandbox.id), 'rootlink'), 'junction')
+        // a link a task left inside what `**` matches is a source as a link: neither the run nor
+        // the read of the files walks the server's disk
+        const plant = await (await runOn(api, sandbox.id, ['plant'])).json()
+        expect(await untilState(api, plant.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
+        expect(lstatSync(join(api.files(sandbox.id), 'rootlink')).isSymbolicLink()).toBe(true)
         const all = await (await runOn(api, sandbox.id, ['all'])).json()
         expect(await untilState(api, all.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
       } finally {
