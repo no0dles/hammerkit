@@ -27,12 +27,11 @@ const web = {
   cmd: `node -e "require('http').createServer((req, res) => res.end('ok')).listen(8080)"`,
   healthcheck: { cmd: 'wget -q -O /dev/null http://127.0.0.1:8080', timeout: '30s' },
 }
-// A client that knows no proxy, by the host's own name. Its stdin stays open
-// until the answer is in, and the answer is printed, so a failure shows it.
+// A client that knows no proxy, by the host's own name, reading the answer to
+// its end. /etc/hosts is printed, so a failure shows where the name led.
 const queryExample =
   'grep example.com /etc/hosts; ' +
-  "(printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n'; sleep 5) | nc -w 10 example.com 80 > /tmp/answer; " +
-  "cat /tmp/answer; grep -q '^HTTP/1' /tmp/answer"
+  'env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY wget -q -T 10 -O /dev/null http://example.com/'
 const reachWeb = (name: string) => `test "$(wget -q -T 5 -O - http://${name}:8080)" = ok`
 
 async function listen(server: Server): Promise<number> {
