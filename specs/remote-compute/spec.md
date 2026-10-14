@@ -1,6 +1,6 @@
 # Feature Specification: Remote Compute
 
-**Status**: Draft, implementation in progress (ADR-0009, ADR-0010). Delivered in phases; later phases are marked.
+**Status**: Draft, implementation in progress (ADR-0009, ADR-0010; sandboxes designed in ADR-0011). Delivered in phases; later phases are marked.
 
 **Input**: run tasks on machines the team operates, so a laptop or a coding agent keeps working locally while heavy or platform-specific work runs elsewhere, with outputs staying on the remote until someone asks for them, and with authorization decided by OAuth alone.
 
@@ -54,7 +54,9 @@ The server accepts several issuers (the company IdP and each CI platform).
 secretProviders:                  # commands, the operator's, never a build file's
   gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}'] }
 accounts:                         # the catalog; a secret names one of these
-  op-payments-dev:  { providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/dev.json } } } }
+  op-payments-dev:
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/dev.json } } }
+    source: [ref, upload, sandbox] # sandbox runs only for accounts that list it
   op-payments-prod:
     providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/prod.json } } }
     source: [ref]                 # production accounts only for reviewed code
@@ -62,16 +64,30 @@ accounts:                         # the catalog; a secret names one of these
 sources:                          # where code may come from, host/path patterns, most specific first
   - match: github.com/corp/*
     secret: { from: 'gsm:github-readonly-token', account: scm-read }   # a reserved account, no caller uses it
+    pushSecret: { from: 'gsm:github-agent-push', account: scm-push }   # designed: the server's write credential for sandbox pushes; who may push where is on the entitlement
 runtimes: [docker]                # what tasks may run on; `local` has to be allowed by name
 approvals: { timeout: 1h, maxWaiting: 100, cooldown: 10m }
 runs:
   env: { allow: [PATH, DOCKER_HOST] }   # the only variables of the server a run sees
   limits: { waiting: 10, queued: 20, running: 2 }   # per caller, 429 over it
   maxDuration: 1h
+  network: open                   # designed: the most open network a task gets (a task's form)
+sandboxes:                        # designed, ADR-0011
+  runtimes: [docker]              # default: `runtimes` without `local`
+  network: { allow: [registry.npmjs.org] }   # default none; within runs.network
+  limits: { count: 5, bytes: 20Gi }
+  total: 500Gi
 entitlements:
   - subject: { iss: https://idp.corp, sub: 4f1c... }
     accounts: { op-payments-dev: use, op-payments-prod: request }
     repos: [github.com/corp/*]    # the repositories a ref run may name
+    sandboxes:                    # designed: the repositories it may keep sandboxes of; absent means none
+      - repo: github.com/corp/payments
+        branches:                 # a type per branch pattern
+          'agent/**': push        # start a sandbox from it, and push to it
+          main: pull              # start a sandbox from it only
+      - repo: github.com/corp/*
+        branches: { main: pull }
     builds: run                   # run | propose | publish, each includes the lower
   - group: { iss: https://idp.corp, name: release-managers }
     accounts: { op-payments-prod: use }
@@ -90,7 +106,10 @@ backend:
 - No account is named in a run request, on a task or by a default: the accounts of a run are the accounts of the secrets of the tasks it executes, derived by the engine from the hash-pinned files and the run's scope. A task without secrets holds no credentials and needs no account. On a server a provider secret must name its `account`, `file:` secrets are refused and `env:` secrets only read variables of `runs.env.allow`.
 - Every grant decision is logged with issuer, `sub`, matched entitlements and accounts.
 - A run from `source: ref` names a repository (`host/path`) and a ref in the request, never a url. The caller's `repos` and the operator's `sources` both have to cover it. The ref is pinned to a commit when the run is submitted and the executor fails if the ref moved, so what was approved is what runs. The read credential is a secret of a provider read as a reserved account, handed to git for one fetch through its environment, and masked in logs.
-- A run executes in a process of its own with a private home directory, a cache namespace per source trust, the allowlisted environment, and no other secret than those of its accounts. A published build file may not name an environment, a Kubernetes service, a cache backend, a mount outside the bundle or a runtime the operator did not allow, and a `file:` secret is refused: where things run and what is read from the machine is the operator's.
+- A run executes in a process of its own with a private home directory, a cache namespace per source trust, the allowlisted environment, and no other secret than those of its accounts. A published build file may not name an environment, a Kubernetes service, a cache backend, a mount or a `src` outside the bundle or a runtime the operator did not allow, and a `file:` secret is refused: where things run and what is read from the machine is the operator's.
+- **On a Kubernetes backend** (designed, the task executor):
+  - Each caller's namespace is its own tenant. The server holds a `RoleBinding` per caller namespace, never a cluster-wide binding. Each caller namespace gets a default-deny ingress and egress `NetworkPolicy` that allows DNS and the server explicitly to pods without a network limit (policies add up, so a limited pod's own policy alone decides what it reaches) and never the metadata range (`169.254.0.0/16`), and the `restricted` Pod Security level.
+  - An account is resolved in the Job with credentials minted for that account (workload identity, or a token minted per Job just before it starts, so a long first command or a pending pod doesn't outlive it). An account without `kubernetes` credentials is refused on a Kubernetes backend; nothing falls back to the node's or the server's own identity.
 - Per caller (issuer and subject) the server limits the runs that wait for an approval, that wait in the queue and that execute at once (`429` over the first two); a run is stopped after `runs.maxDuration` and its log is capped. Runs are written to the storage directory when their state changes: a restart keeps finished runs, lets waiting runs wait on, and fails the ones that were queued or running with the server. SIGHUP reloads the entitlements only; the rest of the config needs a restart.
 
 ### Secrets
@@ -117,13 +136,21 @@ The server holds the build file; a run names a published build file and the task
 - Limits are part of the API from the start: 20,000 files, 32 MiB per file, 1 GiB per tree, 4 GiB per caller, nothing evicted on its own.
 - Not built: the client that walks the tree and sends the delta, `ref` plus a delta for tracked files, and the matcher with `!` exclusions on the Kubernetes upload path (a `// TODO` in `src/kubernetes/volumes.ts`).
 
-**Sandbox (design, not built).** The caller passes a git repository and a ref; the server fetches it into a directory it owns, which belongs to that caller and is not shared. Runs name the sandbox as their source and their tasks execute in that directory, authorized by the service account of the task as for any run. A sandbox stays until it is deleted; quotas limit what a caller keeps, nothing expires.
+**Sandbox (designed, not built; ADR-0011).** A sandbox is a caller's own checkout on the server, which runs published tasks. It is for an agent with no machine and for a person whose laptop should not build, not for production.
 
-- Creating one is a fetch, not a run: no container, no slot of the run ledger.
-- One run at a time per sandbox. The fetch credential is a service account's (named at creation), resolved by the server and never left in the checkout (no token in `.git/config`).
-- `source` on entitlements gains `sandbox` next to `ref` and `upload`: a sandbox can hold any local change, so production accounts do not list it.
-- A caller with no local files (an agent without a machine) needs typed file operations on the sandbox (tree, read, search, edit, diff); shell-like commands are a published build file's task that mounts the sandbox, not an API of their own.
-- Host mode keeps a sandbox as a directory. In Kubernetes mode it is a PVC attached to a task or service only while it runs: idle costs storage, not CPU or memory, `ReadWriteOnce` lets pods on one node share it, and a `ResourceQuota` on storage in the caller's namespace is the quota. Both are two implementations of one interface (create, attach, delete, usage), so the host version does not bake in a path on the server's disk.
+- **Create** (`POST /v1/sandboxes { repo, ref }`) resolves the ref to a commit and fetches it with the read credential of the operator's `sources`, like a ref run. It is a fetch, not a run: no container and no slot of the run limits. An entitlement grants sandboxes in its `sandboxes` list, one entry per repository (`host/path` pattern), each with a type per branch pattern (Pascal, 2026-10-14): `pull` lets a caller start a sandbox from a matching branch, and `push` also lets it push to one. A create names a branch, never a tag or a commit, and the server pins it to its commit. The entries of all of the caller's entitlements whose `repo` covers the repository count, and where several patterns match a branch the higher type wins. An entry's branches never apply to another repository. The operator's `sources` still have to cover the repository, since they hold the server's credentials. A sandbox belongs to its caller (`404` for anybody else), stays until it is deleted (no TTL, nothing evicted), and counts against `sandboxes.limits` (count and bytes per caller, a total).
+- **Files.** Two ways in. The first is typed endpoints for clients without tools of their own (MCP): `tree`, `files` (`offset`/`limit`, numbered lines), `search` (ripgrep's parameters), `edits` (atomic batches of `replace` with `old_string`/`new_string`, `write`, `delete`, `move`, and `patch` as a git diff or an `apply_patch` body), and `changes` (summary, diff or patch against the base commit). The second is a raw surface for harnesses that bring their own tools and only swap the backend (pi's tool operations): read and write bytes, and stat. Every list, read and search is capped, with a total and a cursor. No symbolic link is followed, `.git/` and the upload deny list are never read or written, and edits while a run holds the sandbox are `409`.
+- **Runs** name `source: { type: sandbox, id }`. The published, pinned build file runs: its files are read from the run's private directory with the sandbox as their directory, so the sandbox's own `.hammerkit.yaml` is just a file. Rules for these runs:
+  - One run per sandbox at a time.
+  - Container runtimes only, unless the operator lists `local` in `sandboxes.runtimes`. Its default is `runtimes` without `local`, and it is checked only when an entitlement grants sandboxes, so a server with `runtimes: [local]` and no sandboxes starts as before.
+  - The sandbox's content is written by the caller, for the engine as much as for the file API. Every path a run derives from it (`src`, `mounts`, `generates`, exported outputs, Kubernetes `subPath`s) is resolved without following a symbolic link in any component, and the run fails if one is found; alternatively only the sandbox root is bound and links resolve inside the container. The git dir is never inside anything a task can mount (on Kubernetes it is a volume of its own), and git runs on a sandbox with `core.hooksPath=/dev/null`.
+  - An `env:` secret is read by a sandbox run only when `sandboxes.env.allow` lists its variable (empty by default), as accounts need `source: sandbox`.
+  - The cache namespace is per owner.
+  - The run records the base commit and a hash of the diff it started from.
+- **Accounts** are used by sandbox runs only when their `source` lists `sandbox`; an account without `source` takes `ref` and `upload`, not `sandbox`.
+- **Shell.** A shell is a published task whose last command is `sh -c`, run with [arguments](../task-arguments/spec.md) (`options.args`). A run passes no arguments when its task, a dependency or a needed service reads a secret or a credential from the server's environment (FR-008 there), so a shell runs without any account, nor next to one. Its network is capped by the lower of `runs.network` and `sandboxes.network` ([network limits](../task-network/spec.md)).
+- **Work out**: first, a patch from `changes` that the caller turns into a branch. Later, `POST /v1/sandboxes/<id>/push { branch, message }` to a branch with type `push` in an entitlement's `sandboxes` entry for the sandbox's repository (`agent/**`). The entitlement decides who may push where (Pascal, 2026-10-14). The source only holds the server's write credential, `pushSecret`, as it holds the read credential in `secret`: both are the server's service accounts on that host, not a caller's, and a source without `pushSecret` can't be pushed to. Git runs without the server's own git config, credential helpers or SSH agent, so a push never uses a credential the server happens to have. On Kubernetes the server resolves the credential and never trusts what a pod in the caller's namespace reports about the commit. Pushed branches run the repository's CI on unreviewed code, so operators keep the push patterns out of CI that holds secrets. **Work in**: the `patch` edit, so a laptop's uncommitted work needs no second upload path.
+- **Storage** is one interface (create, attach to a run, files, usage, delete) with two implementations. On a host it is a directory. On Kubernetes it is a PVC in the caller's namespace, mounted only while a task or a short file-operation pod runs, so an idle sandbox costs storage only, and a `ResourceQuota` on storage is the quota. Kubernetes needs the task executor first.
 
 ## Approvals
 
@@ -180,7 +207,7 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 - `grep` and `glob` run on the backend (ripgrep) and return matches only.
 - `fetch <handle> <glob> --to <dir>` is the only command that copies files locally, and only the selected ones.
 - Reads are limited to declared outputs, `src` and logs of the handle, with path traversal rejected, and are checked against the caller.
-- The same operations are exposed as MCP tools by `hammerkit mcp` (stdio first, streamable HTTP later).
+- The same operations are exposed as MCP tools by `hammerkit remote mcp` (stdio first, streamable HTTP later).
 
 ## Security properties
 
@@ -199,8 +226,6 @@ A finished remote task yields a handle (`hk://<server>/<task>@<state key>`) in `
 | C | MCP/Open WebUI front end, detached-run polish, high-availability store, routing across several servers, more backends. |
 
 ## Open questions
-
-- Sandboxes: whether execution includes arbitrary commands or tasks only; whether the published build file or the sandbox's own `.hammerkit.yaml` runs (the first keeps task definitions out of an agent's reach and is the default); how the fetch credential is chosen.
 
 - The command that hosts the server is `hammerkit server` (a top-level `hammerkit serve` would shadow a documented task example). Open for Pascal to rename before the release.
 - The discovery document format served by a server for `remote add`.
