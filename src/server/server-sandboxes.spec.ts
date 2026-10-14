@@ -64,9 +64,15 @@ const buildFile = [
   '  leak:',
   '    src: [escape]',
   '    cmds: [cat escape/secret.txt]',
-  // what `ln -s / rootlink` in a task does, a junction on Windows
   '  plant:',
-  "    cmds: ['node -e \"require(''fs'').symlinkSync(require(''path'').parse(process.cwd()).root, ''rootlink'', ''junction'')\"']",
+  // what `ln -s / rootlink` in a task does, a junction on Windows. The shell's own commands: a
+  // node started by a local task, which gets no variables of the server but PATH, left neither
+  // output nor link on Windows
+  `    cmds: [${JSON.stringify(
+    process.platform === 'win32'
+      ? "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path rootlink -Value ([IO.Path]::GetPathRoot($PWD.Path)) | Out-Null; Get-ChildItem -Name"
+      : 'ln -s / rootlink && ls'
+  )}]`,
   '  all:',
   "    src: ['**']",
   '    cmds: [cat input.txt]',
@@ -202,14 +208,21 @@ describe('sandboxes api', () => {
 
   async function untilState(api: Api, id: string, states: string[]) {
     const until = Date.now() + 30_000
+    let run: any
     while (Date.now() < until) {
-      const run = await (await api.call('GET', `/v1/runs/${id}`)).json()
+      run = await (await api.call('GET', `/v1/runs/${id}`)).json()
       if (states.includes(run.state)) {
         return run
       }
       await sleep(20)
     }
-    throw new Error(`run ${id} never reached ${states}`)
+    // where it stopped, for a failure on a machine nobody can log in to
+    const logs = await (await api.call('GET', `/v1/runs/${id}/logs`)).text()
+    throw new Error(
+      `run ${id} never reached ${states}: ${JSON.stringify(run)}\n${logs.slice(-4000)}\n${api.log
+        .slice(-20)
+        .join('\n')}`
+    )
   }
 
   it('creates, lists, moves and deletes the sandboxes of a caller', async () => {
@@ -331,8 +344,15 @@ describe('sandboxes api', () => {
         // a link a task left inside what `**` matches is a source as a link: neither the run nor
         // the read of the files walks the server's disk
         const plant = await (await runOn(api, sandbox.id, ['plant'])).json()
-        expect(await untilState(api, plant.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
-        expect(lstatSync(join(api.files(sandbox.id), 'rootlink')).isSymbolicLink()).toBe(true)
+        const plantRun = await untilState(api, plant.id, ['succeeded', 'failed'])
+        expect(plantRun).toMatchObject({ state: 'succeeded' })
+        const planted = `${JSON.stringify(plantRun)}\n${await (
+          await api.call('GET', `/v1/runs/${plant.id}/logs`)
+        ).text()}\n${api.log.slice(-20).join('\n')}`
+        expect(
+          lstatSync(join(api.files(sandbox.id), 'rootlink'), { throwIfNoEntry: false })?.isSymbolicLink(),
+          planted
+        ).toBe(true)
         const all = await (await runOn(api, sandbox.id, ['all'])).json()
         expect(await untilState(api, all.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
       } finally {
