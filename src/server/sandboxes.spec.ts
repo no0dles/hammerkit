@@ -486,6 +486,29 @@ describe('SandboxRegistry', () => {
       })
     })
 
+    it('never pushes the run state hammerkit keeps next to a build file', async () => {
+      const sandboxes = registryWith()
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      const files = await sandboxes.attach(sandbox.id)
+      writeFileSync(join(files, 'input.txt'), 'fixed')
+      // what a run on the sandbox writes, at the root and next to a build file further down
+      mkdirSync(join(files, '.hammerkit', 'last-resolved'), { recursive: true })
+      writeFileSync(join(files, '.hammerkit', 'last-resolved', 'test-a94a8fe5.json'), '{}')
+      mkdirSync(join(files, 'packages', 'app', '.hammerkit', 'last-resolved'), { recursive: true })
+      writeFileSync(join(files, 'packages', 'app', '.hammerkit', 'last-resolved', 'build-1.json'), '{}')
+
+      const pushed = await sandboxes.push(alice, sandbox.id, 'agent/fix-cart', author, allowed)
+      expect(git(repository, 'ls-tree', '-r', '--name-only', pushed.commit).split('\n')).toEqual([
+        '.gitignore',
+        'input.txt',
+      ])
+      // it stays in the sandbox for the next run, and alone is nothing to push
+      expect(readFileSync(join(files, '.hammerkit', 'last-resolved', 'test-a94a8fe5.json'), 'utf8')).toBe('{}')
+      await expect(sandboxes.push(alice, sandbox.id, 'agent/fix-cart', author, allowed)).rejects.toMatchObject({
+        status: 409,
+      })
+    })
+
     it('pushes when the branch it started from moved on', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')

@@ -405,8 +405,8 @@ entry for its repository, `agent/**` for example, never to a `main` they may onl
 ```
 
 * **What is committed** is what [`changes`](#changes) shows: new, changed and deleted files,
-  not what `.gitignore` leaves out, and nothing of the deny list (an `.env` a task wrote stays
-  on the server). The commit's parent is the commit the sandbox is at.
+  not what `.gitignore` leaves out, nothing of the deny list (an `.env` a task wrote stays
+  on the server) and no `.hammerkit/` directory a run wrote. The commit's parent is the commit the sandbox is at.
 * **By whom.** The commit's author and committer are the caller, as their token names them
   (`name`, and `email` unless the token says it is not verified), else their subject at the
   host of their issuer (`agent-7@login.example.com`). A request can not set the author, and
