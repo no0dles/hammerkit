@@ -148,7 +148,10 @@ export async function git(
   baseEnv: { [key: string]: string | undefined },
   signal: AbortSignal,
   what: string,
-  action = 'fetch'
+  action = 'fetch',
+  // what git reads on stdin, and the exit codes that answer rather than fail (check-ignore
+  // exits 1 when nothing is ignored)
+  options: { input?: string | Buffer; exitCodes?: number[] } = {}
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -160,9 +163,20 @@ export async function git(
   env.GIT_ALLOW_PROTOCOL = ALLOWED_PROTOCOLS
   try {
     // warnings of a large tree must not fail the command
-    return (await execFileAsync('git', args, { env, signal, maxBuffer: 64 * 1024 * 1024 })).stdout
+    const running = execFileAsync('git', args, { env, signal, maxBuffer: 64 * 1024 * 1024 })
+    // a git that exits before it read its input fails the command, not the server (EPIPE)
+    running.child.stdin?.on('error', () => undefined)
+    running.child.stdin?.end(options.input)
+    return (await running).stdout
   } catch (e) {
-    const error = e as NodeJS.ErrnoException & { stderr?: string }
+    const error = e as Omit<NodeJS.ErrnoException, 'code'> & {
+      code?: string | number
+      stdout?: string
+      stderr?: string
+    }
+    if (typeof error.code === 'number' && options.exitCodes?.includes(error.code)) {
+      return error.stdout ?? ''
+    }
     if (error.code === 'ABORT_ERR') {
       throw new Error(`${action === 'fetch' ? 'fetching' : `${action} of`} ${what} was cancelled`)
     }
