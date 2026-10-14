@@ -14,6 +14,19 @@ import { RepoAccess } from './repo-access'
 import { TEST_WORKER } from '../testing/worker'
 import { ServerConfig, serverConfigSchema } from './server-config'
 
+// fs.promises.rm of the path set here fails the way Windows refuses a directory in use
+const removal = vi.hoisted(() => ({ refused: undefined as string | undefined }))
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>()
+  return {
+    ...actual,
+    rm: (path: string, options?: Parameters<typeof actual.rm>[1]) =>
+      path === removal.refused
+        ? Promise.reject(Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${path}'`), { code: 'EBUSY' }))
+        : actual.rm(path, options),
+  }
+})
+
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const REPO = 'git.test/corp/payments'
 
@@ -110,7 +123,10 @@ describe('HostExecutor', () => {
     executor = new HostExecutor(options)
   })
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }))
+  afterEach(() => {
+    removal.refused = undefined
+    rmSync(root, { recursive: true, force: true })
+  })
 
   it('runs the published tasks on the code of the ref and reports them', async () => {
     const hash = await publish({
@@ -227,6 +243,24 @@ describe('HostExecutor', () => {
     const bad = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [exit 1]\n' })
     await execute(run(bad))
     expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
+  })
+
+  it('ends a run the way it ended when its working directory can not be removed', async () => {
+    removal.refused = join(runs, 'run_test')
+    const ok = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    const passed = await execute(run(ok))
+    expect(passed.error).toBeUndefined()
+    expect(passed.events).toContainEqual(
+      expect.objectContaining({
+        type: 'log',
+        stream: 'stderr',
+        text: expect.stringMatching(/could not be removed: EBUSY/),
+      })
+    )
+    const bad = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [exit 1]\n' })
+    const failed = await execute(run(bad))
+    expect(failed.error?.message).toBeDefined()
+    expect(failed.error?.message).not.toMatch(/EBUSY/)
   })
 
   it('fails with the reason when the server does not list the repository', async () => {

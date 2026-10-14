@@ -143,7 +143,23 @@ export class HostExecutor implements RunExecutor {
       await this.runInProcess(worker, input, checkout, this.processEnvironment(home, cache), context, abortCtrl.signal)
     } finally {
       context.signal.removeEventListener('abort', abort)
-      await rm(root, { recursive: true, force: true })
+      await this.removeRunDirectory(root, context)
+    }
+  }
+
+  // A task of the run may still hold a file of its directory for a moment after the run
+  // ended, which Windows refuses to remove. A directory that stays is reported; it does not
+  // change how the run ended.
+  private async removeRunDirectory(root: string, context: RunContext): Promise<void> {
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    } catch (e) {
+      context.emit({
+        type: 'log',
+        task: 'hammerkit',
+        stream: 'stderr',
+        text: `the working directory of the run could not be removed: ${(e as Error).message}`,
+      })
     }
   }
 
@@ -186,6 +202,15 @@ export class HostExecutor implements RunExecutor {
       let stderr = ''
       let killTimer: NodeJS.Timeout | undefined
       const stop = () => {
+        if (process.platform === 'win32' && child.pid) {
+          // Windows ends only the process itself: the tasks it started would keep running
+          // and hold on to the directory of the run
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on(
+            'error',
+            () => child.kill()
+          )
+          return
+        }
         child.kill('SIGTERM')
         killTimer = setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS)
         killTimer.unref()
