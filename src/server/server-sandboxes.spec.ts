@@ -179,14 +179,17 @@ describe('sandboxes api', () => {
 
   async function untilState(api: Api, id: string, states: string[]) {
     const until = Date.now() + 30_000
+    let run: any
     while (Date.now() < until) {
-      const run = await (await api.call('GET', `/v1/runs/${id}`)).json()
+      run = await (await api.call('GET', `/v1/runs/${id}`)).json()
       if (states.includes(run.state)) {
         return run
       }
       await sleep(20)
     }
-    throw new Error(`run ${id} never reached ${states}`)
+    // where it stopped, for a failure on a machine nobody can log in to
+    const events = await (await api.call('GET', `/v1/runs/${id}/events`)).text()
+    throw new Error(`run ${id} never reached ${states}: ${JSON.stringify(run)}\n${events.slice(-4000)}`)
   }
 
   it('creates, lists, moves and deletes the sandboxes of a caller', async () => {
