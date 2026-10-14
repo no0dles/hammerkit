@@ -145,14 +145,16 @@ describe('sandboxes on a kubernetes backend', () => {
       }
       const repos = new RepoAccess(config, planning.environment, { url: () => repository })
       const limits = { count: 5, bytes: 20 * 1024 * 1024 * 1024, total: 100 * 1024 * 1024 * 1024 }
-      // the sources push to agent/** with the environment of the test, which can write to
-      // the repository on disk
+      // the source has a secret, so the sandboxes may push; it reads and pushes with the
+      // environment of the test, which can write to the repository on disk
+      const testCredentials = async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] })
       const pushing = Object.assign(Object.create(repos) as RepoAccess, {
         source: () => ({
           match: 'git.test/corp/*',
           secret: { from: 'echo:scm-token', account: 'scm', username: 'x-access-token' },
         }),
-        pushCredentials: async () => ({ env: { ...(process.env as { [key: string]: string }) }, values: [] }),
+        credentials: testCredentials,
+        pushCredentials: testCredentials,
       })
       const registry = new SandboxRegistry({
         storage: new KubernetesSandboxStorage(config, limits, process.env, join(root, 'staging')),
