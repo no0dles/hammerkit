@@ -34,9 +34,13 @@ is a shell, and every command of the agent is its [argument](/docs/task/argument
 tasks:
   sh:
     image: node:24
+    mounts: [.]
     cmds: [sh -c]
     network: { allow: [registry.npmjs.org] }
 ```
+
+`mounts: [.]` puts the files of the sandbox into the container, writable, as the task's
+working directory: without it a command in a container sees none of them.
 
 `bash` with `npm test -- -t login` then runs `sh -c 'npm test -- -t login'` in that image,
 on the files of the sandbox. Name the task `sh` or tell the client its name. Use `bash -c`

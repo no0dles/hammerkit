@@ -133,6 +133,7 @@ describe('agent session (docker)', () => {
                     'tasks:',
                     '  sh:',
                     '    image: alpine:3.21',
+                    '    mounts: [.]',
                     '    cmds: [sh -c]',
                     '  test:',
                     '    image: alpine:3.21',
@@ -185,6 +186,13 @@ describe('agent session (docker)', () => {
             expect(direct.text).toMatch(/gateway=\d+\.\d+\.\d+\.\d+/)
             expect(direct.text).not.toContain('HOST-SECRET')
             expect(direct.text).toMatch(/direct=[1-9]/)
+
+            // the shell's container has the files of the sandbox as its working directory,
+            // and what a command writes there stays for the next one
+            const shell = await agent.call('bash', { command: 'cat src/app.ts && echo kept > shell-note.txt' })
+            expect(shell.text).toContain('answer = 42')
+            expect((await agent.call('read', { path: 'shell-note.txt' })).text).toContain('kept')
+            expect((await agent.call('bash', { command: 'rm shell-note.txt && ls' })).text).not.toContain('shell-note')
 
             // the test passes now: its result through run_task, its log through the client
             const ran = await agent.call('run_task', { task: 'test' })
