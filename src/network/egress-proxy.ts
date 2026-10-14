@@ -35,6 +35,9 @@ const allow = entries.filter((e) => !e.includes(':'))
 const forwards = entries
   .filter((e) => e.includes(':'))
   .map((e) => ({ host: e.substring(0, e.lastIndexOf(':')), port: parseInt(e.substring(e.lastIndexOf(':') + 1), 10) }))
+// entries of both kinds that a ceiling allows only through a pattern: they
+// reach no private address, like a pattern
+const publicOnly = JSON.parse(process.env.HAMMERKIT_PUBLIC_ONLY || '[]').map((h) => h.toLowerCase())
 // the names of the needed services, for tools that ignore NO_PROXY: exact
 // names only, never patterns
 const needs = JSON.parse(process.env.HAMMERKIT_NEEDS || '[]').map((h) => h.toLowerCase())
@@ -48,8 +51,18 @@ function emit(event) {
 // the rule that allows a host and port: its exact name, a wildcard, or none
 function allowedBy(host, port) {
   const name = host.toLowerCase().replace(/\\.$/, '')
-  if (allow.includes(name) || needs.includes(name) || forwards.some((f) => f.host === name && f.port === port)) {
+  if (needs.includes(name)) {
     return 'exact'
+  }
+  const named = []
+  if (allow.includes(name)) {
+    named.push(name)
+  }
+  if (forwards.some((f) => f.host === name && f.port === port)) {
+    named.push(name + ':' + port)
+  }
+  if (named.length > 0) {
+    return named.some((entry) => !publicOnly.includes(entry)) ? 'exact' : 'wildcard'
   }
   return allow.some((rule) => rule.startsWith('*.') && name.endsWith(rule.substring(1))) ? 'wildcard' : null
 }
@@ -213,7 +226,7 @@ server.on('connect', (req, socket, head) => {
 function forward(target) {
   return net.createServer({ allowHalfOpen: true }, (client) => {
     client.on('error', () => client.destroy())
-    resolve(target.host, 'exact', (err, addresses) => {
+    resolve(target.host, allowedBy(target.host, target.port), (err, addresses) => {
       if (err || !addresses) {
         if (!err) {
           refuse(target.host)
@@ -265,10 +278,17 @@ export function getEgressProxyCommand(): string[] {
 
 // `needs` are the names of the needed services, allowed as exactly those
 // names. `bind` is the name the proxy listens on alone, so that nothing on its
-// other networks reaches it.
-export function getEgressProxyEnvironment(hosts: string[], needs: string[], bind?: string): { [key: string]: string } {
+// other networks reaches it. `publicOnly` are the entries of `hosts` that reach
+// no private address (see WorkNetwork).
+export function getEgressProxyEnvironment(
+  hosts: string[],
+  needs: string[],
+  bind?: string,
+  publicOnly: string[] = []
+): { [key: string]: string } {
   return {
     HAMMERKIT_ALLOW: JSON.stringify(hosts),
+    ...(publicOnly.length > 0 ? { HAMMERKIT_PUBLIC_ONLY: JSON.stringify(publicOnly) } : {}),
     HAMMERKIT_NEEDS: JSON.stringify(needs),
     HAMMERKIT_PROXY_PORT: `${EGRESS_PROXY_PORT}`,
     ...(bind ? { HAMMERKIT_PROXY_BIND: bind } : {}),
@@ -285,7 +305,8 @@ export function getItemProxyEnvironment(
   return getEgressProxyEnvironment(
     network.type === 'allow' ? network.hosts : [],
     item.needs.map((need) => need.name),
-    bind
+    bind,
+    network.type === 'allow' ? network.publicOnly ?? [] : []
   )
 }
 

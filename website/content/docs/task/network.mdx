@@ -118,7 +118,9 @@ port of that host, and the task reaches the proxy under the host's own name: `ps
 -h db.example.com` connects as it would without a limit, and TLS stays between the
 client and the host. The proxy resolves the name itself and checks every address,
 as for a name listed exactly. Nothing else of that host is reachable without the
-proxy variables; with them, a `CONNECT` to that host and port passes too.
+proxy variables; with them, a `CONNECT` to that host and port passes too. A
+connection to another port of that name finds nothing listening and is refused
+right away, so it doesn't show up among the refused hosts in the log.
 
 A forward names one host, never a `*.` pattern, and two hosts can't share a port in
 one allow list, since the proxy listens on it for one of them. Port `3128` is the
@@ -143,8 +145,11 @@ setting down to it: under `--network none` every task reaches its needed service
 and nothing else. Under an `allow:` ceiling, an `open` task gets the ceiling's
 hosts, and a task with its own allow list keeps the hosts both lists allow. A host
 without a port allows its forwards (`db.example.com` and `*.example.com` both keep
-`db.example.com:5432`), while a forward only allows itself. A service started by an
-earlier `up` is recreated when the ceiling changes its network.
+`db.example.com:5432`), while a forward only allows itself. A name that one of the
+two lists allows only through a pattern counts as a pattern: under `*.example.com`,
+the task's `db.example.com:5432` must not resolve to a private address. Two forwards
+on one port, one from each list, are an error. A service started by an earlier `up`
+is recreated when the ceiling changes its network.
 
 A [server](/docs/remote-compute/runs#network) sets the same ceiling for all of its runs
 with `runs.network`, and refuses to publish a build file that asks for more.
