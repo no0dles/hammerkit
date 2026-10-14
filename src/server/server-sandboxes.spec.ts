@@ -60,7 +60,9 @@ const buildFile = [
   '    src: [escape]',
   '    cmds: [cat escape/secret.txt]',
   '  plant:',
-  '    cmds: [node plant.js]',
+  // node by its path: on Windows a bare `node` has PowerShell look through its modules
+  // first, which takes longer than the test waits in the fresh home of a run
+  `    cmds: [${JSON.stringify(`${process.execPath} plant.js`)}]`,
   '  all:',
   "    src: ['**']",
   '    cmds: [cat input.txt]',
