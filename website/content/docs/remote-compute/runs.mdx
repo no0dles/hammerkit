@@ -409,6 +409,9 @@ runs:
   proposed): with the ceiling above, a task without `network` (which is `open`), or one
   that allows `pypi.org`, can't be published. The error names the task and what it asks for.
   A wildcard of the server covers the names under it; a name does not cover a wildcard.
+  A name of the server covers a [TCP forward](/docs/task/network#tcp-forwards) to any port of it
+  (`db.corp.internal:5432`); a forward covers only itself, so `db.corp.internal:5432` on the
+  server lets a task forward to that port but not reach the name through the proxy.
 * So a build file published to such a server names its `network` on every task and
   service, which is also what a reviewer reads: the [plan](/docs/remote-compute/build-files) of a version shows each
   one's `network`.

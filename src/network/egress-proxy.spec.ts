@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createServer, request, Server } from 'http'
-import { AddressInfo, connect, createServer as createNetServer } from 'net'
+import { AddressInfo, connect, createServer as createNetServer, Server as NetServer, Socket } from 'net'
 import {
   EGRESS_PROXY_SCRIPT,
   EgressProxyEvent,
@@ -60,9 +60,9 @@ async function startProxy(
   return { port, events, process: child }
 }
 
-function get(proxyPort: number, url: string): Promise<{ status: number; body: string }> {
+function get(proxyPort: number, url: string, proxyHost = '127.0.0.1'): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port: proxyPort, method: 'GET', path: url }, (res) => {
+    const req = request({ host: proxyHost, port: proxyPort, method: 'GET', path: url }, (res) => {
       let body = ''
       res.on('data', (chunk) => (body += chunk))
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
@@ -73,9 +73,9 @@ function get(proxyPort: number, url: string): Promise<{ status: number; body: st
 }
 
 // a CONNECT tunnel, then a plain HTTP request through it
-function tunnel(proxyPort: number, authority: string, host: string): Promise<string> {
+function tunnel(proxyPort: number, authority: string, host: string, proxyHost = '127.0.0.1'): Promise<string> {
   return new Promise((resolve, reject) => {
-    const socket = connect(proxyPort, '127.0.0.1', () => {
+    const socket = connect(proxyPort, proxyHost, () => {
       socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`)
     })
     let received = ''
@@ -228,6 +228,99 @@ dns.lookup = (host, options, callback) => {
 
   it('tunnels a CONNECT to the address that answers', async () => {
     expect(await tunnel(proxy.port, `dual.test:${upstreamPort}`, 'dual.test')).toContain('hello from dual.test')
+  })
+})
+
+describe('egress proxy TCP forwards', () => {
+  let dir: string
+  let echo: NetServer
+  let echoPort: number
+  let metaPort: number
+  let proxy: RunningProxy
+
+  // what the client sends, back to it; a refused forward closes the connection
+  function exchange(port: number, message: string): Promise<string> {
+    return new Promise((resolve) => {
+      let received = ''
+      const socket: Socket = connect(port, '127.0.0.2', () => {
+        socket.end(message)
+      })
+      socket.on('data', (data: Buffer) => (received += data.toString()))
+      socket.on('close', () => resolve(received))
+      socket.on('error', () => undefined)
+    })
+  }
+
+  // a CONNECT tunnel, then the message through it and its echo
+  function echoThrough(authority: string, message: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let received = ''
+      let tunneled = false
+      const socket = connect(proxy.port, '127.0.0.2', () => {
+        socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`)
+      })
+      socket.on('data', (data) => {
+        received += data.toString()
+        if (!tunneled && received.startsWith('HTTP/1.1 200')) {
+          tunneled = true
+          received = ''
+          socket.write(message)
+        } else if (tunneled && received === message) {
+          socket.destroy()
+          resolve(received)
+        }
+      })
+      socket.on('end', () => resolve(received))
+      socket.on('error', reject)
+    })
+  }
+
+  beforeAll(async () => {
+    // the proxy listens on the same port at 127.0.0.2, as it does at its own
+    // address in its container
+    echo = createNetServer({ allowHalfOpen: true }, (socket) => socket.pipe(socket))
+    await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', resolve))
+    echoPort = (echo.address() as AddressInfo).port
+    metaPort = await freePort()
+    dir = mkdtempSync(join(tmpdir(), 'hammerkit-proxy-'))
+    const preload = join(dir, 'dns.js')
+    writeFileSync(
+      preload,
+      `const dns = require('dns')
+const lookup = dns.lookup
+const names = { 'db.test': '127.0.0.1', 'meta.test': '169.254.169.254', 'proxy.test': '127.0.0.2' }
+dns.lookup = (host, options, callback) => {
+  if (!names[host]) return lookup(host, options, callback)
+  const address = { address: names[host], family: names[host].includes(':') ? 6 : 4 }
+  const cb = typeof options === 'function' ? options : callback
+  if (options && options.all) cb(null, [address])
+  else cb(null, address.address, address.family)
+}
+`
+    )
+    proxy = await startProxy([`db.test:${echoPort}`, `meta.test:${metaPort}`], { preload, bind: 'proxy.test' })
+  })
+
+  afterAll(async () => {
+    proxy.process.kill()
+    await new Promise<void>((resolve) => echo.close(() => resolve()))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('forwards raw TCP on its port to its host', async () => {
+    expect(await exchange(echoPort, 'PING')).toBe('PING')
+  })
+
+  it('refuses a forward whose host resolves to link-local', async () => {
+    expect(await exchange(metaPort, 'GET / HTTP/1.0\r\n\r\n')).toBe('')
+    await waitFor(() => proxy.events.some((e) => e.type === 'refused' && e.host === 'meta.test'))
+    expect(proxy.events).toContainEqual({ type: 'refused', host: 'meta.test' })
+  })
+
+  it('tunnels a CONNECT to the host on the port of its forward only', async () => {
+    expect(await echoThrough(`db.test:${echoPort}`, 'PING')).toBe('PING')
+    expect(await tunnel(proxy.port, 'db.test:443', 'db.test', '127.0.0.2')).toContain('403 Forbidden')
+    expect((await get(proxy.port, 'http://db.test/', '127.0.0.2')).status).toBe(403)
   })
 })
 
