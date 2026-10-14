@@ -27,6 +27,12 @@ const web = {
   cmd: `node -e "require('http').createServer((req, res) => res.end('ok')).listen(8080)"`,
   healthcheck: { cmd: 'wget -q -O /dev/null http://127.0.0.1:8080', timeout: '30s' },
 }
+// A client that knows no proxy, by the host's own name. Its stdin stays open
+// until the answer is in, and the answer is printed, so a failure shows it.
+const queryExample =
+  'grep example.com /etc/hosts; ' +
+  "(printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n'; sleep 5) | nc -w 10 example.com 80 > /tmp/answer; " +
+  "cat /tmp/answer; grep -q '^HTTP/1' /tmp/answer"
 const reachWeb = (name: string) => `test "$(wget -q -T 5 -O - http://${name}:8080)" = ok`
 
 async function listen(server: Server): Promise<number> {
@@ -184,9 +190,7 @@ describe('network limits (docker)', () => {
               image,
               network: { allow: ['example.com:80'] },
               cmds: [
-                // a client that knows no proxy, by the host's own name
-                `printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n' | ` +
-                  `env -u http_proxy -u HTTP_PROXY nc -w 5 example.com 80 | grep -q '^HTTP/1'`,
+                queryExample,
                 // another port of that host goes nowhere
                 '! nc -w 3 example.com 443 </dev/null',
                 noRouteWithoutProxy,
