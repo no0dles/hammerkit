@@ -252,7 +252,7 @@ entitlements:
         ],
         repos: ['github.com/corp/payments'],
         builds: 'run',
-        sandboxes: false,
+        sandboxes: [],
       })
       expect(log.join('\n')).toMatch(
         /grant iss=\S+ sub=alice accounts=\[op-payments-dev:use,op-payments-prod:request,op-web-dev:use\] entitlements=\[0,1\]/
@@ -383,15 +383,20 @@ describe('server config policy', () => {
     expect(serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] }).success).toBe(false)
   })
 
-  it('rejects sandboxes without repositories', () => {
-    const entitlement = { subject: { iss: 'https://idp.corp', sub: 'a' }, sandboxes: true }
-    const result = serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] })
-    expect(result.success).toBe(false)
-    expect(!result.success && result.error.issues[0].message).toMatch(/list the repositories in repos/)
-    expect(
-      serverConfigSchema.safeParse({ ...base, entitlements: [{ ...entitlement, repos: ['github.com/corp/*'] }] })
-        .success
-    ).toBe(true)
+  it('takes the repositories of sandboxes as a list of their own', () => {
+    const entitlement = { subject: { iss: 'https://idp.corp', sub: 'a' } }
+    const parse = (sandboxes: unknown) =>
+      serverConfigSchema.safeParse({ ...base, entitlements: [{ ...entitlement, sandboxes }] })
+    const parsed = parse([{ repo: 'github.com/corp/payments' }, { repo: 'github.com/corp/*' }])
+    expect(parsed.success && parsed.data.entitlements[0].sandboxes).toEqual([
+      { repo: 'github.com/corp/payments' },
+      { repo: 'github.com/corp/*' },
+    ])
+    expect(parse(true).success).toBe(false)
+    expect(parse([{ repo: 'payments' }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: ['main'] }]).success).toBe(false)
+    // an empty list grants nothing, so the entitlement names nothing either
+    expect(parse([]).success).toBe(false)
   })
 
   it('keeps sandboxes on containers with no network, unless the operator says otherwise', () => {
