@@ -1,5 +1,16 @@
 import { execFileSync } from 'child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { resolveRef } from './git-checkout'
@@ -148,6 +159,35 @@ describe('SandboxRegistry', () => {
     expect(await sandboxes.state(sandbox.id)).toEqual(changed)
     rmSync(join(files, 'new.txt'))
     expect(await sandboxes.state(sandbox.id)).toEqual(clean)
+  })
+
+  it('names a link a task left as the link, never what it points to', async () => {
+    const sandboxes = registryWith()
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    const files = (await sandboxes.attach(sandbox.id, root)).directory
+    const clean = await sandboxes.state(sandbox.id)
+    const outside = mkdtempSync(join(tmpdir(), 'hammerkit-sandboxes-outside-'))
+    try {
+      writeFileSync(join(outside, 'secret.txt'), 'server file')
+      // what `ln -s` or `mklink /J` of a task leaves, a junction on Windows (Git for Windows
+      // takes a junction for a directory); one where .gitignore leaves it out is no change
+      mkdirSync(join(files, 'node_modules'))
+      symlinkSync(outside, join(files, 'node_modules', 'pkg'), 'junction')
+      expect(await sandboxes.state(sandbox.id)).toEqual(clean)
+      symlinkSync(outside, join(files, 'escape'), 'junction')
+      const changed = await sandboxes.state(sandbox.id)
+      expect(changed).toMatchObject({ commit: first, clean: false })
+      // the tree of the commit and `escape` as a link to its target, the tree git writes for
+      // a link on Linux
+      const gitDir = join(root, 'files', sandbox.id, 'git')
+      const read = (args: string[], input?: string) =>
+        execFileSync('git', [`--git-dir=${gitDir}`, ...args], { input, encoding: 'utf8' }).trim()
+      const link = read(['hash-object', '--stdin'], readlinkSync(join(files, 'escape')))
+      const entries = `${read(['ls-tree', first])}\n120000 blob ${link}\tescape\n`
+      expect(changed.tree).toBe(read(['mktree', '--missing'], entries))
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
   })
 
   it('does not run the hooks or the config a task wrote into the files', async () => {

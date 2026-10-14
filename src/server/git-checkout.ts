@@ -175,8 +175,10 @@ export async function git(
   signal: AbortSignal,
   what: string,
   action = 'fetch',
-  // what git may print; a diff of a sandbox can be larger than the default
-  maxBuffer = 64 * 1024 * 1024
+  // what git reads on stdin, the exit codes that answer rather than fail (check-ignore exits
+  // 1 when nothing is ignored), and what git may print (a diff of a sandbox can be larger
+  // than the default)
+  options: { input?: string | Buffer; exitCodes?: number[]; maxBuffer?: number } = {}
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -188,9 +190,20 @@ export async function git(
   env.GIT_ALLOW_PROTOCOL = ALLOWED_PROTOCOLS
   try {
     // warnings of a large tree must not fail the command
-    return (await execFileAsync('git', args, { env, signal, maxBuffer })).stdout
+    const running = execFileAsync('git', args, { env, signal, maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024 })
+    // a git that exits before it read its input fails the command, not the server (EPIPE)
+    running.child.stdin?.on('error', () => undefined)
+    running.child.stdin?.end(options.input)
+    return (await running).stdout
   } catch (e) {
-    const error = e as NodeJS.ErrnoException & { stderr?: string }
+    const error = e as Omit<NodeJS.ErrnoException, 'code'> & {
+      code?: string | number
+      stdout?: string
+      stderr?: string
+    }
+    if (typeof error.code === 'number' && options.exitCodes?.includes(error.code)) {
+      return error.stdout ?? ''
+    }
     if (error.code === 'ABORT_ERR') {
       throw new Error(`${action === 'fetch' ? 'fetching' : `${action} of`} ${what} was cancelled`)
     }
@@ -198,7 +211,9 @@ export async function git(
       throw new Error(`unable to ${action} ${what}: git is not installed`)
     }
     if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-      throw new GitOutputTooLarge(`unable to ${action} ${what}: git printed more than ${maxBuffer} bytes`)
+      throw new GitOutputTooLarge(
+        `unable to ${action} ${what}: git printed more than ${options.maxBuffer ?? 64 * 1024 * 1024} bytes`
+      )
     }
     const reason =
       (error.stderr ?? '')
