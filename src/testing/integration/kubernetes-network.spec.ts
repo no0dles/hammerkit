@@ -126,6 +126,42 @@ describe('network limits (kubernetes)', () => {
   )
 
   it(
+    'forwards raw TCP to a host and port of the allow list through its proxy',
+    requiresKubernetes(async () => {
+      await createTestCase('k8s-network-forward', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          environments: { default: { kubernetes: { context, namespace, networkPolicy: 'enforced' } } },
+          tasks: {
+            query: {
+              image: 'alpine:3.21',
+              src: ['input.txt'],
+              network: { allow: ['example.com:80'] },
+              cmds: [
+                [
+                  // a client that knows no proxy, by the host's own name
+                  `printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n' | ` +
+                    `env -u http_proxy -u HTTP_PROXY nc -w 5 example.com 80 | grep -q '^HTTP/1'`,
+                  // another port of that host goes nowhere
+                  '! nc -w 3 example.com 443 </dev/null',
+                  noRoute('env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY wget'),
+                ].join(' && '),
+              ],
+            },
+          },
+        },
+        'input.txt': `${Date.now()}\n`,
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {
+          taskName: 'query',
+          environmentName: 'default',
+        })
+        await expectSuccessfulResult(await cli.runExec(), environment)
+      })
+    })
+  )
+
+  it(
     'keeps the policy of a limited service until down',
     requiresKubernetes(async () => {
       await createTestCase('k8s-network-service', {
