@@ -2,7 +2,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../environment-mock'
-import { checkCacheState } from './enqueue-next'
+import { checkCacheState, UNCACHED_STATE_KEY } from './enqueue-next'
 import { createLocalCacheBackend } from '../../cache/backends/local-cache-backend'
 import { State } from '../state'
 import { TaskState } from './task-state'
@@ -107,6 +107,53 @@ describe('checkCacheState', () => {
     const task = makeTask('none-task', { resolved: makeResolved('none') })
     const result = await checkCacheState(task, 'checksum', env)
     expect(result.cached).toBe(false)
+  })
+
+  it('reads no source of a task whose cache is off, unless watch mode needs its key', async () => {
+    const env = environmentMock(scratch)
+    const src = join(scratch, 'big.txt')
+    writeFileSync(src, 'v1')
+    const task = makeTask('shell', { resolved: makeResolved('none'), srcFiles: [src] })
+    const matcher = vi.fn(() => true)
+    task.data.src[0].matcher = matcher
+
+    const result = await checkCacheState(task, 'checksum', env)
+    expect(result).toMatchObject({ cached: false, stateKey: UNCACHED_STATE_KEY })
+    expect(matcher).not.toHaveBeenCalled()
+
+    // a run with the cache on never takes outputs recorded under that key
+    const cachedRun = makeTask('shell', {
+      resolved: makeResolved('checksum'),
+      srcFiles: [src],
+      storedStateKey: UNCACHED_STATE_KEY,
+    })
+    expect((await checkCacheState(cachedRun, 'checksum', env)).cached).toBe(false)
+
+    const watched = await checkCacheState(task, 'checksum', env, { watch: true })
+    expect(matcher).toHaveBeenCalled()
+    expect(watched.stateKey).not.toBe(UNCACHED_STATE_KEY)
+    // with a key, it still never comes from the cache
+    const stored = makeTask('shell', {
+      resolved: makeResolved('none'),
+      srcFiles: [src],
+      storedStateKey: watched.stateKey,
+    })
+    expect((await checkCacheState(stored, 'checksum', env, { watch: true })).cached).toBe(false)
+  })
+
+  it('still hashes the sources of a task whose cache is off for a task depending on it', async () => {
+    const env = environmentMock(scratch)
+    const upstreamSrc = join(scratch, 'upstream.txt')
+    writeFileSync(upstreamSrc, 'v1')
+    const dependent = () =>
+      makeTask('dependent', {
+        resolved: makeResolved('checksum'),
+        srcFiles: [join(scratch, 'upstream.txt')],
+        deps: [makeTask('upstream', { resolved: makeResolved('none'), srcFiles: [upstreamSrc] })],
+      })
+    const before = (await checkCacheState(dependent(), 'checksum', env)).stateKey
+    writeFileSync(upstreamSrc, 'v2')
+    expect((await checkCacheState(dependent(), 'checksum', env)).stateKey).not.toBe(before)
   })
 
   it('reports cached:true when the stored key matches the effective key', async () => {

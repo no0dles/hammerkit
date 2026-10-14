@@ -203,7 +203,8 @@ export interface SandboxGit {
     action: string,
     options?: { env?: { [key: string]: string }; maxBuffer?: number }
   ): Promise<string>
-  // `fn` with an index of its own, so reading the state of the files changes no index
+  // `fn` with an index of its own that already holds the files as they are (links as links,
+  // never followed), so reading the state of the files changes no index. `fn` adds nothing itself.
   withIndex<T>(fn: (run: SandboxGit['run']) => Promise<T>): Promise<T>
 }
 
@@ -834,7 +835,6 @@ export class HostSandboxFiles implements SandboxFiles {
   // whose id is not the sandbox's to tell. So is hammerkit's own run state (`isRunState`).
   private async withFilesIndex<T>(fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
     return this.git.withIndex(async (run) => {
-      await run(['add', '--all', '--', '.'], 'read')
       // `:<old mode> <new mode> <old id> <new id> <status>\0<path>\0`
       const raw = (await run(['diff', '--cached', '--raw', '-z', '--no-renames', 'HEAD'], 'read')).split('\0')
       const changed: string[] = []

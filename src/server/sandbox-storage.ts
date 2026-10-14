@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto'
 import { Stats } from 'fs'
-import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
-import { join } from 'path'
+import { chmod, copyFile, lstat, mkdir, readdir, readlink, rm, stat, utimes } from 'fs/promises'
+import { join, relative, sep } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
 import { HostSandboxFiles, SandboxFiles, SandboxGit } from './sandbox-files'
@@ -63,9 +63,10 @@ export class HostSandboxStorage implements SandboxStorage {
   // one git command or walk at a time per sandbox: the objects `state` writes are pruned
   // again, which must not meet another command that still needs them
   private readonly queues = new Map<string, Promise<unknown>>()
-  // the sandboxes `usage` walked last: tasks only write while a run runs, between the
-  // `state` it starts with and the `usage` it ends with, so the next `state` needs no walk
-  private readonly walked = new Set<string>()
+  // the sandboxes `usage` walked last, with the links it found: tasks only write while a run
+  // runs, between the `state` it starts with and the `usage` it ends with, so the next
+  // `state` needs no walk
+  private readonly walked = new Map<string, string[]>()
 
   constructor(
     private readonly directory: string,
@@ -102,7 +103,7 @@ export class HostSandboxStorage implements SandboxStorage {
     env: { [key: string]: string },
     signal: AbortSignal,
     action: string,
-    maxBuffer?: number
+    options: { input?: string | Buffer; exitCodes?: number[]; maxBuffer?: number } = {}
   ): Promise<string> {
     const root = this.root(id)
     return git(
@@ -127,7 +128,7 @@ export class HostSandboxStorage implements SandboxStorage {
       signal,
       `sandbox ${id}`,
       action,
-      maxBuffer
+      options
     )
   }
 
@@ -147,9 +148,10 @@ export class HostSandboxStorage implements SandboxStorage {
     return { ...env, ...extra }
   }
 
-  // `fn` with a copy of the sandbox's index, so neither the index nor the files change, and
-  // what it wrote to the git data is pruned again. Files a task made unreadable are made
-  // readable first: git would leave them out and call them unchanged. Holds the sandbox.
+  // `fn` with a copy of the sandbox's index that holds the files as they are (`addFiles`), so
+  // neither the index nor the files change, and what it wrote to the git data is pruned again.
+  // Files a task made unreadable are made readable first: git would leave them out and call
+  // them unchanged. Holds the sandbox.
   // `afterRun` skips the walk when `usage` just walked the sandbox after a run.
   private withIndex<T>(
     id: string,
@@ -158,9 +160,9 @@ export class HostSandboxStorage implements SandboxStorage {
     afterRun = false
   ): Promise<T> {
     return this.exclusive(id, async () => {
-      if (!(afterRun && this.walked.delete(id))) {
-        await this.reclaim(id)
-      }
+      const walked = afterRun ? this.walked.get(id) : undefined
+      this.walked.delete(id)
+      const links = walked ?? (await this.reclaim(id)).links
       const root = this.root(id)
       const index = join(root, `index-${randomBytes(6).toString('hex')}`)
       try {
@@ -174,8 +176,10 @@ export class HostSandboxStorage implements SandboxStorage {
           },
           () => undefined
         )
+        const env = this.readEnv({ GIT_INDEX_FILE: index })
+        await this.addFiles(id, env, signal, links)
         return await fn((args, action, options = {}) =>
-          this.git(id, args, this.readEnv({ ...options.env, GIT_INDEX_FILE: index }), signal, action, options.maxBuffer)
+          this.git(id, args, { ...env, ...options.env }, signal, action, { maxBuffer: options.maxBuffer })
         )
       } finally {
         await rm(index, { force: true })
@@ -194,7 +198,7 @@ export class HostSandboxStorage implements SandboxStorage {
       this.workTree(id),
       {
         run: (args, action, options = {}) =>
-          this.git(id, args, this.readEnv(options.env), timeout(), action, options.maxBuffer),
+          this.git(id, args, this.readEnv(options.env), timeout(), action, { maxBuffer: options.maxBuffer }),
         withIndex: (fn) => this.withIndex(id, timeout(), fn),
       },
       this.env,
@@ -251,13 +255,65 @@ export class HostSandboxStorage implements SandboxStorage {
       id,
       signal,
       async (run) => {
-        await run(['add', '--all', '--', '.'], 'read')
         const tree = (await run(['write-tree'], 'read')).trim()
         const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
         return { commit, tree, clean: tree === base }
       },
       true
     )
+  }
+
+  // Adds the files as they are to the index of `env`. A link is written as a link and never
+  // walked: Git for Windows takes a junction for a directory, and would read what a
+  // `mklink /J x C:\` of a task points to.
+  private async addFiles(
+    id: string,
+    env: { [key: string]: string },
+    signal: AbortSignal,
+    links: string[]
+  ): Promise<void> {
+    const written = await this.unignoredLinks(id, links, env, signal)
+    const pathspecs = ['.', ...written.map((link) => `:(top,exclude,literal)${link.path}`)]
+    await this.git(id, ['add', '--all', '--pathspec-from-file=-', '--pathspec-file-nul'], env, signal, 'read', {
+      input: pathspecs.map((pathspec) => `${pathspec}\0`).join(''),
+    })
+    if (written.length > 0) {
+      const entries: string[] = []
+      for (const link of written) {
+        const blob = await this.git(id, ['hash-object', '-w', '--stdin'], env, signal, 'read', { input: link.target })
+        entries.push(`120000 ${blob.trim()}\t${link.path}\0`)
+      }
+      await this.git(id, ['update-index', '-z', '--add', '--replace', '--index-info'], env, signal, 'read', {
+        input: entries.join(''),
+      })
+    }
+  }
+
+  // the links of the files that are still links and that git does not ignore, by their path
+  // in the files ('/'-separated) and their target
+  private async unignoredLinks(
+    id: string,
+    paths: string[],
+    env: { [key: string]: string },
+    signal: AbortSignal
+  ): Promise<{ path: string; target: Buffer }[]> {
+    const files = this.workTree(id)
+    const links: { path: string; target: Buffer }[] = []
+    for (const path of paths) {
+      if (!path.startsWith(files + sep) || !(await lstat(path).catch(() => undefined))?.isSymbolicLink()) {
+        continue
+      }
+      links.push({ path: relative(files, path).split(sep).join('/'), target: await readlink(path, 'buffer') })
+    }
+    if (links.length === 0) {
+      return []
+    }
+    const ignored = await this.git(id, ['check-ignore', '-z', '--stdin'], env, signal, 'read', {
+      input: links.map((link) => `${link.path}\0`).join(''),
+      exitCodes: [1],
+    })
+    const skip = new Set(ignored.split('\0'))
+    return links.filter((link) => !skip.has(link.path))
   }
 
   async attach(id: string): Promise<string> {
@@ -273,8 +329,8 @@ export class HostSandboxStorage implements SandboxStorage {
   // outputs. Symbolic links are counted, not followed: a link a task made points anywhere.
   async usage(id: string): Promise<number> {
     return this.exclusive(id, async () => {
-      const bytes = await this.reclaim(id)
-      this.walked.add(id)
+      const { bytes, links } = await this.reclaim(id)
+      this.walked.set(id, links)
       return bytes + ((await this.containers?.volumeBytes(this.workTree(id)).catch(() => 0)) ?? 0)
     })
   }
@@ -292,7 +348,7 @@ export class HostSandboxStorage implements SandboxStorage {
   // Walks the sandbox, makes every directory and file the server's user can read and write
   // (a task runs as that user and may have taken its own permissions away) and answers the
   // bytes. What a container left as another user is given back through a container first.
-  private async reclaim(id: string): Promise<number> {
+  private async reclaim(id: string): Promise<Walk> {
     try {
       return await this.walk(this.root(id))
     } catch (e) {
@@ -307,21 +363,26 @@ export class HostSandboxStorage implements SandboxStorage {
 
   // Directories a few at a time and the entries of each together: a `node_modules` holds
   // tens of thousands of files, and one at a time took seconds for every run.
-  private async walk(root: string): Promise<number> {
+  private async walk(root: string): Promise<Walk> {
     let bytes = 0
+    const links: string[] = []
     let pending = [root]
     while (pending.length > 0) {
       const directories = pending.slice(0, WALK_DIRECTORIES)
       pending = pending.slice(WALK_DIRECTORIES)
       for (const found of await Promise.all(directories.map((directory) => this.walkDirectory(directory, root)))) {
         bytes += found.bytes
+        links.push(...found.links)
         pending.push(...found.directories)
       }
     }
-    return bytes
+    return { bytes, links }
   }
 
-  private async walkDirectory(current: string, root: string): Promise<{ bytes: number; directories: string[] }> {
+  private async walkDirectory(
+    current: string,
+    root: string
+  ): Promise<{ bytes: number; directories: string[]; links: string[] }> {
     await ensureMode(current, 0o700)
     const entries = await readdir(current, { withFileTypes: true }).catch((e) => {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT' && current !== root) {
@@ -330,6 +391,7 @@ export class HostSandboxStorage implements SandboxStorage {
       throw e
     })
     const directories: string[] = []
+    const links: string[] = []
     let bytes = 0
     for (let start = 0; start < entries.length; start += WALK_ENTRIES) {
       const sizes = await Promise.all(
@@ -339,13 +401,16 @@ export class HostSandboxStorage implements SandboxStorage {
             directories.push(path)
             return 0
           }
+          if (entry.isSymbolicLink()) {
+            links.push(path)
+          }
           // one lstat for the mode and the size; a link is counted, not followed
           return (await ensureMode(path, entry.isFile() ? 0o600 : 0))?.size ?? 0
         })
       )
       bytes += sizes.reduce((sum, size) => sum + size, 0)
     }
-    return { bytes, directories }
+    return { bytes, directories, links }
   }
 
   async list(): Promise<string[]> {
@@ -358,6 +423,12 @@ export class HostSandboxStorage implements SandboxStorage {
     })
     return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
   }
+}
+
+// the bytes of a sandbox and the paths of the links in it
+interface Walk {
+  bytes: number
+  links: string[]
 }
 
 // adds the bits of the owner a path lacks and answers what it found; a path that is gone
