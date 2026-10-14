@@ -188,8 +188,12 @@ describe('sandboxes api', () => {
       await sleep(20)
     }
     // where it stopped, for a failure on a machine nobody can log in to
-    const events = await (await api.call('GET', `/v1/runs/${id}/events`)).text()
-    throw new Error(`run ${id} never reached ${states}: ${JSON.stringify(run)}\n${events.slice(-4000)}`)
+    const logs = await (await api.call('GET', `/v1/runs/${id}/logs`)).text()
+    throw new Error(
+      `run ${id} never reached ${states}: ${JSON.stringify(run)}\n${logs.slice(-4000)}\n${api.log
+        .slice(-20)
+        .join('\n')}`
+    )
   }
 
   it('creates, lists, moves and deletes the sandboxes of a caller', async () => {
