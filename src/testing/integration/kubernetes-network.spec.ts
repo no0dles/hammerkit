@@ -30,12 +30,12 @@ const reachWeb = 'test "$(wget -q -T 5 -O - http://web:8080)" = ok'
 const outside = 'http://1.1.1.1'
 const noRoute = (wget = 'wget') => `! ${wget} -q -T 5 -O /dev/null ${outside}`
 
-// A client that knows no proxy, by the host's own name. Its stdin stays open
-// until the answer is in, and the answer is printed, so a failure shows it.
+// A client that knows no proxy, by the host's own name, reading the answer to
+// its end. /etc/hosts is printed, so a failure shows where the name led.
 const queryExample =
   'grep example.com /etc/hosts; ' +
-  "(printf 'HEAD / HTTP/1.0\\r\\nHost: example.com\\r\\n\\r\\n'; sleep 5) | nc -w 10 example.com 80 > /tmp/answer; " +
-  "cat /tmp/answer; grep -q '^HTTP/1' /tmp/answer"
+  'env -u http_proxy -u HTTP_PROXY -u https_proxy -u HTTPS_PROXY wget -q -T 10 -O /dev/null http://example.com/'
+
 function networkingApi(): NetworkingV1Api {
   const kc = new KubeConfig()
   kc.loadFromDefault()
