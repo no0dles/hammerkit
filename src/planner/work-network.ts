@@ -1,8 +1,9 @@
-import { isAllowHost, isNeedName, NetworkSchema } from '../schema/network-schema'
+import { getAllowListError, isAllowEntry, isNeedName, NetworkSchema, parseAllowEntry } from '../schema/network-schema'
 import { WorkTree } from './work-tree'
 
 // What a task or service reaches besides the services it needs, which it
-// reaches at every level. Ordered none < allow < open.
+// reaches at every level. Ordered none < allow < open. The hosts of `allow`
+// are names, `*.` patterns, and names with a port for raw TCP.
 export type WorkNetwork = { type: 'open' } | { type: 'none' } | { type: 'allow'; hosts: string[] }
 
 export const OPEN_NETWORK: WorkNetwork = { type: 'open' }
@@ -17,7 +18,7 @@ export function parseWorkNetwork(schema: NetworkSchema | undefined): WorkNetwork
   return { type: 'allow', hosts: normalizeHosts(schema.allow) }
 }
 
-// `--network none`, `--network open` or `--network allow:<host>,<host>`
+// `--network none`, `--network open` or `--network allow:<host>,<host:port>`
 export function parseNetworkOption(value: string): WorkNetwork {
   if (value === 'open' || value === 'none') {
     return { type: value }
@@ -28,9 +29,16 @@ export function parseNetworkOption(value: string): WorkNetwork {
       .split(',')
       .map((host) => host.trim())
       .filter((host) => host.length > 0)
-    const invalid = hosts.find((host) => !isAllowHost(host))
+    const invalid = hosts.find((host) => !isAllowEntry(host))
     if (invalid) {
-      throw new Error(`invalid host "${invalid}", expected a name such as registry.npmjs.org or *.example.com`)
+      throw new Error(
+        `invalid host "${invalid}", expected a name such as registry.npmjs.org or *.example.com, ` +
+          'or a name and port such as db.example.com:5432'
+      )
+    }
+    const error = getAllowListError(hosts)
+    if (error) {
+      throw new Error(error)
     }
     return { type: 'allow', hosts: normalizeHosts(hosts) }
   }
@@ -94,13 +102,37 @@ export function matchesHost(pattern: string, host: string): boolean {
   return rule.startsWith('*.') ? name.endsWith(rule.substring(1)) : name === rule
 }
 
-// Whether everything `host` (a name or a `*.` pattern) allows, `limit` allows too.
+// Whether everything `host` (a name, a `*.` pattern or a name and port)
+// allows, `limit` allows too. A host without a port reaches every port of it
+// through the proxy, so it covers a forward to one of them; a forward covers
+// only itself.
 function coversHost(limit: string, host: string): boolean {
-  if (host.startsWith('*.')) {
-    // `*.b.example.com` is within `*.example.com`
-    return limit.startsWith('*.') && host.toLowerCase().endsWith(limit.toLowerCase().substring(1))
+  const limitEntry = parseAllowEntry(limit)
+  const hostEntry = parseAllowEntry(host)
+  if (!limitEntry || !hostEntry) {
+    return false
   }
-  return matchesHost(limit, host)
+  if (limitEntry.port !== null) {
+    return hostEntry.port === limitEntry.port && matchesHost(limitEntry.host, hostEntry.host)
+  }
+  if (hostEntry.host.startsWith('*.')) {
+    // `*.b.example.com` is within `*.example.com`
+    return (
+      limitEntry.host.startsWith('*.') &&
+      hostEntry.host.toLowerCase().endsWith(limitEntry.host.toLowerCase().substring(1))
+    )
+  }
+  return matchesHost(limitEntry.host, hostEntry.host)
+}
+
+// The raw TCP forwards of a network: the entries of `allow` with a port.
+export function getTcpForwards(network: WorkNetwork): { host: string; port: number }[] {
+  if (network.type !== 'allow') {
+    return []
+  }
+  return network.hosts
+    .map(parseAllowEntry)
+    .filter((entry): entry is { host: string; port: number } => entry !== null && entry.port !== null)
 }
 
 function normalizeHosts(hosts: string[]): string[] {
@@ -118,7 +150,8 @@ export function formatNetwork(network: WorkNetwork): string {
 // task can't be limited, so a ceiling below open with one in the run is an
 // error before anything runs. So is a limited item that needs a service under
 // a name that is no host name: the proxy passes the names of the needed
-// services, and `*.com` would pass every .com host.
+// services, and `*.com` would pass every .com host. A TCP forward under the
+// name of a needed service would hide that service, so it is an error too.
 export function applyNetworkCeiling(workTree: WorkTree, ceiling: WorkNetwork | null): void {
   const limit = ceiling && isLimitedNetwork(ceiling) ? ceiling : null
   if (limit) {
@@ -148,6 +181,15 @@ export function applyNetworkCeiling(workTree: WorkTree, ceiling: WorkNetwork | n
       throw new Error(
         `${item.name}: network ${formatNetwork(network)} reaches a needed service by a host name, ` +
           `"${invalid.name}" is none (name it like db or api-v2)`
+      )
+    }
+    const hidden = getTcpForwards(network).find((forward) =>
+      item.needs.some((need) => need.name.toLowerCase() === forward.host.toLowerCase())
+    )
+    if (hidden) {
+      throw new Error(
+        `${item.name}: network ${formatNetwork(network)} forwards ${hidden.host}:${hidden.port}, ` +
+          `which is the name of a service it needs`
       )
     }
   }
