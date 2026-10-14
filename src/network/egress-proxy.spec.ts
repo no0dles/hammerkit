@@ -9,6 +9,7 @@ import {
   EgressProxyEvent,
   getEgressProxyEnvironment,
   getProxyClientEnvironment,
+  formatEgressProxyEvent,
   parseEgressProxyEvent,
 } from './egress-proxy'
 
@@ -148,6 +149,21 @@ describe('egress proxy', () => {
     expect(response).toContain('403 Forbidden')
     await waitFor(() => proxy.events.some((e) => e.type === 'refused' && e.host === 'example.com'))
     expect(proxy.events).toContainEqual({ type: 'refused', host: 'example.com' })
+  })
+
+  it('says that an allowed host takes a CONNECT tunnel when a client asks for its https URL', async () => {
+    // BusyBox wget sends the URL as it is instead of a CONNECT
+    const allowed = await get(proxy.port, 'https://api.example.com/')
+    await get(proxy.port, 'https://api.example.com/again')
+    expect(allowed.status).toBe(501)
+    expect(allowed.body).toContain('api.example.com is allowed through a CONNECT tunnel only')
+    await waitFor(() => proxy.events.some((e) => e.type === 'https-url'))
+    expect(proxy.events.filter((e) => e.type !== 'ready' && e.host === 'api.example.com')).toEqual([
+      { type: 'https-url', host: 'api.example.com' },
+    ])
+    // a host not on the list stays refused
+    expect((await get(proxy.port, 'https://other.test/')).status).toBe(403)
+    await waitFor(() => proxy.events.some((e) => e.type === 'refused' && e.host === 'other.test'))
   })
 
   it('does not take the domain of a wildcard as allowed', async () => {
@@ -408,7 +424,16 @@ describe('proxy client environment', () => {
   it('reads events and ignores other output', () => {
     expect(parseEgressProxyEvent('{"type":"refused","host":"a.com"}')).toEqual({ type: 'refused', host: 'a.com' })
     expect(parseEgressProxyEvent('{"type":"ready"}')).toEqual({ type: 'ready' })
+    expect(parseEgressProxyEvent('{"type":"https-url","host":"a.com"}')).toEqual({ type: 'https-url', host: 'a.com' })
     expect(parseEgressProxyEvent('{"type":"refused"}')).toBeNull()
     expect(parseEgressProxyEvent('npm warn')).toBeNull()
+  })
+
+  it('writes a refused host and an https URL to the log', () => {
+    expect(formatEgressProxyEvent({ type: 'refused', host: 'a.com' })).toBe('network: refused a.com')
+    expect(formatEgressProxyEvent({ type: 'https-url', host: 'a.com' })).toBe(
+      'network: a.com is allowed, but the client asked the proxy for its https URL instead of tunneling ' +
+        'with CONNECT (BusyBox wget does), use curl or GNU wget'
+    )
   })
 })

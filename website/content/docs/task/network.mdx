@@ -95,8 +95,11 @@ warn network: refused example.com
 The proxy is the only way out. A tool that ignores the proxy variables finds no
 route at all, and it fails closed: when the proxy is gone, nothing gets out. A tool
 that ignores `NO_PROXY` (busybox `wget`, say) still reaches the needed services,
-through the proxy. A service's healthcheck checks the service itself, so it runs
-without the proxy variables.
+through the proxy. BusyBox `wget`, the `wget` of Alpine images, also asks the proxy
+for an `https://` URL instead of opening a `CONNECT` tunnel; TLS stays between the
+client and the host, so the proxy doesn't serve that, and the log says so: use
+`curl` or GNU `wget` (`apk add wget`) for an https host. A service's healthcheck
+checks the service itself, so it runs without the proxy variables.
 
 ## TCP forwards
 
