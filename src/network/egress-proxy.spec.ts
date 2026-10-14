@@ -9,6 +9,7 @@ import {
   EgressProxyEvent,
   getEgressProxyEnvironment,
   getProxyClientEnvironment,
+  formatEgressProxyEvent,
   parseEgressProxyEvent,
 } from './egress-proxy'
 
@@ -30,12 +31,15 @@ interface RunningProxy {
 // `preload` is a module the script runs after, to stand in for DNS
 async function startProxy(
   hosts: string[],
-  options: { needs?: string[]; bind?: string; preload?: string } = {}
+  options: { needs?: string[]; bind?: string; preload?: string; publicOnly?: string[] } = {}
 ): Promise<RunningProxy> {
   const port = await freePort()
   const preload = options.preload ? ['-r', options.preload] : []
   const child = spawn(process.execPath, [...preload, '-e', EGRESS_PROXY_SCRIPT], {
-    env: { ...getEgressProxyEnvironment(hosts, options.needs ?? [], options.bind), HAMMERKIT_PROXY_PORT: `${port}` },
+    env: {
+      ...getEgressProxyEnvironment(hosts, options.needs ?? [], options.bind, options.publicOnly),
+      HAMMERKIT_PROXY_PORT: `${port}`,
+    },
     stdio: ['ignore', 'pipe', 'inherit'],
   })
   const events: EgressProxyEvent[] = []
@@ -147,6 +151,21 @@ describe('egress proxy', () => {
     expect(proxy.events).toContainEqual({ type: 'refused', host: 'example.com' })
   })
 
+  it('says that an allowed host takes a CONNECT tunnel when a client asks for its https URL', async () => {
+    // BusyBox wget sends the URL as it is instead of a CONNECT
+    const allowed = await get(proxy.port, 'https://api.example.com/')
+    await get(proxy.port, 'https://api.example.com/again')
+    expect(allowed.status).toBe(501)
+    expect(allowed.body).toContain('api.example.com is allowed through a CONNECT tunnel only')
+    await waitFor(() => proxy.events.some((e) => e.type === 'https-url'))
+    expect(proxy.events.filter((e) => e.type !== 'ready' && e.host === 'api.example.com')).toEqual([
+      { type: 'https-url', host: 'api.example.com' },
+    ])
+    // a host not on the list stays refused
+    expect((await get(proxy.port, 'https://other.test/')).status).toBe(403)
+    await waitFor(() => proxy.events.some((e) => e.type === 'refused' && e.host === 'other.test'))
+  })
+
   it('does not take the domain of a wildcard as allowed', async () => {
     const response = await tunnel(proxy.port, 'evil-example.com:443', 'evil-example.com')
     expect(response).toContain('403 Forbidden')
@@ -234,15 +253,17 @@ dns.lookup = (host, options, callback) => {
 describe('egress proxy TCP forwards', () => {
   let dir: string
   let echo: NetServer
-  let echoPort: number
+  let dbPort: number
   let metaPort: number
+  let privatePort: number
+  let preload: string
   let proxy: RunningProxy
 
   // what the client sends, back to it; a refused forward closes the connection
   function exchange(port: number, message: string): Promise<string> {
     return new Promise((resolve) => {
       let received = ''
-      const socket: Socket = connect(port, '127.0.0.2', () => {
+      const socket: Socket = connect(port, '127.0.0.1', () => {
         socket.end(message)
       })
       socket.on('data', (data: Buffer) => (received += data.toString()))
@@ -256,7 +277,7 @@ describe('egress proxy TCP forwards', () => {
     return new Promise((resolve, reject) => {
       let received = ''
       let tunneled = false
-      const socket = connect(proxy.port, '127.0.0.2', () => {
+      const socket = connect(proxy.port, '127.0.0.1', () => {
         socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`)
       })
       socket.on('data', (data) => {
@@ -276,29 +297,40 @@ describe('egress proxy TCP forwards', () => {
   }
 
   beforeAll(async () => {
-    // the proxy listens on the same port at 127.0.0.2, as it does at its own
-    // address in its container
     echo = createNetServer({ allowHalfOpen: true }, (socket) => socket.pipe(socket))
     await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', resolve))
-    echoPort = (echo.address() as AddressInfo).port
+    const echoPort = (echo.address() as AddressInfo).port
+    dbPort = await freePort()
     metaPort = await freePort()
+    privatePort = await freePort()
     dir = mkdtempSync(join(tmpdir(), 'hammerkit-proxy-'))
-    const preload = join(dir, 'dns.js')
+    preload = join(dir, 'dns.js')
+    // stands in for DNS, and for the hosts behind it: db.test serves the echo
+    // on the ports of its forwards, which the proxy itself listens on here
     writeFileSync(
       preload,
       `const dns = require('dns')
+const net = require('net')
 const lookup = dns.lookup
-const names = { 'db.test': '127.0.0.1', 'meta.test': '169.254.169.254', 'proxy.test': '127.0.0.2' }
+const names = { 'db.test': '127.0.0.1', 'meta.test': '169.254.169.254' }
 dns.lookup = (host, options, callback) => {
   if (!names[host]) return lookup(host, options, callback)
-  const address = { address: names[host], family: names[host].includes(':') ? 6 : 4 }
+  const address = { address: names[host], family: 4 }
   const cb = typeof options === 'function' ? options : callback
   if (options && options.all) cb(null, [address])
   else cb(null, address.address, address.family)
 }
+const connectSocket = net.Socket.prototype.connect
+net.Socket.prototype.connect = function (...args) {
+  const options = Array.isArray(args[0]) ? args[0][0] : args[0]
+  if (options && typeof options === 'object' && options.host === 'db.test' && [${dbPort}, ${privatePort}].includes(Number(options.port))) {
+    options.port = ${echoPort}
+  }
+  return connectSocket.apply(this, args)
+}
 `
     )
-    proxy = await startProxy([`db.test:${echoPort}`, `meta.test:${metaPort}`], { preload, bind: 'proxy.test' })
+    proxy = await startProxy([`db.test:${dbPort}`, `meta.test:${metaPort}`], { preload, bind: 'localhost' })
   })
 
   afterAll(async () => {
@@ -308,7 +340,7 @@ dns.lookup = (host, options, callback) => {
   })
 
   it('forwards raw TCP on its port to its host', async () => {
-    expect(await exchange(echoPort, 'PING')).toBe('PING')
+    expect(await exchange(dbPort, 'PING')).toBe('PING')
   })
 
   it('refuses a forward whose host resolves to link-local', async () => {
@@ -318,9 +350,25 @@ dns.lookup = (host, options, callback) => {
   })
 
   it('tunnels a CONNECT to the host on the port of its forward only', async () => {
-    expect(await echoThrough(`db.test:${echoPort}`, 'PING')).toBe('PING')
-    expect(await tunnel(proxy.port, 'db.test:443', 'db.test', '127.0.0.2')).toContain('403 Forbidden')
-    expect((await get(proxy.port, 'http://db.test/', '127.0.0.2')).status).toBe(403)
+    expect(await echoThrough(`db.test:${dbPort}`, 'PING')).toBe('PING')
+    expect(await tunnel(proxy.port, 'db.test:443', 'db.test')).toContain('403 Forbidden')
+    expect((await get(proxy.port, 'http://db.test/')).status).toBe(403)
+  })
+
+  it('keeps an entry a ceiling allows only through a pattern off private addresses', async () => {
+    // db.test resolves to the host itself
+    const limited = await startProxy([`db.test:${privatePort}`, 'db.test'], {
+      preload,
+      bind: 'localhost',
+      publicOnly: [`db.test:${privatePort}`, 'db.test'],
+    })
+    try {
+      expect(await exchange(privatePort, 'PING')).toBe('')
+      expect((await get(limited.port, 'http://db.test/')).status).toBe(403)
+      expect(limited.events).toContainEqual({ type: 'refused', host: 'db.test' })
+    } finally {
+      limited.process.kill()
+    }
   })
 })
 
@@ -376,7 +424,16 @@ describe('proxy client environment', () => {
   it('reads events and ignores other output', () => {
     expect(parseEgressProxyEvent('{"type":"refused","host":"a.com"}')).toEqual({ type: 'refused', host: 'a.com' })
     expect(parseEgressProxyEvent('{"type":"ready"}')).toEqual({ type: 'ready' })
+    expect(parseEgressProxyEvent('{"type":"https-url","host":"a.com"}')).toEqual({ type: 'https-url', host: 'a.com' })
     expect(parseEgressProxyEvent('{"type":"refused"}')).toBeNull()
     expect(parseEgressProxyEvent('npm warn')).toBeNull()
+  })
+
+  it('writes a refused host and an https URL to the log', () => {
+    expect(formatEgressProxyEvent({ type: 'refused', host: 'a.com' })).toBe('network: refused a.com')
+    expect(formatEgressProxyEvent({ type: 'https-url', host: 'a.com' })).toBe(
+      'network: a.com is allowed, but the client asked the proxy for its https URL instead of tunneling ' +
+        'with CONNECT (BusyBox wget does), use curl or GNU wget'
+    )
   })
 })
