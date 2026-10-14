@@ -290,19 +290,23 @@ export class SandboxRegistry {
    * else's work. The sandbox is at the pushed commit afterwards, so its changes are what
    * is not pushed yet and the next push to the branch adds a commit to it.
    */
-  async push(owner: Owner, id: string, branch: string, author: PatchAuthor): Promise<Sandbox> {
+  // `allowed` are the branches the owner's entitlements let them push to from a sandbox of
+  // its repository
+  async push(owner: Owner, id: string, branch: string, author: PatchAuthor, allowed: string[]): Promise<Sandbox> {
     return this.withLock(id, async () => {
       const sandbox = this.mine(owner, id)
       const { storage, repos } = this.options
-      const allowed = repos.source(sandbox.repo)?.push?.branches
-      if (!allowed) {
+      if (!repos.source(sandbox.repo)?.pushSecret) {
         throw new SandboxError(403, `this server does not push to ${sandbox.repo}`)
+      }
+      if (allowed.length === 0) {
+        throw new SandboxError(403, `you may not push from sandboxes of ${sandbox.repo}`)
       }
       if (!isValidBranch(branch)) {
         throw new SandboxError(400, `${JSON.stringify(branch.slice(0, 80))} is not a branch name`)
       }
       if (!matchesRef(allowed, branch)) {
-        throw new SandboxError(403, `a sandbox may only push to ${allowed.join(', ')} of ${sandbox.repo}`)
+        throw new SandboxError(403, `you may only push to ${allowed.join(', ')} of ${sandbox.repo}`)
       }
       this.mustBeFree(id)
       if ((await storage.state(id)).clean) {

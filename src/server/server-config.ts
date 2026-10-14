@@ -329,16 +329,11 @@ export const sourceSchema = z
   .object({
     match: repoPatternSchema,
     secret: sourceSecretSchema.optional(),
-    // pushing the changes of a sandbox: a credential that may write, and the only
-    // branches a sandbox may push to. The credential is required: a push never falls back
-    // to a credential git finds on the server, which would be somebody's own identity.
-    push: z
-      .object({
-        secret: sourceSecretSchema,
-        branches: z.array(branchPatternSchema).min(1),
-      })
-      .strict()
-      .optional(),
+    // the server's credential that writes, for the pushes of sandboxes: a secret and an
+    // account of its own, so a server that only reads never holds a token that writes. Who
+    // may push which branches is on the entitlement. Without it, nothing pushes to these
+    // repositories: a push never falls back to a credential git finds on the server.
+    pushSecret: sourceSecretSchema.optional(),
   })
   .strict()
 
@@ -543,7 +538,7 @@ export const serverConfigSchema = z
     config.sources.forEach((source, index) => {
       const secrets: [(string | number)[], z.infer<typeof sourceSecretSchema> | undefined][] = [
         [['sources', index, 'secret'], source.secret],
-        [['sources', index, 'push', 'secret'], source.push?.secret],
+        [['sources', index, 'pushSecret'], source.pushSecret],
       ]
       for (const [where, secret] of secrets) {
         if (secret) {
@@ -730,7 +725,7 @@ export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string
     ...new Set(
       config.sources.flatMap((source) => [
         ...(source.secret ? [source.secret.account] : []),
-        ...(source.push ? [source.push.secret.account] : []),
+        ...(source.pushSecret ? [source.pushSecret.account] : []),
       ])
     ),
   ]

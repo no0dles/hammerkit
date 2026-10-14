@@ -20,8 +20,7 @@ sources:                            # the repositories a run may get its code fr
 | `secret.from` | The token, as `provider:reference` of a secret provider. Without `secret` the repository is read anonymously. |
 | `secret.account` | The [account](/docs/remote-compute/accounts) the token is read as. It needs credentials for that provider. |
 | `secret.username` | The user name of the basic authentication the token is sent with, `x-access-token` by default. A GitLab token is commonly sent as `oauth2`. |
-| `push.branches` | The branches a [sandbox may push](/docs/remote-compute/sandboxes#pushing) to, see [Pushing](#pushing). Without `push`, sandboxes of these repositories do not push. |
-| `push.secret` | The token that writes, with `from`, `account` and `username` as `secret`. Required: a push never falls back to a credential of the server's user. |
+| `pushSecret` | The token [sandboxes push](/docs/remote-compute/sandboxes#pushing) with, with `from`, `account` and `username` as `secret`, see [Pushing](#pushing). Without it, nothing pushes to these repositories. |
 
 ## Which repositories a run may use
 
@@ -69,22 +68,29 @@ names no branch.
 
 ## Pushing
 
-`push` lets [sandboxes](/docs/remote-compute/sandboxes#pushing) of the repositories an entry
-covers push their changes, to the branches it lists and no others:
+`pushSecret` is the token the server pushes the changes of
+[sandboxes](/docs/remote-compute/sandboxes#pushing) with, to the repositories the entry
+covers. Who may push to which branches is not the source's to say: the `sandboxes` of an
+[entitlement](/docs/remote-compute/entitlements) give a branch pattern the type `push`.
 
 ```yaml title="server.yaml"
 sources:
   - match: github.com/corp/*
     secret: { from: 'gsm:github-readonly-token', account: scm-read }
-    push:
-      secret: { from: 'gsm:github-agent-push', account: scm-push }
-      branches: ['agent/**']        # agent/fix-login, agent/team/x; not main
+    pushSecret: { from: 'gsm:github-agent-push', account: scm-push }
+entitlements:
+  - subject: { iss: https://idp.corp, sub: 4f1c... }
+    sandboxes:
+      - repo: github.com/corp/payments
+        branches:
+          main: pull
+          'agent/**': push          # agent/fix-login, agent/team/x; not main
 ```
 
 A branch pattern is written like an account's `refs`: a name (`agent/fix`), `*` for a part
 of one level (`agent/*`) and `**` as the last level for everything below (`agent/**`). Keep
-the patterns to branches that nobody else writes to and that no deployment runs from: a
-sandbox holds changes nobody reviewed, the push is how they get to a review.
+the `push` patterns to branches that nobody else writes to and that no deployment runs from:
+a sandbox holds changes nobody reviewed, the push is how they get to a review.
 
 The write token is its own secret, read as its own account, so a server that only reads
 never holds a token that writes. Like the read token it goes to one git process through its
@@ -102,7 +108,7 @@ repository as well: a pattern that is too wide is then caught twice.
 **Pushed branches run in your CI.** Most repositories run CI on a push to any branch, with
 the repository's secrets: GitHub Actions `on: push`, GitLab pipelines, Buildkite. A branch a
 sandbox pushed holds code nobody reviewed, including the build scripts and tests CI runs, and
-the workflow files themselves when the token may write them. Before you allow `push`:
+the workflow files themselves when the token may write them. Before you give a pattern the type `push`:
 
 * keep the push patterns out of CI that holds secrets (`branches-ignore: ['agent/**']`), or
   put the jobs with secrets behind a review (environments with required reviewers, protected

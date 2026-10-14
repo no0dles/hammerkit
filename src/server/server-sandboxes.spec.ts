@@ -26,7 +26,7 @@ accounts:
   scm-push: { providers: { echo: { env: {} } } }
 sources:
   - match: github.com/corp/*
-    push: { secret: { from: "echo:push-token", account: scm-push }, branches: ['agent/**'] }
+    pushSecret: { from: "echo:push-token", account: scm-push }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { dev: use, ci: use }
@@ -542,6 +542,21 @@ describe('sandboxes api', () => {
       expect((await signed.json()).error).toMatch(/may not carry Signed-off-by/)
       expect((await push({ branch: 'agent/.hidden', message: 'Agent work' })).status).toBe(400)
       expect((await push({ branch: 'agent/one', message: 'Agent work' }, 'carol')).status).toBe(404)
+      // carol may only pull: her own sandbox does not push
+      const carols = await (await create(api, 'carol')).json()
+      await api.call('POST', `/v1/sandboxes/${carols.id}/edits`, {
+        sub: 'carol',
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'carol' }] },
+      })
+      const pulls = await api.call('POST', `/v1/sandboxes/${carols.id}/push`, {
+        sub: 'carol',
+        body: { branch: 'agent/one', message: 'Carol work' },
+      })
+      expect(pulls.status).toBe(403)
+      expect((await pulls.json()).error).toBe(`you may not push from sandboxes of ${REPO}`)
+      // main is alice's to pull from, not to push to
+      const toMain = await push({ branch: 'main', message: 'Agent work' })
+      expect((await toMain.json()).error).toBe(`you may only push to agent/** of ${REPO}`)
       expect((await api.call('GET', `${base}/push`)).status).toBe(405)
 
       const pushed = await push({ branch: 'agent/one', message: 'Agent work' })

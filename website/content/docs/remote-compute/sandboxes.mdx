@@ -27,7 +27,7 @@ the caller may keep sandboxes of, one `repo` (`host/path` pattern) per entry, an
 branch pattern of it a type:
 
 * `pull`: a sandbox may start from a matching branch, and fetch one.
-* `push`: `pull`, and pushing to the branch once push is built.
+* `push`: `pull`, and [pushing](#pushing) to the branch.
 
 Without `sandboxes` the caller keeps none. It is a list of its own: `repos` are for runs
 from a ref only, and a sandbox needs no `repos` entry for its repository. The entries of all
@@ -385,9 +385,9 @@ it and pushes a branch. The other is a [push](#pushing) by the server. Changes l
 
 `POST /v1/sandboxes/<id>/push` commits the changes of a sandbox and pushes the commit to a
 branch of its repository, with the write credential of the server's
-[sources](/docs/remote-compute/sources#pushing). The repository's `push.branches` decide where
-to: a sandbox only pushes to the branches the operator lists there, `agent/**` for example,
-never to `main`.
+[sources](/docs/remote-compute/sources#pushing) (`pushSecret`). The caller's `sandboxes`
+decide where to: a sandbox only pushes to a branch whose pattern has the type `push` in an
+entry for its repository, `agent/**` for example, never to a `main` they may only `pull`.
 
 ```json
 { "branch": "agent/fix-login", "message": "Fix the login\n\nThe session expired a minute early." }
@@ -419,7 +419,7 @@ never to `main`.
   A sandbox [fetched](#creating-and-managing) to another commit since can not push to the
   branch any more (`409`), it starts a new one.
 * Like edits, a push waits for a batch of edits, is `409` while a run holds the sandbox, and
-  needs an entry of the caller's `sandboxes` that covers the repository.
+  needs the repository and the sandbox's branch in the caller's `sandboxes`.
 
 The server reads the branch first with its read credential, then pushes with the write
 credential, telling the remote which commit it expects the branch at (none for a new one).
@@ -429,7 +429,7 @@ is `409` too.
 | Status | When |
 | --- | --- |
 | `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start with `.` or `-`, or end with `.` or `.lock`). |
-| `403` | The branch is not in `push.branches`, the server does not push to the repository at all, or as for a fetch, no entry of the caller's `sandboxes` covers the repository any more. |
+| `403` | No `push` pattern of the caller's entries for the repository covers the branch, the source has no `pushSecret`, or as for the files, the caller lost the repository or the sandbox's branch. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
 | `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access). Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |

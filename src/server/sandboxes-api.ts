@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from 'http'
 import { z } from 'zod'
 import { readJson, send } from './http'
 import { Principal } from './oauth'
-import { decideSandbox, getGrant } from './policy'
+import { decideSandbox, getGrant, sandboxPushBranches } from './policy'
 import { normalizeRepo } from './repo'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
@@ -159,7 +159,13 @@ export async function handleSandboxes(
         return true
       }
       if ('branch' in body) {
-        const pushed = await sandboxes.push(principal, id, body.branch, { ...author(principal), message: body.message })
+        const pushed = await sandboxes.push(
+          principal,
+          id,
+          body.branch,
+          { ...author(principal), message: body.message },
+          sandboxPushBranches(grant, sandbox.repo)
+        )
         log(`sandbox push ${id} ${who} branch=${body.branch} commit=${pushed.commit}`)
         send(res, 200, { branch: body.branch, commit: pushed.commit, sandbox: view(sandboxes, pushed) })
         return true

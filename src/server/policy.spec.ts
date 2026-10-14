@@ -10,6 +10,7 @@ import {
   maySeeDefinitions,
   RunDecisionInput,
   sandboxBranchType,
+  sandboxPushBranches,
   usedAccounts,
 } from './policy'
 import { Principal } from './oauth'
@@ -379,5 +380,30 @@ describe('sandboxBranchType', () => {
     expect(sandboxBranchType(merged, 'github.com/corp/api', 'main')).toBeNull()
     expect(sandboxBranchType(merged, 'github.com/corp/api', 'agent/x')).toBe('pull')
     expect(sandboxBranchType(merged, 'github.com/other/payments', 'agent/x')).toBeNull()
+  })
+})
+
+describe('sandboxPushBranches', () => {
+  const grant = (sandboxes: Grant['sandboxes']): Grant => ({
+    accounts: {},
+    repos: [],
+    builds: null,
+    sandboxes,
+    matched: [0],
+  })
+
+  it('answers the push patterns of the entries of the repository only', () => {
+    const merged = grant([
+      { repo: 'github.com/corp/payments', branches: { 'agent/**': 'push', main: 'pull' } },
+      { repo: 'github.com/corp/*', branches: { 'agent/**': 'push', 'release/*': 'pull' } },
+      { repo: 'github.com/corp/web', branches: { 'claude/**': 'push' } },
+    ])
+    expect(sandboxPushBranches(merged, 'github.com/corp/payments')).toEqual(['agent/**'])
+    expect(sandboxPushBranches(merged, 'github.com/corp/web')).toEqual(['agent/**', 'claude/**'])
+    expect(sandboxPushBranches(merged, 'github.com/corp/api')).toEqual(['agent/**'])
+    expect(sandboxPushBranches(merged, 'github.com/other/payments')).toEqual([])
+    expect(
+      sandboxPushBranches(grant([{ repo: 'github.com/corp/*', branches: { main: 'pull' } }]), 'github.com/corp/x')
+    ).toEqual([])
   })
 })

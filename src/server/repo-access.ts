@@ -83,12 +83,12 @@ export class RepoAccess {
   }
 
   /**
-   * The same for pushing a sandbox to the repository, with the write credential of the
-   * source's `push`, which is a secret and an account of its own: a server that only reads
-   * never holds a token that writes.
+   * The same for pushing a sandbox to the repository, with the source's `pushSecret`, a
+   * secret and an account of its own: a server that only reads never holds a token that
+   * writes.
    */
   async pushCredentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
-    const secret = this.source(repo)?.push?.secret
+    const secret = this.source(repo)?.pushSecret
     if (!secret) {
       throw new Error(`this server does not push to ${repo}`)
     }
