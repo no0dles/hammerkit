@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from 'http'
 import { z } from 'zod'
 import { readJson, send } from './http'
 import { Principal } from './oauth'
-import { decideSandbox, getGrant } from './policy'
+import { decideSandbox, getGrant, sandboxPushBranches } from './policy'
 import { normalizeRepo } from './repo'
 import { RepoAccess } from './repo-access'
 import { SANDBOX_ID_PATTERN } from './runs'
@@ -23,6 +23,7 @@ const createSchema = z
       }
       return repo
     }),
+    // a branch: a sandbox never starts from a tag or a commit
     ref: refSchema,
   })
   .strict()
@@ -53,11 +54,11 @@ const pushSchema = z
 /**
  * The sandboxes of a caller: checkouts on the server that runs work on.
  *
- *   POST   /v1/sandboxes              { repo, ref }  fetch a ref into a new sandbox
+ *   POST   /v1/sandboxes              { repo, ref }  fetch a branch into a new sandbox
  *   GET    /v1/sandboxes              the caller's sandboxes, their limits and usage
  *   GET    /v1/sandboxes/<id>         one sandbox
  *   DELETE /v1/sandboxes/<id>         cancel its runs and remove it
- *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to another commit
+ *   POST   /v1/sandboxes/<id>/fetch   { ref }  move a sandbox without changes to a branch's commit
  *   POST   /v1/sandboxes/<id>/push    { branch, message }  commit the changes and push them
  *   ...    /v1/sandboxes/<id>/tree, files/<path>, search, edits, changes: its files, see
  *          `handleSandboxFiles`
@@ -99,7 +100,7 @@ export async function handleSandboxes(
           send(res, 501, { error: 'this server keeps sandboxes only on a host backend' })
           return true
         }
-        const refused = decideSandbox(getGrant(config.entitlements, principal), body.repo, (repo) =>
+        const refused = decideSandbox(getGrant(config.entitlements, principal), body.repo, body.ref, (repo) =>
           repos.readable(repo)
         )
         if (refused) {
@@ -121,8 +122,8 @@ export async function handleSandboxes(
       return true
     }
     if (action && action !== 'fetch' && action !== 'push') {
-      // the caller may have lost the repository since they created the sandbox
-      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, (repo) =>
+      // the caller may have lost the repository, or the sandbox's branch, since they created it
+      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, sandbox.ref, (repo) =>
         repos.readable(repo)
       )
       if (refused) {
@@ -146,8 +147,10 @@ export async function handleSandboxes(
         return true
       }
       const body = action === 'fetch' ? parse(fetchSchema, await readJson(req)) : parse(pushSchema, await readJson(req))
-      // the caller may have lost the repository since they created the sandbox
-      const refused = decideSandbox(getGrant(config.entitlements, principal), sandbox.repo, (repo) =>
+      // the caller may have lost the repository or the sandbox's branch since they created the
+      // sandbox, and a fetch needs the new branch
+      const grant = getGrant(config.entitlements, principal)
+      const refused = decideSandbox(grant, sandbox.repo, 'ref' in body ? body.ref : sandbox.ref, (repo) =>
         repos.readable(repo)
       )
       if (refused) {
@@ -156,7 +159,13 @@ export async function handleSandboxes(
         return true
       }
       if ('branch' in body) {
-        const pushed = await sandboxes.push(principal, id, body.branch, { ...author(principal), message: body.message })
+        const pushed = await sandboxes.push(
+          principal,
+          id,
+          body.branch,
+          { ...author(principal), message: body.message },
+          sandboxPushBranches(grant, sandbox.repo)
+        )
         log(`sandbox push ${id} ${who} branch=${body.branch} commit=${pushed.commit}`)
         send(res, 200, { branch: body.branch, commit: pushed.commit, sandbox: view(sandboxes, pushed) })
         return true

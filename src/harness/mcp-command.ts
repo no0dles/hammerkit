@@ -21,7 +21,7 @@ export function registerMcpCommand(remote: Command, environment: Environment, in
     )
     .addOption(new Option('--sandbox <id>', 'a sandbox of yours on the server').env('HAMMERKIT_SANDBOX'))
     .addOption(new Option('--repo <repo>', 'create a sandbox of this repository').env('HAMMERKIT_REPO'))
-    .addOption(new Option('--ref <ref>', 'at this branch, tag or commit').env('HAMMERKIT_REF'))
+    .addOption(new Option('--ref <ref>', 'at this branch').env('HAMMERKIT_REF'))
     .addOption(new Option('--build <name>', 'published build file whose tasks run on it').env('HAMMERKIT_BUILD'))
     .addOption(
       new Option('--shell <task>', 'its task whose last command is a shell, like sh -c')

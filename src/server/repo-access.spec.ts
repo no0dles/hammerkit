@@ -14,7 +14,7 @@ const config = serverConfigSchema.parse({
     {
       match: 'github.com/corp/*',
       secret: { from: 'echo:github-token-value', account: 'scm-read' },
-      push: { secret: { from: 'echo:github-push-token', account: 'scm-push' }, branches: ['agent/**'] },
+      pushSecret: { from: 'echo:github-push-token', account: 'scm-push' },
     },
     {
       match: 'gitlab.corp.com/platform/**',
@@ -83,7 +83,7 @@ describe('RepoAccess', () => {
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: '/dev/null',
     })
-    // a source without push holds no token that writes, and is not pushed to
+    // a source without pushSecret holds no token that writes, and is not pushed to
     await expect(repos.pushCredentials('github.com/corp/special')).rejects.toThrow(
       'this server does not push to github.com/corp/special'
     )

@@ -109,9 +109,9 @@ describe('agent session (docker)', () => {
               '  scm-push: { providers: { echo: { env: {} } } }',
               'sources:',
               '  - match: github.com/corp/*',
-              '    push: { secret: { from: "echo:push-token", account: scm-push }, branches: [agent/**] }',
+              '    pushSecret: { from: "echo:push-token", account: scm-push }',
               'entitlements:',
-              `  - { subject: { iss: "${idp.url}", sub: alice }, repos: [github.com/corp/*], builds: publish, sandboxes: [{ repo: github.com/corp/* }] }`,
+              `  - { subject: { iss: "${idp.url}", sub: alice }, repos: [github.com/corp/*], builds: publish, sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, "agent/**": push } }] }`,
               '',
             ].join('\n')
           )
