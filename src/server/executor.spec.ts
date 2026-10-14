@@ -269,16 +269,21 @@ describe('HostExecutor', () => {
     const failed = await execute(run(bad))
     expect(failed.error?.message).toMatch(/build failed/)
 
-    const slow = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [sleep 30]\n' })
+    // cancelled once its task runs, so it is the process of the run that is stopped
+    const slow = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo started, sleep 30]\n' })
     const abort = new AbortController()
-    const result = execute(run(slow), abort.signal)
-    for (let i = 0; i < 300 && !existsSync(runs); i++) {
+    const seen: RunEventData[] = []
+    const cancelled = executor.execute(run(slow), { emit: (e) => seen.push(e), signal: abort.signal }).then(
+      () => undefined,
+      (e: Error) => e
+    )
+    const started = () => seen.some((e) => e.type === 'log' && e.task === 'build' && e.text.includes('started'))
+    for (let i = 0; i < 1500 && !started(); i++) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(started()).toBe(true)
     abort.abort()
-    const cancelled = await result
-    expect(cancelled.error?.message).toMatch(/cancel/)
+    expect((await cancelled)?.message).toBe('the run was cancelled')
   })
 
   it('fails with the reason when the server does not list the repository', async () => {
