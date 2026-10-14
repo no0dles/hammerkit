@@ -226,6 +226,14 @@ describe('sandbox client', () => {
       await client.writeRaw('-P/f.txt', 'f\n')
       expect((await client.exec('ls', '-P')).output).toBe('f.txt')
 
+      const task = await client.runTask('fail')
+      expect(task.exitCode).toBe(3)
+      expect(task.result?.lastLog).toContain('broken')
+    })
+  })
+
+  itExceptWindows('refuses a command of a shell that sees none of the files of the sandbox', async () => {
+    await withSandboxServer('harness-client-blind-shell', async ({ client }) => {
       // a shell that sees none of the files says so instead of running on an empty directory
       const blind = new SandboxClient(client.connection, client.sandbox, { name: 'payments', shell: 'elsewhere' })
       const said: string[] = []
@@ -234,10 +242,6 @@ describe('sandbox client', () => {
       )
       expect(said).toEqual([])
       expect(await client.stat('lost.txt')).toBeUndefined()
-
-      const task = await client.runTask('fail')
-      expect(task.exitCode).toBe(3)
-      expect(task.result?.lastLog).toContain('broken')
 
       // on a sandbox without files, the empty directory is the sandbox: the command runs
       const files = (await client.tree({ depth: 64 })).entries.filter((entry) => entry.type !== 'directory')
