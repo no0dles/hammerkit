@@ -16,6 +16,7 @@ import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
 import { WorkResources } from './work-resources'
+import { getKubernetesCommandArgs, getKubernetesCommandText } from './utils/task-arguments'
 
 export interface BaseWorkService {
   name: string
@@ -81,7 +82,11 @@ export const getServiceWorkingDir = (service: ContainerWorkService): string => s
 // The container's entrypoint and command for a service: with a `shell`, its
 // `cmd` runs as `<shell> -c "<cmd>"` in place of the image entrypoint; without
 // one the tokenized `cmd` becomes the command and the image entrypoint stays.
-export function getServiceCommand(service: ContainerWorkService): {
+// For Kubernetes, the arguments after -- are escaped so they stay text there.
+export function getServiceCommand(
+  service: ContainerWorkService,
+  options: { kubernetes?: boolean } = {}
+): {
   entrypoint: string[] | null
   cmd: string[] | null
 } {
@@ -89,9 +94,11 @@ export function getServiceCommand(service: ContainerWorkService): {
     return { entrypoint: null, cmd: null }
   }
   if (service.shell) {
-    return { entrypoint: [service.shell, '-c'], cmd: [service.cmd.cmd] }
+    const cmd = options.kubernetes ? getKubernetesCommandText(service.cmd) : service.cmd.cmd
+    return { entrypoint: [service.shell, '-c'], cmd: [cmd] }
   }
-  return { entrypoint: null, cmd: [service.cmd.parsed.command, ...service.cmd.parsed.args] }
+  const args = options.kubernetes ? getKubernetesCommandArgs(service.cmd) : service.cmd.parsed.args
+  return { entrypoint: null, cmd: [service.cmd.parsed.command, ...args] }
 }
 
 // The healthcheck as an exec command, through the service's `shell` if it has one.

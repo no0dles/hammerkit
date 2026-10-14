@@ -38,12 +38,53 @@ Each entry shows the image (or nothing, for a local task), labels, sources,
 generated outputs, and the `deps`/`needs` wiring — the same fields you set in the
 build file.
 
+## JSON [#json]
+
+`--json` prints the same tasks and services as JSON, for scripts and agents:
+
+```bash
+hammerkit ls --json
+```
+
+```json
+{
+  "tasks": [
+    {
+      "name": "test",
+      "description": "run the unit tests",
+      "type": "container-task",
+      "image": "node:24-alpine",
+      "deps": ["install"],
+      "needs": [],
+      "labels": {},
+      "command": "npx vitest run"
+    }
+  ],
+  "services": [
+    {
+      "name": "api",
+      "description": "",
+      "type": "container-service",
+      "image": "node:24-alpine",
+      "ports": [{ "host": 3000, "container": 3000 }],
+      "labels": { "app": ["api"] },
+      "command": "node server.js"
+    }
+  ]
+}
+```
+
+`command` is the task's last command, or the service's `cmd`: where
+[arguments](/docs/task/arguments) after `--` are appended. It is `null` when there
+is none.
+
 ## Options
 
 ```
 Options:
   -f, --filter <labels...>   filter task and services with labels
   -e, --exclude <labels...>  exclude task and services with labels
+  --json                     emit the tasks and services as JSON (default: false)
   -h, --help                 display help for command
 ```
 

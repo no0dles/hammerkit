@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
-import { getLocalWorkRuntime } from './work-runtime-local'
+import { getLocalWorkRuntime, getStateFilename } from './work-runtime-local'
 import { WorkItem } from './work-item'
 import { LocalWorkTask } from './work-task'
 import { environmentMock } from '../executer/environment-mock'
@@ -104,7 +104,33 @@ describe('local task pidfile', () => {
     })
 
     expect(await env.file.exists(join(cwd, '.hammerkit', 'task-1.pid'))).toBe(false)
-    expect(await env.file.exists(join(cwd, '.hammerkit', 'task-1'))).toBe(true)
+    expect(await env.file.exists(getStateFilename(task))).toBe(true)
+  })
+
+  it('takes the outputs as made by the variant that ran last, not by another id of the task', async () => {
+    const task = makeTask(cwd)
+    // the same task with other arguments after --: same name and outputs, other id
+    const variant = { ...makeTask(cwd), id: () => 'task-1-variant' }
+    const env = environmentMock(cwd)
+    const run = async (item: WorkItem<LocalWorkTask>, stateKey: string) => {
+      const state = new State<TaskState>({ type: 'pending', stateKey: null })
+      await getLocalWorkRuntime(item).execute(env, {
+        stateKey,
+        abort: new AbortController().signal,
+        state,
+        cache: { cached: false, stateKey, provable: true, resolved: item.data.caching },
+        daemon: false,
+        publishPorts: false,
+        waitForReady: true,
+      })
+    }
+    mockFindProcess.mockResolvedValue([])
+
+    await run(task, 'state-a')
+    expect(await getLocalWorkRuntime(task).currentStateKey(env)).toBe('state-a')
+    await run(variant, 'state-a')
+    expect(await getLocalWorkRuntime(variant).currentStateKey(env)).toBe('state-a')
+    expect(await getLocalWorkRuntime(task).currentStateKey(env)).toBeNull()
   })
 
   it('removes a stale pidfile when the process is not alive', async () => {

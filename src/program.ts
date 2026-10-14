@@ -4,7 +4,7 @@ import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
 import { isCI } from './utils/ci'
 import { parseLabelArguments } from './parser/parse-label-arguments'
-import { Cli, getCli, isCliService, isCliTask } from './cli'
+import { Cli, CliServiceItem, CliTaskItem, getCli, isCliService, isCliTask } from './cli'
 import { TaskDefinition } from './planner/describe-task'
 import { WorkEnvOrigin } from './planner/work-task'
 import { WorkLabelScope, WorkScope } from './executer/work-scope'
@@ -27,6 +27,7 @@ import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
 import { registerRunWorkerCommand } from './server/run-worker-command'
+import { getArgumentsTarget } from './planner/utils/task-arguments'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
   const { ctx, scope } = await createParseContext(fileName, environment)
@@ -93,6 +94,32 @@ function printTaskDefinition(environment: Environment, definition: TaskDefinitio
   }
 }
 
+// `ls --json`: what a caller (an agent picking a task) needs to know, with the
+// command that arguments after `--` are appended to (null: it takes none).
+function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
+  return {
+    tasks: tasks.map(({ item }) => ({
+      name: item.name,
+      description: item.data.description,
+      type: item.data.type,
+      ...(item.data.type === 'container-task' ? { image: item.data.image } : {}),
+      deps: item.deps.map((d) => d.name),
+      needs: item.needs.map((n) => n.name),
+      labels: item.data.labels,
+      command: getArgumentsTarget(item.data)?.cmd ?? null,
+    })),
+    services: services.map(({ item }) => ({
+      name: item.name,
+      description: item.data.description,
+      type: item.data.type,
+      ...(item.data.type === 'container-service' ? { image: item.data.image } : {}),
+      ports: item.data.ports.map((p) => ({ host: p.hostPort, container: p.containerPort })),
+      labels: item.data.labels,
+      command: getArgumentsTarget(item.data)?.cmd ?? null,
+    })),
+  }
+}
+
 function parseWorkLabelScope(options: unknown): WorkLabelScope {
   const scope: WorkLabelScope = {
     environmentName: null,
@@ -117,6 +144,12 @@ function parseWorkLabelScope(options: unknown): WorkLabelScope {
   return scope
 }
 
+// A task given arguments after -- skips the cache, unless the caller asks for a
+// cache method on the command line.
+function keepsCache(command: commaner.Command): boolean {
+  return command.getOptionValueSource('cache') === 'cli'
+}
+
 export async function getProgram(
   environment: Environment,
   argv: string[]
@@ -125,7 +158,11 @@ export async function getProgram(
   registerServerCommand(program, environment)
   registerRunWorkerCommand(program, environment)
 
-  const parsed = parseSetArguments(argv)
+  // What follows `--` belongs to the one task or service of a run or up, not to
+  // hammerkit: a `--set` or `--file` there is an argument like any other.
+  const separator = argv.indexOf('--')
+  const passthrough = separator >= 0 ? argv.slice(separator + 1) : []
+  const parsed = parseSetArguments(separator >= 0 ? argv.slice(0, separator) : argv)
   const args = parsed.args
   environment.processEnvs = { ...environment.processEnvs, ...parsed.values }
   const fileIndex = args.indexOf('--file')
@@ -136,6 +173,12 @@ export async function getProgram(
     args.splice(fileIndex, 2)
   }
   registerRemoteCommands(program, environment, fileName)
+  program.hook('preAction', (_, actionCommand) => {
+    const takesArguments = actionCommand.parent === program && ['run', 'up'].includes(actionCommand.name())
+    if (passthrough.length > 0 && !takesArguments) {
+      program.error(`${actionCommand.name()} takes no arguments after --, only run and up do`, { exitCode: 1 })
+    }
+  })
 
   if (await environment.file.exists(fileName)) {
     program
@@ -143,12 +186,18 @@ export async function getProgram(
       .description('list all tasks')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
+      .addOption(new Option('--json', 'emit the tasks and services as JSON').default(false))
       .action(async (options) => {
         const cli = await createCli(fileName, environment, parseWorkLabelScope(options))
         const items = cli.ls()
 
         const tasks = items.filter(isCliTask)
         const services = items.filter(isCliService)
+
+        if (options.json) {
+          environment.stdout.write(`${JSON.stringify(getListJson(tasks, services), null, 2)}\n`)
+          return
+        }
 
         if (services.length > 0) {
           printTitle(environment, 'Services')
@@ -634,7 +683,8 @@ export async function getProgram(
 
     program
       .command('up')
-      .description('start services(s)')
+      .description("start services(s), with the arguments after -- appended to the selected service's cmd")
+      .usage('[options] [-- args...]')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(
@@ -675,9 +725,12 @@ export async function getProgram(
           parseDuration
         )
       )
-      .action(async (options) => {
+      .action(async (options, command: commaner.Command) => {
         try {
-          const scope = parseWorkLabelScope(options)
+          const scope = {
+            ...parseWorkLabelScope(options),
+            args: { values: passthrough, services: true, cache: keepsCache(command) },
+          }
           const cli = await createCli(fileName, environment, scope)
           const result = await cli.runUp({
             cacheDefault: options.cache,
@@ -733,7 +786,8 @@ export async function getProgram(
 
     program
       .command('run [task]', { isDefault: true })
-      .description('execute task')
+      .description('execute task, with the arguments after -- appended to its last command')
+      .usage('[options] [task] [-- args...]')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(
@@ -777,17 +831,18 @@ export async function getProgram(
         )
       )
       .addOption(new Option('--no-skip-deps', 'run dependencies even when nothing needing them has to run'))
-      .action(async (task, options) => {
+      .action(async (task, options, command: commaner.Command) => {
         try {
           // For machine-readable JSON, suppress the human progress logger (which
           // also writes to stdout) so the only thing on stdout is the JSON.
           const runEnvironment: Environment = options.summaryJson
             ? { ...environment, stdout: emptyWritable(), console: consoleContext(emptyWritable()) }
             : environment
+          const args = { values: passthrough, services: false, cache: keepsCache(command) }
           const cli = await createCli(
             fileName,
             runEnvironment,
-            task ? { taskName: task, environmentName: options.env } : parseWorkLabelScope(options)
+            task ? { taskName: task, environmentName: options.env, args } : { ...parseWorkLabelScope(options), args }
           )
           if (cli.tasks().length === 0) {
             program.error('No tasks found', { exitCode: 127 })
