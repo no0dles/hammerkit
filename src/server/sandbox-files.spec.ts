@@ -468,6 +468,26 @@ describe('sandbox files', () => {
       expect(await files.diff('patch', { name: 'a', email: 'a@b', message: 'm' })).not.toContain(commit)
     })
 
+    it("leaves hammerkit's own run state out of the changes", async () => {
+      // where the engine writes it: next to the task, also in a directory below the root
+      for (const directory of ['.hammerkit/last-resolved', 'pkg/.hammerkit/state']) {
+        mkdirSync(join(work, directory), { recursive: true })
+        writeFileSync(join(work, directory, 'test-a94a8fe5.json'), '{"taskId":"x"}\n')
+      }
+      writeFileSync(join(work, 'pkg', '.hammerkit', 'abc.pid'), '42\n')
+      // what only looks like it is the project's
+      writeFileSync(join(work, '.hammerkit.yaml'), 'tasks: {}\n')
+      mkdirSync(join(work, 'docs', '.hammerkit-notes'), { recursive: true })
+      writeFileSync(join(work, 'docs', '.hammerkit-notes', 'a.md'), 'a\n')
+      expect((await files.changes()).map((file) => file.path).sort()).toEqual([
+        '.hammerkit.yaml',
+        'docs/.hammerkit-notes/a.md',
+      ])
+      for (const format of ['diff', 'patch'] as const) {
+        expect(await files.diff(format, { name: 'a', email: 'a@b', message: 'm' })).not.toContain('a94a8fe5')
+      }
+    })
+
     it('caps what one read answers', async () => {
       writeFileSync(join(work, 'many.txt'), Array.from({ length: 12_000 }, (_, i) => `line ${i + 1}`).join('\n'))
       const first = await files.read('many.txt', {})
