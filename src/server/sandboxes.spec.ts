@@ -423,12 +423,40 @@ describe('SandboxRegistry', () => {
     // what a run ends with
     expect(await storage.usage(key)).toBe(before + 40 * 250 * 10)
     expect(walk).toHaveBeenCalledTimes(1)
-    // the next run starts on what that walk left, nothing ran in between
+    // the next run is submitted and starts on what that walk left: nothing ran in between
+    expect(await storage.state(key)).toMatchObject({ clean: true })
     expect(await storage.state(key)).toMatchObject({ clean: true })
     expect(walk).toHaveBeenCalledTimes(1)
-    // a run did, so the one after walks again before git reads the files
-    expect(await storage.state(key)).toMatchObject({ clean: true })
-    expect(walk).toHaveBeenCalledTimes(2)
+    // while it runs, its tasks write: a state then walks, and so does the one after
+    await storage.attach(key)
+    writeFileSync(join(files, 'new.txt'), 'new')
+    chmodSync(join(files, 'new.txt'), 0o000)
+    expect(await storage.state(key)).toMatchObject({ clean: false })
+    expect(await storage.state(key)).toMatchObject({ clean: false })
+    expect(walk).toHaveBeenCalledTimes(3)
+    // until its measure: one walk per run
+    await storage.usage(key)
+    expect(await storage.state(key)).toMatchObject({ clean: false })
+    expect(walk).toHaveBeenCalledTimes(4)
+  }, 60_000)
+
+  it('reads the files of an edit without walking them again', async () => {
+    const storage = new HostSandboxStorage(join(root, 'files'), process.env)
+    const signal = AbortSignal.timeout(60_000)
+    const key = { id: 'sbx_edit', owner: alice }
+    await storage.create(key, { url: repository, ref: 'main', env: process.env as any, signal })
+    const files = (await storage.attach(key)).directory
+    // a run left a link, and was measured
+    mkdirSync(join(files, 'dir'))
+    symlinkSync(join(files, 'dir'), join(files, 'link'), 'junction')
+    await storage.usage(key)
+    const walk = vi.spyOn(storage as any, 'walk')
+    const edits = storage.files(key)
+    await (await edits.plan([{ op: 'delete', path: 'link' }])).commit()
+    await (await edits.plan([{ op: 'write', path: 'link', content: 'a file now\n' }])).commit()
+    expect(await edits.changes()).toEqual([{ path: 'link', status: 'added', additions: 1, deletions: 0 }])
+    expect(await storage.state(key)).toMatchObject({ clean: false })
+    expect(walk).not.toHaveBeenCalled()
   }, 60_000)
 
   it('lets a change wait for a delete, and then does not find the sandbox', async () => {
@@ -845,5 +873,16 @@ describe('SandboxRegistry', () => {
       })
       expect(git(repository, 'branch', '--list', 'agent/*')).toBe('')
     })
+  })
+
+  it("does not hold up a run's result for its measure, but the owner's next run waits for it", async () => {
+    const sandboxes = registryWith({ bytes: 1024 * 1024 })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'big.bin'), Buffer.alloc(2 * 1024 * 1024))
+    // what the executor does once the run is over, without waiting
+    const measuring = sandboxes.measure(sandbox.id)
+    await sandboxes.measured(alice)
+    expect(sandboxes.overLimit(alice)).toMatch(/more than your limit of 1Mi/)
+    await measuring
   })
 })

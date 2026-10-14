@@ -192,7 +192,11 @@ export class HostExecutor implements RunExecutor {
         // the published files are read from a directory of the run and work on the
         // sandbox, whose own build files are just files
         const { registry, network } = sandboxes as SandboxRunOptions
+        // read before the run attaches: until then the walk of the last run's measure holds
         const state = await registry.state(source.id, abortCtrl.signal)
+        const attached = await registry.attach(source.id, join(root, 'sandbox'))
+        work = attached.directory
+        claim = attached.claim
         // what was approved is what runs: the files may have changed since, by a run
         // before this one on the sandbox
         if (run.approvals?.length && state.tree !== source.tree) {
@@ -200,9 +204,6 @@ export class HostExecutor implements RunExecutor {
             `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
           )
         }
-        const attached = await registry.attach(source.id, join(root, 'sandbox'))
-        work = attached.directory
-        claim = attached.claim
         if (claim && !this.options.placement) {
           throw new Error(`the sandbox ${source.id} is a claim on a cluster, this server runs tasks on its own docker`)
         }
@@ -258,8 +259,8 @@ export class HostExecutor implements RunExecutor {
       context.signal.removeEventListener('abort', abort)
       await rm(root, { recursive: true, force: true })
       if (source.type === 'sandbox') {
-        // what the run wrote counts against the owner's limits
-        await sandboxes?.registry.measure(source.id).catch(() => undefined)
+        // what the run wrote counts against the owner's limits, from their next run or create
+        sandboxes?.registry.measure(source.id).catch(() => undefined)
       }
     }
   }

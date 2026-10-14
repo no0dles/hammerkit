@@ -137,10 +137,16 @@ export class HostSandboxStorage implements SandboxStorage {
   // one git command or walk at a time per sandbox: the objects `state` writes are pruned
   // again, which must not meet another command that still needs them
   private readonly queues = new Map<string, Promise<unknown>>()
-  // the sandboxes `usage` walked last, with the links it found: tasks only write while a run
-  // runs, between the `state` it starts with and the `usage` it ends with, so the next
-  // `state` needs no walk
+  // the sandboxes walked since a run last wrote to them, with the links the walk found: only
+  // a run's tasks write to a sandbox, between its `attach` and the `usage` it ends with, so
+  // until the next attach a `state` needs no walk. The edits of the file API write readable
+  // files and never a link, so a walk still holds after them: a link it found that an edit
+  // replaced is no link any more, and is added as the file it is.
   private readonly walked = new Map<string, string[]>()
+  // the sandboxes a run attached and that were not measured since, and how often each was
+  // attached: a walk while a run may write, or that a run attached during, is not reused
+  private readonly attached = new Set<string>()
+  private readonly attaches = new Map<string, number>()
 
   constructor(
     private readonly directory: string,
@@ -225,18 +231,10 @@ export class HostSandboxStorage implements SandboxStorage {
   // `fn` with a copy of the sandbox's index that holds the files as they are (`addFiles`), so
   // neither the index nor the files change, and what it wrote to the git data is pruned again.
   // Files a task made unreadable are made readable first: git would leave them out and call
-  // them unchanged. Holds the sandbox.
-  // `afterRun` skips the walk when `usage` just walked the sandbox after a run.
-  private withIndex<T>(
-    id: string,
-    signal: AbortSignal,
-    fn: (run: SandboxGit['run']) => Promise<T>,
-    afterRun = false
-  ): Promise<T> {
+  // them unchanged. Holds the sandbox. No walk when nothing wrote since the last one.
+  private withIndex<T>(id: string, signal: AbortSignal, fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
     return this.exclusive(id, async () => {
-      const walked = afterRun ? this.walked.get(id) : undefined
-      this.walked.delete(id)
-      const links = walked ?? (await this.reclaim(id)).links
+      const links = this.walked.get(id) ?? (await this.walkOnce(id)).links
       try {
         return await this.indexed(id, signal, links, fn)
       } finally {
@@ -323,6 +321,7 @@ export class HostSandboxStorage implements SandboxStorage {
     if (!isValidRef(fetch.ref)) {
       throw new Error(`${JSON.stringify(fetch.ref.slice(0, 80))} is not a branch`)
     }
+    this.walked.delete(id)
     // the branch by its full name: a tag of the same name is never taken
     await this.git(
       id,
@@ -346,7 +345,7 @@ export class HostSandboxStorage implements SandboxStorage {
   // failed late and the remote has it after all.
   async push({ id }: SandboxKey, push: SandboxPush): Promise<string | undefined> {
     return this.exclusive(id, async () => {
-      const { links } = await this.reclaim(id)
+      const links = this.walked.get(id) ?? (await this.walkOnce(id)).links
       try {
         return await this.commitAndPush(id, push, links)
       } finally {
@@ -359,7 +358,7 @@ export class HostSandboxStorage implements SandboxStorage {
   // cluster), and keeps the commit as the push does until the sandbox is moved to it.
   async commit({ id }: SandboxKey, author: PatchAuthor, signal: AbortSignal): Promise<string | undefined> {
     return this.exclusive(id, async () => {
-      const { links } = await this.reclaim(id)
+      const links = this.walked.get(id) ?? (await this.walkOnce(id)).links
       try {
         return await this.keptCommit(id, author, signal, links)
       } finally {
@@ -438,16 +437,11 @@ export class HostSandboxStorage implements SandboxStorage {
   // unreadable are made readable first: git would leave them out and call the sandbox
   // clean.
   async state({ id }: SandboxKey, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
-    return this.withIndex(
-      id,
-      signal,
-      async (run) => {
-        const tree = (await run(['write-tree'], 'read')).trim()
-        const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
-        return { commit, tree, clean: tree === base }
-      },
-      true
-    )
+    return this.withIndex(id, signal, async (run) => {
+      const tree = (await run(['write-tree'], 'read')).trim()
+      const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
+      return { commit, tree, clean: tree === base }
+    })
   }
 
   // Adds the files as they are to the index of `env`. A link is written as a link and never
@@ -510,6 +504,10 @@ export class HostSandboxStorage implements SandboxStorage {
     if (!stats?.isDirectory()) {
       throw new Error(`the sandbox ${id} has no files on this server`)
     }
+    // the run's tasks write from now on
+    this.walked.delete(id)
+    this.attached.add(id)
+    this.attaches.set(id, (this.attaches.get(id) ?? 0) + 1)
     return { directory: files }
   }
 
@@ -517,8 +515,9 @@ export class HostSandboxStorage implements SandboxStorage {
   // outputs. Symbolic links are counted, not followed: a link a task made points anywhere.
   async usage({ id }: SandboxKey): Promise<number> {
     return this.exclusive(id, async () => {
-      const { bytes, links } = await this.reclaim(id)
-      this.walked.set(id, links)
+      // after a run: its tasks are done
+      this.attached.delete(id)
+      const { bytes } = await this.walkOnce(id)
       return bytes + ((await this.containers?.volumeBytes(this.workTree(id)).catch(() => 0)) ?? 0)
     })
   }
@@ -530,11 +529,23 @@ export class HostSandboxStorage implements SandboxStorage {
   private async removeId(id: string): Promise<void> {
     await this.exclusive(id, async () => {
       this.walked.delete(id)
+      this.attached.delete(id)
+      this.attaches.delete(id)
       await this.reclaim(id).catch(() => undefined)
       await rm(this.root(id), { recursive: true, force: true, maxRetries: 3 })
       // without docker there is nothing to remove now; volumes stay labelled with the files
       await this.containers?.removeVolumes(this.workTree(id)).catch(() => undefined)
     })
+  }
+
+  // Walks the sandbox, and keeps the walk for the next `state` when no run wrote meanwhile.
+  private async walkOnce(id: string): Promise<Walk> {
+    const attaches = this.attaches.get(id)
+    const walk = await this.reclaim(id)
+    if (!this.attached.has(id) && this.attaches.get(id) === attaches) {
+      this.walked.set(id, walk.links)
+    }
+    return walk
   }
 
   // Walks the sandbox, makes every directory and file the server's user can read and write

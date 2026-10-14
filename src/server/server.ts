@@ -326,6 +326,7 @@ async function submitRun(
       })
       return
     }
+    await sandboxes.registry.measured(principal)
     const over = sandboxes.registry.overLimit(principal)
     if (over) {
       send(res, 413, { error: over })
