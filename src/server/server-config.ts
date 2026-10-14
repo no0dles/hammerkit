@@ -696,7 +696,7 @@ export const serverConfigSchema = z
       if (
         config.sandboxes.network !== 'open' &&
         backend.networkPolicy !== 'enforced' &&
-        config.entitlements.some((entitlement) => entitlement.sandboxes)
+        config.entitlements.some((entitlement) => entitlement.sandboxes?.length)
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

@@ -613,7 +613,7 @@ export async function startServer(
   }
   // on a cluster that lists the claims of sandboxes in the namespaces of callers, which a
   // server without sandboxes need not be allowed to
-  if (config.backend.type === 'host' || config.entitlements.some((entitlement) => entitlement.sandboxes)) {
+  if (config.backend.type === 'host' || config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
     await sandboxes.registry.load()
   }
   const executorOptions = {
