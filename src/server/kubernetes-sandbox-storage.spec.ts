@@ -645,6 +645,19 @@ describe('sandboxes on a cluster', () => {
         signal: AbortSignal.timeout(60_000),
       }
       await expect(storage.push(key, request)).rejects.toThrow(/has \.env, which never leaves the server/)
+      // or with the run state hammerkit writes next to a task
+      pod(() => {
+        const work = join(root, 'forged-state')
+        execFileSync('git', ['--git-dir', data, 'worktree', 'add', '--quiet', '--detach', work, 'HEAD'])
+        mkdirSync(join(work, 'src', '.hammerkit'), { recursive: true })
+        writeFileSync(join(work, 'src', '.hammerkit', 'cache.json'), '{}')
+        git(work, 'add', '--force', 'src/.hammerkit/cache.json')
+        git(work, 'commit', '--quiet', '-m', 'forged')
+        return git(work, 'rev-parse', 'HEAD')
+      })
+      await expect(storage.push(key, request)).rejects.toThrow(
+        /has src\/\.hammerkit\/cache\.json, which never leaves the server/
+      )
       // a pod that answers a commit of somewhere else
       pod(() => 'f'.repeat(40))
       await expect(storage.push(key, request)).rejects.toThrow()

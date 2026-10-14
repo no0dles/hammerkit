@@ -23,6 +23,7 @@ import {
   EditOp,
   EditPlan,
   FileStat,
+  isRunState,
   PatchAuthor,
   RawFile,
   ReadQuery,
@@ -296,7 +297,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       )
         .split('\0')
         .filter((path) => path.length > 0)
-      const denied = changed.find((path) => deniedPath(path))
+      const denied = changed.find((path) => deniedPath(path) || isRunState(path))
       if (denied) {
         throw new Error(`the commit of the sandbox ${key.id} has ${denied}, which never leaves the server`)
       }
