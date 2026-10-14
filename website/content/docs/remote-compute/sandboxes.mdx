@@ -384,8 +384,8 @@ it and pushes a branch. The other is a [push](#pushing) by the server. Changes l
 ## Pushing
 
 `POST /v1/sandboxes/<id>/push` commits the changes of a sandbox and pushes the commit to a
-branch of its repository, with the write credential of the server's
-[sources](/docs/remote-compute/sources#pushing) (`pushSecret`). The caller's `sandboxes`
+branch of its repository, with the `secret` of the server's
+[source](/docs/remote-compute/sources#pushing) for it. The caller's `sandboxes`
 decide where to: a sandbox only pushes to a branch whose pattern has the type `push` in an
 entry for its repository, `agent/**` for example, never to a `main` they may only `pull`.
 
@@ -429,7 +429,7 @@ is `409` too.
 | Status | When |
 | --- | --- |
 | `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start with `.` or `-`, or end with `.` or `.lock`). |
-| `403` | No `push` pattern of the caller's entries for the repository covers the branch, the source has no `pushSecret`, or as for the files, the caller lost the repository or the sandbox's branch. |
+| `403` | No `push` pattern of the caller's entries for the repository covers the branch, the source has no `secret`, or as for the files, the caller lost the repository or the sandbox's branch. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
 | `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access). Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |

@@ -23,10 +23,10 @@ secretProviders:
 accounts:
   dev: { providers: { echo: { env: {} } }, source: [ref, sandbox] }
   ci: { providers: { echo: { env: {} } } }
-  scm-push: { providers: { echo: { env: {} } } }
+  scm: { providers: { echo: { env: {} } } }
 sources:
   - match: github.com/corp/*
-    pushSecret: { from: "echo:push-token", account: scm-push }
+    secret: { from: "echo:scm-token", account: scm }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { dev: use, ci: use }
