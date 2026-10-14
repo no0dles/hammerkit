@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process'
 import { join } from 'path'
 import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
 import { createPiOperations, hammerkitPiExtension, PiLibrary, PiToolDefinition } from './pi'
@@ -86,6 +87,7 @@ describe('pi extension', () => {
         'ls',
         'find',
         'grep',
+        'push',
       ])
       expect(made.read).toMatchObject({ cwd: root, operations: { readFile: expect.any(Function) } })
       expect(made.bash.operations).toMatchObject({ exec: expect.any(Function) })
@@ -100,7 +102,7 @@ describe('pi extension', () => {
   })
 
   it('names the sandbox in the system prompt once it is connected', async () => {
-    await withSandboxServer('harness-pi-prompt', async ({ client }) => {
+    await withSandboxServer('harness-pi-prompt', async ({ client, repository }) => {
       const handlers: { [event: string]: (event: any, ctx: any) => any } = {}
       const tool = (name: string) => () => ({ name, parameters: {}, execute: async () => undefined })
       const library = {
@@ -112,8 +114,12 @@ describe('pi extension', () => {
         createFindToolDefinition: tool('find'),
         createGrepToolDefinition: tool('grep'),
       }
+      const registered: PiToolDefinition[] = []
       const extension = hammerkitPiExtension(library, { cwd: root, client: async () => client })
-      extension({ registerTool: () => undefined, on: (event, handler) => (handlers[event] = handler) })
+      extension({
+        registerTool: (definition) => registered.push(definition),
+        on: (event, handler) => (handlers[event] = handler),
+      })
       const status: string[] = []
       await handlers.session_start({}, { ui: { setStatus: (_key: string, text: string) => status.push(text) } })
       expect(status).toEqual([`hammerkit sandbox ${client.id}`])
@@ -125,6 +131,16 @@ describe('pi extension', () => {
         `Current working directory: ${root}\nFiles and commands are on hammerkit sandbox ${client.id} of github.com/corp/payments`
       )
       expect(prompt.systemPrompt).toContain('Commands run as the task sh of the published build file payments')
+
+      // push takes the work out as a branch the operator allows
+      await client.writeRaw('notes.md', 'from pi\n')
+      const push = registered.find((definition) => definition.name === 'push') as PiToolDefinition
+      await expect(push.execute('call-1', { branch: 'main', message: 'Agent work' })).rejects.toThrow(
+        /you may only push to agent\/\*\*/
+      )
+      const pushed = await push.execute('call-2', { branch: 'agent/pi-1', message: 'Agent work' })
+      const commit = execFileSync('git', ['-C', repository, 'rev-parse', 'agent/pi-1'], { encoding: 'utf8' }).trim()
+      expect(pushed.content).toEqual([{ type: 'text', text: `pushed ${commit} to agent/pi-1` }])
     })
   })
 })

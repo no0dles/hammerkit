@@ -135,6 +135,10 @@ describe('agent session (docker)', () => {
                     '    image: alpine:3.21',
                     '    mounts: [.]',
                     '    cmds: [sh -c]',
+                    // the shell as agents.mdx showed it before it had the mount
+                    '  bare:',
+                    '    image: alpine:3.21',
+                    '    cmds: [sh -c]',
                     '  test:',
                     '    image: alpine:3.21',
                     '    src: [src/**]',
@@ -193,6 +197,16 @@ describe('agent session (docker)', () => {
             expect(shell.text).toContain('answer = 42')
             expect((await agent.call('read', { path: 'shell-note.txt' })).text).toContain('kept')
             expect((await agent.call('bash', { command: 'rm shell-note.txt && ls' })).text).not.toContain('shell-note')
+
+            // a shell without the mount would run on an empty directory, the client says so instead
+            const bare = connectAgent(new SandboxClient(connection, view, { name: 'payments', shell: 'bare' }))
+            await bare.request('initialize', { protocolVersion: '2025-06-18', capabilities: {} })
+            const blind = await bare.call('bash', { command: 'echo lost > lost.txt' })
+            expect(blind.isError).toBe(true)
+            expect(blind.text).toContain('the shell task bare of payments sees none of the files of the sandbox')
+            expect(blind.text).toContain('mounts: [.]')
+            await bare.close()
+            expect((await agent.call('read', { path: 'lost.txt' })).isError).toBe(true)
 
             // the test passes now: its result through run_task, its log through the client
             const ran = await agent.call('run_task', { task: 'test' })

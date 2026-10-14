@@ -1,7 +1,7 @@
 import { Command, Option } from 'commander'
 import colors from 'colors'
 import { Environment } from '../executer/environment'
-import { getAccessToken } from './credentials'
+import { getTokenSource } from './token-source'
 import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Bundle, HASH_PATTERN } from './bundle'
@@ -180,7 +180,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
 
   const connect = async (name: string | undefined) => {
     const chosen = await getServer(name)
-    const token = await getAccessToken(environment, chosen.name, chosen.server)
+    // a CI job or an agent brings its own token, a person signs in
+    const token = await getTokenSource(environment, chosen.name, chosen.server).token()
     return { ...chosen, token }
   }
 

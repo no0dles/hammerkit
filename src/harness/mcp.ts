@@ -343,6 +343,25 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
         ].join('\n')
       },
     },
+    {
+      name: 'push',
+      description:
+        'Commit the changes of the sandbox and push them to a branch of its repository, for review. The server ' +
+        'pushes only to the branches its operator allows; the sandbox is at the pushed commit afterwards.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          branch: text('the branch to push to, created when it does not exist'),
+          message: text('the commit message'),
+        },
+        required: ['branch', 'message'],
+      },
+      annotations: { title: 'Push a branch', readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      async call(args) {
+        const pushed = await (await client()).push(args.branch, args.message)
+        return `pushed ${pushed.commit} to ${pushed.branch}`
+      },
+    },
   ]
 }
 

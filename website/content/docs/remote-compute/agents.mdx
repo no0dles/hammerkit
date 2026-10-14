@@ -16,8 +16,8 @@ there, as published tasks in their containers. hammerkit connects agents to it t
 | Client                                          | What it gets                                                                                                      |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | [`hammerkit remote mcp`](#hammerkit-remote-mcp) | MCP tools for any client that speaks MCP: Claude Code, Claude Desktop, Cursor, a custom agent.                    |
-| [pi](#pi)                                       | pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`, working on the sandbox.                        |
-| [opencode](#opencode)                           | opencode's own `read`, `write`, `edit`, `apply_patch`, `bash`, `grep`, `glob` and `list`, working on the sandbox. |
+| [pi](#pi)                                       | pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`, working on the sandbox, and `push`.            |
+| [opencode](#opencode)                           | opencode's own `read`, `write`, `edit`, `apply_patch`, `bash`, `grep`, `glob` and `list`, working on the sandbox, and `push`. |
 
 pi and opencode keep the tools their models are tuned for, with the same names, parameters
 and output: only where they read, write and run moves. The MCP tools take the shapes models
@@ -40,7 +40,8 @@ tasks:
 ```
 
 `mounts: [.]` puts the files of the sandbox into the container, writable, as the task's
-working directory: without it a command in a container sees none of them.
+working directory. Without it a command in a container runs in an empty directory: the
+clients then refuse to run it and say the shell task needs `mounts: [.]`.
 
 `bash` with `npm test -- -t login` then runs `sh -c 'npm test -- -t login'` in that image,
 on the files of the sandbox. Name the task `sh` or tell the client its name. Use `bash -c`
@@ -75,7 +76,8 @@ in this order:
 Give the agent's identity an [entitlement](/docs/remote-compute/entitlements) with its
 repositories and branches under `sandboxes`, `builds: run`, and no account that holds
 production secrets. `[{ repo: github.com/corp/*, branches: { main: pull, "agent/**": push } }]`
-lets it start from `main` and push to `agent/**`; with only `pull` it hands back patches.
+lets it start from `main` and push to `agent/**` with the [`push`](#taking-the-work-out) tool;
+with only `pull` it hands back patches.
 
 ## Settings
 
@@ -120,9 +122,11 @@ Paths are relative to the root of the sandbox. The tools:
 | `run_task`    | `task`, `args`                                                                                                       | Runs another published task, such as `test`, and answers its [result](/docs/remote-compute/runs#results-and-waiting): status, exit code, why it was not taken from the cache, its last lines. |
 | `run_logs`    | `run`, `task`, `tail`, `from`, `limit`, `grep`, `ignore_case`, `context`                                             | Reads more of the [log of a run](/docs/remote-compute/runs#logs).                                                                                                                             |
 | `changes`     | `format`: `summary`, `diff` or `patch`                                                                               | What changed since the sandbox was fetched.                                                                                                                                                   |
+| `push`        | `branch`, `message`                                                                                                  | Commits the changes and pushes them to a branch, see [taking the work out](#taking-the-work-out).                                                                                             |
 
-Reads and searches are marked `readOnlyHint`, the edits `destructiveHint`; `bash` and
-`run_task` keep the defaults, since a command can do anything its task can. The server
+Reads and searches are marked `readOnlyHint`, the edits `destructiveHint`, `push`
+`openWorldHint`; `bash` and `run_task` keep the defaults, since a command can do anything
+its task can. The server
 also tells the client which sandbox, repository and commit the tools work on.
 
 ## pi
@@ -166,8 +170,16 @@ Tools the plugin does not replace still work on the machine opencode runs on. Tu
 ones that touch local files and that your opencode version still has, for example
 `"tools": { "multiedit": false }` in `opencode.json`.
 
+## Taking the work out
+
+Every client has a `push` tool with a `branch` and a commit `message`. The server commits the
+changes of the sandbox as the agent's identity and [pushes](/docs/remote-compute/sandboxes#pushing)
+them with the source's own credentials, only to a branch the entitlement gives `push`, such
+as `agent/**`; any other branch is refused with what the agent may push to. The sandbox is at
+the pushed commit afterwards, so the next push carries only new work. Without a branch to push
+to, the MCP tool `changes` with `format: patch` gives a patch to apply with `git am`.
+
 ## What is not covered yet
 
-- Pushing a branch from the sandbox: take the work out with `changes` as a patch.
 - A service on the sandbox, such as a dev server to send requests to.
 - Commands that read input, and long-running background commands.

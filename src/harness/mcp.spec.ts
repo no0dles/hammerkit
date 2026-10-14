@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process'
 import { Command } from 'commander'
 import { PassThrough } from 'stream'
 import { addServer } from '../remote/host-config'
@@ -172,7 +173,7 @@ describe('mcp framing', () => {
 
 describe('mcp tools on a sandbox', () => {
   it('reads, edits, searches and shows the changes of a sandbox', async () => {
-    await withSandboxServer('harness-mcp-files', async ({ client: sandbox }) => {
+    await withSandboxServer('harness-mcp-files', async ({ client: sandbox, repository }) => {
       const client = connect((input, output) =>
         serveMcp(
           input,
@@ -193,6 +194,7 @@ describe('mcp tools on a sandbox', () => {
         'run_task',
         'run_logs',
         'changes',
+        'push',
       ])
       expect(listed.find((tool: McpTool) => tool.name === 'read').annotations).toMatchObject({
         readOnlyHint: true,
@@ -234,6 +236,18 @@ describe('mcp tools on a sandbox', () => {
         ].join('\n')
       )
       expect((await client.call('changes', { format: 'diff' })).text).toContain('+from-agent')
+
+      // the work leaves as a branch, only one the operator lets the caller push to
+      const refused = await client.call('push', { branch: 'main', message: 'Agent work' })
+      expect(refused.isError).toBe(true)
+      expect(refused.text).toMatch(/you may only push to agent\/\*\*/)
+      const pushed = await client.call('push', { branch: 'agent/mcp-1', message: 'Agent work' })
+      const commit = execFileSync('git', ['-C', repository, 'rev-parse', 'agent/mcp-1'], { encoding: 'utf8' }).trim()
+      expect(pushed).toEqual({ text: `pushed ${commit} to agent/mcp-1`, isError: false })
+      expect(execFileSync('git', ['-C', repository, 'show', 'agent/mcp-1:input.txt'], { encoding: 'utf8' })).toBe(
+        'from-agent\n'
+      )
+      expect((await client.call('changes', {})).text).toMatch(/^no changes since /)
       await client.close()
     })
   })

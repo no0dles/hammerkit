@@ -13,7 +13,8 @@ import {
   ServerConnection,
   toSandboxPath,
 } from './sandbox-client'
-import { getHarnessEnvironment, getTokenSource } from './connect'
+import { getHarnessEnvironment } from './connect'
+import { getTokenSource } from '../remote/token-source'
 
 describe('sandbox paths', () => {
   it('maps the working directory of a harness onto the root of the sandbox', () => {
@@ -225,9 +226,23 @@ describe('sandbox client', () => {
       await client.writeRaw('-P/f.txt', 'f\n')
       expect((await client.exec('ls', '-P')).output).toBe('f.txt')
 
+      // a shell that sees none of the files says so instead of running on an empty directory
+      const blind = new SandboxClient(client.connection, client.sandbox, { name: 'payments', shell: 'elsewhere' })
+      const said: string[] = []
+      await expect(blind.exec('echo lost > lost.txt', '', { onLine: (line) => said.push(line) })).rejects.toThrow(
+        'the shell task elsewhere of payments sees none of the files of the sandbox, a shell task in a container needs mounts: [.] to work on them'
+      )
+      expect(said).toEqual([])
+      expect(await client.stat('lost.txt')).toBeUndefined()
+
       const task = await client.runTask('fail')
       expect(task.exitCode).toBe(3)
       expect(task.result?.lastLog).toContain('broken')
+
+      // on a sandbox without files, the empty directory is the sandbox: the command runs
+      const files = (await client.tree({ depth: 64 })).entries.filter((entry) => entry.type !== 'directory')
+      await client.edit(files.map((entry) => ({ op: 'delete' as const, path: entry.path })))
+      expect((await blind.exec('echo ran', '')).output).toBe('ran')
     })
   })
 })

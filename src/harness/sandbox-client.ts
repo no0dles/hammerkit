@@ -2,6 +2,7 @@ import { posix, relative, sep, isAbsolute } from 'path'
 import type { FileStat, ReadResult, SearchQuery, SearchResult, TreeQuery, TreeResult } from '../server/sandbox-files'
 import type { Run, TaskResult } from '../server/runs'
 import type { LogPage } from '../server/run-logs'
+import { isToken } from '../remote/token-source'
 
 // a write carries up to 32 MiB
 const TIMEOUT_MS = 60_000
@@ -164,6 +165,17 @@ export class SandboxClient {
     return (await call(this.connection, 'GET', `${this.base()}/changes`, { query: { format } })).text()
   }
 
+  /**
+   * Commits the changes of the sandbox and pushes them to a branch of its repository, one
+   * the operator lets the caller push to. The sandbox is at the pushed commit then.
+   */
+  async push(branch: string, message: string): Promise<{ branch: string; commit: string }> {
+    const pushed: { branch: string; commit: string } = await json(
+      await call(this.connection, 'POST', `${this.base()}/push`, { body: { branch, message } })
+    )
+    return { branch: pushed.branch, commit: pushed.commit }
+  }
+
   async getRun(id: string): Promise<Run> {
     return json(await call(this.connection, 'GET', `/v1/runs/${encodeURIComponent(id)}`))
   }
@@ -266,6 +278,24 @@ export class SandboxClient {
   async exec(command: string, cwd: string, options: Omit<RunTaskOptions, 'args'> = {}): Promise<TaskRun> {
     // on its own line: `cd dir && a; b` would run b in the root when dir is missing
     const script = cwd && cwd !== '.' ? `cd -- ${quotePosix(cwd)} || exit 1\n${command}` : command
+    // a shell task in a container without `mounts: [.]` runs in an empty directory: the
+    // command would see none of the files and its writes would be lost, so it does not run
+    const onLine = options.onLine
+    const guarded = await this.runTask(this.build.shell, {
+      ...options,
+      args: [`${EMPTY_GUARD}\n${script}`],
+      onLine: onLine && ((line) => line !== EMPTY_MARKER && onLine(line)),
+    })
+    if (guarded.exitCode !== EMPTY_EXIT || !guarded.output.split('\n').includes(EMPTY_MARKER)) {
+      return guarded
+    }
+    if ((await this.tree({ depth: 1, limit: 1 })).entries.length > 0) {
+      throw new SandboxClientError(
+        `the shell task ${this.build.shell} of ${this.build.name} sees none of the files of the sandbox, ` +
+          `a shell task in a container needs mounts: [.] to work on them`
+      )
+    }
+    // the sandbox is empty indeed
     return this.runTask(this.build.shell, { ...options, args: [script] })
   }
 
@@ -281,6 +311,17 @@ export class SandboxClient {
     return `${this.base()}/files/${clean.split('/').map(encodeURIComponent).join('/')}`
   }
 }
+
+// The first lines of every shell command: it stops when the working directory is empty,
+// links included, without any tool but the shell itself.
+const EMPTY_MARKER = 'hammerkit: the shell sees no files'
+const EMPTY_EXIT = 125
+const EMPTY_GUARD = [
+  'hk_seen=',
+  'for hk_f in * .[!.]* ..?*; do if [ -e "$hk_f" ] || [ -L "$hk_f" ]; then hk_seen=1; break; fi; done',
+  `[ -n "$hk_seen" ] || { echo '${EMPTY_MARKER}'; exit ${EMPTY_EXIT}; }`,
+  'unset hk_seen hk_f',
+].join('\n')
 
 // The exit code of a task as a shell reports it: 0 for a task that succeeded or came
 // from the cache, its own when it failed, none when it never ran or ended without one.
@@ -319,12 +360,6 @@ export function toSandboxPath(root: string, path: string): string {
   } catch {
     throw new SandboxClientError(`${path} is outside of the sandbox at ${root}`, 400)
   }
-}
-
-// A bearer token is one word of visible ASCII; anything else is output of a token command
-// that holds more than the token, which must never reach an error message.
-export function isToken(value: string): boolean {
-  return /^[\x21-\x7e]+$/.test(value)
 }
 
 function redact(message: string, token: string): string {

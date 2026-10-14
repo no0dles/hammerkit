@@ -37,7 +37,7 @@ const LIST_LIMIT = 100
 /**
  * The tools of opencode on a hammerkit sandbox: `read`, `write`, `edit`, `apply_patch`,
  * `bash`, `grep`, `glob` and `list` with the parameters of opencode's own, which a plugin replaces
- * by registering tools of the same name. opencode resolves paths against its directory,
+ * by registering tools of the same name, and `push`, which takes the work out as a branch. opencode resolves paths against its directory,
  * which stands for the root of the sandbox. `schema` is the zod of opencode
  * (`tool.schema` of `@opencode-ai/plugin`), so it reads the parameters as its own.
  */
@@ -265,6 +265,20 @@ export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>
           lines.push('', '(Results are truncated. Consider using a more specific path or pattern.)')
         }
         return lines.join('\n')
+      },
+    },
+
+    push: {
+      description:
+        'Commit the changes of the hammerkit sandbox and push them to a branch of its repository, for review. ' +
+        'The server pushes only to the branches its operator allows; the sandbox is at the pushed commit afterwards.',
+      args: {
+        branch: z.string().describe('The branch to push to, created when it does not exist'),
+        message: z.string().describe('The commit message'),
+      },
+      async execute(args: { branch: string; message: string }) {
+        const pushed = await (await client()).push(args.branch, args.message)
+        return { title: `pushed to ${pushed.branch}`, output: `pushed ${pushed.commit} to ${pushed.branch}` }
       },
     },
 
