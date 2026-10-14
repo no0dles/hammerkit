@@ -13,7 +13,8 @@ import {
   setDefaultLocation,
 } from './host-config'
 import { deviceLogin } from './device-login'
-import { getAccessToken, removeToken, saveToken } from './credentials'
+import { removeToken, saveToken } from './credentials'
+import { getTokenSource } from './token-source'
 import { callServer, getMe, printable } from './server-client'
 import { registerWorkCommands } from './remote-work-commands'
 import { registerMcpCommand } from '../harness/mcp-command'
@@ -159,7 +160,7 @@ export function registerRemoteCommands(program: Command, environment: Environmen
     .action(
       guarded('Remote accounts was not successful', async (name: string | undefined) => {
         const chosen = await getServer(name)
-        const token = await getAccessToken(environment, chosen.name, chosen.server)
+        const token = await getTokenSource(environment, chosen.name, chosen.server).token()
         const me = await getMe(chosen.server, token)
         const { body } = await callServer<{
           accounts: { name: string; description?: string; level: 'use' | 'request'; sources: string[] }[]

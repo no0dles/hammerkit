@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process'
 import { join } from 'path'
 import { z } from 'zod'
 import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
@@ -8,9 +9,19 @@ const context = (): OpencodeToolContext => ({ directory, abort: new AbortControl
 
 describe('opencode tools on a sandbox', () => {
   it('takes the parameters of opencode and answers in its words', async () => {
-    await withSandboxServer('harness-opencode-files', async ({ client }) => {
+    await withSandboxServer('harness-opencode-files', async ({ client, repository }) => {
       const tools = createOpencodeTools(z, async () => client)
-      expect(Object.keys(tools)).toEqual(['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob', 'list'])
+      expect(Object.keys(tools)).toEqual([
+        'read',
+        'write',
+        'edit',
+        'apply_patch',
+        'bash',
+        'grep',
+        'glob',
+        'push',
+        'list',
+      ])
       // opencode builds a zod object of the args, as it does for its own
       expect(z.object(tools.edit.args as z.ZodRawShape).safeParse({ filePath: 'a', oldString: 'x' }).success).toBe(
         false
@@ -63,6 +74,15 @@ describe('opencode tools on a sandbox', () => {
       expect(await tools.list.execute({ path: join(directory, 'src'), ignore: ['*.ts'] }, context())).toBe(
         `${join(directory, 'src')}/`
       )
+
+      await expect(tools.push.execute({ branch: 'main', message: 'Agent work' }, context())).rejects.toThrow(
+        /you may only push to agent\/\*\*/
+      )
+      const pushed = await tools.push.execute({ branch: 'agent/opencode-1', message: 'Agent work' }, context())
+      const commit = execFileSync('git', ['-C', repository, 'rev-parse', 'agent/opencode-1'], {
+        encoding: 'utf8',
+      }).trim()
+      expect(pushed).toEqual({ title: 'pushed to agent/opencode-1', output: `pushed ${commit} to agent/opencode-1` })
     })
   })
 

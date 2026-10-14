@@ -244,3 +244,21 @@ URL and issuer it was issued for, so registering the name again for another serv
 Agents and CI do not use `login`. They bring their own token, an agent from its own
 client credentials and a CI job from the OIDC token of the job, and the server maps
 it to service accounts through its [entitlements](/docs/remote-compute/entitlements).
+The `remote` commands take such a token instead of a sign-in, in this order:
+
+| Variable                  | What it is                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `HAMMERKIT_TOKEN_COMMAND` | A command that prints the token, run for each command, such as a script that asks the identity provider for a service account. |
+| `HAMMERKIT_TOKEN`         | The token itself, as a CI job gets it.                                                                                          |
+
+```yaml title=".gitlab-ci.yml"
+publish:
+  id_tokens:
+    HAMMERKIT_TOKEN:
+      aud: hammerkit
+  script:
+    - hammerkit remote add build https://build.example.com --issuer https://gitlab.com
+    - hammerkit remote publish payments build
+```
+
+The token goes only to the server the name is registered for.

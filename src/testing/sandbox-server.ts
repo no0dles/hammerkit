@@ -14,11 +14,14 @@ import { Environment } from '../executer/environment'
 export const SANDBOX_REPO = 'github.com/corp/payments'
 
 // The build file published as `payments`: a shell, a task that takes arguments and one
-// that fails. They are local tasks, which this server lets sandboxes run.
+// that fails. They are local tasks, which this server lets sandboxes run. `elsewhere` is a
+// shell that runs in an empty directory, as a shell in a container without the files does.
 const BUILD_FILE = [
   'tasks:',
   '  sh:',
   '    cmds: [sh -c]',
+  '  elsewhere:',
+  `    cmds: ["sh -c 'cd \\"$(mktemp -d)\\" && exec sh -c \\"$1\\"' sh"]`,
   '  test:',
   '    cmds: [echo testing]',
   '  fail:',
@@ -70,12 +73,21 @@ export async function withSandboxServer(name: string, fn: (server: SandboxServer
           `runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }`,
           'runtimes: [docker, local]',
           'sandboxes: { runtimes: [docker, local], network: open }',
-          'sources: [{ match: github.com/corp/* }]',
+          // the source's secret is what the server pushes with, the repository is a path
+          'secretProviders:',
+          `  echo: { command: [${JSON.stringify(
+            process.execPath
+          )}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }`,
+          'accounts:',
+          '  scm: { providers: { echo: { env: {} } } }',
+          'sources:',
+          '  - match: github.com/corp/*',
+          '    secret: { from: "echo:scm-token", account: scm }',
           'entitlements:',
           `  - subject: { iss: "${idp.url}", sub: alice }`,
           '    repos: [github.com/corp/*]',
           '    builds: publish',
-          '    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull } }]',
+          '    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, "agent/**": push } }]',
           '',
         ].join('\n')
       )

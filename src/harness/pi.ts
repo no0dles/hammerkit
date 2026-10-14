@@ -214,7 +214,7 @@ export interface PiExtensionOptions {
 
 /**
  * The pi extension: pi's read, write, edit, bash, ls, find and grep tools, and the user's
- * `!` commands, work on a hammerkit sandbox. Configured with the same variables as
+ * `!` commands, work on a hammerkit sandbox, and `push` takes the work out as a branch. Configured with the same variables as
  * `hammerkit remote mcp` takes options: HAMMERKIT_SERVER, HAMMERKIT_SANDBOX (or HAMMERKIT_REPO and
  * HAMMERKIT_REF), HAMMERKIT_BUILD and HAMMERKIT_SHELL.
  */
@@ -245,6 +245,26 @@ export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOp
     pi.registerTool(library.createFindToolDefinition(root, { operations: ops.find }))
     const grep = library.createGrepToolDefinition(root)
     pi.registerTool({ ...grep, execute: (_id: string, params: PiGrepParams) => ops.grep(params) })
+    pi.registerTool({
+      name: 'push',
+      label: 'push',
+      description:
+        'Commit the changes of the hammerkit sandbox and push them to a branch of its repository, for review. ' +
+        'The server pushes only to the branches its operator allows; the sandbox is at the pushed commit afterwards.',
+      promptSnippet: 'Push the changes of the sandbox to a branch',
+      parameters: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'The branch to push to, created when it does not exist' },
+          message: { type: 'string', description: 'The commit message' },
+        },
+        required: ['branch', 'message'],
+      },
+      execute: async (_id: string, params: { branch: string; message: string }) => {
+        const pushed = await (await client()).push(params.branch, params.message)
+        return { content: [{ type: 'text', text: `pushed ${pushed.commit} to ${pushed.branch}` }], details: pushed }
+      },
+    })
 
     pi.on('session_start', async (_event, ctx) => {
       try {
