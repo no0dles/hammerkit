@@ -4,14 +4,14 @@ import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import { parseDuration, parseSize } from '../utils/units'
-import { networkSchema } from '../schema/network-schema'
+import { getAllowListError, networkSchema } from '../schema/network-schema'
 import {
   buildFileSecretAccountSchema,
   buildFileSecretProvidersSchema,
 } from '../schema/build-file-secret-provider-schema'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { isRepoPattern } from './repo'
-import { exceedsNetwork, formatNetwork, parseWorkNetwork } from '../planner/work-network'
+import { exceedsNetwork, formatNetwork, limitNetwork, parseWorkNetwork } from '../planner/work-network'
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1']
 
@@ -578,6 +578,16 @@ export const serverConfigSchema = z
         message: `runs on sandboxes get at most runs.network (${formatNetwork(runsNetwork)}), not ${formatNetwork(
           sandboxNetwork
         )}`,
+      })
+    }
+    // what a sandbox run gets, the lower of the two: their TCP forwards together need a port each
+    const sandboxCeiling = limitNetwork(sandboxNetwork, runsNetwork)
+    const shared = sandboxCeiling.type === 'allow' ? getAllowListError(sandboxCeiling.hosts) : null
+    if (shared) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sandboxes', 'network'],
+        message: `under runs.network, ${shared}`,
       })
     }
     if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
