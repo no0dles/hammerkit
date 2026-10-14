@@ -449,6 +449,15 @@ describe('server config policy', () => {
     expect(!result.success && result.error.issues.map((issue) => issue.message)).toContain(
       'runs on sandboxes get at most runs.network (none), not allow registry.npmjs.org'
     )
+    // each list has one forward on 5432, but each one's pattern lets the other's through
+    const shared = serverConfigSchema.safeParse({
+      ...base,
+      runs: { network: { allow: ['b.corp.com:5432', '*.corp.com'] } },
+      sandboxes: { network: { allow: ['a.corp.com:5432', '*.corp.com'] } },
+    })
+    expect(!shared.success && shared.error.issues.map((issue) => issue.message)).toEqual([
+      expect.stringMatching(/^under runs.network, .*share a port/),
+    ])
   })
 
   it('lets env secrets of sandbox runs read only what runs read', () => {

@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { getStateKey, getWorkCacheStats } from './get-work-cache-stats'
 import { WorkCacheFileStats } from './work-cache-stats'
 import { environmentMock } from '../executer/environment-mock'
@@ -98,5 +98,29 @@ describe('getWorkCacheStats', () => {
     // '/'-separated on every OS (portable cache keys)
     expect(Object.keys(stats.files)).toContain('sub/keep.txt')
     expect(Object.keys(stats.files)).not.toContain('sub/skip.md')
+  })
+
+  it('takes a link on a server as the link, and never walks where it points', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'hammerkit-stats-outside-'))
+    try {
+      writeFileSync(join(outside, 'secret'), 'server file')
+      writeFileSync(join(dir, 'a.txt'), 'a')
+      symlinkSync(outside, join(dir, 'escape'), 'junction')
+      const work = { cwd: dir, src: [src(dir)] } as any
+      // on a developer's machine a link is followed, as always
+      expect(Object.keys((await getWorkCacheStats(work, environmentMock(dir))).files).sort()).toEqual([
+        'a.txt',
+        'escape/secret',
+      ])
+      const hosted = { ...environmentMock(dir), hosted: { catalog: { providers: {}, accounts: {} } as any } }
+      const files = (await getWorkCacheStats(work, hosted)).files
+      expect(Object.keys(files).sort()).toEqual(['a.txt', 'escape'])
+      // where it points is part of the key
+      rmSync(join(dir, 'escape'))
+      symlinkSync(dir, join(dir, 'escape'), 'junction')
+      expect((await getWorkCacheStats(work, hosted)).files.escape.checksum).not.toBe(files.escape.checksum)
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
   })
 })

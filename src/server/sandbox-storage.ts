@@ -1,9 +1,14 @@
 import { randomBytes } from 'crypto'
+import { Stats } from 'fs'
 import { chmod, copyFile, lstat, mkdir, readdir, rm, stat, utimes } from 'fs/promises'
 import { join } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
 import { HostSandboxFiles, PatchAuthor, SandboxFiles, SandboxGit } from './sandbox-files'
+
+// how many directories the walk reads at once, and how many entries of one it looks at at once
+const WALK_DIRECTORIES = 16
+const WALK_ENTRIES = 256
 
 // What a sandbox's files are at a moment: the commit it was fetched at, and the git tree
 // of its files as they are (what `.gitignore` leaves out is not part of it). The two are
@@ -92,6 +97,9 @@ export class HostSandboxStorage implements SandboxStorage {
   // one git command or walk at a time per sandbox: the objects `state` writes are pruned
   // again, which must not meet another command that still needs them
   private readonly queues = new Map<string, Promise<unknown>>()
+  // the sandboxes `usage` walked last: tasks only write while a run runs, between the
+  // `state` it starts with and the `usage` it ends with, so the next `state` needs no walk
+  private readonly walked = new Set<string>()
 
   constructor(
     private readonly directory: string,
@@ -176,9 +184,17 @@ export class HostSandboxStorage implements SandboxStorage {
   // `fn` with a copy of the sandbox's index, so neither the index nor the files change, and
   // what it wrote to the git data is pruned again. Files a task made unreadable are made
   // readable first: git would leave them out and call them unchanged. Holds the sandbox.
-  private withIndex<T>(id: string, signal: AbortSignal, fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
+  // `afterRun` skips the walk when `usage` just walked the sandbox after a run.
+  private withIndex<T>(
+    id: string,
+    signal: AbortSignal,
+    fn: (run: SandboxGit['run']) => Promise<T>,
+    afterRun = false
+  ): Promise<T> {
     return this.exclusive(id, async () => {
-      await this.reclaim(id)
+      if (!(afterRun && this.walked.delete(id))) {
+        await this.reclaim(id)
+      }
       try {
         return await this.indexed(id, signal, fn)
       } finally {
@@ -344,12 +360,17 @@ export class HostSandboxStorage implements SandboxStorage {
   // unreadable are made readable first: git would leave them out and call the sandbox
   // clean.
   async state(id: string, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
-    return this.withIndex(id, signal, async (run) => {
-      await run(['add', '--all', '--', '.'], 'read')
-      const tree = (await run(['write-tree'], 'read')).trim()
-      const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
-      return { commit, tree, clean: tree === base }
-    })
+    return this.withIndex(
+      id,
+      signal,
+      async (run) => {
+        await run(['add', '--all', '--', '.'], 'read')
+        const tree = (await run(['write-tree'], 'read')).trim()
+        const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
+        return { commit, tree, clean: tree === base }
+      },
+      true
+    )
   }
 
   async attach(id: string): Promise<string> {
@@ -366,12 +387,14 @@ export class HostSandboxStorage implements SandboxStorage {
   async usage(id: string): Promise<number> {
     return this.exclusive(id, async () => {
       const bytes = await this.reclaim(id)
+      this.walked.add(id)
       return bytes + ((await this.containers?.volumeBytes(this.workTree(id)).catch(() => 0)) ?? 0)
     })
   }
 
   async remove(id: string): Promise<void> {
     await this.exclusive(id, async () => {
+      this.walked.delete(id)
       await this.reclaim(id).catch(() => undefined)
       await rm(this.root(id), { recursive: true, force: true, maxRetries: 3 })
       // without docker there is nothing to remove now; volumes stay labelled with the files
@@ -395,31 +418,47 @@ export class HostSandboxStorage implements SandboxStorage {
     }
   }
 
+  // Directories a few at a time and the entries of each together: a `node_modules` holds
+  // tens of thousands of files, and one at a time took seconds for every run.
   private async walk(root: string): Promise<number> {
     let bytes = 0
-    const pending = [root]
+    let pending = [root]
     while (pending.length > 0) {
-      const current = pending.pop() as string
-      await ensureMode(current, 0o700)
-      const entries = await readdir(current, { withFileTypes: true }).catch((e) => {
-        if ((e as NodeJS.ErrnoException).code === 'ENOENT' && current !== root) {
-          return []
-        }
-        throw e
-      })
-      for (const entry of entries) {
-        const path = join(current, entry.name)
-        if (entry.isDirectory()) {
-          pending.push(path)
-          continue
-        }
-        if (entry.isFile()) {
-          await ensureMode(path, 0o600)
-        }
-        bytes += (await lstat(path).catch(() => undefined))?.size ?? 0
+      const directories = pending.slice(0, WALK_DIRECTORIES)
+      pending = pending.slice(WALK_DIRECTORIES)
+      for (const found of await Promise.all(directories.map((directory) => this.walkDirectory(directory, root)))) {
+        bytes += found.bytes
+        pending.push(...found.directories)
       }
     }
     return bytes
+  }
+
+  private async walkDirectory(current: string, root: string): Promise<{ bytes: number; directories: string[] }> {
+    await ensureMode(current, 0o700)
+    const entries = await readdir(current, { withFileTypes: true }).catch((e) => {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT' && current !== root) {
+        return []
+      }
+      throw e
+    })
+    const directories: string[] = []
+    let bytes = 0
+    for (let start = 0; start < entries.length; start += WALK_ENTRIES) {
+      const sizes = await Promise.all(
+        entries.slice(start, start + WALK_ENTRIES).map(async (entry) => {
+          const path = join(current, entry.name)
+          if (entry.isDirectory()) {
+            directories.push(path)
+            return 0
+          }
+          // one lstat for the mode and the size; a link is counted, not followed
+          return (await ensureMode(path, entry.isFile() ? 0o600 : 0))?.size ?? 0
+        })
+      )
+      bytes += sizes.reduce((sum, size) => sum + size, 0)
+    }
+    return { bytes, directories }
   }
 
   async list(): Promise<string[]> {
@@ -434,8 +473,9 @@ export class HostSandboxStorage implements SandboxStorage {
   }
 }
 
-// adds the bits of the owner a path lacks; a path that is gone since it was listed is fine
-async function ensureMode(path: string, bits: number): Promise<void> {
+// adds the bits of the owner a path lacks and answers what it found; a path that is gone
+// since it was listed is fine
+async function ensureMode(path: string, bits: number): Promise<Stats | undefined> {
   const stats = await lstat(path).catch((e) => {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined
@@ -445,4 +485,5 @@ async function ensureMode(path: string, bits: number): Promise<void> {
   if (stats && (stats.mode & bits) !== bits) {
     await chmod(path, (stats.mode & 0o7777) | bits)
   }
+  return stats
 }
