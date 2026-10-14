@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process'
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, parse } from 'path'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
@@ -61,6 +61,9 @@ const buildFile = [
   '  leak:',
   '    src: [escape]',
   '    cmds: [cat escape/secret.txt]',
+  '  all:',
+  "    src: ['**']",
+  '    cmds: [cat input.txt]',
   '',
 ].join('\n')
 
@@ -309,6 +312,11 @@ describe('sandboxes api', () => {
         expect(finished).toMatchObject({ state: 'failed', error: expect.stringMatching(/symbolic link escape/) })
         const events = await (await api.call('GET', `/v1/runs/${run.id}/events`)).text()
         expect(events).not.toContain('server-secret')
+
+        // a link inside what `**` matches is a source as a link: the run does not walk the server's disk
+        symlinkSync(parse(tmpdir()).root, join(api.files(sandbox.id), 'rootlink'), 'junction')
+        const all = await (await runOn(api, sandbox.id, ['all'])).json()
+        expect(await untilState(api, all.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
       } finally {
         rmSync(outside, { recursive: true, force: true })
       }
