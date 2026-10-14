@@ -6,6 +6,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { WorkerMessage, workerMain } from './run-worker'
+import { hostEnvs } from '../testing/host-env'
 
 function sink(): { stream: Writable; messages: () => WorkerMessage[] } {
   const chunks: string[] = []
@@ -103,9 +104,9 @@ describe('hammerkit server-run', () => {
       try {
         const out = memoryStream()
         environment.stdout = out.stream
-        // the copy of process.env names it Path on Windows, where PowerShell then
-        // takes the timeout to start
-        environment.processEnvs = { ...environment.processEnvs, PATH: process.env.PATH }
+        // what the server hands the process; a copy of process.env loses its case-insensitive
+        // keys on Windows, where PATH is `Path`
+        environment.processEnvs = hostEnvs()
         await runProgram(environment, ['hammerkit', 'server-run'], true)
         const lines = out
           .read()
