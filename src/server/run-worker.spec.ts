@@ -274,6 +274,8 @@ describe('workerMain', () => {
     const combined = getRunNetwork({ network: runs, sandboxNetwork: sandbox })
     expect(combined).toEqual(limitNetwork(parseWorkNetwork(sandbox), parseWorkNetwork(runs)))
     expect(combined).toMatchObject({ type: 'allow', hosts: ['registry.npmjs.org', 'vault.corp.com:8200'] })
+    // each name is allowed by one list only through a pattern: the run keeps both off private addresses
+    expect(combined).toMatchObject({ publicOnly: ['registry.npmjs.org', 'vault.corp.com:8200'] })
   })
 
   it('says when the build file has no such task', async () => {
