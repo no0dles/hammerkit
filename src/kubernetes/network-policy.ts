@@ -14,7 +14,7 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
 import { ContainerWorkTask } from '../planner/work-task'
 import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
-import { getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
+import { getEffectiveNetwork, getTcpForwards, WorkNetwork } from '../planner/work-network'
 import { KubernetesInstance } from './kubernetes-instance'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { getServiceIp } from './get-service-ip'
@@ -26,6 +26,7 @@ import {
   EGRESS_PROXY_PORT,
   formatRefusedHost,
   getEgressProxyCommand,
+  getEgressProxyPorts,
   getItemProxyEnvironment,
   getProxyClientEnvironment,
   parseEgressProxyEvent,
@@ -140,7 +141,7 @@ export function buildNetworkPolicy(
           ? [
               {
                 to: [{ podSelector: { matchLabels: { [PROXY_LABEL]: getNetworkKey(item, scope) } } }],
-                ports: [{ protocol: 'TCP', port: EGRESS_PROXY_PORT }],
+                ports: getEgressProxyPorts(network).map((port) => ({ protocol: 'TCP', port })),
               },
             ]
           : []),
@@ -154,6 +155,7 @@ export function buildNetworkPolicy(
 export function buildProxyPolicy(
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
+  network: WorkNetwork,
   scope: KubernetesNetworkScope
 ): V1NetworkPolicy & KubernetesObjectHeader {
   return {
@@ -171,7 +173,7 @@ export function buildProxyPolicy(
       ingress: [
         {
           _from: [{ podSelector: { matchLabels: getItemPodLabels(item, scope) } }],
-          ports: [{ protocol: 'TCP', port: EGRESS_PROXY_PORT }],
+          ports: getEgressProxyPorts(network).map((port) => ({ protocol: 'TCP', port })),
         },
       ],
     },
@@ -217,7 +219,7 @@ export async function ensureKubernetesItemNetwork(
 
   let proxyIp: string
   try {
-    proxyIp = await ensureProxy(instance, env, item, network.hosts, hostAliases, options)
+    proxyIp = await ensureProxy(instance, env, item, network, hostAliases, options)
   } catch (e) {
     await removeKubernetesItemNetwork(instance, env, item, options).catch(() => undefined)
     throw e
@@ -228,7 +230,11 @@ export async function ensureKubernetesItemNetwork(
       name,
       value,
     })),
-    hostAliases: [...hostAliases, { ip: proxyIp, hostnames: [EGRESS_PROXY_HOST] }],
+    // the item reaches each TCP forward under its host's name, at the proxy
+    hostAliases: [
+      ...hostAliases,
+      { ip: proxyIp, hostnames: [EGRESS_PROXY_HOST, ...getTcpForwards(network).map((forward) => forward.host)] },
+    ],
     initContainers,
     close: () => follow?.abort(),
   }
@@ -366,12 +372,13 @@ async function getNeedHostAliases(
 
 // The proxy as a Deployment and a Service; its pods reach out without an
 // egress policy of their own, and reach the needed services by name for tools
-// that ignore NO_PROXY. Unprivileged, from a pinned image.
+// that ignore NO_PROXY. Unprivileged, from a pinned image. Its Service carries
+// the port of each TCP forward too.
 async function ensureProxy(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
-  hosts: string[],
+  network: Extract<WorkNetwork, { type: 'allow' }>,
   hostAliases: V1HostAlias[],
   scope: KubernetesNetworkScope
 ): Promise<string> {
@@ -395,13 +402,16 @@ async function ensureProxy(
         spec: {
           hostAliases,
           automountServiceAccountToken: false,
+          // unprivileged, it still listens on the port of a TCP forward below
+          // 1024; a sysctl every Pod Security level allows
+          securityContext: { sysctls: [{ name: 'net.ipv4.ip_unprivileged_port_start', value: '0' }] },
           containers: [
             {
               name: 'proxy',
               image: EGRESS_PROXY_IMAGE,
               command: getEgressProxyCommand(),
               env: Object.entries(getItemProxyEnvironment(item)).map(([key, value]) => ({ name: key, value })),
-              ports: [{ containerPort: EGRESS_PROXY_PORT }],
+              ports: getEgressProxyPorts(network).map((port) => ({ containerPort: port })),
               // in the pod, since its ingress policy may keep the kubelet out
               readinessProbe: {
                 exec: {
@@ -428,10 +438,10 @@ async function ensureProxy(
     spec: {
       type: 'ClusterIP',
       selector: labels,
-      ports: [{ port: EGRESS_PROXY_PORT, targetPort: EGRESS_PROXY_PORT }],
+      ports: getEgressProxyPorts(network).map((port) => ({ name: `tcp-${port}`, port, targetPort: port })),
     },
   }
-  await apply(instance, buildProxyPolicy(env, item, scope))
+  await apply(instance, buildProxyPolicy(env, item, network, scope))
   await apply(instance, deployment)
   const created = await apply(instance, service)
   await awaitDeployRunningState(instance, env, name, {
@@ -443,7 +453,7 @@ async function ensureProxy(
   if (!ip) {
     throw new Error(`the egress proxy of ${item.name} has no cluster ip`)
   }
-  item.status.write('debug', `egress proxy allows ${hosts.join(', ') || 'no host'}`)
+  item.status.write('debug', `egress proxy allows ${network.hosts.join(', ') || 'no host'}`)
   return ip
 }
 
