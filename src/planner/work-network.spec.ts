@@ -77,17 +77,52 @@ describe('work network', () => {
       ['none stays none under allow', none, allow('a.com'), none],
       ['open becomes the allow ceiling', open, allow('a.com'), allow('a.com')],
       ['allow keeps the hosts both allow', allow('a.com', 'b.com'), allow('b.com', 'c.com'), allow('b.com')],
-      ['a name within a wildcard ceiling', allow('api.github.com'), allow('*.github.com'), allow('api.github.com')],
-      ['a wildcard cut to a name', allow('*.github.com'), allow('api.github.com'), allow('api.github.com')],
+      [
+        'a name within a wildcard ceiling',
+        allow('api.github.com'),
+        allow('*.github.com'),
+        { type: 'allow', hosts: ['api.github.com'], publicOnly: ['api.github.com'] },
+      ],
+      [
+        'a wildcard cut to a name',
+        allow('*.github.com'),
+        allow('api.github.com'),
+        { type: 'allow', hosts: ['api.github.com'], publicOnly: ['api.github.com'] },
+      ],
       ['a wildcard within a wider one', allow('*.a.github.com'), allow('*.github.com'), allow('*.a.github.com')],
       ['nothing in common', allow('a.com'), allow('b.com'), allow()],
       ['a forward within its host', allow('db.a.com:5432'), allow('db.a.com'), allow('db.a.com:5432')],
-      ['a forward within a wildcard', allow('db.a.com:5432'), allow('*.a.com'), allow('db.a.com:5432')],
+      [
+        'a forward within a wildcard',
+        allow('db.a.com:5432'),
+        allow('*.a.com'),
+        { type: 'allow', hosts: ['db.a.com:5432'], publicOnly: ['db.a.com:5432'] },
+      ],
       ['a host cut to a forward', allow('db.a.com'), allow('db.a.com:5432'), allow('db.a.com:5432')],
       ['a forward on another port', allow('db.a.com:5432'), allow('db.a.com:6432'), allow()],
       ['a forward to another host', allow('db.a.com:5432'), allow('db.b.com:5432'), allow()],
     ])('%s', (_, network, ceiling, expected) => {
       expect(limitNetwork(network, ceiling)).toEqual(expected)
+    })
+
+    // a name reaches private addresses, a pattern doesn't: a name that one
+    // list allows only through a pattern doesn't either
+    it.each<[string, WorkNetwork, WorkNetwork, string[] | undefined]>([
+      ['a forward within a wildcard ceiling', allow('db.corp.com:5432'), allow('*.corp.com'), ['db.corp.com:5432']],
+      ['a name within a wildcard ceiling', allow('vault.corp.com'), allow('*.corp.com'), ['vault.corp.com']],
+      ['a ceiling name within a wildcard', allow('*.corp.com'), allow('vault.corp.com'), ['vault.corp.com']],
+      ['a forward within its host by name', allow('db.corp.com:5432'), allow('db.corp.com'), undefined],
+      ['a name in both lists', allow('db.corp.com', '*.corp.com'), allow('db.corp.com'), undefined],
+      ['a pattern in both lists', allow('*.corp.com'), allow('*.corp.com'), undefined],
+      [
+        'a name that was public only stays so',
+        { type: 'allow', hosts: ['db.corp.com:5432'], publicOnly: ['db.corp.com:5432'] },
+        allow('db.corp.com:5432'),
+        ['db.corp.com:5432'],
+      ],
+    ])('%s', (_, network, ceiling, publicOnly) => {
+      const limited = limitNetwork(network, ceiling)
+      expect(limited.type === 'allow' ? limited.publicOnly : null).toEqual(publicOnly)
     })
   })
 })
