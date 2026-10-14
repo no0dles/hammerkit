@@ -217,6 +217,43 @@ describe('network', () => {
       )
     })
 
+    it('refuses two TCP forwards on one port that a ceiling leaves from both lists', async () => {
+      await withCli(
+        'network-ceiling-shared-port',
+        {
+          tasks: {
+            migrate: { image: 'node:22', cmds: ['true'], network: { allow: ['a.corp.com:5432', '*.corp.com'] } },
+          },
+        },
+        async (cli) => {
+          await expect(
+            cli.runExec({ network: { type: 'allow', hosts: ['*.corp.com', 'b.corp.com:5432'] } })
+          ).rejects.toThrow(
+            'migrate: network allow *.corp.com, a.corp.com:5432, b.corp.com:5432 under --network allow *.corp.com, ' +
+              'b.corp.com:5432, a.corp.com:5432 and b.corp.com:5432 share a port, each TCP forward needs its own'
+          )
+        }
+      )
+    })
+
+    it('passes the entries a ceiling allows only through a pattern to the proxy', async () => {
+      await withCli(
+        'network-ceiling-public-only',
+        {
+          tasks: {
+            migrate: { image: 'node:22', cmds: ['true'], network: { allow: ['vault.corp.com:8200', 'api.corp.com'] } },
+          },
+        },
+        async (cli) => {
+          applyNetworkCeiling((cli as any).workTree, { type: 'allow', hosts: ['*.corp.com', 'api.corp.com'] })
+          expect(getItemProxyEnvironment(cli.task('migrate'))).toMatchObject({
+            HAMMERKIT_ALLOW: '["api.corp.com","vault.corp.com:8200"]',
+            HAMMERKIT_PUBLIC_ONLY: '["vault.corp.com:8200"]',
+          })
+        }
+      )
+    })
+
     it('refuses a ceiling below open with a local task in the run', async () => {
       await withCli('network-ceiling-local', { tasks: { build: { cmds: ['true'] } } }, async (cli) => {
         await expect(cli.runExec({ network: { type: 'none' } })).rejects.toThrow(
