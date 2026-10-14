@@ -22,10 +22,11 @@ Kubernetes come next.
 
 ## Who may keep one
 
-`sandboxes: true` on an [entitlement](/docs/remote-compute/entitlements) lets the caller keep
-sandboxes of the repositories in the `repos` of that entitlement. The `repos` of their other
-entitlements are for runs from a ref only. The server has to read the repository too, the
-same check as for a [run from a ref](/docs/remote-compute/sources).
+The `sandboxes` of an [entitlement](/docs/remote-compute/entitlements) list the repositories
+the caller may keep sandboxes of, one `repo` (`host/path` pattern) per entry. Without
+`sandboxes` the caller keeps none. It is a list of its own: `repos` are for runs from a ref
+only, and a sandbox needs no `repos` entry for its repository. The server has to read the
+repository too, the same check as for a [run from a ref](/docs/remote-compute/sources).
 
 ```yaml title="server.yaml"
 entitlements:
@@ -33,7 +34,9 @@ entitlements:
     accounts: { op-payments-dev: use }
     repos: [github.com/corp/payments]
     builds: run
-    sandboxes: true
+    sandboxes:
+      - repo: github.com/corp/payments
+      - repo: github.com/corp/web
 ```
 
 A sandbox belongs to the caller who created it. For anybody else its id is `404`, the same
@@ -83,7 +86,7 @@ out, such as `node_modules`, are not changes and stay) and no run holds it, else
 | Status | When |
 | --- | --- |
 | `400` | The body is malformed, the repository is not `host/path`, the server can not read it, or the ref is not one branch or tag. |
-| `403` | The caller has no `sandboxes: true`, or the repository is not in the `repos` of an entitlement with it. |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | A fetch of a sandbox with changes, or one a run holds. |
 | `413` | The caller is at their limit of sandboxes or bytes. |
@@ -146,7 +149,7 @@ caller's sandboxes take more than their limit, their runs on sandboxes are refus
 | Status | When |
 | --- | --- |
 | `400` | The sandbox does not exist or is somebody else's, or a task reads an `env:` secret that `sandboxes.env.allow` does not list. |
-| `403` | The caller has no `sandboxes: true` (any more), the repository is not in the `repos` of an entitlement with it, an account of the run does not list `sandbox` in its `source`, or the server runs no tasks on sandboxes (only `runtimes: [local]`, see below). |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository (any more), an account of the run does not list `sandbox` in its `source`, or the server runs no tasks on sandboxes (only `runtimes: [local]`, see below). |
 | `413` | The caller's sandboxes take more than their limit. |
 
 ## Files
@@ -191,8 +194,8 @@ are percent-encoded (`files/src/my%20file.ts`). Three rules hold for every endpo
   and ripgrep) are `409` while a [run holds the sandbox](#running-on-a-sandbox), and the
   next run waits for a batch of edits to finish.
 
-Every file endpoint needs `sandboxes: true` and the repository in `repos`, like a fetch. What
-edits add counts against the owner's [bytes](#config): an edit that would go over is `413`.
+Every file endpoint needs an entry in the `sandboxes` of the caller's entitlements that covers
+the repository, like a fetch. What edits add counts against the owner's [bytes](#config): an edit that would go over is `413`.
 
 ### Tree
 
@@ -353,7 +356,7 @@ it and pushes a branch. The other is a [push](#pushing) by the server. Changes l
 | Status | When |
 | --- | --- |
 | `400` | The path is not inside the sandbox, goes through a link, or is a directory where a file is needed; the body is malformed; a ripgrep error. |
-| `403` | The path is on the deny list; or as for a fetch, the caller has no `sandboxes: true` or the repository any more. |
+| `403` | The path is on the deny list; or as for a fetch, no entry in the `sandboxes` of the caller's entitlements covers the repository any more. |
 | `404` | The sandbox, or the file, does not exist. |
 | `409` | A run holds the sandbox (edits, `PUT`, tree, search, changes); a move or patch onto a file that exists. |
 | `412` | The file changed since the read that `ifHash` or `If-Match` names. |

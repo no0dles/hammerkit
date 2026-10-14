@@ -47,7 +47,7 @@ describe('sandbox runs (docker)', () => {
               `runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }`,
               'sources: [{ match: github.com/corp/* }]',
               'entitlements:',
-              `  - { subject: { iss: "${idp.url}", sub: agent }, repos: [github.com/corp/*], builds: run, sandboxes: true }`,
+              `  - { subject: { iss: "${idp.url}", sub: agent }, repos: [github.com/corp/*], builds: run, sandboxes: [{ repo: github.com/corp/* }] }`,
               `  - { subject: { iss: "${idp.url}", sub: ci }, repos: [github.com/corp/*], builds: publish }`,
               '',
             ].join('\n')
