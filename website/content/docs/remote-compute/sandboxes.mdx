@@ -403,7 +403,7 @@ never to `main`.
   A sandbox [fetched](#creating-and-managing) to another commit since can not push to the
   branch any more (`409`), it starts a new one.
 * Like edits, a push waits for a batch of edits, is `409` while a run holds the sandbox, and
-  needs `sandboxes: true` and the repository in `repos`.
+  needs an entry of the caller's `sandboxes` that covers the repository.
 
 The server reads the branch first with its read credential, then pushes with the write
 credential, telling the remote which commit it expects the branch at (none for a new one).
@@ -413,7 +413,7 @@ is `409` too.
 | Status | When |
 | --- | --- |
 | `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start with `.` or `-`, or end with `.` or `.lock`). |
-| `403` | The branch is not in `push.branches`, the server does not push to the repository at all, or as for a fetch, the caller has no `sandboxes: true` or the repository any more. |
+| `403` | The branch is not in `push.branches`, the server does not push to the repository at all, or as for a fetch, no entry of the caller's `sandboxes` covers the repository any more. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
 | `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access). Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |
