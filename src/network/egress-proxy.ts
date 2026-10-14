@@ -19,7 +19,12 @@ export const EGRESS_PROXY_PORT = PROXY_PORT
 // the name the item reaches the proxy under
 export const EGRESS_PROXY_HOST = 'hammerkit-proxy'
 
-export type EgressProxyEvent = { type: 'ready' } | { type: 'refused'; host: string }
+// `https-url`: an allowed host asked for by its https URL instead of through
+// a CONNECT tunnel, which the proxy doesn't serve
+export type EgressProxyEvent =
+  | { type: 'ready' }
+  | { type: 'refused'; host: string }
+  | { type: 'https-url'; host: string }
 
 // Kept free of anything but Node's own modules. The host rule is the one of
 // matchesHost in planner/work-network.ts. A name a wildcard allows must not
@@ -45,6 +50,7 @@ const port = parseInt(process.env.HAMMERKIT_PROXY_PORT || '${EGRESS_PROXY_PORT}'
 // the name whose address the proxy listens on, every address when unset
 const bind = process.env.HAMMERKIT_PROXY_BIND
 const refused = new Set()
+const httpsUrls = new Set()
 function emit(event) {
   process.stdout.write(JSON.stringify(event) + '\\n')
 }
@@ -124,6 +130,12 @@ function refuse(host) {
     emit({ type: 'refused', host })
   }
 }
+function httpsUrl(host) {
+  if (!httpsUrls.has(host)) {
+    httpsUrls.add(host)
+    emit({ type: 'https-url', host })
+  }
+}
 function parseAuthority(value) {
   const match = /^\\[([^\\]]+)\\](?::(\\d+))?$/.exec(value) || /^([^:]+)(?::(\\d+))?$/.exec(value)
   return match ? { host: match[1], port: match[2] ? parseInt(match[2], 10) : 443 } : null
@@ -135,6 +147,14 @@ const server = http.createServer((req, res) => {
   } catch (e) {
     res.writeHead(400, { 'content-type': 'text/plain' })
     res.end('hammerkit: only proxy requests are served\\n')
+    return
+  }
+  // BusyBox wget sends an https URL to the proxy as it is: TLS belongs between
+  // the client and the host, so only a CONNECT tunnel reaches an https host
+  if (url.protocol === 'https:' && allowedBy(url.hostname, parseInt(url.port || '443', 10))) {
+    httpsUrl(url.hostname)
+    res.writeHead(501, { 'content-type': 'text/plain' })
+    res.end('hammerkit: ' + url.hostname + ' is allowed through a CONNECT tunnel only, not by its https URL\\n')
     return
   }
   const rule = url.protocol === 'http:' ? allowedBy(url.hostname, parseInt(url.port || '80', 10)) : null
@@ -344,8 +364,8 @@ export function parseEgressProxyEvent(line: string): EgressProxyEvent | null {
     if (value?.type === 'ready') {
       return { type: 'ready' }
     }
-    if (value?.type === 'refused' && typeof value.host === 'string') {
-      return { type: 'refused', host: value.host }
+    if ((value?.type === 'refused' || value?.type === 'https-url') && typeof value.host === 'string') {
+      return { type: value.type, host: value.host }
     }
   } catch {
     // not an event
@@ -355,4 +375,15 @@ export function parseEgressProxyEvent(line: string): EgressProxyEvent | null {
 
 export function formatRefusedHost(host: string): string {
   return `network: refused ${host}`
+}
+
+// The line of an event other than `ready` in the item's log.
+export function formatEgressProxyEvent(event: Exclude<EgressProxyEvent, { type: 'ready' }>): string {
+  if (event.type === 'https-url') {
+    return (
+      `network: ${event.host} is allowed, but the client asked the proxy for its https URL instead of ` +
+      'tunneling with CONNECT (BusyBox wget does), use curl or GNU wget'
+    )
+  }
+  return formatRefusedHost(event.host)
 }
