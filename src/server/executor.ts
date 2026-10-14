@@ -183,8 +183,9 @@ export class HostExecutor implements RunExecutor {
         // the published files are read from a directory of the run and work on the
         // sandbox, whose own build files are just files
         const { registry, network } = sandboxes as SandboxRunOptions
-        const files = await registry.attach(source.id)
+        // read before the run attaches: until then the walk of the last run's measure holds
         const state = await registry.state(source.id, abortCtrl.signal)
+        const files = await registry.attach(source.id)
         // what was approved is what runs: the files may have changed since, by a run
         // before this one on the sandbox
         if (run.approvals?.length && state.tree !== source.tree) {
@@ -244,8 +245,8 @@ export class HostExecutor implements RunExecutor {
       context.signal.removeEventListener('abort', abort)
       await rm(root, { recursive: true, force: true })
       if (source.type === 'sandbox') {
-        // what the run wrote counts against the owner's limits
-        await sandboxes?.registry.measure(source.id).catch(() => undefined)
+        // what the run wrote counts against the owner's limits, from their next run or create
+        sandboxes?.registry.measure(source.id).catch(() => undefined)
       }
     }
   }
