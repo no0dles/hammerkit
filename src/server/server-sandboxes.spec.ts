@@ -60,9 +60,14 @@ const buildFile = [
   '    src: [escape]',
   '    cmds: [cat escape/secret.txt]',
   '  plant:',
-  // node by its path: on Windows a bare `node` has PowerShell look through its modules
-  // first, which takes longer than the test waits in the fresh home of a run
-  `    cmds: [echo plant-start, ${JSON.stringify(`${process.execPath} plant.js`)}]`,
+  // what `ln -s / rootlink` in a task does, a junction on Windows. The shell's own commands: a
+  // node started by a local task, which gets no variables of the server but PATH, left neither
+  // output nor link on Windows
+  `    cmds: [${JSON.stringify(
+    process.platform === 'win32'
+      ? "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path rootlink -Value ([IO.Path]::GetPathRoot($PWD.Path)) | Out-Null; Get-ChildItem -Name"
+      : 'ln -s / rootlink && ls'
+  )}]`,
   '  all:',
   "    src: ['**']",
   '    cmds: [cat input.txt]',
@@ -100,17 +105,6 @@ describe('sandboxes api', () => {
     repository = mkdtempSync(join(tmpdir(), 'hammerkit-sandbox-repository-'))
     git('init', '--quiet', '--initial-branch=main')
     writeFileSync(join(repository, 'input.txt'), 'from-main')
-    // what `ln -s / rootlink` in a task does, a junction on Windows: a script, since a
-    // command line quotes differently in every shell
-    writeFileSync(
-      join(repository, 'plant.js'),
-      [
-        "const { symlinkSync, readdirSync } = require('fs')",
-        "symlinkSync(require('path').parse(process.cwd()).root, 'rootlink', 'junction')",
-        "console.log('planted rootlink in', process.cwd(), readdirSync('.').join(','))",
-        '',
-      ].join('\n')
-    )
     git('add', '.')
     git('commit', '--quiet', '-m', 'one')
     git('tag', 'feature/v1')
