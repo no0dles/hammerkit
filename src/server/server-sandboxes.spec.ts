@@ -59,9 +59,8 @@ const buildFile = [
   '  leak:',
   '    src: [escape]',
   '    cmds: [cat escape/secret.txt]',
-  // what `ln -s / rootlink` in a task does, a junction on Windows
   '  plant:',
-  "    cmds: ['node -e \"require(''fs'').symlinkSync(require(''path'').parse(process.cwd()).root, ''rootlink'', ''junction'')\"']",
+  '    cmds: [node plant.js]',
   '  all:',
   "    src: ['**']",
   '    cmds: [cat input.txt]',
@@ -99,6 +98,12 @@ describe('sandboxes api', () => {
     repository = mkdtempSync(join(tmpdir(), 'hammerkit-sandbox-repository-'))
     git('init', '--quiet', '--initial-branch=main')
     writeFileSync(join(repository, 'input.txt'), 'from-main')
+    // what `ln -s / rootlink` in a task does, a junction on Windows: a script, since a
+    // command line quotes differently in every shell
+    writeFileSync(
+      join(repository, 'plant.js'),
+      "require('fs').symlinkSync(require('path').parse(process.cwd()).root, 'rootlink', 'junction')\n"
+    )
     git('add', '.')
     git('commit', '--quiet', '-m', 'one')
     git('tag', 'feature/v1')
