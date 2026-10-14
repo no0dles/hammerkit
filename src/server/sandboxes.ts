@@ -78,6 +78,8 @@ export class SandboxRegistry {
   // bytes they take once they were measured
   private readonly creating = new Map<string, { owner: Owner; bytes: number }>()
   private readonly deleting = new Set<string>()
+  // the measures of runs that are over, which a run's result does not wait for
+  private readonly measuring = new Map<string, Promise<void>>()
   private readonly locks = new Map<string, Promise<unknown>>()
   private readonly now: () => number
   private runs: SandboxRuns = { holder: () => undefined, stop: async () => undefined }
@@ -165,6 +167,15 @@ export class SandboxRegistry {
     }
   }
 
+  // Waits for the measures of the owner's runs that are over, so their limits hold.
+  async measured(owner: Owner): Promise<void> {
+    const pending = [...this.measuring.entries()].filter(([id]) => {
+      const sandbox = this.sandboxes.get(id)
+      return sandbox && owns(owner, sandbox)
+    })
+    await Promise.all(pending.map(([, measure]) => measure))
+  }
+
   // Whether the owner is over their bytes, so no more runs grow their sandboxes.
   overLimit(owner: Owner): string | undefined {
     const { bytes } = this.usage(owner)
@@ -181,6 +192,7 @@ export class SandboxRegistry {
    */
   async create(owner: Owner, repo: string, ref: string): Promise<Sandbox> {
     const { limits, storage, repos } = this.options
+    await this.measured(owner)
     const usage = this.usage(owner)
     if (usage.count >= limits.count) {
       throw new SandboxError(413, `you have ${usage.count} sandboxes, the limit is ${limits.count}: delete one`)
@@ -306,7 +318,10 @@ export class SandboxRegistry {
     return this.withLock(id, async () => fn(copy(this.mine(owner, id))))
   }
 
-  state(id: string, signal?: AbortSignal): Promise<SandboxState> {
+  async state(id: string, signal?: AbortSignal): Promise<SandboxState> {
+    if (!this.sandboxes.has(id) || this.deleting.has(id)) {
+      throw new Error(`the sandbox ${id} was deleted`)
+    }
     return this.options.storage.state(id, signal)
   }
 
@@ -321,14 +336,26 @@ export class SandboxRegistry {
     return this.options.storage.attach(id)
   }
 
-  // What a sandbox takes after a run wrote to it.
-  async measure(id: string): Promise<void> {
-    const sandbox = this.sandboxes.get(id)
-    if (!sandbox || this.deleting.has(id)) {
-      return
-    }
-    sandbox.bytes = await this.options.storage.usage(id)
-    await this.save(sandbox)
+  // What a sandbox takes after a run wrote to it. The run's result is not held up by it: the
+  // owner's next run or create waits for it (`measured`).
+  measure(id: string): Promise<void> {
+    const previous = this.measuring.get(id) ?? Promise.resolve()
+    const measure = previous.then(async () => {
+      const sandbox = this.sandboxes.get(id)
+      if (!sandbox || this.deleting.has(id)) {
+        return
+      }
+      sandbox.bytes = await this.options.storage.usage(id)
+      await this.save(sandbox)
+    })
+    const settled = measure.catch(() => undefined)
+    this.measuring.set(id, settled)
+    settled.then(() => {
+      if (this.measuring.get(id) === settled) {
+        this.measuring.delete(id)
+      }
+    })
+    return measure
   }
 
   private mine(owner: Owner, id: string): Sandbox {

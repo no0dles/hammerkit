@@ -373,12 +373,21 @@ describe('SandboxRegistry', () => {
     // what a run ends with
     expect(await storage.usage('sbx_large')).toBe(before + 40 * 250 * 10)
     expect(walk).toHaveBeenCalledTimes(1)
-    // the next run starts on what that walk left, nothing ran in between
+    // the next run is submitted and starts on what that walk left: nothing ran in between
+    expect(await storage.state('sbx_large')).toMatchObject({ clean: true })
     expect(await storage.state('sbx_large')).toMatchObject({ clean: true })
     expect(walk).toHaveBeenCalledTimes(1)
-    // a run did, so the one after walks again before git reads the files
-    expect(await storage.state('sbx_large')).toMatchObject({ clean: true })
-    expect(walk).toHaveBeenCalledTimes(2)
+    // while it runs, its tasks write: a state then walks, and so does the one after
+    await storage.attach('sbx_large')
+    writeFileSync(join(files, 'new.txt'), 'new')
+    chmodSync(join(files, 'new.txt'), 0o000)
+    expect(await storage.state('sbx_large')).toMatchObject({ clean: false })
+    expect(await storage.state('sbx_large')).toMatchObject({ clean: false })
+    expect(walk).toHaveBeenCalledTimes(3)
+    // until its measure: one walk per run
+    await storage.usage('sbx_large')
+    expect(await storage.state('sbx_large')).toMatchObject({ clean: false })
+    expect(walk).toHaveBeenCalledTimes(4)
   }, 60_000)
 
   it('lets a change wait for a delete, and then does not find the sandbox', async () => {
@@ -403,5 +412,16 @@ describe('SandboxRegistry', () => {
     await sandboxes.measure(sandbox.id)
     expect(sandboxes.get(alice, sandbox.id)?.bytes).toBeGreaterThanOrEqual(sandbox.bytes + 64 * 1024)
     expect(registryWith({ bytes: sandbox.bytes }).overLimit(alice)).toBeUndefined()
+  })
+
+  it("does not hold up a run's result for its measure, but the owner's next run waits for it", async () => {
+    const sandboxes = registryWith({ bytes: 1024 * 1024 })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    writeFileSync(join(await sandboxes.attach(sandbox.id), 'big.bin'), Buffer.alloc(2 * 1024 * 1024))
+    // what the executor does once the run is over, without waiting
+    const measuring = sandboxes.measure(sandbox.id)
+    await sandboxes.measured(alice)
+    expect(sandboxes.overLimit(alice)).toMatch(/more than your limit of 1Mi/)
+    await measuring
   })
 })
