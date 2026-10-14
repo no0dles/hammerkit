@@ -23,7 +23,6 @@ import { awaitDeployRunningState } from './await-running-state'
 import {
   EGRESS_PROXY_HOST,
   EGRESS_PROXY_IMAGE,
-  EGRESS_PROXY_PORT,
   formatRefusedHost,
   getEgressProxyCommand,
   getEgressProxyPorts,
@@ -385,6 +384,16 @@ async function getNeedHostAliases(
 // egress policy of their own, and reach the needed services by name for tools
 // that ignore NO_PROXY. Unprivileged, from a pinned image. Its Service carries
 // the port of each TCP forward too.
+// Exits 0 once every port answers on the pod's loopback.
+export function getProxyReadinessScript(ports: number[]): string {
+  return (
+    `const net = require('net'); let open = ${ports.length}; ` +
+    `for (const port of ${JSON.stringify(ports)}) net.connect(port, '127.0.0.1')` +
+    `.on('connect', function () { this.destroy(); if (--open === 0) process.exit(0) })` +
+    `.on('error', () => process.exit(1))`
+  )
+}
+
 async function ensureProxy(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -426,14 +435,11 @@ async function ensureProxy(
               command: getEgressProxyCommand(),
               env: Object.entries(getItemProxyEnvironment(item)).map(([key, value]) => ({ name: key, value })),
               ports: getEgressProxyPorts(network).map((port) => ({ containerPort: port })),
-              // in the pod, since its ingress policy may keep the kubelet out
+              // in the pod, since its ingress policy may keep the kubelet out;
+              // ready once it listens on every port, its TCP forwards' too
               readinessProbe: {
                 exec: {
-                  command: [
-                    'node',
-                    '-e',
-                    `require('net').connect(${EGRESS_PROXY_PORT}, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))`,
-                  ],
+                  command: ['node', '-e', getProxyReadinessScript(getEgressProxyPorts(network))],
                 },
                 periodSeconds: 2,
               },
