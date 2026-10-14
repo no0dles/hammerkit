@@ -446,6 +446,7 @@ export async function startServer(
       directory: join(storage, 'runs'),
       cache: join(storage, 'cache'),
       worker: options.worker,
+      log,
     })
   const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({

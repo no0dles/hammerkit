@@ -4,7 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, HostExecutorOptions } from './executor'
+import { EventEmitter } from 'events'
+import { HostExecutor, HostExecutorOptions, STOP_GRACE_MS, stopRunProcess } from './executor'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
@@ -232,9 +233,12 @@ describe('HostExecutor', () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 1500))
     abort.abort()
-    const { error } = await result
+    const { error, events } = await result
     expect(error?.message).toMatch(/cancel/)
     expect(Date.now() - started).toBeLessThan(25_000)
+    // on Windows this holds only when the tasks of the run were ended with it
+    expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringMatching(/could not be removed/) }))
+    expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
 
   it('removes the working directory of the run, failed or not', async () => {
@@ -247,6 +251,8 @@ describe('HostExecutor', () => {
 
   it('ends a run the way it ended when its working directory can not be removed', async () => {
     removal.refused = join(runs, 'run_test')
+    const operator: string[] = []
+    executor = new HostExecutor({ ...options, log: (line) => operator.push(line) })
     const ok = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
     const passed = await execute(run(ok))
     expect(passed.error).toBeUndefined()
@@ -254,13 +260,25 @@ describe('HostExecutor', () => {
       expect.objectContaining({
         type: 'log',
         stream: 'stderr',
-        text: expect.stringMatching(/could not be removed: EBUSY/),
+        text: 'the working directory of the run could not be removed: EBUSY',
       })
     )
+    expect(operator).toContainEqual(expect.stringMatching(/^run=run_test could not remove its directory: EBUSY/))
+
     const bad = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [exit 1]\n' })
     const failed = await execute(run(bad))
-    expect(failed.error?.message).toBeDefined()
-    expect(failed.error?.message).not.toMatch(/EBUSY/)
+    expect(failed.error?.message).toMatch(/build failed/)
+
+    const slow = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [sleep 30]\n' })
+    const abort = new AbortController()
+    const result = execute(run(slow), abort.signal)
+    for (let i = 0; i < 300 && !existsSync(runs); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    abort.abort()
+    const cancelled = await result
+    expect(cancelled.error?.message).toMatch(/cancel/)
   })
 
   it('fails with the reason when the server does not list the repository', async () => {
@@ -396,5 +414,67 @@ describe('HostExecutor', () => {
   it('fails when the build file is no longer on the server', async () => {
     const { error } = await execute(run('0'.repeat(64)))
     expect(error?.message).toContain('no longer on this server')
+  })
+})
+
+describe('stopRunProcess', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const child = () => ({ pid: 4242, kill: vi.fn(() => true) })
+  const taskkill = () => {
+    const killer = new EventEmitter()
+    const start = vi.fn(() => killer) as any
+    return { killer, start }
+  }
+
+  it('sends SIGTERM and kills the process after the grace period', () => {
+    vi.useFakeTimers()
+    const worker = child()
+    const { start } = taskkill()
+    stopRunProcess(worker, 'linux', start)
+    expect(start).not.toHaveBeenCalled()
+    expect(worker.kill).toHaveBeenCalledWith('SIGTERM')
+    vi.advanceTimersByTime(STOP_GRACE_MS)
+    expect(worker.kill).toHaveBeenLastCalledWith('SIGKILL')
+  })
+
+  it('ends the process tree on Windows with taskkill and leaves it to taskkill when it succeeds', () => {
+    vi.useFakeTimers()
+    const worker = child()
+    const { killer, start } = taskkill()
+    stopRunProcess(worker, 'win32', start)
+    expect(start).toHaveBeenCalledWith(
+      expect.stringMatching(/taskkill\.exe$/),
+      ['/pid', '4242', '/T', '/F'],
+      expect.anything()
+    )
+    killer.emit('exit', 0)
+    expect(worker.kill).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(STOP_GRACE_MS)
+    expect(worker.kill).toHaveBeenCalledWith('SIGKILL')
+  })
+
+  it('kills the process on Windows when taskkill fails', () => {
+    vi.useFakeTimers()
+    const worker = child()
+    const { killer, start } = taskkill()
+    stopRunProcess(worker, 'win32', start)
+    killer.emit('exit', 1)
+    expect(worker.kill).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(STOP_GRACE_MS)
+    expect(worker.kill).toHaveBeenLastCalledWith('SIGKILL')
+  })
+
+  it('kills the process on Windows when taskkill can not start', () => {
+    vi.useFakeTimers()
+    const worker = child()
+    const { killer, start } = taskkill()
+    stopRunProcess(worker, 'win32', start)
+    killer.emit('error', new Error('ENOENT'))
+    expect(worker.kill).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(STOP_GRACE_MS)
+    expect(worker.kill).toHaveBeenLastCalledWith('SIGKILL')
   })
 })

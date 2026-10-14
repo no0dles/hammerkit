@@ -179,8 +179,10 @@ by the server):
    were named (or the ones the labels select), stopping at the first one that fails, and
    reports each task and its output as events. Cancelling the run stops the process with
    `SIGTERM`, so the engine stops its tasks and removes its containers, and kills it after
-   15 seconds.
-4. It removes the directory, whether the run succeeded, failed or was cancelled.
+   15 seconds. On Windows the server ends the process and the tasks it started at once.
+4. It removes the directory, whether the run succeeded, failed or was cancelled. A directory
+   that can't be removed (a file still in use, for example) is left in place and reported in
+   the run's log and the server's log; the run still ends the way it ended.
 
 The process starts with an environment the server builds, not with its own: the variables
 `runs.env.allow` lists, plus `runs.env.set`, and a `HOME` that is an empty directory of the

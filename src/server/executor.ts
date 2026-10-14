@@ -1,4 +1,4 @@
-import { spawn } from 'child_process'
+import { ChildProcess, spawn } from 'child_process'
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import { lstat, mkdir, rm, writeFile } from 'fs/promises'
@@ -20,8 +20,9 @@ function isGitDirectory(segment: string): boolean {
   return name === '.git' || name === 'git~1'
 }
 
-// A cancelled run gets this long to stop its tasks and remove its containers
-const STOP_GRACE_MS = 15_000
+// A cancelled run gets this long to stop its tasks and remove its containers, after that
+// its process is killed. On Windows the process and its tasks are ended at once.
+export const STOP_GRACE_MS = 15_000
 
 // what is kept of the error output of a process that died without saying why
 const MAX_STDERR = 2 * 1024
@@ -47,6 +48,37 @@ export interface HostExecutorOptions {
   cache: string
   // the command that starts the process of a run, see defaultWorker
   worker?: string[]
+  // the operator's log, which hears of a run directory that could not be removed
+  log?: (line: string) => void
+}
+
+/**
+ * Stops the process of a cancelled run. Elsewhere it gets SIGTERM, so the engine stops its
+ * tasks and removes its containers. Windows ends only the process itself, the tasks it
+ * started would keep running and hold on to the directory of the run, so there the whole
+ * tree is ended with taskkill. Should that not work, the process is killed, and it is
+ * killed in any case if it is still there after the grace period.
+ */
+export function stopRunProcess(
+  child: Pick<ChildProcess, 'pid' | 'kill'>,
+  platform: NodeJS.Platform = process.platform,
+  start: typeof spawn = spawn
+): NodeJS.Timeout {
+  if (platform === 'win32' && child.pid) {
+    const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
+    start(taskkill, ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      .on('error', () => child.kill())
+      .on('exit', (code) => {
+        if (code !== 0) {
+          child.kill()
+        }
+      })
+  } else {
+    child.kill('SIGTERM')
+  }
+  const killTimer = setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS)
+  killTimer.unref()
+  return killTimer
 }
 
 // The cache a run shares with others is the one of its source: the runs of a repository
@@ -61,9 +93,9 @@ function cacheNamespace(run: Run): string {
  * Runs the tasks of a run on this machine with the engine of `hammerkit run`, in a
  * process of its own.
  *
- * The working directory is made for the run and removed afterwards. Its build
- * file is the published version the run is pinned to, written over the code of the
- * source, so the commands are the published ones whatever the source says. The process
+ * The working directory is made for the run and removed afterwards, or reported if it can
+ * not be. Its build file is the published version the run is pinned to, written over the
+ * code of the source, so the commands are the published ones whatever the source says. The process
  * starts with an environment the server builds: the variables `runs.env` lists, a home
  * directory that is the run's alone, and a cache directory per source trust. So what
  * the engine reads of its process (the docker host, the registry logins in the home
@@ -143,23 +175,25 @@ export class HostExecutor implements RunExecutor {
       await this.runInProcess(worker, input, checkout, this.processEnvironment(home, cache), context, abortCtrl.signal)
     } finally {
       context.signal.removeEventListener('abort', abort)
-      await this.removeRunDirectory(root, context)
+      await this.removeRunDirectory(run, root, context)
     }
   }
 
   // A task of the run may still hold a file of its directory for a moment after the run
-  // ended, which Windows refuses to remove. A directory that stays is reported; it does not
-  // change how the run ended.
-  private async removeRunDirectory(root: string, context: RunContext): Promise<void> {
+  // ended, which Windows refuses to remove. A directory that stays is reported, to the run
+  // by its error code and to the operator with its path; it does not change how the run ended.
+  private async removeRunDirectory(run: Run, root: string, context: RunContext): Promise<void> {
     try {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
     } catch (e) {
+      const error = e as NodeJS.ErrnoException
       context.emit({
         type: 'log',
         task: 'hammerkit',
         stream: 'stderr',
-        text: `the working directory of the run could not be removed: ${(e as Error).message}`,
+        text: `the working directory of the run could not be removed: ${error.code ?? 'unknown error'}`,
       })
+      this.options.log?.(`run=${run.id} could not remove its directory: ${error.message}`)
     }
   }
 
@@ -181,8 +215,7 @@ export class HostExecutor implements RunExecutor {
   }
 
   // Starts the process, hands it the run on its standard input and relays what it reports. It
-  // is stopped with SIGTERM when the run is cancelled, so the engine removes its containers
-  // and stops its tasks, and killed if it does not stop in time.
+  // is stopped when the run is cancelled, see stopRunProcess.
   private runInProcess(
     command: string[],
     input: WorkerInput,
@@ -202,18 +235,7 @@ export class HostExecutor implements RunExecutor {
       let stderr = ''
       let killTimer: NodeJS.Timeout | undefined
       const stop = () => {
-        if (process.platform === 'win32' && child.pid) {
-          // Windows ends only the process itself: the tasks it started would keep running
-          // and hold on to the directory of the run
-          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on(
-            'error',
-            () => child.kill()
-          )
-          return
-        }
-        child.kill('SIGTERM')
-        killTimer = setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS)
-        killTimer.unref()
+        killTimer = stopRunProcess(child)
       }
       if (signal.aborted) {
         stop()
