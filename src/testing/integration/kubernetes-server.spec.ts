@@ -205,8 +205,9 @@ services:
     healthcheck:
       cmd: wget -q -O /dev/null http://127.0.0.1:8080/
   bare:
-    # no ports: a headless Service, its tasks reach the pod itself
-    image: busybox:1.36
+    # no ports: a headless Service, its tasks reach the pod itself. Another image than
+    # api's, since a service's id leaves out its cmd and ports
+    image: busybox:1.37
     shell: sh
     cmd: mkdir -p /www && echo bare-ok > /www/index.html && httpd -f -p 8081 -h /www
     healthcheck:
