@@ -34,4 +34,32 @@ describe('getServiceIp', () => {
 
     await expect(getServiceIp({ coreApi } as any, env, service)).resolves.toBeNull()
   })
+
+  it('returns the address of the ready pod of a headless service', async () => {
+    const pod = (ip: string, ready: boolean, deleting = false) => ({
+      metadata: deleting ? { deletionTimestamp: new Date() } : {},
+      status: { podIP: ip, conditions: [{ type: 'Ready', status: ready ? 'True' : 'False' }] },
+    })
+    const coreApi = {
+      readNamespacedService: vi.fn().mockResolvedValue({ spec: { clusterIP: 'None' } }),
+      listNamespacedPod: vi
+        .fn()
+        .mockResolvedValue({ items: [pod('10.1.0.1', true, true), pod('10.1.0.2', false), pod('10.1.0.3', true)] }),
+    }
+
+    await expect(getServiceIp({ coreApi } as any, env, service)).resolves.toBe('10.1.0.3')
+    expect(coreApi.listNamespacedPod).toHaveBeenCalledWith({
+      namespace: 'demo',
+      labelSelector: 'hammerkit.dev/id=abc123',
+    })
+  })
+
+  it('returns null for a headless service without a pod', async () => {
+    const coreApi = {
+      readNamespacedService: vi.fn().mockResolvedValue({ spec: { clusterIP: 'None' } }),
+      listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }),
+    }
+
+    await expect(getServiceIp({ coreApi } as any, env, service)).resolves.toBeNull()
+  })
 })
