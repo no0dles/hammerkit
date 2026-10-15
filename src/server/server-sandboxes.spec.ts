@@ -330,9 +330,11 @@ describe('sandboxes api', () => {
   it('refuses a run whose paths go through a link a task or a commit left in the sandbox', async () => {
     await withApi('sandboxes-api-link', undefined, async (api) => {
       const outside = mkdtempSync(join(tmpdir(), 'hammerkit-sandbox-outside-'))
+      let files = ''
       try {
         writeFileSync(join(outside, 'secret.txt'), 'server-secret')
         const sandbox = await (await create(api)).json()
+        files = api.files(sandbox.id)
         // what `ln -s` in a task of an earlier run leaves behind, a junction on Windows
         symlinkSync(outside, join(api.files(sandbox.id), 'escape'), 'junction')
         const run = await (await runOn(api, sandbox.id, ['leak'])).json()
@@ -356,6 +358,11 @@ describe('sandboxes api', () => {
         const all = await (await runOn(api, sandbox.id, ['all'])).json()
         expect(await untilState(api, all.id, ['succeeded', 'failed'])).toMatchObject({ state: 'succeeded' })
       } finally {
+        // the links stay in temp/, where whatever reads it after the test (the upload of a failed
+        // CI job's files) would follow them onto the disk of the machine
+        for (const link of files ? ['escape', 'rootlink'] : []) {
+          rmSync(join(files, link), { force: true })
+        }
         rmSync(outside, { recursive: true, force: true })
       }
     })
