@@ -204,6 +204,14 @@ services:
     ports: [8080]
     healthcheck:
       cmd: wget -q -O /dev/null http://127.0.0.1:8080/
+  bare:
+    # no ports: a headless Service, its tasks reach the pod itself. Another image than
+    # api's, since a service's id leaves out its cmd and ports
+    image: busybox:1.37
+    shell: sh
+    cmd: mkdir -p /www && echo bare-ok > /www/index.html && httpd -f -p 8081 -h /www
+    healthcheck:
+      cmd: wget -q -O /dev/null http://127.0.0.1:8081/
 tasks:
   build:
     image: alpine:3.19
@@ -242,11 +250,12 @@ tasks:
       - echo denied-ok
   check:
     deps: [build, offline, reach]
-    needs: [api]
+    needs: [api, bare]
     src: [input.txt]
     cmds:
       - echo "read $(cat out/result.txt)"
       - echo "from $(wget -q -O - http://api:8080/)"
+      - echo "from $(wget -q -O - http://bare:8081/)"
       # a pod of a Job, in the tool image, not the server's machine
       - echo "host=$(hostname)"
       - echo "alpine=$(cat /etc/alpine-release)"
@@ -482,6 +491,8 @@ describe('kubernetes backend of a server', () => {
       expect(first.text).toContain('denied-ok')
       // the service is reached from its namespace
       expect(first.text).toContain('from api-ok')
+      // and one without ports, on any port of its pod
+      expect(first.text).toContain('from bare-ok')
 
       const { core } = cluster()
       const quota = await core.readNamespacedResourceQuota({ name: 'hammerkit', namespace: callerNamespace })
@@ -577,6 +588,10 @@ tasks:
       const run = await execute('run_k8s_broken', hash, { name: 'broken', tasks: ['broken'], accounts: [] })
       expect(run.error?.message).toBe('broken failed')
       expect(taskStates(run.events, 'broken')).toContain('failed')
+      // with the exit code of its command, as on a host
+      expect(run.events).toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'broken', state: 'failed', exitCode: 7 })
+      )
       // what the command printed before it failed
       expect(run.text).toContain('before-the-failure')
       expect(await left('run_k8s_broken')).toEqual([])
