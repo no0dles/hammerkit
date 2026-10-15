@@ -269,13 +269,19 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     const repository = join(this.staging, `${key.id}-push-${randomBytes(6).toString('hex')}.git`)
     const what = `sandbox ${key.id}`
     const env = defined(this.env)
-    const run = (args: string[], action: string, runEnv: { [key: string]: string } = env) =>
+    const run = (
+      args: string[],
+      action: string,
+      runEnv: { [key: string]: string } = env,
+      options: { exitCodes?: number[] } = {}
+    ) =>
       git(
         [`--git-dir=${repository}`, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args],
         runEnv,
         push.signal,
         what,
-        action
+        action,
+        options
       )
     try {
       await mkdir(this.staging, { recursive: true, mode: 0o700 })
@@ -322,11 +328,13 @@ export class KubernetesSandboxStorage implements SandboxStorage {
           )
         }
       }
+      let printed: string
       try {
-        await run(
+        printed = await run(
           [
             'push',
-            '--quiet',
+            // a refused ref is a line with the remote's reason, as on a host
+            '--porcelain',
             '--no-verify',
             `--force-with-lease=refs/heads/${push.branch}:${push.expect ?? ''}`,
             '--',
@@ -335,10 +343,15 @@ export class KubernetesSandboxStorage implements SandboxStorage {
           ],
           'push',
           // the write credential is in the environment of this one git process
-          push.env
+          push.env,
+          { exitCodes: [1] }
         )
       } catch (e) {
         throw new SandboxPushFailed(commit, e)
+      }
+      const refusal = getPushRefusal(printed, push.branch)
+      if (refusal) {
+        throw new SandboxPushFailed(commit, new Error(refusal))
       }
       return commit
     } finally {
@@ -956,6 +969,20 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       })
     })
   }
+}
+
+// Why the remote refused the push of `branch`, from what `git push --porcelain` printed
+// (`<flag>\t<from>:<to>\t<summary>`, `!` for a refused ref); none when it took it.
+export function getPushRefusal(printed: string, branch: string): string | undefined {
+  const line = printed
+    .split('\n')
+    .map((printedLine) => printedLine.split('\t'))
+    .find((fields) => fields.length >= 3 && fields[1].endsWith(`:refs/heads/${branch}`))
+  if (line && line[0] !== '!') {
+    return undefined
+  }
+  const reason = line ? line.slice(2).join(' ') : printed.trim() || 'git printed nothing'
+  return `the remote refused the push to ${branch}: ${reason}`
 }
 
 // When the pod started, by the cluster's clock as far as it says, else now.

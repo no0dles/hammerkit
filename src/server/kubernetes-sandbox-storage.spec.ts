@@ -734,6 +734,20 @@ describe('sandboxes on a cluster', () => {
       expect(git(repository, 'rev-parse', 'agent/one^')).toBe(branch)
     })
 
+    it('tells the caller why the remote refused the push, as on a host', async () => {
+      writeFileSync(join(repository, '.git', 'hooks', 'pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+      const registry = registryWith()
+      const sandbox = await registry.create(alice, REPO, 'main')
+      await registry.edit(alice, sandbox.id, [{ op: 'write', path: 'new.txt', content: 'new' }])
+      const refused = await registry.push(alice, sandbox.id, 'agent/refused', author, ['agent/**']).catch((e) => e)
+      expect(refused).toMatchObject({
+        status: 502,
+        message: 'the remote refused the push to agent/refused: [remote rejected] (pre-receive hook declined)',
+      })
+      expect(git(repository, 'branch', '--list', 'agent/*')).toBe('')
+      expect(await registry.state(sandbox.id)).toMatchObject({ commit, clean: false })
+    })
+
     it('refuses a commit of the pod that is not one on top of the sandbox’s, or has what never leaves', async () => {
       const storage = storageWith()
       const registry = registryWith(storage)

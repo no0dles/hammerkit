@@ -3,6 +3,7 @@ import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
 import { RepoAccess } from './repo-access'
+import { SandboxPushFailed } from './sandbox-storage'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -137,5 +138,22 @@ describe('RepoAccess', () => {
     const repos = new RepoAccess(config, environment)
     const error = repos.scrub(new Error('remote said: bad credentials github-token-value'), ['github-token-value'])
     expect(error.message).toBe('remote said: bad credentials ***')
+  })
+
+  it('keeps the class and the message of an error whose constructor takes more than a message', () => {
+    const repos = new RepoAccess(config, environment)
+    const refused = new SandboxPushFailed(
+      'a'.repeat(40),
+      new Error(
+        'refusing to allow a GitHub App to create or update workflow .github/workflows/ci.yaml github-token-value'
+      )
+    )
+    const error = repos.scrub(refused, ['github-token-value'])
+    expect(error).toBeInstanceOf(SandboxPushFailed)
+    expect(error.message).toBe(
+      'refusing to allow a GitHub App to create or update workflow .github/workflows/ci.yaml ***'
+    )
+    expect(error.stack).not.toContain('github-token-value')
+    expect(JSON.stringify({ ...error })).not.toContain('github-token-value')
   })
 })

@@ -400,24 +400,39 @@ export class HostSandboxStorage implements SandboxStorage {
     }
     // the lease makes the remote refuse when the branch moved since it was read, and when
     // somebody created it meanwhile
+    let printed: string
     try {
-      await run(
+      printed = await this.git(
+        id,
         [
           'push',
-          '--quiet',
+          // a ref the remote refuses is a line with the reason (a GitHub App without the
+          // workflows permission, a ruleset), where git's last line only says it failed
+          '--porcelain',
           '--no-verify',
           `--force-with-lease=refs/heads/${push.branch}:${push.expect ?? ''}`,
           '--',
           push.url,
           `${commit}:refs/heads/${push.branch}`,
         ],
-        'push',
         // the write credential is in the environment of this one git process, which is
         // that environment alone: nothing of the server's own git configuration
-        push.env
+        push.env,
+        push.signal,
+        'push',
+        { exitCodes: [1] }
       )
     } catch (e) {
       throw new SandboxPushFailed(commit, e)
+    }
+    // `<flag>\t<from>:<to>\t<summary>`; `!` is a refused ref
+    const line = printed
+      .split('\n')
+      .map((printedLine) => printedLine.split('\t'))
+      .find((fields) => fields.length >= 3 && fields[1].endsWith(`:refs/heads/${push.branch}`))
+    if (!line || line[0] === '!') {
+      const reason = line ? line.slice(2).join(' ') : printed.trim() || 'git printed nothing'
+      throw new SandboxPushFailed(commit, new Error(`the remote refused the push to ${push.branch}: ${reason}`))
     }
     return commit
   }
