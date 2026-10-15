@@ -307,20 +307,20 @@ export function getJobSecretSpec(
     }
   })
   const mounts: V1VolumeMount[] = [{ name: VALUES_VOLUME, mountPath: SECRET_VALUES_PATH }]
-  const exports: string[] = []
+  const exportLines: string[] = []
   for (const { index, secret } of secrets) {
     if (secret.target.type === 'file') {
       mounts.push({ name: VALUES_VOLUME, mountPath: secret.target.path, subPath: `secret-${index}`, readOnly: true })
     } else {
       // verbatim: the x keeps the trailing newlines command substitution would drop
       const name = secret.target.name
-      exports.push(
+      exportLines.push(
         `${name}="$(cat "$HAMMERKIT_SECRETS/secret-${index}"; printf x)" && ${name}="\${${name}%x}" && export ${name}`
       )
     }
   }
   const script = [
-    ...exports,
+    ...exportLines,
     `command -v awk >/dev/null 2>&1 || { echo 'hammerkit: the image has no awk, which masks the secrets of this task in its output' >&2; exit 127; }`,
     `{ "$HAMMERKIT_SHELL" -c "$HAMMERKIT_CMD"; echo $? > "$HAMMERKIT_SECRETS/.status"; } 2>&1 | awk -v dir="$HAMMERKIT_SECRETS" -v count=${
       secrets.length
