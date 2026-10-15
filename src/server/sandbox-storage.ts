@@ -41,6 +41,8 @@ export interface SandboxKey {
 export interface SandboxAttachment {
   directory: string
   claim?: SandboxClaim
+  // when the run ended, whatever the outcome: what the storage keeps for the run goes
+  release?(): void
 }
 
 export interface SandboxClaim {
@@ -98,8 +100,6 @@ export class SandboxPushFailed extends Error {
  * (KubernetesSandboxStorage).
  */
 export interface SandboxStorage {
-  // whether one file can be read while a run holds the sandbox; walks and edits never can
-  readonly readsWhileHeld: boolean
   // fetches the branch into new storage for the sandbox, and answers the commit
   create(key: SandboxKey, fetch: SandboxFetch): Promise<string>
   // moves the files to another commit; only for a sandbox without changes
@@ -133,7 +133,6 @@ const PUSHED_REF = 'refs/hammerkit/pushed'
  * directory and work tree, and runs without hooks or a file system monitor.
  */
 export class HostSandboxStorage implements SandboxStorage {
-  readonly readsWhileHeld = true
   // one git command or walk at a time per sandbox: the objects `state` writes are pruned
   // again, which must not meet another command that still needs them
   private readonly queues = new Map<string, Promise<unknown>>()

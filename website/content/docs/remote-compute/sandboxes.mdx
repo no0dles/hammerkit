@@ -509,7 +509,7 @@ above are the same.
   that mounts its claims, with the same code as on a host (`hammerkit server-sandbox`), so
   paths, links and the deny list follow the same rules. The pod has no token and no network (a
   `NetworkPolicy` denies all of it), runs on the first pool with no capabilities beyond owning
-  and changing files and a read-only root, and stays while requests come,
+  and changing files and a read-only root, and stays while requests come or a run works,
   `backend.sandboxes.idle` after the last one.
 * **Push.** The pod commits the changes; the server copies the objects of the git data,
   checks that the commit is one on top of the sandbox's without anything of the deny list,
@@ -522,11 +522,14 @@ above are the same.
 * **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
   `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a
   `sandboxes.network` other than `open`, the config needs `backend.networkPolicy: enforced`.
-* **One file while a run works.** The pods of the run have the claim then, so reading a file
-  is `409` too, like the other file endpoints.
+* **One file while a run works**, as on a host: the pod of the files stays while the run works.
 * **One node.** A claim is usually `ReadWriteOnce`: several pods share it only on one node.
   The pods that mount a sandbox (the Jobs of its run and the pod of its files) are placed
-  next to each other, so the tasks of a run on a sandbox go to one node, in one pool.
+  next to each other, so its disk never moves between nodes during a run, which takes seconds
+  each time. The tasks of a run on a sandbox go to the node of the pod of its files, in the
+  first pool; a task on another pool (a local task whose `toolImage` is on a later pool) fails.
+  When a pod of the run finds no room on that node for 10 seconds, the pod of the files makes
+  way, so the run's pod goes where there is room and the disk follows it.
 * **Kubernetes 1.30 or later.** The server talks to the pod over `pods/exec` with the
   `v5.channel.k8s.io` protocol, which ends a request's input without closing the connection.
 

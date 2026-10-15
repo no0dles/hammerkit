@@ -17,7 +17,7 @@ import { join } from 'path'
 import { Readable, Writable } from 'stream'
 import { create as createTar, extract as extractTar } from 'tar'
 import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
-import { getKubernetesPersistence, getWorkspacePodSpec } from '../kubernetes/volumes'
+import { getKubernetesPersistence, getSandboxAffinity, getWorkspacePodSpec } from '../kubernetes/volumes'
 import { getCallerNamespace } from './kubernetes-backend'
 import { getSandboxNames, KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
 import { SandboxFileError } from './sandbox-files'
@@ -117,6 +117,19 @@ function fakeCluster(root: string) {
       },
       async readNamespacedPod({ name, namespace }: any) {
         return read('Pod', namespace, name)
+      },
+      async listNamespacedPod({ namespace, labelSelector }: any) {
+        const terms = labelSelector.split(',')
+        const matches = (labels: { [key: string]: string } = {}) =>
+          terms.every((term: string) =>
+            term.startsWith('!') ? !(term.slice(1) in labels) : labels[term.split('=')[0]] === term.split('=')[1]
+          )
+        return {
+          items: [...objects.values()].filter(
+            (object) =>
+              object.kind === 'Pod' && object.metadata.namespace === namespace && matches(object.metadata.labels)
+          ),
+        }
       },
       async deleteNamespacedPod({ name, namespace }: any) {
         read('Pod', namespace, name)
@@ -392,11 +405,16 @@ describe('sandboxes on a cluster', () => {
     expect(stale.status).toBe(422)
   })
 
-  it('reads nothing while a run holds the sandbox: its pods have the claim', async () => {
+  it('reads one file while a run holds the sandbox, as on a host, and edits nothing', async () => {
     const registry = registryWith()
     const sandbox = await registry.create(alice, REPO, 'main')
+    const attached = await registry.attach(sandbox.id, join(root, 'run', 'sandbox'))
     holder = 'run_1'
-    expect(() => registry.files(alice, sandbox.id)).toThrow(SandboxError)
+    expect((await registry.files(alice, sandbox.id).read('src/app.ts', {})).content).toContain('41')
+    const edit = await registry.edit(alice, sandbox.id, [{ op: 'write', path: 'x.txt', content: 'x' }]).catch((e) => e)
+    expect(edit).toBeInstanceOf(SandboxError)
+    expect(edit.status).toBe(409)
+    attached.release?.()
   })
 
   it('keeps the sandboxes of callers apart, each in its own namespace', async () => {
@@ -461,7 +479,7 @@ describe('sandboxes on a cluster', () => {
     expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('outside-secret\n')
   })
 
-  it('copies the files for the run and hands its tasks the claim, without the pod of the files', async () => {
+  it('copies the files for the run and hands its tasks the claim, next to the pod of the files', async () => {
     const registry = registryWith()
     const sandbox = await registry.create(alice, REPO, 'main')
     const names = getSandboxNames(sandbox.id)
@@ -469,9 +487,12 @@ describe('sandboxes on a cluster', () => {
     expect(attached).toEqual({
       directory: join(root, 'run', 'sandbox'),
       claim: { name: names.claim, namespace, subPath: 'files', label: names.label },
+      release: expect.any(Function),
     })
     expect(readFileSync(join(attached.directory, 'src', 'app.ts'), 'utf8')).toContain('41')
-    expect(cluster.objects.has(`Pod/${namespace}/${names.pod}`)).toBe(false)
+    // the pod of the files stays while the run works, and the run's pods go to its node
+    const pod = `Pod/${namespace}/${names.pod}`
+    expect(cluster.objects.get(pod).spec.affinity).toEqual(getSandboxAffinity(names.label))
 
     // a task of the run mounts its sources from the claim, read and write, and goes
     // where the other pods of the sandbox are
@@ -512,7 +533,105 @@ describe('sandboxes on a cluster', () => {
     ])
     // a source outside of the sandbox is uploaded into the task's own claim, as before
     expect(persistence.sources.map((source) => source.localPath)).toEqual([join(root, 'elsewhere')])
-    expect(getWorkspacePodSpec(kubernetes, persistence).labels).toEqual({ 'hammerkit.dev/sandbox': names.label })
+    expect(getWorkspacePodSpec(kubernetes, persistence)).toEqual({
+      labels: { 'hammerkit.dev/sandbox': names.label },
+      affinity: getSandboxAffinity(names.label),
+    })
+    // the pod of the files is on the first pool: a task of another pool would never start
+    const pools = serverConfigSchema.parse({
+      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+      backend: {
+        type: 'kubernetes',
+        namespace: 'hammerkit',
+        pools: [
+          { name: 'build', platform: { os: 'linux', arch: 'amd64' } },
+          { name: 'tools', platform: { os: 'linux', arch: 'amd64' }, toolImage: 'tools:1' },
+        ],
+      },
+    }).backend as KubernetesBackend
+    const onPools = { server: { ...kubernetes.server, pools: pools.pools } } as any
+    expect(getWorkspacePodSpec(onPools, persistence, { name: 'lint', pool: 'build' }).labels).toEqual({
+      'hammerkit.dev/sandbox': names.label,
+    })
+    expect(() => getWorkspacePodSpec(onPools, persistence, { name: 'lint', pool: 'tools' })).toThrow(
+      'task lint: runs on the pool tools, and the tasks of a run on a sandbox run on the first pool, build, where its files are'
+    )
+
+    // a second release is none
+    attached.release?.()
+    attached.release?.()
+    expect(cluster.objects.has(pod)).toBe(true)
+  })
+
+  it('keeps the pod of the files while a run works, and lets it go after the run when idle', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const registry = registryWith()
+      const sandbox = await registry.create(alice, REPO, 'main')
+      const pod = `Pod/${namespace}/${getSandboxNames(sandbox.id).pod}`
+      const attached = await registry.attach(sandbox.id, join(root, 'run', 'sandbox'))
+      // longer than `idle` with no request: the run still has it
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+      expect(cluster.objects.has(pod)).toBe(true)
+      attached.release?.()
+      await vi.advanceTimersByTimeAsync(30 * 1000)
+      expect(cluster.objects.has(pod)).toBe(true)
+      await vi.advanceTimersByTimeAsync(31 * 1000)
+      expect(cluster.objects.has(pod)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('takes the pod of the files away when a pod of the run finds no room on its node', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const registry = registryWith()
+      const sandbox = await registry.create(alice, REPO, 'main')
+      const names = getSandboxNames(sandbox.id)
+      const pod = `Pod/${namespace}/${names.pod}`
+      const attached = await registry.attach(sandbox.id, join(root, 'run', 'sandbox'))
+      const job = (reason: string, since: number) =>
+        cluster.objects.set(`Pod/${namespace}/job-1`, {
+          kind: 'Pod',
+          metadata: { name: 'job-1', namespace, labels: { 'hammerkit.dev/sandbox': names.label } },
+          status: {
+            phase: 'Pending',
+            conditions: [
+              { type: 'PodScheduled', status: 'False', reason, lastTransitionTime: new Date(since).toISOString() },
+            ],
+          },
+        })
+      // a pod of the run that waits on its image, or found no room only just now: the pod stays
+      job('ContainersNotReady', Date.now() - 60 * 1000)
+      await vi.advanceTimersByTimeAsync(3100)
+      job('Unschedulable', Date.now())
+      await vi.advanceTimersByTimeAsync(3100)
+      expect(cluster.objects.has(pod)).toBe(true)
+      // no room for long: it goes, and a request after it starts a new one
+      job('Unschedulable', Date.now() - 60 * 1000)
+      await vi.advanceTimersByTimeAsync(3100)
+      expect(cluster.objects.has(pod)).toBe(false)
+      cluster.objects.delete(`Pod/${namespace}/job-1`)
+      expect((await registry.files(alice, sandbox.id).read('src/app.ts', {})).content).toContain('41')
+      expect(cluster.objects.has(pod)).toBe(true)
+      attached.release?.()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('replaces a pod of the files that nears its deadline, between requests', async () => {
+    const registry = registryWith()
+    const sandbox = await registry.create(alice, REPO, 'main')
+    const pod = `Pod/${namespace}/${getSandboxNames(sandbox.id).pod}`
+    const first = cluster.objects.get(pod)
+    // what a server started a while ago and still has
+    const storage = (registry as any).options.storage
+    storage.pods.get(sandbox.id).started = Date.now() - 5.5 * 60 * 60 * 1000
+    await registry.files(alice, sandbox.id).stat('src/app.ts')
+    expect(cluster.objects.get(pod)).not.toBe(first)
+    expect(storage.pods.get(sandbox.id).started).toBeGreaterThan(Date.now() - 60 * 1000)
   })
 
   it('removes the claims with the sandbox, and its own claims without a record when it starts', async () => {

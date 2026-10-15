@@ -13,7 +13,7 @@ import { Run, RunContext, RunExecutor } from './runs'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { PlanPolicy } from './plan'
 import { SandboxRegistry } from './sandboxes'
-import { SandboxClaim } from './sandbox-storage'
+import { SandboxAttachment, SandboxClaim } from './sandbox-storage'
 import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -162,6 +162,7 @@ export class HostExecutor implements RunExecutor {
     context.signal.addEventListener('abort', abort, { once: true })
 
     const root = join(this.options.directory, run.id)
+    let attachment: SandboxAttachment | undefined
     try {
       // where the process of the run starts: the checkout of a ref, or for a sandbox the
       // published files, so what the process and the secret providers it starts read of
@@ -194,9 +195,9 @@ export class HostExecutor implements RunExecutor {
         const { registry, network } = sandboxes as SandboxRunOptions
         // read before the run attaches: until then the walk of the last run's measure holds
         const state = await registry.state(source.id, abortCtrl.signal)
-        const attached = await registry.attach(source.id, join(root, 'sandbox'))
-        work = attached.directory
-        claim = attached.claim
+        attachment = await registry.attach(source.id, join(root, 'sandbox'))
+        work = attachment.directory
+        claim = attachment.claim
         // what was approved is what runs: the files may have changed since, by a run
         // before this one on the sandbox
         if (run.approvals?.length && state.tree !== source.tree) {
@@ -257,6 +258,7 @@ export class HostExecutor implements RunExecutor {
       }
     } finally {
       context.signal.removeEventListener('abort', abort)
+      attachment?.release?.()
       await rm(root, { recursive: true, force: true })
       if (source.type === 'sandbox') {
         // what the run wrote counts against the owner's limits, from their next run or create

@@ -239,8 +239,15 @@ describe('sandboxes on a kubernetes backend', () => {
           )
         return { error, events, text: events.map((e) => (e.type === 'log' ? e.text : '')).join('\n') }
       }
+      const filesPod = async () =>
+        (await core.readNamespacedPod({ name: names.pod, namespace: callerNamespace })).metadata?.uid
+      const podBefore = await filesPod()
       const { error, events, text } = await execute('run_sbx_one_-', 'build')
       expect(error, text).toBeUndefined()
+      // the pod of the files stayed through the run, whose Job went to its node: the claim
+      // never moved
+      expect(podBefore).toBeDefined()
+      expect(await filesPod()).toBe(podBefore)
       // the Job read the edit and wrote into the claim
       expect(text).toContain('export const answer = 42')
       expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))

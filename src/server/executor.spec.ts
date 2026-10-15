@@ -582,6 +582,18 @@ describe('HostExecutor', () => {
       expect(existsSync(join(runs, 'run_test'))).toBe(false)
     })
 
+    it('releases what it attached when the run ends, failed or not', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' })
+      const released: string[] = []
+      const attach = sandboxes.attach.bind(sandboxes)
+      sandboxes.attach = async (id, into) => ({ ...(await attach(id, into)), release: () => released.push(id) })
+      writeFileSync(join(files, 'input.txt'), 'x')
+      expect((await executeWith(onSandbox(), sandboxRun(hash))).error).toBeUndefined()
+      rmSync(join(files, 'input.txt'))
+      expect((await executeWith(onSandbox(), sandboxRun(hash))).error).toBeDefined()
+      expect(released).toEqual([sandboxId, sandboxId])
+    })
+
     it('fails an approved run when the files are no longer the approved ones', async () => {
       const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' })
       const approved = (await sandboxes.state(sandboxId)).tree

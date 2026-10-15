@@ -79,6 +79,12 @@ const ISS_ANNOTATION = 'hammerkit.dev/owner-iss'
 const SUB_ANNOTATION = 'hammerkit.dev/owner-sub'
 // a pod that is left behind (the server stopped) ends on its own
 const POD_DEADLINE_SECONDS = 6 * 60 * 60
+// a pod this old is replaced when nothing uses it, well before its deadline ends it
+const POD_RENEW_MS = (POD_DEADLINE_SECONDS - 60 * 60) * 1000
+// how often a run's pods are looked at, and how long one may find no room next to the pod
+// of the files before that pod makes way
+const UNSCHEDULABLE_POLL_MS = 3000
+const UNSCHEDULABLE_MS = 10000
 // how long a pod may take to start, its image pull included
 const POD_START_MS = 5 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000
@@ -105,8 +111,12 @@ interface FilesPod {
   namespace: string
   name: string
   ready: Promise<void>
-  // requests under way; the pod goes when none is and it was idle long enough
+  // when it started, once it runs
+  started?: number
+  // requests and runs under way; the pod goes when none is and it was idle long enough
   busy: number
+  // the runs of `busy`
+  runs: number
   idle?: NodeJS.Timeout
 }
 
@@ -123,8 +133,9 @@ interface FilesPod {
  *   rules on paths, links and the deny list are the same. The pod has no network and no
  *   token, and stays while requests come, `backend.sandboxes.idle` after the last.
  * - A run on the sandbox gets a copy of the files to plan with, and its tasks mount the
- *   claim itself (WorkKubernetesWorkspace). While a run holds the sandbox, no pod of its
- *   files runs: one file is not read then either.
+ *   claim itself (WorkKubernetesWorkspace). The pod of its files stays while the run
+ *   works, and the pods of the run go to its node: a claim of one node at a time is then
+ *   never moved between nodes, which takes seconds each time.
  * - A push is made by the server: the pod commits the changes, the server copies the
  *   objects of the sandbox's git data, checks the commit and pushes it with the write
  *   credential, which never enters the caller's namespace either.
@@ -132,8 +143,6 @@ interface FilesPod {
  *   caller's namespace holds `sandboxes.limits` on the cluster as well.
  */
 export class KubernetesSandboxStorage implements SandboxStorage {
-  readonly readsWhileHeld = false
-
   private readonly instance: KubernetesInstance
   private readonly namespaces: CallerNamespaces
   private readonly backend: KubernetesBackend
@@ -350,25 +359,86 @@ export class KubernetesSandboxStorage implements SandboxStorage {
 
   /**
    * Copies the files into `into` for the process of the run, which reads the sources of
-   * tasks to know what changed, and takes the pod of the files down, so the pods of the
-   * run go wherever their pool is.
+   * tasks to know what changed. The pod of the files stays until the run released it,
+   * so the pods of the run, which go next to it, find the claim on its node.
    */
   async attach(key: SandboxKey, into: string): Promise<SandboxAttachment> {
     const names = getSandboxNames(key.id)
     const namespace = this.namespaces.name(key.owner)
-    await mkdir(into, { recursive: true })
-    await this.copyOut(
-      key,
-      ['tar', 'cf', '-', '-C', `${CLAIM_PATH}/${key.id}/files`, '.'],
-      into,
-      // what the run plans with: files, directories and links, nothing outside of it
-      (_path, type) => ['File', 'OldFile', 'ContiguousFile', 'Directory', 'SymbolicLink'].includes(type),
-      AbortSignal.timeout(FETCH_TIMEOUT_MS)
-    )
-    await this.stopPod(key)
+    const pod = await this.usePod(key)
+    pod.runs++
+    const leave = () => {
+      pod.runs--
+      this.leavePod(key, pod)
+    }
+    try {
+      await mkdir(into, { recursive: true })
+      await this.copyOut(
+        key,
+        ['tar', 'cf', '-', '-C', `${CLAIM_PATH}/${key.id}/files`, '.'],
+        into,
+        // what the run plans with: files, directories and links, nothing outside of it
+        (_path, type) => ['File', 'OldFile', 'ContiguousFile', 'Directory', 'SymbolicLink'].includes(type),
+        AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      )
+    } catch (e) {
+      leave()
+      throw e
+    }
+    const watching = new AbortController()
+    void this.makeWayForRun(key, pod, watching.signal)
     return {
       directory: into,
       claim: { name: names.claim, namespace, subPath: FILES_DIRECTORY, label: names.label },
+      release: () => {
+        if (!watching.signal.aborted) {
+          watching.abort()
+          leave()
+        }
+      },
+    }
+  }
+
+  /**
+   * The pods of a run go to the node of the pod of the files. When one finds no room there
+   * (a small node, which the cluster can not grow), the pod of the files goes, so the run's
+   * pod goes where there is room and the claim follows it, as it would without the pod.
+   */
+  private async makeWayForRun(key: SandboxKey, pod: FilesPod, signal: AbortSignal): Promise<void> {
+    const selector = `${SANDBOX_LABEL}=${getSandboxNames(key.id).label},!${FILES_LABEL}`
+    while (!signal.aborted && this.pods.get(key.id) === pod) {
+      await sleep(UNSCHEDULABLE_POLL_MS)
+      if (signal.aborted || this.pods.get(key.id) !== pod) {
+        return
+      }
+      try {
+        const pods = await this.instance.coreApi.listNamespacedPod({
+          namespace: pod.namespace,
+          labelSelector: selector,
+        })
+        const stuck = pods.items.some(
+          (runPod) =>
+            runPod.status?.conditions?.some(
+              (condition) =>
+                condition.type === 'PodScheduled' &&
+                condition.status === 'False' &&
+                condition.reason === 'Unschedulable' &&
+                Date.now() - new Date(condition.lastTransitionTime ?? Date.now()).getTime() >= UNSCHEDULABLE_MS
+            )
+        )
+        if (stuck && !signal.aborted && this.pods.get(key.id) === pod) {
+          // requests under way are answered first; the next one starts a pod next to the run's
+          this.pods.delete(key.id)
+          clearTimeout(pod.idle)
+          for (let i = 0; pod.busy > pod.runs && i < REQUEST_TIMEOUT_MS / 100; i++) {
+            await sleep(100)
+          }
+          await this.deletePod(pod.namespace, pod.name)
+          return
+        }
+      } catch {
+        // the next look may get an answer
+      }
     }
   }
 
@@ -590,11 +660,34 @@ export class KubernetesSandboxStorage implements SandboxStorage {
    * the requests that follow and goes `idle` after the last one.
    */
   private async withPod<T>(key: SandboxKey, fn: (pod: FilesPod) => Promise<T>): Promise<T> {
+    const pod = await this.usePod(key)
+    try {
+      return await fn(pod)
+    } finally {
+      this.leavePod(key, pod)
+    }
+  }
+
+  // The running pod of the sandbox's files, which stays until `leavePod`.
+  private async usePod(key: SandboxKey): Promise<FilesPod> {
     let pod = this.pods.get(key.id)
+    if (pod?.started !== undefined && pod.busy === 0 && Date.now() - pod.started > POD_RENEW_MS) {
+      // nothing uses it and its deadline nears: a new one, before a run needs it for long
+      await this.stopPod(key)
+      pod = this.pods.get(key.id)
+    }
     if (!pod) {
       const namespace = this.namespaces.name(key.owner)
-      const created: FilesPod = { namespace, name: getSandboxNames(key.id).pod, busy: 0, ready: Promise.resolve() }
-      created.ready = this.startPod(key, namespace)
+      const created: FilesPod = {
+        namespace,
+        name: getSandboxNames(key.id).pod,
+        busy: 0,
+        runs: 0,
+        ready: Promise.resolve(),
+      }
+      created.ready = this.startPod(key, namespace).then((started) => {
+        created.started = started
+      })
       created.ready.catch(() => {
         if (this.pods.get(key.id) === created) {
           this.pods.delete(key.id)
@@ -607,18 +700,22 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     pod.busy++
     try {
       await pod.ready
-      return await fn(pod)
-    } finally {
-      pod.busy--
-      if (pod.busy === 0 && this.pods.get(key.id) === pod) {
-        const current = pod
-        current.idle = setTimeout(() => {
-          if (current.busy === 0 && this.pods.get(key.id) === current) {
-            this.stopPod(key).catch(() => undefined)
-          }
-        }, parseDuration(this.backend.sandboxes.idle))
-        current.idle.unref()
-      }
+    } catch (e) {
+      this.leavePod(key, pod)
+      throw e
+    }
+    return pod
+  }
+
+  private leavePod(key: SandboxKey, pod: FilesPod): void {
+    pod.busy--
+    if (pod.busy === 0 && this.pods.get(key.id) === pod) {
+      pod.idle = setTimeout(() => {
+        if (pod.busy === 0 && this.pods.get(key.id) === pod) {
+          this.stopPod(key).catch(() => undefined)
+        }
+      }, parseDuration(this.backend.sandboxes.idle))
+      pod.idle.unref()
     }
   }
 
@@ -657,7 +754,8 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     }
   }
 
-  private async startPod(key: SandboxKey, namespace: string): Promise<void> {
+  // Starts the pod of the sandbox's files and answers when it started.
+  private async startPod(key: SandboxKey, namespace: string): Promise<number> {
     const names = getSandboxNames(key.id)
     await this.prepare(namespace)
     // one left by a server that stopped is used while it runs
@@ -665,7 +763,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       .readNamespacedPod({ name: names.pod, namespace })
       .catch((e) => (statusCodeOf(e) === 404 ? undefined : Promise.reject(e)))
     if (existing?.status?.phase === 'Running' && !existing.metadata?.deletionTimestamp) {
-      return
+      return startedAt(existing)
     }
     if (existing) {
       await this.deletePod(namespace, names.pod)
@@ -734,7 +832,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       const current = await this.instance.coreApi.readNamespacedPod({ name: names.pod, namespace })
       const phase = current.status?.phase
       if (phase === 'Running') {
-        return
+        return startedAt(current)
       }
       const waiting = current.status?.containerStatuses?.[0]?.state?.waiting
       if (phase === 'Failed' || phase === 'Succeeded' || Date.now() > deadline) {
@@ -858,6 +956,12 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       })
     })
   }
+}
+
+// When the pod started, by the cluster's clock as far as it says, else now.
+function startedAt(pod: V1Pod): number {
+  const started = pod.status?.startTime ? new Date(pod.status.startTime).getTime() : NaN
+  return Number.isNaN(started) ? Date.now() : Math.min(started, Date.now())
 }
 
 function defined(env: { [key: string]: string | undefined }): { [key: string]: string } {

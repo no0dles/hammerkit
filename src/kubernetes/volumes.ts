@@ -165,15 +165,24 @@ export function appendVolume(
 /**
  * What a pod that mounts the claim of a sandbox needs: its label, and to go where the
  * other pods that mount it run. A claim is usually `ReadWriteOnce`, which several pods
- * share only on one node; the first pod (no other one runs) goes anywhere.
+ * share only on one node; the first pod (no other one runs) goes anywhere. The pod of the
+ * sandbox's files runs on the first pool while a run works, so a task on another pool
+ * would never start: it is refused.
  */
 export function getWorkspacePodSpec(
   kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
-  persistence: Pick<KubernetesPersistence, 'workspace'>
+  persistence: Pick<KubernetesPersistence, 'workspace'>,
+  task?: { name: string; pool?: string }
 ): { labels: { [label: string]: string }; affinity?: V1Affinity } {
   const workspace = kubernetes.server?.workspace
   if (!workspace || persistence.workspace.length === 0) {
     return { labels: {} }
+  }
+  const first = kubernetes.server?.pools[0]?.name
+  if (task?.pool && first && task.pool !== first) {
+    throw new Error(
+      `task ${task.name}: runs on the pool ${task.pool}, and the tasks of a run on a sandbox run on the first pool, ${first}, where its files are`
+    )
   }
   return {
     labels: { [SANDBOX_LABEL]: workspace.label },

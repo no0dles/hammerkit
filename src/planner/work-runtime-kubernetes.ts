@@ -180,7 +180,7 @@ export function kubernetesTaskRuntime(
       const envs = getEnvironmentVariables(task.data.envs)
 
       const persistence = await getKubernetesPersistence(task, kubernetes)
-      const workspace = getWorkspacePodSpec(kubernetes, persistence)
+      const workspace = getWorkspacePodSpec(kubernetes, persistence, { name: task.name, pool: task.data.pool })
 
       await ensureNamespace(instance, kubernetes.namespace)
       try {

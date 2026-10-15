@@ -446,13 +446,9 @@ export class SandboxRegistry {
     return this.withLock(id, async () => fn(copy(this.mine(owner, id))))
   }
 
-  // The files of one of the owner's sandboxes, to read one: while a run holds it too,
-  // where the storage can read it then.
+  // The files of one of the owner's sandboxes, to read one: while a run holds it too.
   files(owner: Owner, id: string): SandboxFiles {
     const sandbox = this.mine(owner, id)
-    if (!this.options.storage.readsWhileHeld) {
-      this.mustBeFree(id)
-    }
     return this.options.storage.files(keyOf(sandbox))
   }
 
