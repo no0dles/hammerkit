@@ -11,6 +11,13 @@
   ],
   "rules": {
     "no-console": "error",
-    "@typescript-eslint/no-explicit-any": "off"
+    "@typescript-eslint/no-explicit-any": "off",
+    "no-restricted-syntax": [
+      "error",
+      {
+        "selector": "VariableDeclarator > Identifier.id[name=/^(exports|module|require|__dirname|__filename)$/], FunctionDeclaration > Identifier.id[name=/^(exports|module|require|__dirname|__filename)$/], :function > Identifier.params[name=/^(exports|module|require|__dirname|__filename)$/], ClassDeclaration > Identifier.id[name=/^(exports|module|require|__dirname|__filename)$/]",
+        "message": "Shadows a CommonJS module variable: the compiled code refers to it (exports.NAME), so the local breaks the module at runtime. Pick another name."
+      }
+    ]
   }
 }
