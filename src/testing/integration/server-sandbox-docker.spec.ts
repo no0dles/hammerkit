@@ -57,6 +57,7 @@ describe('sandbox runs (docker)', () => {
             repos: { url: () => repository },
             worker: TEST_WORKER,
           })
+          const sandboxIds: string[] = []
           const call = async (method: string, path: string, sub: string, body?: unknown) => {
             const response = await fetch(`${server.url}${path}`, {
               method,
@@ -109,6 +110,7 @@ describe('sandbox runs (docker)', () => {
             expect(published.status).toBe(201)
             const sandbox = await call('POST', '/v1/sandboxes', 'agent', { repo: REPO, ref: 'main' })
             expect(sandbox.status).toBe(201)
+            sandboxIds.push(sandbox.body.id)
             const runTask = async (task: string) => {
               const submitted = await call('POST', '/v1/runs', 'agent', {
                 definition: { name: 'payments', hash: published.body.hash },
@@ -164,6 +166,13 @@ describe('sandbox runs (docker)', () => {
             expect(readFileSync(outside, 'utf8')).toBe('TOPSECRET-OF-SERVER')
           } finally {
             await server.close()
+            // the links stay in temp/, where whatever reads it after the test (the upload of a
+            // failed CI job's files) would follow them into the machine's /etc
+            for (const id of sandboxIds) {
+              for (const link of ['escape', 'leak.txt']) {
+                rmSync(join(cwd, 'server-data', 'sandboxes', 'files', id, 'files', link), { force: true })
+              }
+            }
           }
         })
       } finally {
