@@ -131,16 +131,26 @@ async function writeJobLogs(
   }
 }
 
-// Why a Job failed when it was not the command: the network gate, or an init container
-// that could not read a secret, which names the secret, never its output (which is the provider's and
-// can hold the value).
+export type JobFailure = { type: 'error'; message: string } | { type: 'crash'; exitCode: number }
+
+// the command of a Job exited with this code, as a crash on docker or a host
+class JobCrash extends Error {
+  constructor(readonly exitCode: number) {
+    super(`exit code ${exitCode}`)
+  }
+}
+
+// Why a Job failed: the network gate, an init container that could not read a secret, which
+// names the secret, never its output (which is the provider's and can hold the value), or the
+// exit code of the command.
 export async function describeFailedJob(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
   task: string,
   job: string,
+  container: string,
   secrets: JobSecret[]
-): Promise<string | undefined> {
+): Promise<JobFailure | undefined> {
   const pod = await getJobPod(instance, kubernetes, job).catch(() => undefined)
   for (const status of pod?.status?.initContainerStatuses ?? []) {
     const terminated = status.state?.terminated ?? status.lastState?.terminated
@@ -149,14 +159,25 @@ export async function describeFailedJob(
     }
     if (status.name === NETWORK_GATE_CONTAINER) {
       // the gate says why in its termination message
-      return `${task}: ${terminated.message?.trim() || 'the network policy did not take hold'}`
+      return {
+        type: 'error',
+        message: `${task}: ${terminated.message?.trim() || 'the network policy did not take hold'}`,
+      }
     }
     const secret = secrets.find((s) => `secret-${s.index}` === status.name)
     if (secret) {
-      return `secret ${getSecretName(secret.secret)} (${describeSecretSource(secret.secret)}) could not be read: ${
-        terminated.reason ?? 'exit code'
-      } ${terminated.exitCode}`
+      return {
+        type: 'error',
+        message: `secret ${getSecretName(secret.secret)} (${describeSecretSource(secret.secret)}) could not be read: ${
+          terminated.reason ?? 'exit code'
+        } ${terminated.exitCode}`,
+      }
     }
+  }
+  const command = pod?.status?.containerStatuses?.find((status) => status.name === container)
+  const terminated = command?.state?.terminated ?? command?.lastState?.terminated
+  if (terminated && terminated.exitCode !== 0) {
+    return { type: 'crash', exitCode: terminated.exitCode }
   }
   return undefined
 }
@@ -320,9 +341,11 @@ export function kubernetesTaskRuntime(
               } catch (e) {
                 if (!(e instanceof AbortError)) {
                   await writeJobLogs(instance, kubernetes, task, podName, container)
-                  throw new Error(
-                    (await describeFailedJob(instance, kubernetes, task.name, podName, inJob)) ?? getErrorMessage(e)
-                  )
+                  const failure = await describeFailedJob(instance, kubernetes, task.name, podName, container, inJob)
+                  if (failure?.type === 'crash') {
+                    throw new JobCrash(failure.exitCode)
+                  }
+                  throw new Error(failure?.message ?? getErrorMessage(e))
                 }
                 throw e
               }
@@ -345,11 +368,11 @@ export function kubernetesTaskRuntime(
               return
             }
             await deleteJob(instance, kubernetes, podName).catch(() => undefined)
-            options.state.set({
-              stateKey: options.stateKey,
-              type: 'error',
-              errorMessage: getErrorMessage(e),
-            })
+            options.state.set(
+              e instanceof JobCrash
+                ? { stateKey: options.stateKey, type: 'crash', exitCode: e.exitCode }
+                : { stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) }
+            )
             await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
             return
           }
