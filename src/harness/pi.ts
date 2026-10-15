@@ -2,7 +2,7 @@ import { basename, extname, join } from 'path'
 import { Environment } from '../executer/environment'
 import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
 import { formatSearch } from './format'
-import { SandboxClient, toSandboxPath } from './sandbox-client'
+import { oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
 
 // The parts of pi (`@earendil-works/pi-coding-agent`) this extension uses, as pi declares
 // them. pi hands its own module to the extension, hammerkit does not depend on it.
@@ -237,15 +237,19 @@ export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOp
     }
 
     const ops = createPiOperations(client, root)
-    pi.registerTool(library.createReadToolDefinition(root, { operations: ops.read }))
-    pi.registerTool(library.createWriteToolDefinition(root, { operations: ops.write }))
-    pi.registerTool(library.createEditToolDefinition(root, { operations: ops.edit }))
-    pi.registerTool(library.createBashToolDefinition(root, { operations: ops.bash }))
-    pi.registerTool(library.createLsToolDefinition(root, { operations: ops.ls }))
-    pi.registerTool(library.createFindToolDefinition(root, { operations: ops.find }))
+    // pi runs the tool calls of a turn in parallel, they reach the sandbox one at a time in their order
+    const inTurn = oneAtATime()
+    const register = (tool: PiToolDefinition) =>
+      pi.registerTool({ ...tool, execute: (...args: any[]) => inTurn(() => tool.execute(...args)) })
+    register(library.createReadToolDefinition(root, { operations: ops.read }))
+    register(library.createWriteToolDefinition(root, { operations: ops.write }))
+    register(library.createEditToolDefinition(root, { operations: ops.edit }))
+    register(library.createBashToolDefinition(root, { operations: ops.bash }))
+    register(library.createLsToolDefinition(root, { operations: ops.ls }))
+    register(library.createFindToolDefinition(root, { operations: ops.find }))
     const grep = library.createGrepToolDefinition(root)
-    pi.registerTool({ ...grep, execute: (_id: string, params: PiGrepParams) => ops.grep(params) })
-    pi.registerTool({
+    register({ ...grep, execute: (_id: string, params: PiGrepParams) => ops.grep(params) })
+    register({
       name: 'push',
       label: 'push',
       description:
@@ -278,7 +282,8 @@ export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOp
       }
     })
 
-    pi.on('user_bash', () => ({ operations: ops.bash }))
+    const userBash: PiBashOperations = { exec: (...args) => inTurn(() => ops.bash.exec(...args)) }
+    pi.on('user_bash', () => ({ operations: userBash }))
 
     pi.on('before_agent_start', async (event) => {
       let sandbox: SandboxClient
@@ -289,9 +294,10 @@ export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOp
       }
       const where =
         `Files and commands are on hammerkit sandbox ${sandbox.id} of ${sandbox.sandbox.repo} ` +
-        `(fetched at ${sandbox.sandbox.commit}), ${root} is its root. Commands run as the task ` +
+        `(fetched at ${sandbox.sandbox.commit}), ${root} stands for its root. Commands run as the task ` +
         `${sandbox.build.shell} of the published build file ${sandbox.build.name}, in its container, ` +
-        'one at a time; nothing is installed on this machine.'
+        `one at a time, and start in the root of the sandbox, where ${root} does not exist: give them ` +
+        'relative paths. Nothing is installed on this machine.'
       const line = `Current working directory: ${root}`
       const prompt: string = event.systemPrompt
       return {

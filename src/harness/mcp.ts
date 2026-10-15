@@ -1,7 +1,7 @@
 import { createInterface } from 'readline'
 import { Readable, Writable } from 'stream'
 import { capOutput, formatSearch, formatTree } from './format'
-import { SandboxClient } from './sandbox-client'
+import { oneAtATime, SandboxClient } from './sandbox-client'
 import type { TaskRun } from './sandbox-client'
 
 // the newest first; a client asking for an older one gets it
@@ -82,7 +82,7 @@ function describeRun(task: string, ran: TaskRun): string {
  * command. Paths are relative to the root of the sandbox.
  */
 export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] {
-  return [
+  return inOrder([
     {
       name: 'read',
       description:
@@ -362,7 +362,13 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
         return `pushed ${pushed.commit} to ${pushed.branch}`
       },
     },
-  ]
+  ])
+}
+
+// the calls of a client go to the sandbox one at a time, in the order the client sent them
+function inOrder(tools: McpTool[]): McpTool[] {
+  const inTurn = oneAtATime()
+  return tools.map((tool) => ({ ...tool, call: (args, signal) => inTurn(() => tool.call(args, signal)) }))
 }
 
 interface JsonRpcMessage {

@@ -7,6 +7,7 @@ import { itExceptWindows, SANDBOX_REPO, withSandboxServer } from '../testing/san
 import {
   checkSandboxPath,
   exitCodeOf,
+  oneAtATime,
   quotePosix,
   SandboxClient,
   SandboxClientError,
@@ -32,6 +33,28 @@ describe('sandbox paths', () => {
     expect(checkSandboxPath('.')).toBe('')
     expect(() => checkSandboxPath('/etc/passwd')).toThrow(/outside/)
     expect(() => checkSandboxPath('a/../../b')).toThrow(/outside/)
+  })
+
+  it('takes calls one at a time in the order they came, past one that failed', async () => {
+    const inTurn = oneAtATime()
+    const order: string[] = []
+    const call = (name: string, ms: number, fail = false) =>
+      inTurn(async () => {
+        order.push(`${name} starts`)
+        await new Promise((resolve) => setTimeout(resolve, ms))
+        order.push(`${name} ends`)
+        if (fail) {
+          throw new Error(name)
+        }
+        return name
+      })
+    const calls = [call('bash', 30), call('edit', 1, true), call('read', 1)]
+    expect(await Promise.allSettled(calls)).toEqual([
+      { status: 'fulfilled', value: 'bash' },
+      { status: 'rejected', reason: new Error('edit') },
+      { status: 'fulfilled', value: 'read' },
+    ])
+    expect(order).toEqual(['bash starts', 'bash ends', 'edit starts', 'edit ends', 'read starts', 'read ends'])
   })
 
   it('quotes a directory for the shell and reads the exit code of a result', () => {

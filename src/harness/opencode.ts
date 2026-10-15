@@ -1,9 +1,12 @@
+import { existsSync, readFileSync } from 'fs'
 import { Minimatch } from 'minimatch'
-import { join } from 'path'
+import { homedir } from 'os'
+import { dirname, isAbsolute, join } from 'path'
+import { pathToFileURL } from 'url'
 import { Environment } from '../executer/environment'
 import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
 import { capOutput, formatTree, toColonNumbers } from './format'
-import { SandboxClient, toSandboxPath } from './sandbox-client'
+import { oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
 
 // What opencode passes a tool (`ToolContext` of `@opencode-ai/plugin`), the parts used here.
 export interface OpencodeToolContext {
@@ -57,11 +60,90 @@ export function hammerkitOpencodePlugin(schema: any, settings: OpencodePluginOpt
   }
 }
 
+// the names of the tools of the plugin, which stand in for opencode's own
+export const OPENCODE_TOOLS = ['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob', 'push', 'list']
+
+/**
+ * The plugin as the file `harness/opencode.ts` exports it: it takes the zod of opencode from
+ * `@opencode-ai/plugin`, found next to hammerkit or else in the opencode directories of the
+ * project and of the user, as a linked hammerkit does not see the packages of the project.
+ * Without it the tools still stand in for opencode's and refuse: opencode carries on without a
+ * plugin that fails, and its own tools would work on this machine. `load` is `import` of the file.
+ */
+export function loadHammerkitOpencodePlugin(
+  load: (specifier: string) => Promise<any>,
+  settings: OpencodePluginOptions = {}
+): OpencodePlugin {
+  return async (input) => {
+    let schema: unknown
+    let failure: unknown
+    for (const specifier of ['@opencode-ai/plugin', ...opencodePluginFiles(input)]) {
+      try {
+        schema = (await load(specifier)).tool.schema
+        break
+      } catch (e) {
+        failure = failure ?? e
+      }
+    }
+    if (schema) {
+      return hammerkitOpencodePlugin(schema, settings)(input)
+    }
+    const message =
+      `hammerkit's opencode plugin could not load @opencode-ai/plugin ` +
+      `(${failure instanceof Error ? failure.message : String(failure)}), so its tools refuse rather than ` +
+      'work on this machine: add "@opencode-ai/plugin" to the dependencies of .opencode/package.json'
+    const refusing: OpencodeTool = {
+      description: message,
+      args: {},
+      async execute() {
+        throw new Error(message)
+      },
+    }
+    return { tool: Object.fromEntries(OPENCODE_TOOLS.map((name) => [name, refusing])) }
+  }
+}
+
+// the entry of @opencode-ai/plugin in the opencode directories of the project and of the user
+function opencodePluginFiles(input: { directory: string; worktree?: string }): string[] {
+  const config = process.env.XDG_CONFIG_HOME || join(homedir(), '.config')
+  const directories = [input.directory, input.worktree, join(config, 'opencode')]
+    .filter((directory): directory is string => !!directory)
+    .flatMap((directory) => [join(directory, '.opencode'), directory])
+  const files: string[] = []
+  for (const directory of directories) {
+    for (let current = directory; ; current = dirname(current)) {
+      const manifest = join(current, 'node_modules', '@opencode-ai', 'plugin', 'package.json')
+      if (existsSync(manifest)) {
+        const entry = packageEntry(manifest)
+        if (entry && !files.includes(entry)) {
+          files.push(entry)
+        }
+        break
+      }
+      if (dirname(current) === current) {
+        break
+      }
+    }
+  }
+  return files.map((file) => pathToFileURL(file).href)
+}
+
+function packageEntry(manifest: string): string | undefined {
+  try {
+    const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
+    const root = typeof pkg.exports === 'object' ? pkg.exports['.'] ?? pkg.exports : pkg.exports
+    const entry = typeof root === 'string' ? root : root?.import ?? root?.default ?? pkg.module ?? pkg.main
+    return typeof entry === 'string' ? join(dirname(manifest), entry) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>): { [name: string]: OpencodeTool } {
   const where = (context: OpencodeToolContext, path: string | undefined) =>
     toSandboxPath(context.directory, path ?? context.directory)
 
-  return {
+  return inOrder({
     read: {
       description:
         'Read a file or directory of the hammerkit sandbox. Lines come back numbered as `N: content`; ' +
@@ -161,9 +243,9 @@ export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>
       args: {
         patchText: z.string().describe('The full patch text that describes all changes to be made'),
       },
-      async execute(args: { patchText: string }) {
+      async execute(args: { patchText: string }, context) {
         const sandbox = await client()
-        const files = await sandbox.edit([{ op: 'patch', patch: args.patchText }])
+        const files = await sandbox.edit([{ op: 'patch', patch: patchToSandbox(context.directory, args.patchText) }])
         const marks = { added: 'A', modified: 'M', deleted: 'D' }
         return [
           'Success. Updated the following files:',
@@ -175,7 +257,8 @@ export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>
     bash: {
       description:
         'Run a shell command on the hammerkit sandbox, as the shell task of the published build file, in its ' +
-        'container. Commands run one at a time and nothing is kept between them but the files.',
+        'container. Commands run one at a time and nothing is kept between them but the files. They start in ' +
+        'the root of the sandbox, where the paths of this machine do not exist: give them relative paths.',
       args: {
         command: z.string().describe('The command to execute'),
         timeout: z.number().int().min(1).optional().describe('Optional timeout in milliseconds'),
@@ -315,5 +398,25 @@ export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>
         return lines.join('\n')
       },
     },
-  }
+  })
+}
+
+// opencode runs the tool calls of a step in parallel, they reach the sandbox one at a time in their order
+function inOrder(tools: { [name: string]: OpencodeTool }): { [name: string]: OpencodeTool } {
+  const inTurn = oneAtATime()
+  return Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [
+      name,
+      { ...tool, execute: (args, context) => inTurn(() => tool.execute(args, context)) },
+    ])
+  )
+}
+
+// GPT models name the files of a patch by the absolute paths opencode shows them
+export function patchToSandbox(root: string, patch: string): string {
+  return patch.replace(
+    /^(\*\*\* (?:Add File|Update File|Delete File|Move to): )(.*?)([ \t\r]*)$/gm,
+    (line, head: string, path: string, end: string) =>
+      isAbsolute(path) ? `${head}${toSandboxPath(root, path)}${end}` : line
+  )
 }

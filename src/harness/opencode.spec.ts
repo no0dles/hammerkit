@@ -2,7 +2,13 @@ import { execFileSync } from 'child_process'
 import { join } from 'path'
 import { z } from 'zod'
 import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
-import { createOpencodeTools, hammerkitOpencodePlugin, OpencodeToolContext } from './opencode'
+import {
+  createOpencodeTools,
+  loadHammerkitOpencodePlugin,
+  OPENCODE_TOOLS,
+  OpencodeToolContext,
+  patchToSandbox,
+} from './opencode'
 
 const directory = join(process.cwd(), 'agent-work')
 const context = (): OpencodeToolContext => ({ directory, abort: new AbortController().signal })
@@ -22,6 +28,7 @@ describe('opencode tools on a sandbox', () => {
         'push',
         'list',
       ])
+      expect(OPENCODE_TOOLS).toEqual(Object.keys(tools))
       // opencode builds a zod object of the args, as it does for its own
       expect(z.object(tools.edit.args as z.ZodRawShape).safeParse({ filePath: 'a', oldString: 'x' }).success).toBe(
         false
@@ -95,9 +102,78 @@ describe('opencode tools on a sandbox', () => {
     })
   })
 
+  itExceptWindows('takes the calls of a step in turns, in the order opencode made them', async () => {
+    await withSandboxServer('harness-opencode-turns', async ({ client }) => {
+      const tools = createOpencodeTools(z, async () => client)
+      const patch = (from: string, to: string) => ({
+        // GPT models name the file by the absolute path opencode shows them
+        patchText: [
+          '*** Begin Patch',
+          `*** Update File: ${join(directory, 'src', 'app.ts')}`,
+          '@@',
+          `-export const answer = ${from}`,
+          `+export const answer = ${to}`,
+          '*** End Patch',
+        ].join('\n'),
+      })
+      // a patch sent along with a command: the server refuses edits while the command runs
+      const [shown, patched] = await Promise.all([
+        tools.bash.execute({ command: 'sleep 1; cat src/app.ts' }, context()),
+        tools.apply_patch.execute(patch('41', '42'), context()),
+      ])
+      expect(shown).toContain('answer = 41')
+      expect(patched).toBe('Success. Updated the following files:\nM src/app.ts')
+      const [, again] = await Promise.all([
+        tools.apply_patch.execute(patch('42', '43'), context()),
+        tools.bash.execute({ command: 'cat src/app.ts' }, context()),
+      ])
+      expect(again).toContain('answer = 43')
+    })
+  })
+
+  it('maps the absolute paths of a patch onto the sandbox, and its lines not', () => {
+    const patch = [
+      '*** Begin Patch',
+      `*** Update File: ${join(directory, 'src', 'a.ts')}\r`,
+      `*** Move to: ${join(directory, 'b.ts')}`,
+      `+*** Add File: ${join(directory, 'c.ts')}`,
+      '*** Add File: docs/d.md',
+      '*** End Patch',
+    ].join('\n')
+    expect(patchToSandbox(directory, patch)).toBe(
+      [
+        '*** Begin Patch',
+        '*** Update File: src/a.ts\r',
+        '*** Move to: b.ts',
+        `+*** Add File: ${join(directory, 'c.ts')}`,
+        '*** Add File: docs/d.md',
+        '*** End Patch',
+      ].join('\n')
+    )
+    expect(() => patchToSandbox(directory, `*** Delete File: ${join(directory, '..', 'x')}`)).toThrow(
+      /outside of the sandbox/
+    )
+  })
+
+  it('refuses with its tools when the zod of opencode does not load, so none of opencode works locally', async () => {
+    const hooks = await loadHammerkitOpencodePlugin(async (specifier) => {
+      throw new Error(`Cannot find module '${specifier}'`)
+    })({ directory })
+    expect(Object.keys(hooks.tool)).toEqual(OPENCODE_TOOLS)
+    await expect(hooks.tool.bash.execute({ command: 'pwd' }, context())).rejects.toThrow(
+      /could not load @opencode-ai\/plugin \(Cannot find module '@opencode-ai\/plugin'\), so its tools refuse/
+    )
+  })
+
   it('connects lazily and says what is missing', async () => {
     await withSandboxServer('harness-opencode-plugin', async ({ environment }) => {
-      const hooks = await hammerkitOpencodePlugin(z, { environment, options: { build: 'payments' } })({ directory })
+      const hooks = await loadHammerkitOpencodePlugin(
+        async (specifier) => {
+          expect(specifier).toBe('@opencode-ai/plugin')
+          return { tool: { schema: z } }
+        },
+        { environment, options: { build: 'payments' } }
+      )({ directory })
       await expect(hooks.tool.read.execute({ filePath: join(directory, 'a') }, context())).rejects.toThrow(
         /name a server/
       )

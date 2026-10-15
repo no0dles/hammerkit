@@ -57,7 +57,12 @@ What follows from running a command as a task:
   not reach the next. The clients run a command in a directory with `cd <dir> || exit 1` on a
   line before it.
 - The command reads no input and gets none of the agent's variables.
-- While a command runs, the sandbox is held: an edit in the meantime is `409`.
+- While a command runs, the sandbox is held: an edit in the meantime is `409`. Agents send
+  tool calls in parallel, so each client takes the calls of its model one at a time, in the
+  order the model made them: an edit sent along with `npm test` lands before the tests start.
+  A command of another client still holds the sandbox, and an edit then is refused.
+- A command starts in the root of the sandbox. The paths of the agent's machine do not exist
+  there, which the clients tell the model.
 - What it printed comes from the [log of the run](/docs/remote-compute/runs#logs). A long
   log is cut at `runs.maxLogBytes`; the last lines of the task are kept past it.
 
@@ -165,6 +170,18 @@ parameters (`filePath`, `oldString`, `newString`, `replaceAll`, `patchText`, `wo
 `timeout` in milliseconds) and answer in its words, and opencode still picks `apply_patch`
 for GPT models and `edit` and `write` for the others. opencode's directory stands for the
 root of the sandbox. A long `bash` output keeps its first and last lines, like the MCP tool.
+
+opencode carries on without a plugin that fails to load, and without a word: its own tools
+then work on the machine opencode runs on. hammerkit's plugin keeps that from happening when
+it can. It takes the `@opencode-ai/plugin` of the opencode directory when hammerkit is linked
+there (`npm install ../hammerkit`, `file:`) and does not see it, and when it finds none at
+all, its tools still replace opencode's and refuse with what is missing. A plugin file that
+does not load at all, for example with hammerkit missing, cannot do that. Check once that
+the tools are hammerkit's: this lists the files of the sandbox, not the ones of your directory.
+
+```shell
+opencode debug agent build --tool list
+```
 
 Tools the plugin does not replace still work on the machine opencode runs on. Turn off the
 ones that touch local files and that your opencode version still has, for example

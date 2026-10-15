@@ -1,7 +1,14 @@
 import { execFileSync } from 'child_process'
 import { join } from 'path'
 import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
-import { createPiOperations, hammerkitPiExtension, PiLibrary, PiToolDefinition } from './pi'
+import {
+  createPiOperations,
+  hammerkitPiExtension,
+  PiBashOperations,
+  PiEditOperations,
+  PiLibrary,
+  PiToolDefinition,
+} from './pi'
 
 const root = join(process.cwd(), 'agent-work')
 const at = (...parts: string[]) => join(root, ...parts)
@@ -91,7 +98,7 @@ describe('pi extension', () => {
       ])
       expect(made.read).toMatchObject({ cwd: root, operations: { readFile: expect.any(Function) } })
       expect(made.bash.operations).toMatchObject({ exec: expect.any(Function) })
-      expect(handlers.user_bash({}, {})).toEqual({ operations: made.bash.operations })
+      expect(handlers.user_bash({}, {})).toEqual({ operations: { exec: expect.any(Function) } })
 
       // the extension connects with the host config: no server is registered here
       const notified: string[] = []
@@ -131,6 +138,7 @@ describe('pi extension', () => {
         `Current working directory: ${root}\nFiles and commands are on hammerkit sandbox ${client.id} of github.com/corp/payments`
       )
       expect(prompt.systemPrompt).toContain('Commands run as the task sh of the published build file payments')
+      expect(prompt.systemPrompt).toContain(`start in the root of the sandbox, where ${root} does not exist`)
 
       // push takes the work out as a branch the operator allows
       await client.writeRaw('notes.md', 'from pi\n')
@@ -141,6 +149,53 @@ describe('pi extension', () => {
       const pushed = await push.execute('call-2', { branch: 'agent/pi-1', message: 'Agent work' })
       const commit = execFileSync('git', ['-C', repository, 'rev-parse', 'agent/pi-1'], { encoding: 'utf8' }).trim()
       expect(pushed.content).toEqual([{ type: 'text', text: `pushed ${commit} to agent/pi-1` }])
+    })
+  })
+
+  itExceptWindows('takes the tool calls of a turn one at a time, in the order pi made them', async () => {
+    await withSandboxServer('harness-pi-turns', async ({ client }) => {
+      // tools as pi makes them: bash runs a command, edit reads and writes the file back
+      const library = {
+        createReadToolDefinition: () => ({ name: 'read', parameters: {}, execute: async () => undefined }),
+        createWriteToolDefinition: () => ({ name: 'write', parameters: {}, execute: async () => undefined }),
+        createEditToolDefinition: (_cwd: string, options?: { operations?: PiEditOperations }) => ({
+          name: 'edit',
+          parameters: {},
+          execute: async (_id: string, params: { path: string; oldText: string; newText: string }) => {
+            const ops = options?.operations as PiEditOperations
+            const text = (await ops.readFile(at(params.path))).toString()
+            await ops.writeFile(at(params.path), text.replace(params.oldText, params.newText))
+          },
+        }),
+        createBashToolDefinition: (_cwd: string, options?: { operations?: PiBashOperations }) => ({
+          name: 'bash',
+          parameters: {},
+          execute: async (_id: string, params: { command: string }) => {
+            const chunks: string[] = []
+            await options?.operations?.exec(params.command, root, { onData: (data) => chunks.push(data.toString()) })
+            return chunks.join('')
+          },
+        }),
+        createLsToolDefinition: () => ({ name: 'ls', parameters: {}, execute: async () => undefined }),
+        createFindToolDefinition: () => ({ name: 'find', parameters: {}, execute: async () => undefined }),
+        createGrepToolDefinition: () => ({ name: 'grep', parameters: {}, execute: async () => undefined }),
+      }
+      const registered: { [name: string]: PiToolDefinition } = {}
+      hammerkitPiExtension(library, { cwd: root, client: async () => client })({
+        registerTool: (definition) => (registered[definition.name] = definition),
+        on: () => undefined,
+      })
+      // the edit was refused while the command ran, and the tests ran on the old code
+      const [shown] = await Promise.all([
+        registered.bash.execute('call-1', { command: 'sleep 1; cat src/app.ts' }),
+        registered.edit.execute('call-2', { path: 'src/app.ts', oldText: '41', newText: '42' }),
+      ])
+      expect(shown).toContain('answer = 41')
+      const [, again] = await Promise.all([
+        registered.edit.execute('call-3', { path: 'src/app.ts', oldText: '42', newText: '43' }),
+        registered.bash.execute('call-4', { command: 'cat src/app.ts' }),
+      ])
+      expect(again).toContain('answer = 43')
     })
   })
 })

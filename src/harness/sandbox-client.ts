@@ -193,6 +193,10 @@ export class SandboxClient {
    * lines it prints, its result and exit code. A signal cancels the run.
    */
   async runTask(task: string, options: RunTaskOptions = {}): Promise<TaskRun> {
+    if (options.signal?.aborted) {
+      // cancelled while it waited for its turn
+      throw new SandboxClientError('the run was cancelled')
+    }
     const runOptions: { [key: string]: unknown } = {}
     if (options.args) {
       runOptions.args = options.args
@@ -325,6 +329,20 @@ const EMPTY_GUARD = [
 
 // The exit code of a task as a shell reports it: 0 for a task that succeeded or came
 // from the cache, its own when it failed, none when it never ran or ended without one.
+/**
+ * Runs the calls one at a time, in the order they came. Agents send tool calls in parallel,
+ * and the server refuses edits while a run holds the sandbox: an edit sent along with a
+ * command lands before the command starts, instead of being refused.
+ */
+export function oneAtATime(): <T>(call: () => Promise<T>) => Promise<T> {
+  let last: Promise<unknown> = Promise.resolve()
+  return (call) => {
+    const next = last.then(call)
+    last = next.catch(() => undefined)
+    return next
+  }
+}
+
 export function exitCodeOf(result: TaskResult | undefined): number | null {
   if (!result) {
     return null
