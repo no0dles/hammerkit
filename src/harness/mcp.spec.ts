@@ -264,14 +264,25 @@ describe('mcp tools on a sandbox', () => {
       )
       expect((await client.call('bash', { command: 'ls', workdir: 'src' })).text).toBe('app.ts\n\nexit code 0')
 
-      // an edit while a command holds the sandbox is an answer for the model, not a crash
-      const sleeping = client.call('bash', { command: 'sleep 3' })
-      while (!(await SandboxClient.get(connection, sandbox.id)).busy) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
+      const busy = async () => {
+        while (!(await SandboxClient.get(connection, sandbox.id)).busy) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
       }
-      const busy = await client.call('write', { path: 'busy.txt', content: 'x' })
-      expect(busy).toEqual({ isError: true, text: expect.stringMatching(/holds the sandbox/) })
-      expect((await sleeping).text).toBe('exit code 0')
+      // the calls of a client take turns: a write sent while its command runs lands after it
+      const sleeping = client.call('bash', { command: 'sleep 2; cat busy.txt || echo none' })
+      await busy()
+      const written = client.call('write', { path: 'busy.txt', content: 'x' })
+      expect((await sleeping).text).toMatch(/none\n\nexit code 0$/)
+      expect((await written).isError).toBe(false)
+      expect((await sandbox.readRaw('busy.txt')).toString()).toBe('x')
+
+      // a run of another client that holds the sandbox is an answer for the model, not a crash
+      const other = sandbox.exec('sleep 3', '')
+      await busy()
+      const refused = await client.call('write', { path: 'busy.txt', content: 'y' })
+      expect(refused).toEqual({ isError: true, text: expect.stringMatching(/holds the sandbox/) })
+      expect((await other).exitCode).toBe(0)
       const failed = await client.call('run_task', { task: 'fail' })
       expect(failed.text).toMatch(/^run run_[\w-]+: failed\ntask fail: failed, exit code 3/)
       expect(failed.text).toContain('last lines:\nbroken')
