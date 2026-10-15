@@ -37,6 +37,8 @@ tasks publishes nothing, and two runs on one machine never collide on a host por
 
 Container tasks don't need published ports.
 They share a network with the services and can reach all of their ports.
+On Kubernetes, a service without `ports` is reached on every port of its pod; one
+with `ports` is reached through its Service, on the listed ports only.
 
 </Callout>
 
