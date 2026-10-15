@@ -435,7 +435,7 @@ is `409` too.
 | `403` | No `push` pattern of the caller's entries for the repository covers the branch, the source has no `secret`, or as for the files, the caller lost the repository or the sandbox's branch. |
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
-| `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access). Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |
+| `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access, a GitHub App without the `workflows` permission pushing a workflow file): the error carries the reason the remote gave. Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |
 
 Opening a pull request from the branch is left to the caller: hammerkit holds a token that
 writes branches, not one that reviews them. A pushed branch runs in the repository's CI like

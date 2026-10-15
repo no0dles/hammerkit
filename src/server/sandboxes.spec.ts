@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { resolveRef } from './git-checkout'
+import { RepoAccess } from './repo-access'
 import { HostSandboxStorage, SandboxPushFailed, SandboxStorage } from './sandbox-storage'
 import { SandboxError, SandboxLimits, SandboxRegistry } from './sandboxes'
 
@@ -84,7 +85,7 @@ describe('SandboxRegistry', () => {
         source: (repo) => (repo === REPO ? { match: 'git.test/corp/*', secret } : undefined),
         resolve: (_repo, ref, signal, only) =>
           resolveRef(repository, ref, process.env, signal ?? AbortSignal.timeout(60_000), only),
-        scrub: (e) => (e instanceof Error ? e : new Error(String(e))),
+        scrub: (e, values) => RepoAccess.prototype.scrub.call(undefined, e, values),
       },
     })
     sandboxes.useRuns({
@@ -683,8 +684,12 @@ describe('SandboxRegistry', () => {
         env: { ...(process.env as { [key: string]: string }) },
         signal: AbortSignal.timeout(60_000),
       }
-      await expect(storage.push(sandbox.id, { ...request, expect: null })).rejects.toThrow(/unable to push/)
-      await expect(storage.push(sandbox.id, { ...request, expect: first })).rejects.toThrow(/unable to push/)
+      await expect(storage.push(sandbox.id, { ...request, expect: null })).rejects.toThrow(
+        'the remote refused the push to agent/raced: [rejected] (stale info)'
+      )
+      await expect(storage.push(sandbox.id, { ...request, expect: first })).rejects.toThrow(
+        'the remote refused the push to agent/raced: [rejected] (stale info)'
+      )
       expect(git(repository, 'rev-parse', 'agent/raced')).toBe(second)
       // nothing moved in the sandbox
       expect(await sandboxes.state(sandbox.id)).toMatchObject({ commit: first, clean: false })
@@ -738,6 +743,20 @@ describe('SandboxRegistry', () => {
       expect(sandboxes.get(alice, sandbox.id)?.pushed).toEqual({
         'agent/stuck': git(repository, 'rev-parse', 'agent/stuck'),
       })
+    })
+
+    it('tells the caller why the remote refused the push', async () => {
+      // as GitHub refuses an app without the workflows permission: the reason is on the ref
+      writeFileSync(join(repository, '.git', 'hooks', 'pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+      const sandboxes = registryWith()
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      const refused = await sandboxes.push(alice, sandbox.id, 'agent/refused', author, allowed).catch((e) => e)
+      expect(refused).toMatchObject({
+        status: 502,
+        message: 'the remote refused the push to agent/refused: [remote rejected] (pre-receive hook declined)',
+      })
+      expect(git(repository, 'branch', '--list', 'agent/*')).toBe('')
     })
 
     it('tells the caller neither the branch git refuses nor what the credential provider said', async () => {

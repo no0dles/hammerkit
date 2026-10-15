@@ -167,10 +167,13 @@ export class RepoAccess {
   scrub(error: unknown, values: string[]): Error {
     const registry = createSecretRegistry()
     values.forEach((value) => registry.register(value))
-    const message = error instanceof Error ? error.message : String(error)
-    const scrubbed = new (error instanceof Error ? (error.constructor as new (m: string) => Error) : Error)(
-      registry.redact(message)
-    )
+    const scrubbed = new Error(registry.redact(error instanceof Error ? error.message : String(error)))
+    if (error instanceof Error) {
+      // its class, so a caller still tells a RefError apart, but none of its fields: a
+      // constructor may take more than the message (SandboxPushFailed), a field may hold the token
+      Object.setPrototypeOf(scrubbed, Object.getPrototypeOf(error))
+      scrubbed.name = error.name
+    }
     return scrubbed
   }
 }
