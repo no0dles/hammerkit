@@ -4,8 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { EventEmitter } from 'events'
-import { HostExecutor, HostExecutorOptions, STOP_GRACE_MS, stopRunProcess } from './executor'
+import { HostExecutor, HostExecutorOptions } from './executor'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
@@ -241,6 +240,23 @@ describe('HostExecutor', () => {
     expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
 
+  it('kills the process of a cancelled run that does not stop in time', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    // reads the run and then neither listens for the cancel nor ends
+    const script = `process.stdin.once('data', () => { process.stdout.write('ready\\n'); setInterval(() => {}, 1000) })`
+    const stubborn = new HostExecutor({ ...options, worker: [process.execPath, '-e', script], stopGraceMs: 200 })
+    const abort = new AbortController()
+    const started = Date.now()
+    const result = stubborn.execute(run(hash), { emit: () => undefined, signal: abort.signal }).then(
+      () => undefined,
+      (e: Error) => e
+    )
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    abort.abort()
+    expect((await result)?.message).toBe('the run was cancelled')
+    expect(Date.now() - started).toBeLessThan(10_000)
+  })
+
   it('removes the working directory of the run, failed or not', async () => {
     const ok = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
     await execute(run(ok))
@@ -419,67 +435,5 @@ describe('HostExecutor', () => {
   it('fails when the build file is no longer on the server', async () => {
     const { error } = await execute(run('0'.repeat(64)))
     expect(error?.message).toContain('no longer on this server')
-  })
-})
-
-describe('stopRunProcess', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  const child = () => ({ pid: 4242, kill: vi.fn(() => true) })
-  const taskkill = () => {
-    const killer = new EventEmitter()
-    const start = vi.fn(() => killer) as any
-    return { killer, start }
-  }
-
-  it('sends SIGTERM and kills the process after the grace period', () => {
-    vi.useFakeTimers()
-    const worker = child()
-    const { start } = taskkill()
-    stopRunProcess(worker, 'linux', start)
-    expect(start).not.toHaveBeenCalled()
-    expect(worker.kill).toHaveBeenCalledWith('SIGTERM')
-    vi.advanceTimersByTime(STOP_GRACE_MS)
-    expect(worker.kill).toHaveBeenLastCalledWith('SIGKILL')
-  })
-
-  it('ends the process tree on Windows with taskkill and leaves it to taskkill when it succeeds', () => {
-    vi.useFakeTimers()
-    const worker = child()
-    const { killer, start } = taskkill()
-    stopRunProcess(worker, 'win32', start)
-    expect(start).toHaveBeenCalledWith(
-      expect.stringMatching(/taskkill\.exe$/),
-      ['/pid', '4242', '/T', '/F'],
-      expect.anything()
-    )
-    killer.emit('exit', 0)
-    expect(worker.kill).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(STOP_GRACE_MS)
-    expect(worker.kill).toHaveBeenCalledWith('SIGKILL')
-  })
-
-  it('kills the process on Windows when taskkill fails', () => {
-    vi.useFakeTimers()
-    const worker = child()
-    const { killer, start } = taskkill()
-    stopRunProcess(worker, 'win32', start)
-    killer.emit('exit', 1)
-    expect(worker.kill).toHaveBeenCalledTimes(1)
-    vi.advanceTimersByTime(STOP_GRACE_MS)
-    expect(worker.kill).toHaveBeenLastCalledWith('SIGKILL')
-  })
-
-  it('kills the process on Windows when taskkill can not start', () => {
-    vi.useFakeTimers()
-    const worker = child()
-    const { killer, start } = taskkill()
-    stopRunProcess(worker, 'win32', start)
-    killer.emit('error', new Error('ENOENT'))
-    expect(worker.kill).toHaveBeenCalledTimes(1)
-    vi.advanceTimersByTime(STOP_GRACE_MS)
-    expect(worker.kill).toHaveBeenLastCalledWith('SIGKILL')
   })
 })

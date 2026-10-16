@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import { lstat, mkdir, rm, writeFile } from 'fs/promises'
@@ -21,8 +21,8 @@ function isGitDirectory(segment: string): boolean {
 }
 
 // A cancelled run gets this long to stop its tasks and remove its containers, after that
-// its process is killed. On Windows the process and its tasks are ended at once.
-export const STOP_GRACE_MS = 15_000
+// its process is killed
+const STOP_GRACE_MS = 15_000
 
 // what is kept of the error output of a process that died without saying why
 const MAX_STDERR = 2 * 1024
@@ -50,35 +50,8 @@ export interface HostExecutorOptions {
   worker?: string[]
   // the operator's log, which hears of a run directory that could not be removed
   log?: (line: string) => void
-}
-
-/**
- * Stops the process of a cancelled run. Elsewhere it gets SIGTERM, so the engine stops its
- * tasks and removes its containers. Windows ends only the process itself, the tasks it
- * started would keep running and hold on to the directory of the run, so there the whole
- * tree is ended with taskkill. Should that not work, the process is killed, and it is
- * killed in any case if it is still there after the grace period.
- */
-export function stopRunProcess(
-  child: Pick<ChildProcess, 'pid' | 'kill'>,
-  platform: NodeJS.Platform = process.platform,
-  start: typeof spawn = spawn
-): NodeJS.Timeout {
-  if (platform === 'win32' && child.pid) {
-    const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
-    start(taskkill, ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-      .on('error', () => child.kill())
-      .on('exit', (code) => {
-        if (code !== 0) {
-          child.kill()
-        }
-      })
-  } else {
-    child.kill('SIGTERM')
-  }
-  const killTimer = setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS)
-  killTimer.unref()
-  return killTimer
+  // how long a cancelled run gets to stop before its process is killed
+  stopGraceMs?: number
 }
 
 // The cache a run shares with others is the one of its source: the runs of a repository
@@ -214,8 +187,11 @@ export class HostExecutor implements RunExecutor {
     return env
   }
 
-  // Starts the process, hands it the run on its standard input and relays what it reports. It
-  // is stopped when the run is cancelled, see stopRunProcess.
+  // Starts the process, hands it the run on its standard input and relays what it reports.
+  // A cancelled run is told so on the standard input, the same on every platform, so the
+  // engine stops its tasks and removes its containers; a signal on Windows would end the
+  // process at once and leave its tasks running in the directory of the run. The process is
+  // killed if it has not stopped after the grace period.
   private runInProcess(
     command: string[],
     input: WorkerInput,
@@ -231,11 +207,20 @@ export class HostExecutor implements RunExecutor {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
+      child.stdin.on('error', () => undefined)
+      // the run first, so a cancel comes after it; kept open, it is how a cancel reaches the process
+      child.stdin.write(`${JSON.stringify(input)}\n`)
       let result: Extract<WorkerMessage, { kind: 'result' }> | undefined
       let stderr = ''
       let killTimer: NodeJS.Timeout | undefined
       const stop = () => {
-        killTimer = stopRunProcess(child)
+        child.stdin.write('cancel\n', (e) => {
+          if (e) {
+            child.kill()
+          }
+        })
+        killTimer = setTimeout(() => child.kill('SIGKILL'), this.options.stopGraceMs ?? STOP_GRACE_MS)
+        killTimer.unref()
       }
       if (signal.aborted) {
         stop()
@@ -250,6 +235,8 @@ export class HostExecutor implements RunExecutor {
             context.emit(message.event)
           } else if (message.kind === 'result') {
             result = message
+            // nothing left to tell the process
+            child.stdin.end()
           }
         } catch {
           // not ours: whatever else the process prints is not an event of the run
@@ -258,8 +245,6 @@ export class HostExecutor implements RunExecutor {
       child.stderr.on('data', (chunk: Buffer) => {
         stderr = (stderr + chunk.toString('utf8')).slice(-MAX_STDERR)
       })
-      child.stdin.on('error', () => undefined)
-      child.stdin.end(JSON.stringify(input))
       child.on('error', (e) => {
         signal.removeEventListener('abort', stop)
         clearTimeout(killTimer)

@@ -85,6 +85,41 @@ describe('workerMain', () => {
   })
 })
 
+describe('workerMain cancel', () => {
+  let directory: string
+
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), 'hammerkit-worker-'))
+    writeFileSync(join(directory, '.hammerkit.yaml'), 'tasks:\n  slow:\n    cmds: [echo started, sleep 30]\n')
+  })
+
+  afterEach(() => rmSync(directory, { recursive: true, force: true }))
+
+  it('stops the run when the server writes cancel after it', async () => {
+    const stdin = new PassThrough()
+    const out = sink()
+    const input = {
+      entry: join(directory, '.hammerkit.yaml'),
+      tasks: ['slow'],
+      options: { cache: 'none' },
+      accounts: [],
+      catalog: { providers: {}, accounts: {} },
+    }
+    // the server keeps the standard input open after the run
+    stdin.write(`${JSON.stringify(input)}\n`)
+    const started = Date.now()
+    const done = workerMain(stdin, out.stream, hostEnvs(), directory, new AbortController())
+    while (!JSON.stringify(out.messages()).includes('started') && Date.now() - started < 30_000) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    stdin.write('cancel\n')
+    await done
+    const messages = out.messages()
+    expect(messages[messages.length - 1]).toEqual({ kind: 'result', ok: false, error: 'the run was cancelled' })
+    expect(Date.now() - started).toBeLessThan(25_000)
+  })
+})
+
 describe('hammerkit server-run', () => {
   it('is the command the server starts: the run on stdin, the report on stdout', async () => {
     await createTestCase('server-run-command', {
