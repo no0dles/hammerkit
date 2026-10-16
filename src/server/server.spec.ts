@@ -74,6 +74,22 @@ describe('server config', () => {
     expect(serverConfigSchema.safeParse({ issuers, listen: { host: 'localhost' } }).success).toBe(true)
   })
 
+  it('takes a network ceiling for runs, which local tasks could not keep', () => {
+    const issuers = [{ issuer: 'https://idp.corp', audience: 'hammerkit' }]
+    expect(serverConfigSchema.parse({ issuers }).runs.network).toBe('open')
+    const allow = { network: { allow: ['registry.npmjs.org', '*.githubusercontent.com'] } }
+    expect(serverConfigSchema.parse({ issuers, runs: allow }).runs.network).toEqual(allow.network)
+    expect(serverConfigSchema.safeParse({ issuers, runs: { network: { allow: ['10.0.0.0/8'] } } }).success).toBe(false)
+    const local = serverConfigSchema.safeParse({ issuers, runs: { network: 'none' }, runtimes: ['docker', 'local'] })
+    expect(local.success ? [] : local.error.issues).toContainEqual(
+      expect.objectContaining({
+        path: ['runs', 'network'],
+        message: 'the network of a local task can not be limited, allow only the docker runtime with runs.network',
+      })
+    )
+    expect(serverConfigSchema.safeParse({ issuers, runs: { network: 'open' }, runtimes: ['local'] }).success).toBe(true)
+  })
+
   it('takes only the platforms it knows', () => {
     const issuers = [{ issuer: 'https://idp.corp', audience: 'hammerkit' }]
     const backend = { type: 'host', platform: { os: 'plan9', arch: 'amd64' } }

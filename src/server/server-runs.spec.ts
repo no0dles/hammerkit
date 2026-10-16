@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { join } from 'path'
 import { execFileSync } from 'child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
@@ -152,6 +152,7 @@ const bundle = {
       '  build:',
       '    cmds: [echo build]',
       '  test:',
+      '    deps: [build]',
       '    cmds: [echo test]',
       '  integration:',
       '    labels: { group: slow }',
@@ -166,6 +167,9 @@ const bundle = {
       '    secrets:',
       '      - { from: "echo:prod", account: op-payments-prod, env: KUBE_TOKEN }',
       '    cmds: [echo deploy]',
+      'services:',
+      '  db:',
+      '    image: postgres:16',
       '',
     ].join('\n'),
   },
@@ -437,6 +441,56 @@ describe('runs api', () => {
     })
   })
 
+  it('passes arguments to the one task a run names, and to no run that reads secrets', async () => {
+    await withApi('runs-api-args', done, async (api) => {
+      const args = ['src/login.spec.ts', '-t', 'a; rm -rf /']
+      const response = await api.submit({ ...request, tasks: ['deploy'], options: { args: ['--dry-run'] } })
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toBe(
+        'deploy reads the secret KUBE_TOKEN, it takes no arguments on a server: an argument could make it print them'
+      )
+      expect(api.log.some((line) => line.includes('refuse run') && line.includes('deploy reads the secret'))).toBe(true)
+
+      // nor to a task whose dependency reads one: the dependency can hand it on in its outputs
+      const integration = await api.submit({ ...request, tasks: ['integration'], options: { args } })
+      expect(integration.status).toBe(400)
+      expect((await integration.json()).error).toBe(
+        'integration takes no arguments on a server: ci-secret in its run reads the secret TOKEN, and an argument could make integration print what ci-secret hands on'
+      )
+
+      const test = await api.submit({ ...request, tasks: ['test'], options: { args } })
+      expect(test.status).toBe(202)
+      const run = await test.json()
+      expect(run.options.args).toEqual(args)
+      // the approver and the caller see the command as it runs, the dependency gets no arguments
+      expect(run.plan.test.command).toBe(`echo test 'src/login.spec.ts' '-t' 'a; rm -rf /'`)
+      expect(run.plan.build.command).toBe('echo build')
+
+      const refuse = async (body: unknown, message: string | RegExp) => {
+        const refused = await api.submit(body)
+        expect(refused.status).toBe(400)
+        expect((await refused.json()).error).toMatch(message)
+      }
+      await refuse({ ...request, tasks: ['build', 'test'], options: { args } }, /arguments go to one task/)
+      await refuse({ ...request, tasks: ['db'], options: { args } }, 'db is a service, arguments go to a task')
+      await refuse(
+        { definition: request.definition, source: request.source, options: { filter: ['group=slow'], args } },
+        /arguments go to one task/
+      )
+      await refuse({ ...request, options: { args: Array(101).fill('x') } }, /options.args/)
+      await refuse({ ...request, options: { args: ['x'.repeat(16 * 1024 + 1)] } }, /longer than 16 KiB together/)
+      await refuse({ ...request, options: { args: ['a\0b'] } }, /NUL character/)
+      await refuse({ ...request, options: { args: [1] } }, /options.args/)
+      // the limits themselves are allowed, and 16 KiB counts bytes, not characters
+      const at = async (args: string[]) => (await api.submit({ ...request, tasks: ['test'], options: { args } })).status
+      expect(await at(Array(100).fill('x'))).toBe(202)
+      expect(await at(['x'.repeat(16 * 1024)])).toBe(202)
+      expect(await at(['\u00e9'.repeat(8193)])).toBe(400)
+      // no arguments are no arguments
+      expect((await api.submit({ ...request, tasks: ['build', 'test'], options: { args: [] } })).status).toBe(202)
+    })
+  })
+
   it('rejects settings that are not for a server or not safe', async () => {
     await withApi('runs-api-bad-options', done, async (api) => {
       for (const options of [
@@ -569,7 +623,9 @@ describe('runs api', () => {
         async (api) => {
           const published = await api.call('POST', '/v1/definitions', {
             sub: 'bob',
-            body: { files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' } },
+            body: {
+              files: { '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n  show:\n    cmds: [cat]\n' },
+            },
           })
           const hash = (await published.json()).hash
           const run = await (await api.submit({ ...request, definition: hash })).json()
@@ -577,6 +633,20 @@ describe('runs api', () => {
           const events = await readEvents(await api.call('GET', `/v1/runs/${run.id}/events`))
           expect(events.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
           expect(events.some((e) => e.event === 'task' && e.data.state === 'succeeded')).toBe(true)
+
+          // the arguments of a run reach its last command
+          const show = await (
+            await api.submit({
+              ...request,
+              definition: { name: 'payments', hash },
+              tasks: ['show'],
+              options: { args: ['input.txt'] },
+            })
+          ).json()
+          expect(show.plan.show.command).toMatch(/^cat 'input.txt'$/)
+          expect((await untilState(api, show.id, ['succeeded', 'failed'])).state).toBe('succeeded')
+          const shown = await readEvents(await api.call('GET', `/v1/runs/${show.id}/events`))
+          expect(shown.map((e) => e.data.text ?? '').join('')).toContain('from-the-ref')
         },
         '',
         { url: () => repository }
@@ -881,6 +951,28 @@ describe('runs api', () => {
       await api.call('POST', `/v1/definitions/${request.definition}/yank`, { sub: 'bob' })
       await api.restart()
       expect((await api.submit(request, 'carol')).status).toBe(409)
+    })
+  })
+
+  it('refuses a run of a version that reaches more than a ceiling set after it was published', async () => {
+    await withApi('runs-api-ceiling-later', done, async (api) => {
+      const web = { files: { '.hammerkit.yaml': 'tasks:\n  fetch:\n    image: node:22\n    cmds: [npm ci]\n' } }
+      const published = await api.call('PUT', '/v1/definitions/web', { body: web, sub: 'bob' })
+      expect(published.status).toBe(201)
+      const { hash } = await published.json()
+      // the operator limits the runs of the server, which only runs containers then
+      writeFileSync(
+        api.file,
+        readFileSync(api.file, 'utf8')
+          .replace('runtimes: [docker, local]', 'runtimes: [docker]')
+          .replace('runs: {', 'runs: { network: none,')
+      )
+      await api.restart()
+      const refused = await api.submit({ ...request, definition: { name: 'web', hash }, tasks: ['fetch'] })
+      expect(refused.status).toBe(400)
+      expect((await refused.json()).error).toContain(
+        'fetch: asks for network open, more than this server allows (runs.network: none)'
+      )
     })
   })
 

@@ -154,6 +154,9 @@ the task's `db.example.com:5432` must not resolve to a private address. Two forw
 on one port, one from each list, are an error. A service started by an earlier `up`
 is recreated when the ceiling changes its network.
 
+A [server](/docs/remote-compute/runs#network) sets the same ceiling for all of its runs
+with `runs.network`, and refuses to publish a build file that asks for more.
+
 ## Local tasks
 
 Hammerkit can't limit the network of a local task (one without an `image`), which

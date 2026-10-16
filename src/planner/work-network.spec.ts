@@ -1,4 +1,5 @@
 import {
+  exceedsNetwork,
   getTcpForwards,
   limitNetwork,
   matchesHost,
@@ -123,6 +124,25 @@ describe('work network', () => {
     ])('%s', (_, network, ceiling, publicOnly) => {
       const limited = limitNetwork(network, ceiling)
       expect(limited.type === 'allow' ? limited.publicOnly : null).toEqual(publicOnly)
+    })
+  })
+
+  describe('over a ceiling', () => {
+    it.each<[string, WorkNetwork, WorkNetwork, boolean]>([
+      ['anything under open', open, open, false],
+      ['none under none', none, none, false],
+      ['an empty allow list under none', allow(), none, false],
+      ['a host under none', allow('a.com'), none, true],
+      ['open under allow', open, allow('a.com'), true],
+      ['a name within a wildcard', allow('api.github.com'), allow('*.github.com'), false],
+      ['a wildcard over a name', allow('*.github.com'), allow('api.github.com'), true],
+      ['a forward within its host', allow('db.a.com:5432'), allow('db.a.com'), false],
+      ['a forward within a wildcard', allow('db.a.com:5432'), allow('*.a.com'), false],
+      ['a forward within the same forward', allow('db.a.com:5432'), allow('db.a.com:5432'), false],
+      ['a host over a forward to it', allow('db.a.com'), allow('db.a.com:5432'), true],
+      ['a forward on another port', allow('db.a.com:5432'), allow('db.a.com:6432'), true],
+    ])('%s', (_, network, ceiling, expected) => {
+      expect(exceedsNetwork(network, ceiling)).toBe(expected)
     })
   })
 })

@@ -2,7 +2,7 @@
 
 **Created**: 2026-10-12
 
-**Status**: Implemented for Docker and Kubernetes environments (ADR-0011). FR-009, the server's ceilings, is not (agent harness work item 4).
+**Status**: Implemented for Docker and Kubernetes environments, and `runs.network` on a server (ADR-0011). `sandboxes.network` of FR-009 comes with sandboxes (agent harness work item 5).
 
 **Input**: Every container task and service is on the docker default network and reaches whatever the host reaches. An agent's work (and an untrusted install script) should reach the services it needs and a package registry, not the rest of the network. Pascal decided it is a general feature for all tasks and services, with levels and a host allowlist in the first version, and that the services a task needs are always reachable.
 
@@ -76,6 +76,9 @@ The internal networks are created with `com.docker.network.bridge.inhibit_ipv4=t
 - **The gate on Kubernetes.** Some network plugins (kindnet) enforce a policy a moment after a pod started. A limited pod's first init container (`src/kubernetes/network-gate.ts`, in the proxy's image) connects to the pod's nameserver until that fails, which its policy denies, so the item's own containers start only once the policy holds; after a minute it fails the pod instead. It also checks what `networkPolicy: enforced` states.
 - **Refused hosts on Kubernetes**: a task follows its proxy's log while its jobs run; a service outlives the run on a cluster, so its refused hosts stay in its proxy's log.
 - **Cleanup.** A daemon service keeps its network and proxy until `down`; `clean` removes the networks and proxies of a killed run, like its containers.
+- **`runs.network` is checked three times.** At publish and propose, every task and service of the version against it (the error names the item, what it asks for and the ceiling). At submit and in the executor, the run's items again, so a version published before the operator set a ceiling, and asking for more, is refused rather than clamped silently. The executor also hands the ceiling to the run's process as `--network`, so the engine enforces it.
+- **`runs.network` and local tasks.** A ceiling below `open` with `local` in `runtimes` is a config error: no local task could be published.
+- **Published versions show the network.** Each item of a version's `plan` carries its `network` as the build file declares it, next to `command`, its last command.
 - **A ceiling and running services.** The effective network is part of a service's definition hash, so a service started by an earlier `up` is recreated when a ceiling changes its network.
 
 ## Out of scope

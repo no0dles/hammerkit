@@ -6,7 +6,7 @@ import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Annotations, Bundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations } from './annotations'
-import { callServer, printable } from './server-client'
+import { callServer, printable, printableWhole } from './server-client'
 import { showBundle } from './bundle-text'
 
 export interface WorkCommandContext {
@@ -59,7 +59,7 @@ interface ProposalView {
   canDecide: boolean
 }
 
-interface ApprovalView {
+export interface ApprovalView {
   id: string
   requestedBy: { iss: string; sub: string }
   createdAt: string
@@ -75,11 +75,12 @@ interface ApprovalView {
 }
 
 // what a task or service does, see the plan of a version on the server
-interface PlanView {
+export interface PlanView {
   kind: 'task' | 'service'
   runtime: string
   image?: string
   cmds: string[]
+  network?: unknown
   deps: string[]
   needs: string[]
   accounts: string[]
@@ -103,9 +104,12 @@ function annotationLines(annotations: Annotations | undefined): string[] {
 const collectOption = (value: string, previous: string[] = []) => [...previous, value]
 
 // What a person who approves is shown of a run: everything the decision rests on.
-function describe(run: ApprovalView): string[] {
+export function describeApproval(run: ApprovalView): string[] {
   const source = run.source.type === 'ref' ? `ref ${run.source.ref}` : `snapshot ${run.source.snapshot}`
-  const options = Object.entries(run.options)
+  // the arguments are shown whole on a line of their own, each as a JSON string,
+  // so commas, spaces and quotes inside one stay visible
+  const { args, ...settings } = run.options
+  const options = Object.entries(settings)
     .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)
     .join(' ')
   return [
@@ -117,6 +121,9 @@ function describe(run: ApprovalView): string[] {
     `  accounts: ${run.accounts.length > 0 ? run.accounts.map(printable).join(', ') : 'none'}, source ${printable(
       source
     )}${options ? `, ${printable(options)}` : ''}`,
+    ...(Array.isArray(args) && args.length > 0
+      ? [`  arguments: ${args.map((arg) => printableWhole(JSON.stringify(arg))).join(' ')}`]
+      : []),
     ...(run.approvals ?? []).map(
       (approval) =>
         `  ${printable(approval.account)}: ${
@@ -143,12 +150,16 @@ function flagLines(run: { plan?: Record<string, PlanView> }): string[] {
 }
 
 // The tasks and services the run executes and what each does, never a secret's value.
-function describePlan(plan: Record<string, PlanView>): string[] {
+export function describePlan(plan: Record<string, PlanView>): string[] {
   return Object.entries(plan).flatMap(([name, entry]) => [
     `  ${colors.bold(printable(name))}  ${entry.kind}, ${printable(entry.runtime)}${
       entry.image ? ` ${printable(entry.image)}` : ''
     }${entry.flags.length > 0 ? `  [${entry.flags.map(printable).join(', ')}]` : ''}`,
-    ...entry.cmds.map((cmd) => `    $ ${printable(cmd)}`),
+    // a command is what is decided on: shown whole, however long
+    ...entry.cmds.map((cmd) => `    $ ${printableWhole(cmd)}`),
+    ...(entry.network !== undefined && entry.network !== 'open'
+      ? [`    network: ${printable(typeof entry.network === 'string' ? entry.network : JSON.stringify(entry.network))}`]
+      : []),
     ...(entry.deps.length > 0 ? [`    after: ${entry.deps.map(printable).join(', ')}`] : []),
     ...(entry.needs.length > 0 ? [`    needs: ${entry.needs.map(printable).join(', ')}`] : []),
     ...entry.secrets.map(
@@ -275,7 +286,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         }
         environment.stdout.write(`${serverName}: ${body.approvals.length} waiting for your approval\n`)
         for (const run of body.approvals) {
-          for (const line of describe(run)) {
+          for (const line of describeApproval(run)) {
             environment.stdout.write(`${line}\n`)
           }
         }
@@ -317,7 +328,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           return
         }
         const view = (await callServer<ApprovalView>(server, token, 'GET', `/v1/approvals/${target}`)).body
-        for (const line of describe(view)) {
+        for (const line of describeApproval(view)) {
           environment.stdout.write(`${line}\n`)
         }
         environment.stdout.write(

@@ -4,7 +4,7 @@ import { WorkItemState } from '../planner/work-item'
 import { WorkTask } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
 import { TaskState } from '../executer/scheduler/task-state'
-import { computeStateKey } from '../executer/scheduler/state-key'
+import { computeStateKey, resolveEffective } from '../executer/scheduler/state-key'
 import {
   getWorkTaskCacheDescription,
   storedCacheDescription,
@@ -197,6 +197,20 @@ export async function explainTask(
   }
   visiting.add(item.id())
 
+  // Like the scheduler, a task whose cache is off is never looked up, so its
+  // sources aren't hashed for it.
+  if (resolveEffective(item, defaultCacheMethod).method === 'none') {
+    const explanation: TaskExplanation = {
+      taskId: item.id(),
+      taskName: item.name,
+      status: 'uncacheable',
+      causes: [{ kind: 'caching-disabled' }],
+    }
+    memo.set(item.id(), explanation)
+    visiting.delete(item.id())
+    return explanation
+  }
+
   const { stateKey, stats, resolved, provable, unmatched } = await computeStateKey(
     item,
     defaultCacheMethod,
@@ -220,18 +234,6 @@ export async function explainTask(
       }
     }
     const explanation: TaskExplanation = { taskId: item.id(), taskName: item.name, status: 'uncacheable', causes }
-    memo.set(item.id(), explanation)
-    visiting.delete(item.id())
-    return explanation
-  }
-
-  if (resolved.method === 'none') {
-    const explanation: TaskExplanation = {
-      taskId: item.id(),
-      taskName: item.name,
-      status: 'uncacheable',
-      causes: [{ kind: 'caching-disabled' }],
-    }
     memo.set(item.id(), explanation)
     visiting.delete(item.id())
     return explanation

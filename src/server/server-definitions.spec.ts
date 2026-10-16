@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { HOST_RUNS_YAML } from '../testing/host-env'
+import { HOST_ENV_YAML, HOST_RUNS_YAML } from '../testing/host-env'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
@@ -33,7 +33,9 @@ async function withApi(
     log: string[]
     call: (method: string, path: string, sub?: string | null, body?: unknown) => Promise<JsonResponse>
     restart: () => Promise<void>
-  }) => Promise<void>
+  }) => Promise<void>,
+  // what the server runs on and its runs may do
+  runs = HOST_RUNS_YAML
 ) {
   const key = createTestKey('ES256', 'k1')
   const idp = await startTestIssuer([key])
@@ -42,7 +44,7 @@ async function withApi(
       const file = join(cwd, 'server.yaml')
       writeFileSync(
         file,
-        `${HOST_RUNS_YAML}listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
+        `${runs}listen: { port: 0 }\nstorage: { directory: ${JSON.stringify(
           join(cwd, 'data')
         )} }\nissuers:\n  - { issuer: "${idp.url}", audience: hammerkit }\n${policy.replace(/ISSUER/g, `"${idp.url}"`)}`
       )
@@ -128,6 +130,33 @@ describe('definitions api', () => {
       expect(again.status).toBe(200)
       expect(await again.json()).toMatchObject({ hash: version.hash, created: false, publishedBy: { sub: 'alice' } })
     })
+  })
+
+  it('refuses a version that reaches more than runs.network, and shows what each task reaches', async () => {
+    await withApi(
+      'definitions-api-network',
+      async (api) => {
+        const yaml = (network: string) =>
+          `tasks:\n  install:\n    image: node:22\n    network: ${network}\n    cmds: [npm ci, npm test]\n`
+        const refused = await api.call('POST', '/v1/definitions', 'alice', {
+          files: { '.hammerkit.yaml': yaml('open') },
+        })
+        expect(refused.status).toBe(400)
+        expect((await refused.json()).error).toBe(
+          'the build file does not load: install: asks for network open, more than this server allows (runs.network: allow registry.npmjs.org)'
+        )
+        const published = await api.call('POST', '/v1/definitions', 'alice', {
+          files: { '.hammerkit.yaml': yaml('{ allow: [registry.npmjs.org] }') },
+        })
+        expect(published.status).toBe(201)
+        expect((await published.json()).plan.install).toMatchObject({
+          cmds: ['npm ci', 'npm test'],
+          command: 'npm test',
+          network: { allow: ['registry.npmjs.org'] },
+        })
+      },
+      `${HOST_ENV_YAML.replace(' } }', ' }, network: { allow: [registry.npmjs.org] } }')}runtimes: [docker]\n`
+    )
   })
 
   it('lets only who has a builds level publish', async () => {

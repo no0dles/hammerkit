@@ -14,6 +14,8 @@ import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { runOptionsSchema } from './run-request'
+import { networkSchema } from '../schema/network-schema'
+import { parseWorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
 import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { RunEventData, TaskStatus } from './runs'
@@ -37,6 +39,8 @@ export const workerInputSchema = z
     accounts: z.array(z.string()),
     // the operator's providers and accounts, as the server read them from its config
     catalog: z.custom<SecretCatalog>((value) => typeof value === 'object' && value !== null),
+    // `runs.network`: the most any task or service reaches besides its needs, as `--network`
+    network: networkSchema.optional(),
   })
   .strict()
 
@@ -102,6 +106,7 @@ export async function runTasks(
       cacheReadOnly: options.cacheReadOnly ?? false,
       timeout: options.timeout ? parseDuration(options.timeout) : null,
       skipDeps: options.skipDeps !== false,
+      network: input.network ? parseWorkNetwork(input.network) : null,
       // why a task was not taken from the cache goes into its result
       explain: true,
     }
