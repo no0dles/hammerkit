@@ -47,12 +47,58 @@ The credential is a secret of a secret provider, read as a service account of th
 operator, like the secrets of a task: `secret.from` is `provider:reference`, `account` is
 the account it is read as, and `username` (default `x-access-token`) is the user name of
 the basic authentication the token is sent with. A provider command can mint a
-short-lived token, for example of a GitHub App; it is read again after a minute. A source
+short-lived token, for example of a [GitHub App](#a-github-app); it is read again after a minute. A source
 without a `secret` is read anonymously. The token goes to git for that one fetch through
 the environment of the git process, scoped to the host of the repository, so it is never
 an argument, never written to `.git/config` or the checkout, never in the environment of a
 task, and masked in the logs of the run. The account that reads repositories is the
 server's own: no entitlement may name it and no build file may use it for a secret.
+
+## A GitHub App
+
+A GitHub App gives the server tokens that belong to no person: each lasts an hour, reaches
+only the repositories the App is installed on and has only the App's permissions.
+`hammerkit github-app-token` mints one from the App's private key, so a server needs no
+script and no other runtime for it: the released image runs it as it is.
+
+```yaml title="server.yaml"
+secretProviders:
+  github-app:
+    command: [hammerkit, github-app-token, '{{ref}}']
+accounts:
+  scm:
+    description: The GitHub App of the server
+    providers:
+      github-app:
+        env:
+          GITHUB_APP_ID: '123456'
+          GITHUB_APP_KEY_SECRET: projects/ci-project/secrets/github-app-key/versions/latest
+sources:
+  - match: github.com/corp/payments
+    secret: { from: 'github-app:corp/payments', account: scm }   # this repository only
+  - match: github.com/corp/*
+    secret: { from: 'github-app:corp', account: scm }            # all the installation reaches
+```
+
+The reference is `owner/repo` for a token limited to that one repository, or `owner` for
+one that reaches every repository the App's installation on that owner reaches. The command
+prints the token and nothing else. It reads its settings from the account's `env`, because a
+provider command sees nothing else of the server's environment:
+
+| Variable | What it does |
+| --- | --- |
+| `GITHUB_APP_ID` | The App's ID (or its client ID). Required. |
+| `GITHUB_APP_KEY_SECRET` | The App's private key in Google Secret Manager, as a version: `projects/<project>/secrets/<secret>/versions/<version>`. |
+| `GITHUB_APP_KEY_FILE` | The App's private key as a file, such as a mounted Kubernetes Secret, for a server outside Google Cloud. Set this or `GITHUB_APP_KEY_SECRET`, not both. |
+| `GITHUB_API_URL` | The API of a GitHub Enterprise Server, such as `https://github.corp.com/api/v3`. `https://api.github.com` by default. |
+| `GOOGLE_APPLICATION_CREDENTIALS` | With `GITHUB_APP_KEY_SECRET`: a credential configuration of workload identity federation (`type: external_account`) whose `credential_source` is a file, such as a projected Kubernetes ServiceAccount token. Without it the key is read as the identity of the metadata server (Compute Engine, Cloud Run, GKE with Workload Identity). A key of a Google service account is not taken. |
+
+The identity that reads the key needs `roles/secretmanager.secretAccessor` on that secret,
+and nothing else of Google's. Give the App the permissions the server needs: `Contents:
+Read-only` to read, `Contents: Read and write` when [sandboxes push](#pushing), and no
+`Workflows` permission, so a push that changes `.github/workflows` is refused by GitHub. An
+error says which step failed (the key, Google, Secret Manager, the installation, the token)
+and what the service answered, never the key or a token.
 
 ## Pinning
 
@@ -97,7 +143,7 @@ its environment, is masked, and the account is the server's own: no entitlement 
 and no build file may use it. The pushing git process gets nothing else to sign in with: no
 global or system git configuration, no credential helper, no `.netrc` of a home directory
 and no ssh agent, so a push is always the service account's and never the identity of
-whoever runs the server. A provider command can mint a short-lived token of a GitHub App
+whoever runs the server. `hammerkit github-app-token` mints a short-lived token of a [GitHub App](#a-github-app)
 with write access to the repository's contents. A token can not be limited to branches on
 the host's side, so protect the branches people work on (`main`, releases) in the
 repository as well: a pattern that is too wide is then caught twice.

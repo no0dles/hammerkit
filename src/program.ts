@@ -27,6 +27,7 @@ import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
 import { registerRunWorkerCommand } from './server/run-worker-command'
+import { registerGithubAppTokenCommand } from './secrets/github-app-token-command'
 import { parseNetworkOption, WorkNetwork } from './planner/work-network'
 import { getArgumentsTarget } from './planner/utils/task-arguments'
 
@@ -158,6 +159,7 @@ export async function getProgram(
   const program = new Command()
   registerServerCommand(program, environment)
   registerRunWorkerCommand(program, environment)
+  registerGithubAppTokenCommand(program, environment)
 
   // What follows `--` belongs to the one task or service of a run or up, not to
   // hammerkit: a `--set` or `--file` there is an argument like any other.
