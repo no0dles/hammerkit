@@ -38,6 +38,7 @@ interface Stored {
   // where it is kept: `<hex>.json`, or `<name>/<hex>.json` for a version published
   // when build files still had names
   file: string
+  legacy: boolean
 }
 
 // The published build files: immutable versions, each named by its hash and by
@@ -70,10 +71,10 @@ export class DefinitionStore {
       if ((await stat(path)).isDirectory()) {
         // a name of an older server: its versions are versions like any other
         for (const file of await readdir(path)) {
-          await this.read(join(path, file))
+          await this.read(join(path, file), true)
         }
       } else {
-        await this.read(path)
+        await this.read(path, false)
       }
     }
   }
@@ -117,7 +118,12 @@ export class DefinitionStore {
         ...(options.reason ? { reason: options.reason } : {}),
       }
     }
-    await this.write(stored.file, next, bundle)
+    // a version of an older server is written as `<hex>.json`, which counts over the
+    // copies it may have under several names
+    const file = this.fileOf(hash)
+    await this.write(file, next, bundle)
+    stored.file = file
+    stored.legacy = false
     // the same object, so whoever holds the version sees it
     Object.keys(version).forEach((key) => delete (version as any)[key])
     Object.assign(version, next)
@@ -188,27 +194,37 @@ export class DefinitionStore {
     if (!HASH_PATTERN.test(version.hash)) {
       throw new DefinitionError('invalid hash')
     }
-    const file = join(this.directory, `${version.hash.slice('sha256:'.length)}.json`)
+    const file = this.fileOf(version.hash)
     await mkdir(this.directory, { recursive: true })
     await this.write(file, version, bundle)
-    this.versions.set(version.hash, { version, file })
+    this.versions.set(version.hash, { version, file, legacy: false })
     return { version, created: true }
   }
 
-  private async read(file: string): Promise<void> {
+  private fileOf(hash: string): string {
+    return join(this.directory, `${hash.slice('sha256:'.length)}.json`)
+  }
+
+  private async read(file: string, legacy: boolean): Promise<void> {
     if (!file.endsWith('.json')) {
       return
     }
     const { version } = JSON.parse(await readFile(file, 'utf8'))
     // the name an older server kept with it means nothing now
     delete version.name
+    const stored = this.versions.get(version.hash)
+    if (stored && !stored.legacy) {
+      return // `<hex>.json` is what was written last
+    }
     // published under two names, it is still one version: yanked under either name, it
     // stays yanked, else the first one counts
-    const known = this.versions.get(version.hash)?.version
+    const known = stored?.version
     const first =
-      !known || (Boolean(version.yanked) === Boolean(known.yanked) && version.publishedAt < known.publishedAt)
+      !legacy ||
+      !known ||
+      (Boolean(version.yanked) === Boolean(known.yanked) && version.publishedAt < known.publishedAt)
     if (first || (version.yanked && !known?.yanked)) {
-      this.versions.set(version.hash, { version, file })
+      this.versions.set(version.hash, { version, file, legacy })
     }
   }
 

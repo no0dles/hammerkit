@@ -5,7 +5,7 @@
 - **A version is its hash, and nothing else names it.** `POST /v1/definitions` publishes or proposes a bundle and answers its hash; runs, proposals, yank and unyank name the hash. There is no `latest`: a run names exactly what it runs.
 - **Whoever decides reads the whole version.** A proposal shows its plan and its files (`remote show <hash>`), never a diff. The proposal no longer records a base, so `stale` goes.
 - **Yank stays.** Every published hash stays runnable until it is yanked, so it is the only way to stop a version; `unyank` stays too, because the same files always have the same hash and can not be published anew.
-- **Where a version comes from is an annotation, not a name.** A publish carries annotations outside of the hash (`path`, `repo`, `commit`, `machine`, `user`, which `remote publish` fills in), kept from the first publish, so versions can be found and cleaned up. They are the publisher's word and decide nothing; `publishedBy` comes from the token.
+- **Where a version comes from is an annotation, not a name.** A publish carries annotations outside of the hash (`path`, `repo`, `commit`, `machine`, `user`, which `remote publish` fills in, plus `dirty=true` when a file of the bundle differs from the commit), kept from the first publish, so versions can be found and cleaned up. They are the publisher's word and decide nothing; `publishedBy` comes from the token.
 - **A rejection's cooldown is per proposer and per version.** Without names, the proposer may not propose anything for the cooldown, and nobody that version.
 
 ## Considered options

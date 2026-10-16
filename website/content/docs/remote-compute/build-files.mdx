@@ -78,7 +78,9 @@ cleaned up, later:
 
 `remote publish` fills in `path` (the build file's path in its git repository, or on the
 machine outside of one), `repo` (the `origin` remote as `host/path`, left out when it is
-not an https or ssh address), `commit`, `machine` and `user`. Any other key works too: up
+not an https or ssh address), `commit`, `machine` and `user`. When a file of the bundle
+differs from that commit, or is not committed, it adds `dirty=true`: the version has the
+commit's files plus changes, not the commit's files. Any other key works too: up
 to 20, lower case letters, digits, `.`, `_` and `-`, each value up to 500 characters.
 
 Annotations are not part of the hash, so the same files sent from two machines are one

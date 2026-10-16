@@ -217,12 +217,56 @@ describe('DefinitionStore', () => {
     expect(found?.yanked?.reason).toBe('broken')
     expect(await s.files(found!)).toEqual(bundle())
 
-    // letting it go on rewrites the copy it was read from
+    // letting it go on writes it as `<hex>.json`, which counts over the old copies
     await s.yank(hash, alice, { undo: true })
     const restarted = store()
     await restarted.load()
+    expect(restarted.list()).toHaveLength(1)
     expect(restarted.find(hash)?.yanked).toBeUndefined()
-    expect(restarted.find(hash)?.publishedBy.sub).toBe('alice')
+    expect(restarted.find(hash)).toEqual(s.find(hash))
+    expect(readdirSync(directory)).toContain(file)
+  })
+
+  it('lets a version of an older server go on that was yanked under every name', async () => {
+    const hash = hashBundle(bundle())
+    const file = `${hash.slice('sha256:'.length)}.json`
+    for (const [name, sub] of [
+      ['payments', 'alice'],
+      ['web', 'bob'],
+    ]) {
+      mkdirSync(join(directory, name))
+      writeFileSync(
+        join(directory, name, file),
+        JSON.stringify({
+          version: {
+            name,
+            hash,
+            entry: '.hammerkit.yaml',
+            publishedAt: '2026-10-11T08:00:00Z',
+            publishedBy: { iss: alice.iss, sub },
+            tasks: ['build', 'test'],
+            services: [],
+            plan: {},
+            yanked: { at: '2026-10-11T10:00:00Z', by: alice, reason: `broken in ${name}` },
+          },
+          bundle: bundle(),
+        })
+      )
+    }
+    const s = store()
+    await s.load()
+    expect(s.find(hash)?.yanked).toBeDefined()
+    await s.yank(hash, alice, { undo: true })
+    for (const restarted of [store(), store()]) {
+      await restarted.load()
+      expect(restarted.find(hash)?.yanked).toBeUndefined()
+    }
+
+    // and pulling it back again holds as well
+    await s.yank(hash, alice, { reason: 'again' })
+    const restarted = store()
+    await restarted.load()
+    expect(restarted.find(hash)?.yanked?.reason).toBe('again')
   })
 
   it('does not publish a build file that does not load', async () => {

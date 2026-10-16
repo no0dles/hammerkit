@@ -6,7 +6,7 @@ import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Annotations, Bundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations } from './annotations'
-import { callServer, printable } from './server-client'
+import { callServer, printable, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
 
 export interface WorkCommandContext {
@@ -39,6 +39,13 @@ interface VersionView {
   services: string[]
   accounts: string[]
   yanked?: { by: { sub: string }; reason?: string }
+}
+
+// a published version whole, as `GET /v1/definitions/<hash>` answers it
+interface PublishedView extends Omit<VersionView, 'annotations' | 'accounts'> {
+  annotations?: Annotations
+  accounts?: string[]
+  plan?: Record<string, PlanView>
 }
 
 interface ProposalView {
@@ -93,10 +100,12 @@ interface PlanView {
 const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
 
 // what the publisher said about where a version comes from, one line
-function annotationLines(annotations: Annotations | undefined): string[] {
+// What a publisher said about where a version comes from: the server takes it as said,
+// so anybody else is told it is not checked.
+function annotationLines(annotations: Annotations | undefined, label = 'from (unverified)'): string[] {
   const entries = Object.entries(annotations ?? {})
   return entries.length > 0
-    ? [`  from: ${entries.map(([key, value]) => `${printable(key)}=${printable(value)}`).join(' ')}`]
+    ? [`  ${label}: ${entries.map(([key, value]) => `${printable(key)}=${printable(value)}`).join(' ')}`]
     : []
 }
 
@@ -184,7 +193,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .action(
       guarded('Remote publish was not successful', async (name: string | undefined, options) => {
         const bundle = await collectBundle(buildFile, environment)
-        const annotations = applyAnnotations(await collectAnnotations(buildFile), options.annotation ?? [])
+        const annotations = applyAnnotations(
+          await collectAnnotations(buildFile, Object.keys(bundle.files)),
+          options.annotation ?? []
+        )
         const { name: serverName, server, token } = await connect(name)
         const answer = await callServer<PublishedVersion>(server, token, 'POST', '/v1/definitions', {
           ...bundle,
@@ -199,7 +211,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         )
         const names = [...(version.tasks ?? []), ...(version.services ?? [])]
         environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
-        for (const line of annotationLines(version.annotations)) {
+        for (const line of annotationLines(version.annotations, 'from')) {
           environment.stdout.write(`${line.trimStart()}\n`)
         }
         if (proposed) {
@@ -226,6 +238,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           const index = filter.indexOf('=')
           if (index <= 0) {
             throw new Error(`${printable(filter)} is not a filter, write it as key=value`)
+          }
+          if (index === filter.length - 1) {
+            throw new Error(`${printable(filter)} matches nothing, an annotation always has a value`)
           }
           query.append(filter.slice(0, index), filter.slice(index + 1))
         }
@@ -282,10 +297,47 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       })
     )
 
+  // A version that is published: who published it, what its tasks do and every file.
+  const showPublished = async (hash: string, serverName: string, server: HostServer, token: string) => {
+    const path = `/v1/definitions/${hash}`
+    let version: PublishedView
+    try {
+      version = (await callServer<PublishedView>(server, token, 'GET', path)).body
+    } catch (e) {
+      if (e instanceof ServerError && e.status === 404) {
+        throw new Error(`${serverName} has no proposal or published version ${printable(hash)} you may see`)
+      }
+      throw e
+    }
+    const files = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
+    environment.stdout.write(
+      `${colors.bold(printable(version.hash))} on ${serverName}, published by ${printable(
+        version.publishedBy.sub
+      )} (${printable(version.publishedBy.iss)}) at ${printable(version.publishedAt)}${
+        version.approvedBy ? `, approved by ${printable(version.approvedBy.sub)}` : ''
+      }\n`
+    )
+    for (const line of [
+      ...(version.yanked
+        ? [
+            `  yanked by ${printable(version.yanked.by.sub)}${
+              version.yanked.reason ? `: ${printable(version.yanked.reason)}` : ''
+            }`,
+          ]
+        : []),
+      ...annotationLines(version.annotations),
+      ...flagLines(version),
+      ...(version.plan ? describePlan(version.plan) : ['  the server did not record what its tasks do']),
+      ...showBundle(files),
+    ]) {
+      environment.stdout.write(`${line}\n`)
+    }
+  }
+
   remote
     .command('show <target> [server]')
     .description(
-      'show a run (run_...) or a proposed version (sha256:...) in full: the commands, secrets and accounts of its tasks, and the files of a version'
+      'show a run (run_...) or a proposed or published version (sha256:...) in full: the commands, secrets and accounts of its tasks, and the files of a version'
     )
     .action(
       guarded('Remote show was not successful', async (target: string, name: string | undefined) => {
@@ -293,13 +345,22 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           throw new Error(
             `${printable(
               target
-            )} is not a run id or a proposed version, list them with: hammerkit remote approvals or remote proposals`
+            )} is not a run id or a version, list them with: hammerkit remote approvals, remote proposals or remote versions`
           )
         }
         const { name: serverName, server, token } = await connect(name)
         if (HASH_PATTERN.test(target)) {
           const path = `/v1/proposals/${target}`
-          const proposal = (await callServer<ProposalView>(server, token, 'GET', path)).body
+          let proposal: ProposalView
+          try {
+            proposal = (await callServer<ProposalView>(server, token, 'GET', path)).body
+          } catch (e) {
+            if (e instanceof ServerError && e.status === 404) {
+              await showPublished(target, serverName, server, token)
+              return
+            }
+            throw e
+          }
           const files = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
           environment.stdout.write(
             `${colors.bold(printable(proposal.hash))} on ${serverName}, proposed by ${printable(

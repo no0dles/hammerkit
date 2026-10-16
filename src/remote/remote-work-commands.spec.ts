@@ -241,6 +241,7 @@ describe('remote versions', () => {
       // newest first
       expect(all.indexOf(hash(two))).toBeLessThan(all.indexOf(hash(one)))
       expect(all).toContain('published by bob at ')
+      expect(all).toContain('from (unverified): ')
       expect(all).toContain('team=payments')
       expect(all).toContain('accounts: op-payments-prod')
 
@@ -253,7 +254,30 @@ describe('remote versions', () => {
         'no published versions match'
       )
       await expect(h.run('remote', 'versions', 'build', '--filter', 'team')).rejects.toThrow('is not a filter')
+      await expect(h.run('remote', 'versions', 'build', '--filter', 'team=')).rejects.toThrow('matches nothing')
       await expect(h.run('remote', 'publish', 'build', '--annotation', 'Team=x')).rejects.toThrow('annotation Team')
+    })
+  })
+
+  it('shows a published version whole: who published it, what its tasks do and every file', async () => {
+    await withHarness('remote-versions-show', async (h) => {
+      await h.run('remote', 'login', 'build')
+      const out = await h.run('remote', 'publish', 'build', '--annotation', 'team=payments')
+      const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0] as string
+      await h.run('remote', 'yank', hash, 'build', '--reason', 'broken')
+      // without the bold a terminal shows
+      // eslint-disable-next-line no-control-regex
+      const shown = (await h.run('remote', 'show', hash, 'build')).replace(/\u001b\[[0-9;]*m/g, '')
+      expect(shown).toContain(`${hash} on build, published by bob`)
+      expect(shown).toContain('yanked by bob: broken')
+      expect(shown).toContain('from (unverified): ')
+      expect(shown).toContain('team=payments')
+      expect(shown).toContain('deploy  task')
+      expect(shown).toContain('--- .hammerkit.yaml (entry)')
+
+      await expect(h.run('remote', 'show', `sha256:${'0'.repeat(64)}`, 'build')).rejects.toThrow(
+        'has no proposal or published version'
+      )
     })
   })
 })
@@ -288,7 +312,7 @@ describe('remote approvals', () => {
       expect(shown).toContain('after: build')
       expect(shown).toContain('secret echo:kube as op-payments-prod -> KUBE_TOKEN')
       expect(shown).not.toContain('KUBE_TOKEN=')
-      await expect(h.run('remote', 'show', 'nope', 'build')).rejects.toThrow('is not a run id or a proposed version')
+      await expect(h.run('remote', 'show', 'nope', 'build')).rejects.toThrow('is not a run id or a version')
 
       expect(await h.run('remote', 'approve', run.id, 'build')).toContain(`approved ${run.id} on build, it is queued`)
       expect(await h.run('remote', 'approvals', 'build')).toContain('no runs wait for your approval')
@@ -432,14 +456,14 @@ describe('remote proposals', () => {
         await expect(h.run('remote', 'approve', target, 'build')).rejects.toThrow('answered 404')
       }
       // the files are for who decides and who wrote them
-      await expect(h.run('remote', 'show', target, 'build')).rejects.toThrow('answered 404')
+      await expect(h.run('remote', 'show', target, 'build')).rejects.toThrow('has no proposal or published version')
     })
   })
 
   it('checks the hash before it asks the server', async () => {
     await withHarness('remote-proposals-name', async (h) => {
       await h.run('remote', 'login', 'build')
-      await expect(h.run('remote', 'show', 'payments', 'build')).rejects.toThrow('is not a run id or a proposed')
+      await expect(h.run('remote', 'show', 'payments', 'build')).rejects.toThrow('is not a run id or a version')
       await expect(h.run('remote', 'approve', '../x@sha256:00', 'build')).rejects.toThrow(
         'is not a run id or a proposed'
       )

@@ -36,8 +36,13 @@ export function remoteRepo(url: string): string | undefined {
 
 // Where a build file is published from: its path in its repository (or on this
 // machine, outside of one), the repository and commit, this machine and its user.
-// What can not be found is left out.
-export async function collectAnnotations(fileName: string): Promise<Annotations> {
+// `files` are the paths of the bundle, relative to the build file's directory: when
+// one of them differs from the commit, `dirty=true` says the version is not that
+// commit's. What can not be found is left out.
+export async function collectAnnotations(
+  fileName: string,
+  files: string[] = [basename(fileName)]
+): Promise<Annotations> {
   const path = resolve(fileName)
   const cwd = dirname(path)
   const annotations: Annotations = {}
@@ -55,6 +60,18 @@ export async function collectAnnotations(fileName: string): Promise<Annotations>
     }
     if (commit) {
       annotations.commit = commit
+      const changed = await git(
+        cwd,
+        '--literal-pathspecs',
+        'status',
+        '--porcelain',
+        '--untracked-files=all',
+        '--',
+        ...files
+      )
+      if (changed) {
+        annotations.dirty = 'true'
+      }
     }
   }
   annotations.machine = hostname()
