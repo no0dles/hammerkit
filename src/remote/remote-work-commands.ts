@@ -4,9 +4,10 @@ import { Environment } from '../executer/environment'
 import { getAccessToken } from './credentials'
 import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
-import { Bundle, HASH_PATTERN } from './bundle'
+import { Annotations, Bundle, HASH_PATTERN } from './bundle'
+import { applyAnnotations, collectAnnotations } from './annotations'
 import { callServer, printable } from './server-client'
-import { diffBundles } from './text-diff'
+import { showBundle } from './bundle-text'
 
 export interface WorkCommandContext {
   environment: Environment
@@ -17,8 +18,8 @@ export interface WorkCommandContext {
 }
 
 interface PublishedVersion {
-  name: string
   hash: string
+  annotations?: Annotations
   created: boolean
   tasks: string[]
   services: string[]
@@ -27,9 +28,22 @@ interface PublishedVersion {
   expiresAt?: string
 }
 
-interface ProposalView {
-  name: string
+// one version in the list of a server
+interface VersionView {
   hash: string
+  publishedAt: string
+  publishedBy: { iss: string; sub: string }
+  approvedBy?: { sub: string }
+  annotations: Annotations
+  tasks: string[]
+  services: string[]
+  accounts: string[]
+  yanked?: { by: { sub: string }; reason?: string }
+}
+
+interface ProposalView {
+  hash: string
+  annotations?: Annotations
   state: string
   proposedBy: { iss: string; sub: string }
   createdAt: string
@@ -41,26 +55,16 @@ interface ProposalView {
   accounts: string[]
   missing: string[]
   plan?: Record<string, PlanView>
-  base: string | null
-  latest: string | null
-  stale: boolean
   mine: boolean
   canDecide: boolean
-}
-
-const PROPOSAL_NAME = /^([a-z0-9][a-z0-9._-]{0,63})@(sha256:[0-9a-f]{64})$/i
-
-// A proposed version is named like `payments@sha256:...`
-function parseProposal(value: string): { name: string; hash: string } | undefined {
-  const match = PROPOSAL_NAME.exec(value)
-  return match && HASH_PATTERN.test(match[2]) ? { name: match[1], hash: match[2] } : undefined
 }
 
 interface ApprovalView {
   id: string
   requestedBy: { iss: string; sub: string }
   createdAt: string
-  definition: { name: string; hash: string }
+  // the hash of the published version it runs
+  definition: string
   tasks: string[]
   accounts: string[]
   source: { type: string; ref?: string; snapshot?: string }
@@ -88,6 +92,16 @@ interface PlanView {
 
 const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
 
+// what the publisher said about where a version comes from, one line
+function annotationLines(annotations: Annotations | undefined): string[] {
+  const entries = Object.entries(annotations ?? {})
+  return entries.length > 0
+    ? [`  from: ${entries.map(([key, value]) => `${printable(key)}=${printable(value)}`).join(' ')}`]
+    : []
+}
+
+const collectOption = (value: string, previous: string[] = []) => [...previous, value]
+
 // What a person who approves is shown of a run: everything the decision rests on.
 function describe(run: ApprovalView): string[] {
   const source = run.source.type === 'ref' ? `ref ${run.source.ref}` : `snapshot ${run.source.snapshot}`
@@ -98,7 +112,7 @@ function describe(run: ApprovalView): string[] {
     `${colors.bold(printable(run.id))}  requested by ${printable(run.requestedBy.sub)} (${printable(
       run.requestedBy.iss
     )})`,
-    `  ${printable(run.definition.name)} ${printable(run.definition.hash)}`,
+    `  build file ${printable(run.definition)}`,
     `  tasks: ${run.tasks.length > 0 ? run.tasks.map(printable).join(', ') : 'selected by labels'}`,
     `  accounts: ${run.accounts.length > 0 ? run.accounts.map(printable).join(', ') : 'none'}, source ${printable(
       source
@@ -159,36 +173,91 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
   }
 
   remote
-    .command('publish <definition> [server]')
-    .description('publish the build file and the files it includes to a server, under a name runs can refer to')
+    .command('publish [server]')
+    .description('publish the build file and the files it includes to a server, runs refer to it by its hash')
+    .addOption(
+      new Option(
+        '--annotation <key=value>',
+        'say more about where it comes from, or leave one out with key=; path, repo, commit, machine and user are filled in'
+      ).argParser(collectOption)
+    )
     .action(
-      guarded('Remote publish was not successful', async (definition: string, name: string | undefined) => {
+      guarded('Remote publish was not successful', async (name: string | undefined, options) => {
         const bundle = await collectBundle(buildFile, environment)
+        const annotations = applyAnnotations(await collectAnnotations(buildFile), options.annotation ?? [])
         const { name: serverName, server, token } = await connect(name)
-        const answer = await callServer<PublishedVersion>(
-          server,
-          token,
-          'PUT',
-          `/v1/definitions/${encodeURIComponent(definition)}`,
-          bundle
-        )
+        const answer = await callServer<PublishedVersion>(server, token, 'POST', '/v1/definitions', {
+          ...bundle,
+          annotations,
+        })
         const version = answer.body
         const files = Object.keys(bundle.files).length
         const proposed = answer.status === 202
         const verb = proposed ? 'proposed' : answer.status === 201 ? 'published' : 'already published'
         environment.stdout.write(
-          `${verb} ${definition} to ${serverName}: ${printable(version.hash)} (${files} ${
-            files === 1 ? 'file' : 'files'
-          })\n`
+          `${verb} to ${serverName}: ${printable(version.hash)} (${files} ${files === 1 ? 'file' : 'files'})\n`
         )
         const names = [...(version.tasks ?? []), ...(version.services ?? [])]
         environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+        for (const line of annotationLines(version.annotations)) {
+          environment.stdout.write(`${line.trimStart()}\n`)
+        }
         if (proposed) {
           environment.stdout.write(
-            `it can not run before somebody who may publish ${printable(definition)} approves it, until ${printable(
-              version.expiresAt
-            )}\n`
+            `it can not run before somebody who may publish approves it, until ${printable(version.expiresAt)}\n`
           )
+        }
+      })
+    )
+
+  remote
+    .command('versions [server]')
+    .description('list the published versions of build files on a server, newest first, with where they come from')
+    .addOption(
+      new Option(
+        '--filter <key=value>',
+        'only the versions with this annotation, such as repo=github.com/corp/payments'
+      ).argParser(collectOption)
+    )
+    .action(
+      guarded('Remote versions was not successful', async (name: string | undefined, options) => {
+        const query = new URLSearchParams()
+        for (const filter of (options.filter ?? []) as string[]) {
+          const index = filter.indexOf('=')
+          if (index <= 0) {
+            throw new Error(`${printable(filter)} is not a filter, write it as key=value`)
+          }
+          query.append(filter.slice(0, index), filter.slice(index + 1))
+        }
+        const { name: serverName, server, token } = await connect(name)
+        const path = `/v1/definitions${query.toString() !== '' ? `?${query}` : ''}`
+        const { body } = await callServer<{ definitions: VersionView[] }>(server, token, 'GET', path)
+        if (body.definitions.length === 0) {
+          environment.stdout.write(`${serverName}: no published versions${query.toString() !== '' ? ' match' : ''}\n`)
+          return
+        }
+        environment.stdout.write(`${serverName}: ${body.definitions.length} published\n`)
+        for (const version of body.definitions) {
+          environment.stdout.write(
+            `${colors.bold(printable(version.hash))}  published by ${printable(version.publishedBy.sub)} at ${printable(
+              version.publishedAt
+            )}${version.approvedBy ? `, approved by ${printable(version.approvedBy.sub)}` : ''}\n`
+          )
+          for (const line of annotationLines(version.annotations)) {
+            environment.stdout.write(`${line}\n`)
+          }
+          const names = [...version.tasks, ...version.services]
+          environment.stdout.write(`  tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+          if (version.accounts.length > 0) {
+            environment.stdout.write(`  accounts: ${version.accounts.map(printable).join(', ')}\n`)
+          }
+          if (version.yanked) {
+            environment.stdout.write(
+              `  yanked by ${printable(version.yanked.by.sub)}${
+                version.yanked.reason ? `: ${printable(version.yanked.reason)}` : ''
+              }\n`
+            )
+          }
         }
       })
     )
@@ -214,15 +283,40 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
 
   remote
-    .command('show <run> [server]')
-    .description('show a run that waits for your approval in full: the commands, secrets and accounts of its tasks')
+    .command('show <target> [server]')
+    .description(
+      'show a run (run_...) or a proposed version (sha256:...) in full: the commands, secrets and accounts of its tasks, and the files of a version'
+    )
     .action(
-      guarded('Remote show was not successful', async (run: string, name: string | undefined) => {
-        if (!RUN_ID.test(run)) {
-          throw new Error(`${printable(run)} is not a run id, list them with: hammerkit remote approvals`)
+      guarded('Remote show was not successful', async (target: string, name: string | undefined) => {
+        if (!RUN_ID.test(target) && !HASH_PATTERN.test(target)) {
+          throw new Error(
+            `${printable(
+              target
+            )} is not a run id or a proposed version, list them with: hammerkit remote approvals or remote proposals`
+          )
         }
-        const { server, token } = await connect(name)
-        const view = (await callServer<ApprovalView>(server, token, 'GET', `/v1/approvals/${run}`)).body
+        const { name: serverName, server, token } = await connect(name)
+        if (HASH_PATTERN.test(target)) {
+          const path = `/v1/proposals/${target}`
+          const proposal = (await callServer<ProposalView>(server, token, 'GET', path)).body
+          const files = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
+          environment.stdout.write(
+            `${colors.bold(printable(proposal.hash))} on ${serverName}, proposed by ${printable(
+              proposal.proposedBy.sub
+            )} (${printable(proposal.proposedBy.iss)}), ${printable(proposal.state)}\n`
+          )
+          for (const line of [
+            ...annotationLines(proposal.annotations),
+            ...flagLines(proposal),
+            ...describePlan(proposal.plan ?? {}),
+            ...showBundle(files),
+          ]) {
+            environment.stdout.write(`${line}\n`)
+          }
+          return
+        }
+        const view = (await callServer<ApprovalView>(server, token, 'GET', `/v1/approvals/${target}`)).body
         for (const line of describe(view)) {
           environment.stdout.write(`${line}\n`)
         }
@@ -247,9 +341,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         for (const proposal of body.proposals) {
           const who = proposal.mine ? 'you' : printable(proposal.proposedBy.sub)
           const state = proposal.canDecide ? colors.bold('waits for your approval') : printable(proposal.state)
-          environment.stdout.write(
-            `${colors.bold(`${printable(proposal.name)}@${printable(proposal.hash)}`)}  proposed by ${who}, ${state}\n`
-          )
+          environment.stdout.write(`${colors.bold(printable(proposal.hash))}  proposed by ${who}, ${state}\n`)
+          for (const line of annotationLines(proposal.annotations)) {
+            environment.stdout.write(`${line}\n`)
+          }
           const names = [...proposal.tasks, ...proposal.services]
           environment.stdout.write(`  tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
           if (proposal.accounts.length > 0) {
@@ -264,11 +359,6 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           for (const line of flagLines(proposal)) {
             environment.stdout.write(`${line}\n`)
           }
-          if (proposal.stale) {
-            environment.stdout.write(
-              `  stale: ${printable(proposal.name)} has a newer version, reject it and propose again on top of it\n`
-            )
-          }
           if (proposal.state === 'waiting') {
             environment.stdout.write(`  decide before ${printable(proposal.expiresAt)}\n`)
           } else if (proposal.reason) {
@@ -278,70 +368,26 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       })
     )
 
-  remote
-    .command('diff <proposal> [server]')
-    .description('show what a proposed version (name@hash) changes against the version it follows')
-    .action(
-      guarded('Remote diff was not successful', async (target: string, name: string | undefined) => {
-        const proposal = parseProposal(target)
-        if (!proposal) {
-          throw new Error(`${printable(target)} is not a proposal, list them with: hammerkit remote proposals`)
-        }
-        const { name: serverName, server, token } = await connect(name)
-        const path = `/v1/proposals/${encodeURIComponent(proposal.name)}/${proposal.hash}`
-        const view = (await callServer<ProposalView>(server, token, 'GET', path)).body
-        const proposed = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
-        const base = view.base
-          ? (
-              await callServer<Bundle>(
-                server,
-                token,
-                'GET',
-                `/v1/definitions/${encodeURIComponent(proposal.name)}/${view.base}/files`
-              )
-            ).body
-          : undefined
-        environment.stdout.write(
-          `${printable(proposal.name)}@${printable(proposal.hash)} on ${serverName}, proposed by ${printable(
-            view.proposedBy.sub
-          )} (${printable(view.proposedBy.iss)})\n`
-        )
-        environment.stdout.write(
-          base ? `compared with ${printable(view.base)}\n` : 'no version is published yet, everything is new\n'
-        )
-        if (view.stale) {
-          environment.stdout.write(
-            `warning: ${printable(proposal.name)} has a newer version (${printable(
-              view.latest
-            )}), this can only be rejected\n`
-          )
-        }
-        const lines = diffBundles(base, proposed)
-        environment.stdout.write(lines.length > 0 ? `${lines.join('\n')}\n` : 'the files are the same\n')
-      })
-    )
-
   for (const action of ['yank', 'unyank'] as const) {
     remote
       .command(`${action} <version> [server]`)
       .description(
         action === 'yank'
-          ? 'pull a published version (name@hash) back: no run starts from it and it is not latest'
-          : 'let a yanked version (name@hash) go on'
+          ? 'pull a published version (sha256:...) back: no run starts from it'
+          : 'let a yanked version (sha256:...) go on'
       )
       .addOption(new Option('--reason <text>', 'why, shown to whoever tries to run it').argParser((value) => value))
       .action(
         guarded(`Remote ${action} was not successful`, async (target: string, name: string | undefined, options) => {
-          const version = parseProposal(target)
-          if (!version) {
-            throw new Error(`${printable(target)} is not a version, name it like payments@sha256:...`)
+          if (!HASH_PATTERN.test(target)) {
+            throw new Error(`${printable(target)} is not a version, name it by its hash: sha256:...`)
           }
           const { name: serverName, server, token } = await connect(name)
           await callServer(
             server,
             token,
             'POST',
-            `/v1/definitions/${encodeURIComponent(version.name)}/${version.hash}/${action}`,
+            `/v1/definitions/${target}/${action}`,
             options.reason ? { reason: options.reason } : undefined
           )
           environment.stdout.write(
@@ -356,13 +402,13 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       .command(`${action} <target> [server]`)
       .description(
         action === 'approve'
-          ? 'let a run (run_...) or a proposed version (name@hash) that waits for your approval go ahead'
-          : 'end a run (run_...) or drop a proposed version (name@hash) that waits for your approval'
+          ? 'let a run (run_...) or a proposed version (sha256:...) that waits for your approval go ahead'
+          : 'end a run (run_...) or drop a proposed version (sha256:...) that waits for your approval'
       )
       .addOption(new Option('--reason <text>', 'why, shown to who asked').argParser((value) => value))
       .action(
         guarded(`Remote ${action} was not successful`, async (target: string, name: string | undefined, options) => {
-          const proposal = parseProposal(target)
+          const proposal = HASH_PATTERN.test(target)
           if (!proposal && !RUN_ID.test(target)) {
             throw new Error(
               `${printable(
@@ -371,9 +417,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             )
           }
           const { name: serverName, server, token } = await connect(name)
-          const path = proposal
-            ? `/v1/proposals/${encodeURIComponent(proposal.name)}/${proposal.hash}/${action}`
-            : `/v1/approvals/${target}/${action}`
+          const path = proposal ? `/v1/proposals/${target}/${action}` : `/v1/approvals/${target}/${action}`
           const { body } = await callServer<{ state: string }>(
             server,
             token,

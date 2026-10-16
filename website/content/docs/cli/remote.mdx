@@ -21,7 +21,7 @@ How a server is set up, and how it decides who may run what, is described in
 hammerkit remote add build https://build.example.com --issuer https://login.example.com
 hammerkit remote login build
 hammerkit remote accounts build
-hammerkit remote publish payments build
+hammerkit remote publish build
 hammerkit remote approvals build
 hammerkit remote approve run_Qx3k9ZpL2mW7vN4a build
 hammerkit remote list
@@ -43,15 +43,15 @@ so they work with or without a build file in the working directory.
 | `remote login <name>` | Sign in to the server with your identity provider. |
 | `remote logout <name>` | Forget the sign-in. |
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
-| `remote publish <definition> [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes under a name, see [Publishing](#publishing-a-build-file). |
+| `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). |
+| `remote versions [server]` | List the published versions, newest first, with who published them, where they come from and whether they were yanked. `--filter key=value` (repeatable) keeps the ones with that [annotation](/docs/remote-compute/build-files#annotations). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
-| `remote show <run> [server]` | Show a run that waits for your approval in full: per task the commands, image, secrets and accounts, see [Approving runs](#approving-runs). |
+| `remote show <run or hash> [server]` | Show a run that waits for your approval, or a proposed version, in full: per task the commands, image, secrets and accounts, and every file of a proposed version, see [Approving runs](#approving-runs) and [Proposing](#proposing-a-version). |
 | `remote proposals [server]` | List the proposed versions of build files you made or may approve, see [Proposing](#proposing-a-version). |
-| `remote diff <name@hash> [server]` | Show what a proposed version changes. |
-| `remote approve <run or name@hash> [server]` | Let a run go ahead, or publish a proposed version. `--reason <text>` is optional. |
-| `remote yank <name@hash> [server]` | Pull a published version back: no run starts from it and it is not `latest`. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
-| `remote unyank <name@hash> [server]` | Let a yanked version go on. Needs `builds: publish`. |
-| `remote reject <run or name@hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
+| `remote approve <run or hash> [server]` | Let a run go ahead, or publish a proposed version. `--reason <text>` is optional. |
+| `remote yank <hash> [server]` | Pull a published version back: no run starts from it. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
+| `remote unyank <hash> [server]` | Let a yanked version go on. Needs `builds: publish`. |
+| `remote reject <run or hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
 name at a different server pass `--force`, so a typo can't silently redirect your
@@ -93,9 +93,10 @@ A server runs published build files, it does not take task definitions from the 
 who runs them. `remote publish` sends yours:
 
 ```
-$ hammerkit remote publish payments build
-published payments to build: sha256:9f2c61d0... (3 files)
+$ hammerkit remote publish build
+published to build: sha256:9f2c61d0... (3 files)
 tasks and services: build, deploy, more:lint
+from: path=.hammerkit.yaml repo=github.com/corp/payments commit=4be1a07c... machine=ci-runner-7 user=runner
 ```
 
 It reads the build file with the parser of a run and sends it together with every
@@ -104,8 +105,25 @@ and 1 MiB. Includes have to be below the directory of the build file, because a
 server could not reproduce anything else; git includes are not sent, the server
 fetches them and wants them pinned to a commit. The version printed is the hash of
 the bundle, computed here the same way the server computes it, so the same files
-always have the same version. Publishing what a server already has says `already
+always have the same version. That hash is the only name the version has: a run
+names it, there is no `latest`. Publishing what a server already has says `already
 published` and changes nothing.
+
+With the bundle go [annotations](/docs/remote-compute/build-files#annotations) that say
+where it comes from, the `from:` line: the path of the build file in its git repository,
+the repository and commit, this machine and your user name. They are not part of the
+hash. `--annotation key=value` adds one or replaces one, `--annotation user=` leaves one
+out, and it can be given more than once. `remote versions` lists what a server has and
+finds it by them:
+
+```
+$ hammerkit remote versions build --filter repo=github.com/corp/payments
+build: 1 published
+sha256:9f2c61d0...  published by ci at 2026-10-12T20:31:00.000Z
+  from: path=.hammerkit.yaml repo=github.com/corp/payments commit=4be1a07c... machine=ci-runner-7 user=runner
+  tasks and services: build, deploy, more:lint
+  accounts: op-payments-prod
+```
 
 You need `builds: publish` on the server, see
 [entitlements](/docs/remote-compute/entitlements). A build file that reads secrets as an
@@ -119,41 +137,45 @@ the same command proposes the version. It does not become a version and can not 
 until somebody who may publish, and uses those accounts, approves it:
 
 ```
-$ hammerkit remote publish payments build
-proposed payments to build: sha256:4be1a07c... (3 files)
+$ hammerkit remote publish build
+proposed to build: sha256:4be1a07c... (3 files)
 tasks and services: build, deploy, more:lint
-it can not run before somebody who may publish payments approves it, until 2026-10-11T11:41:00.000Z
+it can not run before somebody who may publish approves it, until 2026-10-11T11:41:00.000Z
 ```
 
-The one who may publish reads what changes before deciding:
+The one who may publish reads the whole version before deciding:
 
 ```
 $ hammerkit remote proposals build
 build: 1 proposed
-payments@sha256:4be1a07c...  proposed by coding-agent, waits for your approval
+sha256:4be1a07c...  proposed by coding-agent, waits for your approval
+  from: path=.hammerkit.yaml repo=github.com/corp/payments machine=agent-sandbox-3 user=agent
   tasks and services: build, deploy, more:lint
   accounts: op-payments-prod, the proposer does not use op-payments-prod
   decide before 2026-10-11T11:41:00.000Z
-$ hammerkit remote diff payments@sha256:4be1a07c... build
-payments@sha256:4be1a07c... on build, proposed by coding-agent (https://login.example.com)
-compared with sha256:9f2c61d0...
---- .hammerkit.yaml (changed)
+$ hammerkit remote show sha256:4be1a07c... build
+sha256:4be1a07c... on build, proposed by coding-agent (https://login.example.com), waiting
+  deploy  task, docker node:22
+    $ ./deploy.sh
+    after: build
+    secret gsm:kube-token as op-payments-prod -> KUBE_TOKEN
+  ...
+--- .hammerkit.yaml (entry)
   tasks:
     build:
--     cmds: [npm run build]
-+     cmds: [npm run build, ./upload.sh]
-$ hammerkit remote approve payments@sha256:4be1a07c... build
-approved payments@sha256:4be1a07c... on build, it is published
+      cmds: [npm run build, ./upload.sh]
+  ...
+$ hammerkit remote approve sha256:4be1a07c... build
+approved sha256:4be1a07c... on build, it is published
 ```
 
-The diff shows the lines that changed with two lines around them, in full and with
-control characters replaced by `?`, so nothing hides in it. It shows the files of the
-bundle, not what the commands in them do. `remote reject` drops the proposal, with a
+`remote show` prints what each task does and then every file of the bundle, whole and
+with control characters replaced by `?`, so nothing hides in it. It does not compare
+with an earlier version: a version has no name and follows none, so a diff would only
+show what the proposer chose to compare with. `remote reject` drops the proposal, with a
 `--reason` the one who proposed it reads in `remote proposals`. Nobody approves their
-own proposal, and what you may not decide does not exist for you. A proposal is `stale`
-when another version was published since: `remote proposals` and `remote diff` say so,
-and it can only be rejected, then proposed again on top of the new version. After a
-rejection you can not propose that build file again for ten minutes (`approvals.cooldown`).
+own proposal, and what you may not decide does not exist for you. After a rejection you
+can not propose again for ten minutes, and nobody that version (`approvals.cooldown`).
 
 ## Approving runs
 
@@ -165,7 +187,7 @@ approve it. If you use the account:
 $ hammerkit remote approvals build
 build: 1 waiting for your approval
 run_Qx3k9ZpL2mW7vN4a  requested by 4f1c2b (https://login.example.com)
-  payments sha256:9f2c61d0...
+  build file sha256:9f2c61d0...
   tasks: deploy
   accounts: op-payments-prod, source ref refs/heads/main, env=staging
   op-payments-prod: waits for somebody who uses it to approve
@@ -190,7 +212,7 @@ The line `look at:` of the list names the tasks with a flag: `local-task` runs o
 and not in a container, `host-port` binds a port of the host and `remote-include`
 includes a file from git. A secret's value is never shown, only where it is read from.
 
-What you see is what the decision rests on: who asked, which version of which build
+What you see is what the decision rests on: who asked, which version of the build
 file, the tasks, the service accounts they read secrets as and where the code comes
 from. The version is the one the run is pinned to, so what you approve is what runs.
 You approve for every account you use; a run on several waits until they are all

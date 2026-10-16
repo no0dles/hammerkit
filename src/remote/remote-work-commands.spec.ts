@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { hostname } from 'os'
 import { writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
@@ -134,9 +135,11 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
   }
 }
 
+// a run of the version published last
 async function submit(h: Harness, sub: string, task: string) {
+  const [published] = (await h.call(sub, 'GET', '/v1/definitions')).body.definitions
   const response = await h.call(sub, 'POST', '/v1/runs', {
-    definition: { name: 'payments' },
+    definition: published.hash,
     tasks: [task],
     source: { type: 'ref', repo: REPO, ref: 'main' },
   })
@@ -148,17 +151,21 @@ describe('remote publish', () => {
   it('publishes the build file and what it includes, and says what it is now', async () => {
     await withHarness('remote-publish', async (h) => {
       await h.run('remote', 'login', 'build')
-      const first = await h.run('remote', 'publish', 'payments', 'build')
-      expect(first).toMatch(/published payments to build: sha256:[0-9a-f]{64} \(2 files\)/)
+      const first = await h.run('remote', 'publish', 'build')
+      expect(first).toMatch(/published to build: sha256:[0-9a-f]{64} \(2 files\)/)
       expect(first).toContain('tasks and services: build, deploy, more:lint')
 
-      const again = await h.run('remote', 'publish', 'payments', 'build')
-      expect(again).toContain('already published payments to build')
+      const again = await h.run('remote', 'publish', 'build')
+      expect(again).toContain('already published to build')
       const hash = /sha256:[0-9a-f]{64}/.exec(first)?.[0]
       expect(again).toContain(hash)
 
-      const published = await h.call('bob', 'GET', '/v1/definitions/payments/latest')
+      const published = await h.call('bob', 'GET', `/v1/definitions/${hash}`)
       expect(published.body).toMatchObject({ hash, tasks: ['build', 'deploy', 'more:lint'] })
+      // where it comes from rides along, outside of the hash
+      expect(first).toMatch(/^from: path=\S*\.hammerkit\.yaml .*machine=/m)
+      expect(published.body.annotations).toMatchObject({ machine: hostname() })
+      expect(published.body.annotations.path).toMatch(/\.hammerkit\.yaml$/)
     })
   })
 
@@ -166,8 +173,8 @@ describe('remote publish', () => {
     await withHarness('remote-publish-default', async (h) => {
       await h.run('remote', 'login', 'build')
       await h.run('remote', 'use', 'build')
-      expect(await h.run('remote', 'publish', 'payments')).toContain('published payments to build')
-      expect(await h.run('--file', 'more.yaml', 'remote', 'publish', 'payments')).toContain('tasks and services: lint')
+      expect(await h.run('remote', 'publish')).toContain('published to build')
+      expect(await h.run('--file', 'more.yaml', 'remote', 'publish')).toContain('tasks and services: lint')
     })
   })
 
@@ -175,8 +182,8 @@ describe('remote publish', () => {
     await withHarness('remote-publish-refused', async (h) => {
       h.as('alice')
       await h.run('remote', 'login', 'build')
-      await expect(h.run('remote', 'publish', 'payments', 'build')).rejects.toThrow(
-        'answered 403: you may not publish payments, it needs builds: propose or publish'
+      await expect(h.run('remote', 'publish', 'build')).rejects.toThrow(
+        'answered 403: you may not publish build files, it needs builds: propose or publish'
       )
     })
   })
@@ -185,38 +192,68 @@ describe('remote publish', () => {
     await withHarness('remote-publish-account', async (h) => {
       h.as('dana')
       await h.run('remote', 'login', 'build')
-      const out = await h.run('remote', 'publish', 'payments', 'build')
-      expect(out).toMatch(/proposed payments to build: sha256:[0-9a-f]{64}/)
+      const out = await h.run('remote', 'publish', 'build')
+      expect(out).toMatch(/proposed to build: sha256:[0-9a-f]{64}/)
       const listing = await h.run('remote', 'proposals', 'build')
       expect(listing).toContain('accounts: op-payments-prod, the proposer does not use op-payments-prod')
-      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(404)
+      const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0]
+      expect((await h.call('bob', 'GET', `/v1/definitions/${hash}`)).status).toBe(404)
 
       // bob uses the account, so he approves it
       h.as('bob')
       await h.run('remote', 'login', 'build')
-      const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0]
-      expect(await h.run('remote', 'approve', `payments@${hash}`, 'build')).toContain('it is published')
+      expect(await h.run('remote', 'approve', `${hash}`, 'build')).toContain('it is published')
 
       // and pulls it back, which refuses runs of it until it is let go on
-      expect(await h.run('remote', 'yank', `payments@${hash}`, 'build', '--reason', 'leaks')).toContain(
-        `yanked payments@${hash} on build`
+      expect(await h.run('remote', 'yank', `${hash}`, 'build', '--reason', 'leaks')).toContain(
+        `yanked ${hash} on build`
       )
-      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(404)
-      expect(await h.run('remote', 'unyank', `payments@${hash}`, 'build')).toContain('let go on')
-      expect((await h.call('bob', 'GET', '/v1/definitions/payments/latest')).status).toBe(200)
+      expect((await h.call('bob', 'GET', `/v1/definitions/${hash}`)).body.yanked.reason).toBe('leaks')
+      expect(await h.run('remote', 'unyank', `${hash}`, 'build')).toContain('let go on')
+      expect((await h.call('bob', 'GET', `/v1/definitions/${hash}`)).body.yanked).toBeUndefined()
       await expect(h.run('remote', 'yank', 'payments', 'build')).rejects.toThrow('is not a version')
+      await expect(h.run('remote', 'yank', `payments@${hash}`, 'build')).rejects.toThrow('is not a version')
     })
   })
 
   it('needs a sign-in, a registered server and a build file', async () => {
     await withHarness('remote-publish-errors', async (h) => {
-      await expect(h.run('remote', 'publish', 'payments', 'build')).rejects.toThrow('not signed in to build')
-      await expect(h.run('remote', 'publish', 'payments', 'nowhere')).rejects.toThrow(
-        'server nowhere is not registered'
-      )
-      await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'payments', 'build')).rejects.toThrow(
+      await expect(h.run('remote', 'publish', 'build')).rejects.toThrow('not signed in to build')
+      await expect(h.run('remote', 'publish', 'nowhere')).rejects.toThrow('server nowhere is not registered')
+      await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'build')).rejects.toThrow(
         'there is no build file'
       )
+    })
+  })
+})
+
+describe('remote versions', () => {
+  it('lists what was published with where it comes from, and finds it by that', async () => {
+    await withHarness('remote-versions', async (h) => {
+      await h.run('remote', 'login', 'build')
+      expect(await h.run('remote', 'versions', 'build')).toContain('build: no published versions')
+      const one = await h.run('remote', 'publish', 'build', '--annotation', 'team=payments', '--annotation', 'user=')
+      const two = await h.run('--file', 'more.yaml', 'remote', 'publish', 'build', '--annotation', 'team=web')
+      const hash = (out: string) => /sha256:[0-9a-f]{64}/.exec(out)?.[0] as string
+
+      const all = await h.run('remote', 'versions', 'build')
+      expect(all).toContain('build: 2 published')
+      // newest first
+      expect(all.indexOf(hash(two))).toBeLessThan(all.indexOf(hash(one)))
+      expect(all).toContain('published by bob at ')
+      expect(all).toContain('team=payments')
+      expect(all).toContain('accounts: op-payments-prod')
+
+      const payments = await h.run('remote', 'versions', 'build', '--filter', 'team=payments')
+      expect(payments).toContain('build: 1 published')
+      expect(payments).toContain(hash(one))
+      expect(payments).not.toContain(hash(two))
+      expect(payments).not.toMatch(/user=/)
+      expect(await h.run('remote', 'versions', 'build', '--filter', 'team=none')).toContain(
+        'no published versions match'
+      )
+      await expect(h.run('remote', 'versions', 'build', '--filter', 'team')).rejects.toThrow('is not a filter')
+      await expect(h.run('remote', 'publish', 'build', '--annotation', 'Team=x')).rejects.toThrow('annotation Team')
     })
   })
 })
@@ -224,7 +261,7 @@ describe('remote publish', () => {
 describe('remote approvals', () => {
   async function waitingRun(h: Harness) {
     await h.run('remote', 'login', 'build')
-    await h.run('remote', 'publish', 'payments', 'build')
+    await h.run('remote', 'publish', 'build')
     return submit(h, 'alice', 'deploy')
   }
 
@@ -240,7 +277,7 @@ describe('remote approvals', () => {
       expect(listing).toContain('build: 1 waiting for your approval')
       expect(listing).toContain(run.id)
       expect(listing).toContain('requested by alice')
-      expect(listing).toMatch(/payments sha256:/)
+      expect(listing).toMatch(/build file sha256:[0-9a-f]{64}/)
       expect(listing).toContain('tasks: deploy')
       expect(listing).toContain('accounts: op-payments-prod, source ref main')
       expect(listing).toContain('op-payments-prod: waits for somebody who uses it to approve')
@@ -251,7 +288,7 @@ describe('remote approvals', () => {
       expect(shown).toContain('after: build')
       expect(shown).toContain('secret echo:kube as op-payments-prod -> KUBE_TOKEN')
       expect(shown).not.toContain('KUBE_TOKEN=')
-      await expect(h.run('remote', 'show', 'nope', 'build')).rejects.toThrow('is not a run id')
+      await expect(h.run('remote', 'show', 'nope', 'build')).rejects.toThrow('is not a run id or a proposed version')
 
       expect(await h.run('remote', 'approve', run.id, 'build')).toContain(`approved ${run.id} on build, it is queued`)
       expect(await h.run('remote', 'approvals', 'build')).toContain('no runs wait for your approval')
@@ -303,24 +340,24 @@ describe('remote approvals', () => {
 describe('remote proposals', () => {
   async function proposal(h: Harness) {
     await h.run('remote', 'login', 'build')
-    await h.run('remote', 'publish', 'payments', 'build')
+    await h.run('remote', 'publish', 'build')
     h.as('agent')
     await h.run('remote', 'login', 'build')
-    const out = await h.run('--file', 'more.yaml', 'remote', 'publish', 'payments', 'build')
+    const out = await h.run('--file', 'more.yaml', 'remote', 'publish', 'build')
     const hash = /sha256:[0-9a-f]{64}/.exec(out)?.[0] as string
     h.as('bob')
     await h.run('remote', 'login', 'build')
-    return { out, hash, target: `payments@${hash}` }
+    return { out, hash, target: hash }
   }
 
   it('proposes when the caller may only propose, and says what happens next', async () => {
     await withHarness('remote-proposals-propose', async (h) => {
       const { out, hash } = await proposal(h)
-      expect(out).toMatch(/proposed payments to build: sha256:[0-9a-f]{64} \(1 file\)/)
+      expect(out).toMatch(/proposed to build: sha256:[0-9a-f]{64} \(1 file\)/)
       expect(out).toContain('tasks and services: lint')
-      expect(out).toContain('can not run before somebody who may publish payments approves it')
-      expect((await h.call('bob', 'GET', '/v1/definitions/payments')).body.versions).toHaveLength(1)
-      expect((await h.call('agent', 'GET', `/v1/proposals/payments/${hash}`)).body.state).toBe('waiting')
+      expect(out).toContain('can not run before somebody who may publish approves it')
+      expect((await h.call('bob', 'GET', '/v1/definitions')).body.definitions).toHaveLength(1)
+      expect((await h.call('agent', 'GET', `/v1/proposals/${hash}`)).body.state).toBe('waiting')
     })
   })
 
@@ -345,16 +382,19 @@ describe('remote proposals', () => {
     })
   })
 
-  it('shows what a proposal changes before it is approved', async () => {
-    await withHarness('remote-proposals-diff', async (h) => {
+  it('shows a proposal whole before it is approved: what its tasks do and every file', async () => {
+    await withHarness('remote-proposals-show', async (h) => {
       const { target } = await proposal(h)
-      const diff = await h.run('remote', 'diff', target, 'build')
-      expect(diff).toContain(`${target} on build, proposed by agent`)
-      expect(diff).toMatch(/compared with sha256:[0-9a-f]{64}/)
-      expect(diff).toContain('entry file: .hammerkit.yaml -> more.yaml')
-      expect(diff).toContain('--- .hammerkit.yaml (removed)')
-      // what both versions have is not repeated
-      expect(diff).not.toContain('--- more.yaml')
+      // without the bold a terminal shows
+      // eslint-disable-next-line no-control-regex
+      const shown = (await h.run('remote', 'show', target, 'build')).replace(/\u001b\[[0-9;]*m/g, '')
+      expect(shown).toContain(`${target} on build, proposed by agent`)
+      expect(shown).toContain('lint  task, local')
+      expect(shown).toContain('$ echo')
+      // the files themselves, not a comparison with anything published before
+      expect(shown).toContain('--- more.yaml (entry)')
+      expect(shown).toContain('  tasks:')
+      expect(shown).not.toContain('.hammerkit.yaml')
     })
   })
 
@@ -364,8 +404,8 @@ describe('remote proposals', () => {
       expect(await h.run('remote', 'approve', target, 'build')).toContain(
         `approved ${target} on build, it is published`
       )
-      const latest = await h.call('bob', 'GET', '/v1/definitions/payments/latest')
-      expect(latest.body).toMatchObject({ hash, publishedBy: { sub: 'agent' }, approvedBy: { sub: 'bob' } })
+      const published = await h.call('bob', 'GET', `/v1/definitions/${hash}`)
+      expect(published.body).toMatchObject({ hash, publishedBy: { sub: 'agent' }, approvedBy: { sub: 'bob' } })
       expect(await h.run('remote', 'proposals', 'build')).not.toContain('waits for your approval')
       await expect(h.run('remote', 'approve', target, 'build')).rejects.toThrow('answered 409')
     })
@@ -392,15 +432,18 @@ describe('remote proposals', () => {
         await expect(h.run('remote', 'approve', target, 'build')).rejects.toThrow('answered 404')
       }
       // the files are for who decides and who wrote them
-      await expect(h.run('remote', 'diff', target, 'build')).rejects.toThrow('answered 404')
+      await expect(h.run('remote', 'show', target, 'build')).rejects.toThrow('answered 404')
     })
   })
 
-  it('checks the name before it asks the server', async () => {
+  it('checks the hash before it asks the server', async () => {
     await withHarness('remote-proposals-name', async (h) => {
       await h.run('remote', 'login', 'build')
-      await expect(h.run('remote', 'diff', 'payments', 'build')).rejects.toThrow('is not a proposal')
+      await expect(h.run('remote', 'show', 'payments', 'build')).rejects.toThrow('is not a run id or a proposed')
       await expect(h.run('remote', 'approve', '../x@sha256:00', 'build')).rejects.toThrow(
+        'is not a run id or a proposed'
+      )
+      await expect(h.run('remote', 'approve', `payments@sha256:${'0'.repeat(64)}`, 'build')).rejects.toThrow(
         'is not a run id or a proposed'
       )
     })

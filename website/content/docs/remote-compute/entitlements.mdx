@@ -66,9 +66,9 @@ level that includes the lower ones:
 | --- | --- |
 | `run` | start runs of published build files. Without a level nothing runs, an account alone does not allow it. |
 | `propose` | also send new versions, which somebody who may publish approves, see [Proposing a version](/docs/remote-compute/build-files#proposing-a-version). |
-| `publish` | also publish new versions of any build file. Who defines the work does not have to be who runs it. |
+| `publish` | also publish build files. Who defines the work does not have to be who runs it. |
 
-Build files are named by whoever publishes them, so the config never lists names.
+A build file has no name, a version is the hash of its files, so the config never lists build files.
 
 ## Repositories
 

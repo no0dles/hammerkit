@@ -24,17 +24,16 @@ there yet; a run is a `POST /v1/runs`.
 
 ```json
 {
-  "definition": { "name": "payments", "hash": "sha256:9f2c..." },
+  "definition": "sha256:9f2c...",
   "tasks": ["build", "test"],
   "source": { "type": "ref", "repo": "github.com/corp/payments", "ref": "main" },
   "options": { "env": "staging", "cache": "checksum", "timeout": "30m" }
 }
 ```
 
-* `definition` names the published build file and the version to run: a hash, or
-  `latest` when left out. The run is pinned to the version the server chose, which
-  the answer shows, so what it executes does not change under it. A name or version
-  that does not exist is `400`.
+* `definition` is the hash of the published [version](/docs/remote-compute/build-files#versions)
+  to run, as `remote publish` printed it. The run is pinned to it, so what it executes
+  does not change under it. A hash that was not published is `400`, a yanked one `409`.
 * `tasks` are task names as on the command line, up to 100. A task the build file
   does not have is `400`. Instead of names, labels in `options.filter` can select
   the tasks.

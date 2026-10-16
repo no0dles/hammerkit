@@ -56,7 +56,7 @@ describe('HostExecutor', () => {
   })
 
   async function publish(files: { [path: string]: string }): Promise<string> {
-    const { version } = await store.publish('payments', { entry: '.hammerkit.yaml', files }, alice)
+    const { version } = await store.publish({ entry: '.hammerkit.yaml', files }, alice)
     return version.hash
   }
 
@@ -65,7 +65,7 @@ describe('HostExecutor', () => {
     owner: alice,
     state: 'running',
     createdAt: new Date().toISOString(),
-    definition: { name: 'payments', hash },
+    definition: hash,
     tasks: ['build'],
     accounts: [],
     source: { type: 'ref', repo: REPO, ref: 'main', commit },
@@ -353,7 +353,7 @@ describe('HostExecutor', () => {
 
   it('fails a run whose version was yanked after the run was accepted', async () => {
     const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo published]\n' })
-    await store.yank('payments', hash, alice, { reason: 'leaks a token' })
+    await store.yank(hash, alice, { reason: 'leaks a token' })
     const { events, error } = await execute(run(hash))
     expect(error?.message).toContain('was yanked: leaks a token')
     expect(events).toEqual([])

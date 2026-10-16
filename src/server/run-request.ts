@@ -1,7 +1,6 @@
 import { z } from 'zod'
 import { parseDuration } from '../utils/units'
 import { HASH_PATTERN } from '../remote/bundle'
-import { definitionName } from './server-config'
 import { normalizeRepo } from './repo'
 
 const name = z.string().min(1).max(200)
@@ -41,14 +40,8 @@ export const runOptionsSchema = z
 
 export const runRequestSchema = z
   .object({
-    // the published build file to run, and the version of it: a hash, or the
-    // latest when left out. The server answers with the hash it chose.
-    definition: z
-      .object({
-        name: definitionName,
-        hash: z.union([z.literal('latest'), z.string().regex(HASH_PATTERN)]).default('latest'),
-      })
-      .strict(),
+    // the published version of the build file to run, by its hash
+    definition: z.string().regex(HASH_PATTERN, 'expected the hash of a published build file, sha256:...'),
     // tasks by their name in the build file, as on the command line; labels in
     // the options can select tasks instead
     tasks: z.array(name).max(100).default([]),
