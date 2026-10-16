@@ -430,6 +430,8 @@ describe('remote proposals', () => {
       )
       const published = await h.call('bob', 'GET', `/v1/definitions/${hash}`)
       expect(published.body).toMatchObject({ hash, publishedBy: { sub: 'agent' }, approvedBy: { sub: 'bob' } })
+      // once approved, it shows as the published version
+      expect(await h.run('remote', 'show', target, 'build')).toContain('published by agent')
       expect(await h.run('remote', 'proposals', 'build')).not.toContain('waits for your approval')
       await expect(h.run('remote', 'approve', target, 'build')).rejects.toThrow('answered 409')
     })
@@ -441,6 +443,9 @@ describe('remote proposals', () => {
       expect(await h.run('remote', 'reject', target, 'build', '--reason', 'use the other file')).toContain(
         `rejected ${target} on build`
       )
+      const shown = await h.run('remote', 'show', target, 'build')
+      expect(shown).toContain('rejected by bob: use the other file')
+      expect(shown).toContain('its files are not kept')
       h.as('agent')
       await h.run('remote', 'login', 'build')
       expect(await h.run('remote', 'proposals', 'build')).toContain('rejected: use the other file')

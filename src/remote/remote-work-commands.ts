@@ -109,6 +109,16 @@ function annotationLines(annotations: Annotations | undefined, label = 'from (un
     : []
 }
 
+function yankLines(version: { yanked?: { by: { sub: string }; reason?: string } }): string[] {
+  return version.yanked
+    ? [
+        `  yanked by ${printable(version.yanked.by.sub)}${
+          version.yanked.reason ? `: ${printable(version.yanked.reason)}` : ''
+        }`,
+      ]
+    : []
+}
+
 const collectOption = (value: string, previous: string[] = []) => [...previous, value]
 
 // What a person who approves is shown of a run: everything the decision rests on.
@@ -266,12 +276,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           if (version.accounts.length > 0) {
             environment.stdout.write(`  accounts: ${version.accounts.map(printable).join(', ')}\n`)
           }
-          if (version.yanked) {
-            environment.stdout.write(
-              `  yanked by ${printable(version.yanked.by.sub)}${
-                version.yanked.reason ? `: ${printable(version.yanked.reason)}` : ''
-              }\n`
-            )
+          for (const line of yankLines(version)) {
+            environment.stdout.write(`${line}\n`)
           }
         }
       })
@@ -318,13 +324,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       }\n`
     )
     for (const line of [
-      ...(version.yanked
-        ? [
-            `  yanked by ${printable(version.yanked.by.sub)}${
-              version.yanked.reason ? `: ${printable(version.yanked.reason)}` : ''
-            }`,
-          ]
-        : []),
+      ...yankLines(version),
       ...annotationLines(version.annotations),
       ...flagLines(version),
       ...(version.plan ? describePlan(version.plan) : ['  the server did not record what its tasks do']),
@@ -360,6 +360,25 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
               return
             }
             throw e
+          }
+          if (proposal.state === 'approved') {
+            await showPublished(target, serverName, server, token)
+            return
+          }
+          if (proposal.state !== 'waiting') {
+            // a decided proposal keeps no files
+            environment.stdout.write(
+              `${colors.bold(printable(proposal.hash))} on ${serverName}, proposed by ${printable(
+                proposal.proposedBy.sub
+              )}, ${printable(proposal.state)}${proposal.decidedBy ? ` by ${printable(proposal.decidedBy.sub)}` : ''}${
+                proposal.reason ? `: ${printable(proposal.reason)}` : ''
+              }\n`
+            )
+            for (const line of annotationLines(proposal.annotations)) {
+              environment.stdout.write(`${line}\n`)
+            }
+            environment.stdout.write('  its files are not kept once it is decided\n')
+            return
           }
           const files = (await callServer<Bundle>(server, token, 'GET', `${path}/files`)).body
           environment.stdout.write(
