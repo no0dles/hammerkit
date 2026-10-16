@@ -92,8 +92,9 @@ export class SandboxClient {
   constructor(
     readonly connection: ServerConnection,
     readonly sandbox: SandboxView,
-    // the published build file whose tasks run on the sandbox, and its shell task
-    readonly build: { name: string; shell: string }
+    // the hash of the published version of the build file whose tasks run on the sandbox, and
+    // its shell task
+    readonly build: { hash: string; shell: string }
   ) {}
 
   get id(): string {
@@ -207,7 +208,7 @@ export class SandboxClient {
     const submitted: Run = await json(
       await call(this.connection, 'POST', '/v1/runs', {
         body: {
-          definition: { name: this.build.name },
+          definition: this.build.hash,
           tasks: [task],
           source: { type: 'sandbox', id: this.id },
           options: runOptions,
@@ -295,7 +296,7 @@ export class SandboxClient {
     }
     if ((await this.tree({ depth: 1, limit: 1 })).entries.length > 0) {
       throw new SandboxClientError(
-        `the shell task ${this.build.shell} of ${this.build.name} sees none of the files of the sandbox, ` +
+        `the shell task ${this.build.shell} of ${this.build.hash} sees none of the files of the sandbox, ` +
           `a shell task in a container needs mounts: [.] to work on them`
       )
     }

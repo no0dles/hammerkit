@@ -22,7 +22,11 @@ export function registerMcpCommand(remote: Command, environment: Environment, in
     .addOption(new Option('--sandbox <id>', 'a sandbox of yours on the server').env('HAMMERKIT_SANDBOX'))
     .addOption(new Option('--repo <repo>', 'create a sandbox of this repository').env('HAMMERKIT_REPO'))
     .addOption(new Option('--ref <ref>', 'at this branch').env('HAMMERKIT_REF'))
-    .addOption(new Option('--build <name>', 'published build file whose tasks run on it').env('HAMMERKIT_BUILD'))
+    .addOption(
+      new Option('--build <hash>', 'hash of the published version of the build file whose tasks run on it').env(
+        'HAMMERKIT_BUILD'
+      )
+    )
     .addOption(
       new Option('--shell <task>', 'its task whose last command is a shell, like sh -c')
         .env('HAMMERKIT_SHELL')
@@ -37,7 +41,7 @@ export function registerMcpCommand(remote: Command, environment: Environment, in
         const instructions =
           `The tools work on hammerkit sandbox ${sandbox.id}, a checkout of ${sandbox.sandbox.repo} at ` +
           `${sandbox.sandbox.commit} on a server. Paths are relative to its root. bash runs a command as the ` +
-          `task ${sandbox.build.shell} of the published build file ${sandbox.build.name}, run_task runs its other ` +
+          `task ${sandbox.build.shell} of the published build file ${sandbox.build.hash}, run_task runs its other ` +
           'tasks; only the files are kept between commands. changes shows what changed since the fetch.'
         const served = serveMcp(
           input,

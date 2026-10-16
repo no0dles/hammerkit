@@ -81,7 +81,7 @@ describe('pi extension', () => {
       hammerkitPiExtension(library, {
         cwd: root,
         environment,
-        options: { sandbox: client.id, build: 'payments' },
+        options: { sandbox: client.id, build: client.build.hash },
       })({
         registerTool: (definition) => registered.push(definition),
         on: (event, handler) => (handlers[event] = handler),
@@ -137,7 +137,9 @@ describe('pi extension', () => {
       expect(prompt.systemPrompt).toContain(
         `Current working directory: ${root}\nFiles and commands are on hammerkit sandbox ${client.id} of github.com/corp/payments`
       )
-      expect(prompt.systemPrompt).toContain('Commands run as the task sh of the published build file payments')
+      expect(prompt.systemPrompt).toContain(
+        `Commands run as the task sh of the published build file ${client.build.hash}`
+      )
       expect(prompt.systemPrompt).toContain(`start in the root of the sandbox, where ${root} does not exist`)
 
       // push takes the work out as a branch the operator allows

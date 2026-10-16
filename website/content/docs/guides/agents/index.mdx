@@ -65,19 +65,21 @@ tasks:
 ```
 
 `mounts: [.]` puts the files of the sandbox into the container, writable. The task reads no
-secrets: a task that does takes no arguments on a server. Publish it under a name with
+secrets: a task that does takes no arguments on a server. Publish it with
 [`hammerkit remote publish`](/docs/cli/remote#publishing-a-build-file) as an identity with
-`builds: publish`. The agent then names the repository, the branch and the published build:
+`builds: publish`; it prints the hash of the version. The agent then names the repository,
+the branch and that hash:
 
 | Variable                  | Example                              | What it names                                              |
 | ------------------------- | ------------------------------------ | ---------------------------------------------------------- |
 | `HAMMERKIT_SERVER`        | `hammerkit`                          | The server, as `hammerkit remote add` registered it.       |
 | `HAMMERKIT_REPO`          | `github.com/acme/shop`               | The repository of the sandbox.                             |
 | `HAMMERKIT_REF`           | `main`                               | The branch it starts from.                                 |
-| `HAMMERKIT_BUILD`         | `shop`                               | The published build file.                                  |
+| `HAMMERKIT_BUILD`         | `sha256:9f2c…`                       | The published version of the build file.                   |
 | `HAMMERKIT_TOKEN_COMMAND` | `gcloud auth print-identity-token …` | Prints a short-lived token of the agent's service account. |
 
-See [Settings](/docs/remote-compute/agents#settings) for the rest, such as `HAMMERKIT_SANDBOX`
+A run names exactly the version it runs, so nothing follows a newer one: when the build file
+changes, publish it again and set the new hash. See [Settings](/docs/remote-compute/agents#settings) for the rest, such as `HAMMERKIT_SANDBOX`
 to come back to a sandbox with work in progress.
 
 ## On the agent's machine

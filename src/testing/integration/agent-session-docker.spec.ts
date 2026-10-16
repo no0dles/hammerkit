@@ -124,8 +124,8 @@ describe('agent session (docker)', () => {
           const token = () =>
             signToken(key, { iss: idp.url, sub: 'alice', aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 600 })
           try {
-            const published = await fetch(`${server.url}/v1/definitions/payments`, {
-              method: 'PUT',
+            const published = await fetch(`${server.url}/v1/definitions`, {
+              method: 'POST',
               headers: { authorization: `Bearer ${token()}`, 'content-type': 'application/json' },
               body: JSON.stringify({
                 files: {
@@ -152,11 +152,12 @@ describe('agent session (docker)', () => {
               }),
             })
             expect(published.status).toBe(201)
+            const { hash } = (await published.json()) as { hash: string }
 
             const connection: ServerConnection = { url: server.url, token: async () => token() }
             const view = await SandboxClient.create(connection, REPO, 'main')
             expect(view.commit).toBe(base)
-            const client = new SandboxClient(connection, view, { name: 'payments', shell: 'sh' })
+            const client = new SandboxClient(connection, view, { hash, shell: 'sh' })
             const agent = connectAgent(client)
             await agent.request('initialize', { protocolVersion: '2025-06-18', capabilities: {} })
 
@@ -199,11 +200,11 @@ describe('agent session (docker)', () => {
             expect((await agent.call('bash', { command: 'rm shell-note.txt && ls' })).text).not.toContain('shell-note')
 
             // a shell without the mount would run on an empty directory, the client says so instead
-            const bare = connectAgent(new SandboxClient(connection, view, { name: 'payments', shell: 'bare' }))
+            const bare = connectAgent(new SandboxClient(connection, view, { hash, shell: 'bare' }))
             await bare.request('initialize', { protocolVersion: '2025-06-18', capabilities: {} })
             const blind = await bare.call('bash', { command: 'echo lost > lost.txt' })
             expect(blind.isError).toBe(true)
-            expect(blind.text).toContain('the shell task bare of payments sees none of the files of the sandbox')
+            expect(blind.text).toContain(`the shell task bare of ${hash} sees none of the files of the sandbox`)
             expect(blind.text).toContain('mounts: [.]')
             await bare.close()
             expect((await agent.call('read', { path: 'lost.txt' })).isError).toBe(true)

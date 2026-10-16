@@ -172,13 +172,13 @@ describe('opencode tools on a sandbox', () => {
   })
 
   it('connects lazily and says what is missing', async () => {
-    await withSandboxServer('harness-opencode-plugin', async ({ environment }) => {
+    await withSandboxServer('harness-opencode-plugin', async ({ environment, build }) => {
       const hooks = await loadHammerkitOpencodePlugin(
         async (specifier) => {
           expect(specifier).toBe('@opencode-ai/plugin')
           return { tool: { schema: z } }
         },
-        { environment, options: { build: 'payments' } }
+        { environment, options: { build } }
       )({ directory })
       await expect(hooks.tool.read.execute({ filePath: join(directory, 'a') }, context())).rejects.toThrow(
         /name a server/
@@ -241,10 +241,10 @@ describe('opencode 2 tools on a sandbox', () => {
   })
 
   it('sets itself up in place of the tools of opencode 2, and serves opencode 1 as well', async () => {
-    await withSandboxServer('harness-opencode2-plugin', async ({ environment }) => {
+    await withSandboxServer('harness-opencode2-plugin', async ({ environment, build }) => {
       const plugin = hammerkitOpencodeEntry(async () => ({ tool: { schema: z } }), {
         environment,
-        options: { build: 'payments' },
+        options: { build },
       })
       expect(plugin.id).toBe('hammerkit')
       const added: OpencodeV2Tool[] = []

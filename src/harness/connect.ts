@@ -6,14 +6,15 @@ import { hasServer, readHostConfig } from '../remote/host-config'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
 import { getTokenSource } from '../remote/token-source'
+import { HASH_PATTERN } from '../remote/bundle'
 import { SandboxClient, SandboxView, ServerConnection } from './sandbox-client'
 
 export const DEFAULT_SHELL_TASK = 'sh'
 
 /**
  * Where a harness works: a registered server, one of the caller's sandboxes on it (or a
- * repository and ref to create one from), and the published build file whose tasks run on
- * it, with the task that is the shell.
+ * repository and ref to create one from), and the published version of the build file whose
+ * tasks run on it, by its hash, with the task that is the shell.
  */
 export interface HarnessOptions {
   server?: string
@@ -52,7 +53,15 @@ export async function connectSandbox(
     )
   }
   if (!options.build) {
-    throw new Error('name the published build file whose tasks run on the sandbox (HAMMERKIT_BUILD or --build)')
+    throw new Error(
+      'name the published version of the build file whose tasks run on the sandbox by its hash (HAMMERKIT_BUILD or --build), as hammerkit remote publish printed it'
+    )
+  }
+  // a run names exactly the version it runs, there is no name that follows the latest one
+  if (!HASH_PATTERN.test(options.build)) {
+    throw new Error(
+      `${options.build} is not the hash of a published version (sha256:...), name it as hammerkit remote publish printed it (HAMMERKIT_BUILD or --build)`
+    )
   }
   const server = config.servers[name]
   const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, name, server) }
@@ -75,14 +84,14 @@ export async function connectSandbox(
       'name a sandbox (HAMMERKIT_SANDBOX or --sandbox), or a repository and ref to create one from (HAMMERKIT_REPO and HAMMERKIT_REF, or --repo and --ref)'
     )
   }
-  return new SandboxClient(connection, sandbox, { name: options.build, shell: options.shell ?? DEFAULT_SHELL_TASK })
+  return new SandboxClient(connection, sandbox, { hash: options.build, shell: options.shell ?? DEFAULT_SHELL_TASK })
 }
 
 // A client that starts with a repository and ref takes a sandbox of the caller's of the same
 // that nobody changed and no run holds, checked out at the ref again, rather than creating
 // one on every start: sandboxes stay until they are deleted, and only a few are allowed.
 async function reuseSandbox(connection: ServerConnection, repo: string, ref: string): Promise<SandboxView | undefined> {
-  const build = { name: '', shell: DEFAULT_SHELL_TASK }
+  const build = { hash: '', shell: DEFAULT_SHELL_TASK }
   for (const candidate of await SandboxClient.list(connection)) {
     if (candidate.repo !== repo || candidate.ref !== ref || candidate.busy) {
       continue

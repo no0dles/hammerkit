@@ -295,7 +295,7 @@ describe('mcp tools on a sandbox', () => {
   })
 
   it('starts as a command for a registered server and the sandbox it names', async () => {
-    await withSandboxServer('harness-mcp-command', async ({ client: sandbox, url, environment, connection }) => {
+    await withSandboxServer('harness-mcp-command', async ({ client: sandbox, url, environment, connection, build }) => {
       await addServer(environment, 'corp', url, { issuer: 'https://idp.example.com' })
       environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_TOKEN: await connection.token() }
       const errors: string[] = []
@@ -305,12 +305,9 @@ describe('mcp tools on a sandbox', () => {
       const client = connect(async (input, output) => {
         environment.stdout = output
         registerMcpCommand(remote, environment, input)
-        await program.parseAsync(
-          ['remote', 'mcp', '--server', 'corp', '--sandbox', sandbox.id, '--build', 'payments'],
-          {
-            from: 'user',
-          }
-        )
+        await program.parseAsync(['remote', 'mcp', '--server', 'corp', '--sandbox', sandbox.id, '--build', build], {
+          from: 'user',
+        })
       })
       const init = await client.request('initialize', { protocolVersion: '2025-06-18' })
       expect(init.result.instructions).toContain(`hammerkit sandbox ${sandbox.id}`)
@@ -323,10 +320,14 @@ describe('mcp tools on a sandbox', () => {
   })
 
   it('takes an unchanged sandbox of the repository and ref before it creates one', async () => {
-    await withSandboxServer('harness-reuse', async ({ client: first, url, environment, connection }) => {
+    await withSandboxServer('harness-reuse', async ({ client: first, url, environment, connection, build }) => {
       await addServer(environment, 'corp', url, { issuer: 'https://idp.example.com' })
       environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_TOKEN: await connection.token() }
-      const options = { server: 'corp', repo: SANDBOX_REPO, ref: 'main', build: 'payments' }
+      const options = { server: 'corp', repo: SANDBOX_REPO, ref: 'main', build }
+      // a run names exactly the version it runs, a name that would follow the latest one is no build
+      await expect(connectSandbox(environment, { ...options, build: 'payments' })).rejects.toThrow(
+        'payments is not the hash of a published version (sha256:...), name it as hammerkit remote publish printed it (HAMMERKIT_BUILD or --build)'
+      )
       const said: string[] = []
       expect((await connectSandbox(environment, options, (line) => said.push(line))).id).toBe(first.id)
       expect(said).toEqual([expect.stringMatching(/^took sandbox .* it had no changes$/)])

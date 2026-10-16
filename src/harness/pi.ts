@@ -295,7 +295,7 @@ export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOp
       const where =
         `Files and commands are on hammerkit sandbox ${sandbox.id} of ${sandbox.sandbox.repo} ` +
         `(fetched at ${sandbox.sandbox.commit}), ${root} stands for its root. Commands run as the task ` +
-        `${sandbox.build.shell} of the published build file ${sandbox.build.name}, in its container, ` +
+        `${sandbox.build.shell} of the published build file ${sandbox.build.hash}, in its container, ` +
         `one at a time, and start in the root of the sandbox, where ${root} does not exist: give them ` +
         'relative paths. Nothing is installed on this machine.'
       const line = `Current working directory: ${root}`

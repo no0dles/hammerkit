@@ -13,7 +13,7 @@ import { Environment } from '../executer/environment'
 
 export const SANDBOX_REPO = 'github.com/corp/payments'
 
-// The build file published as `payments`: a shell, a task that takes arguments and one
+// The published build file: a shell, a task that takes arguments and one
 // that fails. They are local tasks, which this server lets sandboxes run. `elsewhere` is a
 // shell that runs in an empty directory, as a shell in a container without the files does.
 const BUILD_FILE = [
@@ -36,6 +36,8 @@ export interface SandboxServer {
   // the environment the server ran with, with a host config to point a harness at it
   environment: Environment
   repository: string
+  // the hash the build file was published as
+  build: string
 }
 
 /**
@@ -101,23 +103,24 @@ export async function withSandboxServer(name: string, fn: (server: SandboxServer
         const token = () =>
           signToken(key, { iss: idp.url, sub: 'alice', aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
         const connection: ServerConnection = { url: server.url, token: async () => token() }
-        const published = await fetch(`${server.url}/v1/definitions/payments`, {
-          method: 'PUT',
+        const published = await fetch(`${server.url}/v1/definitions`, {
+          method: 'POST',
           headers: { authorization: `Bearer ${token()}`, 'content-type': 'application/json' },
           body: JSON.stringify({ files: { '.hammerkit.yaml': BUILD_FILE } }),
         })
         if (published.status !== 201) {
           throw new Error(`publish answered ${published.status}: ${await published.text()}`)
         }
+        const { hash: build } = (await published.json()) as { hash: string }
         const sandbox = await SandboxClient.create(connection, SANDBOX_REPO, 'main')
-        const client = new SandboxClient(connection, sandbox, { name: 'payments', shell: 'sh' })
+        const client = new SandboxClient(connection, sandbox, { hash: build, shell: 'sh' })
         // a host config and sign-in of the test's own, never the machine's
         env.processEnvs = {
           ...env.processEnvs,
           HAMMERKIT_CONFIG: join(cwd, 'host-config.yaml'),
           HAMMERKIT_CREDENTIALS: join(cwd, 'credentials.json'),
         }
-        await fn({ url: server.url, connection, client, environment: env, repository })
+        await fn({ url: server.url, connection, client, environment: env, repository, build })
       } finally {
         await server.close()
       }

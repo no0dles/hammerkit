@@ -18,7 +18,7 @@ published ones. The tools, the sign-in and the shell task are described in
 named `mcp` still runs with `hammerkit mcp`.
 
 ```bash
-hammerkit remote mcp --server corp --sandbox sbx_4vJ0mT2cX9qLw1aB --build payments
+hammerkit remote mcp --server corp --sandbox sbx_4vJ0mT2cX9qLw1aB --build sha256:9f2c...
 ```
 
 | Option                         | What it does                                                                                                                                                                                 |
@@ -26,7 +26,7 @@ hammerkit remote mcp --server corp --sandbox sbx_4vJ0mT2cX9qLw1aB --build paymen
 | `--server <name>`              | The registered server, `HAMMERKIT_SERVER`. Default: the one `remote use` set.                                                                                                                |
 | `--sandbox <id>`               | A sandbox of yours on it, `HAMMERKIT_SANDBOX`.                                                                                                                                               |
 | `--repo <repo>`, `--ref <ref>` | Instead: a sandbox of this repository at this branch, `HAMMERKIT_REPO` and `HAMMERKIT_REF`. One of yours without changes is checked out at the branch again, otherwise a new one is created. |
-| `--build <name>`               | The published build file whose tasks run on the sandbox, `HAMMERKIT_BUILD`.                                                                                                                  |
+| `--build <hash>`               | The hash of the published version of the build file whose tasks run on the sandbox, as `remote publish` printed it, `HAMMERKIT_BUILD`.                                                       |
 | `--shell <task>`               | Its task whose last command is a shell, `sh` by default, `HAMMERKIT_SHELL`.                                                                                                                  |
 
 Standard output carries the protocol only; what `remote mcp` has to say goes to standard

@@ -41,13 +41,13 @@ which must keep running while pi works. Plain http is accepted only for `127.0.0
 
 Start pi in an empty directory: it stands for the root of the sandbox, and nothing in it is
 read or changed. The variables name the server, the repository and branch to start from, the
-published build file and how to get the agent's token:
+published version of the build file and how to get the agent's token:
 
 ```bash
 mkdir shop-agent && cd shop-agent
 export HAMMERKIT_SERVER=hammerkit
 export HAMMERKIT_REPO=github.com/acme/shop HAMMERKIT_REF=main
-export HAMMERKIT_BUILD=shop
+export HAMMERKIT_BUILD=sha256:9f2c…    # the hash hammerkit remote publish printed
 export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
   --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
 export OPENROUTER_API_KEY=…    # or the key of any provider pi supports

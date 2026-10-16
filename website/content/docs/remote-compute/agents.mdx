@@ -93,7 +93,7 @@ All three clients take the same settings, `hammerkit remote mcp` as options too:
 | `HAMMERKIT_SERVER`                | `--server`        | The registered server. Default: the one `hammerkit remote use` set.                                                                                                                                                                                                                                                                                                                          |
 | `HAMMERKIT_SANDBOX`               | `--sandbox`       | A sandbox of the agent, for example `sbx_4vJ0mT2cX9qLw1aB`.                                                                                                                                                                                                                                                                                                                                  |
 | `HAMMERKIT_REPO`, `HAMMERKIT_REF` | `--repo`, `--ref` | Instead of a sandbox: one of this repository at this branch. When the client starts, it takes a sandbox of yours of the same repository and branch that has no changes and checks it out at the branch again, or creates one. A sandbox stays until it is deleted and the server allows only a few, so set `HAMMERKIT_SANDBOX` to the id the client prints to come back to work in progress. |
-| `HAMMERKIT_BUILD`                 | `--build`         | The published build file whose tasks run on the sandbox.                                                                                                                                                                                                                                                                                                                                     |
+| `HAMMERKIT_BUILD`                 | `--build`         | The hash of the published version of the build file whose tasks run on the sandbox, as `hammerkit remote publish` printed it. A run names exactly the version it runs: when the build file changes, publish it again and set the new hash.                                                                                                                                                   |
 | `HAMMERKIT_SHELL`                 | `--shell`         | Its shell task, `sh` by default.                                                                                                                                                                                                                                                                                                                                                             |
 
 ## hammerkit remote mcp
@@ -106,7 +106,7 @@ Clients start it as a command:
   "mcpServers": {
     "hammerkit": {
       "command": "npx",
-      "args": ["hammerkit", "remote", "mcp", "--server", "corp", "--build", "payments"],
+      "args": ["hammerkit", "remote", "mcp", "--server", "corp", "--build", "sha256:9f2c..."],
       "env": { "HAMMERKIT_SANDBOX": "sbx_4vJ0mT2cX9qLw1aB", "HAMMERKIT_TOKEN_COMMAND": "agent-token" }
     }
   }
@@ -140,7 +140,7 @@ hammerkit is a [pi package](https://pi.dev/packages): installing it adds the ext
 
 ```bash
 pi install npm:hammerkit
-HAMMERKIT_SERVER=corp HAMMERKIT_BUILD=payments HAMMERKIT_SANDBOX=sbx_4vJ0mT2cX9qLw1aB pi
+HAMMERKIT_SERVER=corp HAMMERKIT_BUILD=sha256:9f2c... HAMMERKIT_SANDBOX=sbx_4vJ0mT2cX9qLw1aB pi
 ```
 
 The extension registers pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`

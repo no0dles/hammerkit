@@ -45,7 +45,7 @@ the root of the sandbox; nothing else in it is read or changed.
 ```bash
 export HAMMERKIT_SERVER=hammerkit
 export HAMMERKIT_REPO=github.com/acme/shop HAMMERKIT_REF=main
-export HAMMERKIT_BUILD=shop
+export HAMMERKIT_BUILD=sha256:9f2c…    # the hash hammerkit remote publish printed
 export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
   --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
 export OPENROUTER_API_KEY=…    # or the key of any provider opencode supports

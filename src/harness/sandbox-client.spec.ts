@@ -230,9 +230,9 @@ describe('sandbox client', () => {
   })
 
   it('sees an edit of the same size made in the second the sandbox was created', async () => {
-    await withSandboxServer('harness-client-racy', async ({ connection }) => {
+    await withSandboxServer('harness-client-racy', async ({ connection, build }) => {
       const view = await SandboxClient.create(connection, SANDBOX_REPO, 'main')
-      const client = new SandboxClient(connection, view, { name: 'payments', shell: 'sh' })
+      const client = new SandboxClient(connection, view, { hash: build, shell: 'sh' })
       await client.edit([{ op: 'replace', path: 'src/app.ts', old_string: '41', new_string: '42' }])
       // past the second of the checkout, where git would take the file for unchanged
       await new Promise((resolve) => setTimeout(resolve, 1100))
@@ -279,10 +279,13 @@ describe('sandbox client', () => {
   itExceptWindows('refuses a command of a shell that sees none of the files of the sandbox', async () => {
     await withSandboxServer('harness-client-blind-shell', async ({ client }) => {
       // a shell that sees none of the files says so instead of running on an empty directory
-      const blind = new SandboxClient(client.connection, client.sandbox, { name: 'payments', shell: 'elsewhere' })
+      const blind = new SandboxClient(client.connection, client.sandbox, {
+        hash: client.build.hash,
+        shell: 'elsewhere',
+      })
       const said: string[] = []
       await expect(blind.exec('echo lost > lost.txt', '', { onLine: (line) => said.push(line) })).rejects.toThrow(
-        'the shell task elsewhere of payments sees none of the files of the sandbox, a shell task in a container needs mounts: [.] to work on them'
+        `the shell task elsewhere of ${client.build.hash} sees none of the files of the sandbox, a shell task in a container needs mounts: [.] to work on them`
       )
       expect(said).toEqual([])
       expect(await client.stat('lost.txt')).toBeUndefined()
