@@ -419,4 +419,8 @@ runs:
 * The services a task needs are reachable at every level.
 * Local tasks can't be limited, so a server with a ceiling below `open` allows only the
   `docker` runtime; `runtimes: [docker, local]` with it is a config error.
+* On a [Kubernetes backend](/docs/remote-compute/backend#network) the ceiling is a NetworkPolicy
+  on every pod, so it needs `backend.networkPolicy: enforced`; without that it is a config error.
+  A task that reads a provider's secret there keeps an open network, so it can't be published
+  under a ceiling.
 

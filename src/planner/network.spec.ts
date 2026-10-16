@@ -20,10 +20,12 @@ import {
   buildNetworkPolicy,
   buildProxyPolicy,
   ensureKubernetesItemNetwork,
+  getNetworkLabels,
   getProxyName,
   getProxyReadinessScript,
   removeAllKubernetesItemNetworks,
 } from '../kubernetes/network-policy'
+import { getRunLabelValue } from '../kubernetes/job-placement'
 import { ExecuteOptions } from '../runtime/runtime'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
@@ -441,6 +443,40 @@ describe('network', () => {
           expect(
             getProxyName(cli.service('db') as WorkItem<ContainerWorkService>, { run: null }).length
           ).toBeLessThanOrEqual(63)
+        }
+      )
+    })
+
+    it('labels the limits of a server run with its run, and its limited pods and proxies', async () => {
+      await withCli(
+        'network-k8s-server',
+        {
+          tasks: {
+            offline: { image: 'node:22', cmds: ['true'], network: 'none' },
+            install: { image: 'node:22', cmds: ['true'], network: { allow: ['a.com'] } },
+            open: { image: 'node:22', cmds: ['true'] },
+          },
+        },
+        async (cli) => {
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {} }
+          const run = { run: getRunLabelValue('run_1') }
+          const offline = cli.task('offline') as WorkItem<ContainerWorkTask>
+          const policy = buildNetworkPolicy({ ...env, server }, offline, { type: 'none' }, run)
+          // removed with the run's other objects
+          expect(policy.metadata.labels).toEqual({
+            'hammerkit.dev/network-of': offline.id(),
+            'hammerkit.dev/run': getRunLabelValue('run_1'),
+          })
+          expect(policy.spec?.podSelector).toEqual({
+            matchLabels: { 'hammerkit.dev/id': offline.id(), 'hammerkit.dev/run': getRunLabelValue('run_1') },
+          })
+          // a server's run label is longer than a run id of the CLI
+          const install = cli.task('install') as WorkItem<ContainerWorkTask>
+          expect(getProxyName(install, run).length).toBeLessThanOrEqual(63)
+          // the namespace's default policies leave limited pods out
+          expect(getNetworkLabels({ ...env, server }, offline)).toEqual({ 'hammerkit.dev/network': 'limited' })
+          expect(getNetworkLabels({ ...env, server }, cli.task('open') as WorkItem<ContainerWorkTask>)).toEqual({})
+          expect(getNetworkLabels(env, offline)).toEqual({})
         }
       )
     })

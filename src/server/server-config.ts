@@ -1,3 +1,4 @@
+import { isIP } from 'net'
 import { z } from 'zod'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
@@ -85,6 +86,10 @@ const accountNameSchema = z
   .string()
   .regex(/^[A-Za-z][A-Za-z0-9_-]*$/, 'a name starts with a letter and holds letters, digits, - and _')
 
+const kubernetesNameSchema = z
+  .string()
+  .regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/, 'a Kubernetes name: lower case letters, digits and -')
+
 export const accountSchema = z
   .object({
     description: z.string().min(1).max(200).optional(),
@@ -99,6 +104,24 @@ export const accountSchema = z
     // the refs (branches or tags, `release/*` for a level) a run using this account
     // may be started from; a commit is not accepted then, it names no branch
     refs: z.array(z.string().min(1).max(200)).min(1).optional(),
+    // On a Kubernetes backend: the credential the commands of the account's secrets
+    // get in the Job of a task, under /var/run/hammerkit/account. The server holds
+    // none of the secret manager's credentials.
+    kubernetes: z
+      .object({
+        // a ServiceAccount of the server's namespace: a token of it (an hour, made for
+        // each Job, for `audience`) is put at /var/run/hammerkit/account/token, for a cloud that
+        // trusts the cluster's issuer (workload identity federation)
+        serviceAccount: kubernetesNameSchema.optional(),
+        audience: z.string().min(1).optional(),
+        // a Secret of the server's namespace, each key a file of the directory, such
+        // as a key file or the federation config that reads the token
+        secret: kubernetesNameSchema.optional(),
+      })
+      .strict()
+      .refine((value) => value.serviceAccount || value.secret, 'name a serviceAccount, a secret or both')
+      .refine((value) => !value.audience || value.serviceAccount, 'audience is the one of the serviceAccount token')
+      .optional(),
   })
   .strict()
   .superRefine((account, ctx) => {
@@ -112,6 +135,106 @@ export const accountSchema = z
   })
 
 export type Account = z.infer<typeof accountSchema>
+
+// The tasks of runs execute on this machine, with its docker daemon and local tools.
+const hostBackendSchema = z
+  .object({
+    type: z.literal('host'),
+    // what this machine offers; detected when left out
+    platform: serverPlatformSchema.optional(),
+  })
+  .strict()
+
+const tolerationSchema = z
+  .object({
+    key: z.string().min(1).optional(),
+    operator: z.enum(['Exists', 'Equal']).optional(),
+    value: z.string().optional(),
+    effect: z.enum(['NoSchedule', 'PreferNoSchedule', 'NoExecute']).optional(),
+    tolerationSeconds: z.number().int().min(0).optional(),
+  })
+  .strict()
+
+// an IPv4 or IPv6 range, such as 10.0.0.0/8
+const cidrSchema = z.string().refine((value) => {
+  const [address, prefix, ...rest] = value.split('/')
+  const family = isIP(address)
+  return (
+    rest.length === 0 && family !== 0 && /^\d{1,3}$/.test(prefix ?? '') && Number(prefix) <= (family === 4 ? 32 : 128)
+  )
+}, 'expected an address range, such as 10.0.0.0/8 or fd00::/8')
+
+const quantitiesSchema = z.object({ cpu: z.string().min(1).optional(), memory: z.string().min(1).optional() }).strict()
+
+// Nodes the tasks of runs are placed on. Container tasks go to the first pool; a
+// local task runs in the `toolImage` of the pool that offers the platform it declares.
+export const kubernetesPoolSchema = z
+  .object({
+    name: kubernetesNameSchema,
+    // Linux only: macOS is not a node platform, Windows nodes are not supported yet
+    platform: z
+      .object({ os: z.literal('linux'), arch: z.enum(['amd64', 'arm64']) })
+      .strict()
+      .default({ os: 'linux', arch: 'amd64' }),
+    // labels the nodes of the pool carry, besides kubernetes.io/os and kubernetes.io/arch
+    nodeSelector: z.record(z.string()).default({}),
+    tolerations: z.array(tolerationSchema).default([]),
+    // the image local tasks run in on this pool
+    toolImage: z.string().min(1).optional(),
+  })
+  .strict()
+
+export type KubernetesPool = z.infer<typeof kubernetesPoolSchema>
+
+// The tasks of runs execute as Jobs on a cluster, in a namespace per caller.
+const kubernetesBackendSchema = z
+  .object({
+    type: z.literal('kubernetes'),
+    // the cluster: a context of a kubeconfig, or the cluster the server runs in when
+    // both are left out
+    kubeconfig: z.string().min(1).optional(),
+    context: z.string().min(1).optional(),
+    // the server's own namespace, where the Secrets and ServiceAccounts of the accounts
+    // are; the namespace of the server's pod when left out
+    namespace: kubernetesNameSchema.optional(),
+    // a caller's namespace is this and a hash of their identity, so two servers on
+    // one cluster keep their callers apart with a prefix each
+    namespacePrefix: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]{0,30}$/, 'lower case letters, digits and -, at most 31')
+      .default('hammerkit-'),
+    // of the claims tasks get; the cluster's default when left out
+    storageClass: z.string().min(1).optional(),
+    pools: z
+      .array(kubernetesPoolSchema)
+      .min(1)
+      .default([{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }]),
+    // per secret provider, the image its command runs in: secrets are read in the
+    // Job of the task, not by the server
+    providers: z.record(z.object({ image: z.string().min(1) }).strict()).default({}),
+    // the ResourceQuota of every caller's namespace, such as `requests.cpu: '8'`
+    quota: z.record(z.union([z.string().min(1), z.number()]).transform(String)).optional(),
+    // what a container without `resources` requests (a LimitRange), so it is
+    // admitted under a quota that limits compute
+    defaultResources: z
+      .object({ requests: quantitiesSchema.optional(), limits: quantitiesSchema.optional() })
+      .strict()
+      .optional(),
+    // the ClusterRole the server binds to itself in each caller's namespace, so it needs
+    // no rights in the namespaces of others (see the docs on RBAC)
+    runRole: kubernetesNameSchema.default('hammerkit-runs'),
+    // where the pods of runs with an open network may not connect to: the link-local
+    // range with the metadata endpoints of the clouds (and the node's identity) by
+    // default; add the pod and service ranges of the cluster to keep them off it
+    deniedEgress: z.array(cidrSchema).default(['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32']),
+    // the operator states that the cluster's network plugin enforces NetworkPolicy, as a
+    // build file's environment does: hammerkit can't tell from the API, and without it a
+    // task with a limited network fails rather than runs open
+    networkPolicy: z.literal('enforced').optional(),
+  })
+  .strict()
+
+export type KubernetesBackend = z.infer<typeof kubernetesBackendSchema>
 
 export const accountLevelSchema = z.enum(['use', 'request'])
 export type AccountLevel = z.infer<typeof accountLevelSchema>
@@ -278,14 +401,7 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
-    backend: z
-      .object({
-        type: z.literal('host'),
-        // what this machine offers; detected when left out
-        platform: serverPlatformSchema.optional(),
-      })
-      .strict()
-      .default({ type: 'host' }),
+    backend: z.discriminatedUnion('type', [hostBackendSchema, kubernetesBackendSchema]).default({ type: 'host' }),
   })
   .strict()
   .superRefine((config, ctx) => {
@@ -365,6 +481,71 @@ export const serverConfigSchema = z
         }
       }
     })
+    const backend = config.backend
+    for (const [name, account] of Object.entries(config.accounts)) {
+      if (account.kubernetes && backend.type !== 'kubernetes') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accounts', name, 'kubernetes'],
+          message: 'kubernetes credentials are for backend.type: kubernetes',
+        })
+      }
+    }
+    if (backend.type === 'kubernetes') {
+      const pools = new Set<string>()
+      backend.pools.forEach((pool, index) => {
+        if (pools.has(pool.name)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['backend', 'pools', index, 'name'],
+            message: `the pool ${pool.name} is named twice`,
+          })
+        }
+        pools.add(pool.name)
+      })
+      // the secrets of tasks are read in their Job, with the image of the provider; the
+      // ones of the sources are read by the server, which checks the code out itself
+      const readers = getSourceAccounts(config)
+      for (const [name, account] of Object.entries(config.accounts)) {
+        if (readers.includes(name)) {
+          continue
+        }
+        // the commands run as the account's own identity, never the one of the node
+        // or of the provider's image, which every account would share
+        if (Object.keys(account.providers).length > 0 && !account.kubernetes) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['accounts', name, 'kubernetes'],
+            message: `the account ${name} reads secrets in the Jobs of tasks, name the serviceAccount or secret it reads them as`,
+          })
+        }
+        for (const provider of Object.keys(account.providers)) {
+          if (!backend.providers[provider]) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['backend', 'providers', provider],
+              message: `the account ${name} reads ${provider} in the Jobs of tasks, name the image to run it in`,
+            })
+          }
+        }
+      }
+      if (config.runtimes.includes('local') && !backend.pools.some((pool) => pool.toolImage)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'pools'],
+          message: 'local tasks run in the toolImage of a pool, give a pool one or remove local from runtimes',
+        })
+      }
+      // a limited network is a NetworkPolicy there, which only some network plugins enforce
+      if (config.runs.network !== 'open' && backend.networkPolicy !== 'enforced') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'networkPolicy'],
+          message:
+            'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them',
+        })
+      }
+    }
     if (config.runs.network !== 'open' && config.runtimes.includes('local')) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -12,6 +12,7 @@ import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSo
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
+import { KubernetesExecutor } from './kubernetes-backend'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
@@ -44,7 +45,14 @@ export function getDiscoveryDocument(config: ServerConfig): DiscoveryDocument {
       ...(i.clientId ? { clientId: i.clientId } : {}),
       scope: i.scope,
     })),
-    backend: { type: config.backend.type, platform: config.backend.platform ?? detectPlatform() },
+    backend:
+      config.backend.type === 'kubernetes'
+        ? {
+            type: 'kubernetes',
+            platform: config.backend.pools[0].platform,
+            pools: config.backend.pools.map((pool) => ({ name: pool.name, platform: pool.platform })),
+          }
+        : { type: 'host', platform: config.backend.platform ?? detectPlatform() },
   }
 }
 
@@ -464,7 +472,7 @@ export async function startServer(
   const write = options.log ?? (() => undefined)
   // request urls and subjects come from callers: no control characters, so no forged log lines
   const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
-  if (config.runtimes.includes('local')) {
+  if (config.runtimes.includes('local') && config.backend.type === 'host') {
     log(
       'warning: the local runtime is allowed, local tasks run as the user of this server and read all it can read; ' +
         'an account is then an approval class, not a credential boundary'
@@ -482,6 +490,7 @@ export async function startServer(
       envs: config.runs.env.allow,
       reserved: getSourceAccounts(config),
       runtimes: config.runtimes,
+      backend: config.backend.type,
       network: parseWorkNetwork(config.runs.network),
     },
   }
@@ -491,16 +500,20 @@ export async function startServer(
   })
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
+  const executorOptions = {
+    definitions,
+    planning,
+    repos,
+    directory: join(storage, 'runs'),
+    cache: join(storage, 'cache'),
+    worker: options.worker,
+  }
+  const backend = config.backend
   const executor =
     options.executor ??
-    new HostExecutor({
-      definitions,
-      planning,
-      repos,
-      directory: join(storage, 'runs'),
-      cache: join(storage, 'cache'),
-      worker: options.worker,
-    })
+    (backend.type === 'kubernetes'
+      ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
+      : new HostExecutor(executorOptions))
   const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({
     executor,

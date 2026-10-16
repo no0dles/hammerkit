@@ -43,7 +43,8 @@ describe('kubernetes task lifecycle', () => {
         })
         const result = await cli.runExec()
         expect(result.success).toBe(false)
-        expect(result.state.tasks['job'].state.current.type).toBe('error')
+        // with the exit code of its command, as on docker
+        expect(result.state.tasks['job'].state.current).toMatchObject({ type: 'crash', exitCode: 3 })
       })
     })
   )

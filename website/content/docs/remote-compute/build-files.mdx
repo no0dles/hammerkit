@@ -158,12 +158,20 @@ task) when it
 * has a service for Kubernetes (`selector`, `kubeconfig` or `context`),
 * names a cache backend other than the server's own (`s3`, `registry`, or a `path`),
 * mounts a path outside of the bundle into a container, such as the docker socket, `/etc`
-  or a home directory,
+  or a home directory, or has a `src` or `generates` outside of it (the server would copy its
+  own files into the task),
 * has a task on a runtime that `runtimes` does not allow,
 * has a task or service whose `network` reaches more than [`runs.network`](/docs/remote-compute/runs#network) allows,
 * declares `secretProviders` or `secretAccounts`, reads a `file:` secret, reads an `env:`
   secret the server does not list in `runs.env.allow`, or reads a secret as the account
   that reads repositories (see [Accounts](/docs/remote-compute/accounts) and [Sources](/docs/remote-compute/sources)).
+* on a [Kubernetes backend](/docs/remote-compute/backend#secrets-in-the-job), reads a provider
+  secret in a service, one with `cache: true`, or one in a task with a limited
+  [`network`](/docs/remote-compute/backend#network).
+
+A run checks the same paths again in its checkout, before it starts and before each task or
+service runs: one whose `src`, `generates` or mount goes through a symbolic link of the
+checkout fails, since docker and the copy into a cluster would follow the link out of it.
 
 Without this a task with no secrets would still reach what the operator's machine can: a
 published file would be enough to send a run, or the cache, to a host of its choosing.

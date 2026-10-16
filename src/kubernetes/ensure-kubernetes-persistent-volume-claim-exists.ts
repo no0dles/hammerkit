@@ -6,6 +6,7 @@ import { getVersion } from '../version'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
+import { getRunLabels } from './job-placement'
 
 export async function ensureKubernetesPersistentVolumeClaimExists(
   instance: KubernetesInstance,
@@ -24,6 +25,7 @@ export async function ensureKubernetesPersistentVolumeClaimExists(
       },
       labels: {
         'hammerkit.dev/id': service.id(),
+        ...getRunLabels(env),
       },
     },
     spec: {

@@ -313,13 +313,15 @@ describe('HostExecutor', () => {
     expect(error?.message).toBe('build failed')
     // the exit code of the command that failed (on Windows the redirection fails first,
     // run-worker.spec.ts checks the value), and how long it ran
-    expect(events).toContainEqual({
-      type: 'task',
-      task: 'build',
-      state: 'failed',
-      exitCode: expect.any(Number),
-      durationMs: expect.any(Number),
-    })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'task',
+        task: 'build',
+        state: 'failed',
+        exitCode: expect.any(Number),
+        durationMs: expect.any(Number),
+      })
+    )
   })
 
   it('runs the tasks in the order they were named, and stops at the first failure', async () => {
@@ -330,6 +332,19 @@ describe('HostExecutor', () => {
     const { events, error } = await execute(run(hash, { tasks: ['build', 'bad', 'never'] }))
     expect(error?.message).toBe('bad failed')
     expect(events.filter((e) => e.type === 'task' && e.task === 'never')).toEqual([])
+  })
+
+  it('shares the cache of a repository between its runs', async () => {
+    const hash = await publish({
+      '.hammerkit.yaml':
+        'tasks:\n  build:\n    src: [input.txt]\n    generates: [out]\n    cmds:\n      - mkdir -p out\n      - cp input.txt out/copy.txt\n',
+    })
+    const first = await execute(run(hash, { id: 'run_one' }))
+    expect(first.error).toBeUndefined()
+    expect(first.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
+    const second = await execute(run(hash, { id: 'run_two' }))
+    expect(second.error).toBeUndefined()
+    expect(second.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'cached' }))
   })
 
   it('runs the tasks a label selects', async () => {

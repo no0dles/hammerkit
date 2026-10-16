@@ -37,3 +37,34 @@ export async function apply<T extends KubernetesObject>(
     }
   }
 }
+
+/**
+ * Makes the object exactly as given: replaced as a whole when it exists, so what was
+ * dropped from it goes too, which a merge patch would keep (a key of a quota, a rule
+ * of a policy).
+ */
+export async function replace<T extends KubernetesObject>(
+  instance: KubernetesInstance,
+  spec: T & KubernetesObjectHeader
+): Promise<T> {
+  let current: KubernetesObject | undefined
+  try {
+    current = await instance.objectApi.read(spec)
+  } catch (e) {
+    if (statusCodeOf(e) !== 404) {
+      throw e
+    }
+    try {
+      return await instance.objectApi.create(spec)
+    } catch (createError) {
+      if (statusCodeOf(createError) !== 409) {
+        throw createError
+      }
+      current = await instance.objectApi.read(spec)
+    }
+  }
+  return await instance.objectApi.replace<T>({
+    ...spec,
+    metadata: { ...spec.metadata, resourceVersion: current.metadata?.resourceVersion },
+  })
+}

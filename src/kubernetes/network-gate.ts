@@ -9,6 +9,8 @@ import { EGRESS_PROXY_IMAGE } from '../network/egress-proxy'
 // A policy that never takes hold fails the pod instead of running it open.
 // A script for `node -e` in the proxy's image, like the proxy.
 export const NETWORK_GATE_TIMEOUT_MS = 60000
+// the name of the gate's init container
+export const NETWORK_GATE_CONTAINER = 'hammerkit-network'
 
 // Kept free of anything but Node's own modules.
 export const NETWORK_GATE_SCRIPT = `
@@ -60,7 +62,7 @@ export const HELPER_SECURITY_CONTEXT: V1SecurityContext = {
 
 export function getNetworkGateContainer(): V1Container {
   return {
-    name: 'hammerkit-network',
+    name: NETWORK_GATE_CONTAINER,
     image: EGRESS_PROXY_IMAGE,
     command: ['node', '-e', NETWORK_GATE_SCRIPT],
     securityContext: HELPER_SECURITY_CONTEXT,

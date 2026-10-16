@@ -12,6 +12,7 @@ import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { WorkerInput, WorkerMessage } from './run-worker'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { toNetworkSchema } from '../planner/work-network'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
@@ -48,6 +49,19 @@ export interface HostExecutorOptions {
   cache: string
   // the command that starts the process of a run, see defaultWorker
   worker?: string[]
+  // where container tasks run when not on this machine's docker daemon
+  placement?: RunPlacement
+}
+
+/**
+ * Where the container tasks and services of a run execute when it is not this
+ * machine (see KubernetesExecutor): `prepare` before the process of the run starts,
+ * which says the cluster and namespace and the variables the process needs to reach
+ * it, and `release` when it ended, whatever the outcome.
+ */
+export interface RunPlacement {
+  prepare(run: Run, context: RunContext): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
+  release(run: Run, context: RunContext): Promise<void>
 }
 
 // The cache a run shares with others is the one of its source: the runs of a repository
@@ -136,16 +150,26 @@ export class HostExecutor implements RunExecutor {
       await mkdir(home, { recursive: true })
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
-      const input: WorkerInput = {
-        entry: join(checkout, version.entry),
-        tasks: run.tasks,
-        options: run.options,
-        accounts: run.accounts,
-        catalog: planning.environment.hosted?.catalog as SecretCatalog,
-        // what the version was checked against at publish holds while it runs too
-        ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+      const placement = this.options.placement
+      const placed = placement ? await placement.prepare(run, context) : undefined
+      try {
+        const input: WorkerInput = {
+          entry: join(checkout, version.entry),
+          tasks: run.tasks,
+          options: run.options,
+          accounts: run.accounts,
+          catalog: planning.environment.hosted?.catalog as SecretCatalog,
+          // what the version was checked against at publish holds while it runs too
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+          ...(placed ? { kubernetes: placed.kubernetes } : {}),
+        }
+        const env = { ...this.processEnvironment(home, cache), ...placed?.env }
+        await this.runInProcess(worker, input, checkout, env, context, abortCtrl.signal)
+      } finally {
+        if (placement && placed) {
+          await placement.release(run, context)
+        }
       }
-      await this.runInProcess(worker, input, checkout, this.processEnvironment(home, cache), context, abortCtrl.signal)
     } finally {
       context.signal.removeEventListener('abort', abort)
       await rm(root, { recursive: true, force: true })

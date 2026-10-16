@@ -19,6 +19,8 @@ import { awaitDeployRunningState } from './await-running-state'
 import { getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { getKubernetesResources } from './container-resources'
+import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
+import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 
 // what the service was created from, to tell a changed one
@@ -48,6 +50,8 @@ export async function ensureKubernetesDeploymentExists(
         failureThreshold: 3,
       }
     : undefined
+  const server = env.server
+  const placement = server ? getPodPlacement(server, undefined) : null
   const deployment: V1Deployment & KubernetesObjectHeader = {
     kind: 'Deployment',
     apiVersion: 'apps/v1',
@@ -60,6 +64,7 @@ export async function ensureKubernetesDeploymentExists(
       labels: {
         'hammerkit.dev/id': service.id(),
         'hammerkit.dev/state': stateKey,
+        ...getRunLabels(env),
         [DEFINITION_LABEL]: getServiceDefinitionHash(service),
       },
     },
@@ -75,6 +80,8 @@ export async function ensureKubernetesDeploymentExists(
           labels: {
             'hammerkit.dev/id': service.id(),
             'hammerkit.dev/state': stateKey,
+            ...getRunLabels(env),
+            ...getNetworkLabels(env, service),
           },
         },
         spec: {
@@ -82,6 +89,15 @@ export async function ensureKubernetesDeploymentExists(
           hostname: getServiceHostname(service.name),
           hostAliases: network.hostAliases,
           initContainers: network.initContainers,
+          // on a server the pod is the build's: no token of the namespace, and the
+          // nodes of the first pool
+          ...(placement
+            ? {
+                automountServiceAccountToken: false,
+                nodeSelector: placement.nodeSelector,
+                tolerations: placement.tolerations,
+              }
+            : {}),
           containers: [
             {
               name: service.name.replace(/:/, '-'),
@@ -103,6 +119,7 @@ export async function ensureKubernetesDeploymentExists(
               livenessProbe: probe,
               ...getKubernetesResources(service.data.resources),
               volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
+              ...getContainerSecurity(env),
             },
             {
               name: 'debug',
@@ -110,6 +127,7 @@ export async function ensureKubernetesDeploymentExists(
               command: ['sleep'],
               args: ['3600'],
               volumeMounts: persistence.mounts.map((m) => m.mount),
+              ...getContainerSecurity(env),
             },
           ],
           volumes: [...persistence.volumes, ...secrets.volumes],

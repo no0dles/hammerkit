@@ -29,6 +29,7 @@ accounts:
 | --- | --- |
 | `description` | Shown to callers in `GET /v1/accounts` and `remote accounts`, up to 200 characters. |
 | `providers` | Per secret provider, the `env` its command runs with when it reads a secret as this account. The provider has to be declared under `secretProviders`. |
+| `kubernetes` | On a [Kubernetes backend](/docs/remote-compute/backend#secrets-in-the-job), the credential the Job of a task gets to read the account's secrets: a token of a ServiceAccount, the files of a Secret, or both. |
 | `source` | Where the code of a run using the account may come from, see [Restricting the code](#restricting-the-code). |
 | `refs` | The branches or tags such a run may start from. |
 
