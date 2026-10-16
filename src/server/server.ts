@@ -625,6 +625,7 @@ export async function startServer(
     cache: join(storage, 'cache'),
     worker: options.worker,
     sandboxes: { ...sandboxes, network: config.sandboxes.network },
+    log,
   }
   const backend = config.backend
   const executor =
