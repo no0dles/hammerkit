@@ -6,14 +6,16 @@ import { Environment } from './environment'
 import { computeStateKey } from './scheduler/state-key'
 import { getLastResolvedFile, writeLastResolvedRecord } from '../cache/last-resolved'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
+import { getStateFilename } from '../planner/work-runtime-local'
+import { formatStateRecord } from '../planner/work-state-record'
 
 // Same "simulate a successful run without spawning" helper used by the explain
 // spec: write the local runtime state file + the last-resolved record.
 async function simulateRun(cli: Cli, environment: Environment, taskName: string): Promise<void> {
   const item = cli.task(taskName)
   const { stateKey, stats } = await computeStateKey(item, 'checksum', environment)
-  await environment.file.createDirectory(join(item.data.cwd, '.hammerkit'))
-  await environment.file.writeFile(join(item.data.cwd, '.hammerkit', item.id()), stateKey)
+  await environment.file.createDirectory(join(item.data.cwd, '.hammerkit', 'state'))
+  await environment.file.writeFile(getStateFilename(item as any), formatStateRecord(item, stateKey))
   await writeLastResolvedRecord(environment, item, { description: getWorkTaskCacheDescription(item), stats })
 }
 
