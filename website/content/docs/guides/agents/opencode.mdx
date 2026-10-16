@@ -1,0 +1,129 @@
+---
+title: 'opencode'
+description: "Run opencode 2.0 or 1.x on a hammerkit sandbox: add the plugin to the project, sign in as the agent's service account, and push the work to a branch."
+icon: Terminal
+---
+
+[opencode](https://opencode.ai) lets a plugin replace its built-in tools. hammerkit's plugin
+replaces the ones that read, edit, search and run commands with tools of the same name that
+work on a sandbox of the server, and adds `push`. opencode 2.0 and 1.x load plugins
+differently, so the setup differs; the tools behave the same.
+
+You need a server with a published build file and an identity for the agent, see
+[Agents on a server](/docs/guides/agents), and the server registered for the user that starts
+opencode (`hammerkit remote add`, as in [pi](/docs/guides/agents/pi#2-register-the-server)). With the self-signed certificate of the
+[Kubernetes guide](/docs/guides/agents/kubernetes#7-connect-and-publish), set
+`NODE_EXTRA_CA_CERTS` as there; opencode 2.0 and 1.x both read it.
+
+<Callout type="warn">
+
+opencode starts without a plugin that does not load, without a word, and its own tools then
+work on the machine opencode runs on. Do the check of your version before you give the agent
+work.
+
+</Callout>
+
+## opencode 2.0
+
+### 1. Install opencode and the plugin
+
+```bash
+npm install -g @opencode/cli
+mkdir -p shop-agent/.opencode/plugins && cd shop-agent
+cat > .opencode/package.json <<'EOF'
+{ "dependencies": { "hammerkit": "^1" } }
+EOF
+cat > .opencode/plugins/hammerkit.ts <<'EOF'
+export { default } from 'hammerkit/harness/opencode'
+EOF
+npm install --prefix .opencode
+```
+
+opencode 2.0 finds the plugins of a project in `.opencode/plugins/`. The directory stands for
+the root of the sandbox; nothing else in it is read or changed.
+
+### 2. Start it on a sandbox
+
+```bash
+export HAMMERKIT_SERVER=hammerkit
+export HAMMERKIT_REPO=github.com/acme/shop HAMMERKIT_REF=main
+export HAMMERKIT_BUILD=shop
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
+export OPENROUTER_API_KEY=…    # or the key of any provider opencode supports
+opencode service stop          # the background service keeps the variables it started with
+opencode
+```
+
+opencode 2.0 runs a background service that keeps the environment it was started with. Stop
+it after changing any of these variables, or the next session still sees the old ones.
+
+### 3. Check that the tools are hammerkit's
+
+```bash
+opencode run --auto -m openrouter/anthropic/claude-haiku-5.5 "Read README.md and list the files of the project root."
+```
+
+The answer shows the repository's README and files. "File not found" or an empty directory
+means opencode's own tools answered: the plugin did not load.
+
+The plugin replaces `read`, `write`, `edit`, `patch`, `shell`, `glob` and `grep`, adds `push`,
+and removes opencode's `opencode_worktree_*` tools, which make git worktrees on the local
+machine. `shell` runs the command as the build file's shell task, in the root of the
+sandbox, one command at a time; `background` is not supported.
+
+## opencode 1.x
+
+### 1. Install opencode and the plugin
+
+```bash
+npm install -g opencode-ai@1
+mkdir -p shop-agent/.opencode/plugins && cd shop-agent
+cat > .opencode/package.json <<'EOF'
+{ "dependencies": { "hammerkit": "^1", "@opencode-ai/plugin": "*" } }
+EOF
+cat > .opencode/plugins/hammerkit.ts <<'EOF'
+export { default } from 'hammerkit/harness/opencode'
+EOF
+```
+
+opencode 1.x installs the dependencies of `.opencode/package.json` itself when it starts. The
+plugin file is the same as for 2.0; one that re-exports `HammerkitPlugin` still works on 1.x.
+
+### 2. Check that the tools are hammerkit's
+
+With the variables of [step 2 above](#2-start-it-on-a-sandbox) set, this lists the files of
+the sandbox, without a model:
+
+```bash
+opencode debug agent build --tool list
+```
+
+### 3. Start it
+
+```bash
+opencode
+```
+
+The plugin replaces `read`, `write`, `edit`, `apply_patch`, `bash`, `grep`, `glob` and
+`list`, and adds `push`. Tools the plugin does not replace still work on the local machine:
+turn off the ones your opencode version has that touch local files, for example
+`"tools": { "multiedit": false }` in `opencode.json`.
+
+## Push the work
+
+Ask opencode to push when it is done, for example "run the tests with `node --test` and push
+the fix to `agent/fix-cart`". The `push` tool commits the changes of the sandbox as the
+agent's identity and the server pushes them with its GitHub App, only to a branch the
+agent's entitlement gives `push`.
+
+## Without a terminal
+
+```bash
+opencode run --auto -m openrouter/anthropic/claude-haiku-5.5 \
+  "The cart total skips an item. Fix it, run the tests with node --test and push to agent/fix-cart."
+```
+
+`--auto` approves the tool calls opencode would otherwise ask about.
+
+See [Agents](/docs/remote-compute/agents#opencode) for what each tool does on the sandbox.
