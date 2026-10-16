@@ -7,6 +7,7 @@ import { itExceptWindows, SANDBOX_REPO, withSandboxServer } from '../testing/san
 import {
   checkSandboxPath,
   exitCodeOf,
+  fetchFailure,
   oneAtATime,
   quotePosix,
   SandboxClient,
@@ -147,6 +148,26 @@ describe('tokens', () => {
           }
         )
     )
+  })
+
+  it('says why the server could not be reached', async () => {
+    const closed = createServer()
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(closed.address() as AddressInfo).port}`
+    await new Promise((resolve) => closed.close(resolve))
+    await expect(SandboxClient.get({ url, token: async () => 'tok-1' }, 'sbx_1')).rejects.toThrow(
+      `unable to reach ${url}: fetch failed: connect ECONNREFUSED`
+    )
+
+    // how node's fetch reports a self-signed certificate
+    const untrusted = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('self-signed certificate'), { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' }),
+    })
+    expect(fetchFailure(untrusted)).toBe(
+      'fetch failed: self-signed certificate (DEPTH_ZERO_SELF_SIGNED_CERT), this machine does not trust the ' +
+        'certificate of the server: name its CA in NODE_EXTRA_CA_CERTS'
+    )
+    expect(fetchFailure(new Error('redirect'))).toBe('redirect')
   })
 
   it('refuses the output of a token command that prints more than the token', async () => {

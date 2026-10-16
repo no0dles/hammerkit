@@ -380,6 +380,35 @@ export function toSandboxPath(root: string, path: string): string {
   }
 }
 
+// The certificate errors of a server this machine does not trust
+const UNTRUSTED_CERTIFICATE = [
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_UNTRUSTED',
+]
+
+/**
+ * Why a fetch failed: node's fetch says only "fetch failed" and keeps the reason, such as a
+ * refused connection or an untrusted certificate, as its cause.
+ */
+export function fetchFailure(e: unknown): string {
+  if (!(e instanceof Error)) {
+    return String(e)
+  }
+  const cause = (e as { cause?: unknown }).cause
+  if (!(cause instanceof Error)) {
+    return e.message
+  }
+  const code = (cause as NodeJS.ErrnoException).code
+  const reason = `${e.message}: ${cause.message}${code && !cause.message.includes(code) ? ` (${code})` : ''}`
+  return code && UNTRUSTED_CERTIFICATE.includes(code)
+    ? `${reason}, this machine does not trust the certificate of the server: name its CA in NODE_EXTRA_CA_CERTS`
+    : reason
+}
+
 function redact(message: string, token: string): string {
   return message.split(token).join('***')
 }
@@ -430,9 +459,7 @@ async function call(
       // an answer from anywhere else is not the server's, and a PUT would send its file on
       redirect: 'error',
     }).catch((e) => {
-      throw new SandboxClientError(
-        `unable to reach ${connection.url}: ${redact(e instanceof Error ? e.message : String(e), token)}`
-      )
+      throw new SandboxClientError(`unable to reach ${connection.url}: ${redact(fetchFailure(e), token)}`)
     })
   }
   let response = await send()
