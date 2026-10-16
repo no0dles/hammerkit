@@ -30,7 +30,8 @@ decides with its config whether they may.
 4. **What runs.** A run executes tasks of a [published build file](/docs/remote-compute/build-files),
    pinned to a version, so whoever may run can not change what a task does.
 5. **Which code.** The code comes from a git ref of a repository the server reads itself,
-   see [Sources](/docs/remote-compute/sources), or from files the caller uploads.
+   see [Sources](/docs/remote-compute/sources), from files the caller uploads, or from a
+   [sandbox](/docs/remote-compute/sandboxes): a checkout of the caller's that stays on the server.
 6. **Where it runs.** [Runs](/docs/remote-compute/runs) are queued, limited per caller and
    executed in a process of their own on the [backend](/docs/remote-compute/backend).
 
@@ -194,9 +195,10 @@ backend:
 | `approvals` | How long requested runs and proposals wait, see [Approvals](/docs/remote-compute/entitlements#approvals). |
 | `sources` | The repositories a run may get its code from, see [Sources](/docs/remote-compute/sources). |
 | `runs` | Concurrency, limits per caller, durations, the environment and the network ceiling of runs, see [Runs](/docs/remote-compute/runs#config). |
+| `sandboxes` | The runtimes, network and limits of sandboxes, see [Sandboxes](/docs/remote-compute/sandboxes#config). |
 | `runtimes` | What tasks may run on, see [Backend](/docs/remote-compute/backend#runtimes). |
 | `backend` | Where tasks run and what the machine offers, see [Backend](/docs/remote-compute/backend). |
-| `storage` | Where the server keeps what must survive a restart: the published build files, the uploaded source files, the task cache and the records of the runs (`records/`). Runs work in `runs/` below it while they run. |
+| `storage` | Where the server keeps what must survive a restart: the published build files, the uploaded source files, the sandboxes (`sandboxes/`), the task cache and the records of the runs (`records/`). Runs work in `runs/` below it while they run. |
 
 Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
 Anywhere else the config needs `tls`, or `behindTlsProxy: true`.

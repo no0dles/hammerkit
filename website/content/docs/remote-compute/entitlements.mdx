@@ -30,8 +30,9 @@ entitlements:
 | `accounts` | The [service accounts](/docs/remote-compute/accounts) the caller may `use` or `request`, see [Account levels](#account-levels). |
 | `repos` | The repositories the caller may name in a run from a git ref, see [Repositories](#repositories). |
 | `builds` | What the caller may do with build files: `run`, `propose` or `publish`, see [Build file levels](#build-file-levels). |
+| `sandboxes` | The repositories the caller may keep [sandboxes](/docs/remote-compute/sandboxes) of, one `repo` (`host/path` pattern) per entry with a `pull` or `push` type per branch pattern (`branches`). A list of its own: `repos` is for runs from a ref. |
 
-An entry names accounts, a `builds` level or both.
+An entry names accounts, a `builds` level, `sandboxes` or more of them.
 
 ## Who
 
@@ -95,13 +96,14 @@ server, they are not even shown which build files exist.
     { "name": "op-payments-prod", "level": "request" }
   ],
   "repos": ["github.com/corp/payments"],
-  "builds": "run"
+  "builds": "run",
+  "sandboxes": []
 }
 ```
 
 `GET /v1/accounts` lists the accounts the caller has a level on, with the operator's
-`description` and the `sources` the account allows (`upload`, `ref`, or both when the
-config does not say):
+`description` and the `sources` the account allows (`upload`, `ref`, `sandbox`, or `upload`
+and `ref` when the config does not say):
 
 ```json
 {

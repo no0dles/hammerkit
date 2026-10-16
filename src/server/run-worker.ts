@@ -16,7 +16,7 @@ import { emptyWritable } from '../utils/empty-writable'
 import { parseDuration } from '../utils/units'
 import { runOptionsSchema } from './run-request'
 import { networkSchema } from '../schema/network-schema'
-import { parseWorkNetwork } from '../planner/work-network'
+import { limitNetwork, parseWorkNetwork, WorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
 import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { RunEventData, TaskStatus } from './runs'
@@ -35,6 +35,12 @@ export const workerInputSchema = z
   .object({
     // the build file to start from, in the checkout
     entry: z.string().min(1),
+    // set when the build files are read from a directory of the run and work on the
+    // files of a sandbox
+    directory: z
+      .object({ read: z.string().min(1), work: z.string().min(1) })
+      .strict()
+      .optional(),
     tasks: z.array(z.string()),
     options: runOptionsSchema,
     // the accounts the run was admitted for; a secret of any other is refused
@@ -47,12 +53,21 @@ export const workerInputSchema = z
         (value) => typeof value === 'object' && value !== null && (value as any).type === 'kubernetes'
       )
       .optional(),
-    // `runs.network`: the most any task or service reaches besides its needs, as `--network`
+    // the most any task or service reaches besides its needs, as `--network`: `runs.network`
     network: networkSchema.optional(),
+    // for a run on a sandbox, `sandboxes.network`: the run gets the lower of the two
+    sandboxNetwork: networkSchema.optional(),
   })
   .strict()
 
 export type WorkerInput = z.infer<typeof workerInputSchema>
+
+// The ceiling of the run, combined here and not in the server: the lower of two allow lists
+// marks what one allows only through a pattern, which a build file's `network` can't say.
+export function getRunNetwork(input: Pick<WorkerInput, 'network' | 'sandboxNetwork'>): WorkNetwork | null {
+  const runs = input.network ? parseWorkNetwork(input.network) : null
+  return input.sandboxNetwork ? limitNetwork(parseWorkNetwork(input.sandboxNetwork), runs) : runs
+}
 
 // What the process says, one JSON object per line on its standard output.
 export type WorkerMessage = { kind: 'event'; event: RunEventData } | { kind: 'result'; ok: boolean; error?: string }
@@ -73,14 +88,16 @@ export async function runTasks(
 ): Promise<void> {
   const secrets = createSecretRegistry()
   const status = statusConsole(emptyWritable(), secrets)
+  // the process starts in a directory of the server, the tasks work on the run's files
+  const work = input.directory?.work ?? cwd
   // what the engine would print to a terminal is not wanted, its status console
   // is what is streamed: it is redacted with the secrets of this run
   const environment: Environment = {
     processEnvs,
     hosted: { catalog: input.catalog, accounts: input.accounts, kubernetes: input.kubernetes },
     abortCtrl,
-    cwd,
-    file: getFileContext(cwd),
+    cwd: work,
+    file: getFileContext(work),
     console: consoleContext(emptyWritable()),
     status,
     secrets,
@@ -114,15 +131,17 @@ export async function runTasks(
       cacheReadOnly: options.cacheReadOnly ?? false,
       timeout: options.timeout ? parseDuration(options.timeout) : null,
       skipDeps: options.skipDeps !== false,
-      network: input.network ? parseWorkNetwork(input.network) : null,
+      network: getRunNetwork(input),
       // why a task was not taken from the cache goes into its result
       explain: true,
     }
 
     for (const { name, scope } of getRunScopes(input.tasks, options)) {
-      const { ctx, scope: parsed } = await createParseContext(input.entry, environment)
+      const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
+        directory: input.directory,
+      })
       const workTree = getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment)
-      await assertWorkTreePathsWithinRoot(workTree, cwd)
+      await assertWorkTreePathsWithinRoot(workTree, work)
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0) {
         throw new Error(`no tasks found for ${name}`)

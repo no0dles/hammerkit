@@ -1,0 +1,211 @@
+---
+title: "Sandboxes"
+description: "Keep a checkout on the server, run published tasks on it, and the limits that keep sandboxes in check."
+---
+A sandbox is a caller's own checkout of a repository on the server, which runs work on.
+It is for an agent without a machine of its own, or a person whose laptop should not
+build: the files stay on the server between runs, so what `npm install`, a formatter or a
+code generator wrote is there for the next run. It is not for production, see
+[Accounts](#accounts).
+
+The published build file always runs. A sandbox only supplies the files: its own
+`.hammerkit.yaml` is just a file, and changing it changes nothing until a new version is
+[proposed and published](/docs/remote-compute/build-files).
+
+<Callout type="info">
+
+This page covers sandboxes on a host server: creating, listing, moving, deleting and
+running on them. Reading, searching and editing the files of a sandbox through the API,
+taking the changes out as a patch, pushing a branch and sandboxes on Kubernetes come next.
+
+</Callout>
+
+## Who may keep one
+
+The `sandboxes` of an [entitlement](/docs/remote-compute/entitlements) list the repositories
+the caller may keep sandboxes of, one `repo` (`host/path` pattern) per entry, and give each
+branch pattern of it a type:
+
+* `pull`: a sandbox may start from a matching branch, and fetch one.
+* `push`: `pull`, and pushing to the branch once push is built.
+
+Without `sandboxes` the caller keeps none. It is a list of its own: `repos` are for runs
+from a ref only, and a sandbox needs no `repos` entry for its repository. The entries of all
+of the caller's entitlements whose `repo` covers a repository count, and where several
+patterns match a branch, the higher type wins. An entry's branches never count for another
+repository. The server has to read the repository too, the same check as for a
+[run from a ref](/docs/remote-compute/sources).
+
+```yaml title="server.yaml"
+entitlements:
+  - subject: { iss: https://login.example.com, sub: agent-7 }
+    accounts: { op-payments-dev: use }
+    repos: [github.com/corp/payments]
+    builds: run
+    sandboxes:
+      - repo: github.com/corp/payments
+        branches:
+          'agent/**': push     # agent/ and everything below it
+          main: pull
+      - repo: github.com/corp/*
+        branches: { main: pull }
+```
+
+A branch pattern is a branch name, where a segment may hold `*` (any characters but `/`)
+and the last one may be `**`, everything below.
+
+A sandbox belongs to the caller who created it. For anybody else its id is `404`, the same
+as an id that does not exist, and it does not show in their list.
+
+## Creating and managing
+
+| Call | What it does |
+| --- | --- |
+| `POST /v1/sandboxes` | `{ "repo": "github.com/corp/payments", "ref": "main" }`: fetch a branch into a new sandbox. Answers `201` with the sandbox. A sandbox starts from a branch, never from a tag or a commit, and keeps the commit the branch pointed to. |
+| `GET /v1/sandboxes` | The caller's sandboxes, oldest first, with their `limits` and what they `used`. |
+| `GET /v1/sandboxes/<id>` | One sandbox. |
+| `POST /v1/sandboxes/<id>/fetch` | `{ "ref": "next" }`: move a sandbox without changes to the commit a branch points to now. |
+| `DELETE /v1/sandboxes/<id>` | Cancel the runs on the sandbox, wait for them to stop and remove its files. |
+
+```json
+{
+  "id": "sbx_Jp0dY8m2kQ1aZt5x",
+  "repo": "github.com/corp/payments",
+  "ref": "main",
+  "commit": "4f1c2a...",
+  "bytes": 18352211,
+  "createdAt": "2026-10-12T21:00:00.000Z",
+  "lastUsedAt": "2026-10-12T21:10:00.000Z",
+  "busy": true,
+  "run": "run_Wm3o0yN2e4cR9pLs"
+}
+```
+
+Creating a sandbox is a fetch, not a run: it runs no task, holds no account and takes no
+place of the [run limits](/docs/remote-compute/runs#limits-and-restarts). The server reads
+the repository with the credential of its [sources](/docs/remote-compute/sources), as for a
+run from a ref, and the request waits until the fetch is done. The checkout is shallow, the
+commit and nothing before it.
+
+A sandbox stays until it is deleted. Nothing expires and nothing is removed on its own,
+`lastUsedAt` says when a run or a fetch last used it.
+
+`fetch` moves a sandbox only while nothing changed its files (files that `.gitignore` leaves
+out, such as `node_modules`, are not changes and stay) and no run holds it, else it is
+`409`.
+
+| Status | When |
+| --- | --- |
+| `400` | The body is malformed, the repository is not `host/path`, the server can not read it, or `ref` is not a branch of it (a tag or a commit). |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository, or none of its branch patterns covers the branch. |
+| `404` | The sandbox does not exist or is somebody else's. |
+| `409` | A fetch of a sandbox with changes, or one a run holds. |
+| `413` | The caller is at their limit of sandboxes or bytes. |
+| `501` | The server runs its tasks on a [Kubernetes backend](/docs/remote-compute/backend), which keeps no sandboxes yet. |
+| `502` | The server could not reach the repository. |
+| `507` | All sandboxes together take what the server allows. |
+
+## Running on a sandbox
+
+A run names the sandbox as its `source`, the rest of the request is a normal
+[run](/docs/remote-compute/runs#submitting-a-run):
+
+```json
+{
+  "definition": { "name": "payments" },
+  "tasks": ["test"],
+  "source": { "type": "sandbox", "id": "sbx_Jp0dY8m2kQ1aZt5x" }
+}
+```
+
+* **The published files run on the sandbox.** The server reads the published version from a
+  directory of the run, and its tasks work on the sandbox: a build file published as
+  `ci/build.yaml` works in `ci/` of the sandbox. Nothing of the published version is written
+  into the sandbox.
+* **One run at a time.** A run holds its sandbox from when it is submitted until it is over,
+  waiting for an approval and in the queue included. A second run on the same sandbox waits
+  in the queue for the first, runs on other sandboxes start next to it within the caller's
+  [limits](/docs/remote-compute/runs#limits-and-restarts).
+* **What it started from** is recorded in the run: the `commit` the sandbox was fetched at,
+  the git `tree` of its files when the run was submitted, which together name the changes
+  it held, and whether it held any (`clean`). The run logs the tree again when it starts,
+  since a run before it on the same sandbox may have changed the files. A run that waited
+  for an [approval](/docs/remote-compute/entitlements#approvals) fails when the tree is no longer the one
+  it was approved with; submit it again. Files `.gitignore` leaves out (`node_modules`) are
+  not part of the tree, so an approver does not see them.
+* **No links out.** The files are written by tasks and by whoever pushed the commit, so the
+  server does not trust them. A `src`, mount or output of a task that leaves the sandbox or
+  goes through a symbolic link fails the run, checked when it starts and again before each
+  container is made and before outputs are copied: a task that leaves `src -> /` behind does
+  not give the next run the server's disk.
+* **Containers only.** The tasks of a run on a sandbox may only use the runtimes in
+  `sandboxes.runtimes`, `docker` by default. A local task would run as the user of the
+  server and could read every other sandbox on the machine, so `local` has to be listed
+  there by name, and in `runtimes`.
+* **Network.** No task or service of a run on a sandbox reaches more than
+  `sandboxes.network`, `none` by default: only the services it needs. A build file can
+  narrow it, never widen it, see [network limits](/docs/task/network).
+* **Variables.** An `env:` secret of a run on a sandbox reads only what
+  `sandboxes.env.allow` lists, nothing by default: the code that would read it is nobody's
+  reviewed code.
+* **Cache.** Runs on sandboxes share a cache per owner, never with runs from a ref: a
+  sandbox holds changes nobody reviewed, and an entry they leave must not reach a reviewed
+  run.
+
+What a run wrote stays in the sandbox and counts against the owner's bytes, the docker
+volumes of its outputs included, whatever permissions a task gave its files. While a
+caller's sandboxes take more than their limit, their runs on sandboxes are refused with
+`413`.
+
+| Status | When |
+| --- | --- |
+| `400` | The sandbox does not exist or is somebody else's, or a task reads an `env:` secret that `sandboxes.env.allow` does not list. |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox (any more), an account of the run does not list `sandbox` in its `source`, or the server runs no tasks on sandboxes (only `runtimes: [local]`, see below). |
+| `413` | The caller's sandboxes take more than their limit. |
+
+## Accounts
+
+A sandbox holds changes nobody reviewed, so its runs only use the
+[accounts](/docs/remote-compute/accounts#restricting-the-code) whose `source` lists `sandbox`.
+An account without `source` takes runs from an upload or a ref, not from a sandbox. Keep
+production accounts on `source: [ref]`.
+
+```yaml title="server.yaml"
+accounts:
+  op-payments-dev:
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-dev.json } } }
+    source: [ref, sandbox]
+```
+
+## Config
+
+```yaml title="server.yaml"
+sandboxes:
+  runtimes: [docker]                 # default when runtimes has docker, `local` has to be named (in runtimes too)
+  network: { allow: [registry.npmjs.org, '*.githubusercontent.com'] }   # default: none
+  env: { allow: [] }                 # default, variables of runs.env.allow env: secrets may read
+  limits:
+    count: 5                         # default, sandboxes per caller
+    bytes: 20Gi                      # default, bytes of one caller's sandboxes together
+  total: 500Gi                       # default, all sandboxes on the server
+```
+
+| Key | What it does |
+| --- | --- |
+| `runtimes` | What the tasks of a run on a sandbox may run on, out of `runtimes`. `[docker]` by default when `runtimes` has `docker`. A server with only `runtimes: [local]` starts as before and refuses runs on sandboxes until `local` is named here. |
+| `network` | The most open network a task or service of such a run gets, written as a task's [`network`](/docs/task/network): `none` (the default), `open`, or `{ allow: [hosts] }` for HTTP(S) to those hosts through the egress proxy. It has to be within `runs.network`, which caps every run. With `local` in `runtimes` it has to be `open`, hammerkit can not limit a local task. |
+| `env.allow` | The variables of `runs.env.allow` an `env:` secret of a run on a sandbox may read. None by default. |
+| `limits.count` | Sandboxes one caller may keep. Creating another is `413`. |
+| `limits.bytes` | What one caller's sandboxes may take together, their git data included. A create that would go over is `413` and leaves nothing behind. |
+| `total` | What all sandboxes on the server may take. Over it, a create is `507`. |
+
+The bytes of a sandbox are measured after it is fetched and after each run on it. A run's
+result does not wait for that measure, but the owner's next run or create does. The files
+are kept below `storage` (`sandboxes/`, readable by the user of the server only), with the
+git data of each sandbox next to its files rather than in them: tasks write to the files,
+and git on the server never reads a configuration or a hook a task could have written.
+What a task made unreadable is made readable again before it is measured or deleted, and
+what a container wrote as another user (a service runs as the user of its image) is given
+back to the server's user with a short `alpine` container. A restart keeps the sandboxes,
+also one whose record can't be read: its files stay for the operator to look at. Changes to
+`sandboxes` need a restart.

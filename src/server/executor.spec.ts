@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
@@ -14,6 +14,9 @@ import { parseLogQuery, readLogs } from './run-logs'
 import { RepoAccess } from './repo-access'
 import { TEST_WORKER } from '../testing/worker'
 import { ServerConfig, serverConfigSchema } from './server-config'
+import { SandboxRegistry } from './sandboxes'
+import { HostSandboxStorage } from './sandbox-storage'
+import { NetworkSchema } from '../schema/network-schema'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const REPO = 'git.test/corp/payments'
@@ -56,8 +59,8 @@ describe('HostExecutor', () => {
     policy: { envs: serverConfig.runs.env.allow },
   })
 
-  async function publish(files: { [path: string]: string }): Promise<string> {
-    const { version } = await store.publish({ entry: '.hammerkit.yaml', files }, alice)
+  async function publish(files: { [path: string]: string }, entry = '.hammerkit.yaml'): Promise<string> {
+    const { version } = await store.publish({ entry, files }, alice)
     return version.hash
   }
 
@@ -516,5 +519,137 @@ describe('HostExecutor', () => {
   it('fails when the build file is no longer on the server', async () => {
     const { error } = await execute(run('0'.repeat(64)))
     expect(error?.message).toContain('no longer on this server')
+  })
+
+  describe('on a sandbox', () => {
+    let sandboxes: SandboxRegistry
+    let sandboxId: string
+    let files: string
+
+    const onSandbox = (runtimes: ('docker' | 'local')[] = ['docker', 'local'], network: NetworkSchema = 'open') =>
+      new HostExecutor({
+        ...options,
+        sandboxes: { registry: sandboxes, policy: { ...options.planning.policy, runtimes }, network },
+      })
+
+    const sandboxRun = (hash: string, patch: Partial<Run> = {}): Run =>
+      run(hash, {
+        source: { type: 'sandbox', id: sandboxId, repo: REPO, commit, tree: 'x' },
+        ...patch,
+      })
+
+    async function executeWith(executor: HostExecutor, r: Run) {
+      const events: RunEventData[] = []
+      const error = await executor
+        .execute(r, { emit: (e) => events.push(e), signal: new AbortController().signal })
+        .then(
+          () => undefined,
+          (e: Error) => e
+        )
+      return { events, error, text: events.map((e) => (e.type === 'log' ? e.text : '')).join('\n') }
+    }
+
+    beforeEach(async () => {
+      sandboxes = new SandboxRegistry({
+        storage: new HostSandboxStorage(join(root, 'sandboxes'), process.env),
+        records: join(root, 'sandbox-records'),
+        limits: { count: 5, bytes: 1024 * 1024 * 1024, total: 1024 * 1024 * 1024 },
+        repos: options.repos,
+      })
+      const sandbox = await sandboxes.create(alice, REPO, 'main')
+      sandboxId = sandbox.id
+      files = await sandboxes.attach(sandboxId)
+    })
+
+    it('runs the published tasks on the files of the sandbox, which keep what they wrote', async () => {
+      const hash = await publish({
+        '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - cat input.txt\n      - echo written > out.txt\n',
+      })
+      writeFileSync(join(files, 'input.txt'), 'changed-in-the-sandbox')
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash))
+      expect(error).toBeUndefined()
+      expect(text).toContain('changed-in-the-sandbox')
+      expect(text).not.toContain('from-the-repository')
+      expect(text).toMatch(new RegExp(`sandbox ${sandboxId} of ${REPO} at ${commit}, files [0-9a-f]+ with changes`))
+      expect(existsSync(join(files, 'out.txt'))).toBe(true)
+      // the published build file is not written into the sandbox
+      expect(readFileSync(join(files, '.hammerkit.yaml'), 'utf8')).toContain('from-the-repository')
+      expect(existsSync(join(runs, 'run_test'))).toBe(false)
+    })
+
+    it('fails an approved run when the files are no longer the approved ones', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' })
+      const approved = (await sandboxes.state(sandboxId)).tree
+      const approvals = [{ account: 'dev', expiresAt: new Date(Date.now() + 60_000).toISOString() }]
+      writeFileSync(join(files, 'input.txt'), 'changed-after-the-approval')
+      const source = { type: 'sandbox' as const, id: sandboxId, repo: REPO, commit, tree: approved }
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash, { source, approvals }))
+      expect(error?.message).toMatch(/changed since the run was approved/)
+      expect(text).not.toContain('changed-after-the-approval')
+    })
+
+    it('works in the directory of the sandbox where the published build file is', async () => {
+      const hash = await publish(
+        {
+          'ci/build.yaml': 'tasks:\n  build:\n    cmds:\n      - cat ../input.txt\n      - echo nested > nested.txt\n',
+        },
+        'ci/build.yaml'
+      )
+      mkdirSync(join(files, 'ci'))
+      const { error, text } = await executeWith(onSandbox(), sandboxRun(hash))
+      expect(error).toBeUndefined()
+      expect(text).toContain('hello')
+      expect(existsSync(join(files, 'ci', 'nested.txt'))).toBe(true)
+    })
+
+    it('runs only on the runtimes of sandboxes, and under their network', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo local]\n' })
+      const containers = await executeWith(onSandbox(['docker']), sandboxRun(hash))
+      expect(containers.error?.message).toMatch(/runs on the local runtime, which this server does not allow/)
+      const closed = await executeWith(onSandbox(['docker', 'local'], 'none'), sandboxRun(hash))
+      expect(closed.error?.message).toMatch(/--network none needs every task in a container/)
+    })
+
+    it('keeps the cache of a sandbox run apart from runs of the repository, one per owner', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+      await execute(run(hash))
+      expect((await executeWith(onSandbox(), sandboxRun(hash))).error).toBeUndefined()
+      const spaces = readdirSync(join(root, 'cache')).sort()
+      expect(spaces).toHaveLength(2)
+      expect(spaces.filter((name) => name.startsWith('sandbox-'))).toHaveLength(1)
+    })
+
+    it('gives a ref run of the same repository a cache miss after a sandbox run', async () => {
+      const hash = await publish({
+        '.hammerkit.yaml':
+          'tasks:\n  build:\n    src: [input.txt]\n    generates: [out]\n    cmds:\n      - mkdir -p out\n      - cp input.txt out/copy.txt\n',
+      })
+      // the same files as the repository: a shared cache would hand the sandbox's outputs over
+      const onTheSandbox = await executeWith(onSandbox(), sandboxRun(hash, { id: 'run_sandbox' }))
+      expect(onTheSandbox.error).toBeUndefined()
+      expect(onTheSandbox.events).toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' })
+      )
+      const fromTheRef = await execute(run(hash, { id: 'run_ref' }))
+      expect(fromTheRef.error).toBeUndefined()
+      expect(fromTheRef.events).toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' })
+      )
+      expect(fromTheRef.events).not.toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'build', state: 'cached' })
+      )
+      const spaces = readdirSync(join(root, 'cache'))
+      expect(spaces.some((name) => name.startsWith('sandbox-'))).toBe(true)
+      expect(spaces.some((name) => name.startsWith('ref-'))).toBe(true)
+    })
+
+    it('fails a run on a sandbox that was deleted, and one without sandboxes', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+      expect((await execute(sandboxRun(hash))).error?.message).toBe('this server keeps no sandboxes')
+      await sandboxes.remove(alice, sandboxId)
+      expect((await executeWith(onSandbox(), sandboxRun(hash))).error?.message).toBe(
+        `the sandbox ${sandboxId} was deleted`
+      )
+    })
   })
 })

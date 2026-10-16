@@ -11,6 +11,9 @@ import { checkoutRef } from './git-checkout'
 import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
+import { PlanPolicy } from './plan'
+import { SandboxRegistry } from './sandboxes'
+import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { toNetworkSchema } from '../planner/work-network'
@@ -49,8 +52,18 @@ export interface HostExecutorOptions {
   cache: string
   // the command that starts the process of a run, see defaultWorker
   worker?: string[]
+  // the sandboxes runs may work on, and what such a run may do
+  sandboxes?: SandboxRunOptions
   // where container tasks run when not on this machine's docker daemon
   placement?: RunPlacement
+}
+
+export interface SandboxRunOptions {
+  registry: SandboxRegistry
+  // the policy of a run on a sandbox: the runtimes of `sandboxes.runtimes`
+  policy: PlanPolicy
+  // the most open network a task or service of such a run gets
+  network: NetworkSchema
 }
 
 /**
@@ -65,10 +78,12 @@ export interface RunPlacement {
 }
 
 // The cache a run shares with others is the one of its source: the runs of a repository
-// share one, those of an upload only the uploader's. Somebody who can only upload can
-// not leave an entry for a run from a reviewed repository to find.
+// share one, those of an upload or a sandbox only their owner's. Somebody who can only
+// upload, or an agent on a sandbox, can not leave an entry for a run from a reviewed
+// repository to find.
 function cacheNamespace(run: Run): string {
-  const key = run.source.type === 'ref' ? `ref\0${run.source.repo}` : `upload\0${run.owner.iss}\0${run.owner.sub}`
+  const key =
+    run.source.type === 'ref' ? `ref\0${run.source.repo}` : `${run.source.type}\0${run.owner.iss}\0${run.owner.sub}`
   return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
 }
 
@@ -102,12 +117,16 @@ export class HostExecutor implements RunExecutor {
         `the build file ${run.definition} was yanked${version.yanked.reason ? `: ${version.yanked.reason}` : ''}`
       )
     }
-    if (run.source.type !== 'ref') {
+    if (run.source.type === 'upload') {
       throw new Error('runs from an upload are not supported by this server yet, use a git ref')
     }
-    const { repo, ref, commit: pinned } = run.source
-    if (!repos.readable(repo)) {
-      throw new Error(`this server can not read ${repo}, the operator lists it in sources`)
+    const source = run.source
+    const sandboxes = this.options.sandboxes
+    if (source.type === 'sandbox' && !sandboxes) {
+      throw new Error('this server keeps no sandboxes')
+    }
+    if (source.type === 'ref' && !repos.readable(source.repo)) {
+      throw new Error(`this server can not read ${source.repo}, the operator lists it in sources`)
     }
     const worker = this.options.worker ?? defaultWorker()
     if (!worker) {
@@ -116,7 +135,8 @@ export class HostExecutor implements RunExecutor {
 
     // what was approved is what runs: the accounts are read again from the files with
     // the environment of the run, and the run may use no more than it was admitted for
-    const planned = await planRun(bundle, run, planning.environment, planning.policy)
+    const policy = source.type === 'sandbox' && sandboxes ? sandboxes.policy : planning.policy
+    const planned = await planRun(bundle, run, planning.environment, policy)
     const extra = planned.accounts.filter((account) => !run.accounts.includes(account))
     if (extra.length > 0) {
       throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
@@ -134,17 +154,63 @@ export class HostExecutor implements RunExecutor {
     context.signal.addEventListener('abort', abort, { once: true })
 
     const root = join(this.options.directory, run.id)
-    const checkout = join(root, 'source')
     try {
-      const credentials = await repos.credentials(repo)
-      let commit: string
-      try {
-        commit = await checkoutRef(repos.url(repo), ref, checkout, credentials.env, abortCtrl.signal, pinned)
-      } catch (e) {
-        throw repos.scrub(e, credentials.values)
+      // where the process of the run starts: the checkout of a ref, or for a sandbox the
+      // published files, so what the process and the secret providers it starts read of
+      // their directory is never what a task wrote
+      let cwd: string
+      let input: Pick<WorkerInput, 'entry' | 'directory' | 'network' | 'sandboxNetwork'>
+      if (source.type === 'ref') {
+        cwd = join(root, 'source')
+        const { repo, ref, commit: pinned } = source
+        const credentials = await repos.credentials(repo)
+        let commit: string
+        try {
+          commit = await checkoutRef(repos.url(repo), ref, cwd, credentials.env, abortCtrl.signal, pinned)
+        } catch (e) {
+          throw repos.scrub(e, credentials.values)
+        }
+        context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
+        await this.writeBundle(cwd, bundle.files)
+        // what the version was checked against at publish holds while it runs too
+        input = {
+          entry: join(cwd, version.entry),
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+        }
+      } else {
+        // the published files are read from a directory of the run and work on the
+        // sandbox, whose own build files are just files
+        const { registry, network } = sandboxes as SandboxRunOptions
+        // read before the run attaches: until then the walk of the last run's measure holds
+        const state = await registry.state(source.id, abortCtrl.signal)
+        const files = await registry.attach(source.id)
+        // what was approved is what runs: the files may have changed since, by a run
+        // before this one on the sandbox
+        if (run.approvals?.length && state.tree !== source.tree) {
+          throw new Error(
+            `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
+          )
+        }
+        context.emit({
+          type: 'log',
+          task: 'hammerkit',
+          stream: 'stdout',
+          text: `sandbox ${source.id} of ${source.repo} at ${state.commit}, files ${state.tree}${
+            state.clean ? '' : ' with changes'
+          }`,
+        })
+        const published = join(root, 'bundle')
+        await mkdir(published, { recursive: true })
+        await this.writeBundle(published, bundle.files)
+        cwd = published
+        input = {
+          entry: join(published, version.entry),
+          directory: { read: published, work: files },
+          // the worker takes the lower of sandboxes.network and runs.network
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+          sandboxNetwork: network,
+        }
       }
-      context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
-      await this.writeBundle(checkout, bundle.files)
 
       const home = join(root, 'home')
       await mkdir(home, { recursive: true })
@@ -153,18 +219,21 @@ export class HostExecutor implements RunExecutor {
       const placement = this.options.placement
       const placed = placement ? await placement.prepare(run, context) : undefined
       try {
-        const input: WorkerInput = {
-          entry: join(checkout, version.entry),
-          tasks: run.tasks,
-          options: run.options,
-          accounts: run.accounts,
-          catalog: planning.environment.hosted?.catalog as SecretCatalog,
-          // what the version was checked against at publish holds while it runs too
-          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
-          ...(placed ? { kubernetes: placed.kubernetes } : {}),
-        }
-        const env = { ...this.processEnvironment(home, cache), ...placed?.env }
-        await this.runInProcess(worker, input, checkout, env, context, abortCtrl.signal)
+        await this.runInProcess(
+          worker,
+          {
+            ...input,
+            tasks: run.tasks,
+            options: run.options,
+            accounts: run.accounts,
+            catalog: planning.environment.hosted?.catalog as SecretCatalog,
+            ...(placed ? { kubernetes: placed.kubernetes } : {}),
+          },
+          cwd,
+          { ...this.processEnvironment(home, cache), ...placed?.env },
+          context,
+          abortCtrl.signal
+        )
       } finally {
         if (placement && placed) {
           await placement.release(run, context)
@@ -173,6 +242,10 @@ export class HostExecutor implements RunExecutor {
     } finally {
       context.signal.removeEventListener('abort', abort)
       await rm(root, { recursive: true, force: true })
+      if (source.type === 'sandbox') {
+        // what the run wrote counts against the owner's limits, from their next run or create
+        sandboxes?.registry.measure(source.id).catch(() => undefined)
+      }
     }
   }
 

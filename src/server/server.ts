@@ -3,7 +3,7 @@ import { createServer as createHttpsServer } from 'https'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
+import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, getGrant, mayRun } from './policy'
@@ -13,7 +13,7 @@ import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
 import { KubernetesExecutor } from './kubernetes-backend'
-import { PlanContext, planRun, refuseArguments } from './run-plan'
+import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
 import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
@@ -26,7 +26,12 @@ import { handleProposals } from './proposals-api'
 import { ProposalRegistry } from './proposals'
 import { SourceStore } from './sources'
 import { handleSources } from './sources-api'
-import { formatDuration, parseDuration } from '../utils/units'
+import { Sandbox, SandboxError, SandboxRegistry } from './sandboxes'
+import { HostSandboxStorage } from './sandbox-storage'
+import { DockerSandboxContainers } from './sandbox-docker'
+import { handleSandboxes } from './sandboxes-api'
+import { PlanPolicy } from './plan'
+import { formatDuration, parseDuration, parseSize } from '../utils/units'
 import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
@@ -138,11 +143,18 @@ function streamEvents(
   })
 }
 
+// What a run on a sandbox is checked against: the sandboxes, and the runtimes they allow.
+interface SandboxContext {
+  registry: SandboxRegistry
+  policy: PlanPolicy
+}
+
 async function handleRuns(
   config: ServerConfig,
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
   log: (line: string) => void,
@@ -168,7 +180,7 @@ async function handleRuns(
         }),
       })
     } else if (method === 'POST') {
-      await submitRun(config, registry, definitions, sources, planning, repos, log, principal, req, res)
+      await submitRun(config, registry, definitions, sources, sandboxes, planning, repos, log, principal, req, res)
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -239,6 +251,7 @@ async function submitRun(
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
   log: (line: string) => void,
@@ -298,6 +311,25 @@ async function submitRun(
       return
     }
   }
+  const sandbox = request.source.type === 'sandbox' ? sandboxes.registry.get(principal, request.source.id) : undefined
+  if (request.source.type === 'sandbox') {
+    if (!sandbox) {
+      send(res, 400, { error: `there is no sandbox ${request.source.id}, create one with POST /v1/sandboxes` })
+      return
+    }
+    if (sandboxes.policy.runtimes?.length === 0) {
+      send(res, 403, {
+        error: 'this server runs only local tasks, which it runs on no sandbox unless sandboxes.runtimes names local',
+      })
+      return
+    }
+    await sandboxes.registry.measured(principal)
+    const over = sandboxes.registry.overLimit(principal)
+    if (over) {
+      send(res, 413, { error: over })
+      return
+    }
+  }
   // the accounts of a run are read from the files it is pinned to, with the engine
   const bundle = version.plan ? await definitions.files(version) : undefined
   if (!version.plan || !bundle) {
@@ -306,9 +338,10 @@ async function submitRun(
     })
     return
   }
-  let planned
+  let planned: PlannedRun
   try {
-    planned = await planRun(bundle, request, planning.environment, planning.policy)
+    // a run on a sandbox may only use the runtimes of `sandboxes.runtimes`
+    planned = await planRun(bundle, request, planning.environment, sandbox ? sandboxes.policy : planning.policy)
   } catch (e) {
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
     return
@@ -326,7 +359,9 @@ async function submitRun(
     source:
       request.source.type === 'ref'
         ? { type: 'ref', repo: request.source.repo, ref: request.source.ref }
-        : { type: 'upload' },
+        : sandbox
+          ? { type: 'sandbox', repo: sandbox.repo, branch: sandbox.ref }
+          : { type: 'upload' },
     approvable: (account) => config.entitlements.some((entitlement) => entitlement.accounts[account] === 'use'),
     readable: (repo) => repos.readable(repo),
   })
@@ -337,7 +372,7 @@ async function submitRun(
   }
   const approvals = decision.type === 'approval' ? decision.accounts : []
   // the ref is pinned now: the approver sees the commit, and the run executes that one
-  let source: RunSource
+  let source: RunSource | undefined
   if (request.source.type === 'ref') {
     try {
       const commit = await repos.resolve(request.source.repo, request.source.ref)
@@ -350,31 +385,55 @@ async function submitRun(
       })
       return
     }
-  } else {
+  } else if (request.source.type === 'upload') {
     source = request.source
   }
-  try {
-    const run = registry.submit(
+  const submit = (runSource: RunSource) =>
+    registry.submit(
       principal,
       {
         definition: version.hash,
         tasks: request.tasks,
         accounts: planned.accounts,
         plan: planned.plan,
-        source,
+        source: runSource,
         options: request.options,
       },
       approvals
     )
+  try {
+    // a sandbox is read and the run submitted while nothing else changes it: the run
+    // records what the sandbox held, and holds it from now on
+    const run = source
+      ? submit(source)
+      : await sandboxes.registry.withSandbox(principal, (sandbox as Sandbox).id, async (current) => {
+          const state = await sandboxes.registry.state(current.id)
+          return submit({
+            type: 'sandbox',
+            id: current.id,
+            repo: current.repo,
+            commit: state.commit,
+            tree: state.tree,
+            clean: state.clean,
+          })
+        })
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
         run.source.type
-      } tasks=${run.tasks.length}${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
+      }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}` : ''} tasks=${run.tasks.length}${
+        approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''
+      }`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {
     if (e instanceof RunError) {
       send(res, e.status, { error: e.message })
+      return
+    }
+    if (e instanceof SandboxError) {
+      send(res, e.status === 404 ? 400 : e.status, {
+        error: e.status === 404 ? `there is no sandbox ${(sandbox as Sandbox).id}` : e.message,
+      })
       return
     }
     throw e
@@ -413,6 +472,7 @@ async function handle(
   definitions: DefinitionStore,
   proposals: ProposalRegistry,
   sources: SourceStore,
+  sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
   verifier: TokenVerifier,
@@ -445,7 +505,12 @@ async function handle(
   if (await handleSources(config, sources, log, principal, req, res, url)) {
     return
   }
-  if (await handleRuns(config, registry, definitions, sources, planning, repos, log, principal, req, res, url)) {
+  if (await handleSandboxes(config, sandboxes.registry, repos, log, principal, req, res, url)) {
+    return
+  }
+  if (
+    await handleRuns(config, registry, definitions, sources, sandboxes, planning, repos, log, principal, req, res, url)
+  ) {
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -500,6 +565,41 @@ export async function startServer(
   })
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
+  const sandboxRuntimes = getSandboxRuntimes(config)
+  const sandboxes: SandboxContext = {
+    registry: new SandboxRegistry({
+      storage: new HostSandboxStorage(
+        join(storage, 'sandboxes', 'files'),
+        planning.environment.processEnvs,
+        // what containers of runs leave behind is given back and removed with a container
+        sandboxRuntimes.includes('docker')
+          ? new DockerSandboxContainers(planning.environment.processEnvs.DOCKER_HOST)
+          : undefined
+      ),
+      records: join(storage, 'sandboxes', 'records'),
+      limits: {
+        count: config.sandboxes.limits.count,
+        bytes: parseSize(config.sandboxes.limits.bytes),
+        total: parseSize(config.sandboxes.total),
+      },
+      repos,
+      log,
+    }),
+    // a sandbox holds code nobody reviewed: only the variables of `sandboxes.env`
+    policy: {
+      ...planning.policy,
+      envs: config.sandboxes.env.allow,
+      envsFrom: 'sandboxes.env.allow',
+      runtimes: sandboxRuntimes,
+    },
+  }
+  if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
+    log(
+      'warning: entitlements keep sandboxes, but this server runs only local tasks, which it runs on no sandbox; ' +
+        'runs on sandboxes are refused until sandboxes.runtimes names a runtime'
+    )
+  }
+  await sandboxes.registry.load()
   const executorOptions = {
     definitions,
     planning,
@@ -509,11 +609,12 @@ export async function startServer(
     worker: options.worker,
   }
   const backend = config.backend
+  // sandboxes on a cluster are kept as claims, which this server does not do yet
   const executor =
     options.executor ??
     (backend.type === 'kubernetes'
       ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
-      : new HostExecutor(executorOptions))
+      : new HostExecutor({ ...executorOptions, sandboxes: { ...sandboxes, network: config.sandboxes.network } }))
   const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({
     executor,
@@ -528,13 +629,30 @@ export async function startServer(
     log,
   })
   await registry.restore()
+  sandboxes.registry.useRuns({
+    holder: (id) => registry.holder(id),
+    stop: (id) => registry.stopSandbox(id, 'the sandbox was deleted'),
+  })
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),
     cooldown: parseDuration(config.approvals.cooldown),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, definitions, proposals, sources, planning, repos, verifier, log, req, res).catch((e) => {
+    handle(
+      config,
+      registry,
+      definitions,
+      proposals,
+      sources,
+      sandboxes,
+      planning,
+      repos,
+      verifier,
+      log,
+      req,
+      res
+    ).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return

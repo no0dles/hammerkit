@@ -55,14 +55,19 @@ const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 /**
  * The commit a branch or tag of a repository points to now: `refs/heads/<ref>`, else
  * `refs/tags/<ref>` (the commit of an annotated tag). A name that is both a branch and
- * a tag is ambiguous. A full commit hash is taken as it is.
+ * a tag is ambiguous. A full commit hash is taken as it is. With `branch`, only a
+ * branch: a sandbox starts from one.
  */
 export async function resolveRef(
   repository: string,
   ref: string,
   env: { [key: string]: string | undefined },
-  signal: AbortSignal
+  signal: AbortSignal,
+  only?: 'branch'
 ): Promise<string> {
+  if (only === 'branch') {
+    return resolveBranch(repository, ref, env, signal)
+  }
   if (!isValidRef(ref)) {
     throw new RefError(`${JSON.stringify(ref.slice(0, 80))} is not a branch, tag or commit`)
   }
@@ -103,11 +108,50 @@ export async function resolveRef(
   return commit
 }
 
-async function git(
+async function resolveBranch(
+  repository: string,
+  branch: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string> {
+  assertBranchName(branch)
+  const output = await git(
+    ['ls-remote', '--heads', '--', repository, `refs/heads/${branch}`],
+    env,
+    signal,
+    `the branches of ${repository}`
+  )
+  const commit = output
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .find(([, name]) => name === `refs/heads/${branch}`)?.[0]
+  if (!commit) {
+    throw new RefError(`there is no branch ${branch}`)
+  }
+  return commit
+}
+
+// A name a sandbox can start from: a branch, never a tag or a commit, written without `refs/heads/`.
+export function assertBranchName(branch: string): void {
+  if (!isValidRef(branch) || branch.startsWith('refs/')) {
+    throw new RefError(`${JSON.stringify(branch.slice(0, 80))} is not a branch`)
+  }
+  if (COMMIT.test(branch.toLowerCase())) {
+    throw new RefError(`a sandbox starts from a branch, ${branch} is a commit`)
+  }
+}
+
+// Runs git without a prompt and with the network transports only. Errors say what could
+// not be done (`unable to <action> <what>`) with the last line git printed.
+export async function git(
   args: string[],
   baseEnv: { [key: string]: string | undefined },
   signal: AbortSignal,
-  what: string
+  what: string,
+  action = 'fetch',
+  // what git reads on stdin, and the exit codes that answer rather than fail (check-ignore
+  // exits 1 when nothing is ignored)
+  options: { input?: string | Buffer; exitCodes?: number[] } = {}
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -118,14 +162,26 @@ async function git(
   env.GIT_TERMINAL_PROMPT = '0'
   env.GIT_ALLOW_PROTOCOL = ALLOWED_PROTOCOLS
   try {
-    return (await execFileAsync('git', args, { env, signal })).stdout
+    // warnings of a large tree must not fail the command
+    const running = execFileAsync('git', args, { env, signal, maxBuffer: 64 * 1024 * 1024 })
+    // a git that exits before it read its input fails the command, not the server (EPIPE)
+    running.child.stdin?.on('error', () => undefined)
+    running.child.stdin?.end(options.input)
+    return (await running).stdout
   } catch (e) {
-    const error = e as NodeJS.ErrnoException & { stderr?: string }
+    const error = e as Omit<NodeJS.ErrnoException, 'code'> & {
+      code?: string | number
+      stdout?: string
+      stderr?: string
+    }
+    if (typeof error.code === 'number' && options.exitCodes?.includes(error.code)) {
+      return error.stdout ?? ''
+    }
     if (error.code === 'ABORT_ERR') {
-      throw new Error(`fetching ${what} was cancelled`)
+      throw new Error(`${action === 'fetch' ? 'fetching' : `${action} of`} ${what} was cancelled`)
     }
     if (error.code === 'ENOENT') {
-      throw new Error(`unable to fetch ${what}: git is not installed`)
+      throw new Error(`unable to ${action} ${what}: git is not installed`)
     }
     const reason =
       (error.stderr ?? '')
@@ -133,6 +189,6 @@ async function git(
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
         .pop() ?? error.message
-    throw new Error(`unable to fetch ${what}: ${reason}`)
+    throw new Error(`unable to ${action} ${what}: ${reason}`)
   }
 }

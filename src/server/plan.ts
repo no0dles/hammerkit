@@ -77,6 +77,8 @@ export interface InspectedBundle {
 export interface PlanPolicy {
   // the variables of the server an `env:NAME` secret may read
   envs: string[]
+  // where the operator lists them, for the message; `runs.env.allow` when left out
+  envsFrom?: string
   // the accounts that only the server uses, such as the one that reads repositories
   reserved?: string[]
   // what tasks may run on; every runtime when left out
@@ -327,7 +329,7 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
         problems.push(
           `${item.name}: the secret ${describeSecret(secret).target} reads env:${
             source.name
-          }, which the server does not list in runs.env.allow`
+          }, which the server does not list in ${policy.envsFrom ?? 'runs.env.allow'}`
         )
       }
     }

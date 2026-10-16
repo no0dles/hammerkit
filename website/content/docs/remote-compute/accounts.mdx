@@ -69,14 +69,16 @@ tasks:
 ## Restricting the code
 
 An account can limit where the code of a run that uses it comes from. `source` lists the
-kinds a run may use, `upload` for files the caller sends from their working tree and `ref`
-for a git ref of a repository the server reads itself (see [Sources](/docs/remote-compute/sources)).
+kinds a run may use, `upload` for files the caller sends from their working tree, `ref`
+for a git ref of a repository the server reads itself (see [Sources](/docs/remote-compute/sources)),
+and `sandbox` for a [sandbox](/docs/remote-compute/sandboxes) of the caller's.
 `refs` narrows `ref` to some branches or tags. These are the combinations:
 
 | `source` | `refs` | A run that uses the account may come from |
 | --- | --- | --- |
-| left out | | an upload or any ref. The default, for accounts without credentials that matter. |
+| left out | | an upload or any ref, not a sandbox. The default, for accounts without credentials that matter. |
 | `[upload, ref]` | | the same, written out. |
+| `[ref, sandbox]` | | any ref, or a sandbox. A sandbox holds changes nobody reviewed, so an account takes its runs only when it lists `sandbox`. |
 | `[ref]` | | any branch, tag or 40-digit commit of a repository the caller may name. |
 | `[ref]` | `[main, 'release/*']` | only those branches or tags. `*` matches within one level, so `release/*` takes `release/1.2` but not `release/1/2`; a last `**` takes every level below, so `release/**` takes both. A commit hash is refused, because it names no branch. |
 | `[upload]` | | an upload only. |

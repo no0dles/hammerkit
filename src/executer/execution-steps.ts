@@ -1,13 +1,37 @@
 import { pull } from '../docker/pull'
 import { Environment } from './environment'
-import { ensureVolumeExists, recreateVolume } from './get-docker-executor'
-import { extname } from 'path'
+import { ensureVolumeExists, recreateVolume, volumeLabels } from './get-docker-executor'
+import { extname, isAbsolute } from 'path'
 import { setUserPermission } from './set-user-permission'
 import Dockerode, { Container } from 'dockerode'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkTask, isContainerWorkTask } from '../planner/work-task'
 import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
 import { getContainerBinds } from './get-container-binds'
+import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
+
+// The files a server run works on: its checkout, or a sandbox. Somebody else wrote them.
+export function hostedRoot(environment: Environment): string | undefined {
+  return environment.hosted ? environment.cwd : undefined
+}
+
+/**
+ * On a server, every path of the host an item binds into its container, or the engine
+ * reads or writes for it, has to stay inside the run's files with no link on the way:
+ * tasks of this or an earlier run on a sandbox, or the commit of a ref, could have left
+ * one pointing anywhere on the server. The runtime checks before an item runs; this is
+ * checked again right before a container is made and before outputs are copied, after
+ * other tasks of the run had their turn.
+ */
+export async function refuseHostLinks(
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
+  environment: Environment
+): Promise<void> {
+  const root = hostedRoot(environment)
+  if (root) {
+    await assertItemPathsWithinRoot(item, root)
+  }
+}
 
 export async function pullImage(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
@@ -19,16 +43,18 @@ export async function pullImage(
 
 export async function prepareVolume(
   item: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  docker: Dockerode
+  docker: Dockerode,
+  environment?: Environment
 ): Promise<void> {
+  const labels = volumeLabels(environment ? hostedRoot(environment) : undefined)
   if (isContainerWorkService(item.data)) {
     for (const volume of item.data.volumes) {
       if (volume.resetOnChange && !volume.inherited) {
         item.status.write('debug', 'recreate volume')
-        await recreateVolume(docker, item.status, volume.name)
+        await recreateVolume(docker, item.status, volume.name, labels)
       } else {
         item.status.write('debug', 'ensure volume exists')
-        await ensureVolumeExists(docker, item.status, volume.name)
+        await ensureVolumeExists(docker, item.status, volume.name, labels)
       }
     }
   }
@@ -39,7 +65,7 @@ export async function prepareVolume(
         continue
       }
       item.status.write('debug', 'ensure volume exists')
-      await ensureVolumeExists(docker, item.status, generate.volumeName)
+      await ensureVolumeExists(docker, item.status, generate.volumeName, labels)
     }
   }
 }
@@ -82,9 +108,13 @@ export async function setUserPermissions(
   environment: Environment
 ): Promise<void> {
   if (item.data.user) {
-    const binds = getContainerBinds(item)
+    // On a server only the volumes: a chown as the container's root on a path of the host
+    // would follow a link a task put there after the binds were checked
+    const binds = getContainerBinds(item).filter((bind) => !environment.hosted || !isAbsolute(bind.localPath))
 
-    await setUserPermission(item.data.cwd, item.status, environment, container, item.data.user)
+    if (!environment.hosted) {
+      await setUserPermission(item.data.cwd, item.status, environment, container, item.data.user)
+    }
 
     for (const bind of binds) {
       await setUserPermission(bind.containerPath, item.status, environment, container, item.data.user)

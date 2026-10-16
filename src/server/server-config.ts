@@ -3,14 +3,15 @@ import { z } from 'zod'
 import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
-import { parseDuration } from '../utils/units'
+import { parseDuration, parseSize } from '../utils/units'
+import { getAllowListError, networkSchema } from '../schema/network-schema'
 import {
   buildFileSecretAccountSchema,
   buildFileSecretProvidersSchema,
 } from '../schema/build-file-secret-provider-schema'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { isRepoPattern } from './repo'
-import { networkSchema } from '../schema/network-schema'
+import { exceedsNetwork, formatNetwork, limitNetwork, parseWorkNetwork } from '../planner/work-network'
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1']
 
@@ -96,9 +97,10 @@ export const accountSchema = z
     // per secret provider, the environment that makes its command act as this
     // account; the credentials are files and variables of the operator's machine
     providers: buildFileSecretAccountSchema.shape.providers.default({}),
-    // where the code of a run using this account may come from; both when left out
+    // where the code of a run using this account may come from: `upload` and `ref` when
+    // left out; a sandbox, which holds unreviewed changes, only when it is listed
     source: z
-      .array(z.enum(['upload', 'ref']))
+      .array(z.enum(['upload', 'ref', 'sandbox']))
       .min(1)
       .optional(),
     // the refs (branches or tags, `release/*` for a level) a run using this account
@@ -246,6 +248,38 @@ export type BuildsLevel = z.infer<typeof buildsLevelSchema>
 
 const repoPatternSchema = z.string().refine(isRepoPattern, 'expected host/path, such as github.com/corp/*')
 
+// A branch of a sandbox grant, as written: `agent/**`, `agent/*` (one level) or a name.
+const branchPatternSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) =>
+      /^[A-Za-z0-9._*/-]+$/.test(value) &&
+      !value.startsWith('-') &&
+      !value.startsWith('/') &&
+      !value.endsWith('/') &&
+      !value.includes('//') &&
+      !value.includes('..'),
+    'expected a branch or a pattern of branches, such as agent/**'
+  )
+
+// `pull`: a sandbox may start from (and fetch) a matching branch; `push` also pushes to it.
+export const sandboxBranchTypeSchema = z.enum(['pull', 'push'])
+export type SandboxBranchType = z.infer<typeof sandboxBranchTypeSchema>
+
+// One repository (`host/path` pattern) an entitlement may keep sandboxes of, with a type
+// per branch pattern. Its branches count for this repository only.
+export const sandboxGrantSchema = z
+  .object({
+    repo: repoPatternSchema,
+    branches: z
+      .record(branchPatternSchema, sandboxBranchTypeSchema)
+      .refine((branches) => Object.keys(branches).length > 0, 'name the branches a sandbox may start from'),
+  })
+  .strict()
+export type SandboxGrant = z.infer<typeof sandboxGrantSchema>
+
 export const entitlementSchema = z
   .object({
     ...whoShape,
@@ -255,14 +289,21 @@ export const entitlementSchema = z
     // the repositories (`host/path` patterns) the caller may run from a git ref
     repos: z.array(repoPatternSchema).default([]),
     builds: buildsLevelSchema.optional(),
+    // the repositories the caller may keep sandboxes of, checkouts on the server that runs
+    // work on: a list of its own, the `repos` above are for runs from a ref
+    sandboxes: z.array(sandboxGrantSchema).optional(),
   })
   .strict()
   .superRefine((entitlement, ctx) => {
     checkWho(entitlement, ctx)
-    if (Object.keys(entitlement.accounts).length === 0 && entitlement.builds === undefined) {
+    if (
+      Object.keys(entitlement.accounts).length === 0 &&
+      entitlement.builds === undefined &&
+      !entitlement.sandboxes?.length
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, or a builds level',
+        message: 'name accounts to use or request, a builds level or sandboxes',
       })
     }
   })
@@ -294,6 +335,14 @@ const duration = z.string().refine((value) => {
     return false
   }
 }, 'expected a duration like 30m, 1h or 1d')
+
+const size = z.string().refine((value) => {
+  try {
+    return parseSize(value) > 0
+  } catch {
+    return false
+  }
+}, 'expected a size like 500Mi, 20Gi or 1Ti')
 
 export type Issuer = z.infer<typeof issuerSchema>
 export type Entitlement = z.infer<typeof entitlementSchema>
@@ -401,6 +450,40 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
+    // checkouts of callers on the server that runs work on (the `sandboxes` of an
+    // entitlement). They stay until they are deleted, within these limits.
+    sandboxes: z
+      .object({
+        // what the tasks of a run on a sandbox may run on, out of `runtimes`. A local task
+        // would run as the user of the server and could read every other sandbox, so
+        // `local` has to be named here too. Left out, `docker` when the server runs
+        // containers, see getSandboxRuntimes
+        runtimes: z
+          .array(z.enum(['docker', 'local']))
+          .min(1)
+          .optional(),
+        // the most open network a task or service of a run on a sandbox gets, written as
+        // a task's `network`: only the services it needs by default
+        network: networkSchema.default('none'),
+        // the variables of `runs.env.allow` an `env:` secret of a run on a sandbox may
+        // read: none by default, a sandbox holds code nobody reviewed
+        env: z
+          .object({ allow: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_()]*$/)).default([]) })
+          .strict()
+          .default({}),
+        // what one caller may keep; a sandbox over it can't be created
+        limits: z
+          .object({
+            count: z.number().int().min(1).default(5),
+            bytes: size.default('20Gi'),
+          })
+          .strict()
+          .default({}),
+        // what all sandboxes together may take
+        total: size.default('500Gi'),
+      })
+      .strict()
+      .default({}),
     backend: z.discriminatedUnion('type', [hostBackendSchema, kubernetesBackendSchema]).default({ type: 'host' }),
   })
   .strict()
@@ -479,6 +562,52 @@ export const serverConfigSchema = z
             message: `the account ${account} reads the sources, no entitlement may name it`,
           })
         }
+      }
+    })
+    const sandboxNetwork = parseWorkNetwork(config.sandboxes.network)
+    const runsNetwork = parseWorkNetwork(config.runs.network)
+    if (exceedsNetwork(sandboxNetwork, runsNetwork)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sandboxes', 'network'],
+        message: `runs on sandboxes get at most runs.network (${formatNetwork(runsNetwork)}), not ${formatNetwork(
+          sandboxNetwork
+        )}`,
+      })
+    }
+    // what a sandbox run gets, the lower of the two: their TCP forwards together need a port each
+    const sandboxCeiling = limitNetwork(sandboxNetwork, runsNetwork)
+    const shared = sandboxCeiling.type === 'allow' ? getAllowListError(sandboxCeiling.hosts) : null
+    if (shared) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sandboxes', 'network'],
+        message: `under runs.network, ${shared}`,
+      })
+    }
+    if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sandboxes', 'network'],
+        message: 'hammerkit can not limit the network of a local task, set network: open to allow local in sandboxes',
+      })
+    }
+    config.sandboxes.env.allow.forEach((name, index) => {
+      if (!config.runs.env.allow.includes(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sandboxes', 'env', 'allow', index],
+          message: `${name} is not in runs.env.allow, no run can read it`,
+        })
+      }
+    })
+    config.sandboxes.runtimes?.forEach((runtime, index) => {
+      if (!config.runtimes.includes(runtime)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sandboxes', 'runtimes', index],
+          message: `the runtime ${runtime} is not in runtimes, the server does not run on it at all`,
+        })
       }
     })
     const backend = config.backend
@@ -563,6 +692,13 @@ export const serverConfigSchema = z
   })
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>
+
+// What the tasks of a run on a sandbox may run on: `sandboxes.runtimes`, else containers
+// when the server runs them. Empty on a server with only `runtimes: [local]`, which then
+// runs nothing on sandboxes.
+export function getSandboxRuntimes(config: Pick<ServerConfig, 'runtimes' | 'sandboxes'>): ('docker' | 'local')[] {
+  return config.sandboxes.runtimes ?? config.runtimes.filter((runtime) => runtime === 'docker')
+}
 
 // The accounts that read repositories: no caller uses them and no build file names them.
 export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string[] {

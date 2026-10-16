@@ -4,7 +4,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { Environment } from '../executer/environment'
-import { readServerConfig, serverConfigSchema } from './server-config'
+import { getSandboxRuntimes, readServerConfig, serverConfigSchema } from './server-config'
 import { DISCOVERY_PATH, RunningServer, SERVER_PROTOCOL, startServer } from './server'
 import { getVersion } from '../version'
 import { HOST_ENV_YAML } from '../testing/host-env'
@@ -252,6 +252,7 @@ entitlements:
         ],
         repos: ['github.com/corp/payments'],
         builds: 'run',
+        sandboxes: [],
       })
       expect(log.join('\n')).toMatch(
         /grant iss=\S+ sub=alice accounts=\[op-payments-dev:use,op-payments-prod:request,op-web-dev:use\] entitlements=\[0,1\]/
@@ -380,6 +381,108 @@ describe('server config policy', () => {
     ['an issuer that is not accepted', { subject: { iss: 'https://other', sub: 'a' }, accounts: { a: 'use' } }],
   ])('rejects %s', (_name, entitlement) => {
     expect(serverConfigSchema.safeParse({ ...base, entitlements: [entitlement] }).success).toBe(false)
+  })
+
+  it('takes sandboxes as repositories of their own, with a pull or push type per branch pattern', () => {
+    const entitlement = { subject: { iss: 'https://idp.corp', sub: 'a' } }
+    const parse = (sandboxes: unknown) =>
+      serverConfigSchema.safeParse({ ...base, entitlements: [{ ...entitlement, sandboxes }] })
+    const parsed = parse([
+      { repo: 'github.com/corp/payments', branches: { 'agent/**': 'push', main: 'pull' } },
+      { repo: 'github.com/corp/*', branches: { main: 'pull' } },
+    ])
+    expect(parsed.success && parsed.data.entitlements[0].sandboxes).toEqual([
+      { repo: 'github.com/corp/payments', branches: { 'agent/**': 'push', main: 'pull' } },
+      { repo: 'github.com/corp/*', branches: { main: 'pull' } },
+    ])
+    expect(parse(true).success).toBe(false)
+    expect(parse([{ repo: 'payments', branches: { main: 'pull' } }]).success).toBe(false)
+    // every entry names its branches, each with a type
+    expect(parse([{ repo: 'github.com/corp/*' }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: {} }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: ['main'] }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: { main: 'write' } }]).success).toBe(false)
+    expect(parse([{ repo: 'github.com/corp/*', branches: { '../main': 'pull' } }]).success).toBe(false)
+    // an empty list grants nothing, so the entitlement names nothing either
+    expect(parse([]).success).toBe(false)
+  })
+
+  it('keeps sandboxes on containers with no network, unless the operator says otherwise', () => {
+    const config = serverConfigSchema.parse(base)
+    expect(config.sandboxes).toEqual({
+      network: 'none',
+      env: { allow: [] },
+      limits: { count: 5, bytes: '20Gi' },
+      total: '500Gi',
+    })
+    expect(getSandboxRuntimes(config)).toEqual(['docker'])
+    expect(
+      serverConfigSchema.safeParse({
+        ...base,
+        sandboxes: { network: { allow: ['registry.npmjs.org', '*.github.com'] } },
+      }).success
+    ).toBe(true)
+  })
+
+  it('starts a server that runs only local tasks, which then runs nothing on sandboxes', () => {
+    const config = serverConfigSchema.parse({ ...base, runtimes: ['local'] })
+    expect(getSandboxRuntimes(config)).toEqual([])
+    expect(
+      getSandboxRuntimes(
+        serverConfigSchema.parse({ ...base, runtimes: ['local'], sandboxes: { runtimes: ['local'], network: 'open' } })
+      )
+    ).toEqual(['local'])
+  })
+
+  it('keeps the network of sandbox runs within runs.network', () => {
+    const within = {
+      ...base,
+      runs: { network: { allow: ['*.npmjs.org'] } },
+      sandboxes: { network: { allow: ['registry.npmjs.org'] } },
+    }
+    expect(serverConfigSchema.safeParse(within).success).toBe(true)
+    const result = serverConfigSchema.safeParse({
+      ...base,
+      runs: { network: 'none' },
+      sandboxes: { network: { allow: ['registry.npmjs.org'] } },
+    })
+    expect(!result.success && result.error.issues.map((issue) => issue.message)).toContain(
+      'runs on sandboxes get at most runs.network (none), not allow registry.npmjs.org'
+    )
+    // each list has one forward on 5432, but each one's pattern lets the other's through
+    const shared = serverConfigSchema.safeParse({
+      ...base,
+      runs: { network: { allow: ['b.corp.com:5432', '*.corp.com'] } },
+      sandboxes: { network: { allow: ['a.corp.com:5432', '*.corp.com'] } },
+    })
+    expect(!shared.success && shared.error.issues.map((issue) => issue.message)).toEqual([
+      expect.stringMatching(/^under runs.network, .*share a port/),
+    ])
+  })
+
+  it('lets env secrets of sandbox runs read only what runs read', () => {
+    const allowed = { ...base, runs: { env: { allow: ['NPM_TOKEN'] } }, sandboxes: { env: { allow: ['NPM_TOKEN'] } } }
+    expect(serverConfigSchema.parse(allowed).sandboxes.env.allow).toEqual(['NPM_TOKEN'])
+    const result = serverConfigSchema.safeParse({ ...base, sandboxes: { env: { allow: ['NPM_TOKEN'] } } })
+    expect(!result.success && result.error.issues[0].message).toBe(
+      'NPM_TOKEN is not in runs.env.allow, no run can read it'
+    )
+  })
+
+  it.each([
+    ['a runtime the server does not run on', { runtimes: ['local'], network: 'open' }, /not in runtimes/],
+    ['a level that does not exist', { network: 'some' }, /Invalid input/],
+    ['a host that is an address', { network: { allow: ['10.0.0.1'] } }, /invalid host/],
+    [
+      'local tasks under a limited network',
+      { runtimes: ['local'], network: 'none' },
+      /can not limit the network of a local task/,
+    ],
+    ['a size that is not one', { limits: { bytes: 'lots' } }, /expected a size/],
+  ])('rejects sandboxes with %s', (_name, sandboxes, message) => {
+    const result = serverConfigSchema.safeParse({ ...base, sandboxes })
+    expect(result.success).toBe(false)
+    expect(!result.success && result.error.issues[0].message).toMatch(message)
   })
 
   it('names the account that is not defined, and the ones that are', () => {

@@ -30,6 +30,35 @@ describe('createParseContext', () => {
     expect(scope.schema.tasks?.build).toBeDefined()
   })
 
+  it('reads build files from one directory and works in another', async () => {
+    const env = environmentMock(scratch)
+    const read = join(scratch, 'bundle')
+    const work = join(scratch, 'sandbox')
+    mkdirSync(join(read, 'ci', 'lib'), { recursive: true })
+    mkdirSync(join(read, 'shared'), { recursive: true })
+    writeFileSync(
+      join(read, 'ci', 'build.yaml'),
+      'references:\n  lib: lib\nincludes:\n  shared: ../shared/.hammerkit.yaml\ntasks:\n  build:\n    cmds: [echo hi]\n'
+    )
+    writeFileSync(join(read, 'ci', 'lib', '.hammerkit.yaml'), 'tasks:\n  lib:\n    cmds: [echo lib]\n')
+    writeFileSync(join(read, 'shared', '.hammerkit.yaml'), 'tasks:\n  shared:\n    cmds: [echo shared]\n')
+    // the work directory has build files of its own, which are not read
+    mkdirSync(join(work, 'ci', 'lib'), { recursive: true })
+    writeFileSync(join(work, 'ci', 'lib', '.hammerkit.yaml'), 'tasks:\n  other:\n    cmds: [echo other]\n')
+
+    const { scope } = await createParseContext(join(read, 'ci', 'build.yaml'), env, { directory: { read, work } })
+    expect(scope.fileName).toBe(join(read, 'ci', 'build.yaml'))
+    expect(scope.cwd).toBe(join(work, 'ci'))
+    const lib = scope.references['lib'].scope
+    expect(lib.fileName).toBe(join(read, 'ci', 'lib', '.hammerkit.yaml'))
+    expect(lib.cwd).toBe(join(work, 'ci', 'lib'))
+    expect(Object.keys(lib.schema.tasks ?? {})).toEqual(['lib'])
+    // an include works where the file that includes it works
+    const shared = scope.references['shared'].scope
+    expect(shared.fileName).toBe(join(read, 'shared', '.hammerkit.yaml'))
+    expect(shared.cwd).toBe(join(work, 'ci'))
+  })
+
   it('rejects an unknown top-level key (strict schema)', async () => {
     const env = environmentMock(scratch)
     const file = writeBuildFile('bogus: true\ntasks:\n  build:\n    cmds:\n      - echo hi\n')
