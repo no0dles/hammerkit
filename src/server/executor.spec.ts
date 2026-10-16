@@ -119,6 +119,8 @@ describe('HostExecutor', () => {
       directory: runs,
       cache: join(root, 'cache'),
       worker: TEST_WORKER,
+      // longer than any test waits: a run that stops in a test stopped on its cancel
+      stopGraceMs: 60_000,
     }
     executor = new HostExecutor(options)
   })
@@ -225,17 +227,21 @@ describe('HostExecutor', () => {
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo started\n      - sleep 30\n',
     })
     const abort = new AbortController()
-    const started = Date.now()
-    const result = execute(run(hash), abort.signal)
-    for (let i = 0; i < 300 && !existsSync(runs); i++) {
+    const events: RunEventData[] = []
+    const result = executor.execute(run(hash), { emit: (e) => events.push(e), signal: abort.signal }).then(
+      () => undefined,
+      (e: Error) => e
+    )
+    const started = () => events.some((e) => e.type === 'log' && e.task === 'build' && e.text.includes('started'))
+    for (let i = 0; i < 1500 && !started(); i++) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(started()).toBe(true)
     abort.abort()
-    const { error, events } = await result
-    expect(error?.message).toMatch(/cancel/)
-    expect(Date.now() - started).toBeLessThan(25_000)
-    // on Windows this holds only when the tasks of the run were ended with it
+    const aborted = Date.now()
+    expect((await result)?.message).toBe('the run was cancelled')
+    // well within the grace period: the process stopped on the cancel, it was not killed
+    expect(Date.now() - aborted).toBeLessThan(10_000)
     expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringMatching(/could not be removed/) }))
     expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
   })
@@ -299,7 +305,9 @@ describe('HostExecutor', () => {
     }
     expect(started()).toBe(true)
     abort.abort()
+    const aborted = Date.now()
     expect((await cancelled)?.message).toBe('the run was cancelled')
+    expect(Date.now() - aborted).toBeLessThan(10_000)
   })
 
   it('fails with the reason when the server does not list the repository', async () => {

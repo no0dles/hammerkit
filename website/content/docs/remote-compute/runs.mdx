@@ -180,6 +180,8 @@ by the server):
    reports each task and its output as events. Cancelling the run tells the process so on
    its standard input, the same on every platform, so the engine stops its tasks and
    removes its containers; the process is killed if it is still running after 15 seconds.
+   On Windows the engine stops a local task by ending its shell, so a program the shell
+   started can keep running; the directory it holds is then left and reported (step 4).
 4. It removes the directory, whether the run succeeded, failed or was cancelled. A directory
    that can't be removed (a file still in use, for example) is left in place and reported in
    the run's log and the server's log; the run still ends the way it ended.
