@@ -30,11 +30,12 @@ pi list
 As the user that starts pi, once:
 
 ```bash
-npx hammerkit remote add hammerkit https://127.0.0.1:8480 --issuer https://accounts.google.com
+npx hammerkit remote add hammerkit http://127.0.0.1:8480 --issuer https://accounts.google.com
 ```
 
-With the self-signed certificate of the Kubernetes guide, also
-`export NODE_EXTRA_CA_CERTS=$PWD/tls.crt` in every shell that starts pi. It takes one file: when it already names one, such as the CA of a company proxy, add `tls.crt` to that file instead.
+The address is the `kubectl port-forward` of the [Kubernetes guide](/docs/guides/agents/kubernetes#3-connect-and-publish),
+which must keep running while pi works. Plain http is accepted only for `127.0.0.1` and
+`localhost`; any other address needs https.
 
 ## 3. Start pi on a sandbox
 
@@ -81,7 +82,7 @@ pi --provider openrouter --model anthropic/claude-haiku-5.5 --no-session \
 | What you see                                                                                            | What it means                                                                                                               |
 | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `server hammerkit is not registered`                                                                    | Step 2 was run as another user, or with another name than `HAMMERKIT_SERVER`.                                               |
-| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | `NODE_EXTRA_CA_CERTS` is not set in the shell that started pi, or names another CA.                                         |
+| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | A company or private CA goes in `NODE_EXTRA_CA_CERTS`, which takes one file.                                                |
 | `unable to reach https://…: fetch failed: connect ECONNREFUSED …`                                       | Nothing listens at the server's URL, for example `kubectl port-forward` has stopped.                                        |
 | `you are not entitled to keep sandboxes on this server`                                                 | The entitlement of the token's identity has no `sandboxes`: check that the token command names the agent's service account. |
 | The shell task needs `mounts: [.]`                                                                      | The build file's shell task does not mount the sandbox, see [The build file](/docs/guides/agents#the-build-file).           |
