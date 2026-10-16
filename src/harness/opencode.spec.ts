@@ -4,14 +4,20 @@ import { z } from 'zod'
 import { itExceptWindows, withSandboxServer } from '../testing/sandbox-server'
 import {
   createOpencodeTools,
+  createOpencodeV2Tools,
+  hammerkitOpencodeEntry,
   loadHammerkitOpencodePlugin,
   OPENCODE_TOOLS,
+  OPENCODE_V2_LOCAL_TOOLS,
+  OPENCODE_V2_TOOLS,
   OpencodeToolContext,
+  OpencodeV2Tool,
   patchToSandbox,
 } from './opencode'
 
 const directory = join(process.cwd(), 'agent-work')
 const context = (): OpencodeToolContext => ({ directory, abort: new AbortController().signal })
+const v2 = () => ({ signal: new AbortController().signal })
 
 describe('opencode tools on a sandbox', () => {
   it('takes the parameters of opencode and answers in its words', async () => {
@@ -177,6 +183,102 @@ describe('opencode tools on a sandbox', () => {
       await expect(hooks.tool.read.execute({ filePath: join(directory, 'a') }, context())).rejects.toThrow(
         /name a server/
       )
+    })
+  })
+})
+
+describe('opencode 2 tools on a sandbox', () => {
+  it('takes the inputs of opencode 2, with paths relative to the project or absolute', async () => {
+    await withSandboxServer('harness-opencode2-files', async ({ client, repository }) => {
+      const list = createOpencodeV2Tools(async () => client, directory)
+      expect(list.map((tool) => tool.name)).toEqual(OPENCODE_V2_TOOLS)
+      for (const tool of list) {
+        expect(tool.options.codemode).toBe(false)
+        expect(tool.input).toMatchObject({ type: 'object', additionalProperties: false })
+      }
+      const tools = Object.fromEntries(list.map((tool) => [tool.name, tool]))
+      expect(tools.edit.options.permission).toBe('edit')
+
+      expect((await tools.read.execute({ path: 'src/app.ts', limit: 1 }, v2())).content).toContain(
+        '1: export const greeting = "hello"'
+      )
+      expect((await tools.read.execute({ path: directory }, v2())).content).toContain('<entries>\ninput.txt\nsrc/\n')
+      await expect(tools.read.execute({ path: 'nope' }, v2())).rejects.toThrow(/File not found: nope/)
+      expect(
+        await tools.edit.execute({ path: join(directory, 'src', 'app.ts'), oldString: '41', newString: '42' }, v2())
+      ).toEqual({ content: 'Edit applied successfully.' })
+      expect(await tools.write.execute({ path: 'b.txt', content: 'b\n' }, v2())).toEqual({
+        content: 'Wrote file successfully.',
+      })
+      const patched = await tools.patch.execute(
+        { patchText: ['*** Begin Patch', '*** Delete File: b.txt', '*** End Patch'].join('\n') },
+        v2()
+      )
+      expect(patched.content).toBe('Success. Updated the following files:\nD b.txt')
+
+      const grep = await tools.grep.execute({ pattern: 'ANSWER = 42', literal: true, caseSensitive: false }, v2())
+      expect(grep.content).toContain('Line 2: export const answer = 42')
+      expect((await tools.grep.execute({ pattern: 'answer = 4.', literal: true }, v2())).content).toBe('No files found')
+      expect((await tools.glob.execute({ pattern: '**/*.ts', path: 'src' }, v2())).content).toBe(
+        join(directory, 'src', 'app.ts')
+      )
+
+      const pushed = await tools.push.execute({ branch: 'agent/opencode-2', message: 'Agent work' }, v2())
+      const commit = execFileSync('git', ['-C', repository, 'rev-parse', 'agent/opencode-2'], {
+        encoding: 'utf8',
+      }).trim()
+      expect(pushed).toEqual({ content: `pushed ${commit} to agent/opencode-2` })
+    })
+  })
+
+  itExceptWindows('runs shell commands in the workdir, with the default timeout for 0', async () => {
+    await withSandboxServer('harness-opencode2-shell', async ({ client }) => {
+      const shell = createOpencodeV2Tools(async () => client, directory).find((tool) => tool.name === 'shell')!
+      expect(await shell.execute({ command: 'cat app.ts', workdir: 'src', timeout: 0 }, v2())).toEqual({
+        content: 'export const greeting = "hello"\nexport const answer = 41',
+      })
+    })
+  })
+
+  it('sets itself up in place of the tools of opencode 2, and serves opencode 1 as well', async () => {
+    await withSandboxServer('harness-opencode2-plugin', async ({ environment }) => {
+      const plugin = hammerkitOpencodeEntry(async () => ({ tool: { schema: z } }), {
+        environment,
+        options: { build: 'payments' },
+      })
+      expect(plugin.id).toBe('hammerkit')
+      const added: OpencodeV2Tool[] = []
+      const removed: string[] = []
+      const sessionHooks: { [name: string]: (input: { tools: { [name: string]: { description: string } } }) => void } =
+        {}
+      await plugin.setup({
+        location: { directory },
+        tool: {
+          async transform(edit) {
+            edit({ add: (tool) => added.push(tool), remove: (id) => removed.push(id) })
+          },
+        },
+        session: {
+          async hook(name, callback) {
+            sessionHooks[name] = callback
+          },
+        },
+      })
+      expect(added.map((tool) => tool.name)).toEqual(OPENCODE_V2_TOOLS)
+      expect(removed).toEqual(OPENCODE_V2_LOCAL_TOOLS)
+      // opencode's own description of the shell, which it sets for each request, gives way to the plugin's
+      expect(Object.keys(sessionHooks)).toEqual(['context', 'compaction', 'generate'])
+      const request = {
+        tools: { shell: { description: 'Commands run on Linux using bash.' }, read: { description: 'r' } },
+      }
+      sessionHooks.generate(request)
+      expect(request.tools.shell.description).toContain('Run a shell command on the hammerkit sandbox')
+      expect(request.tools.read.description).toBe('r')
+      // it connects on the first call
+      await expect(added[0].execute({ path: 'a' }, v2())).rejects.toThrow(/name a server/)
+
+      const hooks = await plugin.server({ directory })
+      expect(Object.keys(hooks.tool)).toEqual(OPENCODE_TOOLS)
     })
   })
 })
