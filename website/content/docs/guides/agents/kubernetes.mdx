@@ -1,153 +1,86 @@
 ---
 title: "Server on Kubernetes (GKE)"
-description: "Run a hammerkit server on a GKE cluster for coding agents: images, RBAC, workload identity, a GitHub App that pushes agent branches, and sandboxes."
+description: "Run a hammerkit server for coding agents on a GKE cluster with the released image: four steps from an empty cluster to an agent pushing a branch."
 icon: Server
 ---
 <Callout type="warn">
 
 Experimental, like the server. This guide was run as written on a GKE Autopilot cluster
-(Kubernetes 1.36, Dataplane V2) in `europe-west4`.
+(Kubernetes 1.36) in `europe-west4`.
 
 </Callout>
 
-At the end of this guide a [server](/docs/remote-compute) runs in its own namespace of a GKE
-cluster. Every task of a run is a Job in a namespace of its caller, agents work on
-[sandboxes](/docs/remote-compute/sandboxes) there and push their work to `agent/**` branches
-with a GitHub App. Nothing holds a long-lived key: the server and the Jobs sign in to Google
-with tokens of their Kubernetes ServiceAccounts, the agents with identity tokens of Google
-service accounts.
+You end up with a hammerkit server in its own namespace of your cluster. Agents work on
+[sandboxes](/docs/remote-compute/sandboxes) there: every command they run is a Job in a
+namespace of its own, and their work leaves as a branch pushed by your GitHub App. No key is
+stored in the cluster, and no image has to be built: the server runs the released
+`no0dles/hammerkit` image.
 
-The [Backend](/docs/remote-compute/backend#kubernetes) page explains every setting used here.
+## What you need
 
-## Before you start
+- A GKE cluster that enforces `NetworkPolicy`. Autopilot does; on a Standard cluster turn on
+  Dataplane V2.
+- `gcloud` and `kubectl`, signed in with the right to create ClusterRoles.
+- A GitHub App installed on your repository, with **Contents: read and write**, **Metadata:
+  read** and nothing else. Download a private key for it (`app.pem`).
+- A build file with a shell task in the repository, see
+  [The build file](/docs/guides/agents#the-build-file).
 
-- A GKE cluster on Kubernetes 1.30 or later whose network enforces `NetworkPolicy`. Autopilot
-  does; a Standard cluster needs Dataplane V2 (`--enable-dataplane-v2`).
-- `gcloud`, `kubectl` with the right to make ClusterRoles, `jq` and `openssl`.
-- A GitHub repository with a build file that has a shell task, see
-  [The build file](/docs/guides/agents#the-build-file), and the hammerkit CLI.
-- A GitHub App for the server, installed on that repository, with **Contents** read and write,
-  **Metadata** read and no other permission. Without **Workflows**, GitHub refuses a push that
-  changes `.github/workflows`. Generate a private key for it and keep the file, `app.pem`
-  below, for the first step.
-
-Every command below reads these variables. `NAME` names the namespace, the service accounts,
-the identity pool and the secrets: two servers on one cluster need a name each.
+Set these once; every command below uses them:
 
 ```bash
 PROJECT=my-project
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
 REGION=europe-west4
-NAME=hammerkit
-REPO=acme/shop                  # the GitHub repository agents work on
-GITHUB_APP_ID=123456            # the App's id, on its settings page
-VERSION=1.27.0                  # the version of your hammerkit CLI, `hammerkit --version`
-HAMMERKIT_IMAGE=no0dles/hammerkit:$VERSION
+REPO=acme/shop          # your GitHub repository
+GITHUB_APP_ID=123456    # on the App's settings page
+VERSION=1.27.0          # the hammerkit version, `hammerkit --version`
+NAME=hammerkit          # namespace and account names; another server on the cluster needs another
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
 ```
 
-## 1. Let the cluster sign in to Google
+## 1. Google: the App key and the accounts
 
-GKE gives each cluster an OIDC issuer for the tokens of its ServiceAccounts. A workload
-identity pool that trusts that issuer lets a pod exchange such a token at Google's STS for a
-short-lived access token of `principal://…/subject/system:serviceaccount:<namespace>:<name>`.
-The server reads the App's key this way, and the Jobs of a run read the secrets of their
-account.
+The server reads the App's key from Secret Manager as its Kubernetes ServiceAccount. For that,
+an identity pool trusts the cluster's tokens, and only the server's ServiceAccount may read the
+key. Two Google service accounts give the agent and the publisher an identity to sign in with.
 
 ```bash
-gcloud services enable sts.googleapis.com iamcredentials.googleapis.com secretmanager.googleapis.com \
-  artifactregistry.googleapis.com cloudbuild.googleapis.com --project $PROJECT
-ISSUER=$(kubectl get --raw /.well-known/openid-configuration | jq -r .issuer)
-gcloud iam workload-identity-pools create $NAME --location global --project $PROJECT
-gcloud iam workload-identity-pools providers create-oidc $NAME-cluster --workload-identity-pool $NAME \
-  --location global --project $PROJECT --issuer-uri $ISSUER \
-  --attribute-mapping google.subject=assertion.sub --allowed-audiences $NAME-sts
-POOL=projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$NAME
-STS_AUDIENCE=//iam.googleapis.com/$POOL/providers/$NAME-cluster
+gcloud services enable sts.googleapis.com secretmanager.googleapis.com --project $PROJECT
 
-# the App's key, readable by the server's ServiceAccount only
+# let the cluster's ServiceAccounts sign in to Google
+gcloud iam workload-identity-pools create $NAME --location global --project $PROJECT
+gcloud iam workload-identity-pools providers create-oidc cluster --workload-identity-pool $NAME \
+  --location global --project $PROJECT --allowed-audiences $NAME \
+  --issuer-uri $(kubectl get --raw /.well-known/openid-configuration | jq -r .issuer) \
+  --attribute-mapping google.subject=assertion.sub
+POOL=projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/$NAME
+
+# the App's key, readable by the server only
 gcloud secrets create $NAME-github-app-key --project $PROJECT --data-file app.pem
 gcloud secrets add-iam-policy-binding $NAME-github-app-key --project $PROJECT \
   --role roles/secretmanager.secretAccessor \
   --member principal://iam.googleapis.com/$POOL/subject/system:serviceaccount:$NAME:hammerkit
+
+# identities for the agent and the publisher, which you may sign in as
+for who in agent publisher; do
+  gcloud iam service-accounts create $NAME-$who --project $PROJECT
+  gcloud iam service-accounts add-iam-policy-binding $NAME-$who@$PROJECT.iam.gserviceaccount.com \
+    --project $PROJECT --role roles/iam.serviceAccountTokenCreator --member user:$(gcloud config get account)
+done
+AGENT_ID=$(gcloud iam service-accounts describe $NAME-agent@$PROJECT.iam.gserviceaccount.com \
+  --project $PROJECT --format='value(uniqueId)')
+PUBLISHER_ID=$(gcloud iam service-accounts describe $NAME-publisher@$PROJECT.iam.gserviceaccount.com \
+  --project $PROJECT --format='value(uniqueId)')
 ```
 
-The pool accepts the tokens of every ServiceAccount of the cluster, but a token reaches only
-what its own `principal://` was granted. Delete `app.pem` once it is in Secret Manager.
+Delete `app.pem` now. The two service accounts hold no role in the project: only the server
+reads their tokens. Signed in as a service account yourself, write `--member
+serviceAccount:…` in the loop.
 
-## 2. Build the server's image
+## 2. Deploy the server
 
-The server mints a token of the GitHub App for each fetch and push with a
-[provider command](/docs/remote-compute/accounts). This one reads the App's key from Secret
-Manager as the server's ServiceAccount, signs a JWT and asks GitHub for a token of the
-installation, scoped to the one repository.
-
-```js title="server-image/github-app-token.mjs"
-// github-app-token.mjs <owner/repo>: prints a GitHub App installation token for that repository
-import { createSign } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-
-const repo = process.argv[2]
-const env = process.env
-const json = async (url, init) => {
-  const response = await fetch(url, init)
-  if (!response.ok) throw new Error(`${url}: ${response.status} ${await response.text()}`)
-  return response.json()
-}
-// the pod's ServiceAccount token, exchanged at Google's STS for a short-lived access token
-const { access_token } = await json('https://sts.googleapis.com/v1/token', {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({
-    grantType: 'urn:ietf:params:oauth:grant-type:token-exchange',
-    audience: env.GCP_STS_AUDIENCE,
-    scope: 'https://www.googleapis.com/auth/cloud-platform',
-    requestedTokenType: 'urn:ietf:params:oauth:token-type:access_token',
-    subjectToken: readFileSync(env.GCP_SUBJECT_TOKEN_FILE, 'utf8').trim(),
-    subjectTokenType: 'urn:ietf:params:oauth:token-type:jwt',
-  }),
-})
-const { payload } = await json(`https://secretmanager.googleapis.com/v1/${env.GITHUB_APP_KEY_SECRET}:access`, {
-  headers: { authorization: `Bearer ${access_token}` },
-})
-const b64 = (value) => Buffer.from(value).toString('base64url')
-const now = Math.floor(Date.now() / 1000)
-const unsigned = `${b64(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${b64(
-  JSON.stringify({ iat: now - 60, exp: now + 540, iss: env.GITHUB_APP_ID })
-)}`
-const key = Buffer.from(payload.data, 'base64')
-const signature = createSign('RSA-SHA256').update(unsigned).sign(key, 'base64url')
-const headers = { authorization: `Bearer ${unsigned}.${signature}`, accept: 'application/vnd.github+json' }
-const github = (path, init = {}) => json(`https://api.github.com${path}`, { ...init, headers })
-const installation = await github(`/repos/${repo}/installation`)
-const { token } = await github(`/app/installations/${installation.id}/access_tokens`, {
-  method: 'POST',
-  body: JSON.stringify({ repositories: [repo.split('/')[1]] }),
-})
-process.stdout.write(token)
-```
-
-The server's image is hammerkit's own with Node.js for the script:
-
-```bash
-cd server-image
-cat > Dockerfile <<EOF
-FROM $HAMMERKIT_IMAGE
-RUN apk add --no-cache nodejs
-COPY github-app-token.mjs /opt/hammerkit/github-app-token.mjs
-EOF
-gcloud artifacts repositories create $NAME --repository-format docker --location $REGION --project $PROJECT
-SERVER_IMAGE=$REGION-docker.pkg.dev/$PROJECT/$NAME/server:$VERSION
-gcloud builds submit . --tag $SERVER_IMAGE --project $PROJECT --region $REGION
-cd ..
-```
-
-The pods of sandboxes use hammerkit's image as it is (`backend.sandboxes.image` below).
-
-## 3. Namespace and rights
-
-The server gets its namespace, a ServiceAccount, the two ClusterRoles of
-[What the server may do](/docs/remote-compute/backend#what-the-server-may-do), and the
-admission policy that lets it bind `$NAME-runs` only in namespaces it made.
+One manifest holds everything the server needs in the cluster: its namespace and
+ServiceAccount, its rights, its config, a disk and the Deployment.
 
 ```bash
 kubectl apply -f - <<EOF
@@ -159,6 +92,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata: { name: hammerkit, namespace: $NAME }
 ---
+# may create the namespaces of callers and bind $NAME-runs in them
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: $NAME-server }
@@ -167,6 +101,13 @@ rules:
   - { apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, create, update] }
   - { apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], verbs: [bind], resourceNames: [$NAME-runs] }
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: $NAME-server }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: $NAME-server }
+subjects: [{ kind: ServiceAccount, name: hammerkit, namespace: $NAME }]
+---
+# what the server may do in a caller's namespace, bound there by the server itself
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: $NAME-runs }
@@ -179,12 +120,7 @@ rules:
   - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
   - { apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [get, list, create, update, patch, delete] }
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata: { name: $NAME-server }
-roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: $NAME-server }
-subjects: [{ kind: ServiceAccount, name: hammerkit, namespace: $NAME }]
----
+# the server binds $NAME-runs only in namespaces it made
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata: { name: $NAME-managed-namespaces }
@@ -201,116 +137,65 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata: { name: $NAME-managed-namespaces }
 spec: { policyName: $NAME-managed-namespaces, validationActions: [Deny] }
-EOF
-```
-
-## 4. Service accounts for agents
-
-An agent signs in with an identity token of a Google service account, and an entitlement
-names it by its unique id. A second service account publishes the build file. Neither gets a
-role in the project: only the server reads their tokens.
-
-```bash
-ME=$(gcloud config get account)   # write serviceAccount:$ME when you are signed in as one
-for who in agent publisher; do
-  gcloud iam service-accounts create $NAME-$who --project $PROJECT
-  gcloud iam service-accounts add-iam-policy-binding $NAME-$who@$PROJECT.iam.gserviceaccount.com \
-    --project $PROJECT --role roles/iam.serviceAccountTokenCreator --member user:$ME
-done
-AGENT_ID=$(gcloud iam service-accounts describe $NAME-agent@$PROJECT.iam.gserviceaccount.com \
-  --project $PROJECT --format='value(uniqueId)')
-PUBLISHER_ID=$(gcloud iam service-accounts describe $NAME-publisher@$PROJECT.iam.gserviceaccount.com \
-  --project $PROJECT --format='value(uniqueId)')
-```
-
-The binding lets you mint their tokens with `gcloud auth print-identity-token
---impersonate-service-account`, which needs Token Creator: impersonating starts with an access
-token of the account. The accounts hold no role, so that token reaches nothing. An agent that runs as one of these accounts on GKE, Cloud Run
-or a VM takes its token from the metadata server instead, see
-[Google](/docs/remote-compute/authentication#google), and needs no binding.
-
-## 5. The config
-
-```bash
-kubectl -n $NAME create configmap hammerkit-config --from-file server.yaml=/dev/stdin <<EOF
-listen: { host: 0.0.0.0, port: 8480 }
-tls: { cert: /etc/hammerkit-tls/tls.crt, key: /etc/hammerkit-tls/tls.key }
-storage: { directory: /data }
-issuers:
-  - { issuer: https://accounts.google.com, audience: hammerkit }
-backend:
-  type: kubernetes
-  namespacePrefix: $NAME-
-  runRole: $NAME-runs
-  storageClass: standard-rwo
-  quota: { requests.cpu: '6', requests.memory: 12Gi, persistentvolumeclaims: '20' }
-  defaultResources: { requests: { cpu: 500m, memory: 512Mi } }
-  sandboxes: { size: 4Gi, image: $HAMMERKIT_IMAGE }
-  # link-local (metadata), and the pod and service ranges of the cluster
-  deniedEgress: [169.254.0.0/16, fe80::/10, fd00:ec2::/32, 10.0.0.0/8, 34.118.224.0/20]
-  networkPolicy: enforced
-runtimes: [docker]
-secretProviders:
-  github-app: { command: [node, /opt/hammerkit/github-app-token.mjs, '{{ref}}'] }
-accounts:
-  scm:
-    description: the GitHub App that reads $REPO and pushes the agents' branches
-    providers:
-      github-app:
-        env:
-          GITHUB_APP_ID: '$GITHUB_APP_ID'
-          GITHUB_APP_KEY_SECRET: projects/$PROJECT/secrets/$NAME-github-app-key/versions/latest
-          GCP_STS_AUDIENCE: $STS_AUDIENCE
-          GCP_SUBJECT_TOKEN_FILE: /var/run/hammerkit-sts/token
-sources:
-  - match: github.com/$REPO
-    secret: { from: 'github-app:$REPO', account: scm }
-runs:
-  env: { allow: [PATH] }
-sandboxes:
-  network: { allow: [registry.npmjs.org] }
-entitlements:
-  - subject: { iss: https://accounts.google.com, sub: '$PUBLISHER_ID' }   # $NAME-publisher
-    repos: [github.com/$REPO]
-    builds: publish
-  - subject: { iss: https://accounts.google.com, sub: '$AGENT_ID' }   # $NAME-agent
-    repos: [github.com/$REPO]
-    builds: run
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hammerkit-config, namespace: $NAME }
+data:
+  # how the server signs in to Google: its ServiceAccount token, exchanged at Google's STS
+  gcp.json: |
+    { "type": "external_account",
+      "audience": "//iam.googleapis.com/$POOL/providers/cluster",
+      "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+      "token_url": "https://sts.googleapis.com/v1/token",
+      "credential_source": { "file": "/var/run/hammerkit-google/token" } }
+  server.yaml: |
+    listen: { host: 0.0.0.0, port: 8480 }
+    behindTlsProxy: true    # TLS ends at kubectl port-forward or your load balancer, see below
+    storage: { directory: /data }
+    issuers:
+      - { issuer: https://accounts.google.com, audience: hammerkit }
+    backend:
+      type: kubernetes
+      namespacePrefix: $NAME-
+      runRole: $NAME-runs
+      networkPolicy: enforced
+      # metadata addresses and the cluster's pod and service ranges
+      deniedEgress: [169.254.0.0/16, fe80::/10, fd00:ec2::/32, 10.0.0.0/8, 34.118.224.0/20]
+      sandboxes: { image: 'no0dles/hammerkit:$VERSION' }
+    secretProviders:
+      github-app: { command: [hammerkit, github-app-token, '{{ref}}'] }
+    accounts:
+      github:
+        providers:
+          github-app:
+            env:
+              GITHUB_APP_ID: '$GITHUB_APP_ID'
+              GITHUB_APP_KEY_SECRET: projects/$PROJECT/secrets/$NAME-github-app-key/versions/latest
+              GOOGLE_APPLICATION_CREDENTIALS: /etc/hammerkit/gcp.json
+    sources:
+      - match: github.com/$REPO
+        secret: { from: 'github-app:$REPO', account: github }
+    runs:
+      env: { allow: [PATH] }    # the variables a command gets from the server
     sandboxes:
-      - repo: github.com/$REPO
-        branches: { main: pull, 'agent/**': push }
-EOF
-```
-
-What to look at for your cluster:
-
-- `deniedEgress`: the pod and service ranges of your cluster, so a task with an open network
-  can not reach its other workloads, the server included. `gcloud container clusters describe
-  <cluster> --region $REGION --format='value(clusterIpv4Cidr,servicesIpv4Cidr)'` shows them.
-- `storageClass`: `standard-rwo` is GKE's balanced persistent disk.
-- `sandboxes.network`: what the commands of agents may reach, here npm only. It is a
-  `NetworkPolicy` and an egress proxy, which is why `networkPolicy: enforced` is set.
-- A provider command sees the `env` of its provider and account only, not the server's, so the
-  STS settings are under the account.
-
-## 6. Start the server
-
-The server's pod gets a projected token of its ServiceAccount for the pool's audience, which
-the token script reads, a disk for its storage, and a certificate. A self-signed one is
-enough to try it through `kubectl port-forward`; for a team, see
-[Reaching the server](#reaching-the-server).
-
-```bash
-openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=hammerkit \
-  -addext "subjectAltName=IP:127.0.0.1,DNS:hammerkit.$NAME.svc" -keyout tls.key -out tls.crt
-kubectl -n $NAME create secret tls hammerkit-tls --cert tls.crt --key tls.key
-kubectl apply -f - <<EOF
+      network: { allow: [registry.npmjs.org] }    # what the agent's commands may reach
+    entitlements:
+      - subject: { iss: https://accounts.google.com, sub: '$PUBLISHER_ID' }   # $NAME-publisher
+        repos: [github.com/$REPO]
+        builds: publish
+      - subject: { iss: https://accounts.google.com, sub: '$AGENT_ID' }       # $NAME-agent
+        repos: [github.com/$REPO]
+        builds: run
+        sandboxes:
+          - repo: github.com/$REPO
+            branches: { main: pull, 'agent/**': push }
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: hammerkit-data, namespace: $NAME }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: standard-rwo
   resources: { requests: { storage: 30Gi } }
 ---
 apiVersion: v1
@@ -318,7 +203,7 @@ kind: Service
 metadata: { name: hammerkit, namespace: $NAME }
 spec:
   selector: { app: hammerkit }
-  ports: [{ port: 8480, targetPort: 8480 }]
+  ports: [{ port: 8480 }]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -333,133 +218,103 @@ spec:
       serviceAccountName: hammerkit
       containers:
         - name: server
-          image: $SERVER_IMAGE
+          image: no0dles/hammerkit:$VERSION
           args: [server, --config, /etc/hammerkit/server.yaml]
           ports: [{ containerPort: 8480 }]
-          resources: { requests: { cpu: '2', memory: 4Gi, ephemeral-storage: 4Gi } }
+          readinessProbe: { httpGet: { path: /.well-known/hammerkit, port: 8480 } }
+          resources: { requests: { cpu: '1', memory: 2Gi } }
           volumeMounts:
             - { name: config, mountPath: /etc/hammerkit }
-            - { name: tls, mountPath: /etc/hammerkit-tls }
             - { name: data, mountPath: /data }
-            - { name: sts, mountPath: /var/run/hammerkit-sts }
+            - { name: google, mountPath: /var/run/hammerkit-google }
       volumes:
         - { name: config, configMap: { name: hammerkit-config } }
-        - { name: tls, secret: { secretName: hammerkit-tls } }
         - { name: data, persistentVolumeClaim: { claimName: hammerkit-data } }
-        - name: sts
+        - name: google
           projected:
-            sources: [{ serviceAccountToken: { audience: $NAME-sts, expirationSeconds: 3600, path: token } }]
+            sources: [{ serviceAccountToken: { audience: $NAME, expirationSeconds: 3600, path: token } }]
 EOF
 kubectl -n $NAME rollout status deploy/hammerkit --timeout 10m
 ```
 
-The server keeps one replica: its storage directory holds the records of sandboxes and the
-cache. `Recreate` lets a new pod mount the disk the old one held.
+## 3. Connect and publish
 
-## 7. Connect and publish
-
-Forward the server's port and register it. The CLI trusts the self-signed certificate
-through `NODE_EXTRA_CA_CERTS`:
+Forward the server's port to your machine and register it:
 
 ```bash
-kubectl -n $NAME port-forward svc/hammerkit 8480:8480 >/dev/null &
-export NODE_EXTRA_CA_CERTS=$PWD/tls.crt
-hammerkit remote add $NAME https://127.0.0.1:8480 --issuer https://accounts.google.com
+kubectl -n $NAME port-forward svc/hammerkit 8480:8480 &
+hammerkit remote add $NAME http://127.0.0.1:8480 --issuer https://accounts.google.com
 ```
 
-`NODE_EXTRA_CA_CERTS` takes one file: when it already names one, such as the CA of a company
-proxy, add `tls.crt` to that file instead.
-
-In a checkout of the repository, publish its build file as the publisher:
+Then publish the build file from a checkout of the repository, signed in as the publisher:
 
 ```bash
 HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
   --impersonate-service-account=$NAME-publisher@$PROJECT.iam.gserviceaccount.com" \
-  hammerkit remote publish shop $NAME
+  hammerkit remote publish $NAME
 ```
 
-The server is ready. Connect an agent with [pi](/docs/guides/agents/pi) or
-[opencode](/docs/guides/agents/opencode), or any MCP client with
-[`hammerkit remote mcp`](/docs/remote-compute/agents#hammerkit-remote-mcp). The agent's token
-command is the same with `$NAME-agent`.
+It prints the hash of the published version, `sha256:` and 64 hex digits. The agent names the
+build file by that hash, so a later publish never changes what a running agent uses.
+
+## 4. Start an agent
+
+Follow [pi](/docs/guides/agents/pi) or [opencode](/docs/guides/agents/opencode), with the
+server registered as above, the build file's hash and this token command:
+
+```bash
+export HAMMERKIT_BUILD=sha256:9f2c…    # the hash hammerkit remote publish printed
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=$NAME-agent@$PROJECT.iam.gserviceaccount.com"
+```
+
+The agent's branches show up in the repository as `agent/…`, pushed by your GitHub App.
+
+## Reaching the server from other machines
+
+`kubectl port-forward` needs access to the cluster on every machine. For a team, put the
+Service behind an HTTPS load balancer with a certificate of your domain, for example a GKE
+Gateway with a Google-managed certificate, and register `https://hammerkit.example.com`
+instead. The config already expects TLS to end in front of the server (`behindTlsProxy`).
+That setup was not part of the run this guide was checked with.
+
+## What the pieces are for
+
+- **The pool and `gcp.json`.** The server's pod gets a token of its ServiceAccount for the
+  pool's audience. Google's STS exchanges it for a short-lived access token, which reads the
+  App's key. Nothing else is granted to it. See [A GitHub App](/docs/remote-compute/sources#a-github-app) for
+  the token command.
+- **The two ClusterRoles and the admission policy.** The server creates a namespace per
+  caller and binds `$NAME-runs` there, and nowhere else. See
+  [What the server may do](/docs/remote-compute/backend#what-the-server-may-do).
+- **`deniedEgress`.** A task with an open network can not reach the metadata server or your
+  cluster's other workloads. `gcloud container clusters describe <cluster> --region $REGION
+  --format='value(clusterIpv4Cidr,servicesIpv4Cidr)'` shows your ranges.
+- **`networkPolicy: enforced`.** The agent's commands only reach what `sandboxes.network`
+  allows, here npm. See [Network](/docs/remote-compute/backend#network).
+- **One replica.** The disk holds the server's records of sandboxes and its cache.
 
 ## Secrets for builds
 
-The shell task of agents reads no secrets, but other tasks of the build file can, for example
-an integration test against a staging API. On a cluster the Job of such a task reads the
-secret itself, as the Kubernetes ServiceAccount of its [account](/docs/remote-compute/accounts):
-
-```bash
-gcloud secrets create $NAME-staging-key --project $PROJECT --data-file staging-key.txt
-gcloud secrets add-iam-policy-binding $NAME-staging-key --project $PROJECT \
-  --role roles/secretmanager.secretAccessor \
-  --member principal://iam.googleapis.com/$POOL/subject/system:serviceaccount:$NAME:$NAME-dev
-kubectl -n $NAME create serviceaccount $NAME-dev
-kubectl -n $NAME create secret generic $NAME-dev-federation --from-file gcp.json=/dev/stdin <<EOF
-{"type": "external_account", "audience": "$STS_AUDIENCE",
- "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "https://sts.googleapis.com/v1/token",
- "credential_source": {"file": "/var/run/hammerkit/account/token"}}
-EOF
-kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata: { name: hammerkit-accounts, namespace: $NAME }
-rules:
-  - { apiGroups: [''], resources: [secrets], verbs: [get], resourceNames: [$NAME-dev-federation] }
-  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create], resourceNames: [$NAME-dev] }
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata: { name: hammerkit-accounts, namespace: $NAME }
-roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: hammerkit-accounts }
-subjects: [{ kind: ServiceAccount, name: hammerkit, namespace: $NAME }]
-EOF
-```
-
-Then add the provider and the account to the config, with `NAME=hammerkit` and your
-project, and `accounts: { dev: use }` to the entitlements that run such tasks:
-
-```yaml title="server.yaml"
-backend:
-  type: kubernetes
-  # the backend settings above stay as they are
-  providers:
-    gsm: { image: 'gcr.io/google.com/cloudsdktool/google-cloud-cli:slim' }
-secretProviders:
-  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}', '--project=my-project'] }
-accounts:
-  dev:
-    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /var/run/hammerkit/account/gcp.json } } }
-    kubernetes: { serviceAccount: hammerkit-dev, audience: hammerkit-sts, secret: hammerkit-dev-federation }
-```
-
-A task reads it as `{ from: 'gsm:hammerkit-staging-key', account: dev, env: STAGING_KEY }`.
-Before its Job the server mints an hour's token of `$NAME-dev` for the pool's audience, and
-`gcloud` in the Job's init container exchanges it through `gcp.json`, see
-[Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job).
-
-## Reaching the server
-
-`kubectl port-forward` is for trying it out: every machine that connects needs access to the
-cluster. For a team, put the server behind an HTTPS load balancer with a certificate of your
-domain, for example a GKE Gateway with a Google-managed certificate, set
-`behindTlsProxy: true` in place of `tls` and register `https://hammerkit.example.com`. That
-setup was not part of the run this guide was checked with.
+The agent's shell task reads no secrets. Other tasks of the build file can, for example a
+test against a staging API: the Job of such a task reads the secret itself, as a Kubernetes
+ServiceAccount of its [account](/docs/remote-compute/accounts). See
+[Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job) for the setup with
+Secret Manager.
 
 ## Cleaning up
 
 ```bash
-kubectl delete ns -l hammerkit.dev/managed   # the namespaces of callers, when this is the only server
+kubectl delete ns -l hammerkit.dev/managed   # the callers' namespaces, when this is the only server
 kubectl delete ns $NAME
 kubectl delete clusterrole $NAME-server $NAME-runs
 kubectl delete clusterrolebinding $NAME-server
 kubectl delete validatingadmissionpolicybinding,validatingadmissionpolicy $NAME-managed-namespaces
 gcloud iam workload-identity-pools delete $NAME --location global --project $PROJECT --quiet
 gcloud secrets delete $NAME-github-app-key --project $PROJECT --quiet
-gcloud artifacts repositories delete $NAME --location $REGION --project $PROJECT --quiet
 for who in agent publisher; do
   gcloud iam service-accounts delete $NAME-$who@$PROJECT.iam.gserviceaccount.com --project $PROJECT --quiet
 done
 ```
 
-A deleted pool keeps its name for 30 days, so a new one needs another `NAME` until then.
+A deleted pool keeps its name for 30 days.
