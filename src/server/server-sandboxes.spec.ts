@@ -154,7 +154,7 @@ describe('sandboxes api', () => {
             body: options.body === undefined ? undefined : JSON.stringify(options.body),
           }) as Promise<JsonResponse>
         try {
-          const published = await call('PUT', '/v1/definitions/payments', {
+          const published = await call('POST', '/v1/definitions', {
             sub: 'bob',
             body: { files: { '.hammerkit.yaml': buildFile } },
           })
@@ -180,7 +180,7 @@ describe('sandboxes api', () => {
   const runOn = (api: Api, id: string, tasks = ['build'], sub = 'alice') =>
     api.call('POST', '/v1/runs', {
       sub,
-      body: { definition: { name: 'payments', hash: api.hash }, tasks, source: { type: 'sandbox', id } },
+      body: { definition: api.hash, tasks, source: { type: 'sandbox', id } },
     })
 
   async function untilState(api: Api, id: string, states: string[]) {

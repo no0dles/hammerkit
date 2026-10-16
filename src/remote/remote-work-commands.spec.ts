@@ -308,10 +308,10 @@ describe('remote approvals', () => {
   it('shows the approver the whole command, with format characters written out', async () => {
     await withHarness('remote-approvals-arguments', async (h) => {
       await h.run('remote', 'login', 'build')
-      await h.run('remote', 'publish', 'payments', 'build')
+      const [hash] = /sha256:[0-9a-f]{64}/.exec(await h.run('remote', 'publish', 'build')) ?? []
       // smoke waits for deploy, which reads a secret of prod, so it takes no arguments
       const refused = await h.call('alice', 'POST', '/v1/runs', {
-        definition: { name: 'payments', hash: 'latest' },
+        definition: hash,
         tasks: ['smoke'],
         source: { type: 'ref', repo: REPO, ref: 'main' },
         options: { args: ['--region', 'eu'] },
@@ -518,7 +518,7 @@ describe('describeApproval', () => {
       id: 'run_AAAAAAAAAAAAAAAA',
       requestedBy: { iss: 'https://idp', sub: 'alice' },
       createdAt: '2026-10-13T00:00:00Z',
-      definition: { name: 'payments', hash: 'sha256:abc' },
+      definition: 'sha256:abc',
       tasks: ['smoke'],
       accounts: [],
       source: { type: 'ref', ref: 'main' },

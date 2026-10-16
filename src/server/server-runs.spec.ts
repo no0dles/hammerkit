@@ -638,7 +638,7 @@ describe('runs api', () => {
           const show = await (
             await api.submit({
               ...request,
-              definition: { name: 'payments', hash },
+              definition: hash,
               tasks: ['show'],
               options: { args: ['input.txt'] },
             })
@@ -675,7 +675,7 @@ describe('runs api', () => {
         'runs-api-results',
         undefined,
         async (api) => {
-          const published = await api.call('PUT', '/v1/definitions/payments', {
+          const published = await api.call('POST', '/v1/definitions', {
             sub: 'bob',
             body: {
               files: {
@@ -700,7 +700,7 @@ describe('runs api', () => {
               ...request,
               tasks: ['test'],
               options: { skipDeps: false },
-              definition: { name: 'payments', hash },
+              definition: hash,
             })
           ).json()
           expect(run.results).toEqual({})
@@ -957,7 +957,7 @@ describe('runs api', () => {
   it('refuses a run of a version that reaches more than a ceiling set after it was published', async () => {
     await withApi('runs-api-ceiling-later', done, async (api) => {
       const web = { files: { '.hammerkit.yaml': 'tasks:\n  fetch:\n    image: node:22\n    cmds: [npm ci]\n' } }
-      const published = await api.call('PUT', '/v1/definitions/web', { body: web, sub: 'bob' })
+      const published = await api.call('POST', '/v1/definitions', { body: web, sub: 'bob' })
       expect(published.status).toBe(201)
       const { hash } = await published.json()
       // the operator limits the runs of the server, which only runs containers then
@@ -968,7 +968,7 @@ describe('runs api', () => {
           .replace('runs: {', 'runs: { network: none,')
       )
       await api.restart()
-      const refused = await api.submit({ ...request, definition: { name: 'web', hash }, tasks: ['fetch'] })
+      const refused = await api.submit({ ...request, definition: hash, tasks: ['fetch'] })
       expect(refused.status).toBe(400)
       expect((await refused.json()).error).toContain(
         'fetch: asks for network open, more than this server allows (runs.network: none)'

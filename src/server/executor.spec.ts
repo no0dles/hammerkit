@@ -267,7 +267,6 @@ describe('HostExecutor', () => {
     const yaml = (setting: string) =>
       `tasks:\n  build:\n    image: node:22\n    network: ${setting}\n    cmds: [npm ci]\n`
     const { version } = await network.publish(
-      'payments',
       { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': yaml('none') } },
       alice
     )

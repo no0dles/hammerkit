@@ -421,27 +421,23 @@ describe('kubernetes backend of a server', () => {
     }
   })
 
-  async function publish(name: string, file: string, owner = alice): Promise<string> {
+  async function publish(file: string, owner = alice): Promise<string> {
     await store.load()
-    const { version } = await store.publish(
-      name,
-      { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': file } },
-      owner
-    )
+    const { version } = await store.publish({ entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': file } }, owner)
     return version.hash
   }
 
   async function execute(
     id: string,
     hash: string,
-    options: { owner?: typeof alice; tasks?: string[]; accounts?: string[]; signal?: AbortSignal; name?: string } = {}
+    options: { owner?: typeof alice; tasks?: string[]; accounts?: string[]; signal?: AbortSignal } = {}
   ) {
     const run: Run = {
       id,
       owner: options.owner ?? alice,
       state: 'running',
       createdAt: new Date().toISOString(),
-      definition: { name: options.name ?? 'payments', hash },
+      definition: hash,
       tasks: options.tasks ?? ['check'],
       accounts: options.accounts ?? ['ci'],
       source: { type: 'ref', repo: REPO, ref: 'main', commit },
@@ -464,7 +460,7 @@ describe('kubernetes backend of a server', () => {
   it(
     'runs the tasks as Jobs in the caller’s namespace, reads secrets in the Job and cleans up',
     requiresKubernetes(async () => {
-      const hash = await publish('payments', buildFile(reachable, denied))
+      const hash = await publish(buildFile(reachable, denied))
 
       // run ids may end in `-` or `_`, which a label value can't
       const jobs = watchJobs([callerNamespace, operatorNamespace])
@@ -531,7 +527,6 @@ describe('kubernetes backend of a server', () => {
       ).toBe(true)
 
       const hash = await publish(
-        'probe',
         `
 tasks:
   probe:
@@ -544,7 +539,7 @@ tasks:
         bob
       )
       const jobs = watchJobs([callerNamespace, bobNamespace])
-      const run = await execute('run_k8s_bob', hash, { owner: bob, name: 'probe', tasks: ['probe'], accounts: [] })
+      const run = await execute('run_k8s_bob', hash, { owner: bob, tasks: ['probe'], accounts: [] })
       const seen = await jobs.stop()
       expect(run.error, run.all).toBeUndefined()
       expect(run.text).toContain(`runs in the namespace ${bobNamespace}`)
@@ -576,7 +571,6 @@ tasks:
       })
 
       const hash = await publish(
-        'broken',
         `
 tasks:
   broken:
@@ -585,7 +579,7 @@ tasks:
       - echo before-the-failure && exit 7
 `
       )
-      const run = await execute('run_k8s_broken', hash, { name: 'broken', tasks: ['broken'], accounts: [] })
+      const run = await execute('run_k8s_broken', hash, { tasks: ['broken'], accounts: [] })
       expect(run.error?.message).toBe('broken failed')
       expect(taskStates(run.events, 'broken')).toContain('failed')
       // with the exit code of its command, as on a host
@@ -602,10 +596,9 @@ tasks:
   it(
     'stops the Job of a cancelled run and cleans up',
     requiresKubernetes(async () => {
-      const hash = await publish('slow', 'tasks:\n  slow:\n    image: alpine:3.19\n    cmds: [sleep 300]\n')
+      const hash = await publish('tasks:\n  slow:\n    image: alpine:3.19\n    cmds: [sleep 300]\n')
       const abort = new AbortController()
       const running = execute('run_k8s_cancel', hash, {
-        name: 'slow',
         tasks: ['slow'],
         accounts: [],
         signal: abort.signal,
@@ -633,10 +626,9 @@ tasks:
     'fails a task that runs past its timeout and removes its Job',
     requiresKubernetes(async () => {
       const hash = await publish(
-        'late',
         'tasks:\n  late:\n    image: alpine:3.19\n    timeout: 20s\n    cmds: [echo started && sleep 300]\n'
       )
-      const run = await execute('run_k8s_late', hash, { name: 'late', tasks: ['late'], accounts: [] })
+      const run = await execute('run_k8s_late', hash, { tasks: ['late'], accounts: [] })
       expect(run.error?.message).toBe('late failed')
       expect(taskStates(run.events, 'late')).toContain('failed')
       expect(run.all).toContain('timed out after 20s')
@@ -648,7 +640,6 @@ tasks:
     'names the secret an init container could not read',
     requiresKubernetes(async () => {
       const hash = await publish(
-        'locked',
         `
 tasks:
   locked:
@@ -659,7 +650,7 @@ tasks:
       - echo never-ran
 `
       )
-      const run = await execute('run_k8s_locked', hash, { name: 'locked', tasks: ['locked'] })
+      const run = await execute('run_k8s_locked', hash, { tasks: ['locked'] })
       expect(run.error?.message).toBe('locked failed')
       expect(run.all).toContain('secret MISSING (files:missing as ci) could not be read')
       expect(run.text).not.toContain('never-ran')

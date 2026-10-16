@@ -75,7 +75,7 @@ describe('sandbox runs (docker)', () => {
             return { status: response.status, body: (await response.json()) as any }
           }
           try {
-            const published = await call('PUT', '/v1/definitions/payments', 'ci', {
+            const published = await call('POST', '/v1/definitions', 'ci', {
               files: {
                 '.hammerkit.yaml': [
                   'tasks:',
@@ -113,7 +113,7 @@ describe('sandbox runs (docker)', () => {
             sandboxIds.push(sandbox.body.id)
             const runTask = async (task: string) => {
               const submitted = await call('POST', '/v1/runs', 'agent', {
-                definition: { name: 'payments', hash: published.body.hash },
+                definition: published.body.hash,
                 tasks: [task],
                 source: { type: 'sandbox', id: sandbox.body.id },
               })
