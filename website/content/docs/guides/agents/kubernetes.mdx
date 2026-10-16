@@ -421,6 +421,8 @@ project, and `accounts: { dev: use }` to the entitlements that run such tasks:
 
 ```yaml title="server.yaml"
 backend:
+  type: kubernetes
+  # the backend settings above stay as they are
   providers:
     gsm: { image: 'gcr.io/google.com/cloudsdktool/google-cloud-cli:slim' }
 secretProviders:
