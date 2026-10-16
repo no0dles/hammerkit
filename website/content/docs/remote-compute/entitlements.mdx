@@ -162,7 +162,7 @@ approvals:
   with their dependencies as `plan` (commands, image, the secrets and the account each
   is read as, mounts, ports and the `flags` to look at first, never a value), the
   accounts, the version, the source and the options. Who uses an account a run needed
-  approved may also read that run (`GET /v1/runs/<id>` and its events) and cancel it;
+  approved may also read that run (`GET /v1/runs/<id>`, its events and its logs) and cancel it;
   `GET /v1/runs` stays the caller's own.
 * What an approval cannot cover is what the code does: pinning commands does not pin the
   code they run, so an account that matters should also be limited to `source: [ref]`

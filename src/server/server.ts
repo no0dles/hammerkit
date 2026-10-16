@@ -24,7 +24,8 @@ import { handleProposals } from './proposals-api'
 import { ProposalRegistry } from './proposals'
 import { SourceStore } from './sources'
 import { handleSources } from './sources-api'
-import { parseDuration } from '../utils/units'
+import { formatDuration, parseDuration } from '../utils/units'
+import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 
@@ -75,6 +76,10 @@ export interface ServerOptions extends TokenVerifierOptions {
 }
 
 const HEARTBEAT_MS = 15_000
+
+// the longest `?wait=` of a run: below the 60 seconds after which a proxy in front of the
+// server (nginx by default) closes a connection that says nothing
+const MAX_WAIT_MS = 50_000
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -137,7 +142,7 @@ async function handleRuns(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
@@ -145,7 +150,14 @@ async function handleRuns(
   const method = req.method
   if (!id) {
     if (method === 'GET') {
-      send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
+      // the results of each task are read one run at a time
+      send(res, 200, {
+        runs: registry.list(principal).map((run) => {
+          const { results, ...listed } = toRunResponse(run)
+          void results
+          return listed
+        }),
+      })
     } else if (method === 'POST') {
       await submitRun(config, registry, definitions, sources, planning, repos, log, principal, req, res)
     } else {
@@ -167,9 +179,36 @@ async function handleRuns(
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
     streamEvents(registry, config, principal, id, req, res, url)
+  } else if (action === 'logs') {
+    let query
+    try {
+      query = parseLogQuery(url.searchParams)
+    } catch (e) {
+      send(res, 400, { error: e instanceof Error ? e.message : String(e) })
+      return true
+    }
+    const logs = registry.logs(principal, id, accountsOf(config, principal))
+    logs
+      ? send(res, 200, readLogs(logs.events, logs.index, query, logs.truncated))
+      : send(res, 404, { error: 'not found' })
   } else {
-    const run = registry.get(principal, id, accountsOf(config, principal))
-    run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+    let wait = 0
+    const waitParam = url.searchParams.get('wait')
+    if (waitParam !== null) {
+      try {
+        wait = Math.min(parseDuration(waitParam), MAX_WAIT_MS)
+      } catch {
+        send(res, 400, { error: `wait is a duration up to ${formatDuration(MAX_WAIT_MS)}, for example 30s` })
+        return true
+      }
+    }
+    // a caller that hangs up stops waiting
+    const gone = new AbortController()
+    res.on('close', () => gone.abort())
+    const run = await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)
+    if (!gone.signal.aborted) {
+      run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+    }
   }
   return true
 }
@@ -183,7 +222,7 @@ function accountsOf(config: ServerConfig, principal: Principal): (account: strin
 function toRunResponse(run: Run): Omit<Run, 'owner'> {
   const { owner, ...visible } = run
   void owner
-  return visible
+  return { ...visible, results: run.results ?? {} }
 }
 
 async function submitRun(
