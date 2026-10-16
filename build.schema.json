@@ -261,6 +261,34 @@
                     "additionalProperties": false,
                     "description": "cpu and memory requests and limits"
                   },
+                  "network": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "open"
+                      },
+                      {
+                        "type": "string",
+                        "const": "none"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "allow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "allow"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
+                  },
                   "runner": {
                     "type": "string",
                     "minLength": 1
@@ -334,6 +362,9 @@
                   },
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources"
+                  },
+                  "network": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network"
                   },
                   "runner": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
@@ -468,6 +499,10 @@
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources",
                     "description": "cpu and memory requests and limits"
+                  },
+                  "network": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network",
+                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
                   }
                 },
                 "required": [
@@ -629,6 +664,11 @@
                           ],
                           "additionalProperties": false
                         }
+                      },
+                      "networkPolicy": {
+                        "type": "string",
+                        "const": "enforced",
+                        "description": "the cluster enforces NetworkPolicy, which limited networks need"
                       },
                       "ingresses": {
                         "not": {}

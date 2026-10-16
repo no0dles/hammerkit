@@ -1,4 +1,4 @@
-import commaner, { Command, CommanderError, Option } from 'commander'
+import commaner, { Command, CommanderError, InvalidArgumentError, Option } from 'commander'
 import { parseSetArguments } from './parse-set-arguments'
 import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
@@ -27,6 +27,7 @@ import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
 import { registerRunWorkerCommand } from './server/run-worker-command'
+import { parseNetworkOption, WorkNetwork } from './planner/work-network'
 import { getArgumentsTarget } from './planner/utils/task-arguments'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
@@ -725,6 +726,12 @@ export async function getProgram(
           parseDuration
         )
       )
+      .addOption(
+        new Option(
+          '--network <level>',
+          'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
+        ).argParser(parseNetworkArgument)
+      )
       .action(async (options, command: commaner.Command) => {
         try {
           const scope = {
@@ -742,6 +749,7 @@ export async function getProgram(
             wait: options.wait,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            network: options.network ?? null,
           })
 
           if (!result.success) {
@@ -830,6 +838,12 @@ export async function getProgram(
           parseDuration
         )
       )
+      .addOption(
+        new Option(
+          '--network <level>',
+          'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
+        ).argParser(parseNetworkArgument)
+      )
       .addOption(new Option('--no-skip-deps', 'run dependencies even when nothing needing them has to run'))
       .action(async (task, options, command: commaner.Command) => {
         try {
@@ -869,6 +883,7 @@ export async function getProgram(
             explain: options.explain,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            network: options.network ?? null,
             skipDeps: options.skipDeps !== false,
           })
 
@@ -944,4 +959,12 @@ tasks:
   })
 
   return { program, args }
+}
+
+function parseNetworkArgument(value: string): WorkNetwork {
+  try {
+    return parseNetworkOption(value)
+  } catch (e) {
+    throw new InvalidArgumentError(getErrorMessage(e))
+  }
 }

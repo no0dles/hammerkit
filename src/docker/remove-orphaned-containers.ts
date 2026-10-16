@@ -3,9 +3,9 @@ import { hostname } from 'os'
 import { removeContainer } from './remove-container'
 
 // A hammerkit container nothing will remove any more: a task container (they
-// never outlive their run) or a service of a run that is gone, started by a
-// hammerkit process of this machine that no longer exists, and the paused
-// state records hammerkit kept before 1.9. Services of `up --daemon` and
+// never outlive their run), a service or an egress proxy of a run that is
+// gone, started by a hammerkit process of this machine that no longer exists,
+// and the paused state records hammerkit kept before 1.9. Services of `up --daemon` and
 // containers of other machines or of running processes stay.
 export function isOrphanedContainer(container: ContainerInfo, isProcessAlive: (pid: number) => boolean): boolean {
   const labels = container.Labels
@@ -13,9 +13,16 @@ export function isOrphanedContainer(container: ContainerInfo, isProcessAlive: (p
   if (type === 'task' && container.State === 'paused') {
     return true
   }
-  if (type !== 'task' && type !== 'service') {
+  // a proxy goes with the task or service it serves
+  if (type !== 'task' && type !== 'service' && type !== 'proxy') {
     return false
   }
+  return isOfStoppedRun(labels, isProcessAlive)
+}
+
+// Labeled with the run labels of a hammerkit process of this machine that no
+// longer exists, and not kept for `up --daemon`.
+export function isOfStoppedRun(labels: { [key: string]: string }, isProcessAlive: (pid: number) => boolean): boolean {
   if (labels['hammerkit-daemon'] === 'true') {
     return false
   }

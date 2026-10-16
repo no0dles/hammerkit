@@ -259,6 +259,23 @@ services:
       memory: 1Gi
 ```
 
+## Network [#network]
+
+`network` limits what the service reaches, like a [task's](/docs/task/network):
+`none` for nothing but the services it needs, `{ allow: [hosts] }` for those hosts
+through an egress proxy, `open` (the default) for everything. The tasks and services
+that need it reach it whatever its level. The healthcheck checks the service itself,
+so it runs without the proxy variables. A running service whose network changed is
+recreated.
+
+```yaml
+services:
+  payments:
+    image: node:24-alpine
+    network:
+      allow: [api.stripe.com]
+```
+
 ## Mounts
 Mounts can be used to pass local files into the container.
 They are meant for local configuration and settings files. Append `:ro` to mount

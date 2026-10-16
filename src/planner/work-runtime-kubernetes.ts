@@ -1,21 +1,21 @@
 import { AbortError } from '../executer/abort'
 import { ExecuteOptions, WorkRuntime } from '../runtime/runtime'
-import { getServiceIp } from '../kubernetes/get-service-ip'
 import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ContainerWorkTask } from './work-task'
-import { isContainerWorkServiceItem, WorkItem } from './work-item'
+import { WorkItem } from './work-item'
 import { State } from '../executer/state'
 import { Environment } from '../executer/environment'
 import { kubernetesService } from '../executer/kubernetes-service'
 import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { V1EnvVar, V1HostAlias, V1Job } from '@kubernetes/client-node'
+import { V1EnvVar, V1Job } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
-import { ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
+import { DEFINITION_LABEL, ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
+import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait } from '../kubernetes/await-running-state'
@@ -31,6 +31,14 @@ import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
 import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
+import {
+  ensureKubernetesItemNetwork,
+  releaseKubernetesItemNetwork,
+  removeAllKubernetesItemNetworks,
+  RUN_LABEL,
+} from '../kubernetes/network-policy'
+import { getRunId } from '../utils/run-id'
+import { getEffectiveNetwork, isLimitedNetwork } from './work-network'
 
 async function listJobNames(
   instance: ReturnType<typeof createKubernetesInstances>,
@@ -80,100 +88,104 @@ export function kubernetesTaskRuntime(
         await deleteJobAndWait(instance, kubernetes, name, options.abort)
       }
 
-      // the services the task needs, by the names it lists them under
-      const hostAliases: V1HostAlias[] = []
-      for (const need of task.needs) {
-        if (!isContainerWorkServiceItem(need.service)) {
-          continue
-        }
-        const ip = await getServiceIp(instance, kubernetes, need.service)
-        if (!ip) {
-          throw new Error(`unable to get service ip for ${need.name}`)
-        }
-        hostAliases.push({ ip, hostnames: [need.name] })
-      }
-
-      const podName = `${task.name}-${options.stateKey}`
-      let i = 0
-      for (const cmd of task.data.cmds) {
-        const spec: V1Job & KubernetesObjectHeader = {
-          kind: 'Job',
-          apiVersion: 'batch/v1',
-          metadata: {
-            namespace: kubernetes.namespace,
-            name: podName,
-            annotations: {
-              'hammerkit.dev/version': getVersion(),
-            },
-            labels: {
-              'hammerkit.dev/id': task.id(),
-              'hammerkit.dev/state': options.stateKey,
-            },
-          },
-          spec: {
-            template: {
-              metadata: {
-                annotations: {
-                  'hammerkit.dev/version': getVersion(),
-                },
-                labels: {
-                  'hammerkit.dev/id': task.id(),
-                  'hammerkit.dev/state': options.stateKey,
-                },
+      // the services the task needs by the names it lists them under, and the
+      // NetworkPolicy and proxy of a limited network, both of this run
+      const scope = { run: getRunId() }
+      const network = await ensureKubernetesItemNetwork(instance, kubernetes, task, { followLog: true, ...scope })
+      try {
+        const podName = `${task.name}-${options.stateKey}`
+        let i = 0
+        for (const cmd of task.data.cmds) {
+          const spec: V1Job & KubernetesObjectHeader = {
+            kind: 'Job',
+            apiVersion: 'batch/v1',
+            metadata: {
+              namespace: kubernetes.namespace,
+              name: podName,
+              annotations: {
+                'hammerkit.dev/version': getVersion(),
               },
-              spec: {
-                containers: [
-                  {
-                    image: task.data.image,
-                    // through the task's shell, as on Docker
-                    command: [task.data.shell, '-c'],
-                    args: [getKubernetesCommandText(cmd)],
-                    workingDir: cmd.cwd,
-                    env: [
-                      ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
-                      ...secrets.env,
-                    ],
-                    name: `cmd-${++i}`,
-                    volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
-                    ...getKubernetesResources(task.data.resources),
+              labels: {
+                'hammerkit.dev/id': task.id(),
+                'hammerkit.dev/state': options.stateKey,
+              },
+            },
+            spec: {
+              template: {
+                metadata: {
+                  annotations: {
+                    'hammerkit.dev/version': getVersion(),
                   },
-                ],
-                volumes: [...persistence.volumes, ...secrets.volumes],
-                hostAliases,
-                restartPolicy: 'Never',
+                  labels: {
+                    'hammerkit.dev/id': task.id(),
+                    'hammerkit.dev/state': options.stateKey,
+                    [RUN_LABEL]: scope.run,
+                  },
+                },
+                spec: {
+                  initContainers: network.initContainers,
+                  containers: [
+                    {
+                      image: task.data.image,
+                      // through the task's shell, as on Docker
+                      command: [task.data.shell, '-c'],
+                      args: [getKubernetesCommandText(cmd)],
+                      workingDir: cmd.cwd,
+                      env: [
+                        ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
+                        ...secrets.env,
+                        ...network.env,
+                      ],
+                      name: `cmd-${++i}`,
+                      volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
+                      ...getKubernetesResources(task.data.resources),
+                    },
+                  ],
+                  volumes: [...persistence.volumes, ...secrets.volumes],
+                  hostAliases: network.hostAliases,
+                  restartPolicy: 'Never',
+                },
               },
+              backoffLimit: 1,
+              parallelism: 1,
             },
-            backoffLimit: 1,
-            parallelism: 1,
-          },
-        }
-        try {
-          const pod = await apply(instance, spec)
+          }
+          try {
+            const pod = await apply(instance, spec)
 
-          if (!pod.status?.succeeded) {
-            await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
-          }
-          task.status.write('debug', 'pod completed')
-          if (i < task.data.cmds.length) {
-            await deleteJobAndWait(instance, kubernetes, podName, options.abort)
-          }
-        } catch (e) {
-          if (e instanceof AbortError) {
-            options.state.set({ stateKey: options.stateKey, type: 'canceled' })
+            if (!pod.status?.succeeded) {
+              await awaitJobCompletion(instance, kubernetes, spec.metadata.name, options.abort)
+            }
+            task.status.write('debug', 'pod completed')
+            if (i < task.data.cmds.length) {
+              await deleteJobAndWait(instance, kubernetes, podName, options.abort)
+            }
+          } catch (e) {
+            if (e instanceof AbortError) {
+              options.state.set({ stateKey: options.stateKey, type: 'canceled' })
+              return
+            }
+            await deleteJob(instance, kubernetes, podName).catch(() => undefined)
+            options.state.set({
+              stateKey: options.stateKey,
+              type: 'error',
+              errorMessage: getErrorMessage(e),
+            })
+            await removeKubernetesSecret(instance, kubernetes, task).catch(() => undefined)
             return
           }
-          await deleteJob(instance, kubernetes, podName).catch(() => undefined)
-          options.state.set({
-            stateKey: options.stateKey,
-            type: 'error',
-            errorMessage: getErrorMessage(e),
-          })
-          await removeKubernetesSecret(instance, kubernetes, task).catch(() => undefined)
-          return
+        }
+        // the finished job stays for its state, the values it read need not
+        await removeKubernetesSecret(instance, kubernetes, task)
+      } finally {
+        network.close()
+        // once the run's pods ended: a cancelled job's pod is still terminating
+        if (isLimitedNetwork(getEffectiveNetwork(task.data))) {
+          await releaseKubernetesItemNetwork(instance, kubernetes, task, scope).catch((e) =>
+            task.status.write('error', `remove of network policy failed ${getErrorMessage(e)}`)
+          )
         }
       }
-      // the finished job stays for its state, the values it read need not
-      await removeKubernetesSecret(instance, kubernetes, task)
     },
     async stop(): Promise<void> {
       const jobs = await instance.batchApi.listNamespacedJob({
@@ -182,7 +194,11 @@ export function kubernetesTaskRuntime(
       })
       for (const pod of jobs.items) {
         if (pod.metadata?.name) {
-          await instance.batchApi.deleteNamespacedJob({ name: pod.metadata.name, namespace: kubernetes.namespace })
+          await instance.batchApi.deleteNamespacedJob({
+            name: pod.metadata.name,
+            namespace: kubernetes.namespace,
+            propagationPolicy: 'Background',
+          })
         }
       }
 
@@ -208,6 +224,8 @@ export function kubernetesTaskRuntime(
           await instance.coreApi.deleteNamespacedPod({ name: pod.metadata.name, namespace: kubernetes.namespace })
         }
       }
+      // the limits go last, once no pod of the task runs
+      await removeAllKubernetesItemNetworks(instance, kubernetes, task)
     },
     async remove(): Promise<void> {
       await this.stop()
@@ -251,8 +269,29 @@ export function kubernetesServiceRuntime(
 ): WorkRuntime<ServiceState> {
   const instance = createKubernetesInstances(kubernetes)
   return {
-    initialize(): Promise<void> {
-      return Promise.resolve()
+    // A Deployment left by an earlier `up` is the running service, so `down`
+    // stops it and a run reuses it, as with a container on Docker. One whose
+    // definition changed goes, with its limits, and is created anew.
+    async initialize(state: State<ServiceState>): Promise<void> {
+      const deployments = await instance.appsApi.listNamespacedDeployment({
+        namespace: kubernetes.namespace,
+        labelSelector: `hammerkit.dev/id=${service.id()}`,
+      })
+      const deployment = deployments.items[0]
+      if (!deployment?.metadata?.name) {
+        return
+      }
+      if (deployment.metadata.labels?.[DEFINITION_LABEL] !== getServiceDefinitionHash(service)) {
+        service.status.write('info', `${service.name} changed since it was started, recreating it`)
+        await this.stop()
+        return
+      }
+      state.set({
+        type: 'running',
+        dns: { containerId: deployment.metadata.name },
+        stateKey: deployment.metadata.labels?.['hammerkit.dev/state'] ?? '',
+        remote: null,
+      })
     },
     async restore(environment: Environment, path: string): Promise<void> {
       await restoreKubernetesData(service, kubernetes, instance, environment, path)
@@ -274,6 +313,8 @@ export function kubernetesServiceRuntime(
         }
       }
       await removeKubernetesSecret(instance, kubernetes, service)
+      // the limits go last, once the service's pods ended
+      await removeAllKubernetesItemNetworks(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
       const persistence = await getKubernetesPersistence(service)
@@ -281,13 +322,15 @@ export function kubernetesServiceRuntime(
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)
       await ensureKubernetesSecret(instance, kubernetes, service, service.data.secrets, environment)
+      const network = await ensureKubernetesItemNetwork(instance, kubernetes, service, { followLog: false, run: null })
       await ensureKubernetesDeploymentExists(
         instance,
         kubernetes,
         service,
         persistence,
         getKubernetesSecretRefs(service, service.data.secrets),
-        options.stateKey
+        options.stateKey,
+        network
       )
 
       const name = getResourceName(service)

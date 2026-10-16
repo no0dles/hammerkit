@@ -1,6 +1,7 @@
 import { Environment } from './environment'
 import { purgeGitSources } from '../includes/resolve-git-source'
 import { removeOrphanedContainers } from '../docker/remove-orphaned-containers'
+import { removeOrphanedNetworks } from '../docker/item-network'
 import { getContainerCli } from './execute-docker'
 import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
@@ -122,6 +123,9 @@ export async function cleanCache(
     const removed = await removeOrphanedContainers(getContainerCli(workTree.environment))
     for (const id of removed) {
       environment.console.info(`removed container ${id.substring(0, 12)} left behind by a stopped run`)
+    }
+    for (const name of await removeOrphanedNetworks(getContainerCli(workTree.environment))) {
+      environment.console.info(`removed network ${name} left behind by a stopped run`)
     }
   }
 }

@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { describeSecretSource, getSecretName } from './work-secret'
 import { WorkItem } from './work-item'
 import { ContainerWorkService, isContainerWorkService } from './work-service'
+import { getEffectiveNetwork, isLimitedNetwork } from './work-network'
 import { getDeclaredWorkTaskId } from './work-cache-id'
 
 // Everything a running container of the service was created from, plus the
@@ -11,6 +12,7 @@ import { getDeclaredWorkTaskId } from './work-cache-id'
 // service whose definition changed instead of silently reusing it.
 export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): string {
   const service = item.data
+  const network = getEffectiveNetwork(service)
   const definition = {
     image: service.image,
     cmd: service.cmd?.cmd ?? null,
@@ -39,6 +41,9 @@ export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): 
       .map((need) => `${need.name}=${getServiceDefinitionHash(need.service as WorkItem<ContainerWorkService>)}`),
     // only when declared, so a service without keeps its hash
     ...(service.resources ? { resources: service.resources } : {}),
+    // in this run, under its `--network` ceiling: a service started open is
+    // recreated for a run that limits it
+    ...(isLimitedNetwork(network) ? { network } : {}),
   }
   return createHash('sha1').update(JSON.stringify(definition)).digest('hex')
 }
