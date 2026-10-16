@@ -609,6 +609,7 @@ export async function startServer(
     directory: join(storage, 'runs'),
     cache: join(storage, 'cache'),
     worker: options.worker,
+    log,
   }
   const backend = config.backend
   // sandboxes on a cluster are kept as claims, which this server does not do yet
