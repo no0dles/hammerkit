@@ -13,11 +13,11 @@ A coding agent needs to read, edit and search files and to run commands. On a
 [sandbox](/docs/remote-compute/sandboxes) the files stay on the server and the commands run
 there, as published tasks in their containers. hammerkit connects agents to it three ways:
 
-| Client                                          | What it gets                                                                                                      |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| [`hammerkit remote mcp`](#hammerkit-remote-mcp) | MCP tools for any client that speaks MCP: Claude Code, Claude Desktop, Cursor, a custom agent.                    |
-| [pi](#pi)                                       | pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`, working on the sandbox, and `push`.            |
-| [opencode](#opencode)                           | opencode's own `read`, `write`, `edit`, `apply_patch`, `bash`, `grep`, `glob` and `list`, working on the sandbox, and `push`. |
+| Client                                          | What it gets                                                                                                                                                      |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`hammerkit remote mcp`](#hammerkit-remote-mcp) | MCP tools for any client that speaks MCP: Claude Code, Claude Desktop, Cursor, a custom agent.                                                                    |
+| [pi](#pi)                                       | pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`, working on the sandbox, and `push`.                                                            |
+| [opencode](#opencode)                           | opencode's own `read`, `write`, `edit`, `patch`, `shell`, `grep` and `glob` (`apply_patch`, `bash` and `list` on opencode 1), working on the sandbox, and `push`. |
 
 pi and opencode keep the tools their models are tuned for, with the same names, parameters
 and output: only where they read, write and run moves. The MCP tools take the shapes models
@@ -152,40 +152,69 @@ ripgrep on the server. Images are read from the sandbox like any file.
 
 ## opencode
 
-opencode lets a plugin replace a built-in tool by registering one of the same name. Add
-hammerkit to the dependencies of the project's opencode directory and re-export its plugin:
+opencode lets a plugin replace a built-in tool by registering one of the same name.
+hammerkit's plugin works with opencode 2 and with opencode 1 from 1.18.29. Add hammerkit to
+the dependencies of the project's opencode directory, install them with `npm install` in
+that directory (opencode 2 does not), and re-export the plugin as the default export:
 
 ```json title=".opencode/package.json"
 {
-  "dependencies": { "hammerkit": "^1", "@opencode-ai/plugin": "*" }
+  "dependencies": { "hammerkit": "^1" }
 }
 ```
 
 ```ts title=".opencode/plugins/hammerkit.ts"
-export { HammerkitPlugin } from 'hammerkit/harness/opencode'
+export { default } from 'hammerkit/harness/opencode'
 ```
 
-Then start opencode with the [settings](#settings) as variables. The tools take opencode's
-parameters (`filePath`, `oldString`, `newString`, `replaceAll`, `patchText`, `workdir`,
-`timeout` in milliseconds) and answer in its words, and opencode still picks `apply_patch`
-for GPT models and `edit` and `write` for the others. opencode's directory stands for the
-root of the sandbox. A long `bash` output keeps its first and last lines, like the MCP tool.
+opencode 1 also needs `"@opencode-ai/plugin": "*"` in these dependencies, which it adds
+itself when it starts. Its plugin files that re-export `HammerkitPlugin` still work there;
+opencode 2 loads only the default export.
+
+Then start opencode with the [settings](#settings) as variables, as the user whose host
+config has the server (`hammerkit remote add`). opencode 2 runs a background service that
+keeps the variables it was started with: run `opencode service stop` after changing them, or
+`opencode run --standalone` to start with the current ones.
+
+| opencode 2 | opencode 1    | Parameters                                                                             |
+| ---------- | ------------- | -------------------------------------------------------------------------------------- |
+| `read`     | `read`        | `path` (`filePath` on opencode 1), `offset`, `limit`. A directory lists its entries.   |
+| `write`    | `write`       | `path` (`filePath`), `content`                                                         |
+| `edit`     | `edit`        | `path` (`filePath`), `oldString`, `newString`, `replaceAll`                            |
+| `patch`    | `apply_patch` | `patchText`, a `*** Begin Patch` body or a git diff; every file changes or none.       |
+| `shell`    | `bash`        | `command`, `workdir`, `timeout` in milliseconds. There are no background commands.     |
+| `glob`     | `glob`        | `pattern`, `path`, and on opencode 2 `limit`                                           |
+| `grep`     | `grep`        | `pattern`, `path`, `include`, and on opencode 2 `literal`, `caseSensitive` and `limit` |
+|            | `list`        | `path`, `ignore`                                                                       |
+| `push`     | `push`        | `branch`, `message`, see [Taking the work out](#taking-the-work-out)                   |
+
+The tools answer in opencode's words, and opencode still picks the patch tool for GPT models
+and `edit` and `write` for the others. Paths are relative to opencode's directory or absolute
+below it, which stands for the root of the sandbox. A long shell output keeps its first and
+last lines, like the MCP tool. On opencode 2 the plugin also removes the worktree tools,
+which would make worktrees on the machine opencode runs on.
 
 opencode carries on without a plugin that fails to load, and without a word: its own tools
-then work on the machine opencode runs on. hammerkit's plugin keeps that from happening when
-it can. It takes the `@opencode-ai/plugin` of the opencode directory when hammerkit is linked
-there (`npm install ../hammerkit`, `file:`) and does not see it, and when it finds none at
-all, its tools still replace opencode's and refuse with what is missing. A plugin file that
-does not load at all, for example with hammerkit missing, cannot do that. Check once that
-the tools are hammerkit's: this lists the files of the sandbox, not the ones of your directory.
+then work on the machine opencode runs on. On opencode 1 hammerkit's plugin keeps that from
+happening when it can. It takes the `@opencode-ai/plugin` of the opencode directory when
+hammerkit is linked there (`npm install ../hammerkit`, `file:`) and does not see it, and when
+it finds none at all, its tools still replace opencode's and refuse with what is missing. A
+plugin file that does not load at all cannot do that: hammerkit not installed, or on
+opencode 2 a file without the default export. Check once that the tools are hammerkit's, in a
+directory with nothing but the opencode setup. The answer names the files of the sandbox,
+not the ones of your directory:
 
 ```shell
-opencode debug agent build --tool list
+opencode run --standalone 'List the files of the project root with the read tool.'
 ```
 
-Tools the plugin does not replace still work on the machine opencode runs on. Turn off the
-ones that touch local files and that your opencode version still has, for example
-`"tools": { "multiedit": false }` in `opencode.json`.
+On opencode 1, leave out `--standalone`, or list them without a model:
+`opencode debug agent build --tool list`.
+
+Tools the plugin does not replace still work on the machine opencode runs on, such as
+`webfetch` and `skill`. Turn off the ones that touch local files and that your opencode
+version still has, for example `"tools": { "multiedit": false }` in the `opencode.json` of
+opencode 1.
 
 ## Taking the work out
 
