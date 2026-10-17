@@ -1,6 +1,6 @@
 ---
 title: "Sandboxes"
-description: "Keep a checkout on the server, run published tasks on it, and the limits that keep sandboxes in check."
+description: "Keep a checkout on the server, run published tasks on it, read, search and edit its files, and the limits that keep sandboxes in check."
 ---
 A sandbox is a caller's own checkout of a repository on the server, which runs work on.
 It is for an agent without a machine of its own, or a person whose laptop should not
@@ -14,9 +14,9 @@ The published build file always runs. A sandbox only supplies the files: its own
 
 <Callout type="info">
 
-This page covers sandboxes on a host server: creating, listing, moving, deleting and
-running on them. Reading, searching and editing the files of a sandbox through the API,
-taking the changes out as a patch, pushing a branch and sandboxes on Kubernetes come next.
+This page covers sandboxes on a host server: creating, listing, moving, deleting, running
+on them, and reading, searching and editing their files. Pushing a branch from a sandbox and
+sandboxes on Kubernetes come next.
 
 </Callout>
 
@@ -162,6 +162,222 @@ caller's sandboxes take more than their limit, their runs on sandboxes are refus
 | `400` | The sandbox does not exist or is somebody else's, or a task reads an `env:` secret that `sandboxes.env.allow` does not list. |
 | `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox (any more), an account of the run does not list `sandbox` in its `source`, or the server runs no tasks on sandboxes (only `runtimes: [local]`, see below). |
 | `413` | The caller's sandboxes take more than their limit. |
+
+## Files
+
+The files of a sandbox are read, searched and edited through the API, in two ways:
+
+* **Typed endpoints** for clients without file tools of their own, such as an MCP server: a
+  tree, numbered reads, ripgrep, batches of edits and the changes. Their parameters follow
+  the tools models are trained on: `offset`/`limit` reads in `cat -n` style, exact string
+  replacement with `old_string`/`new_string`, git diffs and OpenAI's `apply_patch`, and
+  ripgrep's options.
+* **A raw surface** for agent harnesses that bring their own tools and only swap where they
+  run (pi's tool operations, for example): read bytes, write bytes, stat.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/sandboxes/<id>/tree` | The files and directories git sees, see [Tree](#tree). |
+| `GET /v1/sandboxes/<id>/files/<path>` | A text file as numbered lines, see [Reading](#reading). |
+| `GET /v1/sandboxes/<id>/files/<path>?raw` | The bytes of a file, with its sha256 as `ETag`. |
+| `GET /v1/sandboxes/<id>/files/<path>?stat` | What a path is: `type` (`file`, `directory`, `symlink`, or `other` for a pipe, socket or device), `size`, `exec`, `modifiedAt`, a link's `target`. |
+| `HEAD /v1/sandboxes/<id>/files/<path>` | The same as headers: `content-length`, `last-modified`, `x-hammerkit-type`, `x-hammerkit-exec`. `404` when there is nothing. |
+| `PUT /v1/sandboxes/<id>/files/<path>` | Write the body as the file's bytes, creating the directories above it. `If-Match: "<sha256>"` writes only over that content. `201` for a new file. |
+| `POST /v1/sandboxes/<id>/search` | ripgrep, see [Search](#search). |
+| `POST /v1/sandboxes/<id>/edits` | A batch of edits, all or nothing, see [Edits](#edits). |
+| `GET /v1/sandboxes/<id>/changes` | What changed since the commit, see [Changes](#changes). |
+
+Paths are relative to the sandbox, with `/` between names and no `.` or `..`; in a URL they
+are percent-encoded (`files/src/my%20file.ts`). Three rules hold for every endpoint:
+
+* **No symbolic link is followed.** A link shows as a link with its `target`; reading,
+  editing or listing through one is `400`. Writing a file where a link is replaces the link.
+  A read checks that the file it opened is the one in the sandbox, so a task that swaps a
+  directory for a link does not lead a read outside of it. Pipes, sockets and devices are
+  `400` too, and a read takes no more than the file held when it was opened.
+* **`.git/` and credentials stay out.** What [uploads refuse](/docs/remote-compute/sources)
+  (`.env`, `.npmrc`, keys, `.ssh/`, `.aws/`, `.git/`) is `403` to read or write, and is left
+  out of the tree, the search and the changes, even when the repository commits it. Names
+  match in any case and under the names Windows also opens (`.SSH`, `.git.`, `GIT~1`). The
+  git data of a sandbox is not in its files anyway.
+* **Runs come first.** Reading one file works at any time, also while a run works on the
+  sandbox. Edits, `PUT`, and the tree, search and changes (which walk the files with git
+  and ripgrep) are `409` while a [run holds the sandbox](#running-on-a-sandbox), and the
+  next run waits for a batch of edits to finish.
+
+Every file endpoint needs an entry in the `sandboxes` of the caller's entitlements that covers
+the repository and the branch of the sandbox, like a run on it. What edits add counts against
+the owner's [bytes](#config): an edit that would go over is `413`.
+
+### Tree
+
+`GET /v1/sandboxes/<id>/tree?path=src&depth=2` lists what git sees below `path` (the whole
+sandbox without it): committed files and new ones, not what `.gitignore` leaves out, such as
+`node_modules`. `depth` is how many levels, `1` by default; directories show as entries of
+their own. With `glob` (`**/*.ts`, matched against the path below `path`) it lists the
+matching files at any depth instead.
+
+```json
+{
+  "path": "src",
+  "entries": [
+    { "path": "src/app.ts", "type": "file", "size": 1180 },
+    { "path": "src/lib", "type": "directory" },
+    { "path": "src/lib/db.ts", "type": "file", "size": 2207 }
+  ],
+  "total": 3,
+  "truncated": false,
+  "cursor": null
+}
+```
+
+Every list answers its `total`. A list longer than `limit` (1,000 by default, at most
+10,000) is `truncated`, and its `cursor` asks for the next page: `?cursor=<cursor>`.
+
+### Reading
+
+`GET /v1/sandboxes/<id>/files/src/app.ts?offset=40&limit=20` answers lines 40 to 59 of a
+text file, numbered like `cat -n`: the line number right aligned in six places, a tab, the
+line.
+
+```json
+{
+  "path": "src/app.ts",
+  "sha256": "9f2c...",
+  "size": 1180,
+  "lines": 72,
+  "offset": 40,
+  "content": "    40\texport function main() {\n    41\t  return run()\n...",
+  "truncated": true,
+  "nextOffset": 60
+}
+```
+
+`offset` starts at `1`, `limit` is 2,000 lines by default. A read answers at most 256 KiB,
+and a line longer than 2,000 characters is cut, saying how long it was. `truncated` and
+`nextOffset` say where to read on. A binary file or one that is not UTF-8 is `415`: read it
+with `?raw`. A file larger than 32 MiB is `413` for a numbered read; `?raw` streams it.
+
+`sha256` is what an edit's `ifHash` and `PUT`'s `If-Match` compare against, so a change a
+run made since the read is not overwritten unseen.
+
+### Search
+
+`POST /v1/sandboxes/<id>/search` runs [ripgrep](https://github.com/BurntSushi/ripgrep) on the
+files, with `.gitignore` honoured and hidden files searched. The server needs `rg` on its
+`PATH`; without it, search is `501`.
+
+```json
+{ "pattern": "createUser\\(", "glob": "*.ts", "output_mode": "content", "C": 2 }
+```
+
+| Field | What it does |
+| --- | --- |
+| `pattern` | A regular expression in ripgrep's syntax. Its errors come back as ripgrep says them, with `400`. |
+| `path` | A file or directory to search in, the whole sandbox by default. |
+| `glob` | One glob or a list, as ripgrep's `--glob` (`*.ts`, `!*.test.ts`). |
+| `type` | A file type of ripgrep (`ts`, `py`, `rust`). |
+| `i` | Ignore case. |
+| `fixed_strings` | The pattern is text, not a regular expression. |
+| `multiline` | Let the pattern match across lines (`.` matches a line feed too). |
+| `A`, `B`, `C` | Lines after, before and around each match, for `content`. `-i`, `-A`, `-B` and `-C` work as names too. |
+| `output_mode` | `files_with_matches` (the default): the paths. `content`: the lines, `{ path, line, text }`, with `context: true` on the lines around a match. `count`: the matches per file. |
+| `head_limit` | Results per page, 250 by default, at most 5,000. `cursor` asks for the next page. |
+
+Results come in path order. ripgrep stops counting 20,000 results past the page; `exact`
+is then `false` and `total` is a lower bound. A search that takes longer than a minute is
+`504`.
+
+### Edits
+
+`POST /v1/sandboxes/<id>/edits` applies a batch of operations in order. Each one sees what
+the ones before it did, and the batch is written only when every operation applies: either
+all of it changes the files or none of it does. `dryRun: true` checks the batch and answers
+what it would change without writing anything.
+
+```json
+{
+  "ops": [
+    { "op": "replace", "path": "src/app.ts", "old_string": "return 1", "new_string": "return 2" },
+    { "op": "write", "path": "docs/notes.md", "content": "# Notes\n" },
+    { "op": "move", "path": "old.ts", "to": "src/new.ts" },
+    { "op": "delete", "path": "tmp/out.log" },
+    { "op": "patch", "patch": "*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch\n" }
+  ]
+}
+```
+
+| Operation | What it does |
+| --- | --- |
+| `replace` | Replaces `old_string` with `new_string` in a text file. `old_string` has to match exactly once, whitespace included; when it matches more often, the error names the lines. `replace_all: true` replaces every match. |
+| `write` | Writes `content` as the whole file, creating it and the directories above it. `encoding: "base64"` for bytes. |
+| `delete` | Deletes a file or a link. Directories are not deleted. |
+| `move` | Moves a file to `to`, which may not exist yet. |
+| `patch` | Applies a patch: a unified diff as `git diff`, `git format-patch` or `diff -u` write it, or the body of OpenAI's `apply_patch` (`*** Begin Patch`). |
+
+`replace`, `write`, `delete` and `move` take `ifHash`, the `sha256` of a read: when the file
+holds something else now, the batch is `412`. The answer lists what changed:
+
+```json
+{
+  "dryRun": false,
+  "files": [
+    { "path": "README.md", "change": "modified", "sha256": "1d0e...", "size": 512 },
+    { "path": "old.ts", "change": "deleted" },
+    { "path": "src/new.ts", "change": "added", "sha256": "77a1...", "size": 640 }
+  ]
+}
+```
+
+An operation that does not apply is `422`, and the error names it and says what to do:
+`op 0 (replace): old_string is 2 times in src/app.ts, at lines 12, 40: add lines around it
+until it is there once, or set replace_all`, with `op` (its index) in the body.
+
+How a patch is applied:
+
+* **A git diff** applies like `git apply`: each hunk where its lines are, or at the nearest
+  place where they all are when lines above it moved. It may add, delete, rename and copy
+  files and set the executable bit. Binary patches, links and submodules are refused; write
+  binary files with `PUT`. A diff of a file with CRLF line endings applies to it either way,
+  and the lines it adds take the file's line ending.
+* **An `apply_patch` body** finds each chunk's lines after the one before it, after the line
+  its `@@` names: exactly, then ignoring trailing whitespace, then ignoring whitespace around
+  the lines, as OpenAI's reference implementation does. `*** End of File` ties a chunk to the
+  end of the file, `*** Move to:` renames.
+
+A patch compares at most 20 million lines to place the hunks of one file; a hunk that is
+not in a large file stops there with `422`. Give it the line numbers of the file as it is,
+or more lines around the change.
+
+### Changes
+
+`GET /v1/sandboxes/<id>/changes` compares the files with the commit the sandbox was fetched
+at, the way a run sees them: new files count, what `.gitignore` leaves out does not, and
+neither does a git repository a task made inside the files. Neither does what hammerkit
+writes next to a task while it runs: a `.hammerkit/` directory at any depth (the last
+cache entry it resolved, the state of local tasks) is the run's, not a change. The build
+file `.hammerkit.yaml` is a change like any other file.
+
+| `format` | What it answers |
+| --- | --- |
+| `summary` (the default) | `{ commit, files: [{ path, status, from, additions, deletions }] }`: `added`, `modified`, `deleted`, `renamed` (with `from`), lines added and deleted (none for binary files). |
+| `diff` | The changes as `git diff` shows them, as `text/x-diff`. |
+| `patch` | One commit in `git format-patch` form, binary files included, for `git am` on another clone. `message`, `name` and `email` set its message and author (`hammerkit` by default). |
+
+This is how work leaves a sandbox for now: the caller, or a connector on their side, applies
+the patch and pushes a branch. Changes larger than 64 MiB are `413`.
+
+| Status | When |
+| --- | --- |
+| `400` | The path is not inside the sandbox, goes through a link, or is a directory where a file is needed; the body is malformed; a ripgrep error. |
+| `403` | The path is on the deny list; or no entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox any more. |
+| `404` | The sandbox, or the file, does not exist. |
+| `409` | A run holds the sandbox (edits, `PUT`, tree, search, changes); a move or patch onto a file that exists. |
+| `412` | The file changed since the read that `ifHash` or `If-Match` names. |
+| `413` | The edits would take more than the owner's bytes, a file is over 32 MiB, or the changes over 64 MiB. |
+| `415` | A numbered read or a text edit of a binary or non-UTF-8 file. |
+| `422` | An operation of the batch does not apply; `op` names it. |
+| `501` | Search, on a server without ripgrep. |
 
 ## Accounts
 

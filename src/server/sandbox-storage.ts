@@ -4,6 +4,7 @@ import { chmod, copyFile, lstat, mkdir, readdir, readlink, rm, stat, utimes } fr
 import { join, relative, sep } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
+import { HostSandboxFiles, SandboxFiles, SandboxGit } from './sandbox-files'
 
 // how many directories the walk reads at once, and how many entries of one it looks at at once
 const WALK_DIRECTORIES = 16
@@ -44,6 +45,8 @@ export interface SandboxStorage {
   attach(id: string): Promise<string>
   // the bytes it takes, its git data included
   usage(id: string): Promise<number>
+  // reading, searching and editing its files through the API
+  files(id: string): SandboxFiles
   remove(id: string): Promise<void>
   // the ids that have storage, to clean up what a crash left behind
   list(): Promise<string[]>
@@ -62,7 +65,9 @@ export class HostSandboxStorage implements SandboxStorage {
   private readonly queues = new Map<string, Promise<unknown>>()
   // the sandboxes walked since a run last wrote to them, with the links the walk found: only
   // a run's tasks write to a sandbox, between its `attach` and the `usage` it ends with, so
-  // until the next attach a `state` needs no walk
+  // until the next attach a `state` needs no walk. The edits of the file API write readable
+  // files and never a link, so a walk still holds after them: a link it found that an edit
+  // replaced is no link any more, and is added as the file it is.
   private readonly walked = new Map<string, string[]>()
   // the sandboxes a run attached and that were not measured since, and how often each was
   // attached: a walk while a run may write, or that a run attached during, is not reused
@@ -94,7 +99,7 @@ export class HostSandboxStorage implements SandboxStorage {
     return join(this.directory, id)
   }
 
-  private files(id: string): string {
+  private workTree(id: string): string {
     return join(this.root(id), 'files')
   }
 
@@ -104,13 +109,13 @@ export class HostSandboxStorage implements SandboxStorage {
     env: { [key: string]: string },
     signal: AbortSignal,
     action: string,
-    options?: { input?: string | Buffer; exitCodes?: number[] }
+    options: { input?: string | Buffer; exitCodes?: number[]; maxBuffer?: number } = {}
   ): Promise<string> {
     const root = this.root(id)
     return git(
       [
         `--git-dir=${join(root, 'git')}`,
-        `--work-tree=${this.files(id)}`,
+        `--work-tree=${this.workTree(id)}`,
         '-c',
         `core.hooksPath=${join(root, 'no-hooks')}`,
         '-c',
@@ -133,11 +138,77 @@ export class HostSandboxStorage implements SandboxStorage {
     )
   }
 
+  // The environment of git when it reads the sandbox, without an index of its own.
+  private readEnv(extra: { [key: string]: string } = {}): { [key: string]: string } {
+    const env: { [key: string]: string } = {}
+    for (const [key, value] of Object.entries(this.env)) {
+      if (value !== undefined && key !== 'GIT_INDEX_FILE') {
+        env[key] = value
+      }
+    }
+    // reading the files needs no configuration of the server's: a filter or attributes the
+    // machine's git config names would run on files a task wrote
+    env.GIT_CONFIG_NOSYSTEM = '1'
+    // a file that is never there, which git reads as empty: Git for Windows refuses `\\.\nul`
+    env.GIT_CONFIG_GLOBAL = join(this.directory, 'no-git-config')
+    return { ...env, ...extra }
+  }
+
+  // `fn` with a copy of the sandbox's index that holds the files as they are (`addFiles`), so
+  // neither the index nor the files change, and what it wrote to the git data is pruned again.
+  // Files a task made unreadable are made readable first: git would leave them out and call
+  // them unchanged. Holds the sandbox. No walk when nothing wrote since the last one.
+  private withIndex<T>(id: string, signal: AbortSignal, fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
+    return this.exclusive(id, async () => {
+      const links = this.walked.get(id) ?? (await this.walkOnce(id)).links
+      const root = this.root(id)
+      const index = join(root, `index-${randomBytes(6).toString('hex')}`)
+      try {
+        const original = join(root, 'git', 'index')
+        await copyFile(original, index).then(
+          // with the time of the index: git takes a file changed in the same second as it was
+          // written for changed only when the index is no newer than the file (racy git)
+          async () => {
+            const stats = await stat(original)
+            await utimes(index, stats.atime, stats.mtime)
+          },
+          () => undefined
+        )
+        const env = this.readEnv({ GIT_INDEX_FILE: index })
+        await this.addFiles(id, env, signal, links)
+        return await fn((args, action, options = {}) =>
+          this.git(id, args, { ...env, ...options.env }, signal, action, { maxBuffer: options.maxBuffer })
+        )
+      } finally {
+        await rm(index, { force: true })
+        // the sandbox's own index and HEAD keep what they need
+        await this.git(id, ['prune', '--expire=now'], this.readEnv(), AbortSignal.timeout(60_000), 'read').catch(
+          () => undefined
+        )
+      }
+    })
+  }
+
+  // `maxChangesBytes` is for tests, which make changes larger than it without writing 64 MiB
+  files(id: string, maxChangesBytes?: number): SandboxFiles {
+    const timeout = () => AbortSignal.timeout(5 * 60 * 1000)
+    return new HostSandboxFiles(
+      this.workTree(id),
+      {
+        run: (args, action, options = {}) =>
+          this.git(id, args, this.readEnv(options.env), timeout(), action, { maxBuffer: options.maxBuffer }),
+        withIndex: (fn) => this.withIndex(id, timeout(), fn),
+      },
+      this.env,
+      maxChangesBytes
+    )
+  }
+
   async create(id: string, fetch: SandboxFetch): Promise<string> {
     const root = this.root(id)
     // the sandboxes are their owners', nobody else on the machine reads them
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    await mkdir(this.files(id), { recursive: true })
+    await mkdir(this.workTree(id), { recursive: true })
     try {
       await git(['init', '--quiet', '--bare', join(root, 'git')], fetch.env, fetch.signal, `sandbox ${id}`, 'create')
       return await this.checkout(id, fetch, true)
@@ -179,64 +250,36 @@ export class HostSandboxStorage implements SandboxStorage {
   // unreadable are made readable first: git would leave them out and call the sandbox
   // clean.
   async state(id: string, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
-    return this.exclusive(id, async () => {
-      const links = this.walked.get(id) ?? (await this.walkOnce(id)).links
-      return this.readState(id, signal, links)
+    return this.withIndex(id, signal, async (run) => {
+      const tree = (await run(['write-tree'], 'read')).trim()
+      const [commit, base] = (await run(['rev-parse', 'HEAD', 'HEAD^{tree}'], 'read')).trim().split('\n')
+      return { commit, tree, clean: tree === base }
     })
   }
 
-  private async readState(id: string, signal: AbortSignal, links: string[]): Promise<SandboxState> {
-    const root = this.root(id)
-    const index = join(root, `index-${randomBytes(6).toString('hex')}`)
-    const base: { [key: string]: string } = {}
-    for (const [key, value] of Object.entries(this.env)) {
-      if (value !== undefined && key !== 'GIT_INDEX_FILE') {
-        base[key] = value
+  // Adds the files as they are to the index of `env`. A link is written as a link and never
+  // walked: Git for Windows takes a junction for a directory, and would read what a
+  // `mklink /J x C:\` of a task points to.
+  private async addFiles(
+    id: string,
+    env: { [key: string]: string },
+    signal: AbortSignal,
+    links: string[]
+  ): Promise<void> {
+    const written = await this.unignoredLinks(id, links, env, signal)
+    const pathspecs = ['.', ...written.map((link) => `:(top,exclude,literal)${link.path}`)]
+    await this.git(id, ['add', '--all', '--pathspec-from-file=-', '--pathspec-file-nul'], env, signal, 'read', {
+      input: pathspecs.map((pathspec) => `${pathspec}\0`).join(''),
+    })
+    if (written.length > 0) {
+      const entries: string[] = []
+      for (const link of written) {
+        const blob = await this.git(id, ['hash-object', '-w', '--stdin'], env, signal, 'read', { input: link.target })
+        entries.push(`120000 ${blob.trim()}\t${link.path}\0`)
       }
-    }
-    // reading the files needs no configuration of the server's: a filter or attributes the
-    // machine's git config names would run on files a task wrote
-    base.GIT_CONFIG_NOSYSTEM = '1'
-    // a file that is never there, which git reads as empty: Git for Windows refuses `\\.\nul`
-    base.GIT_CONFIG_GLOBAL = join(this.directory, 'no-git-config')
-    const env = { ...base, GIT_INDEX_FILE: index }
-    try {
-      const original = join(root, 'git', 'index')
-      await copyFile(original, index).then(
-        // with the time of the index: git takes a file changed in the same second as it was
-        // written for changed only when the index is no newer than the file (racy git)
-        async () => {
-          const stats = await stat(original)
-          await utimes(index, stats.atime, stats.mtime)
-        },
-        () => undefined
-      )
-      // A link is written as a link and never walked: Git for Windows takes a junction for
-      // a directory, and would read what a `mklink /J x C:\` of a task points to.
-      const written = await this.unignoredLinks(id, links, env, signal)
-      const pathspecs = ['.', ...written.map((link) => `:(top,exclude,literal)${link.path}`)]
-      await this.git(id, ['add', '--all', '--pathspec-from-file=-', '--pathspec-file-nul'], env, signal, 'read', {
-        input: pathspecs.map((pathspec) => `${pathspec}\0`).join(''),
+      await this.git(id, ['update-index', '-z', '--add', '--replace', '--index-info'], env, signal, 'read', {
+        input: entries.join(''),
       })
-      if (written.length > 0) {
-        const entries: string[] = []
-        for (const link of written) {
-          const blob = await this.git(id, ['hash-object', '-w', '--stdin'], env, signal, 'read', { input: link.target })
-          entries.push(`120000 ${blob.trim()}\t${link.path}\0`)
-        }
-        await this.git(id, ['update-index', '-z', '--add', '--replace', '--index-info'], env, signal, 'read', {
-          input: entries.join(''),
-        })
-      }
-      const tree = (await this.git(id, ['write-tree'], env, signal, 'read')).trim()
-      const [commit, base] = (await this.git(id, ['rev-parse', 'HEAD', 'HEAD^{tree}'], env, signal, 'read'))
-        .trim()
-        .split('\n')
-      return { commit, tree, clean: tree === base }
-    } finally {
-      await rm(index, { force: true })
-      // the sandbox's own index and HEAD keep what they need
-      await this.git(id, ['prune', '--expire=now'], base, AbortSignal.timeout(60_000), 'read').catch(() => undefined)
     }
   }
 
@@ -248,7 +291,7 @@ export class HostSandboxStorage implements SandboxStorage {
     env: { [key: string]: string },
     signal: AbortSignal
   ): Promise<{ path: string; target: Buffer }[]> {
-    const files = this.files(id)
+    const files = this.workTree(id)
     const links: { path: string; target: Buffer }[] = []
     for (const path of paths) {
       if (!path.startsWith(files + sep) || !(await lstat(path).catch(() => undefined))?.isSymbolicLink()) {
@@ -268,7 +311,7 @@ export class HostSandboxStorage implements SandboxStorage {
   }
 
   async attach(id: string): Promise<string> {
-    const files = this.files(id)
+    const files = this.workTree(id)
     const stats = await lstat(files).catch(() => undefined)
     if (!stats?.isDirectory()) {
       throw new Error(`the sandbox ${id} has no files on this server`)
@@ -287,7 +330,7 @@ export class HostSandboxStorage implements SandboxStorage {
       // after a run: its tasks are done
       this.attached.delete(id)
       const { bytes } = await this.walkOnce(id)
-      return bytes + ((await this.containers?.volumeBytes(this.files(id)).catch(() => 0)) ?? 0)
+      return bytes + ((await this.containers?.volumeBytes(this.workTree(id)).catch(() => 0)) ?? 0)
     })
   }
 
@@ -299,7 +342,7 @@ export class HostSandboxStorage implements SandboxStorage {
       await this.reclaim(id).catch(() => undefined)
       await rm(this.root(id), { recursive: true, force: true, maxRetries: 3 })
       // without docker there is nothing to remove now; volumes stay labelled with the files
-      await this.containers?.removeVolumes(this.files(id)).catch(() => undefined)
+      await this.containers?.removeVolumes(this.workTree(id)).catch(() => undefined)
     })
   }
 

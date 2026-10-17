@@ -390,6 +390,24 @@ describe('SandboxRegistry', () => {
     expect(walk).toHaveBeenCalledTimes(4)
   }, 60_000)
 
+  it('reads the files of an edit without walking them again', async () => {
+    const storage = new HostSandboxStorage(join(root, 'files'), process.env)
+    const signal = AbortSignal.timeout(60_000)
+    await storage.create('sbx_edit', { url: repository, ref: 'main', env: process.env as any, signal })
+    const files = await storage.attach('sbx_edit')
+    // a run left a link, and was measured
+    mkdirSync(join(files, 'dir'))
+    symlinkSync(join(files, 'dir'), join(files, 'link'), 'junction')
+    await storage.usage('sbx_edit')
+    const walk = vi.spyOn(storage as any, 'walk')
+    const edits = storage.files('sbx_edit')
+    await (await edits.plan([{ op: 'delete', path: 'link' }])).commit()
+    await (await edits.plan([{ op: 'write', path: 'link', content: 'a file now\n' }])).commit()
+    expect(await edits.changes()).toEqual([{ path: 'link', status: 'added', additions: 1, deletions: 0 }])
+    expect(await storage.state('sbx_edit')).toMatchObject({ clean: false })
+    expect(walk).not.toHaveBeenCalled()
+  }, 60_000)
+
   it('lets a change wait for a delete, and then does not find the sandbox', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
@@ -412,6 +430,52 @@ describe('SandboxRegistry', () => {
     await sandboxes.measure(sandbox.id)
     expect(sandboxes.get(alice, sandbox.id)?.bytes).toBeGreaterThanOrEqual(sandbox.bytes + 64 * 1024)
     expect(registryWith({ bytes: sandbox.bytes }).overLimit(alice)).toBeUndefined()
+  })
+
+  it('keeps edits within the server total, and counts what they free', async () => {
+    const sandbox = await registryWith().create(alice, REPO, 'main')
+    const full = registryWith({ total: sandbox.bytes + 10 })
+    await full.load()
+    const write = (content: string) => [{ op: 'write' as const, path: 'notes/new.txt', content }]
+    await expect(full.edit(alice, sandbox.id, write('x'.repeat(100)))).rejects.toMatchObject({
+      status: 507,
+      message: 'the server has no room for these edits',
+    })
+    expect(await full.files(alice, sandbox.id).stat('notes/new.txt')).toBeUndefined()
+    await full.edit(alice, sandbox.id, write('x'.repeat(10)))
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes + 10)
+    // a batch that frees bytes makes room again
+    await full.edit(alice, sandbox.id, [{ op: 'delete', path: 'notes/new.txt' }])
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes)
+    await full.edit(alice, sandbox.id, [{ op: 'delete', path: 'input.txt' }])
+    expect(full.get(alice, sandbox.id)?.bytes).toBe(sandbox.bytes - 3)
+  })
+
+  it("edits only an owner's sandbox that no run holds, within their bytes", async () => {
+    const sandboxes = registryWith({ bytes: 1024 * 1024 })
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    const write = (content: string) => [{ op: 'write' as const, path: 'notes/new.txt', content }]
+    await expect(sandboxes.edit(bob, sandbox.id, write('x'))).rejects.toMatchObject({ status: 404 })
+    holder = 'run_1'
+    await expect(sandboxes.edit(alice, sandbox.id, write('x'))).rejects.toMatchObject({
+      status: 409,
+      message: `the run run_1 holds the sandbox ${sandbox.id}, wait for it to finish or cancel it`,
+    })
+    // reads work while a run holds it
+    expect((await sandboxes.files(alice, sandbox.id).read('input.txt', {})).content).toBe('     1\tone')
+    holder = undefined
+    expect(await sandboxes.edit(alice, sandbox.id, write('hello'), true)).toMatchObject([{ change: 'added' }])
+    expect(await sandboxes.files(alice, sandbox.id).stat('notes/new.txt')).toBeUndefined()
+    expect(await sandboxes.edit(alice, sandbox.id, write('hello'))).toMatchObject([{ path: 'notes/new.txt', size: 5 }])
+    const after = sandboxes.get(alice, sandbox.id)
+    expect(after?.bytes).toBe(sandbox.bytes + 5)
+    await expect(sandboxes.edit(alice, sandbox.id, write('x'.repeat(1024 * 1024)))).rejects.toMatchObject({
+      status: 413,
+    })
+    expect((await sandboxes.files(alice, sandbox.id).read('notes/new.txt', {})).content).toBe('     1\thello')
+    expect(await sandboxes.read(alice, sandbox.id, (files) => files.changes())).toEqual([
+      { path: 'notes/new.txt', status: 'added', additions: 1, deletions: 0 },
+    ])
   })
 
   it("does not hold up a run's result for its measure, but the owner's next run waits for it", async () => {

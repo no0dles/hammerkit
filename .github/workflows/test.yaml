@@ -33,6 +33,16 @@ jobs:
           cache: 'npm'
       - name: Install npm packages
         run: npm ci
+      # sandbox search runs ripgrep, which the image does not have. From its release, not
+      # Chocolatey: choco exits 0 having installed nothing when its feed is down.
+      - name: Install ripgrep
+        shell: pwsh
+        run: |
+          $name = 'ripgrep-14.1.1-x86_64-pc-windows-msvc'
+          Invoke-WebRequest "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/$name.zip" -OutFile "$env:RUNNER_TEMP\rg.zip" -MaximumRetryCount 3
+          Expand-Archive "$env:RUNNER_TEMP\rg.zip" -DestinationPath $env:RUNNER_TEMP
+          "$env:RUNNER_TEMP\$name" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & "$env:RUNNER_TEMP\$name\rg.exe" --version
       - name: Run tests
         run: npm test
         timeout-minutes: 15
@@ -222,6 +232,10 @@ jobs:
       - name: Start local registry
         if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
         run: docker run -d --restart=always -p 5000:5000 --name registry registry:2
+      # sandbox search runs ripgrep, which the image does not have
+      - name: Install ripgrep
+        if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       # Serialize (inside the task): one single-node kind cluster on a 4-vCPU
       # runner, so running suites one at a time avoids scheduling/volume races.
       # HAMMERKIT_TEST_RUN_ID is not passed on: hammerkit hands a task only the
