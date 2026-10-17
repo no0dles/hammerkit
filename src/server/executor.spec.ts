@@ -18,6 +18,19 @@ import { SandboxRegistry } from './sandboxes'
 import { HostSandboxStorage } from './sandbox-storage'
 import { NetworkSchema } from '../schema/network-schema'
 
+// fs.promises.rm of the path set here fails the way Windows refuses a directory in use
+const removal = vi.hoisted(() => ({ refused: undefined as string | undefined }))
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>()
+  return {
+    ...actual,
+    rm: (path: string, options?: Parameters<typeof actual.rm>[1]) =>
+      path === removal.refused
+        ? Promise.reject(Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${path}'`), { code: 'EBUSY' }))
+        : actual.rm(path, options),
+  }
+})
+
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const REPO = 'git.test/corp/payments'
 
@@ -110,11 +123,16 @@ describe('HostExecutor', () => {
       directory: runs,
       cache: join(root, 'cache'),
       worker: TEST_WORKER,
+      // longer than any test waits: a run that stops in a test stopped on its cancel
+      stopGraceMs: 60_000,
     }
     executor = new HostExecutor(options)
   })
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }))
+  afterEach(() => {
+    removal.refused = undefined
+    rmSync(root, { recursive: true, force: true })
+  })
 
   it('runs the published tasks on the code of the ref and reports them', async () => {
     const hash = await publish({
@@ -365,16 +383,40 @@ describe('HostExecutor', () => {
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo started\n      - sleep 30\n',
     })
     const abort = new AbortController()
-    const started = Date.now()
-    const result = execute(run(hash), abort.signal)
-    for (let i = 0; i < 300 && !existsSync(runs); i++) {
+    const events: RunEventData[] = []
+    const result = executor.execute(run(hash), { emit: (e) => events.push(e), signal: abort.signal }).then(
+      () => undefined,
+      (e: Error) => e
+    )
+    const started = () => events.some((e) => e.type === 'log' && e.task === 'build' && e.text.includes('started'))
+    for (let i = 0; i < 1500 && !started(); i++) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
+    expect(started()).toBe(true)
+    abort.abort()
+    const aborted = Date.now()
+    expect((await result)?.message).toBe('the run was cancelled')
+    // well within the grace period: the process stopped on the cancel, it was not killed
+    expect(Date.now() - aborted).toBeLessThan(10_000)
+    expect(events).not.toContainEqual(expect.objectContaining({ text: expect.stringMatching(/could not be removed/) }))
+    expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
+  })
+
+  it('kills the process of a cancelled run that does not stop in time', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    // reads the run and then neither listens for the cancel nor ends
+    const script = `process.stdin.once('data', () => { process.stdout.write('ready\\n'); setInterval(() => {}, 1000) })`
+    const stubborn = new HostExecutor({ ...options, worker: [process.execPath, '-e', script], stopGraceMs: 200 })
+    const abort = new AbortController()
+    const started = Date.now()
+    const result = stubborn.execute(run(hash), { emit: () => undefined, signal: abort.signal }).then(
+      () => undefined,
+      (e: Error) => e
+    )
     await new Promise((resolve) => setTimeout(resolve, 1500))
     abort.abort()
-    const { error } = await result
-    expect(error?.message).toMatch(/cancel/)
-    expect(Date.now() - started).toBeLessThan(25_000)
+    expect((await result)?.message).toBe('the run was cancelled')
+    expect(Date.now() - started).toBeLessThan(10_000)
   })
 
   it('removes the working directory of the run, failed or not', async () => {
@@ -383,6 +425,45 @@ describe('HostExecutor', () => {
     const bad = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [exit 1]\n' })
     await execute(run(bad))
     expect(existsSync(runs) ? readdirSync(runs) : []).toEqual([])
+  })
+
+  it('ends a run the way it ended when its working directory can not be removed', async () => {
+    removal.refused = join(runs, 'run_test')
+    const operator: string[] = []
+    executor = new HostExecutor({ ...options, log: (line) => operator.push(line) })
+    const ok = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo ok]\n' })
+    const passed = await execute(run(ok))
+    expect(passed.error).toBeUndefined()
+    expect(passed.events).toContainEqual(
+      expect.objectContaining({
+        type: 'log',
+        stream: 'stderr',
+        text: 'the working directory of the run could not be removed: EBUSY',
+      })
+    )
+    expect(operator).toContainEqual(expect.stringMatching(/^run=run_test could not remove its directory: EBUSY/))
+
+    const bad = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [exit 1]\n' })
+    const failed = await execute(run(bad))
+    expect(failed.error?.message).toMatch(/build failed/)
+
+    // cancelled once its task runs, so it is the process of the run that is stopped
+    const slow = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo started, sleep 30]\n' })
+    const abort = new AbortController()
+    const seen: RunEventData[] = []
+    const cancelled = executor.execute(run(slow), { emit: (e) => seen.push(e), signal: abort.signal }).then(
+      () => undefined,
+      (e: Error) => e
+    )
+    const started = () => seen.some((e) => e.type === 'log' && e.task === 'build' && e.text.includes('started'))
+    for (let i = 0; i < 1500 && !started(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    expect(started()).toBe(true)
+    abort.abort()
+    const aborted = Date.now()
+    expect((await cancelled)?.message).toBe('the run was cancelled')
+    expect(Date.now() - aborted).toBeLessThan(10_000)
   })
 
   it('fails with the reason when the server does not list the repository', async () => {

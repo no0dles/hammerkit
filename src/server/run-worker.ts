@@ -1,3 +1,4 @@
+import { createInterface } from 'readline'
 import { Writable } from 'stream'
 import { z } from 'zod'
 import { CliExecOptions, getCli } from '../cli'
@@ -226,12 +227,24 @@ function reportTasks(
   }
 }
 
-async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-  }
-  return Buffer.concat(chunks).toString('utf8')
+// The run is the first line of the standard input. The server keeps it open and writes
+// `cancel` on it to stop the run: that works the same on every platform, where a signal
+// on Windows ends the process without letting it stop its tasks.
+function readInput(stdin: NodeJS.ReadableStream, cancel: () => void): { input: Promise<string>; close: () => void } {
+  const lines = createInterface({ input: stdin, crlfDelay: Infinity })
+  let first: string | undefined
+  const input = new Promise<string>((resolve) => {
+    lines.on('line', (line) => {
+      if (first === undefined) {
+        first = line
+        resolve(line)
+      } else if (line.trim() === 'cancel') {
+        cancel()
+      }
+    })
+    lines.on('close', () => resolve(first ?? ''))
+  })
+  return { input, close: () => lines.close() }
 }
 
 /**
@@ -247,7 +260,7 @@ export async function workerMain(
   abortCtrl: AbortController
 ): Promise<void> {
   const say = (message: WorkerMessage) => stdout.write(`${JSON.stringify(message)}\n`)
-  // the server stops a run with a signal
+  // the server stops a run with `cancel` on the standard input, anybody else with a signal
   let cancelled = false
   const stop = () => {
     cancelled = true
@@ -255,10 +268,13 @@ export async function workerMain(
   }
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
   signals.forEach((signal) => process.on(signal, stop))
+  const reader = readInput(stdin, stop)
   let input: WorkerInput
   try {
-    input = workerInputSchema.parse(JSON.parse(await readAll(stdin)))
+    input = workerInputSchema.parse(JSON.parse(await reader.input))
   } catch (e) {
+    reader.close()
+    signals.forEach((signal) => process.off(signal, stop))
     say({ kind: 'result', ok: false, error: `the run could not be read: ${e instanceof Error ? e.message : e}` })
     return
   }
@@ -275,6 +291,7 @@ export async function workerMain(
   } catch (e) {
     say({ kind: 'result', ok: false, error: e instanceof Error ? e.message : String(e) })
   } finally {
+    reader.close()
     signals.forEach((signal) => process.off(signal, stop))
   }
 }

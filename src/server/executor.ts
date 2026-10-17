@@ -25,7 +25,8 @@ function isGitDirectory(segment: string): boolean {
   return name === '.git' || name === 'git~1'
 }
 
-// A cancelled run gets this long to stop its tasks and remove its containers
+// A cancelled run gets this long to stop its tasks and remove its containers, after that
+// its process is killed
 const STOP_GRACE_MS = 15_000
 
 // what is kept of the error output of a process that died without saying why
@@ -56,6 +57,10 @@ export interface HostExecutorOptions {
   sandboxes?: SandboxRunOptions
   // where container tasks run when not on this machine's docker daemon
   placement?: RunPlacement
+  // the operator's log, which hears of a run directory that could not be removed
+  log?: (line: string) => void
+  // how long a cancelled run gets to stop before its process is killed
+  stopGraceMs?: number
 }
 
 export interface SandboxRunOptions {
@@ -91,9 +96,9 @@ function cacheNamespace(run: Run): string {
  * Runs the tasks of a run on this machine with the engine of `hammerkit run`, in a
  * process of its own.
  *
- * The working directory is made for the run and removed afterwards. Its build
- * file is the published version the run is pinned to, written over the code of the
- * source, so the commands are the published ones whatever the source says. The process
+ * The working directory is made for the run and removed afterwards, or reported if it can
+ * not be. Its build file is the published version the run is pinned to, written over the
+ * code of the source, so the commands are the published ones whatever the source says. The process
  * starts with an environment the server builds: the variables `runs.env` lists, a home
  * directory that is the run's alone, and a cache directory per source trust. So what
  * the engine reads of its process (the docker host, the registry logins in the home
@@ -241,11 +246,29 @@ export class HostExecutor implements RunExecutor {
       }
     } finally {
       context.signal.removeEventListener('abort', abort)
-      await rm(root, { recursive: true, force: true })
+      await this.removeRunDirectory(run, root, context)
       if (source.type === 'sandbox') {
         // what the run wrote counts against the owner's limits, from their next run or create
         sandboxes?.registry.measure(source.id).catch(() => undefined)
       }
+    }
+  }
+
+  // A task of the run may still hold a file of its directory for a moment after the run
+  // ended, which Windows refuses to remove. A directory that stays is reported, to the run
+  // by its error code and to the operator with its path; it does not change how the run ended.
+  private async removeRunDirectory(run: Run, root: string, context: RunContext): Promise<void> {
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    } catch (e) {
+      const error = e as NodeJS.ErrnoException
+      context.emit({
+        type: 'log',
+        task: 'hammerkit',
+        stream: 'stderr',
+        text: `the working directory of the run could not be removed: ${error.code ?? 'unknown error'}`,
+      })
+      this.options.log?.(`run=${run.id} could not remove its directory: ${error.message}`)
     }
   }
 
@@ -266,9 +289,11 @@ export class HostExecutor implements RunExecutor {
     return env
   }
 
-  // Starts the process, hands it the run on its standard input and relays what it reports. It
-  // is stopped with SIGTERM when the run is cancelled, so the engine removes its containers
-  // and stops its tasks, and killed if it does not stop in time.
+  // Starts the process, hands it the run on its standard input and relays what it reports.
+  // A cancelled run is told so on the standard input, the same on every platform, so the
+  // engine stops its tasks and removes its containers; a signal on Windows would end the
+  // process at once and leave its tasks running in the directory of the run. The process is
+  // killed if it has not stopped after the grace period.
   private runInProcess(
     command: string[],
     input: WorkerInput,
@@ -284,12 +309,19 @@ export class HostExecutor implements RunExecutor {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
+      child.stdin.on('error', () => undefined)
+      // the run first, so a cancel comes after it; kept open, it is how a cancel reaches the process
+      child.stdin.write(`${JSON.stringify(input)}\n`)
       let result: Extract<WorkerMessage, { kind: 'result' }> | undefined
       let stderr = ''
       let killTimer: NodeJS.Timeout | undefined
       const stop = () => {
-        child.kill('SIGTERM')
-        killTimer = setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS)
+        child.stdin.write('cancel\n', (e) => {
+          if (e) {
+            child.kill()
+          }
+        })
+        killTimer = setTimeout(() => child.kill('SIGKILL'), this.options.stopGraceMs ?? STOP_GRACE_MS)
         killTimer.unref()
       }
       if (signal.aborted) {
@@ -305,6 +337,8 @@ export class HostExecutor implements RunExecutor {
             context.emit(message.event)
           } else if (message.kind === 'result') {
             result = message
+            // nothing left to tell the process
+            child.stdin.end()
           }
         } catch {
           // not ours: whatever else the process prints is not an event of the run
@@ -313,8 +347,6 @@ export class HostExecutor implements RunExecutor {
       child.stderr.on('data', (chunk: Buffer) => {
         stderr = (stderr + chunk.toString('utf8')).slice(-MAX_STDERR)
       })
-      child.stdin.on('error', () => undefined)
-      child.stdin.end(JSON.stringify(input))
       child.on('error', (e) => {
         signal.removeEventListener('abort', stop)
         clearTimeout(killTimer)
