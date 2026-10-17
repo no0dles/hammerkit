@@ -74,7 +74,7 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
   },
   {
     file: join('cli', 'remote.mdx'),
-    snippet: 'hammerkit remote publish payments build',
+    snippet: 'hammerkit remote publish build',
     reason: 'GitLab CI (.gitlab-ci.yml) job that publishes with its ID token, not a hammerkit build file',
   },
   {

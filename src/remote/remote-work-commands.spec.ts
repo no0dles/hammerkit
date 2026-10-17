@@ -227,7 +227,7 @@ describe('remote publish', () => {
   it('takes the token of a CI job or an agent instead of a sign-in', async () => {
     await withHarness('remote-publish-token', async (h) => {
       h.env({ HAMMERKIT_TOKEN: h.token('bob') })
-      expect(await h.run('remote', 'publish', 'payments', 'build')).toContain('published payments to build')
+      expect(await h.run('remote', 'publish', 'build')).toContain('published to build')
 
       // a token command runs for the call, and wins over a fixed token
       const run = await submit(h, 'alice', 'deploy')
@@ -239,9 +239,7 @@ describe('remote publish', () => {
       expect(await h.run('remote', 'approve', run.id, 'build')).toContain('approved')
 
       h.env({ HAMMERKIT_TOKEN_COMMAND: undefined, HAMMERKIT_TOKEN: 'two words' })
-      await expect(h.run('remote', 'publish', 'payments', 'build')).rejects.toThrow(
-        'HAMMERKIT_TOKEN holds more than a token'
-      )
+      await expect(h.run('remote', 'publish', 'build')).rejects.toThrow('HAMMERKIT_TOKEN holds more than a token')
     })
   })
 
