@@ -10,7 +10,8 @@ import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kub
 import { getErrorMessage } from '../log'
 import { NETWORK_LABEL, NETWORK_LIMITED } from '../kubernetes/network-policy'
 import { sleep } from '../utils/sleep'
-import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
+import { SandboxClaim } from './sandbox-storage'
 import { getVersion } from '../version'
 import { HostExecutor, HostExecutorOptions, RunPlacement } from './executor'
 import { Run, RunContext, RunExecutor } from './runs'
@@ -173,10 +174,9 @@ export class KubernetesExecutor implements RunExecutor {
   private readonly instance: KubernetesInstance
   private readonly access: ReturnType<typeof getClusterAccess>
   private readonly namespace: string
+  private readonly namespaces: CallerNamespaces
   // the run that executes, or the last one waiting, per caller namespace
   private readonly queues = new Map<string, Promise<void>>()
-  // who the server is to the cluster, the subject of its RoleBinding in a caller's namespace
-  private subject: Promise<RbacV1Subject> | undefined
 
   constructor(
     private readonly config: ServerConfig & { backend: KubernetesBackend },
@@ -200,6 +200,7 @@ export class KubernetesExecutor implements RunExecutor {
       )
     }
     this.namespace = namespace
+    this.namespaces = new CallerNamespaces(this.instance, config.backend)
     this.host = new HostExecutor({ ...options, placement: this.placement() })
   }
 
@@ -228,9 +229,9 @@ export class KubernetesExecutor implements RunExecutor {
   private placement(): RunPlacement {
     const backend = this.config.backend
     return {
-      prepare: async (run: Run, context: RunContext) => {
+      prepare: async (run: Run, context: RunContext, work?: { root: string; claim?: SandboxClaim }) => {
         const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
-        await this.prepareNamespace(namespace)
+        await this.namespaces.prepare(namespace)
         // what an earlier run left when the server stopped before its end; the runs
         // of a caller execute one at a time, so no other run is in the namespace
         await removeRunObjects(
@@ -258,6 +259,7 @@ export class KubernetesExecutor implements RunExecutor {
                 account.kubernetes ? [[name, account.kubernetes]] : []
               )
             ),
+            ...(work?.claim ? { workspace: getWorkspace(work.root, work.claim, namespace) } : {}),
           },
         }
         return { kubernetes, env: this.access.env }
@@ -278,14 +280,32 @@ export class KubernetesExecutor implements RunExecutor {
       },
     }
   }
+}
+
+/**
+ * The namespaces of callers on the cluster: named by the caller (getCallerNamespace),
+ * made on first use, with the operator's quota.
+ */
+export class CallerNamespaces {
+  // who the server is to the cluster, the subject of its RoleBinding in a caller's namespace
+  private subject: Promise<RbacV1Subject> | undefined
+
+  constructor(
+    private readonly instance: KubernetesInstance,
+    private readonly backend: KubernetesBackend
+  ) {}
+
+  name(owner: { iss: string; sub: string }): string {
+    return getCallerNamespace(this.backend.namespacePrefix, owner)
+  }
 
   // The caller's namespace: made by the server and kept apart from the others. The
   // server binds its rights there, isolates the network of the pods, applies the
   // operator's quota and gives containers without resources default requests, so they
   // are admitted under a quota on compute. All of it is replaced on every run, so the
   // namespace follows the config.
-  private async prepareNamespace(namespace: string): Promise<void> {
-    const backend = this.config.backend
+  async prepare(namespace: string): Promise<void> {
+    const backend = this.backend
     let existing
     try {
       existing = await this.instance.coreApi.readNamespace({ name: namespace })
@@ -386,6 +406,15 @@ export class KubernetesExecutor implements RunExecutor {
     }
     return this.subject
   }
+}
+
+// The claim of a sandbox as the Jobs of its run mount it: the run's copy of the files is
+// `root`, a source below it is the same path below `subPath` in the claim.
+function getWorkspace(root: string, claim: SandboxClaim, namespace: string): WorkKubernetesWorkspace {
+  if (claim.namespace !== namespace) {
+    throw new Error(`the sandbox is in ${claim.namespace}, the run in ${namespace}`)
+  }
+  return { root, claim: claim.name, subPath: claim.subPath, label: claim.label }
 }
 
 // Everything a run made in the caller's namespace, by the label selector of the run:

@@ -4,6 +4,7 @@ import { parse } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import { parseDuration, parseSize } from '../utils/units'
+import { getVersion } from '../version'
 import { getAllowListError, networkSchema } from '../schema/network-schema'
 import {
   buildFileSecretAccountSchema,
@@ -189,6 +190,46 @@ export const kubernetesPoolSchema = z
 export type KubernetesPool = z.infer<typeof kubernetesPoolSchema>
 
 // The tasks of runs execute as Jobs on a cluster, in a namespace per caller.
+const duration = z.string().refine((value) => {
+  try {
+    return parseDuration(value) > 0
+  } catch {
+    return false
+  }
+}, 'expected a duration like 30m, 1h or 1d')
+
+const size = z.string().refine((value) => {
+  try {
+    return parseSize(value) > 0
+  } catch {
+    return false
+  }
+}, 'expected a size like 500Mi, 20Gi or 1Ti')
+
+// Where a cluster keeps sandboxes: a claim per sandbox in its caller's namespace
+const kubernetesSandboxesSchema = z
+  .object({
+    // the image of the short pods that fetch, read and change the files of a sandbox:
+    // hammerkit with git and ripgrep, as the image of this version is
+    image: z.string().min(1).default(`no0dles/hammerkit:${getVersion()}`),
+    // what each of the two claims of a sandbox requests: one holds its files, which tasks
+    // mount, the other its git data, which only the pod of its files mounts
+    size: size.default('4Gi'),
+    // of the claims of sandboxes; the class of tasks' claims, else the cluster's default,
+    // when left out. With a class of their own, a ResourceQuota on that class in each
+    // caller's namespace holds `sandboxes.limits`.
+    storageClass: z.string().min(1).optional(),
+    // how long the pod of a sandbox's files stays after the last request
+    idle: duration.default('1m'),
+    // of the pod of a sandbox's files, which runs git and ripgrep over all of them
+    resources: z
+      .object({ requests: quantitiesSchema.optional(), limits: quantitiesSchema.optional() })
+      .strict()
+      .default({ requests: { cpu: '100m', memory: '256Mi' }, limits: { memory: '2Gi' } }),
+  })
+  .strict()
+  .default({})
+
 const kubernetesBackendSchema = z
   .object({
     type: z.literal('kubernetes'),
@@ -222,6 +263,7 @@ const kubernetesBackendSchema = z
       .object({ requests: quantitiesSchema.optional(), limits: quantitiesSchema.optional() })
       .strict()
       .optional(),
+    sandboxes: kubernetesSandboxesSchema,
     // the ClusterRole the server binds to itself in each caller's namespace, so it needs
     // no rights in the namespaces of others (see the docs on RBAC)
     runRole: kubernetesNameSchema.default('hammerkit-runs'),
@@ -327,22 +369,6 @@ export const sourceSchema = z
   .strict()
 
 export type Source = z.infer<typeof sourceSchema>
-
-const duration = z.string().refine((value) => {
-  try {
-    return parseDuration(value) > 0
-  } catch {
-    return false
-  }
-}, 'expected a duration like 30m, 1h or 1d')
-
-const size = z.string().refine((value) => {
-  try {
-    return parseSize(value) > 0
-  } catch {
-    return false
-  }
-}, 'expected a size like 500Mi, 20Gi or 1Ti')
 
 export type Issuer = z.infer<typeof issuerSchema>
 export type Entitlement = z.infer<typeof entitlementSchema>
@@ -658,6 +684,22 @@ export const serverConfigSchema = z
           }
         }
       }
+      const sandboxes = backend.sandboxes
+      if (sandboxes.storageClass && sandboxes.storageClass === backend.storageClass) {
+        // the quota on the class would count the claims of tasks too
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'sandboxes', 'storageClass'],
+          message: 'give sandboxes a storage class of their own, or leave it out to use the one of tasks',
+        })
+      }
+      if (parseSize(sandboxes.size) > parseSize(config.sandboxes.limits.bytes)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'sandboxes', 'size'],
+          message: `a sandbox of ${sandboxes.size} is more than sandboxes.limits.bytes of ${config.sandboxes.limits.bytes}`,
+        })
+      }
       if (config.runtimes.includes('local') && !backend.pools.some((pool) => pool.toolImage)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -672,6 +714,18 @@ export const serverConfigSchema = z
           path: ['backend', 'networkPolicy'],
           message:
             'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them',
+        })
+      }
+      if (
+        config.sandboxes.network !== 'open' &&
+        backend.networkPolicy !== 'enforced' &&
+        config.entitlements.some((entitlement) => entitlement.sandboxes?.length)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'networkPolicy'],
+          message:
+            'sandboxes.network limits the tasks of sandboxes with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them, or sandboxes.network: open',
         })
       }
     }

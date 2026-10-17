@@ -36,6 +36,19 @@ export interface WorkKubernetesServer {
   providers: { [provider: string]: { image: string } }
   // what the commands of an account's secrets get in the Job
   accounts: { [account: string]: { serviceAccount?: string; audience?: string; secret?: string } }
+  // set when the run works on a sandbox: its files are a claim the tasks mount
+  workspace?: WorkKubernetesWorkspace
+}
+
+// The claim of a sandbox in place of the run's directory `root`: a source or mount below
+// `root` is mounted from the claim, from the same path below `subPath`, so what a task
+// writes there lands in the sandbox. The pods that mount it carry `label` and keep to the
+// node of each other (a claim of one node at a time).
+export interface WorkKubernetesWorkspace {
+  root: string
+  claim: string
+  subPath: string
+  label: string
 }
 
 export interface WorkKubernetesPool {

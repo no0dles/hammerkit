@@ -1,7 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { getCallerNamespace, getClusterAccess, getNamespacePolicies, KubernetesExecutor } from './kubernetes-backend'
+import {
+  CallerNamespaces,
+  getCallerNamespace,
+  getClusterAccess,
+  getNamespacePolicies,
+  KubernetesExecutor,
+} from './kubernetes-backend'
 import { getRunLabelValue } from '../kubernetes/job-placement'
 import { Run, RunContext } from './runs'
 import { KubernetesBackend, serverConfigSchema } from './server-config'
@@ -208,6 +214,7 @@ describe('kubernetes backend', () => {
       }) as any
       const result = new KubernetesExecutor(config, {}, {} as any)
       ;(result as any).instance = instance
+      ;(result as any).namespaces = new CallerNamespaces(instance as any, config.backend)
       return (result as any).placement()
     }
 

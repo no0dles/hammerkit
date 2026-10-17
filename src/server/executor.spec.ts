@@ -641,7 +641,7 @@ describe('HostExecutor', () => {
       })
       const sandbox = await sandboxes.create(alice, REPO, 'main')
       sandboxId = sandbox.id
-      files = await sandboxes.attach(sandboxId)
+      files = (await sandboxes.attach(sandboxId, root)).directory
     })
 
     it('runs the published tasks on the files of the sandbox, which keep what they wrote', async () => {
@@ -658,6 +658,18 @@ describe('HostExecutor', () => {
       // the published build file is not written into the sandbox
       expect(readFileSync(join(files, '.hammerkit.yaml'), 'utf8')).toContain('from-the-repository')
       expect(existsSync(join(runs, 'run_test'))).toBe(false)
+    })
+
+    it('releases what it attached when the run ends, failed or not', async () => {
+      const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [cat input.txt]\n' })
+      const released: string[] = []
+      const attach = sandboxes.attach.bind(sandboxes)
+      sandboxes.attach = async (id, into) => ({ ...(await attach(id, into)), release: () => released.push(id) })
+      writeFileSync(join(files, 'input.txt'), 'x')
+      expect((await executeWith(onSandbox(), sandboxRun(hash))).error).toBeUndefined()
+      rmSync(join(files, 'input.txt'))
+      expect((await executeWith(onSandbox(), sandboxRun(hash))).error).toBeDefined()
+      expect(released).toEqual([sandboxId, sandboxId])
     })
 
     it('fails an approved run when the files are no longer the approved ones', async () => {

@@ -14,10 +14,10 @@ The published build file always runs. A sandbox only supplies the files: its own
 
 <Callout type="info">
 
-This page covers sandboxes on a host server: creating, listing, moving, deleting, running
-on them, reading, searching and editing their files, and pushing their changes.
-[Agents](/docs/remote-compute/agents) covers the clients that let a coding agent work on one.
-Sandboxes on Kubernetes come next.
+This page covers creating, listing, moving, deleting, running on sandboxes, reading,
+searching and editing their files, and pushing their changes, on a host and on a
+[Kubernetes backend](#on-kubernetes). [Agents](/docs/remote-compute/agents) covers the
+clients that let a coding agent work on one.
 
 </Callout>
 
@@ -106,7 +106,6 @@ out, such as `node_modules`, are not changes and stay) and no run holds it, else
 | `404` | The sandbox does not exist or is somebody else's. |
 | `409` | A fetch of a sandbox with changes, or one a run holds. |
 | `413` | The caller is at their limit of sandboxes or bytes. |
-| `501` | The server runs its tasks on a [Kubernetes backend](/docs/remote-compute/backend), which keeps no sandboxes yet. |
 | `502` | The server could not reach the repository. |
 | `507` | All sandboxes together take what the server allows. |
 
@@ -207,9 +206,10 @@ are percent-encoded (`files/src/my%20file.ts`). Three rules hold for every endpo
   match in any case and under the names Windows also opens (`.SSH`, `.git.`, `GIT~1`). The
   git data of a sandbox is not in its files anyway.
 * **Runs come first.** Reading one file works at any time, also while a run works on the
-  sandbox. Edits, `PUT`, and the tree, search and changes (which walk the files with git
-  and ripgrep) are `409` while a [run holds the sandbox](#running-on-a-sandbox), and the
-  next run waits for a batch of edits to finish.
+  sandbox (not [on Kubernetes](#on-kubernetes)). Edits, `PUT`, and the tree, search and
+  changes (which walk the files with git and ripgrep) are `409` while a
+  [run holds the sandbox](#running-on-a-sandbox), and the next run waits for a batch of
+  edits to finish.
 
 Every file endpoint needs an entry in the `sandboxes` of the caller's entitlements that covers
 the repository and the branch of the sandbox, like a run on it. What edits add counts against
@@ -490,3 +490,73 @@ what a container wrote as another user (a service runs as the user of its image)
 back to the server's user with a short `alpine` container. A restart keeps the sandboxes,
 also one whose record can't be read: its files stay for the operator to look at. Changes to
 `sandboxes` need a restart.
+
+## On Kubernetes
+
+With a [Kubernetes backend](/docs/remote-compute/backend#kubernetes) a sandbox is two
+`PersistentVolumeClaim`s in its caller's namespace, mounted only while something works on
+it: an idle sandbox costs its storage and nothing else. The API, the limits and the rules
+above are the same.
+
+* **Two claims.** One holds the sandbox's files, which the tasks of its runs mount. The other
+  holds its git data, which only the pod of its files mounts. A link a task makes in the files
+  leads at most to the root of the files' claim, so no task reaches git's configuration or
+  hooks, as on a host.
+* **Fetch.** The server fetches the commit with the read credential of `sources`, as for a
+  run from a ref, and hands the repository to the pod of the sandbox, which takes it into the
+  claim. The credential never reaches the caller's namespace.
+* **Files.** Reads, searches, edits, the changes and the bytes of a sandbox run in a short pod
+  that mounts its claims, with the same code as on a host (`hammerkit server-sandbox`), so
+  paths, links and the deny list follow the same rules. The pod has no token and no network (a
+  `NetworkPolicy` denies all of it), runs on the first pool with no capabilities beyond owning
+  and changing files and a read-only root, and stays while requests come or a run works,
+  `backend.sandboxes.idle` after the last one.
+* **Push.** The pod commits the changes; the server copies the objects of the git data,
+  checks that the commit is one on top of the sandbox's without anything of the deny list,
+  and pushes it with the write credential. The write credential never reaches the caller's
+  namespace either.
+* **Runs.** The process of a run gets a copy of the files to plan with. Its Jobs mount the
+  files' claim itself where their sources are, read and write, so what a task writes is in
+  the sandbox afterwards, as on a host. A source outside of the sandbox goes into the task's
+  own claim as before. A source or mount that goes through a link is refused, as on a host.
+* **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
+  `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a
+  `sandboxes.network` other than `open`, the config needs `backend.networkPolicy: enforced`.
+* **One file while a run works**, as on a host: the pod of the files stays while the run works.
+* **One node.** A claim is usually `ReadWriteOnce`: several pods share it only on one node.
+  The pods that mount a sandbox (the Jobs of its run and the pod of its files) are placed
+  next to each other, so its disk never moves between nodes during a run, which takes seconds
+  each time. The tasks of a run on a sandbox go to the node of the pod of its files, in the
+  first pool; a task on another pool (a local task whose `toolImage` is on a later pool) fails.
+  When a pod of the run finds no room on that node for 10 seconds, the pod of the files makes
+  way, so the run's pod goes where there is room and the disk follows it.
+* **Kubernetes 1.30 or later.** The server talks to the pod over `pods/exec` with the
+  `v5.channel.k8s.io` protocol, which ends a request's input without closing the connection.
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  sandboxes:
+    image: registry.corp/hammerkit@sha256:…  # default: no0dles/hammerkit of the server's version
+    size: 4Gi                        # default, what each claim of a sandbox requests
+    storageClass: sandboxes          # default: the class of tasks' claims
+    idle: 1m                         # default, how long the pod of the files stays
+    resources:                       # default, of the pod of the files
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 2Gi }
+```
+
+| Key | What it does |
+| --- | --- |
+| `image` | The image of the pod of a sandbox's files: hammerkit with git and ripgrep, as the published image of the server's version is. It reads and changes every sandbox's files, so pin it by digest. |
+| `size` | What each of the two claims of a sandbox requests: the most its files, and its git data, can take. No more than `sandboxes.limits.bytes`. |
+| `storageClass` | The storage class of sandboxes' claims. When it is one of their own, each caller's namespace gets a `ResourceQuota` on that class (`requests.storage` of twice `sandboxes.limits.bytes` and `persistentvolumeclaims` of twice `sandboxes.limits.count`, two claims a sandbox), so the cluster holds the limits too. It can not be the class of tasks' claims, whose claims would count against it. |
+| `idle` | How long the pod of a sandbox's files stays after the last request. |
+| `resources` | The requests and limits of the pod of a sandbox's files, which runs git and ripgrep over all of them. |
+
+The server keeps the record of each sandbox in its storage directory as on a host, and the
+claims carry the sandbox's id and owner and a label of the server (its namespace prefix and
+namespace). When the server starts, its own claims without a record are deleted once they are
+an hour old (younger ones may be a sandbox being created), and a record without claims is
+dropped. Claims of another server on the cluster, or of this server under another prefix, are
+left alone, and so are the records of the latter.

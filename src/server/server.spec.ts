@@ -588,7 +588,25 @@ describe('server config policy', () => {
         providers: {},
         runRole: 'hammerkit-runs',
         deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32'],
+        sandboxes: {
+          image: `no0dles/hammerkit:${getVersion()}`,
+          size: '4Gi',
+          idle: '1m',
+          resources: { requests: { cpu: '100m', memory: '256Mi' }, limits: { memory: '2Gi' } },
+        },
       })
+    })
+
+    it('keeps sandboxes on a class of their own and within the limits of a caller', () => {
+      expect(message(kubernetes({ storageClass: 'fast', sandboxes: { storageClass: 'fast' } }))).toBe(
+        'give sandboxes a storage class of their own, or leave it out to use the one of tasks'
+      )
+      expect(message(kubernetes({ sandboxes: { size: '30Gi' } }))).toBe(
+        'a sandbox of 30Gi is more than sandboxes.limits.bytes of 20Gi'
+      )
+      expect(kubernetes({ storageClass: 'fast', sandboxes: { storageClass: 'sandboxes', size: '10Gi' } }).success).toBe(
+        true
+      )
     })
 
     it('takes address ranges the pods of runs may not reach', () => {
@@ -659,7 +677,9 @@ describe('server config policy', () => {
       expect(message(kubernetes({}, { runtimes: ['docker', 'local'] }))).toBe(
         'local tasks run in the toolImage of a pool, give a pool one or remove local from runtimes'
       )
-      expect(kubernetes({ pools: [{ name: 'a', toolImage: 'tools:1' }] }, { runtimes: ['local'] }).success).toBe(true)
+      expect(
+        kubernetes({ pools: [{ name: 'a', toolImage: 'tools:1' }] }, { runtimes: ['docker', 'local'] }).success
+      ).toBe(true)
     })
 
     it('limits runs only on a cluster that enforces NetworkPolicies', () => {
@@ -668,6 +688,22 @@ describe('server config policy', () => {
         'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them'
       )
       expect(kubernetes({ networkPolicy: 'enforced' }, limited).success).toBe(true)
+    })
+
+    it('runs on sandboxes with a limited network only on a cluster that enforces NetworkPolicies', () => {
+      const entitlements = [
+        {
+          subject: { iss: 'https://idp.corp', sub: 'a' },
+          sandboxes: [{ repo: 'git.test/*', branches: { main: 'pull' } }],
+        },
+      ]
+      expect(message(kubernetes({}, { entitlements }))).toBe(
+        'sandboxes.network limits the tasks of sandboxes with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them, or sandboxes.network: open'
+      )
+      expect(kubernetes({ networkPolicy: 'enforced' }, { entitlements }).success).toBe(true)
+      expect(kubernetes({}, { entitlements, sandboxes: { network: 'open' } }).success).toBe(true)
+      // without sandboxes the default sandboxes.network asks for nothing
+      expect(kubernetes({}).success).toBe(true)
     })
   })
 

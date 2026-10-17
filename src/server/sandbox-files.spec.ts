@@ -55,6 +55,7 @@ describe('sandbox files', () => {
   let files: SandboxFiles
   let work: string
   const id = 'sbx_test'
+  const key = { id, owner: { iss: 'https://idp.test', sub: 'alice' } }
 
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), 'hammerkit-sandbox-files-'))
@@ -70,14 +71,14 @@ describe('sandbox files', () => {
     git(repository, 'add', '--all')
     git(repository, 'commit', '--quiet', '-m', 'one')
     storage = new HostSandboxStorage(join(root, 'sandboxes'), process.env)
-    await storage.create(id, {
+    await storage.create(key, {
       url: repository,
       ref: 'main',
       env: process.env as { [key: string]: string },
       signal: AbortSignal.timeout(60_000),
     })
-    work = await storage.attach(id)
-    files = storage.files(id)
+    work = (await storage.attach(key)).directory
+    files = storage.files(key)
     // what tasks leave in a sandbox: ignored files and a credential
     mkdirSync(join(work, 'node_modules', 'dep'), { recursive: true })
     writeFileSync(join(work, 'node_modules', 'dep', 'index.js'), 'hello from a dependency\n')
@@ -526,7 +527,7 @@ describe('sandbox files', () => {
 
     it('answers that changes are too large instead of reading all of them', async () => {
       writeFileSync(join(work, 'large.txt'), 'changed\n'.repeat(1000))
-      const small = storage.files(id, 1000)
+      const small = storage.files(key, 1000)
       expect(await small.changes()).toEqual([{ path: 'large.txt', status: 'added', additions: 1000, deletions: 0 }])
       await expect(small.diff('diff', { name: 'a', email: 'a@b', message: 'm' })).rejects.toBeInstanceOf(
         GitOutputTooLarge
@@ -562,7 +563,7 @@ describe('sandbox files', () => {
         ).commit()
         expect(await files.changes()).toEqual([{ path: 'README.md', status: 'modified', additions: 1, deletions: 1 }])
         expect(await files.diff('diff', { name: 'a', email: 'a@b', message: 'm' })).toContain(`+hello ${word}`)
-        expect((await storage.state(id)).clean).toBe(false)
+        expect((await storage.state(key)).clean).toBe(false)
       }
     })
 
@@ -600,7 +601,7 @@ describe('sandbox files', () => {
       expect(readFileSync(join(clone, 'src', 'new.ts'), 'utf8')).toBe('one\ntwo\n')
       expect(existsSync(join(clone, 'id_rsa'))).toBe(false)
       // the sandbox itself is unchanged, its state still names the changes
-      expect((await storage.state(id)).clean).toBe(false)
+      expect((await storage.state(key)).clean).toBe(false)
     })
   })
 })

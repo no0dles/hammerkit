@@ -96,10 +96,6 @@ export async function handleSandboxes(
         })
       } else if (method === 'POST') {
         const body = parse(createSchema, await readJson(req))
-        if (config.backend.type !== 'host') {
-          send(res, 501, { error: 'this server keeps sandboxes only on a host backend' })
-          return true
-        }
         const refused = decideSandbox(getGrant(config.entitlements, principal), body.repo, body.ref, (repo) =>
           repos.readable(repo)
         )

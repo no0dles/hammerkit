@@ -59,10 +59,13 @@ export async function getPodForPersistence(
     return
   }
 
+  // the claim of a sandbox is mounted by the pods of the work only: it holds no output
+  // and takes no upload
+  const own = persistence.mounts.filter((m) => !m.workspace)
   const mounts: V1VolumeMount[] =
     type === 'read'
-      ? persistence.mounts.map((m) => m.mount)
-      : persistence.mounts.reduce<V1VolumeMount[]>((array, v) => {
+      ? own.map((m) => m.mount)
+      : own.reduce<V1VolumeMount[]>((array, v) => {
           if (!array.some((i) => i.name === v.mount.name)) {
             array.push({
               mountPath: v.uploadPath,

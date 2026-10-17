@@ -17,7 +17,7 @@ export async function restoreKubernetesData(
   environment: Environment,
   path: string
 ) {
-  const persistence = await getKubernetesPersistence(work)
+  const persistence = await getKubernetesPersistence(work, kubernetes)
   await getPodForPersistence(instance, kubernetes, work, persistence, 'write', async (name) => {
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       if (!(await environment.file.exists(generatedArchive.filename))) {

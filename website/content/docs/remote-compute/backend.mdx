@@ -79,6 +79,7 @@ backend:
     gsm: { image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim }
   quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20' }
   defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
+  sandboxes: { size: 4Gi, storageClass: sandboxes }
   # runRole: hammerkit-runs           # the ClusterRole the server binds in each caller's namespace
   deniedEgress: [169.254.0.0/16, fe80::/10, fd00:ec2::/32, 10.0.0.0/8]   # the default, and the cluster's ranges
   networkPolicy: enforced            # the network plugin enforces NetworkPolicy; limited tasks need it
@@ -98,6 +99,7 @@ service a Deployment, in a namespace of the caller.
 | `providers` | Per secret provider, the image its command runs in. Every provider an account reads needs one. |
 | `quota` | The `ResourceQuota` of each caller's namespace, as Kubernetes writes it (`requests.cpu`, `limits.memory`, `pods`, `persistentvolumeclaims`, `requests.storage`). |
 | `defaultResources` | `requests` and `limits` (`cpu`, `memory`) for containers without [`resources`](/docs/task#resources), as a `LimitRange`, so they are admitted under a quota that limits compute. |
+| `sandboxes` | Where [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes) are kept: two claims per sandbox in its caller's namespace, their size and storage class, and the image and resources of the pod that reads and edits its files. |
 | `runRole` | The ClusterRole the server binds to itself in each caller's namespace, `hammerkit-runs` by default, see [What the server may do](#what-the-server-may-do). |
 | `deniedEgress` | Address ranges a pod of a run with an open network may not connect to. By default the link-local ranges, where the clouds' metadata endpoints hand out the node's identity (`169.254.0.0/16`, `fe80::/10`, `fd00:ec2::/32`). Add the pod and service ranges of the cluster to keep tasks off its other workloads, the server's included. |
 
@@ -208,7 +210,9 @@ governed by the policy of the caller's namespace, see [Namespaces](#namespaces).
 The cluster's network plugin has to enforce `NetworkPolicy` (Calico and Cilium do, and recent
 kind), for `network:` and for keeping callers apart. Without it nothing is isolated. Hammerkit
 can't tell from the API, so `backend.networkPolicy: enforced` states it; without it a task with a
-limited network fails instead of running open. Some apply a
+limited network fails instead of running open. With
+[sandboxes](/docs/remote-compute/sandboxes#on-kubernetes), whose runs are limited by
+`sandboxes.network`, a config without it is refused unless that is `open`. Some apply a
 policy a moment after the pod started, so a limited pod waits in an init container until its
 policy holds, and fails after 60 seconds if it never does (see
 [Kubernetes](/docs/task/network#kubernetes)). A run's policies go only after its pods are gone.
@@ -219,9 +223,21 @@ A task that reads a provider's secret keeps an open network for now: its init co
 the task's pod, so its policy would cut them off from the secret manager. Such a build file is
 refused when it is published, and a run whose ceiling would limit such a task fails that task.
 
+### Sandboxes
+
+A [sandbox](/docs/remote-compute/sandboxes#on-kubernetes) is two claims in its caller's
+namespace, next to the namespace's runs: its files, and its git data. A short pod of
+`backend.sandboxes.image` fetches into them, reads and edits the files and commits what the
+server pushes; the Jobs of a run on the sandbox mount the files only. The quota of sandboxes
+is a `ResourceQuota` on their storage class, when they have one of their own. The pod runs as
+root with only the capabilities to own and change files (the `baseline` Pod Security level
+allows it, `restricted` does not).
+
 ### What the server may do
 
-Across the cluster the server makes namespaces and binds `runRole` in the ones it made. It needs
+Across the cluster the server makes namespaces and binds `runRole` in the ones it made. With
+[sandboxes](#sandboxes) it also lists namespaces when it starts, to find the claims of sandboxes
+in the ones it made. It needs
 no rights on Secrets or pods outside of them: those come from `runRole`, which it binds in each
 caller's namespace (Kubernetes lets it bind that role only, by `bind`). In its own namespace it
 reads the Secrets of the accounts and makes tokens of their ServiceAccounts, by name. The
@@ -232,7 +248,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: hammerkit-server }
 rules:
-  - { apiGroups: [''], resources: [namespaces], verbs: [get, create] }
+  - { apiGroups: [''], resources: [namespaces], verbs: [get, list, create] }   # list: with sandboxes
   - { apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, create, update] }
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [clusterroles]

@@ -128,7 +128,7 @@ describe('SandboxRegistry', () => {
     expect(sandbox).toMatchObject({ repo: REPO, ref: 'main', commit: first, owner: alice })
     expect(sandbox.id).toMatch(/^sbx_[A-Za-z0-9_-]{16}$/)
     expect(sandbox.bytes).toBeGreaterThan(0)
-    const files = await sandboxes.attach(sandbox.id)
+    const files = (await sandboxes.attach(sandbox.id, root)).directory
     expect(readFileSync(join(files, 'input.txt'), 'utf8')).toBe('one')
     expect(existsSync(join(files, '.git'))).toBe(false)
     expect(await sandboxes.state(sandbox.id)).toEqual({ commit: first, tree: expect.any(String), clean: true })
@@ -147,7 +147,7 @@ describe('SandboxRegistry', () => {
   it('names the files as they are, changed or not, without touching the index', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
-    const files = await sandboxes.attach(sandbox.id)
+    const files = (await sandboxes.attach(sandbox.id, root)).directory
     const clean = await sandboxes.state(sandbox.id)
     // what .gitignore leaves out is not a change
     mkdirSync(join(files, 'node_modules'))
@@ -165,7 +165,7 @@ describe('SandboxRegistry', () => {
   it('names a link a task left as the link, never what it points to', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
-    const files = await sandboxes.attach(sandbox.id)
+    const files = (await sandboxes.attach(sandbox.id, root)).directory
     const clean = await sandboxes.state(sandbox.id)
     const outside = mkdtempSync(join(tmpdir(), 'hammerkit-sandboxes-outside-'))
     try {
@@ -194,7 +194,7 @@ describe('SandboxRegistry', () => {
   it('does not run the hooks or the config a task wrote into the files', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
-    const files = await sandboxes.attach(sandbox.id)
+    const files = (await sandboxes.attach(sandbox.id, root)).directory
     const marker = join(root, 'ran')
     mkdirSync(join(files, '.git', 'hooks'), { recursive: true })
     writeFileSync(join(files, '.git', 'config'), `[core]\n\tfsmonitor = touch ${marker}\n`)
@@ -207,13 +207,13 @@ describe('SandboxRegistry', () => {
     const sandbox = await sandboxes.create(alice, REPO, 'main')
     const fetched = await sandboxes.fetch(alice, sandbox.id, 'next')
     expect(fetched).toMatchObject({ ref: 'next', commit: second })
-    expect(readFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'utf8')).toBe('two')
+    expect(readFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'utf8')).toBe('two')
   })
 
   it('does not move a sandbox with changes, nor one a run holds', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
-    writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+    writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
     await expect(sandboxes.fetch(alice, sandbox.id, 'next')).rejects.toMatchObject({
       status: 409,
       message: expect.stringMatching(/has changes/),
@@ -259,7 +259,7 @@ describe('SandboxRegistry', () => {
     for (let attempt = 0; attempt < 5; attempt++) {
       const sandbox = await sandboxes.create(alice, REPO, 'main')
       // 'one' to 'onx' right away: same size, and most likely the same second as the index
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'onx')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'onx')
       await new Promise((resolve) => setTimeout(resolve, 1100))
       expect((await sandboxes.state(sandbox.id)).clean).toBe(false)
       await expect(sandboxes.fetch(alice, sandbox.id, 'next')).rejects.toMatchObject({ status: 409 })
@@ -287,7 +287,7 @@ describe('SandboxRegistry', () => {
       },
     })
     const sandbox = await sandboxes.create(alice, REPO, 'main')
-    const files = await sandboxes.attach(sandbox.id)
+    const files = (await sandboxes.attach(sandbox.id, root)).directory
     writeFileSync(join(files, '.gitattributes'), '* filter=x\n')
     writeFileSync(join(files, 'written.txt'), 'by a task')
     expect((await sandboxes.state(sandbox.id)).clean).toBe(false)
@@ -393,7 +393,7 @@ describe('SandboxRegistry', () => {
     async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      const files = await sandboxes.attach(sandbox.id)
+      const files = (await sandboxes.attach(sandbox.id, root)).directory
       mkdirSync(join(files, 'hidden'))
       writeFileSync(join(files, 'hidden', 'big.bin'), Buffer.alloc(64 * 1024))
       chmodSync(join(files, 'hidden', 'big.bin'), 0)
@@ -409,9 +409,10 @@ describe('SandboxRegistry', () => {
   it('measures a large node_modules exactly, and walks a sandbox once per run', async () => {
     const storage = new HostSandboxStorage(join(root, 'files'), process.env)
     const signal = AbortSignal.timeout(60_000)
-    await storage.create('sbx_large', { url: repository, ref: 'main', env: process.env as any, signal })
-    const files = await storage.attach('sbx_large')
-    const before = await storage.usage('sbx_large')
+    const key = { id: 'sbx_large', owner: alice }
+    await storage.create(key, { url: repository, ref: 'main', env: process.env as any, signal })
+    const files = (await storage.attach(key)).directory
+    const before = await storage.usage(key)
     // what `npm ci` leaves: ignored, and tens of thousands of files in a real project
     for (let pkg = 0; pkg < 40; pkg++) {
       mkdirSync(join(files, 'node_modules', `pkg-${pkg}`, 'lib'), { recursive: true })
@@ -421,40 +422,41 @@ describe('SandboxRegistry', () => {
     }
     const walk = vi.spyOn(storage as any, 'walk')
     // what a run ends with
-    expect(await storage.usage('sbx_large')).toBe(before + 40 * 250 * 10)
+    expect(await storage.usage(key)).toBe(before + 40 * 250 * 10)
     expect(walk).toHaveBeenCalledTimes(1)
     // the next run is submitted and starts on what that walk left: nothing ran in between
-    expect(await storage.state('sbx_large')).toMatchObject({ clean: true })
-    expect(await storage.state('sbx_large')).toMatchObject({ clean: true })
+    expect(await storage.state(key)).toMatchObject({ clean: true })
+    expect(await storage.state(key)).toMatchObject({ clean: true })
     expect(walk).toHaveBeenCalledTimes(1)
     // while it runs, its tasks write: a state then walks, and so does the one after
-    await storage.attach('sbx_large')
+    await storage.attach(key)
     writeFileSync(join(files, 'new.txt'), 'new')
     chmodSync(join(files, 'new.txt'), 0o000)
-    expect(await storage.state('sbx_large')).toMatchObject({ clean: false })
-    expect(await storage.state('sbx_large')).toMatchObject({ clean: false })
+    expect(await storage.state(key)).toMatchObject({ clean: false })
+    expect(await storage.state(key)).toMatchObject({ clean: false })
     expect(walk).toHaveBeenCalledTimes(3)
     // until its measure: one walk per run
-    await storage.usage('sbx_large')
-    expect(await storage.state('sbx_large')).toMatchObject({ clean: false })
+    await storage.usage(key)
+    expect(await storage.state(key)).toMatchObject({ clean: false })
     expect(walk).toHaveBeenCalledTimes(4)
   }, 60_000)
 
   it('reads the files of an edit without walking them again', async () => {
     const storage = new HostSandboxStorage(join(root, 'files'), process.env)
     const signal = AbortSignal.timeout(60_000)
-    await storage.create('sbx_edit', { url: repository, ref: 'main', env: process.env as any, signal })
-    const files = await storage.attach('sbx_edit')
+    const key = { id: 'sbx_edit', owner: alice }
+    await storage.create(key, { url: repository, ref: 'main', env: process.env as any, signal })
+    const files = (await storage.attach(key)).directory
     // a run left a link, and was measured
     mkdirSync(join(files, 'dir'))
     symlinkSync(join(files, 'dir'), join(files, 'link'), 'junction')
-    await storage.usage('sbx_edit')
+    await storage.usage(key)
     const walk = vi.spyOn(storage as any, 'walk')
-    const edits = storage.files('sbx_edit')
+    const edits = storage.files(key)
     await (await edits.plan([{ op: 'delete', path: 'link' }])).commit()
     await (await edits.plan([{ op: 'write', path: 'link', content: 'a file now\n' }])).commit()
     expect(await edits.changes()).toEqual([{ path: 'link', status: 'added', additions: 1, deletions: 0 }])
-    expect(await storage.state('sbx_edit')).toMatchObject({ clean: false })
+    expect(await storage.state(key)).toMatchObject({ clean: false })
     expect(walk).not.toHaveBeenCalled()
   }, 60_000)
 
@@ -476,7 +478,7 @@ describe('SandboxRegistry', () => {
   it('measures what a run wrote', async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')
-    writeFileSync(join(await sandboxes.attach(sandbox.id), 'big.bin'), Buffer.alloc(64 * 1024))
+    writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'big.bin'), Buffer.alloc(64 * 1024))
     await sandboxes.measure(sandbox.id)
     expect(sandboxes.get(alice, sandbox.id)?.bytes).toBeGreaterThanOrEqual(sandbox.bytes + 64 * 1024)
     expect(registryWith({ bytes: sandbox.bytes }).overLimit(alice)).toBeUndefined()
@@ -534,7 +536,7 @@ describe('SandboxRegistry', () => {
     it('commits the changes as the caller, pushes them to a new branch and moves the sandbox there', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      const files = await sandboxes.attach(sandbox.id)
+      const files = (await sandboxes.attach(sandbox.id, root)).directory
       writeFileSync(join(files, 'input.txt'), 'changed')
       writeFileSync(join(files, 'new.txt'), 'new')
       // what .gitignore and the deny list leave out stays on the server
@@ -582,7 +584,7 @@ describe('SandboxRegistry', () => {
     it('never pushes the run state hammerkit keeps next to a build file', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      const files = await sandboxes.attach(sandbox.id)
+      const files = (await sandboxes.attach(sandbox.id, root)).directory
       writeFileSync(join(files, 'input.txt'), 'fixed')
       // what a run on the sandbox writes, at the root and next to a build file further down
       mkdirSync(join(files, '.hammerkit', 'last-resolved'), { recursive: true })
@@ -608,7 +610,7 @@ describe('SandboxRegistry', () => {
       writeFileSync(join(repository, 'other.txt'), 'other')
       git(repository, 'add', 'other.txt')
       git(repository, 'commit', '--quiet', '-m', 'moved on')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       const pushed = await sandboxes.push(alice, sandbox.id, 'agent/late', author, allowed)
       expect(git(repository, 'rev-parse', 'agent/late^')).toBe(first)
       expect(pushed.commit).toBe(git(repository, 'rev-parse', 'agent/late'))
@@ -617,7 +619,7 @@ describe('SandboxRegistry', () => {
     it('only pushes to the branches the entitlements allow, with a credential of the server', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       await expect(sandboxes.push(alice, sandbox.id, 'main', author, allowed)).rejects.toMatchObject({
         status: 403,
         message: `you may only push to agent/** of ${REPO}`,
@@ -642,7 +644,7 @@ describe('SandboxRegistry', () => {
     it('never writes over a branch it did not push, or one that moved since it did', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      const files = await sandboxes.attach(sandbox.id)
+      const files = (await sandboxes.attach(sandbox.id, root)).directory
       git(repository, 'branch', 'agent/taken', 'next')
       writeFileSync(join(files, 'input.txt'), 'changed')
       await expect(sandboxes.push(alice, sandbox.id, 'agent/taken', author, allowed)).rejects.toMatchObject({
@@ -674,7 +676,7 @@ describe('SandboxRegistry', () => {
     it('leaves it to the remote to refuse a branch that appeared or moved after it was read', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       git(repository, 'branch', 'agent/raced', 'next')
       const storage = new HostSandboxStorage(join(root, 'files'), process.env)
       const request = {
@@ -684,10 +686,10 @@ describe('SandboxRegistry', () => {
         env: { ...(process.env as { [key: string]: string }) },
         signal: AbortSignal.timeout(60_000),
       }
-      await expect(storage.push(sandbox.id, { ...request, expect: null })).rejects.toThrow(
+      await expect(storage.push({ id: sandbox.id, owner: alice }, { ...request, expect: null })).rejects.toThrow(
         'the remote refused the push to agent/raced: [rejected] (stale info)'
       )
-      await expect(storage.push(sandbox.id, { ...request, expect: first })).rejects.toThrow(
+      await expect(storage.push({ id: sandbox.id, owner: alice }, { ...request, expect: first })).rejects.toThrow(
         'the remote refused the push to agent/raced: [rejected] (stale info)'
       )
       expect(git(repository, 'rev-parse', 'agent/raced')).toBe(second)
@@ -720,7 +722,7 @@ describe('SandboxRegistry', () => {
       }
       const sandboxes = registryWith({}, late)
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       const pushed = await sandboxes.push(alice, sandbox.id, 'agent/late', author, allowed)
       expect(pushed).toMatchObject({ commit: git(repository, 'rev-parse', 'agent/late'), ref: 'agent/late' })
       expect(await sandboxes.state(sandbox.id)).toMatchObject({ commit: pushed.commit, clean: true })
@@ -734,7 +736,7 @@ describe('SandboxRegistry', () => {
       }
       const sandboxes = registryWith({}, stuck)
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       const commitPattern = '[0-9a-f]{40}'
       await expect(sandboxes.push(alice, sandbox.id, 'agent/stuck', author, allowed)).rejects.toMatchObject({
         status: 502,
@@ -750,7 +752,7 @@ describe('SandboxRegistry', () => {
       writeFileSync(join(repository, '.git', 'hooks', 'pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       const refused = await sandboxes.push(alice, sandbox.id, 'agent/refused', author, allowed).catch((e) => e)
       expect(refused).toMatchObject({
         status: 502,
@@ -762,7 +764,7 @@ describe('SandboxRegistry', () => {
     it('tells the caller neither the branch git refuses nor what the credential provider said', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       for (const branch of ['agent/.x', 'agent/x.', 'agent/x.lock', 'agent/x.lock/y']) {
         await expect(sandboxes.push(alice, sandbox.id, branch, author, allowed)).rejects.toMatchObject({ status: 400 })
       }
@@ -777,7 +779,7 @@ describe('SandboxRegistry', () => {
     it('leaves the write credential nowhere in the sandbox, its records or the commit', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       const pushed = await sandboxes.push(alice, sandbox.id, 'agent/secret', author, allowed)
       expect(JSON.stringify(pushed)).not.toContain(PUSH_TOKEN)
       const written = [...allFiles(join(root, 'files')), ...allFiles(join(root, 'records'))]
@@ -790,7 +792,7 @@ describe('SandboxRegistry', () => {
     it('does not run the hooks or the config a task wrote into the files when it pushes', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      const files = await sandboxes.attach(sandbox.id)
+      const files = (await sandboxes.attach(sandbox.id, root)).directory
       const marker = join(root, 'ran')
       mkdirSync(join(files, '.git', 'hooks'), { recursive: true })
       writeFileSync(join(files, '.git', 'config'), `[core]\n\tfsmonitor = touch ${marker}\n`)
@@ -832,7 +834,7 @@ describe('SandboxRegistry', () => {
     ])('refuses to push to %j with %i', async (branch, status) => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       await expect(sandboxes.push(alice, sandbox.id, branch, author, allowed)).rejects.toMatchObject({ status })
       expect(git(repository, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe(
         'refs/heads/main\nrefs/heads/next'
@@ -842,7 +844,7 @@ describe('SandboxRegistry', () => {
     it('answers 502 and leaves the sandbox as it is when it can not read the remote', async () => {
       const sandboxes = registryWith()
       const sandbox = await sandboxes.create(alice, REPO, 'main')
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       const reachable = repository
       repository = join(root, 'gone')
       await expect(sandboxes.push(alice, sandbox.id, 'agent/x', author, allowed)).rejects.toMatchObject({ status: 502 })
@@ -876,9 +878,9 @@ describe('SandboxRegistry', () => {
         message: `the sandbox ${sandbox.id} has no changes to push`,
       })
       // only what the API never reads changed
-      writeFileSync(join(await sandboxes.attach(sandbox.id), '.env'), 'TOKEN=s3cret')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, '.env'), 'TOKEN=s3cret')
       await expect(sandboxes.push(alice, sandbox.id, 'agent/x', author, allowed)).rejects.toMatchObject({ status: 409 })
-      writeFileSync(join(await sandboxes.attach(sandbox.id), 'input.txt'), 'changed')
+      writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'input.txt'), 'changed')
       holder = 'run_1'
       await expect(sandboxes.push(alice, sandbox.id, 'agent/x', author, allowed)).rejects.toMatchObject({
         status: 409,
@@ -891,7 +893,7 @@ describe('SandboxRegistry', () => {
   it("does not hold up a run's result for its measure, but the owner's next run waits for it", async () => {
     const sandboxes = registryWith({ bytes: 1024 * 1024 })
     const sandbox = await sandboxes.create(alice, REPO, 'main')
-    writeFileSync(join(await sandboxes.attach(sandbox.id), 'big.bin'), Buffer.alloc(2 * 1024 * 1024))
+    writeFileSync(join((await sandboxes.attach(sandbox.id, root)).directory, 'big.bin'), Buffer.alloc(2 * 1024 * 1024))
     // what the executor does once the run is over, without waiting
     const measuring = sandboxes.measure(sandbox.id)
     await sandboxes.measured(alice)

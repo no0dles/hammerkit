@@ -13,6 +13,7 @@ import { Run, RunContext, RunExecutor } from './runs'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
 import { PlanPolicy } from './plan'
 import { SandboxRegistry } from './sandboxes'
+import { SandboxAttachment, SandboxClaim } from './sandbox-storage'
 import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -78,7 +79,12 @@ export interface SandboxRunOptions {
  * it, and `release` when it ended, whatever the outcome.
  */
 export interface RunPlacement {
-  prepare(run: Run, context: RunContext): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
+  prepare(
+    run: Run,
+    context: RunContext,
+    // where the run works, and the claim its tasks mount for it on a sandbox
+    work?: { root: string; claim?: SandboxClaim }
+  ): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
   release(run: Run, context: RunContext): Promise<void>
 }
 
@@ -159,12 +165,16 @@ export class HostExecutor implements RunExecutor {
     context.signal.addEventListener('abort', abort, { once: true })
 
     const root = join(this.options.directory, run.id)
+    let attachment: SandboxAttachment | undefined
     try {
       // where the process of the run starts: the checkout of a ref, or for a sandbox the
       // published files, so what the process and the secret providers it starts read of
       // their directory is never what a task wrote
       let cwd: string
       let input: Pick<WorkerInput, 'entry' | 'directory' | 'network' | 'sandboxNetwork'>
+      let claim: SandboxClaim | undefined
+      // the files of the sandbox the tasks work on
+      let work: string | undefined
       if (source.type === 'ref') {
         cwd = join(root, 'source')
         const { repo, ref, commit: pinned } = source
@@ -188,13 +198,18 @@ export class HostExecutor implements RunExecutor {
         const { registry, network } = sandboxes as SandboxRunOptions
         // read before the run attaches: until then the walk of the last run's measure holds
         const state = await registry.state(source.id, abortCtrl.signal)
-        const files = await registry.attach(source.id)
+        attachment = await registry.attach(source.id, join(root, 'sandbox'))
+        work = attachment.directory
+        claim = attachment.claim
         // what was approved is what runs: the files may have changed since, by a run
         // before this one on the sandbox
         if (run.approvals?.length && state.tree !== source.tree) {
           throw new Error(
             `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
           )
+        }
+        if (claim && !this.options.placement) {
+          throw new Error(`the sandbox ${source.id} is a claim on a cluster, this server runs tasks on its own docker`)
         }
         context.emit({
           type: 'log',
@@ -210,7 +225,7 @@ export class HostExecutor implements RunExecutor {
         cwd = published
         input = {
           entry: join(published, version.entry),
-          directory: { read: published, work: files },
+          directory: { read: published, work },
           // the worker takes the lower of sandboxes.network and runs.network
           ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
           sandboxNetwork: network,
@@ -222,7 +237,7 @@ export class HostExecutor implements RunExecutor {
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
       const placement = this.options.placement
-      const placed = placement ? await placement.prepare(run, context) : undefined
+      const placed = placement ? await placement.prepare(run, context, { root: work ?? cwd, claim }) : undefined
       try {
         await this.runInProcess(
           worker,
@@ -246,6 +261,7 @@ export class HostExecutor implements RunExecutor {
       }
     } finally {
       context.signal.removeEventListener('abort', abort)
+      attachment?.release?.()
       await this.removeRunDirectory(run, root, context)
       if (source.type === 'sandbox') {
         // what the run wrote counts against the owner's limits, from their next run or create

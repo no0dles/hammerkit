@@ -7,7 +7,7 @@ import {
   getServiceCommand,
   getServiceWorkingDir,
 } from '../planner/work-service'
-import { KubernetesPersistence } from './volumes'
+import { getWorkspacePodSpec, KubernetesPersistence } from './volumes'
 import { KubernetesSecretRefs } from './secrets'
 import { V1Container, V1Deployment, V1EnvVar, V1HostAlias, V1Probe } from '@kubernetes/client-node'
 import { getServiceHostname } from '../planner/utils/service-hostname'
@@ -52,6 +52,7 @@ export async function ensureKubernetesDeploymentExists(
     : undefined
   const server = env.server
   const placement = server ? getPodPlacement(server, undefined) : null
+  const workspace = getWorkspacePodSpec(env, persistence)
   const deployment: V1Deployment & KubernetesObjectHeader = {
     kind: 'Deployment',
     apiVersion: 'apps/v1',
@@ -81,10 +82,12 @@ export async function ensureKubernetesDeploymentExists(
             'hammerkit.dev/id': service.id(),
             'hammerkit.dev/state': stateKey,
             ...getRunLabels(env),
+            ...workspace.labels,
             ...getNetworkLabels(env, service),
           },
         },
         spec: {
+          ...(workspace.affinity ? { affinity: workspace.affinity } : {}),
           // the pod resolves its own service name, as with Docker's Hostname
           hostname: getServiceHostname(service.name),
           hostAliases: network.hostAliases,
@@ -130,7 +133,7 @@ export async function ensureKubernetesDeploymentExists(
               ...getContainerSecurity(env),
             },
           ],
-          volumes: [...persistence.volumes, ...secrets.volumes],
+          volumes: [...persistence.volumes, ...persistence.workspace, ...secrets.volumes],
         },
       },
     },

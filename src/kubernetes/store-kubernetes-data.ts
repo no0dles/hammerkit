@@ -16,7 +16,7 @@ export async function storeKubernetesData(
   environment: Environment,
   path: string
 ) {
-  const persistence = await getKubernetesPersistence(work)
+  const persistence = await getKubernetesPersistence(work, kubernetes)
   await getPodForPersistence(instance, kubernetes, work, persistence, 'read', async (name) => {
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       const writerStream = environment.file.createWriteStream(generatedArchive.filename)

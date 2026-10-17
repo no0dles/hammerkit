@@ -28,6 +28,7 @@ import { SourceStore } from './sources'
 import { handleSources } from './sources-api'
 import { Sandbox, SandboxError, SandboxRegistry } from './sandboxes'
 import { HostSandboxStorage } from './sandbox-storage'
+import { KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
 import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
 import { PlanPolicy } from './plan'
@@ -566,22 +567,32 @@ export async function startServer(
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
   const sandboxRuntimes = getSandboxRuntimes(config)
+  const sandboxLimits = {
+    count: config.sandboxes.limits.count,
+    bytes: parseSize(config.sandboxes.limits.bytes),
+    total: parseSize(config.sandboxes.total),
+  }
   const sandboxes: SandboxContext = {
     registry: new SandboxRegistry({
-      storage: new HostSandboxStorage(
-        join(storage, 'sandboxes', 'files'),
-        planning.environment.processEnvs,
-        // what containers of runs leave behind is given back and removed with a container
-        sandboxRuntimes.includes('docker')
-          ? new DockerSandboxContainers(planning.environment.processEnvs.DOCKER_HOST)
-          : undefined
-      ),
+      // on a cluster a claim per sandbox in the caller's namespace, else a directory
+      storage:
+        config.backend.type === 'kubernetes'
+          ? new KubernetesSandboxStorage(
+              { ...config, backend: config.backend },
+              sandboxLimits,
+              planning.environment.processEnvs,
+              join(storage, 'sandboxes', 'staging')
+            )
+          : new HostSandboxStorage(
+              join(storage, 'sandboxes', 'files'),
+              planning.environment.processEnvs,
+              // what containers of runs leave behind is given back and removed with a container
+              sandboxRuntimes.includes('docker')
+                ? new DockerSandboxContainers(planning.environment.processEnvs.DOCKER_HOST)
+                : undefined
+            ),
       records: join(storage, 'sandboxes', 'records'),
-      limits: {
-        count: config.sandboxes.limits.count,
-        bytes: parseSize(config.sandboxes.limits.bytes),
-        total: parseSize(config.sandboxes.total),
-      },
+      limits: sandboxLimits,
       repos,
       log,
     }),
@@ -599,7 +610,11 @@ export async function startServer(
         'runs on sandboxes are refused until sandboxes.runtimes names a runtime'
     )
   }
-  await sandboxes.registry.load()
+  // on a cluster that lists the claims of sandboxes in the namespaces of callers, which a
+  // server without sandboxes need not be allowed to
+  if (config.backend.type === 'host' || config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
+    await sandboxes.registry.load()
+  }
   const executorOptions = {
     definitions,
     planning,
@@ -607,15 +622,15 @@ export async function startServer(
     directory: join(storage, 'runs'),
     cache: join(storage, 'cache'),
     worker: options.worker,
+    sandboxes: { ...sandboxes, network: config.sandboxes.network },
     log,
   }
   const backend = config.backend
-  // sandboxes on a cluster are kept as claims, which this server does not do yet
   const executor =
     options.executor ??
     (backend.type === 'kubernetes'
       ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
-      : new HostExecutor({ ...executorOptions, sandboxes: { ...sandboxes, network: config.sandboxes.network } }))
+      : new HostExecutor(executorOptions))
   const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({
     executor,
