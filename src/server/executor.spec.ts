@@ -31,6 +31,24 @@ vi.mock('fs/promises', async (importOriginal) => {
   }
 })
 
+// a run process that tells the network it was asked to run with. The input is the first line;
+// the server keeps the standard input open for a cancel.
+const TELLING_WORKER = [
+  process.execPath,
+  '-e',
+  [
+    'let text = ""',
+    'process.stdin.on("data", (chunk) => {',
+    '  text += chunk',
+    '  if (!text.includes("\\n")) return',
+    '  const network = JSON.stringify(JSON.parse(text.split("\\n")[0]).network)',
+    '  console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: network } }))',
+    '  console.log(JSON.stringify({ kind: "result", ok: true }))',
+    '  process.exit(0)',
+    '})',
+  ].join('\n'),
+]
+
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const REPO = 'git.test/corp/payments'
 
@@ -288,24 +306,11 @@ describe('HostExecutor', () => {
       { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': yaml('none') } },
       alice
     )
-    // a process that tells what it was asked to run with
-    const script = [
-      // the input is the first line; the server keeps the standard input open for a cancel
-      'let text = ""',
-      'process.stdin.on("data", (chunk) => {',
-      '  text += chunk',
-      '  if (!text.includes("\\n")) return',
-      '  const network = JSON.stringify(JSON.parse(text.split("\\n")[0]).network)',
-      '  console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: network } }))',
-      '  console.log(JSON.stringify({ kind: "result", ok: true }))',
-      '  process.exit(0)',
-      '})',
-    ].join('\n')
     const telling = new HostExecutor({
       ...options,
       definitions: network,
       planning: limited,
-      worker: [process.execPath, '-e', script],
+      worker: TELLING_WORKER,
     })
     const events: RunEventData[] = []
     await telling.execute(run(version.hash), { emit: (e) => events.push(e), signal: new AbortController().signal })
@@ -703,6 +708,28 @@ describe('HostExecutor', () => {
       expect(containers.error?.message).toMatch(/runs on the local runtime, which this server does not allow/)
       const closed = await executeWith(onSandbox(['docker', 'local'], 'none'), sandboxRun(hash))
       expect(closed.error?.message).toMatch(/--network none needs every task in a container/)
+    })
+
+    it('keeps a sandbox run under runs.network as well as sandboxes.network', async () => {
+      const ceiling: NetworkSchema = { allow: ['registry.npmjs.org'] }
+      const policy = { ...options.planning.policy, network: { type: 'allow' as const, hosts: ['registry.npmjs.org'] } }
+      const limited = new HostExecutor({
+        ...options,
+        planning: { ...options.planning, policy },
+        worker: TELLING_WORKER,
+        sandboxes: { registry: sandboxes, policy: { ...policy, runtimes: ['docker', 'local'] }, network: 'open' },
+      })
+      const yaml = (setting: string) =>
+        `tasks:\n  build:\n    image: node:22\n    network: ${setting}\n    cmds: [npm ci]\n`
+      const { events, error } = await executeWith(
+        limited,
+        sandboxRun(await publish({ '.hammerkit.yaml': yaml('none') }))
+      )
+      expect(error).toBeUndefined()
+      expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: JSON.stringify(ceiling) })
+
+      const open = await executeWith(limited, sandboxRun(await publish({ '.hammerkit.yaml': yaml('open') })))
+      expect(open.error?.message).toMatch(/more than this server allows/)
     })
 
     it('keeps the cache of a sandbox run apart from runs of the repository, one per owner', async () => {
