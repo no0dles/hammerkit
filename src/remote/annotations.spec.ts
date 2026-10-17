@@ -39,6 +39,34 @@ describe('collectAnnotations', () => {
     }
   })
 
+  it('says when a file of the bundle is not as the commit has it', async () => {
+    const repo = createGitRepo()
+    const fileName = join(repo.path, 'web', '.hammerkit.yaml')
+    const files = ['.hammerkit.yaml', 'more.yaml']
+    try {
+      const commit = repo.commit({
+        'web/.hammerkit.yaml': 'includes:\n  more: ./more.yaml\n',
+        'web/more.yaml': 'tasks: {}\n',
+        'README.md': 'hi\n',
+      })
+      expect(await collectAnnotations(fileName, files)).not.toHaveProperty('dirty')
+
+      // a change outside of the bundle is not one of the version
+      writeFileSync(join(repo.path, 'README.md'), 'changed\n')
+      expect(await collectAnnotations(fileName, files)).not.toHaveProperty('dirty')
+
+      writeFileSync(join(repo.path, 'web', 'more.yaml'), 'tasks:\n  lint:\n    cmds: [echo lint]\n')
+      expect(await collectAnnotations(fileName, files)).toMatchObject({ commit, dirty: 'true' })
+
+      // a file the commit does not have at all
+      repo.commit({ 'web/more.yaml': 'tasks: {}\n' })
+      writeFileSync(join(repo.path, 'web', 'new.yaml'), 'tasks: {}\n')
+      expect(await collectAnnotations(fileName, [...files, 'new.yaml'])).toMatchObject({ dirty: 'true' })
+    } finally {
+      repo.remove()
+    }
+  })
+
   it('names the path in the repository however the file system spells the directory', async () => {
     const repo = createGitRepo()
     const link = join(mkdtempSync(join(tmpdir(), 'hammerkit-link-')), 'repo')

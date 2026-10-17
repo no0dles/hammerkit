@@ -46,7 +46,7 @@ so they work with or without a build file in the working directory.
 | `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). |
 | `remote versions [server]` | List the published versions, newest first, with who published them, where they come from and whether they were yanked. `--filter key=value` (repeatable) keeps the ones with that [annotation](/docs/remote-compute/build-files#annotations). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
-| `remote show <run or hash> [server]` | Show a run that waits for your approval, or a proposed version, in full: per task the commands, image, secrets and accounts, and every file of a proposed version, see [Approving runs](#approving-runs) and [Proposing](#proposing-a-version). |
+| `remote show <run or hash> [server]` | Show a run that waits for your approval, or a proposed or published version, in full: per task the commands, image, secrets and accounts, and every file of a version, see [Approving runs](#approving-runs) and [Proposing](#proposing-a-version). |
 | `remote proposals [server]` | List the proposed versions of build files you made or may approve, see [Proposing](#proposing-a-version). |
 | `remote approve <run or hash> [server]` | Let a run go ahead, or publish a proposed version. `--reason <text>` is optional. |
 | `remote yank <hash> [server]` | Pull a published version back: no run starts from it. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
@@ -111,16 +111,18 @@ published` and changes nothing.
 
 With the bundle go [annotations](/docs/remote-compute/build-files#annotations) that say
 where it comes from, the `from:` line: the path of the build file in its git repository,
-the repository and commit, this machine and your user name. They are not part of the
-hash. `--annotation key=value` adds one or replaces one, `--annotation user=` leaves one
+the repository and commit, this machine and your user name. When a file of the bundle is
+not as the commit has it (changed, or not committed at all), `dirty=true` says so, so the
+version is not taken for that commit's. They are not part of the hash. `--annotation key=value` adds one or replaces one, `--annotation user=` leaves one
 out, and it can be given more than once. `remote versions` lists what a server has and
-finds it by them:
+finds it by them, and `remote show <hash>` prints one whole. Anybody else sees them as
+`from (unverified)`, since the server takes them as you sent them:
 
 ```
 $ hammerkit remote versions build --filter repo=github.com/corp/payments
 build: 1 published
 sha256:9f2c61d0...  published by ci at 2026-10-12T20:31:00.000Z
-  from: path=.hammerkit.yaml repo=github.com/corp/payments commit=4be1a07c... machine=ci-runner-7 user=runner
+  from (unverified): path=.hammerkit.yaml repo=github.com/corp/payments commit=4be1a07c... machine=ci-runner-7 user=runner
   tasks and services: build, deploy, more:lint
   accounts: op-payments-prod
 ```
@@ -149,7 +151,7 @@ The one who may publish reads the whole version before deciding:
 $ hammerkit remote proposals build
 build: 1 proposed
 sha256:4be1a07c...  proposed by coding-agent, waits for your approval
-  from: path=.hammerkit.yaml repo=github.com/corp/payments machine=agent-sandbox-3 user=agent
+  from (unverified): path=.hammerkit.yaml repo=github.com/corp/payments machine=agent-sandbox-3 user=agent
   tasks and services: build, deploy, more:lint
   accounts: op-payments-prod, the proposer does not use op-payments-prod
   decide before 2026-10-11T11:41:00.000Z

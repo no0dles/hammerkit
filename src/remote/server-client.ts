@@ -4,7 +4,15 @@ import { HostServer } from './host-config'
 const TIMEOUT_MS = 10_000
 const WRITE_TIMEOUT_MS = 30_000
 
-export class ServerError extends Error {}
+export class ServerError extends Error {
+  // what the server answered, when it did
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message)
+  }
+}
 
 // Text from the server or the identity provider is shown to the user: no
 // control characters, so it can't rewrite the terminal, and format characters
@@ -107,7 +115,7 @@ export async function callServer<T = any>(
   }
   if (!response.ok) {
     const said = answer && typeof answer.error === 'string' ? `: ${printable(answer.error)}` : ''
-    throw new ServerError(`${server.url} answered ${response.status}${said}`)
+    throw new ServerError(`${server.url} answered ${response.status}${said}`, response.status)
   }
   return { status: response.status, body: answer as T }
 }
