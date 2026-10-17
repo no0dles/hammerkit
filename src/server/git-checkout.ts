@@ -117,16 +117,7 @@ async function resolveBranch(
   signal: AbortSignal
 ): Promise<string> {
   assertBranchName(branch)
-  const output = await git(
-    ['ls-remote', '--heads', '--', repository, `refs/heads/${branch}`],
-    env,
-    signal,
-    `the branches of ${repository}`
-  )
-  const commit = output
-    .split('\n')
-    .map((line) => line.split('\t'))
-    .find(([, name]) => name === `refs/heads/${branch}`)?.[0]
+  const commit = await remoteBranch(repository, branch, env, signal)
   if (!commit) {
     throw new RefError(`there is no branch ${branch}`)
   }
@@ -141,6 +132,39 @@ export function assertBranchName(branch: string): void {
   if (COMMIT.test(branch.toLowerCase())) {
     throw new RefError(`a sandbox starts from a branch, ${branch} is a commit`)
   }
+}
+
+// A branch git takes as a name of its own: a ref, and no part of it starts or ends with a
+// dot or ends with `.lock` (`git check-ref-format` refuses those).
+export function isValidBranch(branch: string): boolean {
+  return (
+    isValidRef(branch) &&
+    branch
+      .split('/')
+      .every((part) => !part.startsWith('.') && !part.startsWith('-') && !part.endsWith('.') && !part.endsWith('.lock'))
+  )
+}
+
+// The commit a branch of a repository points to now, none when there is no such branch.
+export async function remoteBranch(
+  repository: string,
+  branch: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string | undefined> {
+  const output = await git(
+    ['ls-remote', '--heads', '--', repository, `refs/heads/${branch}`],
+    env,
+    signal,
+    `the branches of ${repository}`
+  )
+  for (const line of output.split('\n')) {
+    const [commit, name] = line.split('\t')
+    if (commit && name === `refs/heads/${branch}`) {
+      return commit
+    }
+  }
+  return undefined
 }
 
 // Runs git without a prompt and with the network transports only. Errors say what could

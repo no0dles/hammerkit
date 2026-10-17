@@ -1,6 +1,6 @@
 ---
 title: "Sandboxes"
-description: "Keep a checkout on the server, run published tasks on it, read, search and edit its files, and the limits that keep sandboxes in check."
+description: "Keep a checkout on the server, run published tasks on it, read, search and edit its files, push its changes to a branch, and the limits that keep sandboxes in check."
 ---
 A sandbox is a caller's own checkout of a repository on the server, which runs work on.
 It is for an agent without a machine of its own, or a person whose laptop should not
@@ -15,8 +15,8 @@ The published build file always runs. A sandbox only supplies the files: its own
 <Callout type="info">
 
 This page covers sandboxes on a host server: creating, listing, moving, deleting, running
-on them, and reading, searching and editing their files. Pushing a branch from a sandbox and
-sandboxes on Kubernetes come next.
+on them, reading, searching and editing their files, and pushing their changes. Sandboxes on
+Kubernetes come next.
 
 </Callout>
 
@@ -27,7 +27,7 @@ the caller may keep sandboxes of, one `repo` (`host/path` pattern) per entry, an
 branch pattern of it a type:
 
 * `pull`: a sandbox may start from a matching branch, and fetch one.
-* `push`: `pull`, and pushing to the branch once push is built.
+* `push`: `pull`, and [pushing](#pushing) to the branch.
 
 Without `sandboxes` the caller keeps none. It is a list of its own: `repos` are for runs
 from a ref only, and a sandbox needs no `repos` entry for its repository. The entries of all
@@ -65,6 +65,7 @@ as an id that does not exist, and it does not show in their list.
 | `GET /v1/sandboxes` | The caller's sandboxes, oldest first, with their `limits` and what they `used`. |
 | `GET /v1/sandboxes/<id>` | One sandbox. |
 | `POST /v1/sandboxes/<id>/fetch` | `{ "ref": "next" }`: move a sandbox without changes to the commit a branch points to now. |
+| `POST /v1/sandboxes/<id>/push` | `{ \"branch\": \"agent/fix-login\", \"message\": \"Fix the login\" }`: commit the changes and push them, see [Pushing](#pushing). |
 | `DELETE /v1/sandboxes/<id>` | Cancel the runs on the sandbox, wait for them to stop and remove its files. |
 
 ```json
@@ -80,6 +81,9 @@ as an id that does not exist, and it does not show in their list.
   "run": "run_Wm3o0yN2e4cR9pLs"
 }
 ```
+
+After a [push](#pushing), `ref` is the branch it pushed to, `commit` what it pushed, and
+`pushed` lists each branch it pushed with the commit it pushed there last.
 
 Creating a sandbox is a fetch, not a run: it runs no task, holds no account and takes no
 place of the [run limits](/docs/remote-compute/runs#limits-and-restarts). The server reads
@@ -364,8 +368,9 @@ file `.hammerkit.yaml` is a change like any other file.
 | `diff` | The changes as `git diff` shows them, as `text/x-diff`. |
 | `patch` | One commit in `git format-patch` form, binary files included, for `git am` on another clone. `message`, `name` and `email` set its message and author (`hammerkit` by default). |
 
-This is how work leaves a sandbox for now: the caller, or a connector on their side, applies
-the patch and pushes a branch. Changes larger than 64 MiB are `413`.
+A patch is one way work leaves a sandbox: the caller, or a connector on their side, applies
+it and pushes a branch. The other is a [push](#pushing) by the server. Changes larger than
+64 MiB are `413`.
 
 | Status | When |
 | --- | --- |
@@ -378,6 +383,64 @@ the patch and pushes a branch. Changes larger than 64 MiB are `413`.
 | `415` | A numbered read or a text edit of a binary or non-UTF-8 file. |
 | `422` | An operation of the batch does not apply; `op` names it. |
 | `501` | Search, on a server without ripgrep. |
+
+## Pushing
+
+`POST /v1/sandboxes/<id>/push` commits the changes of a sandbox and pushes the commit to a
+branch of its repository, with the `secret` of the server's
+[source](/docs/remote-compute/sources#pushing) for it. The caller's `sandboxes`
+decide where to: a sandbox only pushes to a branch whose pattern has the type `push` in an
+entry for its repository, `agent/**` for example, never to a `main` they may only `pull`.
+
+```json
+{ "branch": "agent/fix-login", "message": "Fix the login\n\nThe session expired a minute early." }
+```
+
+```json
+{
+  "branch": "agent/fix-login",
+  "commit": "9b0e7c...",
+  "sandbox": { "id": "sbx_Jp0dY8m2kQ1aZt5x", "ref": "agent/fix-login", "commit": "9b0e7c...", "pushed": { "agent/fix-login": "9b0e7c..." } }
+}
+```
+
+* **What is committed** is what [`changes`](#changes) shows: new, changed and deleted files,
+  not what `.gitignore` leaves out, nothing of the deny list (an `.env` a task wrote stays
+  on the server) and no `.hammerkit/` directory a run wrote. The commit's parent is the commit the sandbox is at.
+* **By whom.** The commit's author and committer are the caller, as their token names them
+  (`name`, and `email` unless the token says it is not verified), else their subject at the
+  host of their issuer (`agent-7@login.example.com`). A request can not set the author, and
+  a message with `Signed-off-by`, `Reviewed-by`, `Acked-by` or `Tested-by` is refused: those
+  would attest the commit in somebody else's name. Other trailers, such as `Co-authored-by`,
+  are the caller's text.
+* **Only new branches, or its own.** The branch must not exist yet, or be one this sandbox
+  pushed and still at the commit it pushed there. A branch somebody else created or pushed
+  to since is `409`: push to a new branch. A sandbox never writes over other work, and it
+  never force-pushes.
+* **Afterwards** the sandbox is at the pushed commit, on that branch: `changes` shows what is
+  not pushed yet, and the next push to the same branch adds a commit on top of the last one.
+  A sandbox [fetched](#creating-and-managing) to another commit since can not push to the
+  branch any more (`409`), it starts a new one.
+* Like edits, a push waits for a batch of edits, is `409` while a run holds the sandbox, and
+  needs the repository and the sandbox's branch in the caller's `sandboxes`.
+
+The server reads the branch first with its read credential, then pushes with the write
+credential, telling the remote which commit it expects the branch at (none for a new one).
+The remote refuses the push when somebody created or moved the branch in between, and that
+is `409` too.
+
+| Status | When |
+| --- | --- |
+| `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start with `.` or `-`, or end with `.` or `.lock`). |
+| `403` | No `push` pattern of the caller's entries for the repository covers the branch, the source has no `secret`, or as for the files, the caller lost the repository or the sandbox's branch. |
+| `404` | The sandbox does not exist or is somebody else's. |
+| `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
+| `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access, a GitHub App without the `workflows` permission pushing a workflow file): the error carries the reason the remote gave. Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |
+
+Opening a pull request from the branch is left to the caller: hammerkit holds a token that
+writes branches, not one that reviews them. A pushed branch runs in the repository's CI like
+any other, with its secrets unless the operator keeps those branches out, see
+[Sources](/docs/remote-compute/sources#pushing).
 
 ## Accounts
 

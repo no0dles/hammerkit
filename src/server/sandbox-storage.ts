@@ -4,7 +4,7 @@ import { chmod, copyFile, lstat, mkdir, readdir, readlink, rm, stat, utimes } fr
 import { join, relative, sep } from 'path'
 import { git, isValidRef } from './git-checkout'
 import { SandboxContainers } from './sandbox-docker'
-import { HostSandboxFiles, SandboxFiles, SandboxGit } from './sandbox-files'
+import { HostSandboxFiles, PatchAuthor, SandboxFiles, SandboxGit } from './sandbox-files'
 
 // how many directories the walk reads at once, and how many entries of one it looks at at once
 const WALK_DIRECTORIES = 16
@@ -29,6 +29,31 @@ export interface SandboxFetch {
   signal: AbortSignal
 }
 
+// How to push the changes of a sandbox: where to, the commit the branch has to be at now
+// (none: the branch must not exist), and the environment of the git process that holds
+// the write credential.
+export interface SandboxPush {
+  url: string
+  branch: string
+  expect: string | null
+  author: PatchAuthor
+  env: { [key: string]: string }
+  signal: AbortSignal
+}
+
+export class SandboxPushConflict extends Error {}
+
+// A push that failed after its commit was written: the remote may have taken it anyway (a
+// timeout after it answered), which the caller checks against the branch.
+export class SandboxPushFailed extends Error {
+  constructor(
+    readonly commit: string,
+    readonly cause: unknown
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause))
+  }
+}
+
 /**
  * Where the files of sandboxes are kept. The registry of sandboxes, the API and the
  * executor only know a sandbox id and, while a run uses it, a directory; how the files are
@@ -47,10 +72,19 @@ export interface SandboxStorage {
   usage(id: string): Promise<number>
   // reading, searching and editing its files through the API
   files(id: string): SandboxFiles
+  // commits the changes on top of the commit the sandbox is at and pushes that commit to
+  // the branch; none when there is nothing to push. The sandbox stays where it is.
+  push(id: string, push: SandboxPush): Promise<string | undefined>
+  // moves the sandbox to a commit it pushed, keeping its files: its changes are then what
+  // is not pushed yet
+  moveTo(id: string, commit: string): Promise<void>
   remove(id: string): Promise<void>
   // the ids that have storage, to clean up what a crash left behind
   list(): Promise<string[]>
 }
+
+// the commit a sandbox pushed last, in its own git data
+const PUSHED_REF = 'refs/hammerkit/pushed'
 
 /**
  * Sandboxes as directories below `directory`, one per sandbox: `files` is the checkout the
@@ -161,43 +195,64 @@ export class HostSandboxStorage implements SandboxStorage {
   private withIndex<T>(id: string, signal: AbortSignal, fn: (run: SandboxGit['run']) => Promise<T>): Promise<T> {
     return this.exclusive(id, async () => {
       const links = this.walked.get(id) ?? (await this.walkOnce(id)).links
-      const root = this.root(id)
-      const index = join(root, `index-${randomBytes(6).toString('hex')}`)
       try {
-        const original = join(root, 'git', 'index')
-        await copyFile(original, index).then(
-          // with the time of the index: git takes a file changed in the same second as it was
-          // written for changed only when the index is no newer than the file (racy git)
-          async () => {
-            const stats = await stat(original)
-            await utimes(index, stats.atime, stats.mtime)
-          },
-          () => undefined
-        )
-        const env = this.readEnv({ GIT_INDEX_FILE: index })
-        await this.addFiles(id, env, signal, links)
-        return await fn((args, action, options = {}) =>
-          this.git(id, args, { ...env, ...options.env }, signal, action, { maxBuffer: options.maxBuffer })
-        )
+        return await this.indexed(id, signal, links, fn)
       } finally {
-        await rm(index, { force: true })
-        // the sandbox's own index and HEAD keep what they need
-        await this.git(id, ['prune', '--expire=now'], this.readEnv(), AbortSignal.timeout(60_000), 'read').catch(
-          () => undefined
-        )
+        await this.prune(id)
       }
     })
   }
 
+  // a copy of the index that holds the files as they are (`addFiles`)
+  private async indexed<T>(
+    id: string,
+    signal: AbortSignal,
+    links: string[],
+    fn: (run: SandboxGit['run']) => Promise<T>
+  ): Promise<T> {
+    const root = this.root(id)
+    const index = join(root, `index-${randomBytes(6).toString('hex')}`)
+    try {
+      const original = join(root, 'git', 'index')
+      await copyFile(original, index).then(
+        // with the time of the index: git takes a file changed in the same second as it was
+        // written for changed only when the index is no newer than the file (racy git)
+        async () => {
+          const stats = await stat(original)
+          await utimes(index, stats.atime, stats.mtime)
+        },
+        () => undefined
+      )
+      const env = this.readEnv({ GIT_INDEX_FILE: index })
+      await this.addFiles(id, env, signal, links)
+      return await fn((args, action, options = {}) =>
+        this.git(id, args, { ...env, ...options.env }, signal, action, { maxBuffer: options.maxBuffer })
+      )
+    } finally {
+      await rm(index, { force: true })
+    }
+  }
+
+  // the sandbox's own index, HEAD and refs keep what they need
+  private async prune(id: string): Promise<void> {
+    await this.git(id, ['prune', '--expire=now'], this.readEnv(), AbortSignal.timeout(60_000), 'read').catch(
+      () => undefined
+    )
+  }
+
   // `maxChangesBytes` is for tests, which make changes larger than it without writing 64 MiB
   files(id: string, maxChangesBytes?: number): SandboxFiles {
+    return this.filesOf(id, (fn) => this.withIndex(id, AbortSignal.timeout(5 * 60 * 1000), fn), maxChangesBytes)
+  }
+
+  private filesOf(id: string, withIndex: SandboxGit['withIndex'], maxChangesBytes?: number): SandboxFiles {
     const timeout = () => AbortSignal.timeout(5 * 60 * 1000)
     return new HostSandboxFiles(
       this.workTree(id),
       {
         run: (args, action, options = {}) =>
           this.git(id, args, this.readEnv(options.env), timeout(), action, { maxBuffer: options.maxBuffer }),
-        withIndex: (fn) => this.withIndex(id, timeout(), fn),
+        withIndex,
       },
       this.env,
       maxChangesBytes
@@ -243,6 +298,85 @@ export class HostSandboxStorage implements SandboxStorage {
       'check out'
     )
     return (await this.git(id, ['rev-parse', 'HEAD'], fetch.env, fetch.signal, 'read')).trim()
+  }
+
+  // One hold of the sandbox from the commit to the push: a prune in between would remove the
+  // commit. A ref keeps the commit until the sandbox is moved to it, also when the push
+  // failed late and the remote has it after all.
+  async push(id: string, push: SandboxPush): Promise<string | undefined> {
+    return this.exclusive(id, async () => {
+      const links = this.walked.get(id) ?? (await this.walkOnce(id)).links
+      try {
+        return await this.commitAndPush(id, push, links)
+      } finally {
+        await this.prune(id)
+      }
+    })
+  }
+
+  private async commitAndPush(id: string, push: SandboxPush, links: string[]): Promise<string | undefined> {
+    const commit = await this.filesOf(id, (fn) => this.indexed(id, push.signal, links, fn)).commit(push.author)
+    if (!commit) {
+      return undefined
+    }
+    const run = (args: string[], action: string, env = this.readEnv()) => this.git(id, args, env, push.signal, action)
+    await run(['update-ref', PUSHED_REF, commit], 'push')
+    // a branch this sandbox pushed before only moves forward: the sandbox is at what it
+    // pushed last, or it was moved since and its changes are on another commit
+    if (push.expect) {
+      const ancestor = await run(['merge-base', '--is-ancestor', push.expect, commit], 'read').then(
+        () => true,
+        () => false
+      )
+      if (!ancestor) {
+        throw new SandboxPushConflict(
+          `${push.branch} is at ${push.expect}, which the sandbox is no longer on: push to a new branch`
+        )
+      }
+    }
+    // the lease makes the remote refuse when the branch moved since it was read, and when
+    // somebody created it meanwhile
+    let printed: string
+    try {
+      printed = await this.git(
+        id,
+        [
+          'push',
+          // a ref the remote refuses is a line with the reason (a GitHub App without the
+          // workflows permission, a ruleset), where git's last line only says it failed
+          '--porcelain',
+          '--no-verify',
+          `--force-with-lease=refs/heads/${push.branch}:${push.expect ?? ''}`,
+          '--',
+          push.url,
+          `${commit}:refs/heads/${push.branch}`,
+        ],
+        // the write credential is in the environment of this one git process, which is
+        // that environment alone: nothing of the server's own git configuration
+        push.env,
+        push.signal,
+        'push',
+        { exitCodes: [1] }
+      )
+    } catch (e) {
+      throw new SandboxPushFailed(commit, e)
+    }
+    // `<flag>\t<from>:<to>\t<summary>`; `!` is a refused ref
+    const line = printed
+      .split('\n')
+      .map((printedLine) => printedLine.split('\t'))
+      .find((fields) => fields.length >= 3 && fields[1].endsWith(`:refs/heads/${push.branch}`))
+    if (!line || line[0] === '!') {
+      const reason = line ? line.slice(2).join(' ') : printed.trim() || 'git printed nothing'
+      throw new SandboxPushFailed(commit, new Error(`the remote refused the push to ${push.branch}: ${reason}`))
+    }
+    return commit
+  }
+
+  async moveTo(id: string, commit: string): Promise<void> {
+    await this.exclusive(id, () =>
+      this.git(id, ['reset', '--quiet', commit], this.readEnv(), AbortSignal.timeout(5 * 60 * 1000), 'move')
+    )
   }
 
   // The tree is written with an index of its own, so neither the sandbox's index nor its

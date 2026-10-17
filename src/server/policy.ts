@@ -140,6 +140,18 @@ export function sandboxBranchType(grant: Grant, repo: string, branch: string): S
   return found
 }
 
+// The branch patterns the caller may push to from a sandbox of a repository: those of type
+// `push` in the entries of their `sandboxes` that cover the repository. A pattern of one
+// repository never applies to another.
+export function sandboxPushBranches(grant: Grant, repo: string): string[] {
+  const branches = grant.sandboxes
+    .filter((sandbox) => matchesRepo(sandbox.repo, repo))
+    .flatMap((sandbox) => Object.entries(sandbox.branches))
+    .filter(([, type]) => type === 'push')
+    .map(([pattern]) => pattern)
+  return [...new Set(branches)]
+}
+
 // Whether the caller may start a sandbox of a repository from a branch, or fetch a branch
 // into one: a `pull` or `push` type for the branch in an entry of their `sandboxes` that
 // covers the repository, and the server able to read it. The answer is the reason when not.

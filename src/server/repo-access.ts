@@ -98,6 +98,32 @@ export class RepoAccess {
     return { env, values: [token, header] }
   }
 
+  /**
+   * The same for pushing a sandbox to the repository, with the source's `secret`. A
+   * repository the server reads without one is not pushed to: a push never falls back to
+   * a credential git finds on the server.
+   */
+  async pushCredentials(repo: string): Promise<{ env: { [key: string]: string }; values: string[] }> {
+    if (!this.source(repo)?.secret) {
+      throw new Error(`this server does not push to ${repo}`)
+    }
+    const credentials = await this.credentials(repo)
+    // nothing but that token: no configuration, credential helper, .netrc or ssh agent of
+    // the server's user, which would push as whoever that user is
+    const env = { ...credentials.env }
+    for (const key of ['HOME', 'XDG_CONFIG_HOME', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_SSH_COMMAND']) {
+      delete env[key]
+    }
+    const count = Number(env.GIT_CONFIG_COUNT ?? '0')
+    env[`GIT_CONFIG_KEY_${count}`] = 'credential.helper'
+    env[`GIT_CONFIG_VALUE_${count}`] = ''
+    env.GIT_CONFIG_COUNT = String(count + 1)
+    env.GIT_CONFIG_NOSYSTEM = '1'
+    // an empty file on every platform: git for Windows opens `/dev/null` as `nul`
+    env.GIT_CONFIG_GLOBAL = '/dev/null'
+    return { env, values: credentials.values }
+  }
+
   private async token(secret: NonNullable<Source['secret']>): Promise<string> {
     const key = `${secret.account}\0${secret.from}`
     const known = this.tokens.get(key)
@@ -141,10 +167,13 @@ export class RepoAccess {
   scrub(error: unknown, values: string[]): Error {
     const registry = createSecretRegistry()
     values.forEach((value) => registry.register(value))
-    const message = error instanceof Error ? error.message : String(error)
-    const scrubbed = new (error instanceof Error ? (error.constructor as new (m: string) => Error) : Error)(
-      registry.redact(message)
-    )
+    const scrubbed = new Error(registry.redact(error instanceof Error ? error.message : String(error)))
+    if (error instanceof Error) {
+      // its class, so a caller still tells a RefError apart, but none of its fields: a
+      // constructor may take more than the message (SandboxPushFailed), a field may hold the token
+      Object.setPrototypeOf(scrubbed, Object.getPrototypeOf(error))
+      scrubbed.name = error.name
+    }
     return scrubbed
   }
 }

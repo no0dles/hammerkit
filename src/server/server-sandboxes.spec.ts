@@ -6,9 +6,10 @@ import { createTestCase } from '../testing/test-case'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { TEST_WORKER } from '../testing/worker'
-import { readServerConfig } from './server-config'
+import { readServerConfig, ServerConfig } from './server-config'
 import { RunExecutor } from './runs'
 import { startServer } from './server'
+import { author } from './sandboxes-api'
 
 const REPO = 'github.com/corp/payments'
 
@@ -22,14 +23,16 @@ secretProviders:
 accounts:
   dev: { providers: { echo: { env: {} } }, source: [ref, sandbox] }
   ci: { providers: { echo: { env: {} } } }
+  scm: { providers: { echo: { env: {} } } }
 sources:
   - match: github.com/corp/*
+    secret: { from: "echo:scm-token", account: scm }
 entitlements:
   - subject: { iss: ISSUER, sub: alice }
     accounts: { dev: use, ci: use }
     repos: [github.com/corp/*]
     builds: run
-    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull } }]
+    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull, next: pull, 'feature/*': pull, 'agent/**': push } }]
   - subject: { iss: ISSUER, sub: carol }
     repos: [github.com/corp/*]
     builds: run
@@ -93,6 +96,8 @@ interface Api {
   log: string[]
   // where the files of a sandbox are on the server
   files: (id: string) => string
+  // the entitlements the server reads from now on
+  entitle: (change: (entitlements: ServerConfig['entitlements']) => ServerConfig['entitlements']) => void
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -142,7 +147,8 @@ describe('sandboxes api', () => {
         )
         const log: string[] = []
         const serverEnv = { ...env, processEnvs: { ...process.env } }
-        const server = await startServer(await readServerConfig(serverEnv, file), serverEnv, {
+        const config = await readServerConfig(serverEnv, file)
+        const server = await startServer(config, serverEnv, {
           log: (line) => log.push(line),
           executor,
           repos: { url: () => repository },
@@ -178,6 +184,9 @@ describe('sandboxes api', () => {
             hash: (await published.json()).hash,
             log,
             files: (id) => join(cwd, 'server-data', 'sandboxes', 'files', id, 'files'),
+            entitle: (change) => {
+              server.reload({ ...config, entitlements: change(config.entitlements) })
+            },
           })
         } finally {
           await server.close()
@@ -255,7 +264,10 @@ describe('sandboxes api', () => {
       expect((await bob.json()).error).toBe('you are not entitled to keep sandboxes on this server')
       expect((await (await api.call('GET', '/v1/me', { sub: 'bob' })).json()).sandboxes).toEqual([])
       expect((await (await api.call('GET', '/v1/me')).json()).sandboxes).toEqual([
-        { repo: 'github.com/corp/*', branches: { main: 'pull', next: 'pull', 'feature/*': 'pull' } },
+        {
+          repo: 'github.com/corp/*',
+          branches: { main: 'pull', next: 'pull', 'feature/*': 'pull', 'agent/**': 'push' },
+        },
       ])
       const tag = await create(api, 'alice', 'v1')
       expect(tag.status).toBe(403)
@@ -547,6 +559,119 @@ describe('sandboxes api', () => {
       expect((await api.call('GET', `${base}/tree`, { sub: 'carol' })).status).toBe(404)
       expect((await api.call('GET', `${base}/files/input.txt`, { sub: 'carol' })).status).toBe(404)
       expect(api.log.some((line) => line.startsWith(`sandbox edits ${sandbox.id} iss=`))).toBe(true)
+    })
+  })
+
+  it('commits the changes of a sandbox as the caller and pushes them to an allowed branch', async () => {
+    await withApi('sandboxes-api-push', undefined, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const base = `/v1/sandboxes/${sandbox.id}`
+      const push = (body: unknown, sub = 'alice') => api.call('POST', `${base}/push`, { sub, body })
+      const nothing = await push({ branch: 'agent/one', message: 'Agent work' })
+      expect(nothing.status).toBe(409)
+      expect((await nothing.json()).error).toBe(`the sandbox ${sandbox.id} has no changes to push`)
+
+      const edited = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'agent' }] },
+      })
+      expect(edited.status).toBe(200)
+      expect((await push({ branch: 'main', message: 'Agent work' })).status).toBe(403)
+      expect((await push({ branch: 'agent/one' })).status).toBe(400)
+      expect((await push({ branch: 'agent/one', message: 'x', author: 'someone' })).status).toBe(400)
+      const signed = await push({ branch: 'agent/one', message: 'Agent work\n\nSigned-off-by: Bob <bob@corp.test>' })
+      expect(signed.status).toBe(400)
+      expect((await signed.json()).error).toMatch(/may not carry Signed-off-by/)
+      expect((await push({ branch: 'agent/.hidden', message: 'Agent work' })).status).toBe(400)
+      expect((await push({ branch: 'agent/one', message: 'Agent work' }, 'carol')).status).toBe(404)
+      // carol may only pull: her own sandbox does not push
+      const carols = await (await create(api, 'carol')).json()
+      await api.call('POST', `/v1/sandboxes/${carols.id}/edits`, {
+        sub: 'carol',
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'main', new_string: 'carol' }] },
+      })
+      const pulls = await api.call('POST', `/v1/sandboxes/${carols.id}/push`, {
+        sub: 'carol',
+        body: { branch: 'agent/one', message: 'Carol work' },
+      })
+      expect(pulls.status).toBe(403)
+      expect((await pulls.json()).error).toBe(`you may not push from sandboxes of ${REPO}`)
+      // main is alice's to pull from, not to push to
+      const toMain = await push({ branch: 'main', message: 'Agent work' })
+      expect((await toMain.json()).error).toBe(`you may only push to agent/** of ${REPO}`)
+      expect((await api.call('GET', `${base}/push`)).status).toBe(405)
+
+      const pushed = await push({ branch: 'agent/one', message: 'Agent work' })
+      const answer = await pushed.json()
+      // the error, when there is one, says why
+      expect({ status: pushed.status, error: answer.error }).toEqual({ status: 200, error: undefined })
+      const commit = git('rev-parse', 'agent/one')
+      expect(answer).toMatchObject({
+        branch: 'agent/one',
+        commit,
+        sandbox: { id: sandbox.id, ref: 'agent/one', commit, pushed: { 'agent/one': commit } },
+      })
+      // a token without name and email: the subject at the host of the issuer
+      expect(git('log', '-1', '--format=%an <%ae>|%s', 'agent/one')).toBe('alice <alice@127.0.0.1>|Agent work')
+      expect(git('show', 'agent/one:input.txt')).toBe('from-agent')
+      // what is left to push is measured from the pushed commit
+      expect(await (await api.call('GET', `${base}/changes`)).json()).toEqual({ commit, files: [] })
+      expect(api.log.some((line) => line.startsWith(`sandbox push ${sandbox.id} iss=`))).toBe(true)
+
+      // a caller who lost the repository, or sandboxes, pushes no more
+      const again = await api.call('POST', `${base}/edits`, {
+        body: { ops: [{ op: 'replace', path: 'input.txt', old_string: 'agent', new_string: 'again' }] },
+      })
+      expect(again.status).toBe(200)
+      const alice = (entitlement: ServerConfig['entitlements'][number]) => entitlement.subject?.sub === 'alice'
+      api.entitle((entitlements) =>
+        entitlements.map((e) =>
+          alice(e)
+            ? { ...e, sandboxes: [{ repo: 'github.com/other/*', branches: { 'agent/**': 'push' as const } }] }
+            : e
+        )
+      )
+      const lostRepo = await push({ branch: 'agent/two', message: 'Agent work' })
+      expect(lostRepo.status).toBe(403)
+      api.entitle((entitlements) => entitlements.map((e) => (alice(e) ? { ...e, sandboxes: undefined } : e)))
+      const lostSandboxes = await push({ branch: 'agent/two', message: 'Agent work' })
+      expect(lostSandboxes.status).toBe(403)
+      expect((await lostSandboxes.json()).error).toBe('you are not entitled to keep sandboxes on this server')
+      expect(git('branch', '--list', 'agent/two')).toBe('')
+    })
+  })
+})
+
+describe('the author of a push', () => {
+  const principal = (sub: string, claims: Record<string, string> = {}) => ({
+    iss: 'https://login.corp.test',
+    sub,
+    groups: [],
+    claims,
+  })
+
+  it('is the caller as their token names them', () => {
+    expect(author(principal('4f1c', { name: 'Alice Doe', email: 'alice@corp.test' }))).toEqual({
+      name: 'Alice Doe',
+      email: 'alice@corp.test',
+    })
+    expect(author(principal('agent-7', { preferred_username: 'agent' }))).toEqual({
+      name: 'agent',
+      email: 'agent-7@login.corp.test',
+    })
+  })
+
+  it('does not take an address the issuer did not verify', () => {
+    expect(author({ ...principal('agent-7', { name: 'Eve', email: 'ceo@corp.test' }), emailVerified: false })).toEqual({
+      name: 'Eve',
+      email: 'agent-7@login.corp.test',
+    })
+    expect(author({ ...principal('a', { email: 'a@corp.test' }), emailVerified: true }).email).toBe('a@corp.test')
+  })
+
+  it('takes nothing from a claim that would break the commit header', () => {
+    expect(author(principal('a b|c', { name: 'Eve <eve@x>\nX', email: 'not an email' }))).toEqual({
+      name: 'Eve eve@xX',
+      email: 'a-b-c@login.corp.test',
     })
   })
 })

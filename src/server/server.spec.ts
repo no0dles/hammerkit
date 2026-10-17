@@ -539,6 +539,21 @@ describe('server config policy', () => {
       expect(serverConfigSchema.safeParse({ ...withProviders, sources }).success).toBe(false)
     })
 
+    it('pushes with the secret that reads, and takes no other credential on a source', () => {
+      // a source holds one credential; who may push which branches is on the entitlement
+      for (const extra of [
+        { pushSecret: { from: 'gsm:push', account: 'scm-read' } },
+        { push: { secret, branches: ['agent/**'] } },
+      ]) {
+        expect(
+          serverConfigSchema.safeParse({
+            ...withProviders,
+            sources: [{ match: 'github.com/corp/*', secret, ...extra }],
+          }).success
+        ).toBe(false)
+      }
+    })
+
     it('keeps the account that reads repositories away from entitlements', () => {
       const result = serverConfigSchema.safeParse({
         ...withProviders,
