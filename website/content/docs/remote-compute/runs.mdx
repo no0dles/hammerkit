@@ -1,7 +1,8 @@
 ---
-title: "Runs"
-description: "Submit runs of published build files, wait for them, read how each task went and search their logs, upload source files, and the limits and environment runs execute with."
+title: 'Runs'
+description: 'Submit runs of published build files, wait for them, read how each task went and search their logs, upload source files, and the limits and environment runs execute with.'
 ---
+
 A run is a request to execute tasks of a published [build file](/docs/remote-compute/build-files). The server writes every run
 down in `storage` (`records/`, readable by the user of the server only), so a restart keeps them with their
 logs, see [Limits and restarts](#limits-and-restarts). Every call needs a token, and a run can be
@@ -14,14 +15,14 @@ there yet; a run is a `POST /v1/runs`.
 
 ## Submitting a run
 
-| Call | What it does |
-| --- | --- |
-| `POST /v1/runs` | Submit a run. Answers `202` with the run in state `queued`, or `awaiting-approval` when the caller only has the account on [`request`](/docs/remote-compute/entitlements#approvals). |
-| `GET /v1/runs` | The caller's runs, newest first, without the `results` of their tasks. |
-| `GET /v1/runs/<id>` | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. `results` says how each task went, and `?wait=30s` answers once the run is over, see [Results and waiting](#results-and-waiting). |
-| `POST /v1/runs/<id>/cancel` | Cancel a run: one that is queued or waits for an approval at once, a running one when its tasks have stopped. |
-| `GET /v1/runs/<id>/events` | The run's events as server-sent events, see [Events](#events). |
-| `GET /v1/runs/<id>/logs` | The run's output as numbered lines, with a tail, a range and a search, see [Logs](#logs). |
+| Call                        | What it does                                                                                                                                                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /v1/runs`             | Submit a run. Answers `202` with the run in state `queued`, or `awaiting-approval` when the caller only has the account on [`request`](/docs/remote-compute/entitlements#approvals).                                                                                                       |
+| `GET /v1/runs`              | The caller's runs, newest first, without the `results` of their tasks.                                                                                                                                                                                                                     |
+| `GET /v1/runs/<id>`         | One run: `state` is `awaiting-approval`, `queued`, `running`, `succeeded`, `failed`, `cancelled` or `rejected`; a failed or rejected run has an `error`. `results` says how each task went, and `?wait=30s` answers once the run is over, see [Results and waiting](#results-and-waiting). |
+| `POST /v1/runs/<id>/cancel` | Cancel a run: one that is queued or waits for an approval at once, a running one when its tasks have stopped.                                                                                                                                                                              |
+| `GET /v1/runs/<id>/events`  | The run's events as server-sent events, see [Events](#events).                                                                                                                                                                                                                             |
+| `GET /v1/runs/<id>/logs`    | The run's output as numbered lines, with a tail, a range and a search, see [Logs](#logs).                                                                                                                                                                                                  |
 
 ```json
 {
@@ -32,30 +33,30 @@ there yet; a run is a `POST /v1/runs`.
 }
 ```
 
-* `definition` is the hash of the published [version](/docs/remote-compute/build-files#versions)
+- `definition` is the hash of the published [version](/docs/remote-compute/build-files#versions)
   to run, as `remote publish` printed it. The run is pinned to it, so what it executes
   does not change under it. A hash that was not published is `400`, a yanked one `409`.
-* `tasks` are task names as on the command line, up to 100. A task the build file
+- `tasks` are task names as on the command line, up to 100. A task the build file
   does not have is `400`. Instead of names, labels in `options.filter` can select
   the tasks.
-* There is no account in the request. The run uses the accounts of the secrets of the
+- There is no account in the request. The run uses the accounts of the secrets of the
   tasks it executes, with their dependencies and the services they need, derived from
   the pinned version, and the answer lists them as `accounts`. A caller who has no
   level on one of them gets `403` naming the account, one who may only `request` it
   gets a run in `awaiting-approval`, and a caller without `builds` level may not run.
-* `source` says where the code comes from: `{ "type": "ref", "repo": "github.com/corp/payments", "ref": "main" }`
+- `source` says where the code comes from: `{ "type": "ref", "repo": "github.com/corp/payments", "ref": "main" }`
   for a branch or tag of a repository (or a full commit hash) that the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
   for the caller's working tree, announced and sent beforehand, see [Source
   files](#source-files), or `{ "type": "sandbox", "id": "sbx_..." }` for a
   [sandbox](/docs/remote-compute/sandboxes) of the caller's. A snapshot that is unknown, or that still lacks files, and a sandbox
   that is not the caller's, are `400`. The kinds the accounts of the run list in `source` (and, for `refs`, the
   branches) are the only ones allowed, anything else is `403`.
-* `options` are the settings of `hammerkit run` that make sense on a server, all
+- `options` are the settings of `hammerkit run` that make sense on a server, all
   optional: `env`, `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
   `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
   parallel and how much of the machine they use stay with the server, and `watch` and
   the log mode are for terminals only, so they are not accepted.
-* `options.args` are [arguments](/docs/task/arguments), what `hammerkit run <task> -- ...`
+- `options.args` are [arguments](/docs/task/arguments), what `hammerkit run <task> -- ...`
   passes after `--`. See [Arguments](#arguments).
 
 The request names the work, it does not contain it: what the tasks do comes from the
@@ -68,18 +69,18 @@ logged with who submitted it, the accounts and the source.
 
 What `POST /v1/runs` answers, in the order the server checks:
 
-| Status | When |
-| --- | --- |
-| `202` | The run is accepted, `queued` or `awaiting-approval`. |
-| `400` | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
-| `401` | The token is missing or invalid. |
-| `403` | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs its repository and branch in the `sandboxes` of an entitlement. |
-| `409` | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request. |
-| `413` | The caller's [sandboxes](/docs/remote-compute/sandboxes) take more than their limit (runs on a sandbox only). |
-| `429` | The caller is over their [limits](#limits-and-restarts). |
-| `501` | The run is from an `upload`, which the executor does not support yet. |
-| `502` | The server could not reach the repository to resolve the ref. |
-| `503` | The server is shutting down, or too many runs wait for an approval. |
+| Status | When                                                                                                                                                                                                                                                                                                                                                    |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `202`  | The run is accepted, `queued` or `awaiting-approval`.                                                                                                                                                                                                                                                                                                   |
+| `400`  | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
+| `401`  | The token is missing or invalid.                                                                                                                                                                                                                                                                                                                        |
+| `403`  | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs its repository and branch in the `sandboxes` of an entitlement.                                                                                                     |
+| `409`  | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request.                                                                                                                                                                                                                      |
+| `413`  | The caller's [sandboxes](/docs/remote-compute/sandboxes) take more than their limit (runs on a sandbox only).                                                                                                                                                                                                                                           |
+| `429`  | The caller is over their [limits](#limits-and-restarts).                                                                                                                                                                                                                                                                                                |
+| `501`  | The run is from an `upload`, which the executor does not support yet.                                                                                                                                                                                                                                                                                   |
+| `502`  | The server could not reach the repository to resolve the ref.                                                                                                                                                                                                                                                                                           |
+| `503`  | The server is shutting down, or too many runs wait for an approval.                                                                                                                                                                                                                                                                                     |
 
 ## Arguments
 
@@ -101,10 +102,10 @@ none. The run's `plan` shows the command as it runs, so the caller sees
 `npx vitest run 'src/login.spec.ts' '-t' 'login flow'`, and a published version shows
 the last command of each task as `command`, so a caller knows where the arguments land.
 
-* `tasks` names exactly one task; labels can not select it. Several tasks, a service, or
+- `tasks` names exactly one task; labels can not select it. Several tasks, a service, or
   only labels with arguments are `400`.
-* Up to 100 arguments, 16 KiB together, and none with a NUL character.
-* A run in which any task or service reads a secret, or takes a variable of the server
+- Up to 100 arguments, 16 KiB together, and none with a NUL character.
+- A run in which any task or service reads a secret, or takes a variable of the server
   into its `envs` (`$NAME` or `${NAME}` of [`runs.env`](#config)) other than `PATH`,
   `HOME` and `CI`, passes no arguments. That covers the task itself, its dependencies and
   the services it needs: an argument could make the command print what the task holds,
@@ -112,13 +113,13 @@ the last command of each task as `command`, so a caller knows where the argument
   secrets knows (`rev token.txt`). The run is `400` naming the item and what it reads,
   and the executor checks again before it starts. A shell task (`cmds: [sh -c]`) on a
   server therefore runs without any account or credential of the server, nor next to one.
-* Such a run never uses an account, so it never waits for an approval.
-* [`remote approvals`](/docs/cli/remote#approving-runs) still lists the arguments of a
+- Such a run never uses an account, so it never waits for an approval.
+- [`remote approvals`](/docs/cli/remote#approving-runs) still lists the arguments of a
   run as JSON strings, and `remote show` prints every command whole, never cut, with
   control and bidi characters written out.
-* On a server that allows the `local` runtime, arguments to a local task run as commands
+- On a server that allows the `local` runtime, arguments to a local task run as commands
   on the server's machine, as the code of the ref already does.
-* A server never takes `--set`; variables stay what the published build file says.
+- A server never takes `--set`; variables stay what the published build file says.
 
 As [locally](/docs/task/arguments), the task with arguments skips the cache: it reads no
 cache entry and stores none, and a later run without arguments doesn't take its outputs
@@ -158,15 +159,15 @@ lines are not enough:
 }
 ```
 
-| Field | What it says |
-| --- | --- |
-| `status` | `running`, `succeeded`, `failed`, `cached` (taken from the cache, nothing ran), `skipped` (a dependency no task of the run needed, because every task depending on it was cached) or `cancelled` (stopped with the run, or never started because another task failed). A task the run names that is checked again as a dependency of a later one keeps what it did the first time. |
-| `startedAt`, `finishedAt` | When the server heard that the task started and ended. A cached task has no `startedAt`. |
-| `durationMs` | How long the task took, as the engine measured it. |
-| `exitCode` | The exit code of the command that failed. |
-| `error` | Why a task failed when no command exited, for example `timed out after 30m`. Masked like the log, up to 2 KiB. |
-| `cache` | `hit: true` for a cached task. For a task that ran, `causes` says why it was not taken from the cache, as [`--explain`](/docs/cli/explain) would: `never cached`, `source changed: <file>`, `command changed`, `no src declared (uncacheable)` and so on, at most 20 and then `… and N more`. |
-| `lastLog` | The last 20 lines the task printed, stdout and stderr as they came, the newest last, each cut at 1000 characters. They are kept even when the run's log was [cut off](#limits-and-restarts), so the end of a long log, where the error usually is, is never lost. |
+| Field                     | What it says                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`                  | `running`, `succeeded`, `failed`, `cached` (taken from the cache, nothing ran), `skipped` (a dependency no task of the run needed, because every task depending on it was cached) or `cancelled` (stopped with the run, or never started because another task failed). A task the run names that is checked again as a dependency of a later one keeps what it did the first time. |
+| `startedAt`, `finishedAt` | When the server heard that the task started and ended. A cached task has no `startedAt`.                                                                                                                                                                                                                                                                                           |
+| `durationMs`              | How long the task took, as the engine measured it.                                                                                                                                                                                                                                                                                                                                 |
+| `exitCode`                | The exit code of the command that failed.                                                                                                                                                                                                                                                                                                                                          |
+| `error`                   | Why a task failed when no command exited, for example `timed out after 30m`. Masked like the log, up to 2 KiB.                                                                                                                                                                                                                                                                     |
+| `cache`                   | `hit: true` for a cached task. For a task that ran, `causes` says why it was not taken from the cache, as [`--explain`](/docs/cli/explain) would: `never cached`, `source changed: <file>`, `command changed`, `no src declared (uncacheable)` and so on, at most 20 and then `… and N more`.                                                                                      |
+| `lastLog`                 | The last 20 lines the task printed, stdout and stderr as they came, the newest last, each cut at 1000 characters. They are kept even when the run's log was [cut off](#limits-and-restarts), so the end of a long log, where the error usually is, is never lost.                                                                                                                  |
 
 `GET /v1/runs/<id>?wait=30s` holds the answer until the run is over (`succeeded`,
 `failed`, `cancelled` or `rejected`) or the time is up, and then answers the run as it
@@ -184,24 +185,22 @@ kept it. Without parameters it answers the first 200 lines:
 
 ```json
 {
-  "lines": [
-    { "line": 2, "task": "test", "stream": "stdout", "text": "  expected 1 to be 2", "match": true }
-  ],
+  "lines": [{ "line": 2, "task": "test", "stream": "stdout", "text": "  expected 1 to be 2", "match": true }],
   "total": 214,
   "next": 3,
   "truncated": false
 }
 ```
 
-| Parameter | What it does |
-| --- | --- |
-| `task` | Only the lines of this task. The lines are numbered from 1 over what `task` selects, so a later call with the same `task` reads around a line it found. Without it, every task's lines, and the server's own (`hammerkit`, the checkout). |
-| `tail` | The last lines, up to 1000. With `grep`, the last lines of what it finds: the matches and their context, counted as lines. |
-| `from` | The first line to read, by its number. Not together with `tail`. |
-| `limit` | How many lines one answer has, up to 1000: 200 by default, or as many as `tail` asks for. When more follow, `next` is the `from` that continues; a match just before `from` still shows its lines after. |
-| `grep` | Only lines that contain this text. It is a fixed string, not a regular expression, so a pattern can not keep the server busy. It can not span lines. |
-| `i` | `true` to ignore case in `grep`. |
-| `context` | Lines before and after each match, up to 20, marked `"match": false`. They are lines of the `task` asked for; without `task`, the lines around the match in the whole log, of any task. |
+| Parameter | What it does                                                                                                                                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task`    | Only the lines of this task. The lines are numbered from 1 over what `task` selects, so a later call with the same `task` reads around a line it found. Without it, every task's lines, and the server's own (`hammerkit`, the checkout). |
+| `tail`    | The last lines, up to 1000. With `grep`, the last lines of what it finds: the matches and their context, counted as lines.                                                                                                                |
+| `from`    | The first line to read, by its number. Not together with `tail`.                                                                                                                                                                          |
+| `limit`   | How many lines one answer has, up to 1000: 200 by default, or as many as `tail` asks for. When more follow, `next` is the `from` that continues; a match just before `from` still shows its lines after.                                  |
+| `grep`    | Only lines that contain this text. It is a fixed string, not a regular expression, so a pattern can not keep the server busy. It can not span lines.                                                                                      |
+| `i`       | `true` to ignore case in `grep`.                                                                                                                                                                                                          |
+| `context` | Lines before and after each match, up to 20, marked `"match": false`. They are lines of the `task` asked for; without `task`, the lines around the match in the whole log, of any task.                                                   |
 
 `total` counts the lines `task` selects, `truncated` says the log of the run was cut off at
 `runs.maxLogBytes` and its end is not kept (the [results](#results-and-waiting) still have the
@@ -265,35 +264,35 @@ the paths sorted, the same construction as the version of a build file, so the s
 files have the same name anywhere. It answers `201` for a new tree and `200` for
 one the server already knows. Then each missing file is sent on its own:
 
-| Call | What it does |
-| --- | --- |
-| `POST /v1/sources` | Announce a tree. Up to 20,000 files, 32 MiB per file, 1 GiB per tree. |
+| Call                             | What it does                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `POST /v1/sources`               | Announce a tree. Up to 20,000 files, 32 MiB per file, 1 GiB per tree.                             |
 | `PUT /v1/sources/blobs/<sha256>` | Send the content of one file as the request body. Answers `201`, or `200` when the server had it. |
-| `GET /v1/sources` | The trees the caller keeps, what they take and the limit. |
-| `GET /v1/sources/<snapshot>` | One tree and the digests still missing; `complete` when none is. |
-| `DELETE /v1/sources/<snapshot>` | Forget a tree and the content no other tree of the caller needs. |
+| `GET /v1/sources`                | The trees the caller keeps, what they take and the limit.                                         |
+| `GET /v1/sources/<snapshot>`     | One tree and the digests still missing; `complete` when none is.                                  |
+| `DELETE /v1/sources/<snapshot>`  | Forget a tree and the content no other tree of the caller needs.                                  |
 
 A second run after one edited file announces the tree again and sends that file
 only. A client can also skip the announcement when the snapshot it computes is the
 one it used last and `GET /v1/sources/<snapshot>` says it is complete.
 
-* **Only the caller's.** Trees and content belong to the caller who sent them;
+- **Only the caller's.** Trees and content belong to the caller who sent them;
   another caller's snapshot is `404`. Content is never shared between callers: a
   server that answers "I already have this file" to anybody would tell them what
   other people work on.
-* **Only announced content.** A file is taken only if a tree the caller announced
+- **Only announced content.** A file is taken only if a tree the caller announced
   lists its digest, with the size announced, and only if the content has that
   digest. Anything else is `400`.
-* **Credentials do not leave.** A tree with a path that looks like a credential is
+- **Credentials do not leave.** A tree with a path that looks like a credential is
   refused with `400` that names it, even when a `src` pattern reaches it: `.env`
   (not `.env.example`, `.env.sample`, `.env.template`), `.npmrc`, `.netrc`,
   `.pypirc`, `.git-credentials`, private keys (`id_rsa` and its kin, `*.pem`,
   `*.p12`, `*.pfx`) and anything below `.git/`, `.ssh/`, `.aws/`, `.gnupg/` or
   `.kube/`, in any case and under the names Windows also opens (`.SSH`, `.git.`,
   `GIT~1`). Secrets belong in a secret provider; there is no override.
-* **Quota.** A caller may keep 4 GiB; a file that would go over is `413`. Nothing
+- **Quota.** A caller may keep 4 GiB; a file that would go over is `413`. Nothing
   is removed on its own, a caller deletes what they no longer need.
-* **Who may.** Callers with a `builds` level; others get `403`. An account can
+- **Who may.** Callers with a `builds` level; others get `403`. An account can
   further restrict its `source`.
 
 Paths are relative to the root of the project, forward slashes, nothing that climbs
@@ -365,10 +364,10 @@ the state changes and the results of the tasks, with their last lines, are alway
 
 Runs are written down when their state changes. On start the server takes them back:
 
-* finished runs keep their state, the results of their tasks, events and logs;
-* runs that wait for an approval wait on, for the time that was left, and are rejected when it has passed;
-* runs that were queued or running when the server stopped have failed with it: `the server stopped while
-  the run was running, submit it again`.
+- finished runs keep their state, the results of their tasks, events and logs;
+- runs that wait for an approval wait on, for the time that was left, and are rejected when it has passed;
+- runs that were queued or running when the server stopped have failed with it: `the server stopped while
+the run was running, submit it again`.
 
 A graceful stop (SIGTERM) leaves the waiting runs waiting, and cancels the queued and running ones.
 
@@ -379,30 +378,30 @@ Changes to `runs` need a restart; only the entitlements are read again on `SIGHU
 
 ```yaml title="server.yaml"
 runs:
-  maxConcurrent: 4   # default
-  keep: 200          # default
-  limits:            # per caller (issuer and subject), 429 over it
-    waiting: 10      # default, runs that wait for an approval
-    queued: 20       # default, runs that wait for a free place
-    running: 2       # default, runs that execute at once, the others wait in the queue
-  maxDuration: 1h    # default, a longer run is stopped and fails
-  maxLogBytes: 1048576   # default, log output kept per run
+  maxConcurrent: 4 # default
+  keep: 200 # default
+  limits: # per caller (issuer and subject), 429 over it
+    waiting: 10 # default, runs that wait for an approval
+    queued: 20 # default, runs that wait for a free place
+    running: 2 # default, runs that execute at once, the others wait in the queue
+  maxDuration: 1h # default, a longer run is stopped and fails
+  maxLogBytes: 1048576 # default, log output kept per run
   env:
-    allow: [PATH, DOCKER_HOST]   # the only variables of the server a run sees, none by default
+    allow: [PATH, DOCKER_HOST] # the only variables of the server a run sees, none by default
     set: { CI: 'true' }
-  network: { allow: [registry.npmjs.org] }   # open by default
+  network: { allow: [registry.npmjs.org] } # open by default
 ```
 
-| Key | What it does |
-| --- | --- |
-| `maxConcurrent` | Runs that execute at the same time, the others wait in queue. `4` by default. |
-| `keep` | Finished runs that are remembered, the oldest are dropped first. `200` by default. |
-| `limits` | What one caller may have at a time, see [Limits and restarts](#limits-and-restarts). |
-| `maxDuration` | A run that executes longer is stopped and fails. `1h` by default. |
-| `maxLogBytes` | The log of a run that says more is cut off. 1 MiB by default. |
-| `env.allow` | The variables of the server process that a run, its provider commands and the git fetch can see. Nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
-| `env.set` | Fixed values that are set in addition. |
-| `network` | The most any task or service of a run reaches besides the services it needs: `open` (the default), `none` or `{ allow: [hosts] }`, as the [`network`](/docs/task/network) of a task. See [Network](#network). |
+| Key             | What it does                                                                                                                                                                                                                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `maxConcurrent` | Runs that execute at the same time, the others wait in queue. `4` by default.                                                                                                                                                                                                                                                   |
+| `keep`          | Finished runs that are remembered, the oldest are dropped first. `200` by default.                                                                                                                                                                                                                                              |
+| `limits`        | What one caller may have at a time, see [Limits and restarts](#limits-and-restarts).                                                                                                                                                                                                                                            |
+| `maxDuration`   | A run that executes longer is stopped and fails. `1h` by default.                                                                                                                                                                                                                                                               |
+| `maxLogBytes`   | The log of a run that says more is cut off. 1 MiB by default.                                                                                                                                                                                                                                                                   |
+| `env.allow`     | The variables of the server process that a run, its provider commands and the git fetch can see. Nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
+| `env.set`       | Fixed values that are set in addition.                                                                                                                                                                                                                                                                                          |
+| `network`       | The most any task or service of a run reaches besides the services it needs: `open` (the default), `none` or `{ allow: [hosts] }`, as the [`network`](/docs/task/network) of a task. See [Network](#network).                                                                                                                   |
 
 ## Network
 
@@ -415,23 +414,22 @@ runs:
   network: { allow: [registry.npmjs.org, '*.githubusercontent.com'] }
 ```
 
-* A version whose tasks or services ask for more is refused when it is published (or
+- A version whose tasks or services ask for more is refused when it is published (or
   proposed): with the ceiling above, a task without `network` (which is `open`), or one
   that allows `pypi.org`, can't be published. The error names the task and what it asks for.
   A wildcard of the server covers the names under it; a name does not cover a wildcard.
   A name of the server covers a [TCP forward](/docs/task/network#tcp-forwards) to any port of it
   (`db.corp.internal:5432`); a forward covers only itself, so `db.corp.internal:5432` on the
   server lets a task forward to that port but not reach the name through the proxy.
-* So a build file published to such a server names its `network` on every task and
+- So a build file published to such a server names its `network` on every task and
   service, which is also what a reviewer reads: the [plan](/docs/remote-compute/build-files) of a version shows each
   one's `network`.
-* Every run executes under the ceiling as well, and a version published before the
+- Every run executes under the ceiling as well, and a version published before the
   ceiling was set, which asks for more, is refused when a run of it is submitted.
-* The services a task needs are reachable at every level.
-* Local tasks can't be limited, so a server with a ceiling below `open` allows only the
+- The services a task needs are reachable at every level.
+- Local tasks can't be limited, so a server with a ceiling below `open` allows only the
   `docker` runtime; `runtimes: [docker, local]` with it is a config error.
-* On a [Kubernetes backend](/docs/remote-compute/backend#network) the ceiling is a NetworkPolicy
+- On a [Kubernetes backend](/docs/remote-compute/backend#network) the ceiling is a NetworkPolicy
   on every pod, so it needs `backend.networkPolicy: enforced`; without that it is a config error.
   A task that reads a provider's secret there keeps an open network, so it can't be published
   under a ceiling.
-

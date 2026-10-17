@@ -168,6 +168,11 @@ export async function getProgram(
   const parsed = parseSetArguments(separator >= 0 ? argv.slice(0, separator) : argv)
   const args = parsed.args
   environment.processEnvs = { ...environment.processEnvs, ...parsed.values }
+  const remote = args.indexOf('remote')
+  if (remote >= 0 && args[remote + 1] === 'mcp') {
+    // `remote mcp` speaks its protocol on stdout: a warning there would break it
+    environment.console = consoleContext(environment.stderr)
+  }
   const fileIndex = args.indexOf('--file')
   const fileName =
     fileIndex >= 0 ? join(environment.cwd, args[fileIndex + 1]) : await getBuildFilename(environment.cwd, environment)

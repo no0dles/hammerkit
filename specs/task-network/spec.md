@@ -2,7 +2,7 @@
 
 **Created**: 2026-10-12
 
-**Status**: Implemented for Docker and Kubernetes environments, and `runs.network` on a server (ADR-0011). `sandboxes.network` of FR-009 comes with sandboxes (agent harness work item 5).
+**Status**: Implemented for Docker and Kubernetes environments, and `runs.network` and `sandboxes.network` on a server (ADR-0011).
 
 **Input**: Every container task and service is on the docker default network and reaches whatever the host reaches. An agent's work (and an untrusted install script) should reach the services it needs and a package registry, not the rest of the network. Pascal decided it is a general feature for all tasks and services, with levels and a host allowlist in the first version, and that the services a task needs are always reachable.
 

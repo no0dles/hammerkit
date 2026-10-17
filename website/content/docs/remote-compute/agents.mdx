@@ -1,0 +1,231 @@
+---
+title: 'Agents'
+description: 'Let a coding agent work on a sandbox: hammerkit remote mcp for chat clients and agents, and the pi extension and opencode plugin that move the tools of those harnesses onto the server.'
+---
+
+<Callout type="warn">
+
+Experimental. The tools and settings can still change between releases.
+
+</Callout>
+
+A coding agent needs to read, edit and search files and to run commands. On a
+[sandbox](/docs/remote-compute/sandboxes) the files stay on the server and the commands run
+there, as published tasks in their containers. hammerkit connects agents to it three ways:
+
+| Client                                          | What it gets                                                                                                                                                      |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`hammerkit remote mcp`](#hammerkit-remote-mcp) | MCP tools for any client that speaks MCP: Claude Code, Claude Desktop, Cursor, a custom agent.                                                                    |
+| [pi](#pi)                                       | pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`, working on the sandbox, and `push`.                                                            |
+| [opencode](#opencode)                           | opencode's own `read`, `write`, `edit`, `patch`, `shell`, `grep` and `glob` (`apply_patch`, `bash` and `list` on opencode 1), working on the sandbox, and `push`. |
+
+pi and opencode keep the tools their models are tuned for, with the same names, parameters
+and output: only where they read, write and run moves. The MCP tools take the shapes models
+are trained on: numbered reads with an offset and limit, an exact string replace, an
+`apply_patch` body or a git diff, ripgrep's parameters and a shell command.
+
+## The shell task
+
+There is no command endpoint on the server: commands bypassing the published build file
+would bypass its image, network and accounts. A shell is a published task whose last command
+is a shell, and every command of the agent is its [argument](/docs/task/arguments):
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  sh:
+    image: node:24
+    mounts: [.]
+    cmds: [sh -c]
+    network: { allow: [registry.npmjs.org] }
+```
+
+`mounts: [.]` puts the files of the sandbox into the container, writable, as the task's
+working directory. Without it a command in a container runs in an empty directory: the
+clients then refuse to run it and say the shell task needs `mounts: [.]`.
+
+`bash` with `npm test -- -t login` then runs `sh -c 'npm test -- -t login'` in that image,
+on the files of the sandbox. Name the task `sh` or tell the client its name. Use `bash -c`
+when the image has bash. A task that reads secrets takes no arguments on a server, so the
+shell holds no account. Its network is the lower of its own `network`,
+[`runs.network`](/docs/remote-compute/runs#config) and
+[`sandboxes.network`](/docs/remote-compute/sandboxes#config).
+
+What follows from running a command as a task:
+
+- Commands run one at a time, each in a fresh container: only the files are kept between
+  them. A background process ends with its command, and `cd` or `export` in one command does
+  not reach the next. The clients run a command in a directory with `cd <dir> || exit 1` on a
+  line before it.
+- The command reads no input and gets none of the agent's variables.
+- While a command runs, the sandbox is held: an edit in the meantime is `409`. Agents send
+  tool calls in parallel, so each client takes the calls of its model one at a time, in the
+  order the model made them: an edit sent along with `npm test` lands before the tests start.
+  A command of another client still holds the sandbox, and an edit then is refused.
+- A command starts in the root of the sandbox. The paths of the agent's machine do not exist
+  there, which the clients tell the model.
+- What it printed comes from the [log of the run](/docs/remote-compute/runs#logs). A long
+  log is cut at `runs.maxLogBytes`; the last lines of the task are kept past it.
+
+## Sign-in
+
+The clients send the token of the agent, not of a person, to the server registered in the
+host config ([`hammerkit remote add`](/docs/cli/remote)), and nowhere else. They look for it
+in this order:
+
+| Source                            | What it is                                                                                                                                                                                                                                                                   |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HAMMERKIT_TOKEN_COMMAND`         | A command that prints a short-lived access token of the agent's own identity, for example a service account or workload identity of the identity provider the server accepts. It runs again when the server stops accepting the token, so a long session outlives one token. |
+| `HAMMERKIT_TOKEN`                 | Such a token, as the agent's platform hands it over.                                                                                                                                                                                                                         |
+| `hammerkit remote login <server>` | The sign-in stored on the machine, for an agent a person starts on their own machine.                                                                                                                                                                                        |
+
+Give the agent's identity an [entitlement](/docs/remote-compute/entitlements) with its
+repositories and branches under `sandboxes`, `builds: run`, and no account that holds
+production secrets. `[{ repo: github.com/corp/*, branches: { main: pull, "agent/**": push } }]`
+lets it start from `main` and push to `agent/**` with the [`push`](#taking-the-work-out) tool;
+with only `pull` it hands back patches.
+
+## Settings
+
+All three clients take the same settings, `hammerkit remote mcp` as options too:
+
+| Variable                          | Option            | What it names                                                                                                                                                                                                                                                                                                                                                                                |
+| --------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HAMMERKIT_SERVER`                | `--server`        | The registered server. Default: the one `hammerkit remote use` set.                                                                                                                                                                                                                                                                                                                          |
+| `HAMMERKIT_SANDBOX`               | `--sandbox`       | A sandbox of the agent, for example `sbx_4vJ0mT2cX9qLw1aB`.                                                                                                                                                                                                                                                                                                                                  |
+| `HAMMERKIT_REPO`, `HAMMERKIT_REF` | `--repo`, `--ref` | Instead of a sandbox: one of this repository at this branch. When the client starts, it takes a sandbox of yours of the same repository and branch that has no changes and checks it out at the branch again, or creates one. A sandbox stays until it is deleted and the server allows only a few, so set `HAMMERKIT_SANDBOX` to the id the client prints to come back to work in progress. |
+| `HAMMERKIT_BUILD`                 | `--build`         | The published build file whose tasks run on the sandbox.                                                                                                                                                                                                                                                                                                                                     |
+| `HAMMERKIT_SHELL`                 | `--shell`         | Its shell task, `sh` by default.                                                                                                                                                                                                                                                                                                                                                             |
+
+## hammerkit remote mcp
+
+[`hammerkit remote mcp`](/docs/cli/remote-mcp) is an MCP server on stdio for one sandbox.
+Clients start it as a command:
+
+```json title=".mcp.json"
+{
+  "mcpServers": {
+    "hammerkit": {
+      "command": "npx",
+      "args": ["hammerkit", "remote", "mcp", "--server", "corp", "--build", "payments"],
+      "env": { "HAMMERKIT_SANDBOX": "sbx_4vJ0mT2cX9qLw1aB", "HAMMERKIT_TOKEN_COMMAND": "agent-token" }
+    }
+  }
+}
+```
+
+Paths are relative to the root of the sandbox. The tools:
+
+| Tool          | Parameters                                                                                                           | What it does                                                                                                                                                                                  |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`        | `path`, `offset`, `limit`                                                                                            | The lines of a file, numbered like `cat -n`, in parts for long files.                                                                                                                         |
+| `write`       | `path`, `content`                                                                                                    | Writes a whole file, making its directories.                                                                                                                                                  |
+| `edit`        | `path`, `old_string`, `new_string`, `replace_all`                                                                    | Replaces a string that matches exactly once, or every match.                                                                                                                                  |
+| `apply_patch` | `patch`                                                                                                              | A `*** Begin Patch` body or a git diff; every file changes or none.                                                                                                                           |
+| `search`      | `pattern`, `path`, `glob`, `type`, `-i`, `-A`, `-B`, `-C`, `fixed_strings`, `multiline`, `output_mode`, `head_limit` | ripgrep on the server.                                                                                                                                                                        |
+| `glob`        | `pattern`, `path`                                                                                                    | The files that match a glob.                                                                                                                                                                  |
+| `bash`        | `command`, `workdir`, `timeout` (seconds)                                                                            | Runs a command as the shell task and answers its output and exit code. A long output keeps its first 50 and last 200 lines, about 30 KB; `run_logs` reads the rest.                           |
+| `run_task`    | `task`, `args`                                                                                                       | Runs another published task, such as `test`, and answers its [result](/docs/remote-compute/runs#results-and-waiting): status, exit code, why it was not taken from the cache, its last lines. |
+| `run_logs`    | `run`, `task`, `tail`, `from`, `limit`, `grep`, `ignore_case`, `context`                                             | Reads more of the [log of a run](/docs/remote-compute/runs#logs).                                                                                                                             |
+| `changes`     | `format`: `summary`, `diff` or `patch`                                                                               | What changed since the sandbox was fetched.                                                                                                                                                   |
+| `push`        | `branch`, `message`                                                                                                  | Commits the changes and pushes them to a branch, see [taking the work out](#taking-the-work-out).                                                                                             |
+
+Reads and searches are marked `readOnlyHint`, the edits `destructiveHint`, `push`
+`openWorldHint`; `bash` and `run_task` keep the defaults, since a command can do anything
+its task can. The server
+also tells the client which sandbox, repository and commit the tools work on.
+
+## pi
+
+hammerkit is a [pi package](https://pi.dev/packages): installing it adds the extension.
+
+```bash
+pi install npm:hammerkit
+HAMMERKIT_SERVER=corp HAMMERKIT_BUILD=payments HAMMERKIT_SANDBOX=sbx_4vJ0mT2cX9qLw1aB pi
+```
+
+The extension registers pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`
+with the sandbox as their backend, the way pi's SSH example does, and runs the user's `!`
+commands there too. pi's working directory stands for the root of the sandbox: a path below
+it is the same path in the sandbox, anything else is refused. The system prompt names the
+sandbox, so the model knows nothing is installed on the machine. `grep` searches with
+ripgrep on the server. Images are read from the sandbox like any file.
+
+## opencode
+
+opencode lets a plugin replace a built-in tool by registering one of the same name.
+hammerkit's plugin works with opencode 2 and with opencode 1 from 1.18.29. Add hammerkit to
+the dependencies of the project's opencode directory, install them with `npm install` in
+that directory (opencode 2 does not), and re-export the plugin as the default export:
+
+```json title=".opencode/package.json"
+{
+  "dependencies": { "hammerkit": "^1" }
+}
+```
+
+```ts title=".opencode/plugins/hammerkit.ts"
+export { default } from 'hammerkit/harness/opencode'
+```
+
+opencode 1 also needs `"@opencode-ai/plugin": "*"` in these dependencies, which it adds
+itself when it starts. Its plugin files that re-export `HammerkitPlugin` still work there;
+opencode 2 loads only the default export.
+
+Then start opencode with the [settings](#settings) as variables, as the user whose host
+config has the server (`hammerkit remote add`). opencode 2 runs a background service that
+keeps the variables it was started with: run `opencode service stop` after changing them, or
+`opencode run --standalone` to start with the current ones.
+
+| opencode 2 | opencode 1    | Parameters                                                                             |
+| ---------- | ------------- | -------------------------------------------------------------------------------------- |
+| `read`     | `read`        | `path` (`filePath` on opencode 1), `offset`, `limit`. A directory lists its entries.   |
+| `write`    | `write`       | `path` (`filePath`), `content`                                                         |
+| `edit`     | `edit`        | `path` (`filePath`), `oldString`, `newString`, `replaceAll`                            |
+| `patch`    | `apply_patch` | `patchText`, a `*** Begin Patch` body or a git diff; every file changes or none.       |
+| `shell`    | `bash`        | `command`, `workdir`, `timeout` in milliseconds. There are no background commands.     |
+| `glob`     | `glob`        | `pattern`, `path`, and on opencode 2 `limit`                                           |
+| `grep`     | `grep`        | `pattern`, `path`, `include`, and on opencode 2 `literal`, `caseSensitive` and `limit` |
+|            | `list`        | `path`, `ignore`                                                                       |
+| `push`     | `push`        | `branch`, `message`, see [Taking the work out](#taking-the-work-out)                   |
+
+The tools answer in opencode's words, and opencode still picks the patch tool for GPT models
+and `edit` and `write` for the others. Paths are relative to opencode's directory or absolute
+below it, which stands for the root of the sandbox. A long shell output keeps its first and
+last lines, like the MCP tool. On opencode 2 the plugin also removes the worktree tools,
+which would make worktrees on the machine opencode runs on.
+
+opencode carries on without a plugin that fails to load, and without a word: its own tools
+then work on the machine opencode runs on. On opencode 1 hammerkit's plugin keeps that from
+happening when it can. It takes the `@opencode-ai/plugin` of the opencode directory when
+hammerkit is linked there (`npm install ../hammerkit`, `file:`) and does not see it, and when
+it finds none at all, its tools still replace opencode's and refuse with what is missing. A
+plugin file that does not load at all cannot do that: hammerkit not installed, or on
+opencode 2 a file without the default export. Check once that the tools are hammerkit's, in a
+directory with nothing but the opencode setup. The answer names the files of the sandbox,
+not the ones of your directory:
+
+```shell
+opencode run --standalone 'List the files of the project root with the read tool.'
+```
+
+On opencode 1, leave out `--standalone`, or list them without a model:
+`opencode debug agent build --tool list`.
+
+Tools the plugin does not replace still work on the machine opencode runs on, such as
+`webfetch` and `skill`. Turn off the ones that touch local files and that your opencode
+version still has, for example `"tools": { "multiedit": false }` in the `opencode.json` of
+opencode 1.
+
+## Taking the work out
+
+Every client has a `push` tool with a `branch` and a commit `message`. The server commits the
+changes of the sandbox as the agent's identity and [pushes](/docs/remote-compute/sandboxes#pushing)
+them with the source's own credentials, only to a branch the entitlement gives `push`, such
+as `agent/**`; any other branch is refused with what the agent may push to. The sandbox is at
+the pushed commit afterwards, so the next push carries only new work. Without a branch to push
+to, the MCP tool `changes` with `format: patch` gives a patch to apply with `git am`.
+
+## What is not covered yet
+
+- A service on the sandbox, such as a dev server to send requests to.
+- Commands that read input, and long-running background commands.

@@ -1,0 +1,90 @@
+---
+title: 'pi'
+description: "Run the pi coding agent on a hammerkit sandbox: install the extension, sign in as the agent's service account, and push the work to a branch."
+icon: Terminal
+---
+
+[pi](https://pi.dev) keeps its own tools (`read`, `write`, `edit`, `bash`, `ls`, `find` and
+`grep`) and hammerkit's extension moves them onto a sandbox of the server, with a `push` tool
+on top. This guide was run as written with pi 1.2.0 against the server of
+[Server on Kubernetes](/docs/guides/agents/kubernetes).
+
+You need a server with a published build file and an identity for the agent, see
+[Agents on a server](/docs/guides/agents).
+
+## 1. Install pi and the extension
+
+hammerkit is a [pi package](https://pi.dev/packages): installing it adds the extension to
+every pi session of your user.
+
+```bash
+npm install -g @earendil-works/pi-coding-agent
+pi install npm:hammerkit
+pi list
+```
+
+`pi list` shows hammerkit under the user packages. Use the hammerkit version of the server.
+
+## 2. Register the server
+
+As the user that starts pi, once:
+
+```bash
+npx hammerkit remote add hammerkit http://127.0.0.1:8480 --issuer https://accounts.google.com
+```
+
+The address is the `kubectl port-forward` of the [Kubernetes guide](/docs/guides/agents/kubernetes#3-connect-and-publish),
+which must keep running while pi works. Plain http is accepted only for `127.0.0.1` and
+`localhost`; any other address needs https.
+
+## 3. Start pi on a sandbox
+
+Start pi in an empty directory: it stands for the root of the sandbox, and nothing in it is
+read or changed. The variables name the server, the repository and branch to start from, the
+published build file and how to get the agent's token:
+
+```bash
+mkdir shop-agent && cd shop-agent
+export HAMMERKIT_SERVER=hammerkit
+export HAMMERKIT_REPO=github.com/acme/shop HAMMERKIT_REF=main
+export HAMMERKIT_BUILD=shop
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
+export OPENROUTER_API_KEY=…    # or the key of any provider pi supports
+pi --provider openrouter --model anthropic/claude-haiku-5.5
+```
+
+On its first tool call the extension takes a sandbox of the agent at `main` that has no
+changes, or creates one, and every tool works on it from then on. Ask pi to list the files:
+it lists the repository's, not the empty directory's.
+
+## 4. Push the work
+
+Ask pi to push when it is done, for example "run the tests and push the fix to
+`agent/fix-cart`". Its `push` tool commits the changes of the sandbox as the agent's identity
+and the server pushes them with its GitHub App. A branch outside the agent's `push` patterns
+is refused with the ones it may push to.
+
+## Without a terminal
+
+`-p` runs one prompt and exits. pi waits for input on stdin, so close it when nothing feeds
+it, for example in CI:
+
+```bash
+pi --provider openrouter --model anthropic/claude-haiku-5.5 --no-session \
+  -p "The cart total skips an item. Fix it, run the tests and push to agent/fix-cart." < /dev/null
+```
+
+`--mode json` prints every tool call and result as a line of JSON.
+
+## When it does not work
+
+| What you see                                                                                            | What it means                                                                                                               |
+| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `server hammerkit is not registered`                                                                    | Step 2 was run as another user, or with another name than `HAMMERKIT_SERVER`.                                               |
+| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | A company or private CA goes in `NODE_EXTRA_CA_CERTS`, which takes one file.                                                |
+| `unable to reach https://…: fetch failed: connect ECONNREFUSED …`                                       | Nothing listens at the server's URL, for example `kubectl port-forward` has stopped.                                        |
+| `you are not entitled to keep sandboxes on this server`                                                 | The entitlement of the token's identity has no `sandboxes`: check that the token command names the agent's service account. |
+| The shell task needs `mounts: [.]`                                                                      | The build file's shell task does not mount the sandbox, see [The build file](/docs/guides/agents#the-build-file).           |
+
+See [Agents](/docs/remote-compute/agents#pi) for what the extension does with each tool.

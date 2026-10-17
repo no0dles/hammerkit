@@ -52,6 +52,7 @@ so they work with or without a build file in the working directory.
 | `remote yank <hash> [server]` | Pull a published version back: no run starts from it. `--reason <text>` is shown to whoever tries to run it. Needs `builds: publish` or `use` of an account the version works with. |
 | `remote unyank <hash> [server]` | Let a yanked version go on. Needs `builds: publish`. |
 | `remote reject <run or hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
+| `remote mcp` | Serve a sandbox on a server as MCP tools over stdio for a coding agent, see [remote mcp](/docs/cli/remote-mcp). |
 
 Re-running `remote add` with the same values changes nothing. To point an existing
 name at a different server pass `--force`, so a typo can't silently redirect your
@@ -267,3 +268,21 @@ URL and issuer it was issued for, so registering the name again for another serv
 Agents and CI do not use `login`. They bring their own token, an agent from its own
 client credentials and a CI job from the OIDC token of the job, and the server maps
 it to service accounts through its [entitlements](/docs/remote-compute/entitlements).
+The `remote` commands take such a token instead of a sign-in, in this order:
+
+| Variable                  | What it is                                                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `HAMMERKIT_TOKEN_COMMAND` | A command that prints the token, run for each command, such as a script that asks the identity provider for a service account. |
+| `HAMMERKIT_TOKEN`         | The token itself, as a CI job gets it.                                                                                          |
+
+```yaml title=".gitlab-ci.yml"
+publish:
+  id_tokens:
+    HAMMERKIT_TOKEN:
+      aud: hammerkit
+  script:
+    - hammerkit remote add build https://build.example.com --issuer https://gitlab.com
+    - hammerkit remote publish build
+```
+
+The token goes only to the server the name is registered for.

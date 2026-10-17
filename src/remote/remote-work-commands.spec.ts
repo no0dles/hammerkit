@@ -36,6 +36,8 @@ interface Harness {
   call: (sub: string, method: string, path: string, body?: unknown) => Promise<{ status: number; body: any }>
   executed: string[]
   url: string
+  // variables of the environment the commands run in, as a CI job sets them
+  env: (vars: { [name: string]: string | undefined }) => void
 }
 
 async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
@@ -129,7 +131,8 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           return { status: response.status, body: await response.json() }
         }
         await run('remote', 'add', 'build', server.url, '--issuer', idp.url)
-        await fn({ run, as: (sub) => (who = sub), token, call, executed, url: server.url })
+        const env: Harness['env'] = (vars) => (environment.processEnvs = { ...environment.processEnvs, ...vars })
+        await fn({ run, as: (sub) => (who = sub), token, call, executed, url: server.url, env })
       } finally {
         await server.close()
       }
@@ -218,6 +221,27 @@ describe('remote publish', () => {
       expect((await h.call('bob', 'GET', `/v1/definitions/${hash}`)).body.yanked).toBeUndefined()
       await expect(h.run('remote', 'yank', 'payments', 'build')).rejects.toThrow('is not a version')
       await expect(h.run('remote', 'yank', `payments@${hash}`, 'build')).rejects.toThrow('is not a version')
+    })
+  })
+
+  it('takes the token of a CI job or an agent instead of a sign-in', async () => {
+    await withHarness('remote-publish-token', async (h) => {
+      h.env({ HAMMERKIT_TOKEN: h.token('bob') })
+      expect(await h.run('remote', 'publish', 'payments', 'build')).toContain('published payments to build')
+
+      // a token command runs for the call, and wins over a fixed token
+      const run = await submit(h, 'alice', 'deploy')
+      h.env({
+        HAMMERKIT_TOKEN: h.token('alice'),
+        HAMMERKIT_TOKEN_COMMAND: `${JSON.stringify(process.execPath)} -e "process.stdout.write('${h.token('bob')}')"`,
+      })
+      expect(await h.run('remote', 'approvals', 'build')).toContain(run.id)
+      expect(await h.run('remote', 'approve', run.id, 'build')).toContain('approved')
+
+      h.env({ HAMMERKIT_TOKEN_COMMAND: undefined, HAMMERKIT_TOKEN: 'two words' })
+      await expect(h.run('remote', 'publish', 'payments', 'build')).rejects.toThrow(
+        'HAMMERKIT_TOKEN holds more than a token'
+      )
     })
   })
 

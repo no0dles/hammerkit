@@ -1,0 +1,34 @@
+---
+title: 'remote mcp'
+description: 'Serve the files, shell and tasks of a sandbox on a server as MCP tools over stdio.'
+---
+
+<Callout type="warn">
+
+Experimental. The tools and options can still change between releases.
+
+</Callout>
+
+`remote mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio for one
+[sandbox](/docs/remote-compute/sandboxes) on a server. An MCP client starts it as a command
+and gets tools to read, search and edit the sandbox's files, run commands and published
+tasks on it, show what changed and push it to a branch. Like `remote`, it needs no build file: the tasks are the
+published ones. The tools, the sign-in and the shell task are described in
+[Agents](/docs/remote-compute/agents). It is a [`remote`](/docs/cli/remote) command, so a task
+named `mcp` still runs with `hammerkit mcp`.
+
+```bash
+hammerkit remote mcp --server corp --sandbox sbx_4vJ0mT2cX9qLw1aB --build payments
+```
+
+| Option                         | What it does                                                                                                                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--server <name>`              | The registered server, `HAMMERKIT_SERVER`. Default: the one `remote use` set.                                                                                                                |
+| `--sandbox <id>`               | A sandbox of yours on it, `HAMMERKIT_SANDBOX`.                                                                                                                                               |
+| `--repo <repo>`, `--ref <ref>` | Instead: a sandbox of this repository at this branch, `HAMMERKIT_REPO` and `HAMMERKIT_REF`. One of yours without changes is checked out at the branch again, otherwise a new one is created. |
+| `--build <name>`               | The published build file whose tasks run on the sandbox, `HAMMERKIT_BUILD`.                                                                                                                  |
+| `--shell <task>`               | Its task whose last command is a shell, `sh` by default, `HAMMERKIT_SHELL`.                                                                                                                  |
+
+Standard output carries the protocol only; what `remote mcp` has to say goes to standard
+error, warnings about the build file in the working directory too. It stops when the client
+closes its input.
