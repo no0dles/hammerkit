@@ -1,10 +1,14 @@
 import { z } from 'zod'
 import { parseDuration } from '../utils/units'
 import { HASH_PATTERN } from '../remote/bundle'
-import { definitionName } from './server-config'
 import { normalizeRepo } from './repo'
+import { SANDBOX_ID_PATTERN } from './runs'
 
 const name = z.string().min(1).max(200)
+
+// what one run may pass after `--`
+export const MAX_ARGS = 100
+export const MAX_ARGS_BYTES = 16 * 1024
 
 // What `POST /v1/runs` takes. Who is asking and which accounts they may use is
 // decided from the token, never from this body; the accounts a run uses are those
@@ -36,19 +40,24 @@ export const runOptionsSchema = z
     timeout: duration.optional(),
     // as --no-skip-deps when false
     skipDeps: z.boolean().optional(),
+    // as the text after `--`: appended to the last command of the one task the run
+    // names, each quoted for its shell. A task that reads a secret or a variable of the
+    // server takes none (see refuseArguments).
+    args: z
+      .array(z.string().refine((arg) => !arg.includes('\0'), 'an argument can not contain a NUL character'))
+      .max(MAX_ARGS)
+      .refine(
+        (args) => args.reduce((total, arg) => total + Buffer.byteLength(arg), 0) <= MAX_ARGS_BYTES,
+        `the arguments are longer than ${MAX_ARGS_BYTES / 1024} KiB together`
+      )
+      .optional(),
   })
   .strict()
 
 export const runRequestSchema = z
   .object({
-    // the published build file to run, and the version of it: a hash, or the
-    // latest when left out. The server answers with the hash it chose.
-    definition: z
-      .object({
-        name: definitionName,
-        hash: z.union([z.literal('latest'), z.string().regex(HASH_PATTERN)]).default('latest'),
-      })
-      .strict(),
+    // the published version of the build file to run, by its hash
+    definition: z.string().regex(HASH_PATTERN, 'expected the hash of a published build file, sha256:...'),
     // tasks by their name in the build file, as on the command line; labels in
     // the options can select tasks instead
     tasks: z.array(name).max(100).default([]),
@@ -74,6 +83,10 @@ export const runRequestSchema = z
         .strict(),
       // the name of a tree announced with POST /v1/sources
       z.object({ type: z.literal('upload'), snapshot: z.string().regex(HASH_PATTERN) }).strict(),
+      // a sandbox of the caller's, see POST /v1/sandboxes
+      z
+        .object({ type: z.literal('sandbox'), id: z.string().regex(SANDBOX_ID_PATTERN, 'expected a sandbox id') })
+        .strict(),
     ]),
     options: runOptionsSchema.default({}),
   })
@@ -81,6 +94,10 @@ export const runRequestSchema = z
   .refine((request) => request.tasks.length > 0 || (request.options.filter ?? []).length > 0, {
     message: 'name at least one task, or filter by labels',
     path: ['tasks'],
+  })
+  .refine((request) => (request.options.args ?? []).length === 0 || request.tasks.length === 1, {
+    message: 'arguments go to one task, name exactly one in tasks',
+    path: ['options', 'args'],
   })
 
 export type RunRequest = z.infer<typeof runRequestSchema>

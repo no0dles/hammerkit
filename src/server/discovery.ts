@@ -19,5 +19,11 @@ export interface DiscoveryDocument {
   // to them: public OIDC metadata that `remote add` compares with the issuer
   // given on the command line
   issuers: DiscoveredIssuer[]
-  backend: { type: 'host'; platform: { os: string; arch: string } }
+  // where tasks execute: the machine of the server, or the pools of a cluster (the
+  // first is where container tasks go, and `platform` is its)
+  backend: {
+    type: 'host' | 'kubernetes'
+    platform: { os: string; arch: string }
+    pools?: { name: string; platform: { os: string; arch: string } }[]
+  }
 }

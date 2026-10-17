@@ -4,14 +4,30 @@ import { HostServer } from './host-config'
 const TIMEOUT_MS = 10_000
 const WRITE_TIMEOUT_MS = 30_000
 
-export class ServerError extends Error {}
+export class ServerError extends Error {
+  // what the server answered, when it did
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message)
+  }
+}
 
 // Text from the server or the identity provider is shown to the user: no
-// control characters, so it can't rewrite the terminal.
+// control characters, so it can't rewrite the terminal, and format characters
+// (bidi overrides, zero-width) written out, so text reads in the order it runs.
+// Long text is cut, and says how much was.
 export function printable(value: unknown): string {
+  const text = printableWhole(value)
+  return text.length > 300 ? `${text.slice(0, 300)}… (+${text.length - 300} chars)` : text
+}
+
+// The same, never cut: for what somebody decides on, such as a command.
+export function printableWhole(value: unknown): string {
   return String(value)
     .replace(/\p{Cc}/gu, '?')
-    .slice(0, 300)
+    .replace(/\p{Cf}/gu, (char) => `\\u{${char.codePointAt(0)?.toString(16)}}`)
 }
 
 async function getJson(url: string, token?: string): Promise<unknown> {
@@ -99,7 +115,7 @@ export async function callServer<T = any>(
   }
   if (!response.ok) {
     const said = answer && typeof answer.error === 'string' ? `: ${printable(answer.error)}` : ''
-    throw new ServerError(`${server.url} answered ${response.status}${said}`)
+    throw new ServerError(`${server.url} answered ${response.status}${said}`, response.status)
   }
   return { status: response.status, body: answer as T }
 }

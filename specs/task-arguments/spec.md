@@ -2,7 +2,7 @@
 
 **Created**: 2026-10-12
 
-**Status**: Local side implemented (FR-001 to FR-006); the server side (FR-007, FR-008) is not built yet (ADR-0011)
+**Status**: Implemented, locally (FR-001 to FR-006) and on a server (FR-007, FR-008) (ADR-0011)
 
 **Input**: Narrowing a run (one test file, one test name, a flag for a dev server) needs a new task per variation or a `--set` variable the build file has to anticipate. Agents need the same thing on a server: a shell is a task that takes its command as an argument. Pascal decided on raw passthrough, as `npm run x -- ...` and `make` users know it, and that it works locally and remotely.
 
@@ -32,6 +32,15 @@
 - **FR-006**: `hammerkit ls --json` and the published versions of a server show each task's last command (and each service's `cmd`), so a caller can tell where arguments land.
 - **FR-007 (server)**: The run request takes `options.args: string[]` with exactly one entry in `tasks`. Limits: 100 arguments, 16 KiB together, no NUL. A server never takes `--set`. An approver sees every argument in full: nothing is cut without a marker, and control and bidi characters are escaped.
 - **FR-008 (server)**: A run that passes arguments is refused at submit (`400`), and again before it starts, when any task or service of the run reads a secret or takes a value of an `envs` entry from the server's environment (`runs.env`), other than `PATH`, `HOME` and `CI`. That covers the task itself, its dependencies and the services it needs: an argument can make the command print what the task holds, and what a dependency wrote into its outputs or a service answers, past the masking of secrets (a transform such as `rev`). So a shell task runs with no account and no server credential, nor next to one (decided by Pascal, 2026-10-13).
+
+## Implementation notes (server)
+
+- **Where the check sits.** The arguments are applied while the run is planned, so the run's `plan` (what the caller and an approver see) carries the command as it runs. The secrets check reads that plan at submit, and again in the executor before anything starts.
+- **What a run reads.** A version's plan records, per item, the variables of the server its `envs` read (`serverEnvs`), taken from where `$NAME` and `${NAME}` resolved while the build file was read. The secrets of any item in the run's plan (the task, its dependencies, its needed services) and any of those variables other than `PATH`, `HOME` and `CI` refuse arguments. The refusal names the task first when it reads one itself, else the first item by name.
+- **No approval with arguments.** Approval comes from the accounts a run uses, and a run with arguments uses none, so it never waits for one. The approver's display of arguments stays for runs stored before.
+- **Not a service.** A run request names tasks; arguments with a service in `tasks` are `400`.
+- **No NUL.** An argument with a NUL character is `400` at the schema, as locally.
+- **The approver's view.** `hammerkit remote approvals` and `remote show` list the arguments as JSON strings on a line of their own, so commas and spaces in one stay visible. Arguments and command lines are never cut; other text is cut at 300 characters with a `… (+N chars)` marker. Control characters print as `?`, format characters (bidi, zero-width) as `\u{…}`.
 
 ## Out of scope
 

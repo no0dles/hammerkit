@@ -6,6 +6,7 @@ import { Environment } from '../executer/environment'
 import { WorkService } from '../planner/work-service'
 import { CacheMethod } from '../parser/cache-method'
 import { createHash } from 'crypto'
+import { lstat, readlink } from 'fs/promises'
 import { WorkItem } from '../planner/work-item'
 import { WorkSource } from '../planner/work-source'
 
@@ -30,6 +31,22 @@ async function addWorkCacheStats(
 ): Promise<number> {
   if (isExcluded(path, excluded)) {
     return 0
+  }
+
+  // On a server the files were written by a commit or a task: a link is a source as it is,
+  // its target, and never followed. A `**` would walk `x -> /` through the server's disk.
+  if (context.hosted) {
+    const link = await lstat(path).catch(() => undefined)
+    if (link?.isSymbolicLink()) {
+      if (!matcher(path)) {
+        return 0
+      }
+      const checksum = createHash('sha1')
+        .update(`link:${await readlink(path)}`)
+        .digest('hex')
+      result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: link.mtimeMs, checksum }
+      return 1
+    }
   }
 
   const exists = await context.file.exists(path)

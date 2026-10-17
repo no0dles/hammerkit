@@ -17,7 +17,7 @@ export async function restoreKubernetesData(
   environment: Environment,
   path: string
 ) {
-  const persistence = await getKubernetesPersistence(work)
+  const persistence = await getKubernetesPersistence(work, kubernetes)
   await getPodForPersistence(instance, kubernetes, work, persistence, 'write', async (name) => {
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       if (!(await environment.file.exists(generatedArchive.filename))) {
@@ -25,17 +25,23 @@ export async function restoreKubernetesData(
       }
 
       const targetPath = `/dev/hammerkit/${work.id()}/${basename(generatedArchive.path)}`
+      // a claim made for this run (a server removes the claims of a run when it
+      // ends) does not have the directory of the output yet
+      let failure: string | null = null
       const res = await instance.exec.exec(
         kubernetes.namespace,
         name,
         'volume',
-        ['tar', 'xzf', '-', '-C', targetPath],
+        ['sh', '-c', 'mkdir -p "$1" && tar xzf - -C "$1"', 'sh', targetPath],
         process.stdout,
         process.stderr,
         environment.file.readStream(generatedArchive.filename),
         false,
         (status) => {
-          work.status.write('debug', `upload ${generatedArchive.filename} to ${name}: ${status}`)
+          work.status.write('debug', `upload ${generatedArchive.filename} to ${name}: ${status.status}`)
+          if (status.status !== 'Success') {
+            failure = status.message ?? status.reason ?? 'unknown'
+          }
         }
       )
       await new Promise<void>((resolve, reject) => {
@@ -51,6 +57,10 @@ export async function restoreKubernetesData(
             reject(err)
           })
           res.on('close', () => {
+            if (failure) {
+              reject(new Error(`unable to restore ${generatedArchive.path} into ${name}: ${failure}`))
+              return
+            }
             work.status.write('debug', `uploaded ${generatedArchive.filename} to ${name}:${targetPath}`)
             resolve()
           })

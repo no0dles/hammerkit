@@ -4,7 +4,7 @@ import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
 import { DefinitionError, planBundle } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
-import { planRun } from './run-plan'
+import { planRun, refuseArguments } from './run-plan'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -51,10 +51,13 @@ describe('planBundle on a server', () => {
       kind: 'task',
       runtime: 'local',
       cmds: ['./deploy.sh'],
+      command: './deploy.sh',
+      network: 'open',
       deps: ['build'],
       needs: [],
       accounts: ['prod'],
       secrets: [{ from: 'gsm:kube-token', account: 'prod', target: 'KUBE_TOKEN' }],
+      serverEnvs: [],
       mounts: [],
       ports: [],
       generates: [],
@@ -104,6 +107,207 @@ tasks:
     expect(planned.plan.test.needs).toEqual(['db'])
   })
 
+  it('shows the last command of each task and the cmd of each service, where arguments land', async () => {
+    const yaml = `
+services:
+  api:
+    image: node:22
+    cmd: node server.js
+    network: { allow: [registry.npmjs.org] }
+tasks:
+  setup:
+    image: node:22
+    cmds: [npm ci, npx vitest run]
+    network: none
+  empty:
+    image: node:22
+`
+    const planned = await planBundle(bundle(yaml), hosted, { policy })
+    expect(planned.plan.setup).toMatchObject({ command: 'npx vitest run', network: 'none' })
+    expect(planned.plan.empty.command).toBeNull()
+    expect(planned.plan.api).toMatchObject({
+      command: 'node server.js',
+      network: { allow: ['registry.npmjs.org'] },
+    })
+  })
+
+  it('appends the arguments of a run to the last command of its task, never to a dependency', async () => {
+    const yaml = `
+tasks:
+  build:
+    image: node:22
+    cmds: [npm run build]
+  test:
+    image: node:22
+    deps: [build]
+    cmds: [npm ci, npx vitest run]
+`
+    const run = { tasks: ['test'], options: { args: ['src/login.spec.ts', '-t', "it's a; rm -rf /"] } }
+    const planned = await planRun(bundle(yaml), run, hosted, policy)
+    expect(planned.plan.test.cmds).toEqual(['npm ci', `npx vitest run 'src/login.spec.ts' '-t' 'it'\\''s a; rm -rf /'`])
+    expect(planned.plan.test.command).toEqual(planned.plan.test.cmds[1])
+    expect(planned.plan.build.cmds).toEqual(['npm run build'])
+    expect(refuseArguments(run, planned.plan)).toBeNull()
+  })
+
+  it('refuses arguments for a run in which an item reads a secret or a variable of the server', async () => {
+    const refusal = async (yaml: string, task: string) => {
+      const run = { tasks: [task], options: { args: ['-t', 'x'] } }
+      return refuseArguments(run, (await planRun(bundle(yaml), run, hosted, policy)).plan)
+    }
+    expect(await refusal(build, 'test')).toEqual(
+      'test reads the secret DB, it takes no arguments on a server: an argument could make it print them'
+    )
+    const yaml = `
+services:
+  signer:
+    image: node:22
+    cmd: node sign.js
+    secrets:
+      - { from: "gsm:signing-key", account: ci, env: KEY }
+tasks:
+  login:
+    image: node:22
+    secrets:
+      - { from: "gsm:npm-token", account: ci, env: NPM_TOKEN }
+    cmds: [npm whoami]
+  test:
+    image: node:22
+    deps: [login]
+    needs: [signer]
+    cmds: [npx vitest run]
+  token:
+    image: node:22
+    envs: { TOKEN: $SERVER_ONLY, URL: "https://\${SERVER_ONLY}@registry" }
+    cmds: [npm ci]
+  plain:
+    image: node:22
+    envs: { P: $PATH, BIN: "\${PATH}/x" }
+    cmds: [npm test]
+`
+    // what a dependency or a service of the run holds reaches the task: the dependency through
+    // its outputs, the service through its answers
+    expect(await refusal(yaml, 'test')).toEqual(
+      'test takes no arguments on a server: login in its run reads the secret NPM_TOKEN, and an argument could make test print what login hands on'
+    )
+    const needs = `
+services:
+  signer:
+    image: node:22
+    cmd: node sign.js
+    secrets:
+      - { from: "gsm:signing-key", account: ci, env: KEY }
+tasks:
+  registry:
+    image: node:22
+    envs: { TOKEN: $SERVER_ONLY }
+    cmds: [npm ci]
+  sign:
+    image: node:22
+    needs: [signer]
+    cmds: [node client.js]
+  install:
+    image: node:22
+    deps: [registry]
+    cmds: [npm test]
+`
+    expect(await refusal(needs, 'sign')).toEqual(
+      'sign takes no arguments on a server: signer in its run reads the secret KEY, and an argument could make sign print what signer hands on'
+    )
+    expect(await refusal(needs, 'install')).toEqual(
+      'install takes no arguments on a server: registry in its run reads $SERVER_ONLY of the server, and an argument could make install print what registry hands on'
+    )
+    // a variable of the server can be a credential as well, as `$NAME` or `${NAME}`
+    expect(await refusal(yaml, 'token')).toEqual(
+      'token reads $SERVER_ONLY of the server, it takes no arguments on a server: an argument could make it print them'
+    )
+    // where tools are is not a credential
+    expect(await refusal(yaml, 'plain')).toBeNull()
+    expect(await refusal(yaml, 'signer')).toEqual('signer is not a task of this version')
+    expect(await refusal(yaml, 'nope')).toEqual('nope is not a task of this version')
+  })
+
+  it('records the variables of the server each item reads', async () => {
+    const yaml =
+      'tasks:\n  a:\n    image: node:22\n    envs: { A: $SERVER_ONLY, B: "${PATH}:x", C: literal }\n    cmds: [echo]\n'
+    expect((await planBundle(bundle(yaml), hosted, { policy })).plan.a.serverEnvs).toEqual(['PATH', 'SERVER_ONLY'])
+  })
+
+  it('refuses a version that reaches more than runs.network allows', async () => {
+    const yaml = `
+tasks:
+  install:
+    image: node:22
+    network: { allow: [registry.npmjs.org, '*.githubusercontent.com'] }
+    cmds: [npm ci]
+  test:
+    image: node:22
+    network: none
+    cmds: [npm test]
+`
+    const allow = (...hosts: string[]) => ({ ...policy, network: { type: 'allow' as const, hosts } })
+    // open, the default, allows anything
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, network: { type: 'open' } } })
+    ).resolves.toBeDefined()
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: allow('*.githubusercontent.com', 'registry.npmjs.org') })
+    ).resolves.toBeDefined()
+    // a wildcard of the server covers the names under it
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: allow('*.githubusercontent.com', '*.npmjs.org') })
+    ).resolves.toBeDefined()
+    await expect(planBundle(bundle(yaml), hosted, { policy: allow('registry.npmjs.org') })).rejects.toThrow(
+      'install: asks for network allow *.githubusercontent.com, registry.npmjs.org, more than this server allows (runs.network: allow registry.npmjs.org)'
+    )
+    // a redundant name of the server takes nothing from a task that asks for exactly what it allows
+    await expect(
+      planBundle(bundle(yaml), hosted, {
+        policy: allow('*.githubusercontent.com', 'raw.githubusercontent.com', 'registry.npmjs.org'),
+      })
+    ).resolves.toBeDefined()
+    // a name of the server does not cover the wildcard of the build file
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: allow('raw.githubusercontent.com', 'registry.npmjs.org') })
+    ).rejects.toThrow('install: asks for network')
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, network: { type: 'none' } } })
+    ).rejects.toThrow(/^install: asks for network allow .*\(runs.network: none\)$/)
+    // an empty allow list reaches nothing; a task that asks for nothing passes, one that sets no network is open
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    image: node:22\n    network: { allow: [] }\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'none' } },
+      })
+    ).resolves.toBeDefined()
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    image: node:22\n    network: none\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'none' } },
+      })
+    ).resolves.toBeDefined()
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    image: node:22\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'none' } },
+      })
+    ).rejects.toThrow('a: asks for network open, more than this server allows (runs.network: none)')
+    // services are held to it as well, whether a task needs them or not
+    const services = (network: string) =>
+      `services:\n  api:\n    image: node:22\n    cmd: node server.js${network}\ntasks:\n  a:\n    image: node:22\n    network: none\n    cmds: [echo]\n`
+    await expect(
+      planBundle(bundle(services('')), hosted, { policy: { ...policy, network: { type: 'none' } } })
+    ).rejects.toThrow('api: asks for network open, more than this server allows (runs.network: none)')
+    await expect(
+      planBundle(bundle(services('\n    network: none')), hosted, { policy: { ...policy, network: { type: 'none' } } })
+    ).resolves.toBeDefined()
+  })
+
+  it('refuses a local task under a runs.network below open', async () => {
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    cmds: [echo]\n'), hosted, {
+        policy: { ...policy, network: { type: 'allow', hosts: ['registry.npmjs.org'] } },
+      })
+    ).rejects.toThrow("a: is a local task, which can't be limited to the network this server allows")
+  })
+
   it('requires every provider secret to name its account, a task account does not count', async () => {
     const yaml = `
 tasks:
@@ -138,6 +342,28 @@ tasks:
     await expect(planBundle(bundle(yaml), hosted, { policy })).rejects.toThrow(
       /declares secret providers or accounts, which a server defines in its own config/
     )
+  })
+
+  it('refuses on a cluster what the Job of a task can not read itself yet', async () => {
+    const onCluster = { policy: { ...policy, backend: 'kubernetes' as const } }
+    const cached =
+      'tasks:\n  a:\n    secrets:\n      - { from: "gsm:x", account: ci, env: X, cache: true }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(cached), hosted, onCluster)).rejects.toThrow(
+      'a: the secret X has cache: true, its digest would need the value before the Job of the task reads it'
+    )
+    const service =
+      'services:\n  db:\n    image: postgres:16\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n'
+    await expect(planBundle(bundle(service), hosted, onCluster)).rejects.toThrow(
+      'db: the secret X is read from gsm, which this server does for tasks only'
+    )
+    const offline =
+      'tasks:\n  a:\n    image: alpine:3.19\n    network: none\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(offline), hosted, onCluster)).rejects.toThrow(
+      'a: the secret X is read from gsm in the Job of the task, which network none would cut off from it'
+    )
+    await expect(planBundle(bundle(build), hosted, onCluster)).resolves.toBeTruthy()
+    await expect(planBundle(bundle(cached), hosted, { policy })).resolves.toBeTruthy()
+    await expect(planBundle(bundle(offline), hosted, { policy })).resolves.toBeTruthy()
   })
 
   it('refuses a task whose runtime the server does not allow', async () => {
@@ -179,6 +405,16 @@ tasks:
     await refuse(
       'tasks:\n  a:\n    image: alpine\n    mounts: ["../outside:/x"]\n    cmds: [echo]\n',
       /a: mounts .*outside, which is outside of the bundle/
+    )
+    // what a task reads would be uploaded or bound from the server: its cluster token
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    src: ["../../../../../../var/run/secrets/kubernetes.io/serviceaccount"]\n    cmds: [echo]\n',
+      'a: src ../../../../../../var/run/secrets/kubernetes.io/serviceaccount is outside of the bundle'
+    )
+    await refuse('tasks:\n  a:\n    src: ["../../**/*.conf"]\n    cmds: [echo]\n', 'a: src ../../**/*.conf is outside')
+    await refuse(
+      'tasks:\n  a:\n    image: alpine\n    generates: ["../out"]\n    cmds: [echo]\n',
+      /a: generates .*out, which is outside of the bundle/
     )
   })
 

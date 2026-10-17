@@ -43,6 +43,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
 | `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/task#resources) limits and requests (`2`, `500m`; `512Mi`, `2Gi`); the run is planned by the requests. Not enforced for a local task, not part of the cache key. |
+| `network` | `open` \| `none` \| `{allow: [hosts]}` | What the container [reaches](/docs/task/network) besides the services in `needs` (default `open`); `allow` goes through an egress proxy, and a `host:port` entry forwards raw TCP. An error on a local task, not part of the cache key. |
 | `runner` | string | Name of the [server](/docs/cli/remote) the task has to run on (experimental, see [runner](/docs/task#runner)). |
 
 **Container task** adds:
@@ -77,6 +78,7 @@ service** (it has a `selector`).
 | `envs` | map of string→string/number | Service environment variables. |
 | `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/service/container#resources) limits and requests of the container, as for a task. |
+| `network` | `open` \| `none` \| `{allow: [hosts]}` | What the service [reaches](/docs/task/network) besides the services it needs, as for a task; what needs the service always reaches it. |
 | `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
 | `mounts` | array of string | `host:container[:ro]` config mounts. |
 | `deps` | array of string | Tasks that must run before the service starts. |
@@ -123,7 +125,7 @@ Each environment is a [run target](/docs/task/kubernetes) — exactly one of:
 
 | Key | Fields | Description |
 |-----|--------|-------------|
-| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]` | Run tasks as jobs and services as deployments on a cluster. |
+| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]`, `networkPolicy` | Run tasks as jobs and services as deployments on a cluster. `networkPolicy: enforced` states that the cluster enforces NetworkPolicy, which [network limits](/docs/task/network#kubernetes) need. |
 | `docker` | `host` | Run against a remote Docker daemon. |
 
 An `httpRoutes` entry has `host`, `service` and `gateway` (all required),

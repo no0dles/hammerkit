@@ -1,4 +1,4 @@
-import commaner, { Command, CommanderError, Option } from 'commander'
+import commaner, { Command, CommanderError, InvalidArgumentError, Option } from 'commander'
 import { parseSetArguments } from './parse-set-arguments'
 import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
@@ -26,7 +26,9 @@ import { formatDuration, formatSize, parseDuration, parseSize } from './utils/un
 import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
-import { registerRunWorkerCommand } from './server/run-worker-command'
+import { registerRunWorkerCommand, registerSandboxPodCommand } from './server/run-worker-command'
+import { registerGithubAppTokenCommand } from './secrets/github-app-token-command'
+import { parseNetworkOption, WorkNetwork } from './planner/work-network'
 import { getArgumentsTarget } from './planner/utils/task-arguments'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
@@ -157,6 +159,8 @@ export async function getProgram(
   const program = new Command()
   registerServerCommand(program, environment)
   registerRunWorkerCommand(program, environment)
+  registerSandboxPodCommand(program, environment)
+  registerGithubAppTokenCommand(program, environment)
 
   // What follows `--` belongs to the one task or service of a run or up, not to
   // hammerkit: a `--set` or `--file` there is an argument like any other.
@@ -165,6 +169,11 @@ export async function getProgram(
   const parsed = parseSetArguments(separator >= 0 ? argv.slice(0, separator) : argv)
   const args = parsed.args
   environment.processEnvs = { ...environment.processEnvs, ...parsed.values }
+  const remote = args.indexOf('remote')
+  if (remote >= 0 && args[remote + 1] === 'mcp') {
+    // `remote mcp` speaks its protocol on stdout: a warning there would break it
+    environment.console = consoleContext(environment.stderr)
+  }
   const fileIndex = args.indexOf('--file')
   const fileName =
     fileIndex >= 0 ? join(environment.cwd, args[fileIndex + 1]) : await getBuildFilename(environment.cwd, environment)
@@ -725,6 +734,12 @@ export async function getProgram(
           parseDuration
         )
       )
+      .addOption(
+        new Option(
+          '--network <level>',
+          'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
+        ).argParser(parseNetworkArgument)
+      )
       .action(async (options, command: commaner.Command) => {
         try {
           const scope = {
@@ -742,6 +757,7 @@ export async function getProgram(
             wait: options.wait,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            network: options.network ?? null,
           })
 
           if (!result.success) {
@@ -830,6 +846,12 @@ export async function getProgram(
           parseDuration
         )
       )
+      .addOption(
+        new Option(
+          '--network <level>',
+          'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
+        ).argParser(parseNetworkArgument)
+      )
       .addOption(new Option('--no-skip-deps', 'run dependencies even when nothing needing them has to run'))
       .action(async (task, options, command: commaner.Command) => {
         try {
@@ -869,6 +891,7 @@ export async function getProgram(
             explain: options.explain,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            network: options.network ?? null,
             skipDeps: options.skipDeps !== false,
           })
 
@@ -944,4 +967,12 @@ tasks:
   })
 
   return { program, args }
+}
+
+function parseNetworkArgument(value: string): WorkNetwork {
+  try {
+    return parseNetworkOption(value)
+  } catch (e) {
+    throw new InvalidArgumentError(getErrorMessage(e))
+  }
 }

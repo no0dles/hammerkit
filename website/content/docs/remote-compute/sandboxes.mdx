@@ -1,0 +1,562 @@
+---
+title: "Sandboxes"
+description: "Keep a checkout on the server, run published tasks on it, read, search and edit its files, push its changes to a branch, and the limits that keep sandboxes in check."
+---
+A sandbox is a caller's own checkout of a repository on the server, which runs work on.
+It is for an agent without a machine of its own, or a person whose laptop should not
+build: the files stay on the server between runs, so what `npm install`, a formatter or a
+code generator wrote is there for the next run. It is not for production, see
+[Accounts](#accounts).
+
+The published build file always runs. A sandbox only supplies the files: its own
+`.hammerkit.yaml` is just a file, and changing it changes nothing until a new version is
+[proposed and published](/docs/remote-compute/build-files).
+
+<Callout type="info">
+
+This page covers creating, listing, moving, deleting, running on sandboxes, reading,
+searching and editing their files, and pushing their changes, on a host and on a
+[Kubernetes backend](#on-kubernetes). [Agents](/docs/remote-compute/agents) covers the
+clients that let a coding agent work on one.
+
+</Callout>
+
+## Who may keep one
+
+The `sandboxes` of an [entitlement](/docs/remote-compute/entitlements) list the repositories
+the caller may keep sandboxes of, one `repo` (`host/path` pattern) per entry, and give each
+branch pattern of it a type:
+
+* `pull`: a sandbox may start from a matching branch, and fetch one.
+* `push`: `pull`, and [pushing](#pushing) to the branch.
+
+Without `sandboxes` the caller keeps none. It is a list of its own: `repos` are for runs
+from a ref only, and a sandbox needs no `repos` entry for its repository. The entries of all
+of the caller's entitlements whose `repo` covers a repository count, and where several
+patterns match a branch, the higher type wins. An entry's branches never count for another
+repository. The server has to read the repository too, the same check as for a
+[run from a ref](/docs/remote-compute/sources).
+
+```yaml title="server.yaml"
+entitlements:
+  - subject: { iss: https://login.example.com, sub: agent-7 }
+    accounts: { op-payments-dev: use }
+    repos: [github.com/corp/payments]
+    builds: run
+    sandboxes:
+      - repo: github.com/corp/payments
+        branches:
+          'agent/**': push     # agent/ and everything below it
+          main: pull
+      - repo: github.com/corp/*
+        branches: { main: pull }
+```
+
+A branch pattern is a branch name, where a segment may hold `*` (any characters but `/`)
+and the last one may be `**`, everything below.
+
+A sandbox belongs to the caller who created it. For anybody else its id is `404`, the same
+as an id that does not exist, and it does not show in their list.
+
+## Creating and managing
+
+| Call | What it does |
+| --- | --- |
+| `POST /v1/sandboxes` | `{ "repo": "github.com/corp/payments", "ref": "main" }`: fetch a branch into a new sandbox. Answers `201` with the sandbox. A sandbox starts from a branch, never from a tag or a commit, and keeps the commit the branch pointed to. |
+| `GET /v1/sandboxes` | The caller's sandboxes, oldest first, with their `limits` and what they `used`. |
+| `GET /v1/sandboxes/<id>` | One sandbox. |
+| `POST /v1/sandboxes/<id>/fetch` | `{ "ref": "next" }`: move a sandbox without changes to the commit a branch points to now. |
+| `POST /v1/sandboxes/<id>/push` | `{ \"branch\": \"agent/fix-login\", \"message\": \"Fix the login\" }`: commit the changes and push them, see [Pushing](#pushing). |
+| `DELETE /v1/sandboxes/<id>` | Cancel the runs on the sandbox, wait for them to stop and remove its files. |
+
+```json
+{
+  "id": "sbx_Jp0dY8m2kQ1aZt5x",
+  "repo": "github.com/corp/payments",
+  "ref": "main",
+  "commit": "4f1c2a...",
+  "bytes": 18352211,
+  "createdAt": "2026-10-12T21:00:00.000Z",
+  "lastUsedAt": "2026-10-12T21:10:00.000Z",
+  "busy": true,
+  "run": "run_Wm3o0yN2e4cR9pLs"
+}
+```
+
+After a [push](#pushing), `ref` is the branch it pushed to, `commit` what it pushed, and
+`pushed` lists each branch it pushed with the commit it pushed there last.
+
+Creating a sandbox is a fetch, not a run: it runs no task, holds no account and takes no
+place of the [run limits](/docs/remote-compute/runs#limits-and-restarts). The server reads
+the repository with the credential of its [sources](/docs/remote-compute/sources), as for a
+run from a ref, and the request waits until the fetch is done. The checkout is shallow, the
+commit and nothing before it.
+
+A sandbox stays until it is deleted. Nothing expires and nothing is removed on its own,
+`lastUsedAt` says when a run or a fetch last used it.
+
+`fetch` moves a sandbox only while nothing changed its files (files that `.gitignore` leaves
+out, such as `node_modules`, are not changes and stay) and no run holds it, else it is
+`409`.
+
+| Status | When |
+| --- | --- |
+| `400` | The body is malformed, the repository is not `host/path`, the server can not read it, or `ref` is not a branch of it (a tag or a commit). |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository, or none of its branch patterns covers the branch. |
+| `404` | The sandbox does not exist or is somebody else's. |
+| `409` | A fetch of a sandbox with changes, or one a run holds. |
+| `413` | The caller is at their limit of sandboxes or bytes. |
+| `502` | The server could not reach the repository. |
+| `507` | All sandboxes together take what the server allows. |
+
+## Running on a sandbox
+
+A run names the sandbox as its `source`, the rest of the request is a normal
+[run](/docs/remote-compute/runs#submitting-a-run):
+
+```json
+{
+  "definition": "sha256:9f2c...",
+  "tasks": ["test"],
+  "source": { "type": "sandbox", "id": "sbx_Jp0dY8m2kQ1aZt5x" }
+}
+```
+
+* **The published files run on the sandbox.** The server reads the published version from a
+  directory of the run, and its tasks work on the sandbox: a build file published as
+  `ci/build.yaml` works in `ci/` of the sandbox. Nothing of the published version is written
+  into the sandbox.
+* **One run at a time.** A run holds its sandbox from when it is submitted until it is over,
+  waiting for an approval and in the queue included. A second run on the same sandbox waits
+  in the queue for the first, runs on other sandboxes start next to it within the caller's
+  [limits](/docs/remote-compute/runs#limits-and-restarts).
+* **What it started from** is recorded in the run: the `commit` the sandbox was fetched at,
+  the git `tree` of its files when the run was submitted, which together name the changes
+  it held, and whether it held any (`clean`). The run logs the tree again when it starts,
+  since a run before it on the same sandbox may have changed the files. A run that waited
+  for an [approval](/docs/remote-compute/entitlements#approvals) fails when the tree is no longer the one
+  it was approved with; submit it again. Files `.gitignore` leaves out (`node_modules`) are
+  not part of the tree, so an approver does not see them.
+* **No links out.** The files are written by tasks and by whoever pushed the commit, so the
+  server does not trust them. A `src`, mount or output of a task that leaves the sandbox or
+  goes through a symbolic link fails the run, checked when it starts and again before each
+  container is made and before outputs are copied: a task that leaves `src -> /` behind does
+  not give the next run the server's disk.
+* **Containers only.** The tasks of a run on a sandbox may only use the runtimes in
+  `sandboxes.runtimes`, `docker` by default. A local task would run as the user of the
+  server and could read every other sandbox on the machine, so `local` has to be listed
+  there by name, and in `runtimes`.
+* **Network.** No task or service of a run on a sandbox reaches more than
+  `sandboxes.network`, `none` by default: only the services it needs, nor more than
+  [`runs.network`](/docs/remote-compute/runs#config), which holds for every run. A build
+  file can narrow it, never widen it, see [network limits](/docs/task/network).
+* **Variables.** An `env:` secret of a run on a sandbox reads only what
+  `sandboxes.env.allow` lists, nothing by default: the code that would read it is nobody's
+  reviewed code.
+* **Cache.** Runs on sandboxes share a cache per owner, never with runs from a ref: a
+  sandbox holds changes nobody reviewed, and an entry they leave must not reach a reviewed
+  run.
+
+What a run wrote stays in the sandbox and counts against the owner's bytes, the docker
+volumes of its outputs included, whatever permissions a task gave its files. While a
+caller's sandboxes take more than their limit, their runs on sandboxes are refused with
+`413`.
+
+| Status | When |
+| --- | --- |
+| `400` | The sandbox does not exist or is somebody else's, or a task reads an `env:` secret that `sandboxes.env.allow` does not list. |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox (any more), an account of the run does not list `sandbox` in its `source`, or the server runs no tasks on sandboxes (only `runtimes: [local]`, see below). |
+| `413` | The caller's sandboxes take more than their limit. |
+
+## Files
+
+The files of a sandbox are read, searched and edited through the API, in two ways:
+
+* **Typed endpoints** for clients without file tools of their own, such as an MCP server: a
+  tree, numbered reads, ripgrep, batches of edits and the changes. Their parameters follow
+  the tools models are trained on: `offset`/`limit` reads in `cat -n` style, exact string
+  replacement with `old_string`/`new_string`, git diffs and OpenAI's `apply_patch`, and
+  ripgrep's options.
+* **A raw surface** for agent harnesses that bring their own tools and only swap where they
+  run (pi's tool operations, for example): read bytes, write bytes, stat.
+
+| Call | What it does |
+| --- | --- |
+| `GET /v1/sandboxes/<id>/tree` | The files and directories git sees, see [Tree](#tree). |
+| `GET /v1/sandboxes/<id>/files/<path>` | A text file as numbered lines, see [Reading](#reading). |
+| `GET /v1/sandboxes/<id>/files/<path>?raw` | The bytes of a file, with its sha256 as `ETag`. |
+| `GET /v1/sandboxes/<id>/files/<path>?stat` | What a path is: `type` (`file`, `directory`, `symlink`, or `other` for a pipe, socket or device), `size`, `exec`, `modifiedAt`, a link's `target`. |
+| `HEAD /v1/sandboxes/<id>/files/<path>` | The same as headers: `content-length`, `last-modified`, `x-hammerkit-type`, `x-hammerkit-exec`. `404` when there is nothing. |
+| `PUT /v1/sandboxes/<id>/files/<path>` | Write the body as the file's bytes, creating the directories above it. `If-Match: "<sha256>"` writes only over that content. `201` for a new file. |
+| `POST /v1/sandboxes/<id>/search` | ripgrep, see [Search](#search). |
+| `POST /v1/sandboxes/<id>/edits` | A batch of edits, all or nothing, see [Edits](#edits). |
+| `GET /v1/sandboxes/<id>/changes` | What changed since the commit, see [Changes](#changes). |
+
+Paths are relative to the sandbox, with `/` between names and no `.` or `..`; in a URL they
+are percent-encoded (`files/src/my%20file.ts`). Three rules hold for every endpoint:
+
+* **No symbolic link is followed.** A link shows as a link with its `target`; reading,
+  editing or listing through one is `400`. Writing a file where a link is replaces the link.
+  A read checks that the file it opened is the one in the sandbox, so a task that swaps a
+  directory for a link does not lead a read outside of it. Pipes, sockets and devices are
+  `400` too, and a read takes no more than the file held when it was opened.
+* **`.git/` and credentials stay out.** What [uploads refuse](/docs/remote-compute/sources)
+  (`.env`, `.npmrc`, keys, `.ssh/`, `.aws/`, `.git/`) is `403` to read or write, and is left
+  out of the tree, the search and the changes, even when the repository commits it. Names
+  match in any case and under the names Windows also opens (`.SSH`, `.git.`, `GIT~1`). The
+  git data of a sandbox is not in its files anyway.
+* **Runs come first.** Reading one file works at any time, also while a run works on the
+  sandbox (not [on Kubernetes](#on-kubernetes)). Edits, `PUT`, and the tree, search and
+  changes (which walk the files with git and ripgrep) are `409` while a
+  [run holds the sandbox](#running-on-a-sandbox), and the next run waits for a batch of
+  edits to finish.
+
+Every file endpoint needs an entry in the `sandboxes` of the caller's entitlements that covers
+the repository and the branch of the sandbox, like a run on it. What edits add counts against
+the owner's [bytes](#config): an edit that would go over is `413`.
+
+### Tree
+
+`GET /v1/sandboxes/<id>/tree?path=src&depth=2` lists what git sees below `path` (the whole
+sandbox without it): committed files and new ones, not what `.gitignore` leaves out, such as
+`node_modules`. `depth` is how many levels, `1` by default; directories show as entries of
+their own. With `glob` (`**/*.ts`, matched against the path below `path`) it lists the
+matching files at any depth instead.
+
+```json
+{
+  "path": "src",
+  "entries": [
+    { "path": "src/app.ts", "type": "file", "size": 1180 },
+    { "path": "src/lib", "type": "directory" },
+    { "path": "src/lib/db.ts", "type": "file", "size": 2207 }
+  ],
+  "total": 3,
+  "truncated": false,
+  "cursor": null
+}
+```
+
+Every list answers its `total`. A list longer than `limit` (1,000 by default, at most
+10,000) is `truncated`, and its `cursor` asks for the next page: `?cursor=<cursor>`.
+
+### Reading
+
+`GET /v1/sandboxes/<id>/files/src/app.ts?offset=40&limit=20` answers lines 40 to 59 of a
+text file, numbered like `cat -n`: the line number right aligned in six places, a tab, the
+line.
+
+```json
+{
+  "path": "src/app.ts",
+  "sha256": "9f2c...",
+  "size": 1180,
+  "lines": 72,
+  "offset": 40,
+  "content": "    40\texport function main() {\n    41\t  return run()\n...",
+  "truncated": true,
+  "nextOffset": 60
+}
+```
+
+`offset` starts at `1`, `limit` is 2,000 lines by default. A read answers at most 256 KiB,
+and a line longer than 2,000 characters is cut, saying how long it was. `truncated` and
+`nextOffset` say where to read on. A binary file or one that is not UTF-8 is `415`: read it
+with `?raw`. A file larger than 32 MiB is `413` for a numbered read; `?raw` streams it.
+
+`sha256` is what an edit's `ifHash` and `PUT`'s `If-Match` compare against, so a change a
+run made since the read is not overwritten unseen.
+
+### Search
+
+`POST /v1/sandboxes/<id>/search` runs [ripgrep](https://github.com/BurntSushi/ripgrep) on the
+files, with `.gitignore` honoured and hidden files searched. The server needs `rg` on its
+`PATH`; without it, search is `501`.
+
+```json
+{ "pattern": "createUser\\(", "glob": "*.ts", "output_mode": "content", "C": 2 }
+```
+
+| Field | What it does |
+| --- | --- |
+| `pattern` | A regular expression in ripgrep's syntax. Its errors come back as ripgrep says them, with `400`. |
+| `path` | A file or directory to search in, the whole sandbox by default. |
+| `glob` | One glob or a list, as ripgrep's `--glob` (`*.ts`, `!*.test.ts`). |
+| `type` | A file type of ripgrep (`ts`, `py`, `rust`). |
+| `i` | Ignore case. |
+| `fixed_strings` | The pattern is text, not a regular expression. |
+| `multiline` | Let the pattern match across lines (`.` matches a line feed too). |
+| `A`, `B`, `C` | Lines after, before and around each match, for `content`. `-i`, `-A`, `-B` and `-C` work as names too. |
+| `output_mode` | `files_with_matches` (the default): the paths. `content`: the lines, `{ path, line, text }`, with `context: true` on the lines around a match. `count`: the matches per file. |
+| `head_limit` | Results per page, 250 by default, at most 5,000. `cursor` asks for the next page. |
+
+Results come in path order. ripgrep stops counting 20,000 results past the page; `exact`
+is then `false` and `total` is a lower bound. A search that takes longer than a minute is
+`504`.
+
+### Edits
+
+`POST /v1/sandboxes/<id>/edits` applies a batch of operations in order. Each one sees what
+the ones before it did, and the batch is written only when every operation applies: either
+all of it changes the files or none of it does. `dryRun: true` checks the batch and answers
+what it would change without writing anything.
+
+```json
+{
+  "ops": [
+    { "op": "replace", "path": "src/app.ts", "old_string": "return 1", "new_string": "return 2" },
+    { "op": "write", "path": "docs/notes.md", "content": "# Notes\n" },
+    { "op": "move", "path": "old.ts", "to": "src/new.ts" },
+    { "op": "delete", "path": "tmp/out.log" },
+    { "op": "patch", "patch": "*** Begin Patch\n*** Update File: README.md\n@@\n-old\n+new\n*** End Patch\n" }
+  ]
+}
+```
+
+| Operation | What it does |
+| --- | --- |
+| `replace` | Replaces `old_string` with `new_string` in a text file. `old_string` has to match exactly once, whitespace included; when it matches more often, the error names the lines. `replace_all: true` replaces every match. |
+| `write` | Writes `content` as the whole file, creating it and the directories above it. `encoding: "base64"` for bytes. |
+| `delete` | Deletes a file or a link. Directories are not deleted. |
+| `move` | Moves a file to `to`, which may not exist yet. |
+| `patch` | Applies a patch: a unified diff as `git diff`, `git format-patch` or `diff -u` write it, or the body of OpenAI's `apply_patch` (`*** Begin Patch`). |
+
+`replace`, `write`, `delete` and `move` take `ifHash`, the `sha256` of a read: when the file
+holds something else now, the batch is `412`. The answer lists what changed:
+
+```json
+{
+  "dryRun": false,
+  "files": [
+    { "path": "README.md", "change": "modified", "sha256": "1d0e...", "size": 512 },
+    { "path": "old.ts", "change": "deleted" },
+    { "path": "src/new.ts", "change": "added", "sha256": "77a1...", "size": 640 }
+  ]
+}
+```
+
+An operation that does not apply is `422`, and the error names it and says what to do:
+`op 0 (replace): old_string is 2 times in src/app.ts, at lines 12, 40: add lines around it
+until it is there once, or set replace_all`, with `op` (its index) in the body.
+
+How a patch is applied:
+
+* **A git diff** applies like `git apply`: each hunk where its lines are, or at the nearest
+  place where they all are when lines above it moved. It may add, delete, rename and copy
+  files and set the executable bit. Binary patches, links and submodules are refused; write
+  binary files with `PUT`. A diff of a file with CRLF line endings applies to it either way,
+  and the lines it adds take the file's line ending.
+* **An `apply_patch` body** finds each chunk's lines after the one before it, after the line
+  its `@@` names: exactly, then ignoring trailing whitespace, then ignoring whitespace around
+  the lines, as OpenAI's reference implementation does. `*** End of File` ties a chunk to the
+  end of the file, `*** Move to:` renames.
+
+A patch compares at most 20 million lines to place the hunks of one file; a hunk that is
+not in a large file stops there with `422`. Give it the line numbers of the file as it is,
+or more lines around the change.
+
+### Changes
+
+`GET /v1/sandboxes/<id>/changes` compares the files with the commit the sandbox was fetched
+at, the way a run sees them: new files count, what `.gitignore` leaves out does not, and
+neither does a git repository a task made inside the files. Neither does what hammerkit
+writes next to a task while it runs: a `.hammerkit/` directory at any depth (the last
+cache entry it resolved, the state of local tasks) is the run's, not a change. The build
+file `.hammerkit.yaml` is a change like any other file.
+
+| `format` | What it answers |
+| --- | --- |
+| `summary` (the default) | `{ commit, files: [{ path, status, from, additions, deletions }] }`: `added`, `modified`, `deleted`, `renamed` (with `from`), lines added and deleted (none for binary files). |
+| `diff` | The changes as `git diff` shows them, as `text/x-diff`. |
+| `patch` | One commit in `git format-patch` form, binary files included, for `git am` on another clone. `message`, `name` and `email` set its message and author (`hammerkit` by default). |
+
+A patch is one way work leaves a sandbox: the caller, or a connector on their side, applies
+it and pushes a branch. The other is a [push](#pushing) by the server. Changes larger than
+64 MiB are `413`.
+
+| Status | When |
+| --- | --- |
+| `400` | The path is not inside the sandbox, goes through a link, or is a directory where a file is needed; the body is malformed; a ripgrep error. |
+| `403` | The path is on the deny list; or no entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox any more. |
+| `404` | The sandbox, or the file, does not exist. |
+| `409` | A run holds the sandbox (edits, `PUT`, tree, search, changes); a move or patch onto a file that exists. |
+| `412` | The file changed since the read that `ifHash` or `If-Match` names. |
+| `413` | The edits would take more than the owner's bytes, a file is over 32 MiB, or the changes over 64 MiB. |
+| `415` | A numbered read or a text edit of a binary or non-UTF-8 file. |
+| `422` | An operation of the batch does not apply; `op` names it. |
+| `501` | Search, on a server without ripgrep. |
+
+## Pushing
+
+`POST /v1/sandboxes/<id>/push` commits the changes of a sandbox and pushes the commit to a
+branch of its repository, with the `secret` of the server's
+[source](/docs/remote-compute/sources#pushing) for it. The caller's `sandboxes`
+decide where to: a sandbox only pushes to a branch whose pattern has the type `push` in an
+entry for its repository, `agent/**` for example, never to a `main` they may only `pull`.
+
+```json
+{ "branch": "agent/fix-login", "message": "Fix the login\n\nThe session expired a minute early." }
+```
+
+```json
+{
+  "branch": "agent/fix-login",
+  "commit": "9b0e7c...",
+  "sandbox": { "id": "sbx_Jp0dY8m2kQ1aZt5x", "ref": "agent/fix-login", "commit": "9b0e7c...", "pushed": { "agent/fix-login": "9b0e7c..." } }
+}
+```
+
+* **What is committed** is what [`changes`](#changes) shows: new, changed and deleted files,
+  not what `.gitignore` leaves out, nothing of the deny list (an `.env` a task wrote stays
+  on the server) and no `.hammerkit/` directory a run wrote. The commit's parent is the commit the sandbox is at.
+* **By whom.** The commit's author and committer are the caller, as their token names them
+  (`name`, and `email` unless the token says it is not verified), else their subject at the
+  host of their issuer (`agent-7@login.example.com`). A request can not set the author, and
+  a message with `Signed-off-by`, `Reviewed-by`, `Acked-by` or `Tested-by` is refused: those
+  would attest the commit in somebody else's name. Other trailers, such as `Co-authored-by`,
+  are the caller's text.
+* **Only new branches, or its own.** The branch must not exist yet, or be one this sandbox
+  pushed and still at the commit it pushed there. A branch somebody else created or pushed
+  to since is `409`: push to a new branch. A sandbox never writes over other work, and it
+  never force-pushes.
+* **Afterwards** the sandbox is at the pushed commit, on that branch: `changes` shows what is
+  not pushed yet, and the next push to the same branch adds a commit on top of the last one.
+  A sandbox [fetched](#creating-and-managing) to another commit since can not push to the
+  branch any more (`409`), it starts a new one.
+* Like edits, a push waits for a batch of edits, is `409` while a run holds the sandbox, and
+  needs the repository and the sandbox's branch in the caller's `sandboxes`.
+
+The server reads the branch first with its read credential, then pushes with the write
+credential, telling the remote which commit it expects the branch at (none for a new one).
+The remote refuses the push when somebody created or moved the branch in between, and that
+is `409` too.
+
+| Status | When |
+| --- | --- |
+| `400` | The body is malformed, the message signs off in somebody's name, or the branch is not a name git takes (no part may start with `.` or `-`, or end with `.` or `.lock`). |
+| `403` | No `push` pattern of the caller's entries for the repository covers the branch, the source has no `secret`, or as for the files, the caller lost the repository or the sandbox's branch. |
+| `404` | The sandbox does not exist or is somebody else's. |
+| `409` | Nothing to push, a run holds the sandbox, or the branch is not this sandbox's to push to. |
+| `502` | The server could not read its push credential (the details are in its log), could not reach the repository, or the remote refused the push for another reason (a rule of the repository, a token without write access, a GitHub App without the `workflows` permission pushing a workflow file): the error carries the reason the remote gave. Also when the push went through but the sandbox could not be moved to it: the branch stays the sandbox's. |
+
+Opening a pull request from the branch is left to the caller: hammerkit holds a token that
+writes branches, not one that reviews them. A pushed branch runs in the repository's CI like
+any other, with its secrets unless the operator keeps those branches out, see
+[Sources](/docs/remote-compute/sources#pushing).
+
+## Accounts
+
+A sandbox holds changes nobody reviewed, so its runs only use the
+[accounts](/docs/remote-compute/accounts#restricting-the-code) whose `source` lists `sandbox`.
+An account without `source` takes runs from an upload or a ref, not from a sandbox. Keep
+production accounts on `source: [ref]`.
+
+```yaml title="server.yaml"
+accounts:
+  op-payments-dev:
+    providers: { gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /etc/hammerkit/creds/payments-dev.json } } }
+    source: [ref, sandbox]
+```
+
+## Config
+
+```yaml title="server.yaml"
+sandboxes:
+  runtimes: [docker]                 # default when runtimes has docker, `local` has to be named (in runtimes too)
+  network: { allow: [registry.npmjs.org, '*.githubusercontent.com'] }   # default: none
+  env: { allow: [] }                 # default, variables of runs.env.allow env: secrets may read
+  limits:
+    count: 5                         # default, sandboxes per caller
+    bytes: 20Gi                      # default, bytes of one caller's sandboxes together
+  total: 500Gi                       # default, all sandboxes on the server
+```
+
+| Key | What it does |
+| --- | --- |
+| `runtimes` | What the tasks of a run on a sandbox may run on, out of `runtimes`. `[docker]` by default when `runtimes` has `docker`. A server with only `runtimes: [local]` starts as before and refuses runs on sandboxes until `local` is named here. |
+| `network` | The most open network a task or service of such a run gets, written as a task's [`network`](/docs/task/network): `none` (the default), `open`, or `{ allow: [hosts] }` for HTTP(S) to those hosts through the egress proxy. It has to be within `runs.network`, which caps every run. With `local` in `runtimes` it has to be `open`, hammerkit can not limit a local task. |
+| `env.allow` | The variables of `runs.env.allow` an `env:` secret of a run on a sandbox may read. None by default. |
+| `limits.count` | Sandboxes one caller may keep. Creating another is `413`. |
+| `limits.bytes` | What one caller's sandboxes may take together, their git data included. A create that would go over is `413` and leaves nothing behind. |
+| `total` | What all sandboxes on the server may take. Over it, a create is `507`. |
+
+The bytes of a sandbox are measured after it is fetched and after each run on it. A run's
+result does not wait for that measure, but the owner's next run or create does. The files
+are kept below `storage` (`sandboxes/`, readable by the user of the server only), with the
+git data of each sandbox next to its files rather than in them: tasks write to the files,
+and git on the server never reads a configuration or a hook a task could have written.
+What a task made unreadable is made readable again before it is measured or deleted, and
+what a container wrote as another user (a service runs as the user of its image) is given
+back to the server's user with a short `alpine` container. A restart keeps the sandboxes,
+also one whose record can't be read: its files stay for the operator to look at. Changes to
+`sandboxes` need a restart.
+
+## On Kubernetes
+
+With a [Kubernetes backend](/docs/remote-compute/backend#kubernetes) a sandbox is two
+`PersistentVolumeClaim`s in its caller's namespace, mounted only while something works on
+it: an idle sandbox costs its storage and nothing else. The API, the limits and the rules
+above are the same.
+
+* **Two claims.** One holds the sandbox's files, which the tasks of its runs mount. The other
+  holds its git data, which only the pod of its files mounts. A link a task makes in the files
+  leads at most to the root of the files' claim, so no task reaches git's configuration or
+  hooks, as on a host.
+* **Fetch.** The server fetches the commit with the read credential of `sources`, as for a
+  run from a ref, and hands the repository to the pod of the sandbox, which takes it into the
+  claim. The credential never reaches the caller's namespace.
+* **Files.** Reads, searches, edits, the changes and the bytes of a sandbox run in a short pod
+  that mounts its claims, with the same code as on a host (`hammerkit server-sandbox`), so
+  paths, links and the deny list follow the same rules. The pod has no token and no network (a
+  `NetworkPolicy` denies all of it), runs on the first pool with no capabilities beyond owning
+  and changing files and a read-only root, and stays while requests come or a run works,
+  `backend.sandboxes.idle` after the last one.
+* **Push.** The pod commits the changes; the server copies the objects of the git data,
+  checks that the commit is one on top of the sandbox's without anything of the deny list,
+  and pushes it with the write credential. The write credential never reaches the caller's
+  namespace either.
+* **Runs.** The process of a run gets a copy of the files to plan with. Its Jobs mount the
+  files' claim itself where their sources are, read and write, so what a task writes is in
+  the sandbox afterwards, as on a host. A source outside of the sandbox goes into the task's
+  own claim as before. A source or mount that goes through a link is refused, as on a host.
+* **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
+  `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a
+  `sandboxes.network` other than `open`, the config needs `backend.networkPolicy: enforced`.
+* **One file while a run works**, as on a host: the pod of the files stays while the run works.
+* **One node.** A claim is usually `ReadWriteOnce`: several pods share it only on one node.
+  The pods that mount a sandbox (the Jobs of its run and the pod of its files) are placed
+  next to each other, so its disk never moves between nodes during a run, which takes seconds
+  each time. The tasks of a run on a sandbox go to the node of the pod of its files, in the
+  first pool; a task on another pool (a local task whose `toolImage` is on a later pool) fails.
+  When a pod of the run finds no room on that node for 10 seconds, the pod of the files makes
+  way, so the run's pod goes where there is room and the disk follows it.
+* **Kubernetes 1.30 or later.** The server talks to the pod over `pods/exec` with the
+  `v5.channel.k8s.io` protocol, which ends a request's input without closing the connection.
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  sandboxes:
+    image: registry.corp/hammerkit@sha256:…  # default: no0dles/hammerkit of the server's version
+    size: 4Gi                        # default, what each claim of a sandbox requests
+    storageClass: sandboxes          # default: the class of tasks' claims
+    idle: 1m                         # default, how long the pod of the files stays
+    resources:                       # default, of the pod of the files
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 2Gi }
+```
+
+| Key | What it does |
+| --- | --- |
+| `image` | The image of the pod of a sandbox's files: hammerkit with git and ripgrep, as the published image of the server's version is. It reads and changes every sandbox's files, so pin it by digest. |
+| `size` | What each of the two claims of a sandbox requests: the most its files, and its git data, can take. No more than `sandboxes.limits.bytes`. |
+| `storageClass` | The storage class of sandboxes' claims. When it is one of their own, each caller's namespace gets a `ResourceQuota` on that class (`requests.storage` of twice `sandboxes.limits.bytes` and `persistentvolumeclaims` of twice `sandboxes.limits.count`, two claims a sandbox), so the cluster holds the limits too. It can not be the class of tasks' claims, whose claims would count against it. |
+| `idle` | How long the pod of a sandbox's files stays after the last request. |
+| `resources` | The requests and limits of the pod of a sandbox's files, which runs git and ripgrep over all of them. |
+
+The server keeps the record of each sandbox in its storage directory as on a host, and the
+claims carry the sandbox's id and owner and a label of the server (its namespace prefix and
+namespace). When the server starts, its own claims without a record are deleted once they are
+an hour old (younger ones may be a sandbox being created), and a record without claims is
+dropped. Claims of another server on the cluster, or of this server under another prefix, are
+left alone, and so are the records of the latter.

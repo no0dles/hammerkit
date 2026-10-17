@@ -252,7 +252,7 @@ describe('getKubernetesPersistence for a container service', () => {
 describe('appendVolume', () => {
   it('dedupes the volume but pushes one mount per call', () => {
     const sourceWork = makeWorkItem('w1', {} as WorkTask)
-    const persistence = { volumes: [], sources: [], mounts: [], initCommands: [] }
+    const persistence = { volumes: [], workspace: [], sources: [], mounts: [], initCommands: [] }
 
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)

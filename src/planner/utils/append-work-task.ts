@@ -22,6 +22,9 @@ import { getWorkTaskRuntime } from './get-work-runtime'
 import { resolveCache } from '../../cache/resolve-cache'
 import { parseDuration } from '../../utils/units'
 import { parseWorkResources } from '../work-resources'
+import { placeOnPool, runInToolImage } from '../../kubernetes/job-placement'
+import { BuildFileLocalTaskSchema } from '../../schema/build-file-local-task-schema'
+import { formatNetwork, parseWorkNetwork } from '../work-network'
 
 export function appendWorkTask(
   workTree: WorkTree,
@@ -30,7 +33,14 @@ export function appendWorkTask(
   environment: Environment,
   context: ReferencedContext
 ): WorkItemState<WorkTask, TaskState> {
-  const task = parseTask(cwd, referenceTask, environment, context)
+  const parsed = parseTask(cwd, referenceTask, environment, context)
+  // on a server's cluster a local task runs in a tool image like a container task
+  const server = workTree.environment.type === 'kubernetes' ? workTree.environment.server : undefined
+  const task = !server
+    ? parsed
+    : parsed.type === 'local-task'
+      ? runInToolImage(parsed, server, (referenceTask.schema as BuildFileLocalTaskSchema).platform)
+      : placeOnPool(parsed, server)
   if (!workTree.tasks[task.name]) {
     const workItem: WorkItem<WorkTask> = {
       // A dependency cycle is rejected before anything runs (checkForLoop), but
@@ -97,6 +107,8 @@ function parseTask(
       task.schema.account
     ),
     resources: parseWorkResources(task.schema.resources),
+    network: parseWorkNetwork(task.schema.network),
+    networkCeiling: null,
     runner: task.schema.runner ?? task.scope.schema.runner ?? null,
   }
 
@@ -113,6 +125,12 @@ function parseTask(
     if (fileSecret) {
       throw new Error(
         `task ${task.relativeName}: a local task takes secrets as env only (${getSecretName(fileSecret)})`
+      )
+    }
+    if (baseWorkNode.network.type !== 'open') {
+      throw new Error(
+        `task ${task.relativeName}: network ${formatNetwork(baseWorkNode.network)} needs a container, ` +
+          `hammerkit can't limit the network of a local task`
       )
     }
     return <LocalWorkTask>{

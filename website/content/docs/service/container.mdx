@@ -37,6 +37,8 @@ tasks publishes nothing, and two runs on one machine never collide on a host por
 
 Container tasks don't need published ports.
 They share a network with the services and can reach all of their ports.
+On Kubernetes, a service without `ports` is reached on every port of its pod; one
+with `ports` is reached through its Service, on the listed ports only.
 
 </Callout>
 
@@ -257,6 +259,23 @@ services:
     resources:
       cpus: 500m
       memory: 1Gi
+```
+
+## Network [#network]
+
+`network` limits what the service reaches, like a [task's](/docs/task/network):
+`none` for nothing but the services it needs, `{ allow: [hosts] }` for those hosts
+through an egress proxy, `open` (the default) for everything. The tasks and services
+that need it reach it whatever its level. The healthcheck checks the service itself,
+so it runs without the proxy variables. A running service whose network changed is
+recreated.
+
+```yaml
+services:
+  payments:
+    image: node:24-alpine
+    network:
+      allow: [api.stripe.com]
 ```
 
 ## Mounts

@@ -16,6 +16,7 @@ import { TaskState } from '../executer/scheduler/task-state'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
 import { WorkResources } from './work-resources'
+import { WorkNetwork } from './work-network'
 import { getKubernetesCommandArgs, getKubernetesCommandText } from './utils/task-arguments'
 
 export interface BaseWorkService {
@@ -56,6 +57,10 @@ export interface ContainerWorkService extends BaseWorkService {
   secrets: WorkSecret[]
   // container limits, null for none
   resources: WorkResources | null
+  // what the container reaches besides its needs, as the build file declares it
+  network: WorkNetwork
+  // the run's `--network` ceiling, null for none; see getEffectiveNetwork
+  networkCeiling: WorkNetwork | null
 }
 
 export interface WorkServiceInit {

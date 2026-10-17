@@ -8,7 +8,7 @@ execute. So whoever may run work cannot change what a task does, and what a task
 does is decided by whoever may publish.
 
 ```
-PUT /v1/definitions/payments
+POST /v1/definitions
 ```
 
 ```json
@@ -23,8 +23,8 @@ PUT /v1/definitions/payments
 
 A published build file is a bundle: the file that starts it (`entry`, the usual
 `.hammerkit.yaml` when left out) and every file it includes, as text, up to 200
-files and 1 MiB. The name says what it is for (letters, digits, `.`, `_` and `-`).
-The server reads the bundle the way a run would, in a directory of its own where
+files and 1 MiB. It has no name: the server answers with its version, and a run
+names that. The server reads the bundle the way a run would, in a directory of its own where
 only the bundle's files exist, so one that does not load is refused when it is
 published and not when somebody wants to run it (`400`). A bundle may not include
 anything outside of itself. Includes from git have to be pinned to a commit and
@@ -37,20 +37,56 @@ Every bundle has a version, the hash of its files:
 `sha256:<hex>` of the JSON `[entry, [[path, sha-256 of the content], ...]]` with
 the paths sorted. The same files have the same version anywhere, so a client can
 compute it and compare it with the server's. A version is never changed; publishing
-different files under the same name adds a version, publishing the same files again
-answers `200` and changes nothing (the first publish answers `201`).
+other files adds a version, publishing the same files again, by anybody, answers `200`
+and changes nothing (the first publish answers `201`).
+
+The hash is the only name a version has. There is no `latest` and no line of versions
+one follows the other in: a name would be the publisher's choice, so a new name could
+always start a new line, and a comparison with the version before would prove nothing.
+Whoever reviews a version reads all of it, its [plan](#plan-and-accounts) and its files.
 
 | Call | What it does |
 | --- | --- |
-| `PUT /v1/definitions/<name>` | Publish a bundle. Needs `builds: publish`, else `403`. With `builds: propose`, or when the bundle names accounts the caller does not `use`, it is a [proposal](#proposing-a-version) and answers `202`. |
-| `GET /v1/definitions` | The names with their latest version. |
-| `GET /v1/definitions/<name>` | The versions of one, newest first, with who published each, the tasks and services it has and what each task works on (`inputs`). |
-| `GET /v1/definitions/<name>/<hash>` | One version. `latest` stands for the one published last. |
-| `GET /v1/definitions/<name>/<hash>/files` | The files of one version, to see what would run. |
-| `POST /v1/definitions/<name>/<hash>/yank` | Pull a version back, see [Yanking](#yanking-a-version). The body is optional: `{ "reason": "..." }`. |
-| `POST /v1/definitions/<name>/<hash>/unyank` | Let a yanked version go on. Needs `builds: publish`. |
+| `POST /v1/definitions` | Publish a bundle. Needs `builds: publish`, else `403`. With `builds: propose`, or when the bundle names accounts the caller does not `use`, it is a [proposal](#proposing-a-version) and answers `202`. The answer carries the `hash`. |
+| `GET /v1/definitions` | Every version, newest first, with who published (and approved) it and when, its [annotations](#annotations), the tasks and services it has, the `accounts` it uses and whether it was yanked. `?repo=github.com/corp/payments&machine=ci-7` keeps the versions with those annotations. |
+| `GET /v1/definitions/<hash>` | One version, with its `plan` and what each task works on (`inputs`). |
+| `GET /v1/definitions/<hash>/files` | The files of one version, to see what would run. |
+| `POST /v1/definitions/<hash>/yank` | Pull a version back, see [Yanking](#yanking-a-version). The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/definitions/<hash>/unyank` | Let a yanked version go on. Needs `builds: publish`. |
 
 Reading needs a token and at least one service account or `builds` level. Versions are kept in the `storage` directory and survive a restart.
+
+## Annotations
+
+Without names, a version says where it comes from with annotations the publisher sends
+next to the bundle, so the versions of one repository or one machine can be found, and
+cleaned up, later:
+
+```json
+{
+  "entry": ".hammerkit.yaml",
+  "files": { ".hammerkit.yaml": "..." },
+  "annotations": {
+    "path": "web/.hammerkit.yaml",
+    "repo": "github.com/corp/payments",
+    "commit": "4be1a07c...",
+    "machine": "ci-runner-7",
+    "user": "runner"
+  }
+}
+```
+
+`remote publish` fills in `path` (the build file's path in its git repository, or on the
+machine outside of one), `repo` (the `origin` remote as `host/path`, left out when it is
+not an https or ssh address), `commit`, `machine` and `user`. When a file of the bundle
+differs from that commit, or is not committed, it adds `dirty=true`: the version has the
+commit's files plus changes, not the commit's files. Any other key works too: up
+to 20, lower case letters, digits, `.`, `_` and `-`, each value up to 500 characters.
+
+Annotations are not part of the hash, so the same files sent from two machines are one
+version, and it keeps the annotations of its first publish (a proposal keeps the
+proposer's when it is approved). The server stores them as they were sent: they identify
+a version, they prove nothing. Who published it is `publishedBy`, from the token.
 
 ## Inputs
 
@@ -83,14 +119,22 @@ or an agent sees `deploy` uses `op-payments-prod` before anything runs:
 "plan": {
   "deploy": {
     "kind": "task", "runtime": "docker", "image": "node:22",
-    "cmds": ["./deploy.sh"], "deps": [], "needs": [],
+    "cmds": ["./deploy.sh"], "command": "./deploy.sh", "network": "open",
+    "deps": [], "needs": [],
     "accounts": ["op-payments-prod"],
     "secrets": [{ "from": "gsm:kube-token", "account": "op-payments-prod", "target": "KUBE_TOKEN" }],
+    "serverEnvs": [],
     "mounts": [], "ports": [], "generates": [],
     "flags": ["local-task"]
   }
 }
 ```
+
+`command` is the last command of a task (the `cmd` of a service), where a run's
+[arguments](/docs/remote-compute/runs#arguments) land; `null` when there is none.
+`serverEnvs` are the variables of the server its `envs` read (`$NAME`, `${NAME}`).
+`network` is what it reaches besides its needs, as the build file declares it (`open`
+when it declares nothing). Versions published before these were recorded have neither.
 
 The plan never holds a value of a secret, only where it is read from. `flags` are what a
 reviewer looks at first: `local-task` (it runs on the host, not in a container),
@@ -116,11 +160,20 @@ task) when it
 * has a service for Kubernetes (`selector`, `kubeconfig` or `context`),
 * names a cache backend other than the server's own (`s3`, `registry`, or a `path`),
 * mounts a path outside of the bundle into a container, such as the docker socket, `/etc`
-  or a home directory,
+  or a home directory, or has a `src` or `generates` outside of it (the server would copy its
+  own files into the task),
 * has a task on a runtime that `runtimes` does not allow,
+* has a task or service whose `network` reaches more than [`runs.network`](/docs/remote-compute/runs#network) allows,
 * declares `secretProviders` or `secretAccounts`, reads a `file:` secret, reads an `env:`
   secret the server does not list in `runs.env.allow`, or reads a secret as the account
   that reads repositories (see [Accounts](/docs/remote-compute/accounts) and [Sources](/docs/remote-compute/sources)).
+* on a [Kubernetes backend](/docs/remote-compute/backend#secrets-in-the-job), reads a provider
+  secret in a service, one with `cache: true`, or one in a task with a limited
+  [`network`](/docs/remote-compute/backend#network).
+
+A run checks the same paths again in its checkout, before it starts and before each task or
+service runs: one whose `src`, `generates` or mount goes through a symbolic link of the
+checkout fails, since docker and the copy into a cluster would follow the link out of it.
 
 Without this a task with no secrets would still reach what the operator's machine can: a
 published file would be enough to send a run, or the cache, to a host of its choosing.
@@ -141,11 +194,11 @@ entitlements:
     builds: propose
 ```
 
-A caller who may only propose sends the same `PUT`. The server reads the bundle as it
+A caller who may only propose sends the same `POST`. The server reads the bundle as it
 does for a publish and refuses one that does not load, then keeps it as a
 **proposal** (`202`). A publish also ends up here when the bundle names accounts the
 publisher does not `use` (`missing` lists them). It is not a version: it can not be
-run, `latest` does not change and the build files are not listed with it. Someone who
+run and it is not listed with the versions. Someone who
 may `publish`, uses the accounts in `missing`, and did not propose it, approves it,
 and only then it is published, as the proposer's version with the approver recorded as
 `approvedBy`. That is the version runs refer to by hash, so what was approved is what
@@ -153,11 +206,11 @@ runs.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v1/proposals` | The proposals the caller made or may see, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, the `accounts` and the `missing` ones, `plan`, `base` (the latest version when it was proposed, the one it follows), `latest`, `stale` and whether the caller `canDecide`. |
-| `GET /v1/proposals/<name>/<hash>` | One of them. |
-| `GET /v1/proposals/<name>/<hash>/files` | Its files, to read what would be published. |
-| `POST /v1/proposals/<name>/<hash>/approve` | Publish it. The body is optional: `{ "reason": "..." }`. |
-| `POST /v1/proposals/<name>/<hash>/reject` | Drop it; the reason (up to 500 characters) is kept with it. |
+| `GET /v1/proposals` | The proposals the caller made or may see, newest first, with `state` (`waiting`, `approved`, `rejected`, `expired`), who proposed it, the tasks and services, the `accounts` and the `missing` ones, `plan` and whether the caller `canDecide`. |
+| `GET /v1/proposals/<hash>` | One of them. |
+| `GET /v1/proposals/<hash>/files` | Its files, to read what would be published. |
+| `POST /v1/proposals/<hash>/approve` | Publish it. The body is optional: `{ "reason": "..." }`. |
+| `POST /v1/proposals/<hash>/reject` | Drop it; the reason (up to 500 characters) is kept with it. |
 
 A proposal is visible to its proposer and to everyone who may publish; what the caller
 neither proposed nor may decide does not exist for them (`404`), and one that is
@@ -166,13 +219,8 @@ requested run does, and `approvals.maxWaiting` limits the proposals that wait (`
 Proposals are kept in memory, unlike runs: after a restart the proposer proposes again. Each
 proposal and decision is logged with who made it.
 
-### Only while it follows the latest
-
-A proposal records the latest version when it is
-made (`base`). If another version of the build file is published before it is decided, it
-is `stale`: it can only be rejected, approving answers `409`, because publishing it would
-put an old file in front of newer work for everyone who runs `latest`. The proposer
-proposes again on top of the new version.
+Whoever decides reads the proposal whole, its plan and its files (`remote show`
+does both). There is no diff against an earlier version: a proposal follows none.
 
 ### No git includes
 
@@ -183,7 +231,7 @@ only propose, so a proposal with `includes` or `references` from git is refused
 
 ### Cooldown
 
-After a rejection, the proposer can not propose that build file again,
+After a rejection, the proposer can not propose anything,
 and nobody that version, for `approvals.cooldown` (default `10m`): `429`, with the time
 left. A proposal that only ran out of time does not start one. It keeps the people who
 decide from being asked again and again; like the proposals it is forgotten by a restart.
@@ -196,18 +244,19 @@ A proposal approves a new version of the build file, not the code its commands r
 
 A published version is never changed, but one can be pulled back when it should not run
 any more (it leaks a token, it deploys to the wrong place). `POST
-/v1/definitions/<name>/<hash>/yank` is open to whoever has `builds: publish`, and to
+/v1/definitions/<hash>/yank` is open to whoever has `builds: publish`, and to
 whoever `use`s an account the version works with: the people who answer for what runs
 as that account do not have to wait for a publisher. The body may carry a `reason`, up
 to 500 characters.
 
-A yanked version is not `latest` any more, a run that names it is refused with `409`
+A run that names a yanked version is refused with `409`
 and the reason, and a run that was accepted before, and still waits for an approval or in
 the queue, fails when it would start. Runs that already execute are not stopped; cancel
-them. The version and its files stay on the server for the record, and the version lists
-show who yanked it and why. `unyank` lets it go on, and needs `builds: publish`. Both are
+them. The version and its files stay on the server for the record, and the version list
+shows who yanked it and why. Without names, yanking is the only way to stop a version:
+every published hash stays runnable until it is yanked. `unyank` lets it go on, and needs `builds: publish`. Both are
 logged with who did it, and a yank survives a restart.
 
 From the command line, [`remote publish`](/docs/cli/remote#publishing-a-build-file) publishes
-or proposes the build file of the working directory, and `remote proposals`, `diff`,
-`approve`, `reject`, `yank` and `unyank` work with the versions.
+or proposes the build file of the working directory and prints its hash, and `remote
+proposals`, `show`, `approve`, `reject`, `yank` and `unyank` work with the versions.

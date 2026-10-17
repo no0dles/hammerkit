@@ -20,6 +20,8 @@ const baseTask = {
   timeout: null,
   secrets: [],
   resources: null,
+  network: { type: 'open' as const },
+  networkCeiling: null,
   runner: null,
 }
 

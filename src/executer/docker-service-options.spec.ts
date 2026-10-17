@@ -19,6 +19,8 @@ function service(name: string): WorkItem<ContainerWorkService> {
       cwd: '/project',
       projectRoot: '/project',
       image: 'postgres:16',
+      network: { type: 'open' },
+      networkCeiling: null,
       cmd: null,
       shell: null,
       workdir: null,

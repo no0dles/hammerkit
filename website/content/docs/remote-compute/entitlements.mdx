@@ -30,8 +30,9 @@ entitlements:
 | `accounts` | The [service accounts](/docs/remote-compute/accounts) the caller may `use` or `request`, see [Account levels](#account-levels). |
 | `repos` | The repositories the caller may name in a run from a git ref, see [Repositories](#repositories). |
 | `builds` | What the caller may do with build files: `run`, `propose` or `publish`, see [Build file levels](#build-file-levels). |
+| `sandboxes` | The repositories the caller may keep [sandboxes](/docs/remote-compute/sandboxes) of, one `repo` (`host/path` pattern) per entry with a `pull` or `push` type per branch pattern (`branches`). A list of its own: `repos` is for runs from a ref. |
 
-An entry names accounts, a `builds` level or both.
+An entry names accounts, a `builds` level, `sandboxes` or more of them.
 
 ## Who
 
@@ -66,9 +67,9 @@ level that includes the lower ones:
 | --- | --- |
 | `run` | start runs of published build files. Without a level nothing runs, an account alone does not allow it. |
 | `propose` | also send new versions, which somebody who may publish approves, see [Proposing a version](/docs/remote-compute/build-files#proposing-a-version). |
-| `publish` | also publish new versions of any build file. Who defines the work does not have to be who runs it. |
+| `publish` | also publish build files. Who defines the work does not have to be who runs it. |
 
-Build files are named by whoever publishes them, so the config never lists names.
+A build file has no name, a version is the hash of its files, so the config never lists build files.
 
 ## Repositories
 
@@ -95,13 +96,14 @@ server, they are not even shown which build files exist.
     { "name": "op-payments-prod", "level": "request" }
   ],
   "repos": ["github.com/corp/payments"],
-  "builds": "run"
+  "builds": "run",
+  "sandboxes": []
 }
 ```
 
 `GET /v1/accounts` lists the accounts the caller has a level on, with the operator's
-`description` and the `sources` the account allows (`upload`, `ref`, or both when the
-config does not say):
+`description` and the `sources` the account allows (`upload`, `ref`, `sandbox`, or `upload`
+and `ref` when the config does not say):
 
 ```json
 {
@@ -162,7 +164,7 @@ approvals:
   with their dependencies as `plan` (commands, image, the secrets and the account each
   is read as, mounts, ports and the `flags` to look at first, never a value), the
   accounts, the version, the source and the options. Who uses an account a run needed
-  approved may also read that run (`GET /v1/runs/<id>` and its events) and cancel it;
+  approved may also read that run (`GET /v1/runs/<id>`, its events and its logs) and cancel it;
   `GET /v1/runs` stays the caller's own.
 * What an approval cannot cover is what the code does: pinning commands does not pin the
   code they run, so an account that matters should also be limited to `source: [ref]`

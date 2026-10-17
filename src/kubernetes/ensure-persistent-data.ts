@@ -16,6 +16,8 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
 import { Readable } from 'stream'
+import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
+import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
 
 // A previous run that crashed between creating an upload/download pod and its
 // `finally` cleanup leaves a pod behind under the same deterministic name. apply()
@@ -57,10 +59,13 @@ export async function getPodForPersistence(
     return
   }
 
+  // the claim of a sandbox is mounted by the pods of the work only: it holds no output
+  // and takes no upload
+  const own = persistence.mounts.filter((m) => !m.workspace)
   const mounts: V1VolumeMount[] =
     type === 'read'
-      ? persistence.mounts.map((m) => m.mount)
-      : persistence.mounts.reduce<V1VolumeMount[]>((array, v) => {
+      ? own.map((m) => m.mount)
+      : own.reduce<V1VolumeMount[]>((array, v) => {
           if (!array.some((i) => i.name === v.mount.name)) {
             array.push({
               mountPath: v.uploadPath,
@@ -88,12 +93,21 @@ export async function getPodForPersistence(
       name,
       labels: {
         'hammerkit.dev/id': service.id(),
+        ...getRunLabels(env),
       },
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
     },
     spec: {
+      // on a server the claims are bound where the pod of the task can go: the nodes
+      // of its pool
+      ...(env.server
+        ? {
+            automountServiceAccountToken: false,
+            ...getPodPlacement(env.server, 'pool' in service.data ? service.data.pool : undefined),
+          }
+        : {}),
       containers: [
         {
           name: 'volume',
@@ -101,6 +115,7 @@ export async function getPodForPersistence(
           command: ['sh'],
           tty: true,
           volumeMounts: mounts,
+          ...getContainerSecurity(env),
         },
       ],
       volumes: persistence.volumes,
@@ -131,6 +146,11 @@ export async function ensurePersistentData(
   service: WorkItem<ContainerWorkService | ContainerWorkTask>,
   persistence: KubernetesPersistence
 ) {
+  // what a run of a server uploads comes from its checkout and nowhere else
+  if (environment.hosted) {
+    await assertItemPathsWithinRoot(service, environment.cwd)
+  }
+
   // Dedupe of already-uploaded state (skip the upload when the persisted state
   // key still matches) needs an in-cluster state marker per volume — deferred
   // post-1.6.0, tracked in FOLLOWUPS.md alongside the volumes.ts stateKey/matcher.
