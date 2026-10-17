@@ -166,7 +166,6 @@ describe('sandboxes on a kubernetes backend', () => {
       const store = new DefinitionStore(join(root, 'definitions'), planning.environment, { policy: planning.policy })
       await store.load()
       const { version } = await store.publish(
-        'payments',
         { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': BUILD_FILE } },
         alice
       )
@@ -224,7 +223,7 @@ describe('sandboxes on a kubernetes backend', () => {
           owner: alice,
           state: 'running',
           createdAt: new Date().toISOString(),
-          definition: { name: 'payments', hash: version.hash },
+          definition: version.hash,
           tasks: [task],
           accounts: [],
           source: { type: 'sandbox', id: sandbox.id, repo: REPO, commit: current.commit, tree: current.tree },
