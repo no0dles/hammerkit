@@ -290,12 +290,15 @@ describe('HostExecutor', () => {
     )
     // a process that tells what it was asked to run with
     const script = [
+      // the input is the first line; the server keeps the standard input open for a cancel
       'let text = ""',
-      'process.stdin.on("data", (chunk) => (text += chunk))',
-      'process.stdin.on("end", () => {',
-      '  const network = JSON.stringify(JSON.parse(text).network)',
+      'process.stdin.on("data", (chunk) => {',
+      '  text += chunk',
+      '  if (!text.includes("\\n")) return',
+      '  const network = JSON.stringify(JSON.parse(text.split("\\n")[0]).network)',
       '  console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: network } }))',
       '  console.log(JSON.stringify({ kind: "result", ok: true }))',
+      '  process.exit(0)',
       '})',
     ].join('\n')
     const telling = new HostExecutor({
