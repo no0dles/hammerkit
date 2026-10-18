@@ -76,6 +76,8 @@ PUBLISHER_ID=$(gcloud iam service-accounts describe $NAME-publisher@$PROJECT.iam
 Delete `app.pem` now. The two service accounts hold no role in the project: only the server
 reads their tokens. Signed in as a service account yourself, write `--member
 serviceAccount:…` in the loop.
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts) explains these two
+accounts, and how to let your team act as the agent.
 
 ## 2. Deploy the server
 
