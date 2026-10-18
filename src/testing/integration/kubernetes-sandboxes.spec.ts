@@ -145,8 +145,9 @@ describe('sandboxes on a kubernetes backend', () => {
           // egress proxy of each task (sandboxes.network)
           networkPolicy: 'enforced',
           defaultResources: { requests: { cpu: '10m', memory: '16Mi' } },
-          sandboxes: { image, size: '1Gi', network: { allow: ['registry.npmjs.org'] } },
+          sandboxes: { image, size: '1Gi' },
         },
+        sandboxes: { network: { allow: ['registry.npmjs.org'] } },
       }) as ServerConfig & { backend: KubernetesBackend }
       const planning: PlanContext = {
         environment: {
