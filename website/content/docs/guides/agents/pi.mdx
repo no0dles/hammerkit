@@ -66,7 +66,7 @@ needs on the server side. Otherwise ask whoever runs the server for:
 </Step>
 <Step>
 
-**Node.js 22 or later** on your machine, for pi and the hammerkit CLI.
+**Node.js 24 or later** on your machine, for pi and the hammerkit CLI.
 
 </Step>
 <Step>
@@ -86,12 +86,20 @@ npm install -g hammerkit
 hammerkit --version
 ```
 
+<Callout>
+
+The agent clients ship with hammerkit 1.27.0. Until it is released, the steps here install
+1.26.0, which does not have them: install the prerelease instead, `npm install -g hammerkit@next` for
+the CLI, and `pi install npm:hammerkit@next` in step 4.
+
+</Callout>
+
 Use the same version as the server. The CLI registers the server in step 2 and publishes the
 build file in step 3; pi's extension in step 4 comes from the same package.
 
 ## 2. Register the server on your machine
 
-The CLI keeps a list of servers per user, in `~/.hammerkit/config.yaml`. Add the server
+The CLI keeps a list of servers for your user, in its config file. Add the server
 under a short name of your choice, with the issuer of the tokens it accepts:
 
 ```bash
