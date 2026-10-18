@@ -4,7 +4,7 @@ import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { Environment } from '../executer/environment'
-import { getSandboxRuntimes, readServerConfig, serverConfigSchema } from './server-config'
+import { getSandboxRuntimes, KubernetesBackend, readServerConfig, serverConfigSchema } from './server-config'
 import { DISCOVERY_PATH, RunningServer, SERVER_PROTOCOL, startServer } from './server'
 import { getVersion } from '../version'
 import { HOST_ENV_YAML } from '../testing/host-env'
@@ -588,6 +588,7 @@ describe('server config policy', () => {
         providers: {},
         runRole: 'hammerkit-runs',
         deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32'],
+        volumeSize: '1Gi',
         sandboxes: {
           image: `no0dles/hammerkit:${getVersion()}`,
           size: '4Gi',
@@ -595,6 +596,16 @@ describe('server config policy', () => {
           resources: { requests: { cpu: '100m', memory: '256Mi' }, limits: { memory: '2Gi' } },
         },
       })
+    })
+
+    it('gives the claims of tasks a size, at most the one it allows', () => {
+      const result = kubernetes({ volumeSize: '5Gi', maxVolumeSize: '50Gi' })
+      const backend = result.success ? (result.data.backend as KubernetesBackend) : null
+      expect(backend && [backend.volumeSize, backend.maxVolumeSize]).toEqual(['5Gi', '50Gi'])
+      expect(message(kubernetes({ volumeSize: '5Gi', maxVolumeSize: '2Gi' }))).toBe(
+        'a claim of 5Gi is more than maxVolumeSize of 2Gi'
+      )
+      expect(message(kubernetes({ volumeSize: 'big' }))).toBe('expected a size like 500Mi, 20Gi or 1Ti')
     })
 
     it('keeps sandboxes on a class of their own and within the limits of a caller', () => {

@@ -253,6 +253,15 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('gives the claims of tasks the size of the backend, at most its maximum', async () => {
+      const { instance } = cluster(null)
+      const prepared = await executor({ volumeSize: '5Gi', maxVolumeSize: '50Gi' }, instance).prepare(
+        { id: 'run_1', owner } as Run,
+        context
+      )
+      expect([prepared.kubernetes.volumeSize, prepared.kubernetes.maxVolumeSize]).toEqual(['5Gi', '50Gi'])
+    })
+
     it('hands the tasks of a run on a sandbox its claim and the pod that holds it', async () => {
       const { instance } = cluster(null)
       const claim = { name: 'claim', namespace, subPath: 'files', label: 'sbx', pod: { name: 'files', uid: 'pod-1' } }

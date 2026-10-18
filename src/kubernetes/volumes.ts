@@ -9,6 +9,9 @@ import { WorkItem } from '../planner/work-item'
 export interface KubernetesPersistence {
   // the claims of the work and of what it inherits
   volumes: V1Volume[]
+  // the `volumeSize` of the work each claim of `volumes` belongs to, null for the
+  // environment's
+  sizes: { [claim: string]: string | null }
   // the claim of a sandbox the run works on, which is not the run's
   workspace: V1Volume[]
   // `workspace` for a mount of the sandbox's claim: nothing is uploaded to it, and only
@@ -75,7 +78,14 @@ export async function getKubernetesPersistence(
   work: WorkItem<ContainerWorkTask | ContainerWorkService>,
   kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
 ): Promise<KubernetesPersistence> {
-  const persistence: KubernetesPersistence = { volumes: [], workspace: [], sources: [], mounts: [], initCommands: [] }
+  const persistence: KubernetesPersistence = {
+    volumes: [],
+    sizes: {},
+    workspace: [],
+    sources: [],
+    mounts: [],
+    initCommands: [],
+  }
   const workspace = kubernetes?.server?.workspace
 
   for (const mount of work.data.mounts) {
@@ -139,6 +149,7 @@ export function appendVolume(
         claimName: volumeName,
       },
     })
+    persistence.sizes[volumeName] = 'volumeSize' in sourceWork.data ? sourceWork.data.volumeSize : null
   }
 
   persistence.mounts.push({

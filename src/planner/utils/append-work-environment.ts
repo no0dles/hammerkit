@@ -15,6 +15,7 @@ export function appendWorkEnvironment(referenced: ReferenceEnvironment): WorkEnv
       httpRoutes: referenced.schema.kubernetes.httpRoutes || [],
       namespace: referenced.schema.kubernetes.namespace ?? 'default',
       networkPolicyEnforced: referenced.schema.kubernetes.networkPolicy === 'enforced',
+      ...(referenced.schema.kubernetes.volumeSize ? { volumeSize: referenced.schema.kubernetes.volumeSize } : {}),
     }
   }
 }

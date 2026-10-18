@@ -50,6 +50,26 @@ describe('buildFileSchema', () => {
     })
   })
 
+  describe('volume size', () => {
+    it('accepts the size of the claim of a container task and service, and of an environment', async () => {
+      const result = await parse({
+        environments: { cluster: { kubernetes: { context: 'prod', volumeSize: '2Gi' } } },
+        services: { db: { image: 'postgres:16', volumeSize: '20Gi' } },
+        tasks: { install: { image: 'node:24', cmds: ['npm ci'], volumeSize: '5Gi' } },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('rejects a size it can not read, and one on a local task', async () => {
+      const invalid = await parse({ tasks: { install: { image: 'node:24', cmds: ['npm ci'], volumeSize: 'big' } } })
+      expect(invalid.success || invalid.error.issues.map((issue) => issue.message)).toContain(
+        'invalid size "big", expected e.g. 500Mi, 5Gi or 2G'
+      )
+      const local = await parse({ tasks: { install: { cmds: ['npm ci'], volumeSize: '5Gi' } } })
+      expect(local.success).toBe(false)
+    })
+  })
+
   describe('strictness', () => {
     it('rejects unknown top-level keys', async () => {
       const result = await parse({ bogus: true })

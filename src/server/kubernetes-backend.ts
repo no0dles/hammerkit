@@ -248,6 +248,8 @@ export class KubernetesExecutor implements RunExecutor {
           context: this.access.context,
           httpRoutes: [],
           storageClass: backend.storageClass,
+          volumeSize: backend.volumeSize,
+          ...(backend.maxVolumeSize ? { maxVolumeSize: backend.maxVolumeSize } : {}),
           networkPolicyEnforced: backend.networkPolicy === 'enforced',
           server: {
             run: run.id,

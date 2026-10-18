@@ -16,6 +16,10 @@ export interface WorkKubernetesEnvironment {
   context?: string
   httpRoutes: BuildFileEnvironmentSchemaHttpRoute[]
   storageClass?: string
+  // what the claim of a task or service requests when it states no `volumeSize`
+  // (DEFAULT_VOLUME_SIZE when left out), and at most (a server's `maxVolumeSize`)
+  volumeSize?: string
+  maxVolumeSize?: string
   // the cluster enforces NetworkPolicy, as the build file states
   networkPolicyEnforced: boolean
   // set when a hammerkit server runs the tasks of a run on its cluster

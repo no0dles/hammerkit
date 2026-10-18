@@ -248,6 +248,10 @@ const kubernetesBackendSchema = z
       .default('hammerkit-'),
     // of the claims tasks get; the cluster's default when left out
     storageClass: z.string().min(1).optional(),
+    // what the claim of a task or service requests when it states no `volumeSize`, and
+    // the most one may state (none when left out: the namespace's quota bounds them)
+    volumeSize: size.default('1Gi'),
+    maxVolumeSize: size.optional(),
     pools: z
       .array(kubernetesPoolSchema)
       .min(1)
@@ -683,6 +687,13 @@ export const serverConfigSchema = z
             })
           }
         }
+      }
+      if (backend.maxVolumeSize && parseSize(backend.volumeSize) > parseSize(backend.maxVolumeSize)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'volumeSize'],
+          message: `a claim of ${backend.volumeSize} is more than maxVolumeSize of ${backend.maxVolumeSize}`,
+        })
       }
       const sandboxes = backend.sandboxes
       if (sandboxes.storageClass && sandboxes.storageClass === backend.storageClass) {

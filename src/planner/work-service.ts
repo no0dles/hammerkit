@@ -57,6 +57,8 @@ export interface ContainerWorkService extends BaseWorkService {
   secrets: WorkSecret[]
   // container limits, null for none
   resources: WorkResources | null
+  // on Kubernetes, the size of its claim; the environment's when null
+  volumeSize: string | null
   // what the container reaches besides its needs, as the build file declares it
   network: WorkNetwork
   // the run's `--network` ceiling, null for none; see getEffectiveNetwork

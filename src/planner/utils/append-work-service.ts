@@ -140,6 +140,7 @@ function parseService(
         service.schema.account
       ),
       resources: parseWorkResources(service.schema.resources),
+      volumeSize: service.schema.volumeSize ?? null,
       network: parseWorkNetwork(service.schema.network),
       networkCeiling: null,
     }

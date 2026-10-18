@@ -44,6 +44,14 @@ describe('getKubernetesPersistence for a container task', () => {
 
     const persistence = await getKubernetesPersistence(work)
 
+    // each claim is of the size its own work states, the generator's for what it made
+    expect(persistence.sizes).toEqual({ 'hammerkit-task-1': null, 'hammerkit-gen-1': null })
+    ;(generator.data as ContainerWorkTask).volumeSize = '5Gi'
+    expect((await getKubernetesPersistence(work)).sizes).toEqual({
+      'hammerkit-task-1': null,
+      'hammerkit-gen-1': '5Gi',
+    })
+
     expect(persistence.volumes).toEqual([
       {
         name: 'hammerkit-task-1',
@@ -252,7 +260,7 @@ describe('getKubernetesPersistence for a container service', () => {
 describe('appendVolume', () => {
   it('dedupes the volume but pushes one mount per call', () => {
     const sourceWork = makeWorkItem('w1', {} as WorkTask)
-    const persistence = { volumes: [], workspace: [], sources: [], mounts: [], initCommands: [] }
+    const persistence = { volumes: [], sizes: {}, workspace: [], sources: [], mounts: [], initCommands: [] }
 
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)

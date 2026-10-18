@@ -81,7 +81,7 @@ export async function getPodForPersistence(
   // function directly, and a claim shared with another work item can be removed
   // concurrently — without this the pod would hang Pending on "pvc not found".
   for (const volume of persistence.volumes) {
-    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service)
+    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service, persistence.sizes[volume.name])
   }
 
   const name = getResourceName(service, type === 'write' ? '-upload' : '-download')
@@ -156,7 +156,7 @@ export async function ensurePersistentData(
   // post-1.6.0, tracked in FOLLOWUPS.md alongside the volumes.ts stateKey/matcher.
 
   for (const volume of persistence.volumes) {
-    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service)
+    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service, persistence.sizes[volume.name])
   }
 
   if (persistence.sources.length === 0) {

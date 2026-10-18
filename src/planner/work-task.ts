@@ -68,6 +68,8 @@ export interface ContainerWorkTask extends BaseWorkTask {
   image: string
   user: string | null
   mounts: WorkMount[]
+  // on Kubernetes, the size of its claim; the environment's when null
+  volumeSize: string | null
   // on a server's cluster, the pool of a local task that runs in the pool's tool image
   pool?: string
   // on a server's cluster, the architecture of the nodes it runs on (as process.arch

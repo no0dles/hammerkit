@@ -33,6 +33,7 @@ describe('getWorkTaskCacheDescription', () => {
       image: 'node:alpine',
       user: null,
       mounts: [{ mount: 'b:b' }, { mount: 'a:a' }] as any,
+      volumeSize: null,
     }
     const d = getWorkTaskCacheDescription({ data: task, deps: [] } as any)
     expect(d.platform).toBe('node:alpine')
