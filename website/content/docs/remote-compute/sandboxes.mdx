@@ -522,6 +522,12 @@ above are the same.
 * **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
   `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a
   `sandboxes.network` other than `open`, the config needs `backend.networkPolicy: enforced`.
+  Under `{ allow: [hosts] }` a task's [egress proxy](/docs/task/network) stays with the
+  sandbox while the pod of its files runs, so the next run of that task on the sandbox
+  uses it instead of waiting for a new one. Each run lets in its own pods only. A task whose
+  allow list or needed services changed gets a new proxy, and the old one goes. All of them
+  go when the pod of the files does. That is one small pod per limited task of an active
+  sandbox, counted by the namespace's quota.
 * **One file while a run works**, as on a host: the pod of the files stays while the run works.
 * **One node.** A claim is usually `ReadWriteOnce`: several pods share it only on one node.
   The pods that mount a sandbox (the Jobs of its run and the pod of its files) are placed

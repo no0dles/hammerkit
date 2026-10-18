@@ -253,6 +253,22 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('hands the tasks of a run on a sandbox its claim and the pod that holds it', async () => {
+      const { instance } = cluster(null)
+      const claim = { name: 'claim', namespace, subPath: 'files', label: 'sbx', pod: { name: 'files', uid: 'pod-1' } }
+      const prepared = await executor({}, instance).prepare({ id: 'run_1', owner } as Run, context, {
+        root: '/runs/run_1',
+        claim,
+      })
+      expect(prepared.kubernetes.server.workspace).toEqual({
+        root: '/runs/run_1',
+        claim: 'claim',
+        subPath: 'files',
+        label: 'sbx',
+        pod: { name: 'files', uid: 'pod-1' },
+      })
+    })
+
     it('refuses a namespace of the same name that hammerkit did not make', async () => {
       const { calls, instance } = cluster({ team: 'payments' })
       await expect(executor({}, instance).prepare({ id: 'run_1', owner } as Run, context)).rejects.toThrow(
