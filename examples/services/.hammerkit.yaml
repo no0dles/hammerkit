@@ -25,7 +25,7 @@ services:
       POSTGRES_DB: api
       POSTGRES_PASSWORD: 123456
     healthcheck:
-      cmd: "pg_isready -U api"
+      cmd: "pg_isready -h 127.0.0.1 -U api"
 
 tasks:
   install:
