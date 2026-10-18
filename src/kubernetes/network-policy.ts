@@ -52,9 +52,10 @@ const POD_END_TIMEOUT_MS = 120000
 const POD_END_POLL_MS = 500
 // on the pods of a limited item on a server: its own policy governs their egress, the
 // one of the caller's namespace (see getNamespacePolicies) leaves them out
-// (`limited`), and on its egress proxy (`proxy`), whose ingress its own policy decides
+// (`limited`), and on its egress proxy (`proxy`), whose ingress only its own policy lets in
 export const NETWORK_LABEL = 'hammerkit.dev/network'
 export const NETWORK_LIMITED = 'limited'
+export const NETWORK_PROXY = 'proxy'
 
 export function getNetworkLabels(env: WorkKubernetesEnvironment, item: ContainerItem): { [label: string]: string } {
   return env.server && getEffectiveNetwork(item.data).type !== 'open' ? { [NETWORK_LABEL]: NETWORK_LIMITED } : {}
@@ -530,7 +531,7 @@ async function ensureProxy(
           labels: {
             ...labels,
             ...(proxy.sandbox ? {} : getRunLabels(env)),
-            ...(env.server ? { [NETWORK_LABEL]: 'proxy' } : {}),
+            ...(env.server ? { [NETWORK_LABEL]: NETWORK_PROXY } : {}),
           },
         },
         spec: {

@@ -173,6 +173,18 @@ describe('kubernetes backend', () => {
     expect(getNamespacePolicies('hk-alice', DEFAULT_DENIED_EGRESS)[1].spec?.egress).toHaveLength(3)
   })
 
+  it('lets nothing into an egress proxy that its own policy does not let in', () => {
+    // the proxy's own policy can go before its pod has ended: without this one, nothing
+    // would select the pod for ingress and anyone who can route to it would get in
+    const proxy = getNamespacePolicies('hk-alice', DEFAULT_DENIED_EGRESS)[2]
+    expect(proxy.metadata?.name).toBe('hammerkit-proxy-ingress')
+    expect(proxy.spec).toEqual({
+      podSelector: { matchLabels: { 'hammerkit.dev/network': 'proxy' } },
+      policyTypes: ['Ingress'],
+      ingress: [],
+    })
+  })
+
   describe('the namespace of a caller', () => {
     const owner = { iss: 'https://idp.corp', sub: 'alice' }
     const namespace = getCallerNamespace('hammerkit-', owner)
@@ -250,6 +262,7 @@ describe('kubernetes backend', () => {
         '  hammerkit-runs for system:serviceaccount:hammerkit:server',
         'create NetworkPolicy hammerkit-ingress',
         'create NetworkPolicy hammerkit-egress',
+        'create NetworkPolicy hammerkit-proxy-ingress',
         'create ResourceQuota hammerkit',
         // no defaultResources: one an earlier config made goes
         'delete LimitRange hammerkit',

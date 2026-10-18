@@ -8,7 +8,7 @@ import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/app
 import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
-import { NETWORK_LABEL, NETWORK_LIMITED } from '../kubernetes/network-policy'
+import { NETWORK_LABEL, NETWORK_LIMITED, NETWORK_PROXY } from '../kubernetes/network-policy'
 import { sleep } from '../utils/sleep'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { SandboxClaim } from './sandbox-storage'
@@ -134,6 +134,18 @@ export function getNamespacePolicies(
           // the operator's exceptions, which rules add up to
           ...(allowedEgress.length > 0 ? [{ to: allowedEgress.map((cidr) => ({ ipBlock: { cidr } })) }] : []),
         ],
+      },
+    },
+    {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: metadata('hammerkit-proxy-ingress'),
+      spec: {
+        // an egress proxy takes only what its own policy lets in: one whose policy went
+        // before the pod ended takes nothing
+        podSelector: { matchLabels: { [NETWORK_LABEL]: NETWORK_PROXY } },
+        policyTypes: ['Ingress'],
+        ingress: [],
       },
     },
   ]

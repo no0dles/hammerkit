@@ -170,12 +170,14 @@ make. On every run the server puts in it, replacing what was there:
 - a `NetworkPolicy` that lets each pod with an open network accept connections from the pods of
   its namespace only (the services a task needs), so callers can not reach each other's pods;
 - a `NetworkPolicy` for the pods with an open network and the egress proxies: they reach their
-  namespace, DNS, any address outside `deniedEgress` and the addresses of `allowedEgress`.
+  namespace, DNS, any address outside `deniedEgress` and the addresses of `allowedEgress`;
+- a `NetworkPolicy` that lets nothing into an egress proxy, so a proxy takes connections only
+  from the task its own policy names, and from nobody once that policy is gone;
+- `quota` and `defaultResources`; removing one from the config removes it from the namespace.
 
-Policies add up, so neither selects a pod with a limited [network](#network) (labelled
+Policies add up, so none of them widens a pod with a limited [network](#network) (labelled
 `hammerkit.dev/network: limited`): its own policy alone decides what it reaches, DNS left out, and
 what reaches it. An egress proxy takes connections from its task only.
-- `quota` and `defaultResources`; removing one from the config removes it from the namespace.
 
 The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
 no privileged pods, host paths or host network. Every container of a run runs with
