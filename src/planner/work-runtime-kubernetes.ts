@@ -47,6 +47,7 @@ import {
   ensureKubernetesItemNetwork,
   getNetworkLabels,
   KubernetesItemNetwork,
+  KubernetesNetworkScope,
   releaseKubernetesItemNetwork,
   removeAllKubernetesItemNetworks,
   RUN_LABEL,
@@ -225,8 +226,19 @@ export function kubernetesTaskRuntime(
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
         return
       }
-      // the run its pods and limits belong to: on a server, the server's run
-      const scope = { run: server ? getRunLabelValue(server.run) : getRunId() }
+      // the run its pods and limits belong to: on a server, the server's run; on a
+      // sandbox, its proxy stays with the sandbox for the next runs
+      const scope: KubernetesNetworkScope & { run: string } = {
+        run: server ? getRunLabelValue(server.run) : getRunId(),
+        ...(server?.workspace
+          ? {
+              sandbox: {
+                label: server.workspace.label,
+                ...(server.workspace.pod ? { pod: server.workspace.pod } : {}),
+              },
+            }
+          : {}),
+      }
       const labels = {
         'hammerkit.dev/id': task.id(),
         'hammerkit.dev/state': options.stateKey,

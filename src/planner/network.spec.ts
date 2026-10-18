@@ -23,6 +23,8 @@ import {
   getNetworkLabels,
   getProxyName,
   getProxyReadinessScript,
+  KubernetesNetworkScope,
+  releaseKubernetesItemNetwork,
   removeAllKubernetesItemNetworks,
 } from '../kubernetes/network-policy'
 import { getRunLabelValue } from '../kubernetes/job-placement'
@@ -619,6 +621,190 @@ describe('network', () => {
             kind: 'NetworkPolicy',
             metadata: { name: 'policy-a', namespace: 'ns' },
           })
+        }
+      )
+    })
+
+    // A cluster in memory: objects by kind and name, a Service gets an address, a
+    // Deployment is ready, and the pod of a sandbox's files is there as `files`.
+    function memoryCluster() {
+      const objects = new Map<string, any>()
+      const made: string[] = []
+      const files = { metadata: { name: 'files', uid: 'pod-1' } as { name: string; uid: string } }
+      const notFound = () => Object.assign(new Error('not found'), { code: 404 })
+      const keyOf = (kind: string, name: string) => `${kind}/${name}`
+      const remove = (kind: string, name: string) => {
+        if (!objects.delete(keyOf(kind, name))) {
+          throw notFound()
+        }
+      }
+      const instance = {
+        objectApi: {
+          read: async (spec: any) => objects.get(keyOf(spec.kind, spec.metadata.name)) ?? Promise.reject(notFound()),
+          create: async (spec: any) => {
+            made.push(keyOf(spec.kind, spec.metadata.name))
+            const object = {
+              ...spec,
+              metadata: { ...spec.metadata, uid: `uid-${made.length}` },
+              spec: spec.kind === 'Service' ? { ...spec.spec, clusterIP: '10.0.0.9' } : spec.spec,
+            }
+            objects.set(keyOf(spec.kind, spec.metadata.name), object)
+            return object
+          },
+          // a merge patch: what the patch leaves out stays
+          patch: async (spec: any) => {
+            const current = objects.get(keyOf(spec.kind, spec.metadata.name))
+            const object = {
+              ...current,
+              metadata: { ...current.metadata, ...spec.metadata },
+              spec: { ...current.spec, ...spec.spec },
+            }
+            objects.set(keyOf(spec.kind, spec.metadata.name), object)
+            return object
+          },
+          delete: async (spec: any) => remove(spec.kind, spec.metadata.name),
+        },
+        appsApi: {
+          readNamespacedDeployment: async () => ({ status: { readyReplicas: 1 } }),
+          listNamespacedDeployment: async ({ labelSelector }: any) => ({
+            items: [...objects.values()].filter(
+              (object) =>
+                object.kind === 'Deployment' &&
+                labelSelector
+                  .split(',')
+                  .every((term: string) => object.metadata.labels?.[term.split('=')[0]] === term.split('=')[1])
+            ),
+          }),
+          deleteNamespacedDeployment: async ({ name }: any) => remove('Deployment', name),
+        },
+        coreApi: {
+          deleteNamespacedService: async ({ name }: any) => remove('Service', name),
+          readNamespacedPod: async ({ name }: any) =>
+            name === files.metadata.name ? files : Promise.reject(notFound()),
+          // the pods of a run ended
+          listNamespacedPod: async () => ({ items: [] }),
+        },
+      } as any
+      const of = (kind: string) => [...objects.values()].filter((object) => object.kind === kind)
+      return { instance, objects, made, files, of }
+    }
+
+    it('keeps the proxy of a task on a sandbox for its next runs, as long as the pod of its files', async () => {
+      await withCli(
+        'network-k8s-sandbox-proxy',
+        { tasks: { install: { image: 'node:22', cmds: ['true'], network: { allow: ['a.com'] } } } },
+        async (cli) => {
+          const cluster = memoryCluster()
+          const pool = { name: 'build', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }
+          const onServer = (run: string) =>
+            ({
+              ...env,
+              networkPolicyEnforced: true,
+              server: { run, namespace: 'hammerkit', pools: [pool], providers: {}, accounts: {} },
+            }) as WorkKubernetesEnvironment
+          const sandbox = { label: 'sbx', pod: { name: 'files', uid: 'pod-1' } }
+          const scopeOf = (run: string): KubernetesNetworkScope => ({ run: getRunLabelValue(run), sandbox })
+          const install = cli.task('install') as WorkItem<ContainerWorkTask>
+          const runOn = async (run: string, item = install, scope = scopeOf(run)) => {
+            const network = await ensureKubernetesItemNetwork(cluster.instance, onServer(run), item, {
+              followLog: false,
+              ...scope,
+            })
+            const seen = {
+              deployments: cluster.of('Deployment').map((d) => ({ ...d.metadata })),
+              policies: cluster.of('NetworkPolicy').map((p) => ({ name: p.metadata.name, spec: p.spec })),
+              hostAliases: network.hostAliases,
+            }
+            network.close()
+            await releaseKubernetesItemNetwork(cluster.instance, onServer(run), item, scope)
+            return seen
+          }
+
+          const first = await runOn('run_1')
+          expect(first.deployments).toHaveLength(1)
+          const proxy = first.deployments[0]
+          expect(proxy.name.length).toBeLessThanOrEqual(63)
+          // no run's label: removed with the pod of the sandbox's files, which owns it
+          expect(proxy.labels).toEqual({
+            'hammerkit.dev/proxy-for': proxy.name.replace('hammerkit-proxy-', ''),
+            'hammerkit.dev/network-of': install.id(),
+            'hammerkit.dev/proxy-of-sandbox': 'sbx',
+          })
+          expect(proxy.ownerReferences).toEqual([{ apiVersion: 'v1', kind: 'Pod', name: 'files', uid: 'pod-1' }])
+          const template = cluster.objects.get(`Deployment/${proxy.name}`).spec.template.metadata.labels
+          expect(template).not.toHaveProperty('hammerkit.dev/run')
+          expect(first.hostAliases).toContainEqual({ ip: '10.0.0.9', hostnames: ['hammerkit-proxy'] })
+          // the run's own policy reaches it, and goes with the run; the proxy stays
+          const runPolicy = first.policies.find((p) => p.name.startsWith('hammerkit-network-'))
+          expect(runPolicy?.spec.egress[0].to).toEqual([
+            { podSelector: { matchLabels: { 'hammerkit.dev/proxy-for': proxy.labels['hammerkit.dev/proxy-for'] } } },
+          ])
+          expect(cluster.of('NetworkPolicy').map((p) => p.metadata.name)).toEqual([proxy.name])
+          expect(cluster.of('Deployment').map((d) => d.metadata.uid)).toEqual([proxy.uid])
+
+          // the next run takes it as it is, and lets in the pods of that run only
+          const madeBefore = cluster.made.length
+          const second = await runOn('run_2')
+          expect(cluster.made.slice(madeBefore)).toEqual([expect.stringMatching(/^NetworkPolicy\/hammerkit-network-/)])
+          expect(second.deployments.map((d) => d.uid)).toEqual([proxy.uid])
+          expect(cluster.objects.get(`NetworkPolicy/${proxy.name}`).spec.ingress[0]._from).toEqual([
+            {
+              podSelector: {
+                matchLabels: { 'hammerkit.dev/id': install.id(), 'hammerkit.dev/run': getRunLabelValue('run_2') },
+              },
+            },
+          ])
+
+          // a changed allow list is a proxy of its own, and the one before goes
+          install.data.network = { type: 'allow', hosts: ['b.com'] }
+          const changed = await runOn('run_3')
+          expect(changed.deployments).toHaveLength(1)
+          expect(changed.deployments[0].name).not.toEqual(proxy.name)
+          expect(cluster.objects.has(`Service/${proxy.name}`)).toBe(false)
+          expect(cluster.objects.has(`NetworkPolicy/${proxy.name}`)).toBe(false)
+
+          // the pod of the files is no longer the one the run holds (it made way for a
+          // pod of the run): the proxy goes with the run
+          cluster.files.metadata = { name: 'files', uid: 'pod-2' }
+          await runOn('run_4')
+          expect(cluster.of('Deployment')).toEqual([])
+          expect(cluster.of('Service')).toEqual([])
+          expect(cluster.of('NetworkPolicy')).toEqual([])
+
+          // and a run that knows no pod of the files keeps none either
+          await runOn('run_5', install, { run: getRunLabelValue('run_5'), sandbox: { label: 'sbx' } })
+          expect(cluster.of('Deployment')).toEqual([])
+
+          // a network without proxy takes the sandbox's proxy of the task away
+          cluster.files.metadata = { name: 'files', uid: 'pod-1' }
+          await runOn('run_6')
+          expect(cluster.of('Deployment')).toHaveLength(1)
+          install.data.network = { type: 'none' }
+          await runOn('run_7')
+          expect(cluster.of('Deployment')).toEqual([])
+          expect(cluster.of('NetworkPolicy')).toEqual([])
+        }
+      )
+    })
+
+    it('starts a proxy per run for a task that is not on a sandbox, as before', async () => {
+      await withCli(
+        'network-k8s-run-proxy',
+        { tasks: { install: { image: 'node:22', cmds: ['true'], network: { allow: ['a.com'] } } } },
+        async (cli) => {
+          const cluster = memoryCluster()
+          const enforced = { ...env, networkPolicyEnforced: true }
+          const install = cli.task('install') as WorkItem<ContainerWorkTask>
+          const scope = { run: 'abcd1234' }
+          const network = await ensureKubernetesItemNetwork(cluster.instance, enforced, install, {
+            followLog: false,
+            ...scope,
+          })
+          expect(cluster.of('Deployment').map((d) => d.metadata.name)).toEqual([getProxyName(install, scope)])
+          expect(cluster.of('Deployment')[0].metadata.ownerReferences).toBeUndefined()
+          network.close()
+          await releaseKubernetesItemNetwork(cluster.instance, enforced, install, scope)
+          expect(cluster.objects.size).toBe(0)
         }
       )
     })

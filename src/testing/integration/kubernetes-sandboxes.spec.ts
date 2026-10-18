@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { BatchV1Api, CoreV1Api, KubeConfig } from '@kubernetes/client-node'
+import { AppsV1Api, BatchV1Api, CoreV1Api, KubeConfig } from '@kubernetes/client-node'
 import { createServerAccount, ServerAccount } from '../kubernetes-server-account'
 import { requiresKubernetes } from '../requires-kubernetes'
 import { getRunLabelValue } from '../../kubernetes/job-placement'
@@ -47,11 +47,16 @@ function git(cwd: string, ...args: string[]): string {
   ).trim()
 }
 
-function cluster(): { config: KubeConfig; core: CoreV1Api; batch: BatchV1Api } {
+function cluster(): { config: KubeConfig; core: CoreV1Api; batch: BatchV1Api; apps: AppsV1Api } {
   const config = new KubeConfig()
   config.loadFromDefault()
   config.setCurrentContext(context)
-  return { config, core: config.makeApiClient(CoreV1Api), batch: config.makeApiClient(BatchV1Api) }
+  return {
+    config,
+    core: config.makeApiClient(CoreV1Api),
+    batch: config.makeApiClient(BatchV1Api),
+    apps: config.makeApiClient(AppsV1Api),
+  }
 }
 
 const BUILD_FILE = `
@@ -74,6 +79,13 @@ tasks:
     src: [src/up]
     cmds:
       - echo "seen:$(ls -A src/up | tr '\\n' ',')"
+  fetch:
+    image: node:24-alpine
+    src: [src]
+    network:
+      allow: [registry.npmjs.org]
+    cmds:
+      - echo "left-pad:$(npm view left-pad version)"
 `
 
 describe('sandboxes on a kubernetes backend', () => {
@@ -129,10 +141,11 @@ describe('sandboxes on a kubernetes backend', () => {
           runRole,
           namespace: operatorNamespace,
           namespacePrefix: prefix,
-          // runs on sandboxes have no network but the services they need (sandboxes.network)
+          // runs on sandboxes reach the services they need and the registry, through the
+          // egress proxy of each task (sandboxes.network)
           networkPolicy: 'enforced',
           defaultResources: { requests: { cpu: '10m', memory: '16Mi' } },
-          sandboxes: { image, size: '1Gi' },
+          sandboxes: { image, size: '1Gi', network: { allow: ['registry.npmjs.org'] } },
         },
       }) as ServerConfig & { backend: KubernetesBackend }
       const planning: PlanContext = {
@@ -184,7 +197,7 @@ describe('sandboxes on a kubernetes backend', () => {
       })
 
       const sandbox = await registry.create(alice, REPO, 'main')
-      const { core, batch } = cluster()
+      const { core, batch, apps } = cluster()
       const names = getSandboxNames(sandbox.id)
       for (const name of [names.claim, names.git]) {
         const claim = await core.readNamespacedPersistentVolumeClaim({ name, namespace: callerNamespace })
@@ -240,7 +253,29 @@ describe('sandboxes on a kubernetes backend', () => {
       }
       const filesPod = async () =>
         (await core.readNamespacedPod({ name: names.pod, namespace: callerNamespace })).metadata?.uid
+      // the egress proxies of the sandbox's tasks, by name, with their uid and owner
+      const proxies = async () =>
+        Object.fromEntries(
+          (
+            await apps.listNamespacedDeployment({
+              namespace: callerNamespace,
+              labelSelector: `hammerkit.dev/proxy-of-sandbox=${names.label}`,
+            })
+          ).items
+            .filter((deployment) => !deployment.metadata?.deletionTimestamp)
+            .map((deployment) => [
+              deployment.metadata?.name,
+              { uid: deployment.metadata?.uid, owner: deployment.metadata?.ownerReferences?.[0]?.uid },
+            ])
+        )
       const podBefore = await filesPod()
+      // a task that reaches the registry through its proxy, which stays with the sandbox
+      const fetched = await execute('run_sbx_fetch_1', 'fetch')
+      expect(fetched.error, fetched.text).toBeUndefined()
+      expect(fetched.text).toMatch(/left-pad:\d+\.\d+\.\d+/)
+      const fetchProxies = await proxies()
+      expect(Object.values(fetchProxies)).toEqual([{ uid: expect.any(String), owner: podBefore }])
+
       const { error, events, text } = await execute('run_sbx_one_-', 'build')
       expect(error, text).toBeUndefined()
       // the pod of the files stayed through the run, whose Job went to its node: the claim
@@ -264,6 +299,12 @@ describe('sandboxes on a kubernetes backend', () => {
       })
       expect(jobs.items.filter((job) => !job.metadata?.deletionTimestamp)).toEqual([])
       expect(registry.get(alice, sandbox.id)?.bytes).toBeGreaterThan(0)
+
+      // the next run of the task, on the files the build changed, uses the same proxy
+      const again = await execute('run_sbx_fetch_2', 'fetch')
+      expect(again.error, again.text).toBeUndefined()
+      expect(again.text).toMatch(/left-pad:\d+\.\d+\.\d+/)
+      expect(await proxies()).toMatchObject(fetchProxies)
 
       // the server pushes the changes, with nothing of git run in the caller's namespace
       const pushed = await registry.push(
@@ -292,6 +333,11 @@ describe('sandboxes on a kubernetes backend', () => {
       expect((seen as string).split(',').filter((name) => name && name !== 'lost+found')).toEqual(['files'])
 
       await registry.remove(alice, sandbox.id)
+      // the proxies go with the pod of the files, which owned them
+      for (let attempt = 0; Object.keys(await proxies()).length > 0 && attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+      expect(await proxies()).toEqual({})
       for (const name of [names.claim, names.git]) {
         const left = await core.readNamespacedPersistentVolumeClaim({ name, namespace: callerNamespace }).then(
           (found) => !found.metadata?.deletionTimestamp,

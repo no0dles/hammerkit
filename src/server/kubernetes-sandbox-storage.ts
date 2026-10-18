@@ -8,7 +8,7 @@ import type { WebSocket } from 'ws'
 import { create as createTar, extract as extractTar } from 'tar'
 import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
-import { NETWORK_LABEL } from '../kubernetes/network-policy'
+import { NETWORK_LABEL, removeSandboxProxies } from '../kubernetes/network-policy'
 import { getSandboxAffinity, SANDBOX_LABEL } from '../kubernetes/volumes'
 import { getErrorMessage } from '../log'
 import { sleep } from '../utils/sleep'
@@ -111,13 +111,16 @@ interface FilesPod {
   namespace: string
   name: string
   ready: Promise<void>
-  // when it started, once it runs
+  // when it started and its uid, once it runs
   started?: number
+  uid?: string
   // requests and runs under way; the pod goes when none is and it was idle long enough
   busy: number
   // the runs of `busy`
   runs: number
   idle?: NodeJS.Timeout
+  // it went to make way for a pod of a run (makeWayForRun), leaving what it owns
+  movedAside?: boolean
 }
 
 /**
@@ -402,11 +405,23 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     void this.makeWayForRun(key, pod, watching.signal)
     return {
       directory: into,
-      claim: { name: names.claim, namespace, subPath: FILES_DIRECTORY, label: names.label },
+      claim: {
+        name: names.claim,
+        namespace,
+        subPath: FILES_DIRECTORY,
+        label: names.label,
+        ...(pod.uid ? { pod: { name: pod.name, uid: pod.uid } } : {}),
+      },
       release: () => {
         if (!watching.signal.aborted) {
           watching.abort()
           leave()
+          if (pod.movedAside) {
+            // the egress proxies it owned stayed for the run; those of a pod after it stay
+            removeSandboxProxies(this.instance, namespace, { sandbox: names.label }, (deployment) =>
+              (deployment.metadata?.ownerReferences ?? []).some((reference) => reference.uid !== pod.uid)
+            ).catch(() => undefined)
+          }
         }
       },
     }
@@ -446,7 +461,10 @@ export class KubernetesSandboxStorage implements SandboxStorage {
           for (let i = 0; pod.busy > pod.runs && i < REQUEST_TIMEOUT_MS / 100; i++) {
             await sleep(100)
           }
-          await this.deletePod(pod.namespace, pod.name)
+          // what it owns stays for the run (the egress proxies of its tasks) and goes
+          // when the run released it
+          pod.movedAside = true
+          await this.deletePod(pod.namespace, pod.name, 'Orphan')
           return
         }
       } catch {
@@ -698,8 +716,9 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         runs: 0,
         ready: Promise.resolve(),
       }
-      created.ready = this.startPod(key, namespace).then((started) => {
+      created.ready = this.startPod(key, namespace).then(({ started, uid }) => {
         created.started = started
+        created.uid = uid
       })
       created.ready.catch(() => {
         if (this.pods.get(key.id) === created) {
@@ -745,9 +764,14 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     await this.deletePod(namespace, getSandboxNames(key.id).pod)
   }
 
-  private async deletePod(namespace: string, name: string): Promise<void> {
+  private async deletePod(namespace: string, name: string, propagationPolicy?: 'Orphan'): Promise<void> {
     try {
-      await this.instance.coreApi.deleteNamespacedPod({ name, namespace, gracePeriodSeconds: 0 })
+      await this.instance.coreApi.deleteNamespacedPod({
+        name,
+        namespace,
+        gracePeriodSeconds: 0,
+        ...(propagationPolicy ? { propagationPolicy } : {}),
+      })
     } catch (e) {
       if (statusCodeOf(e) === 404) {
         return
@@ -767,8 +791,8 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     }
   }
 
-  // Starts the pod of the sandbox's files and answers when it started.
-  private async startPod(key: SandboxKey, namespace: string): Promise<number> {
+  // Starts the pod of the sandbox's files and answers when it started, and its uid.
+  private async startPod(key: SandboxKey, namespace: string): Promise<{ started: number; uid?: string }> {
     const names = getSandboxNames(key.id)
     await this.prepare(namespace)
     // one left by a server that stopped is used while it runs
@@ -776,7 +800,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       .readNamespacedPod({ name: names.pod, namespace })
       .catch((e) => (statusCodeOf(e) === 404 ? undefined : Promise.reject(e)))
     if (existing?.status?.phase === 'Running' && !existing.metadata?.deletionTimestamp) {
-      return startedAt(existing)
+      return { started: startedAt(existing), uid: existing.metadata?.uid }
     }
     if (existing) {
       await this.deletePod(namespace, names.pod)
@@ -845,7 +869,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       const current = await this.instance.coreApi.readNamespacedPod({ name: names.pod, namespace })
       const phase = current.status?.phase
       if (phase === 'Running') {
-        return startedAt(current)
+        return { started: startedAt(current), uid: current.metadata?.uid }
       }
       const waiting = current.status?.containerStatuses?.[0]?.state?.waiting
       if (phase === 'Failed' || phase === 'Succeeded' || Date.now() > deadline) {

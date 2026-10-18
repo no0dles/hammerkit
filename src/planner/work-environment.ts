@@ -49,6 +49,9 @@ export interface WorkKubernetesWorkspace {
   claim: string
   subPath: string
   label: string
+  // the pod of the sandbox's files the run holds: what stays with the sandbox for its
+  // next runs (the egress proxy of a task) goes with this pod
+  pod?: { name: string; uid: string }
 }
 
 export interface WorkKubernetesPool {
