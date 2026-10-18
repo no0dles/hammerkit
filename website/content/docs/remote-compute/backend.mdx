@@ -72,13 +72,16 @@ rules like these do it (the run networks are `br-*` bridges, the egress proxies 
 items are on `docker0`). They need Docker's `iptables` firewall backend, which has the
 `DOCKER-USER` chain (not `firewall-backend: nftables`), and a daemon with IPv6 off, its
 default; with IPv6 on, the same rules are needed in `ip6tables` for `fe80::/10`, `fc00::/7`
-and `fd00:ec2::/32`. The script can run again, replacing what it set; run it from a systemd
-unit after `docker.service` so the rules come back after a reboot. Test them with an open
-task that has to fail `wget -T 3 http://169.254.169.254/` and still resolve names:
+and `fd00:ec2::/32`. The script can run again, replacing what it set, and the rules stay when
+Docker restarts. Test them with an open task that has to fail `wget -T 3 http://169.254.169.254/`
+and still resolve names:
 
 ```sh title="firewall of the server's host"
-# the resolvers the containers use, the only private addresses they reach on port 53
-RESOLVERS=$(awk '/^nameserver/ { print $2 }' /etc/resolv.conf | grep -v '^127\.')
+# the resolvers the containers use, the only private addresses they reach on port 53: like
+# Docker, read systemd-resolved's upstream list when /etc/resolv.conf names only its stub
+RESOLV_CONF=/etc/resolv.conf
+grep -q '^nameserver 127\.0\.0\.53' "$RESOLV_CONF" && RESOLV_CONF=/run/systemd/resolve/resolv.conf
+RESOLVERS=$(awk '/^nameserver/ && $2 !~ /^127\./ && !seen[$2]++ { print $2 }' "$RESOLV_CONF")
 iptables -N HAMMERKIT-RUNS 2>/dev/null || iptables -F HAMMERKIT-RUNS
 iptables -A HAMMERKIT-RUNS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
 for resolver in $RESOLVERS; do
@@ -99,8 +102,26 @@ for bridge in 'br-+' docker0; do
 done
 ```
 
-A host whose `/etc/resolv.conf` names only `127.0.0.53` (systemd-resolved) gives containers
-the upstream resolvers instead; list those in `RESOLVERS` (`resolvectl dns`).
+Saved as `/usr/local/sbin/hammerkit-firewall.sh`, a unit puts the rules back after a reboot. Start
+the server after it (`After=hammerkit-firewall.service` in the server's unit), so no run starts
+before the rules are in:
+
+```txt title="/etc/systemd/system/hammerkit-firewall.service"
+[Unit]
+Description=Firewall rules for the containers of hammerkit runs
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/local/sbin/hammerkit-firewall.sh
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`systemctl enable --now hammerkit-firewall` applies them now and on every boot.
 
 On a cluster every task is a pod of its own in the caller's namespace, without a token of the
 cluster. The boundary is the container, the namespace and the network policies the server puts
