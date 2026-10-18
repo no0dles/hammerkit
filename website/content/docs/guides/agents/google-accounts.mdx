@@ -8,10 +8,10 @@ An agent never signs in to the server as you. It signs in as a **service account
 and the server's [entitlements](/docs/remote-compute/entitlements) decide what that account
 may do. The guides use two accounts:
 
-| Account               | Signs in to                                         | Entitlement on the server       |
-| --------------------- | --------------------------------------------------- | ------------------------------- |
-| `hammerkit-agent`     | start sandboxes, run tasks, push `agent/…` branches | `builds: run` and `sandboxes`   |
-| `hammerkit-publisher` | publish build files (`hammerkit remote publish`)    | `builds: publish`, nothing else |
+| Account               | Signs in to                                         | Entitlement on the server                        |
+| --------------------- | --------------------------------------------------- | ------------------------------------------------ |
+| `hammerkit-agent`     | start sandboxes, run tasks, push `agent/…` branches | `builds: run` and `sandboxes`                    |
+| `hammerkit-publisher` | publish build files (`hammerkit remote publish`)    | `builds: publish` (includes run), no `sandboxes` |
 
 Neither account gets a key file or a role in your project. Instead, you are allowed to
 **impersonate** them: `gcloud` asks Google for a short-lived token of the account on your
@@ -54,6 +54,9 @@ for who in agent publisher; do
 done
 ```
 
+The narrower role Service Account OpenID Token Creator is not enough: `gcloud` with
+`--impersonate-service-account` also asks for an access token of the account.
+
 Signed in to `gcloud` as a service account yourself, for example in CI, write
 `--member serviceAccount:…` instead of `user:…`. A new binding can take a minute before it
 works.
@@ -82,7 +85,7 @@ This is the command the tutorials put in `HAMMERKIT_TOKEN_COMMAND`. It prints a 
 starting with `eyJ`, a token that is valid for an hour. `--audiences=hammerkit` has to match
 the `audience` of `issuers` in the server's config.
 
-`Permission 'iam.serviceAccounts.getOpenIdToken' denied` means step 2 or 3 is missing for
+A `Permission 'iam.serviceAccounts.getAccessToken' denied` (or `getOpenIdToken`) error means step 2 or 3 is missing for
 your user, or has not taken effect yet.
 
 ## 5. Give the server the accounts' ids
