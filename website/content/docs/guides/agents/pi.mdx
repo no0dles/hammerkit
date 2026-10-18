@@ -156,6 +156,9 @@ HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit 
 published to hammerkit: sha256:9f2c61d0… (1 file)
 ```
 
+If this exact version was published before, it prints `already published to hammerkit:`
+with the same hash instead; that is fine.
+
 `HAMMERKIT_TOKEN_COMMAND` makes this one command sign in as `hammerkit-publisher`: `gcloud`
 prints a token of that service account for you. That only works once you may act as it, see
 [Service accounts on Google Cloud](/docs/guides/agents/google-accounts). Write your project

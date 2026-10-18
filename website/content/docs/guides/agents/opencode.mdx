@@ -156,6 +156,9 @@ HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit 
 published to hammerkit: sha256:9f2c61d0… (1 file)
 ```
 
+If this exact version was published before, it prints `already published to hammerkit:`
+with the same hash instead; that is fine.
+
 `HAMMERKIT_TOKEN_COMMAND` makes this one command sign in as `hammerkit-publisher`: `gcloud`
 prints a token of that service account for you. That only works once you may act as it, see
 [Service accounts on Google Cloud](/docs/guides/agents/google-accounts). Write your project
@@ -226,12 +229,14 @@ work on your machine instead of the sandbox. Do this check before you give openc
 ```bash
 source agent.env
 opencode service stop
-opencode run --standalone 'List the files of the project root with the read tool.'
+opencode run --standalone -m openrouter/anthropic/claude-haiku-5.5 \
+  'List the files of the project root with the read tool.'
 ```
 
 opencode 2.0 runs a background service that keeps the environment it was first started with.
 `opencode service stop` ends it, so the next start sees the variables of `agent.env`; do that
-whenever you change them. `--standalone` runs this one check without the service.
+whenever you change them. `--standalone` runs this one check without the service, and `-m`
+picks the model, so the check does not depend on your opencode's default.
 
 The answer has to list your repository's files. If it lists only `.opencode`, or says a file
 is not found, the plugin did not load: check that `npm install --prefix .opencode` ran and
