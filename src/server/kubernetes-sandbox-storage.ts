@@ -388,6 +388,11 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       this.leavePod(key, pod)
     }
     try {
+      // runs on a sandbox go one at a time: a proxy the pod of the files does not own was
+      // left by a run before (the server stopped, or its release could not remove it)
+      await removeSandboxProxies(this.instance, namespace, { sandbox: names.label }, (deployment) =>
+        isOwnedBy(deployment, pod.uid)
+      ).catch(() => undefined)
       await mkdir(into, { recursive: true })
       await this.copyOut(
         key,
@@ -418,8 +423,11 @@ export class KubernetesSandboxStorage implements SandboxStorage {
           leave()
           if (pod.movedAside) {
             // the egress proxies it owned stayed for the run; those of a pod after it stay
-            removeSandboxProxies(this.instance, namespace, { sandbox: names.label }, (deployment) =>
-              (deployment.metadata?.ownerReferences ?? []).some((reference) => reference.uid !== pod.uid)
+            removeSandboxProxies(
+              this.instance,
+              namespace,
+              { sandbox: names.label },
+              (deployment) => !isOwnedBy(deployment, pod.uid) && (deployment.metadata?.ownerReferences ?? []).length > 0
             ).catch(() => undefined)
           }
         }
@@ -513,6 +521,8 @@ export class KubernetesSandboxStorage implements SandboxStorage {
   private async removeIn(namespace: string, id: string): Promise<void> {
     const names = getSandboxNames(id)
     await this.stopPod({ id, owner: { iss: '', sub: '' } }, namespace)
+    // the cluster removes the proxies the pod owned; those it did not own go here
+    await removeSandboxProxies(this.instance, namespace, { sandbox: names.label })
     for (const name of [names.claim, names.git]) {
       try {
         await this.instance.coreApi.deleteNamespacedPersistentVolumeClaim({ name, namespace })
@@ -1007,6 +1017,10 @@ export function getPushRefusal(printed: string, branch: string): string | undefi
   }
   const reason = line ? line.slice(2).join(' ') : printed.trim() || 'git printed nothing'
   return `the remote refused the push to ${branch}: ${reason}`
+}
+
+function isOwnedBy(object: { metadata?: { ownerReferences?: { uid: string }[] } }, uid: string | undefined): boolean {
+  return !!uid && (object.metadata?.ownerReferences ?? []).some((reference) => reference.uid === uid)
 }
 
 // When the pod started, by the cluster's clock as far as it says, else now.

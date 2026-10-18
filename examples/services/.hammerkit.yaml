@@ -25,6 +25,8 @@ services:
       POSTGRES_DB: api
       POSTGRES_PASSWORD: 123456
     healthcheck:
+      # over TCP: the image's first-start server listens on the socket only, and
+      # restarts once its init scripts ran
       cmd: "pg_isready -h 127.0.0.1 -U api"
 
 tasks:

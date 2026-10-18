@@ -679,6 +679,45 @@ describe('sandboxes on a cluster', () => {
     }
   })
 
+  it('removes the egress proxies a run before left when a run starts, and all with the sandbox', async () => {
+    const registry = registryWith()
+    const sandbox = await registry.create(alice, REPO, 'main')
+    const names = getSandboxNames(sandbox.id)
+    // a request starts the pod of the files
+    await registry.files(alice, sandbox.id).read('src/app.ts', {})
+    const uid = cluster.objects.get(`Pod/${namespace}/${names.pod}`).metadata.uid
+    const proxy = (name: string, owner?: string) => {
+      const metadata = {
+        name,
+        namespace,
+        labels: { 'hammerkit.dev/proxy-of-sandbox': names.label },
+        ...(owner ? { ownerReferences: [{ apiVersion: 'v1', kind: 'Pod', name: names.pod, uid: owner }] } : {}),
+      }
+      for (const kind of ['Deployment', 'Service', 'NetworkPolicy']) {
+        cluster.objects.set(`${kind}/${namespace}/${name}`, { kind, metadata })
+      }
+    }
+    const left = () =>
+      [...cluster.objects.values()]
+        .filter((object) => object.kind === 'Deployment')
+        .map((object) => object.metadata.name)
+        .sort()
+    // one of the current pod, one the server left when it stopped, one of a pod before
+    proxy('proxy-current', uid)
+    proxy('proxy-stopped')
+    proxy('proxy-before', 'uid-of-a-pod-before')
+    const attached = await registry.attach(sandbox.id, join(root, 'run', 'sandbox'))
+    expect(left()).toEqual(['proxy-current'])
+    expect(cluster.objects.has(`Service/${namespace}/proxy-stopped`)).toBe(false)
+    expect(cluster.objects.has(`NetworkPolicy/${namespace}/proxy-stopped`)).toBe(false)
+    attached.release?.()
+
+    // the sandbox removed: the cluster removes what the pod owned, and the server the rest
+    proxy('proxy-stopped')
+    await registry.remove(alice, sandbox.id)
+    expect(left()).toEqual([])
+  })
+
   it('replaces a pod of the files that nears its deadline, between requests', async () => {
     const registry = registryWith()
     const sandbox = await registry.create(alice, REPO, 'main')

@@ -41,27 +41,20 @@ Four pieces work together. You set up the last three in this tutorial.
 <Steps>
 <Step>
 
-**A hammerkit server that knows your repository.** If you do not have one yet, follow
-[Server on Kubernetes](/docs/guides/agents/kubernetes) first; it sets up everything this page
-needs on the server side. Otherwise ask whoever runs the server for:
+**A hammerkit server for your GitHub repository.** [Server on Kubernetes](/docs/guides/agents/kubernetes)
+sets one up on GKE: the server checks out and pushes to your repository with a GitHub App,
+and accepts Google sign-ins. If someone else runs the server, ask them for its address and
+the issuer of the tokens it accepts, for example `https://accounts.google.com`.
 
-- its address and the **issuer** of the tokens it accepts, for example
-  `https://accounts.google.com`;
-- a service account for the agent, with an [entitlement](/docs/remote-compute/entitlements)
-  like this one in the server's config:
+</Step>
+<Step>
 
-  ```yaml title="server.yaml"
-  entitlements:
-    - subject: { iss: https://accounts.google.com, sub: '<id of the agent account>' }
-      repos: [github.com/acme/shop]
-      builds: run # may run tasks of published build files
-      sandboxes:
-        - repo: github.com/acme/shop
-          branches: { main: pull, 'agent/**': push } # start from main, push to agent/…
-  ```
-
-- an identity that may **publish** build files (`builds: publish`), for step 3. That can be
-  you, or a second service account as in the Kubernetes guide.
+**Service accounts for the agent and the publisher**, and the right to act as them.
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts) creates
+`hammerkit-agent` and `hammerkit-publisher`, gives you the role that lets `gcloud` print their
+tokens, and shows the entitlements the server needs for them. The Kubernetes guide does this
+in its step 1; with a server someone else runs, have them add you as in
+[Let your team act as them](/docs/guides/agents/google-accounts#3-let-your-team-act-as-them).
 
 </Step>
 <Step>
@@ -151,7 +144,7 @@ hammerkit run sh -- 'ls && node --version'
 ```
 
 Commit the file, so the next publish starts from the same version. Then publish it from the
-root of your checkout, signed in as the identity that may publish:
+root of your checkout, signed in as the publisher's service account:
 
 ```bash
 HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
@@ -162,6 +155,14 @@ HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit 
 ```text
 published to hammerkit: sha256:9f2c61d0… (1 file)
 ```
+
+If this exact version was published before, it prints `already published to hammerkit:`
+with the same hash instead; that is fine.
+
+`HAMMERKIT_TOKEN_COMMAND` makes this one command sign in as `hammerkit-publisher`: `gcloud`
+prints a token of that service account for you. That only works once you may act as it, see
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts). Write your project
+instead of `my-project`.
 
 Copy the hash, `sha256:` and 64 hex digits: it names this version of the build file, and pi
 uses it in step 5. The server never takes task definitions from the agent itself, so the
@@ -196,10 +197,11 @@ export OPENROUTER_API_KEY=…                         # for the model, not for h
 
 `HAMMERKIT_TOKEN_COMMAND` is how pi signs in as the agent: a command that prints a
 short-lived token of the agent's service account. The extension runs it again whenever the
-server stops accepting the token, so a long session needs no new sign-in. With Google, the
-command above works when your own account has `roles/iam.serviceAccountTokenCreator` on the
-agent's service account. With another identity provider, use any command that prints a token
-of the agent's account.
+server stops accepting the token, so a long session needs no new sign-in. The command above
+works once you may act as `hammerkit-agent`, see
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts); check it there with
+[a token test](/docs/guides/agents/google-accounts#4-check-that-a-token-comes-back). With
+another identity provider, use any command that prints a token of the agent's account.
 
 ## 6. Start pi and check where it works
 
@@ -250,15 +252,16 @@ pi --provider openrouter --model anthropic/claude-haiku-5.5 --no-session \
 
 ## When it does not work
 
-| What you see                                                                                            | What it means                                                                                                                         |
-| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| pi lists an empty directory, or files of your machine                                                   | The extension is not loaded: check `pi list`.                                                                                         |
-| `server hammerkit is not registered`                                                                    | Step 2 was run as another user, or `HAMMERKIT_SERVER` names another server.                                                           |
-| `… is not the hash of a published version`                                                              | `HAMMERKIT_BUILD` holds a name or a shortened hash. Use the full hash that step 3 printed.                                            |
-| `unable to reach http://…: fetch failed: connect ECONNREFUSED …`                                        | Nothing listens at the server's address, for example `kubectl port-forward` has stopped.                                              |
-| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | The server's certificate comes from a company or private CA: name that CA's file in `NODE_EXTRA_CA_CERTS`, which takes one file.      |
-| `you are not entitled to keep sandboxes on this server`                                                 | The token is not the agent's, or its entitlement has no `sandboxes`: check the account in `HAMMERKIT_TOKEN_COMMAND`.                  |
-| The shell task needs `mounts: [.]`                                                                      | The shell task does not mount the sandbox: add `mounts: [.]` (step 3), publish again and set the new hash.                            |
-| `npm: not found`, or a download that times out                                                          | The shell task's image lacks the tool, or its `network` does not allow the host. Change the task, publish again and set the new hash. |
+| What you see                                                                                            | What it means                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pi lists an empty directory, or files of your machine                                                   | The extension is not loaded: check `pi list`.                                                                                                                                         |
+| `server hammerkit is not registered`                                                                    | Step 2 was run as another user, or `HAMMERKIT_SERVER` names another server.                                                                                                           |
+| `… is not the hash of a published version`                                                              | `HAMMERKIT_BUILD` holds a name or a shortened hash. Use the full hash that step 3 printed.                                                                                            |
+| `unable to reach http://…: fetch failed: connect ECONNREFUSED …`                                        | Nothing listens at the server's address, for example `kubectl port-forward` has stopped.                                                                                              |
+| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | The server's certificate comes from a company or private CA: name that CA's file in `NODE_EXTRA_CA_CERTS`, which takes one file.                                                      |
+| `Permission 'iam.serviceAccounts.getAccessToken' denied`                                                | You may not act as the service account in `HAMMERKIT_TOKEN_COMMAND` yet, see [Service accounts on Google Cloud](/docs/guides/agents/google-accounts#2-allow-yourself-to-act-as-them). |
+| `you are not entitled to keep sandboxes on this server`                                                 | The token is not the agent's, or its entitlement has no `sandboxes`: check the account in `HAMMERKIT_TOKEN_COMMAND`.                                                                  |
+| The shell task needs `mounts: [.]`                                                                      | The shell task does not mount the sandbox: add `mounts: [.]` (step 3), publish again and set the new hash.                                                                            |
+| `npm: not found`, or a download that times out                                                          | The shell task's image lacks the tool, or its `network` does not allow the host. Change the task, publish again and set the new hash.                                                 |
 
 See [Agents](/docs/remote-compute/agents#pi) for what the extension does with each of pi's tools.
