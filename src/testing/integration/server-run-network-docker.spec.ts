@@ -88,7 +88,8 @@ async function startOnDefaultBridge(docker: Dockerode, name: string): Promise<st
     HostConfig: { AutoRemove: true },
   })
   await container.start()
-  return (await container.inspect()).NetworkSettings.IPAddress
+  // Docker 29 has the address of a container only per network
+  return (await container.inspect()).NetworkSettings.Networks.bridge.IPAddress
 }
 
 // whether a container on the default bridge reaches the address
@@ -161,6 +162,38 @@ describe('open containers of a server run (docker)', () => {
       expect(messages.pop(), JSON.stringify(messages)).toEqual({ kind: 'result', ok: true })
       // the volume is the caller's, not one any build file can name
       expect((await docker.getVolume(`hammerkit-${scope}-data`).inspect()).Name).toEqual(`hammerkit-${scope}-data`)
+    }),
+    180_000
+  )
+
+  it(
+    'gives a service the outputs of the tasks it depends on, under their own names',
+    requiresLinuxContainers(async () => {
+      writeFileSync(
+        join(directory, '.hammerkit.yaml'),
+        [
+          'services:',
+          '  srv:',
+          '    image: busybox:1.36',
+          '    shell: sh',
+          '    deps: [gen]',
+          '    cmd: mkdir -p /www && cp out/hello /www/index.html && httpd -f -p 8080 -h /www',
+          '    healthcheck:',
+          '      cmd: wget -q -O /dev/null http://localhost:8080/',
+          'tasks:',
+          '  gen:',
+          '    image: busybox:1.36',
+          '    generates: [out]',
+          '    cmds: [mkdir -p out, echo hello > out/hello]',
+          '  check:',
+          '    image: busybox:1.36',
+          '    needs: [srv]',
+          '    cmds: [wget -q -O - http://srv:8080/ | grep hello]',
+          '',
+        ].join('\n')
+      )
+      const messages = await run(directory, 'check', undefined, { volumeScope: scope })
+      expect(messages.pop(), JSON.stringify(messages)).toEqual({ kind: 'result', ok: true })
     }),
     180_000
   )

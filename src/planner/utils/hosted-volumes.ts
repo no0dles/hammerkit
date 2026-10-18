@@ -13,9 +13,10 @@ export function isVolumeName(name: string): boolean {
 /**
  * On a server, the docker volumes of a run's services are its caller's: each name gets the
  * run's scope (its caller and source trust) in front, so a build file can neither open nor,
- * with `resetOnChange`, remove a volume of another caller, of a sandbox or of the host,
- * and two callers' services with the same `path` don't share data. A Kubernetes backend
- * keeps claims in the caller's namespace and is left as it is.
+ * with `resetOnChange`, remove a volume of another caller, of a sandbox or of the host.
+ * The outputs a service inherits from its deps keep their names: those are made from paths
+ * in the run's own files, and the task that writes them uses the same name. A Kubernetes
+ * backend keeps claims in the caller's namespace and is left as it is.
  */
 export function scopeServiceVolumes(workTree: WorkTree, scope: string): void {
   const scoped = new Set<WorkVolume>()
@@ -24,7 +25,7 @@ export function scopeServiceVolumes(workTree: WorkTree, scope: string): void {
       continue
     }
     for (const volume of service.data.volumes) {
-      if (!scoped.has(volume)) {
+      if (!volume.inherited && !scoped.has(volume)) {
         scoped.add(volume)
         volume.name = `hammerkit-${scope}-${volume.name}`
       }

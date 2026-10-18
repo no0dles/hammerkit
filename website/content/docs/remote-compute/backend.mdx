@@ -53,32 +53,54 @@ default bridge, so they don't reach the containers of other runs or other caller
 of a service are its caller's: the server puts a scope of the caller and the source in front of
 each name (`pg-data` becomes `hammerkit-ref-<hash>-pg-data`), so a build file can't open, or
 with `resetOnChange` remove, the data of somebody else's services. A volume named like a path
-is refused, since docker would mount that path of the host.
+is refused, since docker would mount that path of the host. The outputs a service gets from
+the tasks it depends on keep their names, which come from the run's own files. Nothing removes
+the scoped volumes, and volumes of a server from before the scope are no run's any more: both
+are listed by `docker volume ls --filter label=app=hammerkit`.
+
+Each running run takes one Docker network, and each limited task or service one more, out of
+the daemon's address pools, which hold about 30 by default. A server with many runs at a time
+needs larger pools (`default-address-pools` in `daemon.json`). A daemon that runs Windows
+containers has no such networks: there the open containers of all runs stay on its default
+network, so it doesn't keep runs apart.
 
 What lies beyond the host is not hammerkit's to block on Docker: an open container reaches the
 LAN, the host's own services through the gateway of its network and the cloud's metadata
 address (`169.254.169.254`), which hands out the machine's credentials. So `open` means the
 internet only once the host's firewall says so. On a host that runs nothing but the server,
 rules like these do it (the run networks are `br-*` bridges, the egress proxies of `allow`
-items are on `docker0`); test them with an open task
-that has to fail `wget -T 3 http://169.254.169.254/` and still resolve names:
+items are on `docker0`). They need Docker's `iptables` firewall backend, which has the
+`DOCKER-USER` chain (not `firewall-backend: nftables`), and a daemon with IPv6 off, its
+default; with IPv6 on, the same rules are needed in `ip6tables` for `fe80::/10`, `fc00::/7`
+and `fd00:ec2::/32`. The script can run again, replacing what it set; run it from a systemd
+unit after `docker.service` so the rules come back after a reboot. Test them with an open
+task that has to fail `wget -T 3 http://169.254.169.254/` and still resolve names:
 
 ```sh title="firewall of the server's host"
-iptables -N HAMMERKIT-RUNS
+# the resolvers the containers use, the only private addresses they reach on port 53
+RESOLVERS=$(awk '/^nameserver/ { print $2 }' /etc/resolv.conf | grep -v '^127\.')
+iptables -N HAMMERKIT-RUNS 2>/dev/null || iptables -F HAMMERKIT-RUNS
 iptables -A HAMMERKIT-RUNS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-iptables -A HAMMERKIT-RUNS -p udp --dport 53 -j RETURN   # DNS, which a cloud serves on a private or link-local address
-iptables -A HAMMERKIT-RUNS -p tcp --dport 53 -j RETURN
+for resolver in $RESOLVERS; do
+  iptables -A HAMMERKIT-RUNS -d "$resolver" -p udp --dport 53 -j RETURN
+  iptables -A HAMMERKIT-RUNS -d "$resolver" -p tcp --dport 53 -j RETURN
+done
 iptables -A HAMMERKIT-RUNS -d 10.20.0.15 -j RETURN       # an internal registry runs may reach anyway
 for range in 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10; do
   iptables -A HAMMERKIT-RUNS -d "$range" -j DROP
 done
 # leaving a network of containers for anywhere else; Docker keeps the networks apart itself
 for bridge in 'br-+' docker0; do
-  iptables -I DOCKER-USER -i "$bridge" ! -o "$bridge" -j HAMMERKIT-RUNS
+  iptables -C DOCKER-USER -i "$bridge" ! -o "$bridge" -j HAMMERKIT-RUNS 2>/dev/null ||
+    iptables -I DOCKER-USER -i "$bridge" ! -o "$bridge" -j HAMMERKIT-RUNS
   # the host itself, through the gateway of the network
-  iptables -I INPUT -i "$bridge" -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+  iptables -C INPUT -i "$bridge" -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP 2>/dev/null ||
+    iptables -I INPUT -i "$bridge" -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
 done
 ```
+
+A host whose `/etc/resolv.conf` names only `127.0.0.53` (systemd-resolved) gives containers
+the upstream resolvers instead; list those in `RESOLVERS` (`resolvectl dns`).
 
 On a cluster every task is a pod of its own in the caller's namespace, without a token of the
 cluster. The boundary is the container, the namespace and the network policies the server puts
