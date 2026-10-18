@@ -589,6 +589,7 @@ describe('server config policy', () => {
         runRole: 'hammerkit-runs',
         deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32'],
         volumeSize: '1Gi',
+        keepVolumes: '15m',
         sandboxes: {
           image: `no0dles/hammerkit:${getVersion()}`,
           size: '4Gi',
@@ -606,6 +607,16 @@ describe('server config policy', () => {
         'a claim of 5Gi is more than maxVolumeSize of 2Gi'
       )
       expect(message(kubernetes({ volumeSize: 'big' }))).toBe('expected a size like 500Mi, 20Gi or 1Ti')
+    })
+
+    it('keeps the claims of tasks for a while, or not at all', () => {
+      const kept = (keepVolumes: unknown) => {
+        const result = kubernetes({ keepVolumes })
+        return result.success ? (result.data.backend as KubernetesBackend).keepVolumes : message(result)
+      }
+      expect(kept('1h')).toBe('1h')
+      expect(kept(false)).toBe(false)
+      expect(kept('0s')).toBe('expected a duration like 30m, 1h or 1d')
     })
 
     it('keeps sandboxes on a class of their own and within the limits of a caller', () => {

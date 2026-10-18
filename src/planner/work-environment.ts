@@ -42,6 +42,10 @@ export interface WorkKubernetesServer {
   accounts: { [account: string]: { serviceAccount?: string; audience?: string; secret?: string } }
   // set when the run works on a sandbox: its files are a claim the tasks mount
   workspace?: WorkKubernetesWorkspace
+  // set when the claims of tasks stay after the run (`backend.keepVolumes`): the trust of
+  // the run's source, which a kept claim is named and labelled by, so only a run of the
+  // same source mounts it again
+  volumeScope?: string
 }
 
 // The claim of a sandbox in place of the run's directory `root`: a source or mount below

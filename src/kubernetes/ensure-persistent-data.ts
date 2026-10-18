@@ -81,7 +81,14 @@ export async function getPodForPersistence(
   // function directly, and a claim shared with another work item can be removed
   // concurrently — without this the pod would hang Pending on "pvc not found".
   for (const volume of persistence.volumes) {
-    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service, persistence.sizes[volume.name])
+    await ensureKubernetesPersistentVolumeClaimExists(
+      instance,
+      env,
+      volume,
+      service,
+      persistence.sizes[volume.name],
+      persistence.kept.includes(volume.name)
+    )
   }
 
   const name = getResourceName(service, type === 'write' ? '-upload' : '-download')
@@ -139,12 +146,48 @@ export async function getPodForPersistence(
   }
 }
 
+// Empties the claim of `work` in an upload pod: a kept claim an earlier run left, before
+// the task runs on it or outputs are restored into it, so it holds what a new one would
+export async function clearClaim(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  work: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  pod: string
+): Promise<void> {
+  const targetPath = `/dev/hammerkit/${work.id()}`
+  work.status.console('stdout', `clear what an earlier run left in ${targetPath}`)
+  let failure: string | null = null
+  const res = await instance.exec.exec(
+    env.namespace,
+    pod,
+    'volume',
+    ['find', targetPath, '-mindepth', '1', '-maxdepth', '1', '-exec', 'rm', '-rf', '{}', '+'],
+    process.stdout,
+    process.stderr,
+    null,
+    false,
+    (status) => {
+      if (status.status !== 'Success') {
+        failure = status.message ?? status.reason ?? 'unknown'
+      }
+    }
+  )
+  await new Promise<void>((resolve, reject) => {
+    res.on('error', reject)
+    res.on('close', () =>
+      failure ? reject(new Error(`unable to clear ${targetPath} in ${pod}: ${failure}`)) : resolve()
+    )
+  })
+}
+
 export async function ensurePersistentData(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   environment: Environment,
   service: WorkItem<ContainerWorkService | ContainerWorkTask>,
-  persistence: KubernetesPersistence
+  persistence: KubernetesPersistence,
+  // the kept claim of the work holds what an earlier run left, which goes first
+  options: { reset?: boolean } = {}
 ) {
   // what a run of a server uploads comes from its checkout and nowhere else
   if (environment.hosted) {
@@ -156,15 +199,25 @@ export async function ensurePersistentData(
   // post-1.6.0, tracked in FOLLOWUPS.md alongside the volumes.ts stateKey/matcher.
 
   for (const volume of persistence.volumes) {
-    await ensureKubernetesPersistentVolumeClaimExists(instance, env, volume, service, persistence.sizes[volume.name])
+    await ensureKubernetesPersistentVolumeClaimExists(
+      instance,
+      env,
+      volume,
+      service,
+      persistence.sizes[volume.name],
+      persistence.kept.includes(volume.name)
+    )
   }
 
-  if (persistence.sources.length === 0) {
+  if (persistence.sources.length === 0 && !options.reset) {
     return
   }
 
   service.status.console('stdout', 'start upload container')
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
+    if (options.reset) {
+      await clearClaim(instance, env, service, name)
+    }
     for (const source of persistence.sources) {
       // skip sources that don't exist on disk — nothing to upload
       if (!(await environment.file.exists(source.localPath))) {

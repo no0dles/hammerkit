@@ -264,6 +264,8 @@ tasks:
 describe('kubernetes backend of a server', () => {
   let root: string
   let executor: KubernetesExecutor
+  let config: ServerConfig
+  let executorOptions: ConstructorParameters<typeof KubernetesExecutor>[2]
   let store: DefinitionStore
   let commit: string
 
@@ -370,7 +372,7 @@ describe('kubernetes backend of a server', () => {
       git(repository, 'commit', '--quiet', '-m', 'one')
       commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
 
-      const config: ServerConfig = serverConfigSchema.parse({
+      config = serverConfigSchema.parse({
         issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
         runs: { env: { allow: HOST_ENV_ALLOW } },
         runtimes: ['docker', 'local'],
@@ -393,6 +395,8 @@ describe('kubernetes backend of a server', () => {
           providers: { files: { image: 'alpine:3.19' } },
           quota: { pods: 20 },
           defaultResources: { requests: { cpu: '10m', memory: '16Mi' } },
+          // the claims of a run go with it, so the next run restores from the cache
+          keepVolumes: false,
         },
       })
       const planning: PlanContext = {
@@ -404,14 +408,15 @@ describe('kubernetes backend of a server', () => {
         policy: { envs: config.runs.env.allow, runtimes: config.runtimes, backend: 'kubernetes' },
       }
       store = new DefinitionStore(join(root, 'definitions'), planning.environment, { policy: planning.policy })
-      executor = new KubernetesExecutor(config as ServerConfig & { backend: any }, process.env, {
+      executorOptions = {
         definitions: store,
         planning,
         repos: new RepoAccess(config, planning.environment, { url: () => repository }),
         directory: join(root, 'runs'),
         cache: join(root, 'cache'),
         worker: TEST_WORKER,
-      })
+      }
+      executor = new KubernetesExecutor(config as ServerConfig & { backend: any }, process.env, executorOptions)
     })
   )
 
@@ -508,6 +513,74 @@ describe('kubernetes backend of a server', () => {
       expect(taskStates(second.events, 'build')).not.toContain('succeeded')
       expect(second.text).toContain('read hello from the checkout')
       expect(await left('run_k8s_two_')).toEqual([])
+    })
+  )
+
+  it(
+    'keeps the claims of tasks for the next runs of the repository, empties them on a change and removes them once expired',
+    requiresKubernetes(async () => {
+      const keep = { ...config, backend: { ...config.backend, keepVolumes: '30s' } }
+      executor = new KubernetesExecutor(keep as ServerConfig & { backend: any }, process.env, executorOptions)
+      const hash = await publish(`
+tasks:
+  install:
+    image: alpine:3.19
+    src: [input.txt]
+    generates: [out]
+    cmds:
+      - mkdir -p out && cp input.txt "out/$(md5sum input.txt | cut -c1-8)" && date +%s%N > out/stamp
+  check:
+    image: alpine:3.19
+    deps: [install]
+    cmds:
+      - echo "stamp=$(cat out/stamp) files=$(ls out | wc -l)"
+`)
+      const { core } = cluster()
+      const keptClaims = async () =>
+        (
+          await core.listNamespacedPersistentVolumeClaim({
+            namespace: callerNamespace,
+            labelSelector: 'hammerkit.dev/volume-scope',
+          })
+        ).items.filter((claim) => !claim.metadata?.deletionTimestamp)
+      const stamp = (text: string) => /stamp=(\d+) files=(\d+)/.exec(text)?.slice(1)
+
+      const first = await execute('run_k8s_keep_1', hash, { tasks: ['check'], accounts: [] })
+      expect(first.error, first.all).toBeUndefined()
+      expect(taskStates(first.events, 'install')).toContain('succeeded')
+      const [made, count] = stamp(first.text) ?? []
+      expect(count).toBe('2')
+      // the claim of install stays, with the state of its outputs, and nothing else of the run
+      const claims = await keptClaims()
+      expect(claims.map((claim) => claim.metadata?.name)).toEqual([expect.stringMatching(/^hammerkit-[0-9a-f]{40}-/)])
+      expect(claims[0].metadata?.labels?.['hammerkit.dev/run']).toBeUndefined()
+      expect(Object.keys(claims[0].metadata?.annotations ?? {})).toEqual(
+        expect.arrayContaining(['hammerkit.dev/state', 'hammerkit.dev/expires'])
+      )
+      expect(await left('run_k8s_keep_1')).toEqual([])
+
+      // without the cache, the next run mounts the outputs in the kept claim as they are
+      rmSync(join(root, 'cache'), { recursive: true, force: true })
+      const second = await execute('run_k8s_keep_2', hash, { tasks: ['check'], accounts: [] })
+      expect(second.error, second.all).toBeUndefined()
+      expect(second.events).toContainEqual(expect.objectContaining({ type: 'task', task: 'install', state: 'cached' }))
+      expect(taskStates(second.events, 'install')).not.toContain('succeeded')
+      expect(stamp(second.text)).toEqual([made, '2'])
+
+      // a change runs install on an emptied claim: the output of the input before is gone
+      const repository = join(root, 'repository')
+      writeFileSync(join(repository, 'input.txt'), 'changed')
+      git(repository, 'commit', '--quiet', '-am', 'two')
+      commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+      const third = await execute('run_k8s_keep_3', hash, { tasks: ['check'], accounts: [] })
+      expect(third.error, third.all).toBeUndefined()
+      expect(taskStates(third.events, 'install')).toContain('succeeded')
+      const [remade, files] = stamp(third.text) ?? []
+      expect(remade).not.toBe(made)
+      expect(files).toBe('2')
+
+      // once it expired, the server removes it
+      await until(async () => (await keptClaims()).length === 0, 120_000, 'the kept claim is still there')
     })
   )
 

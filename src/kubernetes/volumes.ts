@@ -5,6 +5,7 @@ import { V1Affinity, V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
 import { WorkItem } from '../planner/work-item'
+import { getClaimName, isKeptClaim } from './kept-claims'
 
 export interface KubernetesPersistence {
   // the claims of the work and of what it inherits
@@ -12,6 +13,8 @@ export interface KubernetesPersistence {
   // the `volumeSize` of the work each claim of `volumes` belongs to, null for the
   // environment's
   sizes: { [claim: string]: string | null }
+  // the claims of `volumes` that stay after the run (see isKeptClaim)
+  kept: string[]
   // the claim of a sandbox the run works on, which is not the run's
   workspace: V1Volume[]
   // `workspace` for a mount of the sandbox's claim: nothing is uploaded to it, and only
@@ -28,8 +31,11 @@ export interface KubernetesPersistenceSource {
   matcher: (fileName: string, cwd: string) => boolean
 }
 
-export function getVolumeName(service: WorkItem<WorkService | WorkTask>) {
-  return 'hammerkit-' + service.id()
+export function getVolumeName(
+  service: WorkItem<WorkService | WorkTask>,
+  kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
+) {
+  return getClaimName(service, kubernetes)
 }
 
 const WORKSPACE_VOLUME = 'hammerkit-sandbox'
@@ -81,6 +87,7 @@ export async function getKubernetesPersistence(
   const persistence: KubernetesPersistence = {
     volumes: [],
     sizes: {},
+    kept: [],
     workspace: [],
     sources: [],
     mounts: [],
@@ -95,7 +102,7 @@ export async function getKubernetesPersistence(
     ) {
       continue
     }
-    appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true)
+    appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true, kubernetes)
   }
 
   for (const src of work.data.src) {
@@ -108,12 +115,20 @@ export async function getKubernetesPersistence(
     ) {
       continue
     }
-    appendVolume(work, persistence, src.absolutePath, src.absolutePath, src.isFile, true) // TODO matcher
+    appendVolume(work, persistence, src.absolutePath, src.absolutePath, src.isFile, true, kubernetes) // TODO matcher
   }
 
   if (work.data.type === 'container-task') {
     for (const generate of work.data.generates) {
-      appendVolume(generate.inherited ?? work, persistence, generate.path, null, false, !!generate.inherited)
+      appendVolume(
+        generate.inherited ?? work,
+        persistence,
+        generate.path,
+        null,
+        false,
+        !!generate.inherited,
+        kubernetes
+      )
     }
   } else {
     for (const volume of work.data.volumes) {
@@ -123,7 +138,8 @@ export async function getKubernetesPersistence(
         volume.containerPath,
         null,
         false,
-        !!volume.inherited || volume.readOnly
+        !!volume.inherited || volume.readOnly,
+        kubernetes
       )
     }
   }
@@ -137,9 +153,10 @@ export function appendVolume(
   containerPath: string,
   localPath: string | null,
   isFile: boolean,
-  readOnly: boolean
+  readOnly: boolean,
+  kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
 ): void {
-  const volumeName = getVolumeName(sourceWork)
+  const volumeName = getVolumeName(sourceWork, kubernetes)
 
   const existVolume = persistence.volumes.some((v) => v.name === volumeName)
   if (!existVolume) {
@@ -150,6 +167,9 @@ export function appendVolume(
       },
     })
     persistence.sizes[volumeName] = 'volumeSize' in sourceWork.data ? sourceWork.data.volumeSize : null
+    if (kubernetes && isKeptClaim(sourceWork, kubernetes)) {
+      persistence.kept.push(volumeName)
+    }
   }
 
   persistence.mounts.push({

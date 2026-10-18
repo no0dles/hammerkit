@@ -77,7 +77,9 @@ On Kubernetes each container task and service gets one `PersistentVolumeClaim`
 (`ReadWriteOnce`, the cluster's default storage class). It holds the files of its `src`
 and `mounts`, uploaded before it starts, and what it `generates`, which the tasks that
 depend on it mount from there. It stays until `hammerkit clean`, so the next run finds the
-outputs it already made.
+outputs it already made. On a server, the claim of a task stays for a while after the run,
+for the next run of the same source, see
+[Kept claims](/docs/remote-compute/backend#kept-claims).
 
 The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
 (an `npm ci`, a build of many images) states its own:

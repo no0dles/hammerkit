@@ -52,6 +52,16 @@ describe('getKubernetesPersistence for a container task', () => {
       'hammerkit-gen-1': '5Gi',
     })
 
+    // on a server that keeps them, the claims of tasks are named by the run's scope and stay
+    expect(persistence.kept).toEqual([])
+    ;(generator.data as any).type = 'container-task'
+    const server = { server: { volumeScope: 'ref-1' } } as any
+    const kept = await getKubernetesPersistence(work, server)
+    const names = [getVolumeName(work, server), getVolumeName(generator, server)]
+    expect(names.every((name, i) => name.startsWith(i === 0 ? 'hammerkit-task-1-' : 'hammerkit-gen-1-'))).toBe(true)
+    expect(kept.volumes.map((v) => v.persistentVolumeClaim?.claimName)).toEqual(names)
+    expect(kept.kept).toEqual(names)
+
     expect(persistence.volumes).toEqual([
       {
         name: 'hammerkit-task-1',
@@ -260,7 +270,7 @@ describe('getKubernetesPersistence for a container service', () => {
 describe('appendVolume', () => {
   it('dedupes the volume but pushes one mount per call', () => {
     const sourceWork = makeWorkItem('w1', {} as WorkTask)
-    const persistence = { volumes: [], sizes: {}, workspace: [], sources: [], mounts: [], initCommands: [] }
+    const persistence = { volumes: [], sizes: {}, kept: [], workspace: [], sources: [], mounts: [], initCommands: [] }
 
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)
     appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)

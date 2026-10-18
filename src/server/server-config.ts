@@ -252,6 +252,10 @@ const kubernetesBackendSchema = z
     // the most one may state (none when left out: the namespace's quota bounds them)
     volumeSize: size.default('1Gi'),
     maxVolumeSize: size.optional(),
+    // how long the claim of a task stays after the run that mounted it last, for the next
+    // run of the same source to mount its outputs as they are; false removes it at the end
+    // of the run
+    keepVolumes: z.union([duration, z.literal(false)]).default('15m'),
     pools: z
       .array(kubernetesPoolSchema)
       .min(1)

@@ -3,6 +3,8 @@ import {
   getClaimSize,
 } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { getRunLabelValue } from './job-placement'
+import { EXPIRES_ANNOTATION, KEPT_BY_LABEL, VOLUME_SCOPE_LABEL } from './kept-claims'
 
 const env = {
   type: 'kubernetes',
@@ -83,5 +85,116 @@ describe('the claim of a task', () => {
       'the claim hammerkit-install has 1Gi and install needs 5Gi, which its storage class could not grow it to ' +
         '(only dynamically provisioned pvc can be resized): remove it with hammerkit clean and run again'
     )
+  })
+})
+
+describe('the kept claim of a task', () => {
+  const server = {
+    ...env,
+    server: { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {}, volumeScope: 'ref-1' },
+  } as WorkKubernetesEnvironment
+  const runLabel = getRunLabelValue('run_1')
+
+  function keptCluster(existing: any, options: { quotaFull?: boolean } = {}) {
+    let claim = existing
+    let quotaFull = !!options.quotaFull
+    const calls: string[] = []
+    const notFound = () => Object.assign(new Error('not found'), { code: 404 })
+    const other = { metadata: { name: 'hammerkit-other', labels: { [VOLUME_SCOPE_LABEL]: 'sandbox-1' } } }
+    let others = [other]
+    const instance = {
+      objectApi: {
+        read: async () => claim ?? Promise.reject(notFound()),
+        create: async (spec: any) => {
+          if (quotaFull) {
+            throw Object.assign(new Error('persistentvolumeclaims "x" is forbidden: exceeded quota: hammerkit'), {
+              code: 403,
+            })
+          }
+          calls.push(`create ${JSON.stringify(spec.metadata.labels)}`)
+          claim = spec
+          return spec
+        },
+        patch: async (spec: any) => {
+          calls.push(`patch ${JSON.stringify(spec.metadata)}`)
+          claim = {
+            ...claim,
+            metadata: { ...claim.metadata, labels: { ...claim.metadata.labels, ...spec.metadata.labels } },
+          }
+          return claim
+        },
+      },
+      coreApi: {
+        listNamespacedPersistentVolumeClaim: async () => ({ items: others }),
+        deleteNamespacedPersistentVolumeClaim: async ({ name }: any) => {
+          calls.push(`delete ${name}`)
+          others = []
+          quotaFull = false
+        },
+        readNamespacedPersistentVolumeClaim: async () => Promise.reject(notFound()),
+      },
+    } as any
+    return { instance, calls }
+  }
+
+  it('carries the scope and the run that mounts it, not the run label', async () => {
+    const { instance, calls } = keptCluster(null)
+    await ensureKubernetesPersistentVolumeClaimExists(instance, server, volume, install, null, true)
+    expect(calls).toEqual([
+      `create ${JSON.stringify({
+        'hammerkit.dev/id': 'install',
+        [VOLUME_SCOPE_LABEL]: 'ref-1',
+        [KEPT_BY_LABEL]: runLabel,
+      })}`,
+    ])
+    // one that is not kept, a service's, is the run's
+    const run = keptCluster(null)
+    await ensureKubernetesPersistentVolumeClaimExists(run.instance, server, volume, install, null)
+    expect(run.calls).toEqual([
+      `create ${JSON.stringify({ 'hammerkit.dev/id': 'install', 'hammerkit.dev/run': runLabel })}`,
+    ])
+  })
+
+  it('does not expire while a run mounts it again', async () => {
+    const { instance, calls } = keptCluster({
+      metadata: {
+        name: volume.name,
+        labels: { [VOLUME_SCOPE_LABEL]: 'ref-1', [KEPT_BY_LABEL]: 'earlier' },
+        annotations: { [EXPIRES_ANNOTATION]: '2026-10-18T12:00:00Z' },
+      },
+      spec: { resources: { requests: { storage: '1Gi' } } },
+    })
+    await ensureKubernetesPersistentVolumeClaimExists(instance, server, volume, install, null, true)
+    expect(calls).toEqual([
+      `patch ${JSON.stringify({
+        name: volume.name,
+        namespace: 'ns',
+        labels: { [KEPT_BY_LABEL]: runLabel },
+        annotations: { [EXPIRES_ANNOTATION]: null },
+      })}`,
+    ])
+  })
+
+  it('is never one another source kept', async () => {
+    const { instance } = keptCluster({
+      metadata: { name: volume.name, labels: { [VOLUME_SCOPE_LABEL]: 'sandbox-1', [KEPT_BY_LABEL]: 'earlier' } },
+      spec: { resources: { requests: { storage: '1Gi' } } },
+    })
+    await expect(
+      ensureKubernetesPersistentVolumeClaimExists(instance, server, volume, install, null, true)
+    ).rejects.toThrow(`the claim ${volume.name} is not one this run may mount, it was made for another source`)
+  })
+
+  it('makes room under the quota with the kept claims of other sources', async () => {
+    const { instance, calls } = keptCluster(null, { quotaFull: true })
+    await ensureKubernetesPersistentVolumeClaimExists(instance, server, volume, install, null, true)
+    expect(calls).toEqual([
+      'delete hammerkit-other',
+      `create ${JSON.stringify({
+        'hammerkit.dev/id': 'install',
+        [VOLUME_SCOPE_LABEL]: 'ref-1',
+        [KEPT_BY_LABEL]: runLabel,
+      })}`,
+    ])
   })
 })
