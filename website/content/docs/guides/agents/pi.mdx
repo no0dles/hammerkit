@@ -1,21 +1,166 @@
 ---
-title: 'pi'
-description: "Run the pi coding agent on a hammerkit sandbox: install the extension, sign in as the agent's service account, and push the work to a branch."
+title: 'pi on a sandbox'
+description: 'Step by step: set up the pi coding agent for an existing project so that it reads, edits and runs everything on a sandbox of a hammerkit server, and hands its work back as a branch.'
 icon: Terminal
 ---
 
-[pi](https://pi.dev) keeps its own tools (`read`, `write`, `edit`, `bash`, `ls`, `find` and
-`grep`) and hammerkit's extension moves them onto a sandbox of the server, with a `push` tool
-on top. This guide was run as written with pi 1.2.0 against the server of
+<Callout type="warn">
+
+Experimental. The tools and settings can still change between releases.
+
+</Callout>
+
+At the end of this tutorial you start [pi](https://pi.dev) on your machine, give it a task
+for your project, and it works on a copy of your repository on a hammerkit server. Your own
+checkout stays untouched: pi never reads or writes a file on your machine and never runs a
+command there. When it is done, its work shows up as a branch in your repository, ready for
+a pull request.
+
+This page was run as written with pi 1.2.0 against the server of
 [Server on Kubernetes](/docs/guides/agents/kubernetes).
 
-You need a server with a published build file and an identity for the agent, see
-[Agents on a server](/docs/guides/agents).
+## How it fits together
 
-## 1. Install pi and the extension
+Four pieces work together. You set up the last three in this tutorial.
 
-hammerkit is a [pi package](https://pi.dev/packages): installing it adds the extension to
-every pi session of your user.
+- **The server** keeps a **sandbox** for the agent: a checkout of your repository at a branch,
+  for example `main`. Every file pi reads or edits is a file of the sandbox.
+- **Your build file** has a **shell task**. Every command pi runs, such as `npm test`, is
+  handed to that task as its argument and runs on the server, in the task's image. The build
+  file is **published** to the server once; the server answers with a hash that names exactly
+  that version.
+- **The agent's identity** is a service account, not you. pi signs in to the server as that
+  account, and the server only lets it start sandboxes from `main` and push to `agent/…`
+  branches.
+- **pi** runs on your machine and talks to the language model as usual. hammerkit's pi
+  extension swaps pi's tools (`read`, `write`, `edit`, `bash`, `ls`, `find`, `grep`) for ones
+  that work on the sandbox, and adds a `push` tool.
+
+## Before you start
+
+<Steps>
+<Step>
+
+**A hammerkit server that knows your repository.** If you do not have one yet, follow
+[Server on Kubernetes](/docs/guides/agents/kubernetes) first; it sets up everything this page
+needs on the server side. Otherwise ask whoever runs the server for:
+
+- its address and the **issuer** of the tokens it accepts, for example
+  `https://accounts.google.com`;
+- a service account for the agent, with an [entitlement](/docs/remote-compute/entitlements)
+  like this one in the server's config:
+
+  ```yaml title="server.yaml"
+  entitlements:
+    - subject: { iss: https://accounts.google.com, sub: '<id of the agent account>' }
+      repos: [github.com/acme/shop]
+      builds: run # may run tasks of published build files
+      sandboxes:
+        - repo: github.com/acme/shop
+          branches: { main: pull, 'agent/**': push } # start from main, push to agent/…
+  ```
+
+- an identity that may **publish** build files (`builds: publish`), for step 3. That can be
+  you, or a second service account as in the Kubernetes guide.
+
+</Step>
+<Step>
+
+**Node.js 22 or later** on your machine, for pi and the hammerkit CLI.
+
+</Step>
+<Step>
+
+**An API key of a model provider** that pi supports. The examples use OpenRouter.
+
+</Step>
+</Steps>
+
+The examples below use the repository `github.com/acme/shop`, a server registered as
+`hammerkit`, and Google service accounts. Replace them with yours.
+
+## 1. Install the hammerkit CLI
+
+```bash
+npm install -g hammerkit
+hammerkit --version
+```
+
+Use the same version as the server. The CLI registers the server in step 2 and publishes the
+build file in step 3; pi's extension in step 4 comes from the same package.
+
+## 2. Register the server on your machine
+
+The CLI keeps a list of servers per user, in `~/.hammerkit/config.yaml`. Add the server
+under a short name of your choice, with the issuer of the tokens it accepts:
+
+```bash
+hammerkit remote add hammerkit http://127.0.0.1:8480 --issuer https://accounts.google.com
+```
+
+`hammerkit` is the name you use from now on. The address here is the
+`kubectl port-forward` of the Kubernetes guide, which has to keep running while pi works.
+Plain `http` is only accepted for `127.0.0.1` and `localhost`; a server on any other address
+needs `https`.
+
+Register it as the same user that starts pi later: pi's extension reads this list.
+
+## 3. Add a shell task to your project and publish it
+
+Open your project's `.hammerkit.yaml`, or create one in the root of the repository, and add a
+task for the agent's commands. For a Node.js project:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  sh:
+    image: node:22-alpine
+    mounts: [.]
+    cmds: [sh -c]
+    network: { allow: [registry.npmjs.org] }
+```
+
+Line by line:
+
+- `sh` is the task's name. The extension looks for a task called `sh` unless you set
+  `HAMMERKIT_SHELL`.
+- `image` is the container every command of the agent runs in. Pick one with the tools your
+  project needs: the agent can only run `npm`, `go` or `python` if the image has them.
+- `mounts: [.]` puts the files of the sandbox into the container, writable. Without it, the
+  commands would run in an empty directory.
+- `cmds: [sh -c]` is the trick: the agent's command is appended to the last command as one
+  argument, so `npm test` runs as `sh -c 'npm test'`.
+- `network` lists what the commands may reach. The sandbox is a fresh checkout without
+  `node_modules`, so the agent installs dependencies itself and needs the registry. The
+  server can narrow this further, never widen it.
+
+Leave secrets out of this task: a task that reads a secret takes no arguments on a server.
+Your other tasks, such as `test` or `lint`, stay as they are, and pi can run them too.
+
+If you have Docker, try the task on your machine before you publish it:
+
+```bash
+hammerkit run sh -- 'ls && node --version'
+```
+
+Commit the file, so the next publish starts from the same version. Then publish it from the
+root of your checkout, signed in as the identity that may publish:
+
+```bash
+HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=hammerkit-publisher@my-project.iam.gserviceaccount.com" \
+  hammerkit remote publish hammerkit
+```
+
+```text
+published to hammerkit: sha256:9f2c61d0… (1 file)
+```
+
+Copy the hash, `sha256:` and 64 hex digits: it names this version of the build file, and pi
+uses it in step 5. The server never takes task definitions from the agent itself, so the
+agent can not change what its commands run in. When you change the build file later, publish
+it again and use the new hash; an agent that is already running keeps the old one.
+
+## 4. Install pi and the extension
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent
@@ -23,68 +168,89 @@ pi install npm:hammerkit
 pi list
 ```
 
-`pi list` shows hammerkit under the user packages. Use the hammerkit version of the server.
+`pi install` adds hammerkit as a [pi package](https://pi.dev/packages) for every pi session of
+your user. `pi list` shows it under the user packages.
 
-## 2. Register the server
+## 5. Tell the extension where to work
 
-As the user that starts pi, once:
+The extension reads its settings from environment variables. Put them in a file, so every
+session starts the same way:
 
-```bash
-npx hammerkit remote add hammerkit http://127.0.0.1:8480 --issuer https://accounts.google.com
+```bash title="agent.env"
+export HAMMERKIT_SERVER=hammerkit                   # the name from step 2
+export HAMMERKIT_REPO=github.com/acme/shop          # the repository of the sandbox
+export HAMMERKIT_REF=main                           # the branch the sandbox starts from
+export HAMMERKIT_BUILD=sha256:9f2c61d0…             # the hash from step 3
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
+export OPENROUTER_API_KEY=…                         # for the model, not for hammerkit
 ```
 
-The address is the `kubectl port-forward` of the [Kubernetes guide](/docs/guides/agents/kubernetes#3-connect-and-publish),
-which must keep running while pi works. Plain http is accepted only for `127.0.0.1` and
-`localhost`; any other address needs https.
+`HAMMERKIT_TOKEN_COMMAND` is how pi signs in as the agent: a command that prints a
+short-lived token of the agent's service account. The extension runs it again whenever the
+server stops accepting the token, so a long session needs no new sign-in. With Google, the
+command above works when your own account has `roles/iam.serviceAccountTokenCreator` on the
+agent's service account. With another identity provider, use any command that prints a token
+of the agent's account.
 
-## 3. Start pi on a sandbox
+## 6. Start pi and check where it works
 
-Start pi in an empty directory: it stands for the root of the sandbox, and nothing in it is
-read or changed. The variables name the server, the repository and branch to start from, the
-published version of the build file and how to get the agent's token:
+Start pi in a new, empty directory. pi treats its working directory as the root of the
+sandbox, so this directory only stands in for it: nothing in it is read or changed.
 
 ```bash
 mkdir shop-agent && cd shop-agent
-export HAMMERKIT_SERVER=hammerkit
-export HAMMERKIT_REPO=github.com/acme/shop HAMMERKIT_REF=main
-export HAMMERKIT_BUILD=sha256:9f2c…    # the hash hammerkit remote publish printed
-export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
-  --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
-export OPENROUTER_API_KEY=…    # or the key of any provider pi supports
+source ../agent.env
 pi --provider openrouter --model anthropic/claude-haiku-5.5
 ```
 
-On its first tool call the extension takes a sandbox of the agent at `main` that has no
-changes, or creates one, and every tool works on it from then on. Ask pi to list the files:
-it lists the repository's, not the empty directory's.
+Ask pi first: "List the files of the project." The answer has to show your repository's
+files, not an empty directory. On this first tool call the extension signs in, takes a
+sandbox of the agent at `main` that has no changes (or creates one) and shows its id, for
+example `sbx_4vJ0mT2cX9qLw1aB`. Every tool works on that sandbox from then on.
 
-## 4. Push the work
+A sandbox stays on the server until it is deleted, with whatever pi changed in it. To come
+back to unfinished work in a later session, add `export HAMMERKIT_SANDBOX=<id>` to
+`agent.env`; without it, pi starts from a clean checkout of `main` again.
 
-Ask pi to push when it is done, for example "run the tests and push the fix to
-`agent/fix-cart`". Its `push` tool commits the changes of the sandbox as the agent's identity
-and the server pushes them with its GitHub App. A branch outside the agent's `push` patterns
-is refused with the ones it may push to.
+## 7. Give it work and get it back
+
+Give pi a task the way you would in your own checkout, and tell it where to push, for example:
+
+> The cart total skips the last item. Fix it, run the tests and push the fix to
+> `agent/fix-cart`.
+
+pi edits the files of the sandbox, runs `npm ci` and `npm test` as the shell task on the
+server, and finally calls `push`. The server commits the changes as the agent and pushes
+them with its own GitHub credentials. Only branches the entitlement allows are accepted, here
+`agent/…`; for any other branch, pi is told which ones it may push to.
+
+The branch now shows up in your repository. Open a pull request from it and review it like
+any other.
 
 ## Without a terminal
 
-`-p` runs one prompt and exits. pi waits for input on stdin, so close it when nothing feeds
-it, for example in CI:
+`-p` runs one prompt and exits, for example in CI. pi waits for input on stdin, so close it
+when nothing feeds it:
 
 ```bash
 pi --provider openrouter --model anthropic/claude-haiku-5.5 --no-session \
-  -p "The cart total skips an item. Fix it, run the tests and push to agent/fix-cart." < /dev/null
+  -p "The cart total skips the last item. Fix it, run the tests and push to agent/fix-cart." < /dev/null
 ```
 
 `--mode json` prints every tool call and result as a line of JSON.
 
 ## When it does not work
 
-| What you see                                                                                            | What it means                                                                                                               |
-| ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `server hammerkit is not registered`                                                                    | Step 2 was run as another user, or with another name than `HAMMERKIT_SERVER`.                                               |
-| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | A company or private CA goes in `NODE_EXTRA_CA_CERTS`, which takes one file.                                                |
-| `unable to reach https://…: fetch failed: connect ECONNREFUSED …`                                       | Nothing listens at the server's URL, for example `kubectl port-forward` has stopped.                                        |
-| `you are not entitled to keep sandboxes on this server`                                                 | The entitlement of the token's identity has no `sandboxes`: check that the token command names the agent's service account. |
-| The shell task needs `mounts: [.]`                                                                      | The build file's shell task does not mount the sandbox, see [The build file](/docs/guides/agents#the-build-file).           |
+| What you see                                                                                            | What it means                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| pi lists an empty directory, or files of your machine                                                   | The extension is not loaded: check `pi list`.                                                                                         |
+| `server hammerkit is not registered`                                                                    | Step 2 was run as another user, or `HAMMERKIT_SERVER` names another server.                                                           |
+| `… is not the hash of a published version`                                                              | `HAMMERKIT_BUILD` holds a name or a shortened hash. Use the full hash that step 3 printed.                                            |
+| `unable to reach http://…: fetch failed: connect ECONNREFUSED …`                                        | Nothing listens at the server's address, for example `kubectl port-forward` has stopped.                                              |
+| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | The server's certificate comes from a company or private CA: name that CA's file in `NODE_EXTRA_CA_CERTS`, which takes one file.      |
+| `you are not entitled to keep sandboxes on this server`                                                 | The token is not the agent's, or its entitlement has no `sandboxes`: check the account in `HAMMERKIT_TOKEN_COMMAND`.                  |
+| The shell task needs `mounts: [.]`                                                                      | The shell task does not mount the sandbox: add `mounts: [.]` (step 3), publish again and set the new hash.                            |
+| `npm: not found`, or a download that times out                                                          | The shell task's image lacks the tool, or its `network` does not allow the host. Change the task, publish again and set the new hash. |
 
-See [Agents](/docs/remote-compute/agents#pi) for what the extension does with each tool.
+See [Agents](/docs/remote-compute/agents#pi) for what the extension does with each of pi's tools.
