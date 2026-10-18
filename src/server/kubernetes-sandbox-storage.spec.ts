@@ -52,6 +52,9 @@ function fakeCluster(root: string) {
   const keyOf = (kind: string, namespace: string, name: string) => `${kind}/${namespace}/${name}`
   const claimDirectory = (namespace: string, claim: string) => join(root, 'claims', namespace, claim)
   const commands: string[][] = []
+  // the deletes of pods, with what goes with them
+  const podDeletes: { name: string; propagationPolicy?: string }[] = []
+  let uids = 0
   let quotaFull = false
   // namespaces the server can not read: those of another server
   const forbidden = new Set<string>()
@@ -75,7 +78,7 @@ function fakeCluster(root: string) {
         }
         const object =
           spec.kind === 'Pod'
-            ? { ...spec, status: { phase: 'Running' } }
+            ? { ...spec, metadata: { ...spec.metadata, uid: `uid-${++uids}` }, status: { phase: 'Running' } }
             : spec.kind === 'PersistentVolumeClaim'
               ? { ...spec, metadata: { ...spec.metadata, creationTimestamp: new Date(created) } }
               : spec
@@ -93,6 +96,23 @@ function fakeCluster(root: string) {
       async delete(spec: any) {
         read(spec.kind, spec.metadata.namespace, spec.metadata.name)
         objects.delete(keyOf(spec.kind, spec.metadata.namespace, spec.metadata.name))
+      },
+    },
+    appsApi: {
+      async listNamespacedDeployment({ namespace, labelSelector }: any) {
+        const terms: string[][] = labelSelector.split(',').map((term: string) => term.split('='))
+        return {
+          items: [...objects.values()].filter(
+            (object) =>
+              object.kind === 'Deployment' &&
+              object.metadata.namespace === namespace &&
+              terms.every(([key, value]) => object.metadata.labels?.[key] === value)
+          ),
+        }
+      },
+      async deleteNamespacedDeployment({ name, namespace }: any) {
+        read('Deployment', namespace, name)
+        objects.delete(keyOf('Deployment', namespace, name))
       },
     },
     authApi: {
@@ -131,9 +151,14 @@ function fakeCluster(root: string) {
           ),
         }
       },
-      async deleteNamespacedPod({ name, namespace }: any) {
+      async deleteNamespacedPod({ name, namespace, propagationPolicy }: any) {
         read('Pod', namespace, name)
+        podDeletes.push({ name, propagationPolicy })
         objects.delete(keyOf('Pod', namespace, name))
+      },
+      async deleteNamespacedService({ name, namespace }: any) {
+        read('Service', namespace, name)
+        objects.delete(keyOf('Service', namespace, name))
       },
       async deleteNamespacedPersistentVolumeClaim({ name, namespace }: any) {
         read('PersistentVolumeClaim', namespace, name)
@@ -233,6 +258,7 @@ function fakeCluster(root: string) {
     instance: instance as unknown as KubernetesInstance,
     objects,
     commands,
+    podDeletes,
     claimDirectory,
     fullQuota: () => (quotaFull = true),
     forbid: (namespace: string) => forbidden.add(namespace),
@@ -484,14 +510,22 @@ describe('sandboxes on a cluster', () => {
     const sandbox = await registry.create(alice, REPO, 'main')
     const names = getSandboxNames(sandbox.id)
     const attached = await registry.attach(sandbox.id, join(root, 'run', 'sandbox'))
+    const pod = `Pod/${namespace}/${names.pod}`
+    // with the pod that holds it, which what stays with the sandbox (a task's egress
+    // proxy) goes with
     expect(attached).toEqual({
       directory: join(root, 'run', 'sandbox'),
-      claim: { name: names.claim, namespace, subPath: 'files', label: names.label },
+      claim: {
+        name: names.claim,
+        namespace,
+        subPath: 'files',
+        label: names.label,
+        pod: { name: names.pod, uid: cluster.objects.get(pod).metadata.uid },
+      },
       release: expect.any(Function),
     })
     expect(readFileSync(join(attached.directory, 'src', 'app.ts'), 'utf8')).toContain('41')
     // the pod of the files stays while the run works, and the run's pods go to its node
-    const pod = `Pod/${namespace}/${names.pod}`
     expect(cluster.objects.get(pod).spec.affinity).toEqual(getSandboxAffinity(names.label))
 
     // a task of the run mounts its sources from the claim, read and write, and goes
@@ -591,6 +625,21 @@ describe('sandboxes on a cluster', () => {
       const names = getSandboxNames(sandbox.id)
       const pod = `Pod/${namespace}/${names.pod}`
       const attached = await registry.attach(sandbox.id, join(root, 'run', 'sandbox'))
+      const uid = cluster.objects.get(pod).metadata.uid
+      // egress proxies of the run's tasks, which the pod owns, and one of a pod after it
+      const proxy = (name: string, owner: string) => {
+        const metadata = {
+          name,
+          namespace,
+          labels: { 'hammerkit.dev/proxy-of-sandbox': names.label },
+          ownerReferences: [{ apiVersion: 'v1', kind: 'Pod', name: names.pod, uid: owner }],
+        }
+        cluster.objects.set(`Deployment/${namespace}/${name}`, { kind: 'Deployment', metadata })
+        cluster.objects.set(`Service/${namespace}/${name}`, { kind: 'Service', metadata })
+        cluster.objects.set(`NetworkPolicy/${namespace}/${name}`, { kind: 'NetworkPolicy', metadata })
+      }
+      proxy('proxy-a', uid)
+      proxy('proxy-b', 'uid-of-a-later-pod')
       const job = (reason: string, since: number) =>
         cluster.objects.set(`Pod/${namespace}/job-1`, {
           kind: 'Pod',
@@ -612,10 +661,19 @@ describe('sandboxes on a cluster', () => {
       job('Unschedulable', Date.now() - 60 * 1000)
       await vi.advanceTimersByTimeAsync(3100)
       expect(cluster.objects.has(pod)).toBe(false)
+      // what it owns stays while the run works: the run's tasks still use their proxies
+      expect(cluster.podDeletes).toEqual([{ name: names.pod, propagationPolicy: 'Orphan' }])
+      expect(cluster.objects.has(`Deployment/${namespace}/proxy-a`)).toBe(true)
       cluster.objects.delete(`Pod/${namespace}/job-1`)
       expect((await registry.files(alice, sandbox.id).read('src/app.ts', {})).content).toContain('41')
       expect(cluster.objects.has(pod)).toBe(true)
       attached.release?.()
+      // and goes with the run; a proxy of a pod after it stays
+      await vi.advanceTimersByTimeAsync(10)
+      for (const kind of ['Deployment', 'Service', 'NetworkPolicy']) {
+        expect(cluster.objects.has(`${kind}/${namespace}/proxy-a`)).toBe(false)
+        expect(cluster.objects.has(`${kind}/${namespace}/proxy-b`)).toBe(true)
+      }
     } finally {
       vi.useRealTimers()
     }

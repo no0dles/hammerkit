@@ -418,7 +418,13 @@ function getWorkspace(root: string, claim: SandboxClaim, namespace: string): Wor
   if (claim.namespace !== namespace) {
     throw new Error(`the sandbox is in ${claim.namespace}, the run in ${namespace}`)
   }
-  return { root, claim: claim.name, subPath: claim.subPath, label: claim.label }
+  return {
+    root,
+    claim: claim.name,
+    subPath: claim.subPath,
+    label: claim.label,
+    ...(claim.pod ? { pod: claim.pod } : {}),
+  }
 }
 
 // Everything a run made in the caller's namespace, by the label selector of the run:

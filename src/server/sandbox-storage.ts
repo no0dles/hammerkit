@@ -54,6 +54,8 @@ export interface SandboxClaim {
   // the pods that mount the claim carry it as `hammerkit.dev/sandbox` and keep to one
   // node: a claim that can be written by one node at a time
   label: string
+  // the pod that holds the claim on its node while the run works (WorkKubernetesWorkspace)
+  pod?: { name: string; uid: string }
 }
 
 // Storage of a sandbox that a list found, with or without a record.
