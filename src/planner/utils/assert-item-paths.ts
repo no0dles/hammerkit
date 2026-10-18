@@ -3,6 +3,7 @@ import { WorkItem } from '../work-item'
 import { isContainerWorkService, WorkService } from '../work-service'
 import { isContainerWorkTask, isWorkTask, WorkTask } from '../work-task'
 import { WorkTree } from '../work-tree'
+import { isVolumeName } from './hosted-volumes'
 
 /**
  * Refuses an item whose sources, outputs or mounts leave the root of a run, or go
@@ -22,6 +23,15 @@ export async function assertItemPathsWithinRoot(item: WorkItem<WorkTask | WorkSe
   if (isContainerWorkTask(data) || isContainerWorkService(data)) {
     for (const mount of data.mounts) {
       await assertWithinRoot(root, mount.localPath, `${item.name}: mount ${mount.localPath}`)
+    }
+  }
+  if (isContainerWorkService(data)) {
+    for (const volume of data.volumes) {
+      if (!isVolumeName(volume.name)) {
+        throw new Error(
+          `${item.name}: volume ${volume.name} is not a volume name, a path of the server can't be mounted`
+        )
+      }
     }
   }
   if (isWorkTask(data)) {

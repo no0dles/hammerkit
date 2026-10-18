@@ -15,7 +15,7 @@ import { applyNetworkCeiling, getEffectiveNetwork } from './work-network'
 import { getItemProxyEnvironment } from '../network/egress-proxy'
 import { buildCreateOptions } from '../executer/docker-task'
 import { buildServiceCreateOptions } from '../executer/docker-service'
-import { getItemNetworkName, prepareItemNetwork } from '../docker/item-network'
+import { getItemNetworkName, getRunNetworkName, prepareItemNetwork } from '../docker/item-network'
 import {
   buildNetworkPolicy,
   buildProxyPolicy,
@@ -298,6 +298,87 @@ describe('network', () => {
           const options = buildCreateOptions(build, 'state', network.options, environment, noSecrets)
           expect(options.HostConfig?.NetworkMode).toBeUndefined()
           expect(options.HostConfig?.Links).toEqual(['db-container:db'])
+        }
+      )
+    })
+
+    it("puts the open items of a server's run on the run's own network, not the default bridge", async () => {
+      await withCli(
+        'network-docker-hosted-open',
+        {
+          services: { db: { image: 'postgres:16' } },
+          tasks: { build: { image: 'node:22', cmds: ['true'], needs: [{ name: 'database', service: 'db' }] } },
+        },
+        async (cli, environment) => {
+          const hosted = { ...environment, hosted: { catalog: {} as any } }
+          const build = cli.task('build') as WorkItem<ContainerWorkTask>
+          runService(cli.service('db') as WorkItem<ContainerWorkService>, 'db-container')
+          const run = getRunNetworkName()
+          const created: string[] = []
+          const removed: string[] = []
+          const docker = {
+            version: vi.fn().mockResolvedValue({ Version: '28.0.0', Os: 'linux' }),
+            createNetwork: vi.fn(async ({ Name }: { Name: string }) => {
+              created.push(Name)
+            }),
+            listContainers: vi.fn().mockResolvedValue([]),
+            getNetwork: (name: string) => ({
+              inspect: async () => {
+                if (removed.includes(name) || !created.includes(name)) {
+                  throw Object.assign(new Error('not found'), { statusCode: 404 })
+                }
+                return { Containers: {} }
+              },
+              remove: async () => {
+                removed.push(name)
+              },
+            }),
+            getContainer: () => ({
+              inspect: async () => ({
+                Name: '/db-name',
+                HostConfig: { NetworkMode: run },
+                NetworkSettings: { Networks: { [run]: { IPAddress: '172.30.0.2' } } },
+              }),
+            }),
+          } as unknown as Dockerode
+
+          const service = await prepareItemNetwork(docker, cli.service('db') as any, hosted, { daemon: false })
+          const task = await prepareItemNetwork(docker, build, hosted, { daemon: false })
+          // one network for the run, made once; the service is found by the name the task needs it by
+          expect(created).toEqual([run])
+          expect(service.options).toEqual({ mode: run, hosts: [] })
+          expect(task.options).toEqual({ mode: run, hosts: ['database:172.30.0.2'] })
+          const options = buildCreateOptions(build, 'state', task.options, hosted, noSecrets)
+          expect(options.HostConfig?.NetworkMode).toEqual(run)
+          expect(options.HostConfig?.Links).toEqual([])
+
+          // removed after its last user, and made again by the next
+          await task.release()
+          expect(removed).toEqual([])
+          await service.release()
+          expect(removed).toEqual([run])
+          const next = await prepareItemNetwork(docker, cli.service('db') as any, hosted, { daemon: false })
+          expect(created).toEqual([run, run])
+          await next.release()
+
+          // a daemon outlives the run and stays on the default bridge, as off a server
+          const daemon = await prepareItemNetwork(docker, cli.service('db') as any, hosted, { daemon: true })
+          expect(daemon.options).toEqual({ links: [], hosts: [] })
+        }
+      )
+    })
+
+    it('keeps the open items of a server on the default bridge on a daemon without Linux bridges', async () => {
+      await withCli(
+        'network-docker-hosted-windows',
+        { services: { db: { image: 'postgres:16' } } },
+        async (cli, environment) => {
+          const docker = {
+            version: vi.fn().mockResolvedValue({ Version: '28.0.0', Os: 'windows' }),
+          } as unknown as Dockerode
+          const hosted = { ...environment, hosted: { catalog: {} as any } }
+          const network = await prepareItemNetwork(docker, cli.service('db') as any, hosted, { daemon: false })
+          expect(network.options).toEqual({ links: [], hosts: [] })
         }
       )
     })

@@ -587,7 +587,16 @@ describe('server config policy', () => {
         pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }],
         providers: {},
         runRole: 'hammerkit-runs',
-        deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32'],
+        deniedEgress: [
+          '169.254.0.0/16',
+          '10.0.0.0/8',
+          '172.16.0.0/12',
+          '192.168.0.0/16',
+          '100.64.0.0/10',
+          'fe80::/10',
+          'fc00::/7',
+        ],
+        allowedEgress: [],
         sandboxes: {
           image: `no0dles/hammerkit:${getVersion()}`,
           size: '4Gi',
@@ -611,10 +620,13 @@ describe('server config policy', () => {
 
     it('takes address ranges the pods of runs may not reach', () => {
       expect(kubernetes({ deniedEgress: ['10.0.0.0/8', 'fd00::/8'] }).success).toBe(true)
+      expect(kubernetes({ allowedEgress: ['10.1.2.3/32', 'fd00::/64'] }).success).toBe(true)
       for (const range of ['10.0.0.0', '10.0.0.0/33', 'fd00::/129', 'cluster/8', '10.0.0.0/8/1', '']) {
-        expect(message(kubernetes({ deniedEgress: [range] })), range).toBe(
-          'expected an address range, such as 10.0.0.0/8 or fd00::/8'
-        )
+        for (const key of ['deniedEgress', 'allowedEgress']) {
+          expect(message(kubernetes({ [key]: [range] })), `${key} ${range}`).toBe(
+            'expected an address range, such as 10.0.0.0/8 or fd00::/8'
+          )
+        }
       }
     })
 

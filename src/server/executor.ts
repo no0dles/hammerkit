@@ -98,6 +98,14 @@ function cacheNamespace(run: Run): string {
   return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
 }
 
+// The docker volumes of a run's services are its caller's, within the cache's source trust:
+// two callers of one repository share a cache, a task is keyed by what it reads, but not the
+// data their services keep.
+export function volumeScope(run: Run): string {
+  const key = `${cacheNamespace(run)}\0${run.owner.iss}\0${run.owner.sub}`
+  return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
+}
+
 /**
  * Runs the tasks of a run on this machine with the engine of `hammerkit run`, in a
  * process of its own.
@@ -246,6 +254,7 @@ export class HostExecutor implements RunExecutor {
             tasks: run.tasks,
             options: run.options,
             accounts: run.accounts,
+            volumeScope: volumeScope(run),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(placed ? { kubernetes: placed.kubernetes } : {}),
           },

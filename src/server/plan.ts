@@ -14,6 +14,7 @@ import { WorkTree } from '../planner/work-tree'
 import { WorkSecret } from '../planner/work-secret'
 import { isContainerWorkTask, isWorkTask } from '../planner/work-task'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
+import { isVolumeName } from '../planner/utils/hosted-volumes'
 import { WorkTask } from '../planner/work-task'
 import { Bundle } from '../remote/bundle'
 import { getErrorMessage } from '../log'
@@ -292,6 +293,12 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
         if (insideBundle(root, data.cwd, mount.localPath).length === 0) {
           problems.push(`${item.name}: mounts ${mount.localPath}, which is outside of the bundle`)
         }
+      }
+    }
+    for (const volume of isContainerWorkService(data) ? data.volumes : []) {
+      // docker takes anything else for a path of the host, such as the docker socket
+      if (!isVolumeName(volume.name)) {
+        problems.push(`${item.name}: volume ${volume.name} is not a volume name, a path of the server can't be mounted`)
       }
     }
     for (const secret of secretsOf(item)) {

@@ -162,6 +162,8 @@ task) when it
 * mounts a path outside of the bundle into a container, such as the docker socket, `/etc`
   or a home directory, or has a `src` or `generates` outside of it (the server would copy its
   own files into the task),
+* has a service volume whose name is a path (`/var/run/docker.sock:/var/run/docker.sock`),
+  which docker would mount from the host,
 * has a task on a runtime that `runtimes` does not allow,
 * has a task or service whose `network` reaches more than [`runs.network`](/docs/remote-compute/runs#network) allows,
 * declares `secretProviders` or `secretAccounts`, reads a `file:` secret, reads an `env:`

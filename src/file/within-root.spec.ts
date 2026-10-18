@@ -79,4 +79,23 @@ describe('paths within the root of a run', () => {
       assertItemPathsWithinRoot(item({ src: [source(join(base, 'secrets'), { name: 'dep' })] }), root)
     ).resolves.toBeUndefined()
   })
+
+  it('refuses a volume of a service that names a path of the host', async () => {
+    const service = (name: string): any => ({
+      name: 'db',
+      data: {
+        type: 'container-service',
+        image: 'postgres',
+        src: [],
+        mounts: [],
+        volumes: [{ name, containerPath: '/data' }],
+      },
+    })
+    await expect(assertItemPathsWithinRoot(service('pg-data'), root)).resolves.toBeUndefined()
+    for (const name of ['/var/run/docker.sock', '/', '.', '../data', 'C:\\data']) {
+      await expect(assertItemPathsWithinRoot(service(name), root), name).rejects.toThrow(
+        `db: volume ${name} is not a volume name, a path of the server can't be mounted`
+      )
+    }
+  })
 })
