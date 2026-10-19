@@ -30,7 +30,7 @@ import { getKubernetesCommandText } from './utils/task-arguments'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
-import { forgetClaimState, isKeptClaim, readClaimState, recordClaimState } from '../kubernetes/kept-claims'
+import { forgetClaimState, isKeptClaim, recordClaimState, useClaimState } from '../kubernetes/kept-claims'
 import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 import {
@@ -473,7 +473,7 @@ export function kubernetesTaskRuntime(
     async currentStateKey(): Promise<string | null> {
       if (kept) {
         // the server removes the Jobs of a run at its end, the claim says
-        return readClaimState(instance, kubernetes, claim)
+        return useClaimState(instance, kubernetes, claim)
       }
       const jobs = await instance.batchApi.listNamespacedJob({
         namespace: kubernetes.namespace,

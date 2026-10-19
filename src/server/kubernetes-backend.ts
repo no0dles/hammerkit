@@ -17,7 +17,7 @@ import { cacheNamespace, HostExecutor, HostExecutorOptions, RunPlacement } from 
 import { expireKeptClaims, sweepKeptClaims } from '../kubernetes/kept-claims'
 import { parseDuration } from '../utils/units'
 import { Run, RunContext, RunExecutor } from './runs'
-import { KubernetesBackend, ServerConfig } from './server-config'
+import { getMaxVolumeSize, KubernetesBackend, ServerConfig } from './server-config'
 
 // the name of the quota and limit range the server keeps in a caller's namespace
 const POLICY_NAME = 'hammerkit'
@@ -277,7 +277,7 @@ export class KubernetesExecutor implements RunExecutor {
           httpRoutes: [],
           storageClass: backend.storageClass,
           volumeSize: backend.volumeSize,
-          ...(backend.maxVolumeSize ? { maxVolumeSize: backend.maxVolumeSize } : {}),
+          maxVolumeSize: getMaxVolumeSize(backend),
           networkPolicyEnforced: backend.networkPolicy === 'enforced',
           server: {
             run: run.id,

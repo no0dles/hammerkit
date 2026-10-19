@@ -261,6 +261,13 @@ describe('kubernetes backend', () => {
         context
       )
       expect([prepared.kubernetes.volumeSize, prepared.kubernetes.maxVolumeSize]).toEqual(['5Gi', '50Gi'])
+
+      // a build file states its own size: a server bounds it when the operator does not
+      const bounded = async (patch: object) =>
+        (await executor(patch, cluster(null).instance).prepare({ id: 'run_1', owner, source } as Run, context))
+          .kubernetes.maxVolumeSize
+      expect(await bounded({})).toBe('10Gi')
+      expect(await bounded({ volumeSize: '20Gi' })).toBe('20Gi')
     })
 
     it('keeps the claims of tasks for the next runs of the same source, and then removes them', async () => {
