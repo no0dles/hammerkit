@@ -87,8 +87,9 @@ here and in `pi install npm:hammerkit@…` in step 4.
 
 </Callout>
 
-`hammerkit --version` has to print the server's version. On a Node.js older than 24, npm
-quietly installs an old hammerkit without the agent clients instead.
+`hammerkit --version` has to print the server's version. hammerkit needs Node.js 24: on an
+older one npm warns `EBADENGINE`, and with a range instead of an exact version it quietly
+installs an old hammerkit without the agent clients.
 
 Use the same version as the server. The CLI registers the server in step 2 and publishes the
 build file in step 3; pi's extension in step 4 comes from the same package.
@@ -146,8 +147,8 @@ If you have Docker, try the task on your machine before you publish it:
 hammerkit run sh -- 'ls && node --version'
 ```
 
-Commit the file and push it, or open a pull request for it: the agent's commands run in the
-published version, and its sandbox is a checkout of `main`, so the two should not drift apart.
+Commit the file and get it onto `main`: the agent's commands run in the published version,
+and its sandbox is a checkout of `main`, so the two should not drift apart.
 Then publish it from the root of your checkout, signed in as the publisher's service account:
 
 ```bash
@@ -249,13 +250,16 @@ any other.
 when nothing feeds it:
 
 ```bash
+BRANCH=agent/fix-cart-$(date +%Y%m%d%H%M%S)    # a new branch for every run
 pi --provider openrouter --model anthropic/claude-haiku-5.5 --no-session \
-  -p "The cart total skips the last item. Fix it, run the tests and push to agent/fix-cart." < /dev/null
-git ls-remote --exit-code https://github.com/acme/shop refs/heads/agent/fix-cart
+  -p "The cart total skips the last item. Fix it, run the tests and push to $BRANCH." < /dev/null
+git -C "$CHECKOUT" ls-remote --exit-code origin "refs/heads/$BRANCH"
 ```
 
-pi can end without pushing, for example when its tools failed: `git ls-remote --exit-code`
-fails a CI job when the branch is not there.
+pi can end without pushing, for example when its tools failed, so the last line fails the job
+when the branch is not there. `$CHECKOUT` is a checkout of the repository that may read it,
+for example the CI job's own; a branch name of its own for every run keeps an earlier run's
+branch from passing the check.
 
 `--mode json` prints every tool call and result as a line of JSON.
 

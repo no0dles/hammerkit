@@ -22,8 +22,9 @@ stored in the cluster, and no image has to be built: the server runs the release
   Dataplane V2.
 - `gcloud`, `kubectl` and `jq`, signed in with the right to create ClusterRoles.
 - The hammerkit CLI of the server's version, on Node.js 24 or later:
-  `npm install -g hammerkit@$VERSION` with `VERSION` from below. On an older Node.js, npm
-  quietly installs an old hammerkit without the commands this guide uses.
+  `npm install -g hammerkit@$VERSION` with `VERSION` from below. On an older Node.js npm
+  warns `EBADENGINE`, and with a range instead of an exact version it quietly installs an
+  old hammerkit without the commands this guide uses.
 - A GitHub App installed on your repository, with **Contents: read and write**, **Metadata:
   read** and nothing else. Download a private key for it (`app.pem`).
 - A build file with a shell task in the repository, see
@@ -91,14 +92,17 @@ PUBLISHER_ID=$(gcloud iam service-accounts describe $PUBLISHER --project $PROJEC
 ```
 
 Delete `app.pem` now. The two service accounts hold no role in the project: only the server
-reads their tokens. A new IAM binding can take a few minutes before it works.
+reads their tokens. A new IAM binding can take a few minutes before it works. `AUDIENCE` is
+what the pool accepts from the server's pod; it is unrelated to the `audience: hammerkit` of
+the sign-in tokens in step 2.
 
 **Did someone else do this step?** Ask them for the values the last block sets, and set them
 in your shell: `POOL` (the pool's full name, as above), `AUDIENCE` (the audience its provider
 allows), `KEY_SECRET` (the Secret Manager version of the App's key), `AGENT` and `PUBLISHER`
 (the emails of the two service accounts) and `AGENT_ID` and `PUBLISHER_ID` (their unique ids).
-They also have to let the server's ServiceAccount, `system:serviceaccount:$NAME:hammerkit`,
-read the key, and let you act as the two accounts.
+The pool's provider has to be named `cluster`, or change `providers/cluster` in `gcp.json`
+of step 2. They also have to let the server's ServiceAccount,
+`system:serviceaccount:$NAME:hammerkit`, read the key, and let you act as the two accounts.
 [Service accounts on Google Cloud](/docs/guides/agents/google-accounts) explains these two
 accounts, and how to let your team act as the agent.
 
@@ -109,7 +113,8 @@ ServiceAccount, its rights, its config, a disk and the Deployment. It uses the v
 step 1; the first line stops when one of them is not set, for example in a new terminal.
 
 ```bash
-: "${POOL:?}" "${AUDIENCE:?}" "${KEY_SECRET:?}" "${AGENT_ID:?}" "${PUBLISHER_ID:?}" "${VERSION:?}"
+: "${NAME:?}" "${REPO:?}" "${GITHUB_APP_ID:?}" "${VERSION:?}" "${POOL:?}" "${AUDIENCE:?}" \
+  "${KEY_SECRET:?}" "${AGENT_ID:?}" "${PUBLISHER_ID:?}"
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
@@ -147,7 +152,7 @@ rules:
   - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
   - { apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [get, list, create, update, patch, delete] }
 ---
-# the server binds $NAME-runs only in namespaces it made
+# the server binds $NAME-runs only in namespaces it made, not in another server's
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata: { name: $NAME-managed-namespaces }
@@ -159,6 +164,7 @@ spec:
     - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:$NAME:hammerkit'" }
   validations:
     - expression: "namespaceObject.metadata.?labels['hammerkit.dev/managed'].orValue('') == 'true'"
+    - expression: "namespaceObject.metadata.name.matches('^$NAME-[0-9a-f]{16}$')"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -371,8 +377,9 @@ Secret Manager.
 ## Cleaning up
 
 ```bash
-# the callers' namespaces of this server: their names start with namespacePrefix
-kubectl get ns -l hammerkit.dev/managed -o name | grep "^namespace/$NAME-" | xargs -r kubectl delete
+# the callers' namespaces of this server: namespacePrefix and 16 hex digits; look before you delete
+kubectl get ns -l hammerkit.dev/managed -o name | grep -E "^namespace/$NAME-[0-9a-f]{16}$"
+kubectl get ns -l hammerkit.dev/managed -o name | grep -E "^namespace/$NAME-[0-9a-f]{16}$" | xargs -r kubectl delete
 kubectl delete ns $NAME
 kubectl delete clusterrole $NAME-server $NAME-runs
 kubectl delete clusterrolebinding $NAME-server
@@ -385,6 +392,5 @@ done
 ```
 
 Every server labels the namespaces it makes `hammerkit.dev/managed`, so on a cluster with
-several servers delete by the name's prefix, as above, not by the label alone. With servers
-named `hk` and `hk-test`, `hk-` also matches the other's namespaces: give servers names where
-one is not the start of another. A deleted pool keeps its name for 30 days.
+several servers delete by the whole name, as above, not by the label alone. A deleted pool
+keeps its name for 30 days.
