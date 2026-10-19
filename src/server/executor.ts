@@ -92,7 +92,7 @@ export interface RunPlacement {
 // share one, those of an upload or a sandbox only their owner's. Somebody who can only
 // upload, or an agent on a sandbox, can not leave an entry for a run from a reviewed
 // repository to find.
-function cacheNamespace(run: Run): string {
+export function cacheNamespace(run: Run): string {
   const key =
     run.source.type === 'ref' ? `ref\0${run.source.repo}` : `${run.source.type}\0${run.owner.iss}\0${run.owner.sub}`
   return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`

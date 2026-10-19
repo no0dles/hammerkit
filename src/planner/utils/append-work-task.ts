@@ -119,6 +119,7 @@ function parseTask(
       user: getContainerUser(),
       image: templateValue(task.schema.image, envs),
       mounts: parseWorkMounts(cwd, task.schema, envs),
+      volumeSize: task.schema.volumeSize ?? null,
     }
   } else {
     const fileSecret = baseWorkNode.secrets.find((secret) => secret.target.type === 'file')

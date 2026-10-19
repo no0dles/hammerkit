@@ -54,6 +54,7 @@ export function runInToolImage(
     image: pool.toolImage as string,
     user: null,
     mounts: [],
+    volumeSize: null,
     pool: pool.name,
     arch: getNodeArch(pool),
   }

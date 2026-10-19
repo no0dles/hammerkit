@@ -301,6 +301,10 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "volumeSize": {
+                    "type": "string",
+                    "description": "size of its claim on Kubernetes, e.g. 10Gi"
                   }
                 },
                 "required": [
@@ -500,6 +504,10 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources",
                     "description": "cpu and memory requests and limits"
                   },
+                  "volumeSize": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize",
+                    "description": "size of its claim on Kubernetes, e.g. 10Gi"
+                  },
                   "network": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network",
                     "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
@@ -670,6 +678,10 @@
                         "const": "enforced",
                         "description": "the cluster enforces NetworkPolicy, which limited networks need"
                       },
+                      "volumeSize": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize",
+                        "description": "size of the claim of each task and service, 1Gi by default"
+                      },
                       "ingresses": {
                         "not": {}
                       }
@@ -790,7 +802,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                   },
                   "maxSize": {
-                    "type": "string"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize"
                   },
                   "keepPerTask": {
                     "type": "integer",

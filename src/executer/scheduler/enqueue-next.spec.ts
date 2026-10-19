@@ -235,4 +235,25 @@ describe('checkCacheState', () => {
     const keyReversed = (await checkCacheState(reversed, 'checksum', env)).stateKey
     expect(keyForward).toBe(keyReversed)
   })
+
+  it('restores what the cache has for the key, and tells the runtime the key', async () => {
+    const env = environmentMock(scratch)
+    const src = join(scratch, 'input.txt')
+    writeFileSync(src, 'v1')
+    const pull = vi.fn(async () => true)
+    const task = makeTask('pulled', {
+      resolved: { ...makeResolved('checksum'), backend: { ...makeResolved('checksum').backend, pull } },
+      srcFiles: [src],
+    })
+    const restore = vi.fn(async () => undefined)
+    task.runtime.restore = restore
+    Object.assign(task.data, { secrets: [], projectRoot: scratch })
+
+    const result = await checkCacheState(task, 'checksum', env)
+    expect((task.status.write as any).mock.calls).toEqual([['info', 'pulled pulled from cache "remote" (local)']])
+    expect(result.cached).toBe(true)
+    expect(pull).toHaveBeenCalledWith('pulled', result.stateKey, expect.any(String), env)
+    // a runtime that keeps outputs between runs records which state they are of
+    expect(restore).toHaveBeenCalledWith(env, expect.any(String), result.stateKey)
+  })
 })

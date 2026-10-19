@@ -62,6 +62,7 @@ describe('job placement', () => {
       image: 'tools:arm',
       user: null,
       mounts: [],
+      volumeSize: null,
       pool: 'arm',
       arch: 'arm64',
     })

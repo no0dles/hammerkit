@@ -8,17 +8,22 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getKubernetesPersistence } from './volumes'
-import { getPodForPersistence } from './ensure-persistent-data'
+import { clearClaim, getPodForPersistence } from './ensure-persistent-data'
 
 export async function restoreKubernetesData(
   work: WorkItem<ContainerWorkService | ContainerWorkTask>,
   kubernetes: WorkKubernetesEnvironment,
   instance: KubernetesInstance,
   environment: Environment,
-  path: string
+  path: string,
+  // the kept claim of the work holds what an earlier run left, which goes first
+  options: { reset?: boolean } = {}
 ) {
   const persistence = await getKubernetesPersistence(work, kubernetes)
   await getPodForPersistence(instance, kubernetes, work, persistence, 'write', async (name) => {
+    if (options.reset) {
+      await clearClaim(instance, kubernetes, work, name)
+    }
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       if (!(await environment.file.exists(generatedArchive.filename))) {
         continue

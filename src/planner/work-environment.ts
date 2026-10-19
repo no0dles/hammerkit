@@ -16,6 +16,10 @@ export interface WorkKubernetesEnvironment {
   context?: string
   httpRoutes: BuildFileEnvironmentSchemaHttpRoute[]
   storageClass?: string
+  // what the claim of a task or service requests when it states no `volumeSize`
+  // (DEFAULT_VOLUME_SIZE when left out), and at most (a server's `maxVolumeSize`)
+  volumeSize?: string
+  maxVolumeSize?: string
   // the cluster enforces NetworkPolicy, as the build file states
   networkPolicyEnforced: boolean
   // set when a hammerkit server runs the tasks of a run on its cluster
@@ -38,6 +42,10 @@ export interface WorkKubernetesServer {
   accounts: { [account: string]: { serviceAccount?: string; audience?: string; secret?: string } }
   // set when the run works on a sandbox: its files are a claim the tasks mount
   workspace?: WorkKubernetesWorkspace
+  // set when the claims of tasks stay after the run (`backend.keepVolumes`): the trust of
+  // the run's source, which a kept claim is named and labelled by, so only a run of the
+  // same source mounts it again
+  volumeScope?: string
 }
 
 // The claim of a sandbox in place of the run's directory `root`: a source or mount below

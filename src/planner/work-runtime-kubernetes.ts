@@ -30,6 +30,7 @@ import { getKubernetesCommandText } from './utils/task-arguments'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
+import { forgetClaimState, isKeptClaim, readClaimState, recordClaimState } from '../kubernetes/kept-claims'
 import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 import {
@@ -188,12 +189,24 @@ export function kubernetesTaskRuntime(
   kubernetes: WorkKubernetesEnvironment
 ): WorkRuntime<TaskState> {
   const instance = createKubernetesInstances(kubernetes)
+  // on a server that keeps them, the task's claim stays after the run with the state of its
+  // outputs, and the next run of the same source mounts them as they are (see kept-claims)
+  const kept = isKeptClaim(task, kubernetes)
+  const claim = getVolumeName(task, kubernetes)
   return {
     initialize(): Promise<void> {
       return Promise.resolve()
     },
-    async restore(environment: Environment, path: string): Promise<void> {
-      await restoreKubernetesData(task, kubernetes, instance, environment, path)
+    async restore(environment: Environment, path: string, stateKey?: string): Promise<void> {
+      if (!kept) {
+        await restoreKubernetesData(task, kubernetes, instance, environment, path)
+        return
+      }
+      const reset = await forgetClaimState(instance, kubernetes, claim)
+      await restoreKubernetesData(task, kubernetes, instance, environment, path, { reset })
+      if (stateKey) {
+        await recordClaimState(instance, kubernetes, claim, stateKey)
+      }
     },
     async archive(environment: Environment, path: string): Promise<void> {
       await storeKubernetesData(task, kubernetes, instance, environment, path)
@@ -206,7 +219,10 @@ export function kubernetesTaskRuntime(
 
       await ensureNamespace(instance, kubernetes.namespace)
       try {
-        await ensurePersistentData(instance, kubernetes, environment, task, persistence)
+        // the task writes to it now: what it holds stops being the outputs of a state, and
+        // goes, as a new claim would hold nothing
+        const reset = kept && (await forgetClaimState(instance, kubernetes, claim))
+        await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset })
       } catch (e) {
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
         return
@@ -399,6 +415,9 @@ export function kubernetesTaskRuntime(
         }
         // the finished job stays for its state, the values it read need not
         await removeTaskSecrets(instance, kubernetes, task)
+        if (kept) {
+          await recordClaimState(instance, kubernetes, claim, options.stateKey)
+        }
       } finally {
         network.close()
         // once the run's pods ended: a cancelled job's pod is still terminating
@@ -452,6 +471,10 @@ export function kubernetesTaskRuntime(
       await removeTaskSecrets(instance, kubernetes, task)
     },
     async currentStateKey(): Promise<string | null> {
+      if (kept) {
+        // the server removes the Jobs of a run at its end, the claim says
+        return readClaimState(instance, kubernetes, claim)
+      }
       const jobs = await instance.batchApi.listNamespacedJob({
         namespace: kubernetes.namespace,
         labelSelector: `hammerkit.dev/id=${task.id()}`,
@@ -466,11 +489,11 @@ export function kubernetesTaskRuntime(
       // outputs live in the task's claim; without it the finished job left
       // nothing to reuse
       try {
-        const claim = await instance.coreApi.readNamespacedPersistentVolumeClaim({
-          name: getVolumeName(task),
+        const found = await instance.coreApi.readNamespacedPersistentVolumeClaim({
+          name: claim,
           namespace: kubernetes.namespace,
         })
-        return claim.metadata?.deletionTimestamp ? null : stateKey
+        return found.metadata?.deletionTimestamp ? null : stateKey
       } catch (e) {
         if (statusCodeOf(e) === 404) {
           return null

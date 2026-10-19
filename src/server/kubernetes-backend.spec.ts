@@ -156,6 +156,7 @@ describe('kubernetes backend', () => {
 
   describe('the namespace of a caller', () => {
     const owner = { iss: 'https://idp.corp', sub: 'alice' }
+    const source = { type: 'ref', repo: 'git.test/corp/app', ref: 'main' } as Run['source']
     const namespace = getCallerNamespace('hammerkit-', owner)
     const context: RunContext = { emit: () => undefined, signal: new AbortController().signal }
 
@@ -221,7 +222,7 @@ describe('kubernetes backend', () => {
     it('is made isolated, with the server’s rights bound in it only, and swept of earlier runs', async () => {
       const { calls, instance } = cluster(null)
       const placement = executor({ quota: { pods: 20 } }, instance)
-      const prepared = await placement.prepare({ id: 'run_AAAAAAAAAAAAAAA-', owner } as Run, context)
+      const prepared = await placement.prepare({ id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run, context)
       expect(prepared.kubernetes.namespace).toBe(namespace)
       expect(calls).toEqual([
         'create Namespace {"hammerkit.dev/managed":"true","hammerkit.dev/caller":"' +
@@ -243,7 +244,7 @@ describe('kubernetes backend', () => {
       ])
 
       calls.length = 0
-      await placement.release({ id: 'run_AAAAAAAAAAAAAAA-', owner } as Run, context)
+      await placement.release({ id: 'run_AAAAAAAAAAAAAAA-', owner, source } as Run, context)
       expect(calls).toEqual([
         ...['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
           (kind) => `delete ${kind} hammerkit.dev/run=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`
@@ -253,10 +254,72 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('gives the claims of tasks the size of the backend, at most its maximum', async () => {
+      const { instance } = cluster(null)
+      const prepared = await executor({ volumeSize: '5Gi', maxVolumeSize: '50Gi' }, instance).prepare(
+        { id: 'run_1', owner, source } as Run,
+        context
+      )
+      expect([prepared.kubernetes.volumeSize, prepared.kubernetes.maxVolumeSize]).toEqual(['5Gi', '50Gi'])
+    })
+
+    it('keeps the claims of tasks for the next runs of the same source, and then removes them', async () => {
+      const { instance } = cluster(null)
+      const patched: string[] = []
+      const deleted: string[] = []
+      const claims = [
+        {
+          metadata: {
+            name: 'hammerkit-expired',
+            labels: { 'hammerkit.dev/volume-scope': 'ref-1' },
+            annotations: { 'hammerkit.dev/expires': '2000-01-01T00:00:00Z' },
+          },
+        },
+      ]
+      ;(instance.coreApi as any).listNamespacedPersistentVolumeClaim = async (request: any) => ({
+        items:
+          request.labelSelector === `hammerkit.dev/kept-by=${getRunLabelValue('run_1')}`
+            ? [{ metadata: { name: 'hammerkit-kept' } }]
+            : request.labelSelector === 'hammerkit.dev/volume-scope'
+              ? claims
+              : [],
+      })
+      ;(instance.coreApi as any).deleteNamespacedPersistentVolumeClaim = async ({ name }: any) => {
+        deleted.push(name)
+        claims.length = 0
+      }
+      ;(instance.coreApi as any).readNamespacedPersistentVolumeClaim = async () =>
+        Promise.reject(Object.assign(new Error('not found'), { code: 404 }))
+      ;(instance.objectApi as any).patch = async (spec: any) => {
+        patched.push(`${spec.metadata.name} ${Object.keys(spec.metadata.annotations)}`)
+        return spec
+      }
+      const placement = executor({ keepVolumes: '10m' }, instance)
+      const ref = (id: string, repo: string) => ({ id, owner, source: { type: 'ref', repo, ref: 'main' } }) as Run
+      const sandbox = (id: string) => ({ id, owner, source: { type: 'sandbox', id, repo: 'git.test/corp/app' } }) as Run
+      const scope = async (run: Run) => (await placement.prepare(run, context)).kubernetes.server.volumeScope
+
+      // the claims that expired go before the run
+      const first = await scope(ref('run_1', 'git.test/corp/app'))
+      expect(deleted).toEqual(['hammerkit-expired'])
+      // a repository's runs share them, as they share the cache; a sandbox's are its own
+      expect(await scope(ref('run_2', 'git.test/corp/app'))).toBe(first)
+      expect(await scope(ref('run_3', 'git.test/corp/other'))).not.toBe(first)
+      expect(await scope(sandbox('sbx_1'))).not.toBe(await scope(sandbox('sbx_2')))
+      expect(await scope(sandbox('sbx_1'))).toMatch(/^sandbox-[0-9a-f]{24}$/)
+      // a server that keeps none
+      const off = await executor({ keepVolumes: false }, cluster(null).instance).prepare(ref('run_1', 'x'), context)
+      expect(off.kubernetes.server.volumeScope).toBeUndefined()
+
+      // what the run kept expires once it ended
+      await placement.release(ref('run_1', 'git.test/corp/app'), context)
+      expect(patched).toEqual(['hammerkit-kept hammerkit.dev/expires'])
+    })
+
     it('hands the tasks of a run on a sandbox its claim and the pod that holds it', async () => {
       const { instance } = cluster(null)
       const claim = { name: 'claim', namespace, subPath: 'files', label: 'sbx', pod: { name: 'files', uid: 'pod-1' } }
-      const prepared = await executor({}, instance).prepare({ id: 'run_1', owner } as Run, context, {
+      const prepared = await executor({}, instance).prepare({ id: 'run_1', owner, source } as Run, context, {
         root: '/runs/run_1',
         claim,
       })
@@ -271,7 +334,7 @@ describe('kubernetes backend', () => {
 
     it('refuses a namespace of the same name that hammerkit did not make', async () => {
       const { calls, instance } = cluster({ team: 'payments' })
-      await expect(executor({}, instance).prepare({ id: 'run_1', owner } as Run, context)).rejects.toThrow(
+      await expect(executor({}, instance).prepare({ id: 'run_1', owner, source } as Run, context)).rejects.toThrow(
         `the namespace ${namespace} was not made by hammerkit, the server does not run tasks in it`
       )
       expect(calls).toEqual([])

@@ -69,6 +69,9 @@ backend:
   # kubeconfig: /etc/hammerkit/kubeconfig   # with context, for a cluster the server is not in
   # context: prod
   storageClass: standard-rwo        # of the claims of tasks; the cluster's default when left out
+  volumeSize: 1Gi                   # default, of a task's claim that states no volumeSize
+  maxVolumeSize: 50Gi               # the most a task may state; no limit but the quota when left out
+  keepVolumes: 15m                  # default; how long a task's claim stays for the next run, false for not at all
   pools:
     - name: builds
       platform: { os: linux, arch: amd64 }
@@ -95,6 +98,8 @@ service a Deployment, in a namespace of the caller.
 | `kubeconfig`, `context` | The cluster, for a server outside of it. Without them the server uses its default kubeconfig, else the cluster it runs in. |
 | `namespacePrefix` | A caller's namespace is this and the first 16 hex digits of the sha-256 of their issuer and subject, `hammerkit-` by default. Two servers on one cluster need a prefix each. |
 | `storageClass` | The storage class of the claims tasks get. |
+| `volumeSize`, `maxVolumeSize` | The size of a task's or service's claim when it states no [`volumeSize`](/docs/task/kubernetes#claims) (`1Gi`), and the most one may state. A task over it fails before its pods start. Each claim counts as its size in a `requests.storage` quota. |
+| `keepVolumes` | How long the claim of a task stays after the run that mounted it last (`15m`), see [Kept claims](#kept-claims). `false` removes it at the end of the run. |
 | `pools` | Where pods are placed, see [Pools](#pools). One `linux`/`amd64` pool when left out. |
 | `providers` | Per secret provider, the image its command runs in. Every provider an account reads needs one. |
 | `quota` | The `ResourceQuota` of each caller's namespace, as Kubernetes writes it (`requests.cpu`, `limits.memory`, `pods`, `persistentvolumeclaims`, `requests.storage`). |
@@ -128,12 +133,38 @@ of the cluster.
 
 What a run makes there carries the label `hammerkit.dev/run` and is deleted when the run ends,
 whether it succeeded or not, and the end of the run waits until its pods and claims are gone:
-an idle caller costs nothing on the cluster. What a run left because the server stopped before
-its end is deleted when the caller's next run starts. The runs of one caller execute one after
+an idle caller costs nothing on the cluster but the [claims it keeps](#kept-claims) for a while.
+What a run left because the server stopped before its end is deleted when the caller's next run
+starts. The runs of one caller execute one after
 the other, since the Jobs and claims of a task are named after its cache id; the next waits in
 the queue, without counting against `runs.maxDuration`. The runs of different callers run side
 by side. A pod that does not fit the nodes waits for one, and a pod over the quota is not
 created until the quota has room: the task waits in both cases, until `runs.maxDuration`.
+
+### Kept claims
+
+The claim of a container task stays after the run for `keepVolumes` (`15m`), and each run
+that mounts it again starts the time anew. The next run of the same source finds the task's
+outputs in it: when the task's inputs did not change, the task is cached and the tasks that
+depend on it mount its outputs from there, without restoring them from the cache. A restore
+copies the outputs into a new claim through a pod, which for a `node_modules` of an `npm ci`
+takes a while; with the claim kept, a change to code the install does not read goes straight
+to the compile and test steps.
+
+When the inputs did change, the task runs on its kept claim emptied first, as on a new one,
+so a run's outputs never mix with those of an earlier one. Without a kept claim, a cache hit
+restores into a new claim as before.
+
+A kept claim is the source's, as its [cache](#cache-and-sources) is: the runs of a
+repository share theirs, and a run on a sandbox mounts only those of the same sandbox, never
+what a run of the repository or of another sandbox kept. Its name carries a hash of the
+source, and its label `hammerkit.dev/volume-scope` the source.
+
+The disk they take is bounded by the time and the quota of the namespace: the server removes
+a claim once it expired, and when a claim of a run does not fit a `requests.storage` or
+`persistentvolumeclaims` quota, the claims kept for the caller's other sources make room.
+After a restart, the server finds the claims it kept before when its first run starts, and
+removes them as they expire. Services keep no claim; theirs go with the run.
 
 ### Pools
 
@@ -192,7 +223,8 @@ reads the value).
 
 The cache stays on the server, one per source trust as on a host (a repository's runs share it).
 After a task ran, its outputs are copied from its claim into the cache, and a later run that
-hits restores them into a new claim before its dependents start. The files of a task's `src`
+hits restores them into a new claim before its dependents start, unless the claim is still
+[kept](#kept-claims). The files of a task's `src`
 are copied from the server's checkout into its claim. So on a cluster the storage directory
 of the server (`storage.directory`) belongs on a volume of its own.
 

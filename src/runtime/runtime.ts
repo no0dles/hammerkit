@@ -22,6 +22,7 @@ export interface WorkRuntime<S> {
   execute(environment: Environment, options: ExecuteOptions<S>): Promise<void>
   stop(): Promise<void>
   archive(environment: Environment, path: string): Promise<void>
-  restore(environment: Environment, path: string): Promise<void>
+  // `stateKey`: the state the restored outputs are of, when the cache says
+  restore(environment: Environment, path: string, stateKey?: string): Promise<void>
   currentStateKey(environment: Environment): Promise<string | null>
 }

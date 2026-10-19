@@ -74,7 +74,7 @@ export async function checkCacheState(
       const pulled = await resolved.backend.pull(item.id(), stateKey, cacheDir, environment)
       if (pulled) {
         item.status.write('info', `${item.name} pulled from cache "${resolved.name}" (${resolved.backend.type})`)
-        await item.runtime.restore(environment, cacheDir)
+        await item.runtime.restore(environment, cacheDir, stateKey)
         await writeCacheMetadata(environment, item, currentStats, getWorkTaskCacheDescription(item))
         return { cached: true, stateKey, resolved, provable }
       }

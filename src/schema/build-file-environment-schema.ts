@@ -1,5 +1,6 @@
 import { array, literal, never, object, string, union, z } from 'zod'
 import { buildFileEnvironmentSchemaHttpRoute } from './build-file-environment-schema-http-route'
+import { sizeSchema } from './size-schema'
 
 export const buildFileKubernetesEnvironmentSchema = object({
   namespace: string().optional(),
@@ -12,6 +13,8 @@ export const buildFileKubernetesEnvironmentSchema = object({
   networkPolicy: literal('enforced')
     .describe('the cluster enforces NetworkPolicy, which limited networks need')
     .optional(),
+  // the size of the claim of a task or service that states none (1Gi when left out)
+  volumeSize: sizeSchema.describe('size of the claim of each task and service, 1Gi by default').optional(),
   // Ingress support was removed in 1.8.0. Fail instead of dropping the routes.
   ingresses: never({
     errorMap: () => ({
