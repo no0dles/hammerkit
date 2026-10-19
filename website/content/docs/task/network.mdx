@@ -131,6 +131,11 @@ proxy's own, and a forward can't use the name of a service the task needs. A
 database the task runs itself still belongs in its `needs` as a
 [service](/docs/service): those are reached directly, on any port.
 
+On a [server](/docs/remote-compute/backend#kubernetes), a host or forward with a private
+address (`10.x`, `192.168.x` and the like) is reachable only when the operator lists it in
+`allowedEgress`, or in the firewall of a Docker host: the server keeps its runs off the
+networks behind it unless told otherwise.
+
 ## A ceiling for the run
 
 `--network` on [`run`](/docs/cli/execute) and [`up`](/docs/cli/up) sets the most any

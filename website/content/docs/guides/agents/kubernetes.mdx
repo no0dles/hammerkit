@@ -163,8 +163,9 @@ data:
       runRole: $NAME-runs
       networkPolicy: enforced
       maxVolumeSize: 10Gi    # the default: the most a task's claim may request
-      # metadata addresses and the cluster's pod and service ranges
-      deniedEgress: [169.254.0.0/16, fe80::/10, fd00:ec2::/32, 10.0.0.0/8, 34.118.224.0/20]
+      # the default (metadata and private ranges) and GKE's service range, which is outside of them
+      deniedEgress:
+        [169.254.0.0/16, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, fe80::/10, fc00::/7, 34.118.224.0/20]
       sandboxes: { image: 'no0dles/hammerkit:$VERSION' }
     secretProviders:
       github-app: { command: [hammerkit, github-app-token, '{{ref}}'] }
@@ -291,8 +292,10 @@ That setup was not part of the run this guide was checked with.
   caller and binds `$NAME-runs` there, and nowhere else. See
   [What the server may do](/docs/remote-compute/backend#what-the-server-may-do).
 - **`deniedEgress`.** A task with an open network can not reach the metadata server or your
-  cluster's other workloads. `gcloud container clusters describe <cluster> --region $REGION
-  --format='value(clusterIpv4Cidr,servicesIpv4Cidr)'` shows your ranges.
+  cluster's other workloads: the private ranges are denied by default, GKE's service range has
+  to be added. `gcloud container clusters describe <cluster> --region $REGION
+  --format='value(clusterIpv4Cidr,servicesIpv4Cidr)'` shows your ranges. An internal address
+  tasks need goes in `allowedEgress`.
 - **`networkPolicy: enforced`.** The agent's commands only reach what `sandboxes.network`
   allows, here npm. See [Network](/docs/remote-compute/backend#network).
 - **One replica.** The disk holds the server's records of sandboxes and its cache.

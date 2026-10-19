@@ -237,7 +237,8 @@ tasks:
   reach:
     image: alpine:3.19
     cmds:
-      # an open network reaches beyond the namespace, but not a denied address. An open
+      # an open network reaches an allowed address beyond the namespace, but not the rest
+      # of the cluster, which the private ranges of deniedEgress hold by default. An open
       # pod has no gate: on kindnet the namespace's policy applies a moment after it
       # started, so the denied address is blocked from then on, five tries in a row (in
       # one command, since every command is a pod of its own)
@@ -387,8 +388,8 @@ describe('kubernetes backend of a server', () => {
           context: kubeconfig ? 'hammerkit' : context,
           namespace: operatorNamespace,
           runRole,
-          // the default ranges, and one web server of the cluster
-          deniedEgress: ['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32', ...(denied ? [`${denied}/32`] : [])],
+          // the default ranges deny every pod of the cluster, one web server is allowed
+          allowedEgress: reachable ? [`${reachable}/32`] : [],
           networkPolicy: 'enforced',
           namespacePrefix: prefix,
           pools: [{ name: 'default', toolImage: 'alpine:3.19' }],

@@ -230,6 +230,16 @@ const kubernetesSandboxesSchema = z
   .strict()
   .default({})
 
+export const DEFAULT_DENIED_EGRESS = [
+  '169.254.0.0/16',
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '100.64.0.0/10',
+  'fe80::/10',
+  'fc00::/7',
+]
+
 const kubernetesBackendSchema = z
   .object({
     type: z.literal('kubernetes'),
@@ -275,10 +285,14 @@ const kubernetesBackendSchema = z
     // the ClusterRole the server binds to itself in each caller's namespace, so it needs
     // no rights in the namespaces of others (see the docs on RBAC)
     runRole: kubernetesNameSchema.default('hammerkit-runs'),
-    // where the pods of runs with an open network may not connect to: the link-local
-    // range with the metadata endpoints of the clouds (and the node's identity) by
-    // default; add the pod and service ranges of the cluster to keep them off it
-    deniedEgress: z.array(cidrSchema).default(['169.254.0.0/16', 'fe80::/10', 'fd00:ec2::/32']),
+    // where the pods of runs with an open network may not connect to: by default the
+    // link-local ranges with the metadata endpoints of the clouds (and the node's identity)
+    // and the private ones, where the cluster's nodes, pods and services and the networks
+    // behind it are, so `open` means the internet
+    deniedEgress: z.array(cidrSchema).default(DEFAULT_DENIED_EGRESS),
+    // the addresses in deniedEgress they may reach anyway, such as an internal registry
+    // or a database a TCP forward of `allow` goes to
+    allowedEgress: z.array(cidrSchema).default([]),
     // the operator states that the cluster's network plugin enforces NetworkPolicy, as a
     // build file's environment does: hammerkit can't tell from the API, and without it a
     // task with a limited network fails rather than runs open

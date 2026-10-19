@@ -11,6 +11,7 @@ import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
 import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { assertWorkTreePathsWithinRoot } from '../planner/utils/assert-item-paths'
+import { scopeServiceVolumes } from '../planner/utils/hosted-volumes'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
@@ -58,6 +59,12 @@ export const workerInputSchema = z
     network: networkSchema.optional(),
     // for a run on a sandbox, `sandboxes.network`: the run gets the lower of the two
     sandboxNetwork: networkSchema.optional(),
+    // the caller and source trust of the run, in front of the names of its services' docker
+    // volumes (see scopeServiceVolumes)
+    volumeScope: z
+      .string()
+      .regex(/^[a-z]+-[0-9a-f]{24}$/)
+      .optional(),
   })
   .strict()
 
@@ -143,6 +150,9 @@ export async function runTasks(
       })
       const workTree = getWorkContext(await parseReferences(ctx, parsed, environment), scope, environment)
       await assertWorkTreePathsWithinRoot(workTree, work)
+      if (input.volumeScope && !input.kubernetes) {
+        scopeServiceVolumes(workTree, input.volumeScope)
+      }
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0) {
         throw new Error(`no tasks found for ${name}`)

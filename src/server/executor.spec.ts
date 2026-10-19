@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
-import { HostExecutor, HostExecutorOptions } from './executor'
+import { HostExecutor, HostExecutorOptions, volumeScope } from './executor'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
@@ -33,7 +33,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 
 // a run process that tells the network it was asked to run with. The input is the first line;
 // the server keeps the standard input open for a cancel.
-const TELLING_WORKER = [
+const tellingWorker = (key: string) => [
   process.execPath,
   '-e',
   [
@@ -41,13 +41,14 @@ const TELLING_WORKER = [
     'process.stdin.on("data", (chunk) => {',
     '  text += chunk',
     '  if (!text.includes("\\n")) return',
-    '  const network = JSON.stringify(JSON.parse(text.split("\\n")[0]).network)',
+    `  const network = JSON.stringify(JSON.parse(text.split("\\n")[0]).${key})`,
     '  console.log(JSON.stringify({ kind: "event", event: { type: "log", task: "t", stream: "stdout", text: network } }))',
     '  console.log(JSON.stringify({ kind: "result", ok: true }))',
     '  process.exit(0)',
     '})',
   ].join('\n'),
 ]
+const TELLING_WORKER = tellingWorker('network')
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
 const REPO = 'git.test/corp/payments'
@@ -331,6 +332,19 @@ describe('HostExecutor', () => {
         (e: Error) => e
       )
     expect(refused?.message).toContain('build: asks for network open, more than this server allows')
+  })
+
+  it("hands the run's volume scope to the process of the run", async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
+    const telling = new HostExecutor({ ...options, worker: tellingWorker('volumeScope') })
+    const events: RunEventData[] = []
+    await telling.execute(run(hash), { emit: (e) => events.push(e), signal: new AbortController().signal })
+    expect(events).toContainEqual({
+      type: 'log',
+      task: 't',
+      stream: 'stdout',
+      text: JSON.stringify(volumeScope(run(hash))),
+    })
   })
 
   it('fails the run when a task fails, with the task and its output', async () => {
@@ -773,5 +787,26 @@ describe('HostExecutor', () => {
         `the sandbox ${sandboxId} was deleted`
       )
     })
+  })
+})
+
+describe('volumeScope', () => {
+  const run = (source: object, sub: string) => ({ source, owner: { iss: 'https://idp.corp', sub } }) as unknown as Run
+  const ref = { type: 'ref', repo: 'git.test/corp/app' }
+
+  it("keeps the volumes of one caller's runs of a source together", () => {
+    expect(volumeScope(run(ref, 'alice'))).toBe(volumeScope(run({ ...ref, commit: 'other' }, 'alice')))
+    expect(volumeScope(run(ref, 'alice'))).toMatch(/^ref-[0-9a-f]{24}$/)
+  })
+
+  it('keeps them apart between callers and between sources', () => {
+    const scopes = [
+      volumeScope(run(ref, 'alice')),
+      volumeScope(run(ref, 'bob')),
+      volumeScope(run({ type: 'ref', repo: 'git.test/corp/other' }, 'alice')),
+      volumeScope(run({ type: 'sandbox', id: 's1' }, 'alice')),
+      volumeScope(run({ type: 'upload' }, 'alice')),
+    ]
+    expect(new Set(scopes).size).toBe(scopes.length)
   })
 })

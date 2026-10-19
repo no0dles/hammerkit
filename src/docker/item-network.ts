@@ -66,6 +66,77 @@ export function getItemNetworkName(item: ContainerItem): string {
   return `hammerkit-${getWorkInstanceId(item)}-${getRunId()}`
 }
 
+// On a server, the network the open tasks and services of a run share, in place of the
+// default bridge: Docker keeps user-defined bridges apart, so the containers of one run
+// can't reach those of another, or of another caller. What lies beyond the host's own
+// interfaces (the LAN, the cloud's metadata address) is the host firewall's to block.
+export function getRunNetworkName(): string {
+  return `hammerkit-run-${getRunId()}`
+}
+
+const runNetworks = new WeakMap<Dockerode, { users: number; lock: Promise<unknown> }>()
+
+function withRunNetwork<T>(docker: Dockerode, fn: (state: { users: number }) => Promise<T>): Promise<T> {
+  let state = runNetworks.get(docker)
+  if (!state) {
+    state = { users: 0, lock: Promise.resolve() }
+    runNetworks.set(docker, state)
+  }
+  const current = state
+  const result = current.lock.then(() => fn(current))
+  current.lock = result.catch(() => undefined)
+  return result
+}
+
+// The run's network for an open item, made by its first user and removed after the last
+// one: null off a server, for a daemon (it outlives the run) and on a daemon that has no
+// Linux bridges, where the item stays on the default bridge as before.
+async function acquireRunNetwork(
+  docker: Dockerode,
+  environment: Environment,
+  options: { daemon: boolean }
+): Promise<string | null> {
+  if (!environment.hosted || options.daemon || (await getDaemonVersion(docker)).Os !== 'linux') {
+    return null
+  }
+  return withRunNetwork(docker, async (state) => {
+    const name = getRunNetworkName()
+    if (state.users === 0) {
+      try {
+        await docker.createNetwork({
+          Name: name,
+          Labels: { app: 'hammerkit', ...getRunLabels(), 'hammerkit-daemon': 'false' },
+        })
+      } catch (e: any) {
+        // left by an item whose release failed
+        if (e?.statusCode !== 409) {
+          throw e
+        }
+      }
+    }
+    state.users++
+    return name
+  })
+}
+
+async function releaseRunNetwork(docker: Dockerode): Promise<void> {
+  await withRunNetwork(docker, async (state) => {
+    state.users--
+    if (state.users === 0) {
+      await removeItemNetwork(docker, getRunNetworkName())
+    }
+  })
+}
+
+async function getAddressOn(docker: Dockerode, containerId: string, network: string): Promise<string> {
+  const info = await docker.getContainer(containerId).inspect()
+  const address = info.NetworkSettings.Networks[network]?.IPAddress
+  if (!address) {
+    throw new Error(`${info.Name.replace(/^\//, '')} has no address on the network ${network} of the run`)
+  }
+  return address
+}
+
 // The network between an `allow` item and its proxy, which nothing else joins:
 // the services the item needs don't get to use its proxy.
 export function getProxyNetworkName(networkName: string): string {
@@ -74,16 +145,20 @@ export function getProxyNetworkName(networkName: string): string {
 
 const daemonVersions = new WeakMap<Dockerode, Promise<{ Version: string; Os: string }>>()
 
-// Limits rely on internal networks without a gateway on the host, which only
-// Linux containers on Docker 28 or later have. Anything else would run the
-// item with a hole, so it is refused.
-export async function checkNetworkLimitSupport(docker: Dockerode, item: ContainerItem): Promise<void> {
+function getDaemonVersion(docker: Dockerode): Promise<{ Version: string; Os: string }> {
   let version = daemonVersions.get(docker)
   if (!version) {
     version = docker.version()
     daemonVersions.set(docker, version)
   }
-  const { Version, Os } = await version
+  return version
+}
+
+// Limits rely on internal networks without a gateway on the host, which only
+// Linux containers on Docker 28 or later have. Anything else would run the
+// item with a hole, so it is refused.
+export async function checkNetworkLimitSupport(docker: Dockerode, item: ContainerItem): Promise<void> {
+  const { Version, Os } = await getDaemonVersion(docker)
   const level = getEffectiveNetwork(item.data).type
   if (Os !== 'linux') {
     throw new Error(`${item.name}: network ${level} needs Linux containers, the docker daemon runs ${Os} containers`)
@@ -133,7 +208,8 @@ async function getNeedNetwork(docker: Dockerode, need: WorkItemNeed, containerId
 }
 
 // Docker options for the network of a task or service. `open` is the default
-// bridge with links to the needed services, as before network limits. `none`
+// bridge with links to the needed services, as before network limits, and on a
+// server the run's own network (see getRunNetworkName). `none`
 // and `allow` put the container on an internal network of its own (or none at
 // all for a task that needs nothing) that the needed services join under the
 // names it needs them by; `allow` adds the egress proxy to it.
@@ -165,11 +241,23 @@ export async function prepareItemNetwork(
   }
 
   if (!isLimitedNetwork(network)) {
+    const linked = containers.filter((c) => !c.network)
+    const shared = await acquireRunNetwork(docker, environment, options)
+    if (shared) {
+      try {
+        // the services it needs are on the same network, found under the names it needs them by
+        for (const target of linked) {
+          hosts.push(`${target.need.name}:${await getAddressOn(docker, target.containerId, shared)}`)
+        }
+      } catch (e) {
+        await releaseRunNetwork(docker)
+        throw e
+      }
+    }
     return {
-      options: {
-        links: containers.filter((c) => !c.network).map((c) => `${c.containerId}:${c.need.name}`),
-        hosts,
-      },
+      options: shared
+        ? { mode: shared, hosts }
+        : { links: linked.map((c) => `${c.containerId}:${c.need.name}`), hosts },
       // a limited service is on its internal network only, so an open item
       // joins that network to reach it
       async connect(container: Container) {
@@ -184,7 +272,11 @@ export async function prepareItemNetwork(
           }
         }
       },
-      async release() {},
+      async release() {
+        if (shared) {
+          await releaseRunNetwork(docker)
+        }
+      },
     }
   }
 

@@ -10,7 +10,7 @@ import {
 } from './kubernetes-backend'
 import { getRunLabelValue } from '../kubernetes/job-placement'
 import { Run, RunContext } from './runs'
-import { KubernetesBackend, serverConfigSchema } from './server-config'
+import { DEFAULT_DENIED_EGRESS, KubernetesBackend, serverConfigSchema } from './server-config'
 
 const KUBECONFIG = `
 apiVersion: v1
@@ -154,6 +154,37 @@ describe('kubernetes backend', () => {
     })
   })
 
+  it('lets the pods of a caller reach the allowed addresses of the denied ranges, in a rule of their own', () => {
+    const egress = getNamespacePolicies('hk-alice', DEFAULT_DENIED_EGRESS, ['10.1.2.3/32', 'fd00::5/128'])[1]
+    expect(egress.spec?.egress?.[2]).toEqual({
+      to: [
+        {
+          ipBlock: {
+            cidr: '0.0.0.0/0',
+            except: ['169.254.0.0/16', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10'],
+          },
+        },
+        { ipBlock: { cidr: '::/0', except: ['fe80::/10', 'fc00::/7'] } },
+      ],
+    })
+    expect(egress.spec?.egress?.[3]).toEqual({
+      to: [{ ipBlock: { cidr: '10.1.2.3/32' } }, { ipBlock: { cidr: 'fd00::5/128' } }],
+    })
+    expect(getNamespacePolicies('hk-alice', DEFAULT_DENIED_EGRESS)[1].spec?.egress).toHaveLength(3)
+  })
+
+  it('lets nothing into an egress proxy that its own policy does not let in', () => {
+    // the proxy's own policy can go before its pod has ended: without this one, nothing
+    // would select the pod for ingress and anyone who can route to it would get in
+    const proxy = getNamespacePolicies('hk-alice', DEFAULT_DENIED_EGRESS)[2]
+    expect(proxy.metadata?.name).toBe('hammerkit-proxy-ingress')
+    expect(proxy.spec).toEqual({
+      podSelector: { matchLabels: { 'hammerkit.dev/network': 'proxy' } },
+      policyTypes: ['Ingress'],
+      ingress: [],
+    })
+  })
+
   describe('the namespace of a caller', () => {
     const owner = { iss: 'https://idp.corp', sub: 'alice' }
     const source = { type: 'ref', repo: 'git.test/corp/app', ref: 'main' } as Run['source']
@@ -232,6 +263,7 @@ describe('kubernetes backend', () => {
         '  hammerkit-runs for system:serviceaccount:hammerkit:server',
         'create NetworkPolicy hammerkit-ingress',
         'create NetworkPolicy hammerkit-egress',
+        'create NetworkPolicy hammerkit-proxy-ingress',
         'create ResourceQuota hammerkit',
         // no defaultResources: one an earlier config made goes
         'delete LimitRange hammerkit',

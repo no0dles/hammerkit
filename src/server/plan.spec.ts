@@ -416,6 +416,22 @@ tasks:
       'tasks:\n  a:\n    image: alpine\n    generates: ["../out"]\n    cmds: [echo]\n',
       /a: generates .*out, which is outside of the bundle/
     )
+    // docker binds a volume "name" that is a path of the host
+    await refuse(
+      'services:\n  db:\n    image: postgres\n    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]\n',
+      "db: volume /var/run/docker.sock is not a volume name, a path of the server can't be mounted"
+    )
+    await refuse(
+      'services:\n  db:\n    image: postgres\n    volumes: ["/etc:/data:ro"]\n',
+      "db: volume /etc is not a volume name, a path of the server can't be mounted"
+    )
+  })
+
+  it('takes services with named volumes', async () => {
+    const yaml =
+      'services:\n  db:\n    image: postgres\n    volumes: ["pg-data:/var/lib/postgresql/data", "cache:/cache:ro"]\n' +
+      'tasks:\n  a:\n    cmds: [echo]\n'
+    await expect(planBundle(bundle(yaml), hosted, { policy })).resolves.toMatchObject({ tasks: ['a'] })
   })
 
   it('takes mounts inside the bundle', async () => {

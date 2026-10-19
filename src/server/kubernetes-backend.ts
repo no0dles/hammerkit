@@ -8,7 +8,7 @@ import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/app
 import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getErrorMessage } from '../log'
-import { NETWORK_LABEL, NETWORK_LIMITED } from '../kubernetes/network-policy'
+import { NETWORK_LABEL, NETWORK_LIMITED, NETWORK_PROXY } from '../kubernetes/network-policy'
 import { sleep } from '../utils/sleep'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { SandboxClaim } from './sandbox-storage'
@@ -76,14 +76,16 @@ function readInClusterNamespace(): string | undefined {
  * - ingress of a pod with an open network: connections from the pods of its namespace
  *   only (the services a task needs)
  * - egress of a pod with an open network, and of an egress proxy: its namespace, DNS,
- *   and any address but the denied ranges
+ *   and any address but the denied ranges (link-local and private by default), plus the
+ *   allowed ones
  * Policies add up, so neither selects the pods of a limited item: its own policy (see
  * buildNetworkPolicy) is all it may reach, DNS left out, and all that may reach it. An
  * egress proxy takes connections from its item only (buildProxyPolicy).
  */
 export function getNamespacePolicies(
   namespace: string,
-  deniedEgress: string[]
+  deniedEgress: string[],
+  allowedEgress: string[] = []
 ): (V1NetworkPolicy & KubernetesObjectHeader)[] {
   const metadata = (name: string) => ({
     name,
@@ -131,7 +133,21 @@ export function getNamespacePolicies(
               ),
             ],
           },
+          // the operator's exceptions, which rules add up to
+          ...(allowedEgress.length > 0 ? [{ to: allowedEgress.map((cidr) => ({ ipBlock: { cidr } })) }] : []),
         ],
+      },
+    },
+    {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: metadata('hammerkit-proxy-ingress'),
+      spec: {
+        // an egress proxy takes only what its own policy lets in: one whose policy went
+        // before the pod ended takes nothing
+        podSelector: { matchLabels: { [NETWORK_LABEL]: NETWORK_PROXY } },
+        policyTypes: ['Ingress'],
+        ingress: [],
       },
     },
   ]
@@ -447,7 +463,7 @@ export class CallerNamespaces {
       }
     }
     await replace(this.instance, getRunRoleBinding(namespace, backend.runRole, await this.whoAmI()))
-    const [first, ...policies] = getNamespacePolicies(namespace, backend.deniedEgress)
+    const [first, ...policies] = getNamespacePolicies(namespace, backend.deniedEgress, backend.allowedEgress)
     // the API server may refuse what the binding allows for a moment after it was made
     await untilAllowed(() => replace(this.instance, first))
     for (const policy of policies) {
