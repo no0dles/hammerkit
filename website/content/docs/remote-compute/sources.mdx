@@ -98,7 +98,8 @@ and nothing else of Google's. Give the App the permissions the server needs: `Co
 Read-only` to read, `Contents: Read and write` when [sandboxes push](#pushing), and no
 `Workflows` permission, so a push that changes `.github/workflows` is refused by GitHub. An
 error says which step failed (the key, Google, Secret Manager, the installation, the token)
-and what the service answered, never the key or a token.
+and what the service answered, never the key or a token. The command writes it to stderr, and
+the server puts it in the error of the run or sandbox that needed the token.
 
 ## Pinning
 
