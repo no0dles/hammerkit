@@ -70,7 +70,7 @@ backend:
   # context: prod
   storageClass: standard-rwo        # of the claims of tasks; the cluster's default when left out
   volumeSize: 1Gi                   # default, of a task's claim that states no volumeSize
-  maxVolumeSize: 50Gi               # the most a task may state; no limit but the quota when left out
+  maxVolumeSize: 50Gi               # the most a task may state; 10Gi (or volumeSize, if more) when left out
   keepVolumes: 15m                  # default; how long a task's claim stays for the next run, false for not at all
   pools:
     - name: builds
@@ -80,7 +80,7 @@ backend:
       toolImage: ghcr.io/corp/build-tools:2026.10
   providers:
     gsm: { image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim }
-  quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20' }
+  quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20', requests.storage: 100Gi }
   defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
   sandboxes: { size: 4Gi, storageClass: sandboxes }
   # runRole: hammerkit-runs           # the ClusterRole the server binds in each caller's namespace
@@ -98,7 +98,7 @@ service a Deployment, in a namespace of the caller.
 | `kubeconfig`, `context` | The cluster, for a server outside of it. Without them the server uses its default kubeconfig, else the cluster it runs in. |
 | `namespacePrefix` | A caller's namespace is this and the first 16 hex digits of the sha-256 of their issuer and subject, `hammerkit-` by default. Two servers on one cluster need a prefix each. |
 | `storageClass` | The storage class of the claims tasks get. |
-| `volumeSize`, `maxVolumeSize` | The size of a task's or service's claim when it states no [`volumeSize`](/docs/task/kubernetes#claims) (`1Gi`), and the most one may state. A task over it fails before its pods start. Each claim counts as its size in a `requests.storage` quota. |
+| `volumeSize`, `maxVolumeSize` | The size of a task's or service's claim when it states no [`volumeSize`](/docs/task/kubernetes#claims) (`1Gi`), and the most one may state: `10Gi` when left out, or `volumeSize` if that is more, since a build file states its own. A task over it fails before its pods start. Each claim counts as its size in a `requests.storage` quota, which bounds what a caller's claims take together. |
 | `keepVolumes` | How long the claim of a task stays after the run that mounted it last (`15m`), see [Kept claims](#kept-claims). `false` removes it at the end of the run. |
 | `pools` | Where pods are placed, see [Pools](#pools). One `linux`/`amd64` pool when left out. |
 | `providers` | Per secret provider, the image its command runs in. Every provider an account reads needs one. |
@@ -162,7 +162,8 @@ source, and its label `hammerkit.dev/volume-scope` the source.
 
 The disk they take is bounded by the time and the quota of the namespace: the server removes
 a claim once it expired, and when a claim of a run does not fit a `requests.storage` or
-`persistentvolumeclaims` quota, the claims kept for the caller's other sources make room.
+`persistentvolumeclaims` quota, the kept claims the run does not use make room: those of the
+caller's other sources, and those of its own a task no longer has (one renamed or changed).
 After a restart, the server finds the claims it kept before when its first run starts, and
 removes them as they expire. Services keep no claim; theirs go with the run.
 

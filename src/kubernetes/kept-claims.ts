@@ -7,6 +7,7 @@ import { WorkTask } from '../planner/work-task'
 import { KubernetesInstance } from './kubernetes-instance'
 import { statusCodeOf } from './apply'
 import { sleep } from '../utils/sleep'
+import { getRunLabelValue } from './job-placement'
 
 // On a server with `backend.keepVolumes`, the claim of a task stays after the run, so the
 // next run of the same source finds the outputs in it and mounts them without restoring
@@ -60,14 +61,39 @@ async function readClaim(
   }
 }
 
-// The state key of the outputs a kept claim holds, null when it holds none that are whole
-export async function readClaimState(
+// The state key of the outputs a kept claim holds, null when it holds none that are whole.
+// The claim is the run's from now: it does not expire or make way for another claim
+// before the run ended, so outputs the run found in it are still there when it mounts them.
+export async function useClaimState(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
   name: string
 ): Promise<string | null> {
-  const claim = await readClaim(instance, kubernetes.namespace, name)
-  if (!claim || claim.metadata?.deletionTimestamp) {
+  let claim: V1PersistentVolumeClaim
+  try {
+    claim = await instance.objectApi.patch<V1PersistentVolumeClaim>({
+      apiVersion: 'v1',
+      kind: 'PersistentVolumeClaim',
+      metadata: {
+        name,
+        namespace: kubernetes.namespace,
+        labels: { [KEPT_BY_LABEL]: getRunLabelValue(kubernetes.server?.run ?? '') },
+        // null removes it
+        annotations: { [EXPIRES_ANNOTATION]: null as unknown as string },
+      },
+    })
+  } catch (e) {
+    if (statusCodeOf(e) === 404) {
+      return null
+    }
+    throw e
+  }
+  // one being removed holds nothing to mount, nor one of another source (ensured anyway
+  // by the hash of the source in its name)
+  if (
+    claim.metadata?.deletionTimestamp ||
+    claim.metadata?.labels?.[VOLUME_SCOPE_LABEL] !== kubernetes.server?.volumeScope
+  ) {
     return null
   }
   return claim.metadata?.annotations?.[STATE_ANNOTATION] ?? null
@@ -130,13 +156,27 @@ async function removeClaims(
   claims: V1PersistentVolumeClaim[],
   timeout: number
 ): Promise<string[]> {
-  const names = claims.flatMap((claim) => (claim.metadata?.name ? [claim.metadata.name] : []))
-  for (const name of names) {
-    await instance.coreApi.deleteNamespacedPersistentVolumeClaim({ name, namespace }).catch((e) => {
-      if (statusCodeOf(e) !== 404) {
+  const names: string[] = []
+  for (const claim of claims) {
+    const name = claim.metadata?.name
+    if (!name) {
+      continue
+    }
+    try {
+      // only as it was listed: one a run took for itself since (useClaimState) stays
+      await instance.coreApi.deleteNamespacedPersistentVolumeClaim({
+        name,
+        namespace,
+        body: { preconditions: { resourceVersion: claim.metadata?.resourceVersion } },
+      })
+      names.push(name)
+    } catch (e) {
+      if (statusCodeOf(e) === 404) {
+        names.push(name)
+      } else if (statusCodeOf(e) !== 409) {
         throw e
       }
-    })
+    }
   }
   // a run mounts a claim of the same name again
   const deadline = Date.now() + timeout
@@ -189,21 +229,22 @@ export async function sweepKeptClaims(
   return { removed, next: next === null ? null : new Date(next) }
 }
 
-// When a run needs room under the quota of its namespace: the kept claims of the other
-// sources go, which this run never mounts. The names of those removed.
+// When a run needs room under the quota of its namespace: the kept claims it does not use
+// go, those of the other sources and those of its own a task of this run did not take (one
+// renamed or changed since). The names of those removed.
 export async function evictKeptClaims(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
   timeout: number
 ): Promise<string[]> {
-  const scope = kubernetes.server?.volumeScope
-  if (!scope) {
+  const server = kubernetes.server
+  if (!server?.volumeScope) {
     return []
   }
-  const others = await listKeptClaims(
+  const unused = await listKeptClaims(
     instance,
     kubernetes.namespace,
-    `${VOLUME_SCOPE_LABEL},${VOLUME_SCOPE_LABEL}!=${scope}`
+    `${VOLUME_SCOPE_LABEL},${KEPT_BY_LABEL}!=${getRunLabelValue(server.run)}`
   )
-  return removeClaims(instance, kubernetes.namespace, others, timeout)
+  return removeClaims(instance, kubernetes.namespace, unused, timeout)
 }

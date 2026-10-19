@@ -160,6 +160,7 @@ data:
       namespacePrefix: $NAME-
       runRole: $NAME-runs
       networkPolicy: enforced
+      maxVolumeSize: 10Gi    # the default: the most a task's claim may request
       # metadata addresses and the cluster's pod and service ranges
       deniedEgress: [169.254.0.0/16, fe80::/10, fd00:ec2::/32, 10.0.0.0/8, 34.118.224.0/20]
       sandboxes: { image: 'no0dles/hammerkit:$VERSION' }

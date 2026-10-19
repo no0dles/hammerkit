@@ -249,7 +249,7 @@ const kubernetesBackendSchema = z
     // of the claims tasks get; the cluster's default when left out
     storageClass: z.string().min(1).optional(),
     // what the claim of a task or service requests when it states no `volumeSize`, and
-    // the most one may state (none when left out: the namespace's quota bounds them)
+    // the most one may state (see getMaxVolumeSize when left out)
     volumeSize: size.default('1Gi'),
     maxVolumeSize: size.optional(),
     // how long the claim of a task stays after the run that mounted it last, for the next
@@ -287,6 +287,22 @@ const kubernetesBackendSchema = z
   .strict()
 
 export type KubernetesBackend = z.infer<typeof kubernetesBackendSchema>
+
+// the most a task's claim may request on a server whose operator states no maxVolumeSize
+export const DEFAULT_MAX_VOLUME_SIZE = '10Gi'
+
+// The most a task's or service's claim may request: the operator's maxVolumeSize, else
+// DEFAULT_MAX_VOLUME_SIZE or the backend's volumeSize when that is more. A build file
+// states its volumeSize, so without a bound any caller could make the operator pay for a
+// disk of any size.
+export function getMaxVolumeSize(backend: Pick<KubernetesBackend, 'volumeSize' | 'maxVolumeSize'>): string {
+  if (backend.maxVolumeSize) {
+    return backend.maxVolumeSize
+  }
+  return parseSize(backend.volumeSize) > parseSize(DEFAULT_MAX_VOLUME_SIZE)
+    ? backend.volumeSize
+    : DEFAULT_MAX_VOLUME_SIZE
+}
 
 export const accountLevelSchema = z.enum(['use', 'request'])
 export type AccountLevel = z.infer<typeof accountLevelSchema>

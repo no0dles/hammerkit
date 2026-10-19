@@ -6,12 +6,13 @@ import {
   getClaimName,
   isKeptClaim,
   KEPT_BY_LABEL,
-  readClaimState,
   recordClaimState,
   STATE_ANNOTATION,
   sweepKeptClaims,
+  useClaimState,
   VOLUME_SCOPE_LABEL,
 } from './kept-claims'
+import { getRunLabelValue } from './job-placement'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 const env = (volumeScope?: string) =>
@@ -30,6 +31,7 @@ interface Claim {
   labels: { [key: string]: string }
   annotations: { [key: string]: string }
   deleting?: boolean
+  version?: number
 }
 
 // claims of one namespace, which a label selector of `key`, `key=value` and `key!=value` lists
@@ -38,6 +40,7 @@ function cluster(claims: Claim[]) {
   const notFound = () => Object.assign(new Error('not found'), { code: 404 })
   const metadata = (claim: Claim) => ({
     name: claim.name,
+    resourceVersion: String(claim.version ?? 1),
     labels: claim.labels,
     annotations: claim.annotations,
     ...(claim.deleting ? { deletionTimestamp: new Date() } : {}),
@@ -59,7 +62,14 @@ function cluster(claims: Claim[]) {
       listNamespacedPersistentVolumeClaim: async ({ labelSelector }: any) => ({
         items: claims.filter((c) => matches(c, labelSelector)).map((c) => ({ metadata: metadata(c) })),
       }),
-      deleteNamespacedPersistentVolumeClaim: async ({ name }: any) => {
+      deleteNamespacedPersistentVolumeClaim: async ({ name, body }: any) => {
+        const claim = claims.find((c) => c.name === name)
+        if (!claim) {
+          throw notFound()
+        }
+        if (body?.preconditions?.resourceVersion !== String(claim.version ?? 1)) {
+          throw Object.assign(new Error('the object has been modified'), { code: 409 })
+        }
         calls.push(`delete ${name}`)
         claims.splice(
           claims.findIndex((c) => c.name === name),
@@ -74,6 +84,8 @@ function cluster(claims: Claim[]) {
           throw notFound()
         }
         calls.push(`annotate ${claim.name} ${JSON.stringify(spec.metadata.annotations)}`)
+        claim.version = (claim.version ?? 1) + 1
+        Object.assign(claim.labels, spec.metadata.labels ?? {})
         for (const [key, value] of Object.entries(spec.metadata.annotations ?? {})) {
           if (value === null) {
             delete claim.annotations[key]
@@ -112,19 +124,27 @@ describe('kept claims', () => {
   })
 
   it('says the state of the outputs only while they are whole', async () => {
-    const { instance, claims } = cluster([kept('claim', 'ref-1')])
-    expect(await readClaimState(instance, env('ref-1'), 'claim')).toBeNull()
+    const { instance, claims } = cluster([
+      kept('claim', 'ref-1', { [EXPIRES_ANNOTATION]: '2026-10-18T12:00:00Z' }),
+      kept('foreign', 'sandbox-1', { [STATE_ANNOTATION]: 'state-1' }),
+    ])
+    expect(await useClaimState(instance, env('ref-1'), 'claim')).toBeNull()
+    // the run that looked at it holds it: it does not expire before the run's end
+    expect(claims[0].labels[KEPT_BY_LABEL]).toBe(getRunLabelValue('run_1'))
+    expect(claims[0].annotations).toEqual({})
     await recordClaimState(instance, env('ref-1'), 'claim', 'state-1')
-    expect(await readClaimState(instance, env('ref-1'), 'claim')).toBe('state-1')
+    expect(await useClaimState(instance, env('ref-1'), 'claim')).toBe('state-1')
     expect(await forgetClaimState(instance, env('ref-1'), 'claim')).toBe(true)
     expect(claims[0].annotations).toEqual({})
     // one that is being removed holds nothing to mount
     claims[0].annotations[STATE_ANNOTATION] = 'state-1'
     claims[0].deleting = true
-    expect(await readClaimState(instance, env('ref-1'), 'claim')).toBeNull()
+    expect(await useClaimState(instance, env('ref-1'), 'claim')).toBeNull()
+    // nor one of another source
+    expect(await useClaimState(instance, env('ref-1'), 'foreign')).toBeNull()
     // a claim that is not there was not left by a run
     expect(await forgetClaimState(instance, env('ref-1'), 'other')).toBe(false)
-    expect(await readClaimState(instance, env('ref-1'), 'other')).toBeNull()
+    expect(await useClaimState(instance, env('ref-1'), 'other')).toBeNull()
   })
 
   it('gives the claims a run kept their expiry at its end', async () => {
@@ -152,10 +172,30 @@ describe('kept claims', () => {
     expect(off).toEqual({ removed: ['later', 'sooner'], next: null })
   })
 
-  it('makes way under a quota by removing the kept claims of other sources only', async () => {
-    const { instance, claims } = cluster([kept('mine', 'ref-1'), kept('other', 'sandbox-1'), kept('third', 'ref-2')])
-    expect(await evictKeptClaims(instance, env('ref-1'), 1000)).toEqual(['other', 'third'])
+  it('makes way under a quota by removing the kept claims the run did not take', async () => {
+    const run = getRunLabelValue('run_1')
+    const { instance, claims } = cluster([
+      kept('mine', 'ref-1', {}, run),
+      // of a task renamed since, which no task of the run takes
+      kept('renamed', 'ref-1'),
+      kept('other', 'sandbox-1'),
+      kept('third', 'ref-2'),
+    ])
+    expect(await evictKeptClaims(instance, env('ref-1'), 1000)).toEqual(['renamed', 'other', 'third'])
     expect(claims.map((c) => c.name)).toEqual(['mine'])
     expect(await evictKeptClaims(instance, env(), 1000)).toEqual([])
+  })
+
+  it('leaves a claim a run took between the listing and the removal', async () => {
+    const { instance, claims } = cluster([kept('taken', 'ref-1'), kept('idle', 'ref-1')])
+    const list = instance.coreApi.listNamespacedPersistentVolumeClaim
+    instance.coreApi.listNamespacedPersistentVolumeClaim = async (request: any) => {
+      const listed = await list(request)
+      // a task of the run finds its outputs in it right after
+      await useClaimState(instance, env('ref-1'), 'taken')
+      return listed
+    }
+    expect(await evictKeptClaims(instance, env('ref-1'), 1000)).toEqual(['idle'])
+    expect(claims.map((c) => c.name)).toEqual(['taken'])
   })
 })
