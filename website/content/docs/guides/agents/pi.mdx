@@ -165,8 +165,7 @@ If this exact version was published before, it prints `already published to hamm
 with the same hash instead; that is fine.
 
 `HAMMERKIT_TOKEN_COMMAND` makes this one command sign in as `hammerkit-publisher`: `gcloud`
-prints a token of that service account for you, and a warning that it impersonates it. That
-only works once you may act as it, see
+prints a token of that service account for you. That only works once you may act as it, see
 [Service accounts on Google Cloud](/docs/guides/agents/google-accounts). Write your project
 instead of `my-project`; with the Kubernetes guide, the account is `$PUBLISHER` of its step 1.
 
@@ -272,7 +271,7 @@ branch from passing the check.
 | `… is not the hash of a published version`                                                              | `HAMMERKIT_BUILD` holds a name or a shortened hash. Use the full hash that step 3 printed.                                                                                            |
 | `unable to reach http://…: fetch failed: connect ECONNREFUSED …`                                        | Nothing listens at the server's address, for example `kubectl port-forward` has stopped.                                                                                              |
 | `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | The server's certificate comes from a company or private CA: name that CA's file in `NODE_EXTRA_CA_CERTS`, which takes one file.                                                      |
-| `error: lost connection to pod`, or an empty reply from the server                                      | The server's pod was replaced, for example by a `kubectl apply`, and `kubectl port-forward` ended with it: start it again.                                                            |
+| `error: lost connection to pod`, `Unable to connect`, or an empty reply from the server                 | `kubectl port-forward` ended, because the server's pod was replaced or the connection dropped: start it again, or run it in the loop of the Kubernetes guide.                         |
 | `could not read the source credential …`                                                                | The server can not mint its token for the repository; the rest of the message says why. See [the check](/docs/guides/agents/kubernetes#2-deploy-the-server) after the deploy.         |
 | `Permission 'iam.serviceAccounts.getAccessToken' denied`                                                | You may not act as the service account in `HAMMERKIT_TOKEN_COMMAND` yet, see [Service accounts on Google Cloud](/docs/guides/agents/google-accounts#2-allow-yourself-to-act-as-them). |
 | `you are not entitled to keep sandboxes on this server`                                                 | The token is not the agent's, or its entitlement has no `sandboxes`: check the account in `HAMMERKIT_TOKEN_COMMAND`.                                                                  |

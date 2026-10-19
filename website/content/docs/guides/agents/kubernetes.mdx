@@ -75,7 +75,7 @@ gcloud secrets add-iam-policy-binding $NAME-github-app-key --project $PROJECT \
   --member principal://iam.googleapis.com/$POOL/subject/system:serviceaccount:$NAME:hammerkit
 
 # identities for the agent and the publisher, which you may sign in as
-ME=user:$(gcloud config get account)    # signed in as a service account: ME=serviceAccount:<its email>
+ME=user:$(gcloud config get account)    # as a service account: ME=serviceAccount:<its email>; empty: set it yourself
 for who in agent publisher; do
   gcloud iam service-accounts create $NAME-$who --project $PROJECT
   gcloud iam service-accounts add-iam-policy-binding $NAME-$who@$PROJECT.iam.gserviceaccount.com \
@@ -300,12 +300,12 @@ An agent whose sandbox can not be created gets the same reason from the server.
 Forward the server's port to your machine and register it:
 
 ```bash
-kubectl -n $NAME port-forward svc/hammerkit 8480:8480 &
+while true; do kubectl -n $NAME port-forward svc/hammerkit 8480:8480; sleep 1; done &
 hammerkit remote add $NAME http://127.0.0.1:8480 --issuer https://accounts.google.com
 ```
 
-The port-forward ends when the server's pod is replaced, for example after a `kubectl apply`:
-start it again then.
+`kubectl port-forward` ends when the server's pod is replaced, for example after a
+`kubectl apply`, and now and then when its connection drops; the loop starts it again.
 
 Before you publish, check that the build file's shell task has `mounts: [.]` and
 `cmds: [sh -c]`, as in [The build file](/docs/guides/agents#the-build-file). Without the
@@ -317,8 +317,6 @@ HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit 
   --impersonate-service-account=$PUBLISHER" \
   hammerkit remote publish $NAME
 ```
-
-`gcloud` also prints a warning that it impersonates the account; that is expected.
 
 It prints the hash of the published version, `sha256:` and 64 hex digits. The agent names the
 build file by that hash, so a later publish never changes what a running agent uses.
@@ -375,6 +373,8 @@ ServiceAccount of its [account](/docs/remote-compute/accounts). See
 Secret Manager.
 
 ## Cleaning up
+
+Stop the port-forward loop first (`kill %1`, or close its terminal), then:
 
 ```bash
 # the callers' namespaces of this server: namespacePrefix and 16 hex digits; look before you delete
