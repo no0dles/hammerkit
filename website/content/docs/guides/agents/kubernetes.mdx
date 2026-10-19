@@ -305,7 +305,9 @@ hammerkit remote add $NAME http://127.0.0.1:8480 --issuer https://accounts.googl
 ```
 
 `kubectl port-forward` ends when the server's pod is replaced, for example after a
-`kubectl apply`, and now and then when its connection drops; the loop starts it again.
+`kubectl apply`, and now and then when its connection drops; the loop starts it again. When
+it prints the same error every second, for example because port 8480 is taken or the cluster
+can not be reached, stop it with `kill %1` and fix that first.
 
 Before you publish, check that the build file's shell task has `mounts: [.]` and
 `cmds: [sh -c]`, as in [The build file](/docs/guides/agents#the-build-file). Without the
