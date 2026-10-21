@@ -35,6 +35,12 @@ export function getCallerNamespace(prefix: string, owner: { iss: string; sub: st
   return `${prefix}${createHash('sha256').update(`${owner.iss}\0${owner.sub}`).digest('hex').slice(0, 16)}`
 }
 
+// Whether a namespace is one getCallerNamespace makes with this prefix: a server named `hk`
+// passes over the namespaces of a server named `hk-test` on the same cluster.
+export function isCallerNamespace(prefix: string, name: string): boolean {
+  return name.startsWith(prefix) && /^[0-9a-f]{16}$/.test(name.slice(prefix.length))
+}
+
 // How the server and the processes of its runs reach the cluster: a kubeconfig and
 // context the operator names, else the server's default kubeconfig, else the cluster
 // the server runs in (its pod's ServiceAccount, found through the variables
@@ -387,7 +393,11 @@ export class KubernetesExecutor implements RunExecutor {
       .then((namespaces) => {
         for (const namespace of namespaces.items) {
           const name = namespace.metadata?.name
-          if (name?.startsWith(this.config.backend.namespacePrefix) && !namespace.metadata?.deletionTimestamp) {
+          if (
+            name &&
+            isCallerNamespace(this.config.backend.namespacePrefix, name) &&
+            !namespace.metadata?.deletionTimestamp
+          ) {
             this.sweepLater(name, 0)
           }
         }

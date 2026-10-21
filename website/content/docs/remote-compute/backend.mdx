@@ -396,7 +396,8 @@ rules:
 Bind `hammerkit-server` with a ClusterRoleBinding and `hammerkit-accounts` with a RoleBinding to
 the server's ServiceAccount; do not bind `hammerkit-runs` yourself. Making RoleBindings across the
 cluster still lets the server bind `hammerkit-runs` in a namespace it did not make. To rule that
-out, admit its RoleBindings in managed namespaces only:
+out, admit its RoleBindings only in the namespaces of its own callers, its `namespacePrefix`
+and 16 hex digits, and not in those of another server on the cluster:
 
 ```yaml title="admission.yaml"
 apiVersion: admissionregistration.k8s.io/v1
@@ -410,6 +411,7 @@ spec:
     - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:hammerkit:hammerkit'" }
   validations:
     - expression: "namespaceObject.metadata.?labels['hammerkit.dev/managed'].orValue('') == 'true'"
+    - expression: "namespaceObject.metadata.name.matches('^hammerkit-[0-9a-f]{16}$')"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

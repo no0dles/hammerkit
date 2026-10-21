@@ -20,7 +20,11 @@ stored in the cluster, and no image has to be built: the server runs the release
 
 - A GKE cluster that enforces `NetworkPolicy`. Autopilot does; on a Standard cluster turn on
   Dataplane V2.
-- `gcloud` and `kubectl`, signed in with the right to create ClusterRoles.
+- `gcloud`, `kubectl` and `jq`, signed in with the right to create ClusterRoles.
+- The hammerkit CLI of the server's version, on Node.js 24 or later:
+  `npm install -g hammerkit@$VERSION` with `VERSION` from below. On an older Node.js npm
+  warns `EBADENGINE`, and with a range instead of an exact version it quietly installs an
+  old hammerkit without the commands this guide uses.
 - A GitHub App installed on your repository, with **Contents: read and write**, **Metadata:
   read** and nothing else. Download a private key for it (`app.pem`).
 - A build file with a shell task in the repository, see
@@ -33,10 +37,18 @@ PROJECT=my-project
 REGION=europe-west4
 REPO=acme/shop          # your GitHub repository
 GITHUB_APP_ID=123456    # on the App's settings page
-VERSION=1.27.0          # the hammerkit version, `hammerkit --version`
+VERSION=1.27.0          # one hammerkit version for the server, the CLI and the agent
 NAME=hammerkit          # namespace and account names; another server on the cluster needs another
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
 ```
+
+<Callout>
+
+Until 1.27.0 is released, use the prerelease: `VERSION=$(npm view hammerkit@next version)`,
+for example `1.27.0-next.1`. The image `no0dles/hammerkit:$VERSION` and the npm package
+`hammerkit@$VERSION` exist for every published version, the prereleases included.
+
+</Callout>
 
 ## 1. Google: the App key and the accounts
 
@@ -45,7 +57,8 @@ an identity pool trusts the cluster's tokens, and only the server's ServiceAccou
 key. Two Google service accounts give the agent and the publisher an identity to sign in with.
 
 ```bash
-gcloud services enable sts.googleapis.com secretmanager.googleapis.com --project $PROJECT
+gcloud services enable sts.googleapis.com secretmanager.googleapis.com iam.googleapis.com \
+  iamcredentials.googleapis.com --project $PROJECT
 
 # let the cluster's ServiceAccounts sign in to Google
 gcloud iam workload-identity-pools create $NAME --location global --project $PROJECT
@@ -62,29 +75,46 @@ gcloud secrets add-iam-policy-binding $NAME-github-app-key --project $PROJECT \
   --member principal://iam.googleapis.com/$POOL/subject/system:serviceaccount:$NAME:hammerkit
 
 # identities for the agent and the publisher, which you may sign in as
+ME=user:$(gcloud config get account)    # as a service account: ME=serviceAccount:<its email>; empty: set it yourself
 for who in agent publisher; do
   gcloud iam service-accounts create $NAME-$who --project $PROJECT
   gcloud iam service-accounts add-iam-policy-binding $NAME-$who@$PROJECT.iam.gserviceaccount.com \
-    --project $PROJECT --role roles/iam.serviceAccountTokenCreator --member user:$(gcloud config get account)
+    --project $PROJECT --role roles/iam.serviceAccountTokenCreator --member $ME
 done
-AGENT_ID=$(gcloud iam service-accounts describe $NAME-agent@$PROJECT.iam.gserviceaccount.com \
-  --project $PROJECT --format='value(uniqueId)')
-PUBLISHER_ID=$(gcloud iam service-accounts describe $NAME-publisher@$PROJECT.iam.gserviceaccount.com \
-  --project $PROJECT --format='value(uniqueId)')
+
+# what the next steps use
+AUDIENCE=$NAME
+KEY_SECRET=projects/$PROJECT/secrets/$NAME-github-app-key/versions/latest
+AGENT=$NAME-agent@$PROJECT.iam.gserviceaccount.com
+PUBLISHER=$NAME-publisher@$PROJECT.iam.gserviceaccount.com
+AGENT_ID=$(gcloud iam service-accounts describe $AGENT --project $PROJECT --format='value(uniqueId)')
+PUBLISHER_ID=$(gcloud iam service-accounts describe $PUBLISHER --project $PROJECT --format='value(uniqueId)')
 ```
 
 Delete `app.pem` now. The two service accounts hold no role in the project: only the server
-reads their tokens. Signed in as a service account yourself, write `--member
-serviceAccount:…` in the loop.
+reads their tokens. A new IAM binding can take a few minutes before it works. `AUDIENCE` is
+what the pool accepts from the server's pod; it is unrelated to the `audience: hammerkit` of
+the sign-in tokens in step 2.
+
+**Did someone else do this step?** Ask them for the values the last block sets, and set them
+in your shell: `POOL` (the pool's full name, as above), `AUDIENCE` (the audience its provider
+allows), `KEY_SECRET` (the Secret Manager version of the App's key), `AGENT` and `PUBLISHER`
+(the emails of the two service accounts) and `AGENT_ID` and `PUBLISHER_ID` (their unique ids).
+The pool's provider has to be named `cluster`, or change `providers/cluster` in `gcp.json`
+of step 2. They also have to let the server's ServiceAccount,
+`system:serviceaccount:$NAME:hammerkit`, read the key, and let you act as the two accounts.
 [Service accounts on Google Cloud](/docs/guides/agents/google-accounts) explains these two
 accounts, and how to let your team act as the agent.
 
 ## 2. Deploy the server
 
 One manifest holds everything the server needs in the cluster: its namespace and
-ServiceAccount, its rights, its config, a disk and the Deployment.
+ServiceAccount, its rights, its config, a disk and the Deployment. It uses the variables of
+step 1; the first line stops when one of them is not set, for example in a new terminal.
 
 ```bash
+: "${NAME:?}" "${REPO:?}" "${GITHUB_APP_ID:?}" "${VERSION:?}" "${POOL:?}" "${AUDIENCE:?}" \
+  "${KEY_SECRET:?}" "${AGENT_ID:?}" "${PUBLISHER_ID:?}"
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
@@ -122,7 +152,7 @@ rules:
   - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
   - { apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [get, list, create, update, patch, delete] }
 ---
-# the server binds $NAME-runs only in namespaces it made
+# the server binds $NAME-runs only in namespaces it made, not in another server's
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata: { name: $NAME-managed-namespaces }
@@ -134,6 +164,7 @@ spec:
     - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:$NAME:hammerkit'" }
   validations:
     - expression: "namespaceObject.metadata.?labels['hammerkit.dev/managed'].orValue('') == 'true'"
+    - expression: "namespaceObject.metadata.name.matches('^$NAME-[0-9a-f]{16}$')"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -175,7 +206,7 @@ data:
           github-app:
             env:
               GITHUB_APP_ID: '$GITHUB_APP_ID'
-              GITHUB_APP_KEY_SECRET: projects/$PROJECT/secrets/$NAME-github-app-key/versions/latest
+              GITHUB_APP_KEY_SECRET: $KEY_SECRET
               GOOGLE_APPLICATION_CREDENTIALS: /etc/hammerkit/gcp.json
     sources:
       - match: github.com/$REPO
@@ -185,10 +216,10 @@ data:
     sandboxes:
       network: { allow: [registry.npmjs.org] }    # what the agent's commands may reach
     entitlements:
-      - subject: { iss: https://accounts.google.com, sub: '$PUBLISHER_ID' }   # $NAME-publisher
+      - subject: { iss: https://accounts.google.com, sub: '$PUBLISHER_ID' }   # $PUBLISHER
         repos: [github.com/$REPO]
         builds: publish
-      - subject: { iss: https://accounts.google.com, sub: '$AGENT_ID' }       # $NAME-agent
+      - subject: { iss: https://accounts.google.com, sub: '$AGENT_ID' }       # $AGENT
         repos: [github.com/$REPO]
         builds: run
         sandboxes:
@@ -236,25 +267,56 @@ spec:
         - { name: data, persistentVolumeClaim: { claimName: hammerkit-data } }
         - name: google
           projected:
-            sources: [{ serviceAccountToken: { audience: $NAME, expirationSeconds: 3600, path: token } }]
+            sources: [{ serviceAccountToken: { audience: $AUDIENCE, expirationSeconds: 3600, path: token } }]
 EOF
 kubectl -n $NAME rollout status deploy/hammerkit --timeout 10m
 ```
+
+On Autopilot the first rollout waits a few minutes for a node, and `kubectl apply` warns that
+GKE changed the admission policy to fit Autopilot; both are expected.
+
+Check that the server can read the App's key and reach your repository. This runs the command
+the server mints its GitHub tokens with, as the server's ServiceAccount, and throws the token
+away:
+
+```bash
+kubectl -n $NAME exec deploy/hammerkit -- env GITHUB_APP_ID=$GITHUB_APP_ID \
+  GITHUB_APP_KEY_SECRET=$KEY_SECRET GOOGLE_APPLICATION_CREDENTIALS=/etc/hammerkit/gcp.json \
+  hammerkit github-app-token $REPO > /dev/null && echo "the server can read $REPO"
+```
+
+When it fails, it says which step did:
+
+- `Secret Manager did not give …: 403` means the server's ServiceAccount may not read the key:
+  the binding of step 1 is missing, names another namespace, or is not in effect yet.
+- `Google STS did not exchange the token …` means the pool or its provider does not match:
+  compare `POOL` and `AUDIENCE` with step 1.
+- `the GitHub App … is not installed on …` means the App is not installed on the repository.
+
+An agent whose sandbox can not be created gets the same reason from the server.
 
 ## 3. Connect and publish
 
 Forward the server's port to your machine and register it:
 
 ```bash
-kubectl -n $NAME port-forward svc/hammerkit 8480:8480 &
+while true; do kubectl -n $NAME port-forward svc/hammerkit 8480:8480; sleep 1; done &
 hammerkit remote add $NAME http://127.0.0.1:8480 --issuer https://accounts.google.com
 ```
 
-Then publish the build file from a checkout of the repository, signed in as the publisher:
+`kubectl port-forward` ends when the server's pod is replaced, for example after a
+`kubectl apply`, and now and then when its connection drops; the loop starts it again. When
+it prints the same error every second, for example because port 8480 is taken or the cluster
+can not be reached, stop it with `kill %1` and fix that first.
+
+Before you publish, check that the build file's shell task has `mounts: [.]` and
+`cmds: [sh -c]`, as in [The build file](/docs/guides/agents#the-build-file). Without the
+mount, the agent's commands run in an empty directory. Then publish the build file from a
+checkout of the repository, signed in as the publisher:
 
 ```bash
 HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
-  --impersonate-service-account=$NAME-publisher@$PROJECT.iam.gserviceaccount.com" \
+  --impersonate-service-account=$PUBLISHER" \
   hammerkit remote publish $NAME
 ```
 
@@ -269,8 +331,11 @@ server registered as above, the build file's hash and this token command:
 ```bash
 export HAMMERKIT_BUILD=sha256:9f2c…    # the hash hammerkit remote publish printed
 export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
-  --impersonate-service-account=$NAME-agent@$PROJECT.iam.gserviceaccount.com"
+  --impersonate-service-account=$AGENT"
 ```
+
+The tutorials write the accounts as `hammerkit-agent@my-project…` and
+`hammerkit-publisher@my-project…`: use `$AGENT` and `$PUBLISHER` from step 1 instead.
 
 The agent's branches show up in the repository as `agent/…`, pushed by your GitHub App.
 
@@ -294,8 +359,9 @@ That setup was not part of the run this guide was checked with.
 - **`deniedEgress`.** A task with an open network can not reach the metadata server or your
   cluster's other workloads: the private ranges are denied by default, GKE's service range has
   to be added. `gcloud container clusters describe <cluster> --region $REGION
-  --format='value(clusterIpv4Cidr,servicesIpv4Cidr)'` shows your ranges. An internal address
-  tasks need goes in `allowedEgress`.
+  --format='value(clusterIpv4Cidr,servicesIpv4Cidr)'` shows your ranges. Without the right to
+  describe the cluster, `kubectl get svc -A -o jsonpath='{..clusterIP}'` shows service addresses
+  that have to be in the denied ranges. An internal address tasks need goes in `allowedEgress`.
 - **`networkPolicy: enforced`.** The agent's commands only reach what `sandboxes.network`
   allows, here npm. See [Network](/docs/remote-compute/backend#network).
 - **One replica.** The disk holds the server's records of sandboxes and its cache.
@@ -310,8 +376,12 @@ Secret Manager.
 
 ## Cleaning up
 
+Stop the port-forward loop first (`kill %1`, or close its terminal), then:
+
 ```bash
-kubectl delete ns -l hammerkit.dev/managed   # the callers' namespaces, when this is the only server
+# the callers' namespaces of this server: namespacePrefix and 16 hex digits; look before you delete
+kubectl get ns -l hammerkit.dev/managed -o name | grep -E "^namespace/$NAME-[0-9a-f]{16}$"
+kubectl get ns -l hammerkit.dev/managed -o name | grep -E "^namespace/$NAME-[0-9a-f]{16}$" | xargs -r kubectl delete
 kubectl delete ns $NAME
 kubectl delete clusterrole $NAME-server $NAME-runs
 kubectl delete clusterrolebinding $NAME-server
@@ -323,4 +393,6 @@ for who in agent publisher; do
 done
 ```
 
-A deleted pool keeps its name for 30 days.
+Every server labels the namespaces it makes `hammerkit.dev/managed`, so on a cluster with
+several servers delete by the whole name, as above, not by the label alone. A deleted pool
+keeps its name for 30 days.

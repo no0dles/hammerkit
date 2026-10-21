@@ -18,7 +18,8 @@ Neither account gets a key file or a role in your project. Instead, you are allo
 behalf, and that is the token hammerkit sends to the server. This page sets that up.
 
 If you followed [Server on Kubernetes](/docs/guides/agents/kubernetes), its step 1 already
-created both accounts for you; skip to [Let your team act as them](#3-let-your-team-act-as-them)
+created both accounts for you, named `$NAME-agent` and `$NAME-publisher`; skip to
+[Let your team act as them](#3-let-your-team-act-as-them)
 to add more people.
 
 ## What you need
@@ -82,7 +83,8 @@ gcloud auth print-identity-token --audiences=hammerkit \
 ```
 
 This is the command the tutorials put in `HAMMERKIT_TOKEN_COMMAND`. It prints a long string
-starting with `eyJ`, a token that is valid for an hour. `--audiences=hammerkit` has to match
+starting with `eyJ`, a token that is valid for an hour, and a warning on stderr that it
+impersonates the account, which is expected. `--audiences=hammerkit` has to match
 the `audience` of `issuers` in the server's config.
 
 A `Permission 'iam.serviceAccounts.getAccessToken' denied` (or `getOpenIdToken`) error means step 2 or 3 is missing for

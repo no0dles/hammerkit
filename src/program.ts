@@ -960,7 +960,8 @@ tasks:
   program.option('--file', 'set build file', '.hammerkit.yaml')
   program.option('--set <NAME=value>', 'value for $NAME / ${NAME} references, ahead of the shell and .env (repeatable)')
   program.configureOutput({
-    writeOut: (str) => environment.console.info(str),
+    // --version and --help as they are, so `VERSION=$(hammerkit --version)` works
+    writeOut: (str) => environment.stdout.write(str),
     writeErr: (str) => {
       environment.console.error(str)
     },

@@ -1,5 +1,6 @@
 import { createVerify, generateKeyPairSync } from 'crypto'
 import { join } from 'path'
+import { consoleContext } from '../log'
 import { runProgram } from '../run-program'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
@@ -300,5 +301,24 @@ describe('github-app-token', () => {
     } finally {
       fetch.mockRestore()
     }
+  })
+
+  // A server runs this command as a secret provider and puts its stderr in the error a
+  // caller sees; the CLI's console writes to stdout, which the server drops on a failure.
+  it('says why it failed on stderr and prints nothing on stdout as a command', async () => {
+    const t = createTestCase('github-app-token-failure', {})
+    await t.setup(async (cwd, environment) => {
+      const stdout = memoryStream()
+      const stderr = memoryStream()
+      environment.stdout = stdout.stream
+      environment.stderr = stderr.stream
+      environment.console = consoleContext(stdout.stream)
+      environment.processEnvs = { GITHUB_APP_KEY_FILE: join(cwd, 'key.pem') }
+      await expect(runProgram(environment, ['hammerkit', 'github-app-token', 'corp/app'], true)).rejects.toThrow(
+        'GITHUB_APP_ID is not set'
+      )
+      expect(stderr.read()).toBe('github-app-token: GITHUB_APP_ID is not set\n')
+      expect(stdout.read()).toBe('')
+    })
   })
 })

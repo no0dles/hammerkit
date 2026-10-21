@@ -16,6 +16,17 @@ import { memoryStream } from './testing/test-streams'
 const HK = 'hammerkit'
 
 describe('program commands (fast)', () => {
+  it('prints the bare version, so a script can read it', async () => {
+    const t = createTestCase('cmd-version', {})
+    await t.setup(async (cwd, env) => {
+      const out = memoryStream()
+      env.stdout = out.stream
+      env.console = consoleContext(out.stream)
+      await expect(runProgram(env, [HK, '--version'], true)).rejects.toThrow()
+      expect(out.read()).toMatch(/^\d+\.\d+\.\d+(-[\w.]+)?\n$/)
+    })
+  })
+
   it('ls lists tasks and services without running them', async () => {
     const t = createTestCase('cmd-ls', {
       '.hammerkit.yaml': {

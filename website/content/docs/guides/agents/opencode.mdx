@@ -75,17 +75,21 @@ The examples below use the repository `github.com/acme/shop`, a server registere
 ## 1. Install the hammerkit CLI
 
 ```bash
-npm install -g hammerkit
+npm install -g hammerkit@1.27.0    # the server's version
 hammerkit --version
 ```
 
 <Callout>
 
-The agent clients ship with hammerkit 1.27.0. Until it is released, the steps here install
-1.26.0, which does not have them: install the prerelease instead, `npm install -g hammerkit@next` for
-the CLI, and `"hammerkit": "next"` in `.opencode/package.json` in step 4.
+The agent clients ship with hammerkit 1.27.0. Until it is released, use the prerelease the
+server runs, for example `1.27.0-next.1` (`npm view hammerkit@next version` prints the newest),
+here and in `"hammerkit"` in `.opencode/package.json` in step 4.
 
 </Callout>
+
+`hammerkit --version` has to print the server's version. hammerkit needs Node.js 24: on an
+older one npm warns `EBADENGINE`, and with a range instead of an exact version it quietly
+installs an old hammerkit without the agent clients.
 
 Use the same version as the server. The CLI registers the server in step 2 and publishes the
 build file in step 3.
@@ -143,8 +147,9 @@ If you have Docker, try the task on your machine before you publish it:
 hammerkit run sh -- 'ls && node --version'
 ```
 
-Commit the file, so the next publish starts from the same version. Then publish it from the
-root of your checkout, signed in as the publisher's service account:
+Commit the file and get it onto `main`: the agent's commands run in the published version,
+and its sandbox is a checkout of `main`, so the two should not drift apart.
+Then publish it from the root of your checkout, signed in as the publisher's service account:
 
 ```bash
 HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
@@ -162,7 +167,7 @@ with the same hash instead; that is fine.
 `HAMMERKIT_TOKEN_COMMAND` makes this one command sign in as `hammerkit-publisher`: `gcloud`
 prints a token of that service account for you. That only works once you may act as it, see
 [Service accounts on Google Cloud](/docs/guides/agents/google-accounts). Write your project
-instead of `my-project`.
+instead of `my-project`; with the Kubernetes guide, the account is `$PUBLISHER` of its step 1.
 
 Copy the hash, `sha256:` and 64 hex digits: it names this version of the build file, and
 opencode uses it in step 5. The server never takes task definitions from the agent itself, so
@@ -179,16 +184,18 @@ sandbox; nothing else in it is read or changed. Do not use your project's checko
 npm install -g @opencode/cli
 mkdir -p shop-agent/.opencode/plugins && cd shop-agent
 cat > .opencode/package.json <<'EOF'
-{ "dependencies": { "hammerkit": "^1" } }
+{ "dependencies": { "hammerkit": "1.27.0" } }
 EOF
 cat > .opencode/plugins/hammerkit.ts <<'EOF'
 export { default } from 'hammerkit/harness/opencode'
 EOF
 npm install --prefix .opencode
+npm ls --prefix .opencode hammerkit
 ```
 
-- `.opencode/package.json` makes hammerkit a dependency of opencode's directory. Use the same
-  version as the server.
+- `.opencode/package.json` makes hammerkit a dependency of opencode's directory. Write the
+  server's exact version, not a range: `^1` would install a hammerkit without the plugin.
+  `npm ls` has to show that version.
 - `.opencode/plugins/hammerkit.ts` is the plugin file: it hands hammerkit's plugin to
   opencode as is.
 - `npm install --prefix .opencode` installs it. opencode 2.0 does not install the
@@ -212,7 +219,7 @@ export OPENROUTER_API_KEY=…                         # for the model, not for h
 `HAMMERKIT_TOKEN_COMMAND` is how opencode signs in as the agent: a command that prints a
 short-lived token of the agent's service account. The plugin runs it again whenever the
 server stops accepting the token, so a long session needs no new sign-in. The command above
-works once you may act as `hammerkit-agent`, see
+works once you may act as `hammerkit-agent` (with the Kubernetes guide, `$AGENT` of its step 1), see
 [Service accounts on Google Cloud](/docs/guides/agents/google-accounts); check it there with
 [a token test](/docs/guides/agents/google-accounts#4-check-that-a-token-comes-back). With
 another identity provider, use any command that prints a token of the agent's account.
@@ -270,11 +277,17 @@ a clean one again. Have opencode push before you end a session, or set
 To run one prompt without the terminal interface, for example in CI:
 
 ```bash
+BRANCH=agent/fix-cart-$(date +%Y%m%d%H%M%S)    # a new branch for every run
 opencode run --auto -m openrouter/anthropic/claude-haiku-5.5 \
-  "The cart total skips the last item. Fix it, run the tests and push to agent/fix-cart."
+  "The cart total skips the last item. Fix it, run the tests and push to $BRANCH." < /dev/null
+git -C "$CHECKOUT" ls-remote --exit-code origin "refs/heads/$BRANCH"
 ```
 
-`--auto` approves the tool calls opencode would otherwise ask you about.
+`--auto` approves the tool calls opencode would otherwise ask you about. opencode waits for
+input on stdin, so close it when nothing feeds it. It exits with 0 even when its tools failed
+and nothing was pushed, so the last line fails the job when the branch is not there.
+`$CHECKOUT` is a checkout of the repository that may read it, for example the CI job's own;
+a branch name of its own for every run keeps an earlier run's branch from passing the check.
 
 ## When it does not work
 
@@ -286,6 +299,8 @@ opencode run --auto -m openrouter/anthropic/claude-haiku-5.5 \
 | `… is not the hash of a published version`                                                              | `HAMMERKIT_BUILD` holds a name or a shortened hash. Use the full hash that step 3 printed.                                                                                            |
 | `unable to reach http://…: fetch failed: connect ECONNREFUSED …`                                        | Nothing listens at the server's address, for example `kubectl port-forward` has stopped.                                                                                              |
 | `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | The server's certificate comes from a company or private CA: name that CA's file in `NODE_EXTRA_CA_CERTS`, which takes one file.                                                      |
+| `error: lost connection to pod`, `Unable to connect`, or an empty reply from the server                 | `kubectl port-forward` ended, because the server's pod was replaced or the connection dropped: start it again, or run it in the loop of the Kubernetes guide.                         |
+| `could not read the source credential …`                                                                | The server can not mint its token for the repository; the rest of the message says why. See [the check](/docs/guides/agents/kubernetes#2-deploy-the-server) after the deploy.         |
 | `Permission 'iam.serviceAccounts.getAccessToken' denied`                                                | You may not act as the service account in `HAMMERKIT_TOKEN_COMMAND` yet, see [Service accounts on Google Cloud](/docs/guides/agents/google-accounts#2-allow-yourself-to-act-as-them). |
 | `you are not entitled to keep sandboxes on this server`                                                 | The token is not the agent's, or its entitlement has no `sandboxes`: check the account in `HAMMERKIT_TOKEN_COMMAND`.                                                                  |
 | The shell task needs `mounts: [.]`                                                                      | The shell task does not mount the sandbox: add `mounts: [.]` (step 3), publish again and set the new hash.                                                                            |

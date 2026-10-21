@@ -155,11 +155,12 @@ ripgrep on the server. Images are read from the sandbox like any file.
 opencode lets a plugin replace a built-in tool by registering one of the same name.
 hammerkit's plugin works with opencode 2 and with opencode 1 from 1.18.29. Add hammerkit to
 the dependencies of the project's opencode directory, install them with `npm install` in
-that directory (opencode 2 does not), and re-export the plugin as the default export:
+that directory (opencode 2 does not), and re-export the plugin as the default export. Write
+the server's exact version: a range such as `^1` can install a hammerkit without the plugin.
 
 ```json title=".opencode/package.json"
 {
-  "dependencies": { "hammerkit": "^1" }
+  "dependencies": { "hammerkit": "1.27.0" }
 }
 ```
 

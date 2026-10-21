@@ -6,6 +6,7 @@ import {
   getCallerNamespace,
   getClusterAccess,
   getNamespacePolicies,
+  isCallerNamespace,
   KubernetesExecutor,
 } from './kubernetes-backend'
 import { getRunLabelValue } from '../kubernetes/job-placement'
@@ -42,6 +43,16 @@ describe('kubernetes backend', () => {
     expect(getCallerNamespace('hammerkit-', { iss: 'https://idp.corp', sub: 'bob' })).not.toBe(alice)
     expect(getCallerNamespace('hammerkit-', { iss: 'https://other', sub: 'alice' })).not.toBe(alice)
     expect(getCallerNamespace('agents-', { iss: 'https://idp.corp', sub: 'alice' })).toMatch(/^agents-/)
+  })
+
+  it('knows its callers’ namespaces apart from those of a server whose prefix starts the same', () => {
+    const own = getCallerNamespace('hk-', { iss: 'https://idp.corp', sub: 'alice' })
+    const other = getCallerNamespace('hk-test-', { iss: 'https://idp.corp', sub: 'alice' })
+    expect(isCallerNamespace('hk-', own)).toBe(true)
+    expect(isCallerNamespace('hk-', other)).toBe(false)
+    expect(isCallerNamespace('hk-test-', other)).toBe(true)
+    expect(isCallerNamespace('hk-', 'hk-')).toBe(false)
+    expect(isCallerNamespace('hk-', 'hk-server')).toBe(false)
   })
 
   it('reaches the cluster by the kubeconfig the operator names, the server’s own, or from inside it', () => {
