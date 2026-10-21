@@ -1,3 +1,11 @@
+# [1.27.0-next.2](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.1...v1.27.0-next.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **cli:** show why github-app-token failed, print the bare version, and the day of the month in logs ([280911f](https://github.com/no0dles/hammerkit/commit/280911f097997da57e6045a1c3b9cc3560150a5a))
+* **server:** sweep only this server's caller namespaces, and review fixes to the agent guides ([13eb9d5](https://github.com/no0dles/hammerkit/commit/13eb9d51309f4a56d26c7f1064f3d2ab4b37b630))
+
 # [1.27.0-next.1](https://github.com/no0dles/hammerkit/compare/v1.26.0...v1.27.0-next.1) (2026-10-19)
 
 
