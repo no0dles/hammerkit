@@ -8,6 +8,8 @@ import { isToken } from '../remote/token-source'
 const TIMEOUT_MS = 60_000
 // a run is asked for this long at a time, the log is read in between
 const POLL_WAIT = '1s'
+// a cancelled run waits this long for the server to take the cancel, before it gives up
+const CANCEL_WAIT_MS = 10_000
 
 export class SandboxClientError extends Error {
   constructor(
@@ -334,8 +336,9 @@ export async function followRun(
   options: FollowRunOptions = {}
 ): Promise<FollowedRun> {
   const path = `/v1/runs/${encodeURIComponent(submitted.id)}`
+  let cancelling: Promise<unknown> | undefined
   const cancel = () => {
-    call(connection, 'POST', `${path}/cancel`).catch(() => undefined)
+    cancelling ??= call(connection, 'POST', `${path}/cancel`).catch(() => undefined)
   }
   options.signal?.addEventListener('abort', cancel, { once: true })
   const lines: LogLine[] = []
@@ -365,6 +368,11 @@ export async function followRun(
     let waitingSaid = false
     for (;;) {
       if (options.signal?.aborted) {
+        // the process may exit after this, so the cancel has to reach the server first
+        cancel()
+        let timer: NodeJS.Timeout | undefined
+        await Promise.race([cancelling, new Promise((resolve) => (timer = setTimeout(resolve, CANCEL_WAIT_MS)))])
+        clearTimeout(timer)
         throw new SandboxClientError('the run was cancelled')
       }
       if (run.state === 'awaiting-approval' && !waitingSaid) {

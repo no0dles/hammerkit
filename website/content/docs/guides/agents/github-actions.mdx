@@ -5,7 +5,9 @@ description: 'GitHub Actions jobs that hold nothing but their own token: the ser
 
 <Callout type="warn">
 
-Experimental. The commands and settings can still change between releases.
+Experimental. The commands and settings can still change between releases. The server side
+of this guide was tested on a GKE server with a stand-in for the CI job's identity; the
+workflow of step 4 has not run on GitHub's runners yet.
 
 </Callout>
 
@@ -71,10 +73,14 @@ GitHub puts in it, such as `repository_id` and `ref`, as they are. See
 
 ```yaml title="server.yaml"
 entitlements:
-  # jobs of pushes to main: publish the build file, run it, and ask for deploys
+  # the ci workflow, on a push to main: publish the build file, run it, and ask for deploys
   - claims:
       iss: https://token.actions.githubusercontent.com
-      match: { repository_id: '123456789', ref: refs/heads/main }
+      match:
+        repository_id: '123456789'
+        ref: refs/heads/main
+        event_name: push
+        job_workflow_ref: acme/shop/.github/workflows/ci.yaml@refs/heads/main
     repos: [github.com/acme/shop]
     builds: publish
     accounts: { deploy: request }
@@ -91,14 +97,22 @@ entitlements:
     accounts: { deploy: use }
 ```
 
-A claim matches when it is exactly the value written, so `ref: refs/heads/main` is the job of a
-push to `main` and nothing else. Entitlements add up: the job of `main` matches both, and gets
-the higher level.
+A claim matches when it is exactly the value written, and every claim of `match` has to.
+`ref: refs/heads/main` alone would be any job on `main`: a scheduled one, one started by hand,
+or one of another workflow file with `id-token: write`. `event_name` and `job_workflow_ref` keep
+it to the `ci` workflow of step 4 on a push. Entitlements add up: that job matches both, and
+gets the higher level.
 
-The job of `main` publishes. What the build file's tasks run is then what was merged to
-`main`, through your review, and not whatever somebody with a publisher account uploads. Once
-this works, take `builds: publish` away from the people and service accounts that only
-published, such as the publisher of the Kubernetes guide.
+That job publishes. What the build file's tasks run is then what the `ci` workflow on `main`
+publishes, and not whatever somebody with a publisher account uploads. Once this works, take
+`builds: publish` away from the people and service accounts that only published, such as the
+publisher of the Kubernetes guide.
+
+The server still takes the files the job uploads as they are: any step of that job, an action
+or an install script of a package, could upload another build file. Tasks that read secrets as
+`deploy` are protected by the approval of
+[When the build file changes](#when-the-build-file-changes); tasks without secrets are
+published at once.
 
 The approver keeps `builds: publish`: a new version that changes what `deploy` runs needs their
 approval (see [When the build file changes](#when-the-build-file-changes)), and approving a
@@ -181,8 +195,18 @@ jobs:
       HAMMERKIT_TOKEN_COMMAND: >-
         curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"
         "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://hammerkit.example.com" | jq -r .value
+      # the branch and commit the server checks out: a pull request's head, or the pushed commit
+      REF: ${{ github.head_ref || github.ref_name }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    # a deploy that waits for its approval holds the job, an hour at most
+    timeout-minutes: 75
+    concurrency:
+      group: ci-${{ github.ref }}
+      # a newer push to a pull request stops the older job, and its run on the server
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
+        with: { ref: '${{ env.SHA }}' }
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - run: npm install -g hammerkit@1.27.0
@@ -191,12 +215,9 @@ jobs:
           hammerkit remote use hammerkit
       - if: github.event_name == 'push'
         run: hammerkit remote publish
-      - run: >-
-          hammerkit remote run test
-          --ref ${{ github.head_ref || github.ref_name }}
-          --commit ${{ github.event.pull_request.head.sha || github.sha }}
+      - run: hammerkit remote run test --ref "$REF" --commit "$SHA"
       - if: github.event_name == 'push'
-        run: hammerkit remote run deploy
+        run: hammerkit remote run deploy --ref "$REF" --commit "$SHA"
 ```
 
 What each step does:
@@ -208,13 +229,21 @@ What each step does:
   checks that the server takes them.
 - **`remote publish`**, on `main` only, publishes the build file of the commit. A build file
   that did not change since the last push is `already published`.
-- **`remote run test`** runs `test` at the job's commit. It names the build file by the hash
-  of the one checked out, so a pull request runs the published tasks only when it does not
-  change them. The branch and commit come from the event: a pull request's job checks out a
-  merge commit the server does not know, so it names the head of the branch instead. A ref
-  that moved since, after a newer push, is refused, and the newer push's job runs it.
-- **`remote run deploy`**, without options, runs from the branch and commit checked out:
-  `main` at the pushed commit.
+- **`REF` and `SHA`** come from the event: a pull request's job would check out a merge commit
+  the server does not know, so the job checks out the head of the branch and names it. They go
+  to the commands as variables, not into the script: a branch name is chosen by whoever opens
+  the pull request, and may hold shell.
+- **`remote run test`** runs `test` at that commit. It names the build file by the hash of the
+  one checked out. A ref that moved since, after a newer push, is refused, and the newer push's
+  job runs it.
+- **A pull request that changes the build file** fails at `remote run` with
+  `the build file here is not published on hammerkit, publish it first`: its job may only run
+  what is published, and its version is published once it is merged. Read that failure as
+  "the tasks changed", and look at what `main`'s job does after the merge.
+- **`remote run deploy`** runs `deploy` from `main` at the pushed commit.
+- **`concurrency`** stops an older job of a pull request when a newer push arrives, which
+  cancels its run on the server. Jobs on `main` are not stopped, so a deploy is never cut off
+  halfway: a newer push waits until the older deploy is approved or rejected.
 
 The job exits as the task did, with its exit code, and prints its output as it comes. The
 runner holds no cloud credentials, no registry login and no deploy key: nothing a changed

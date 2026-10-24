@@ -197,7 +197,8 @@ run_Qx3k9ZpL2mW7vN4a succeeded
 ```
 
 It prints every line of the run as the server logs it, with the task in front when the line
-is not of the one task you named (`[hammerkit]` is the server's own). It exits with `0` when
+is not of the one task you named (`[hammerkit]` is the server's own, so a task of that name
+is best called something else). It exits with `0` when
 the run succeeded and with the exit code of the task that failed otherwise, `1` when the
 run was rejected, cancelled or failed without one. Control characters of the output show as
 `?`, so the output of a run can not rewrite your terminal; tabs stay.
@@ -224,7 +225,8 @@ waiting until somebody who uses deploy-prod approves it, before 2026-10-24T10:41
 ```
 
 The command waits as long as the server lets the run wait (`approvals.timeout`, one hour by
-default). Ctrl-C cancels the run on the server. The token is the one of
+default). Ctrl-C, or the cancel of a CI job, cancels the run on the server: the command waits
+up to ten seconds for the server to take the cancel before it ends. The token is the one of
 [Signing in](#signing-in), or `HAMMERKIT_TOKEN_COMMAND` / `HAMMERKIT_TOKEN`, which is how a CI
 job signs in with its own identity, see
 [CI through a server](/docs/guides/agents/github-actions).

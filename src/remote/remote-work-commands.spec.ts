@@ -42,6 +42,8 @@ interface Harness {
   cwd: string
   // what the last command printed, also when it failed
   output: () => string
+  // Ctrl-C, or the CI job being cancelled
+  abort: () => void
 }
 
 async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
@@ -107,7 +109,8 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
         HAMMERKIT_CREDENTIALS: join(cwd, 'credentials.json'),
       }
       const executed: string[] = []
-      // each task prints where it runs from; an argument that is a number is the exit code it fails with
+      // each task prints where it runs from; an argument that is a number is the exit code it fails with,
+      // and `long` prints more than the server keeps of a run's log
       const executor: RunExecutor = {
         execute: async (run, context) => {
           executed.push(run.tasks.join(','))
@@ -115,6 +118,11 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
             context.emit({ type: 'task', task, state: 'running' })
             const at = run.source.type === 'ref' ? `${run.source.ref}@${run.source.commit}` : run.source.type
             context.emit({ type: 'log', task, stream: 'stdout', text: `${task} ${at} ${run.options.args ?? ''}` })
+            if (run.options.args?.[0] === 'long') {
+              for (let i = 1; i <= 2000; i++) {
+                context.emit({ type: 'log', task, stream: 'stdout', text: `${task} line ${i} ${'x'.repeat(600)}` })
+              }
+            }
             const code = Number(run.options.args?.[0])
             if (code > 0) {
               context.emit({ type: 'log', task, stream: 'stderr', text: `\tfailing\u001b[2J` })
@@ -161,6 +169,7 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
           env,
           cwd,
           output: () => last.read(),
+          abort: () => environment.abortCtrl.abort(),
         })
       } finally {
         await server.close()
@@ -362,6 +371,41 @@ describe('remote run', () => {
       const rejected = await failure(again)
       expect(rejected.exitCode).toBe(1)
       expect(rejected.message).toContain(`${next?.id} rejected`)
+    })
+  })
+
+  it('cancels the run on the server when it is stopped', async () => {
+    await withHarness('remote-run-cancel', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'publish', 'build')
+      h.as('alice')
+      await h.run('remote', 'login', 'build')
+      const running = h.run('remote', 'run', 'deploy', '--server', 'build', ...from)
+      let waiting: { id: string } | undefined
+      for (let i = 0; i < 200 && !waiting; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        waiting = (await h.call('bob', 'GET', '/v1/approvals')).body.approvals[0]
+      }
+      expect(waiting).toBeDefined()
+      h.abort()
+      const stopped = await failure(running)
+      expect(stopped.exitCode).toBe(1)
+      expect(stopped.message).toContain('the run was cancelled')
+      // the cancel reached the server before the command ended
+      expect((await h.call('bob', 'GET', `/v1/runs/${waiting?.id}`)).body.state).toBe('cancelled')
+    })
+  })
+
+  it('shows the end of the log when the server cut it off', async () => {
+    await withHarness('remote-run-truncated', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await h.run('remote', 'publish')
+      const out = await h.run('remote', 'run', 'build', ...from, '--', 'long')
+      expect(out).toMatch(/succeeded$/m)
+      const header = out.indexOf('… the server cut the log off at its limit, the last lines of build were:')
+      expect(header).toBeGreaterThan(out.indexOf('build line 1 '))
+      expect(out.indexOf('build line 2000 ', header)).toBeGreaterThan(header)
     })
   })
 
