@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { basename } from 'path'
+import { basename, relative, sep } from 'path'
 import { WorkItem } from '../planner/work-item'
 import { WorkService } from '../planner/work-service'
 import { WorkTask } from '../planner/work-task'
@@ -56,4 +56,16 @@ export function byDepth(a: string, b: string): number {
 export function hasPathsEndingAlike(work: Pick<WorkItem<WorkTask | WorkService>, 'data'>): boolean {
   const paths = new Set(getClaimPaths(work))
   return new Set([...paths].map((path) => basename(path))).size < paths.size
+}
+
+// Whether two outputs of `work` flatten to the same name of a cache archive (`a-b` and
+// `a/b`, see getArchivePaths). Before they were named apart, one archive held both.
+export function hasOutputsFlatteningAlike(work: Pick<WorkItem<WorkTask | WorkService>, 'data'>): boolean {
+  const data = work.data
+  if (!('generates' in data) || !('cwd' in data)) {
+    return false
+  }
+  const paths = new Set(data.generates.filter((generate) => !generate.inherited).map((generate) => generate.path))
+  const names = new Set([...paths].map((path) => relative(data.cwd, path).split(sep).join('-')))
+  return names.size < paths.size
 }

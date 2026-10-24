@@ -76,6 +76,15 @@ describe('getWorkTaskCacheDescription', () => {
     // a source shares the claim with the outputs
     const source = { ...task, generates: [task.generates[0]], src: [{ absolutePath: '/work/node_modules' }] as any }
     expect(getWorkTaskCacheDescription({ data: source, deps: [] } as any).claimLayout).toBe(2)
+    // two outputs that shared one cache archive
+    const flat = {
+      ...task,
+      generates: [
+        { path: '/work/app/a-b', inherited: null },
+        { path: '/work/app/a/b', inherited: null },
+      ] as any,
+    }
+    expect(getWorkTaskCacheDescription({ data: flat, deps: [] } as any).claimLayout).toBe(2)
   })
 
   it('describes a local task with the host platform and no mounts', () => {
