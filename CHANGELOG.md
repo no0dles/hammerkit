@@ -1,3 +1,15 @@
+# [1.27.0-next.5](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.4...v1.27.0-next.5) (2026-10-24)
+
+
+### Bug Fixes
+
+* keep the proxy token out of secret references and pin it to the init containers ([3f4c0e8](https://github.com/no0dles/hammerkit/commit/3f4c0e811e670d0ace0aab1d5c792d781c17bbd2))
+
+
+### Features
+
+* close agents' ways out with per-task args and a network ceiling for secret tasks ([29dcf68](https://github.com/no0dles/hammerkit/commit/29dcf6821b509946aff4d85814e71b8b68211c2f))
+
 # [1.27.0-next.4](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.3...v1.27.0-next.4) (2026-10-24)
 
 
