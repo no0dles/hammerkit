@@ -184,8 +184,9 @@ decision is an event of the run, so the one who asked sees who approved it.
 
 ## Changing entitlements
 
-`kill -HUP <pid>` reads the config file again and takes over its `entitlements`: who may use which account,
-which repositories and which build files changes for the next request, no restart and no run is touched.
+`kill -HUP <pid>` (in a container `docker kill -s HUP <container>`) reads the config file again and takes over
+its `entitlements`: who may use which account, which repositories and which build files changes for the next
+request, the server keeps running and no run is touched.
 Entitlements that name an account or issuer the running server does not have are refused and the old ones
 stay. Everything else (accounts, issuers, providers, sources, limits) is read at start only, the server says
 which keys of the file differ and need a restart. SIGHUP is not available on Windows.

@@ -3,6 +3,7 @@ import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import { readServerConfig } from './server-config'
 import { startServer } from './server'
+import { takeOverSignal } from '../utils/abort-on-signals'
 
 // Runs this machine as a hammerkit server until interrupted. Like `remote`, it
 // only needs its own config file, not a build file.
@@ -34,10 +35,10 @@ export function registerServerCommand(program: Command, environment: Environment
             environment.stdout.write(`entitlements were not reloaded: ${getErrorMessage(e)}\n`)
           }
         }
-        const onReload = () => void reload()
-        if (process.platform !== 'win32') {
-          process.on('SIGHUP', onReload)
-        }
+        // it takes SIGHUP over from the abort of the CLI, which stops other commands on it.
+        // Windows sends it when the console closes, which stops the server there too.
+        const releaseReload =
+          process.platform !== 'win32' ? takeOverSignal(process, 'SIGHUP', () => void reload()) : () => undefined
 
         await new Promise<void>((resolve) => {
           if (environment.abortCtrl.signal.aborted) {
@@ -45,7 +46,7 @@ export function registerServerCommand(program: Command, environment: Environment
           }
           environment.abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
         })
-        process.off('SIGHUP', onReload)
+        releaseReload()
         await server.close()
         environment.stdout.write('hammerkit server stopped\n')
       } catch (e) {

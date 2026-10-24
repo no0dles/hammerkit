@@ -9,6 +9,7 @@ import { DISCOVERY_PATH, RunningServer, SERVER_PROTOCOL, startServer } from './s
 import { getVersion } from '../version'
 import { HOST_ENV_YAML } from '../testing/host-env'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
+import { abortOnSignals } from '../utils/abort-on-signals'
 
 const minimal = `
 ${HOST_ENV_YAML}listen: { port: 0 }
@@ -750,6 +751,23 @@ describe('server config policy', () => {
   })
 })
 
+// resolves with the first match of `pattern` in what the server wrote
+function waitForOutput(read: () => string, pattern: RegExp, what: string): Promise<RegExpExecArray> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now()
+    const timer = setInterval(() => {
+      const match = pattern.exec(read())
+      if (match) {
+        clearInterval(timer)
+        resolve(match)
+      } else if (Date.now() - started > 5000) {
+        clearInterval(timer)
+        reject(new Error(`${what}: ${read()}`))
+      }
+    }, 20)
+  })
+}
+
 describe('server command', () => {
   it('serves until it is interrupted', async () => {
     await withServerConfig('server-command', minimal, async (env, file) => {
@@ -757,19 +775,7 @@ describe('server command', () => {
       env.stdout = out.stream
       const finished = runProgram(env, ['hammerkit', 'server', '--config', file], true)
 
-      const url = await new Promise<string>((resolve, reject) => {
-        const started = Date.now()
-        const timer = setInterval(() => {
-          const match = /listening on (\S+)/.exec(out.read())
-          if (match) {
-            clearInterval(timer)
-            resolve(match[1])
-          } else if (Date.now() - started > 5000) {
-            clearInterval(timer)
-            reject(new Error(`server did not start: ${out.read()}`))
-          }
-        }, 20)
-      })
+      const [, url] = await waitForOutput(out.read, /listening on (\S+)/, 'server did not start')
       expect((await fetch(`${url}/healthz`)).status).toBe(200)
 
       env.abortCtrl.abort()
@@ -777,6 +783,41 @@ describe('server command', () => {
       expect(out.read()).toContain('hammerkit server stopped')
     })
   })
+
+  // The process gets real signals, wired up as the CLI does (main.ts). Windows has no
+  // SIGHUP to send: process.kill would end the test process there.
+  it.runIf(process.platform !== 'win32')(
+    'reloads the entitlements on SIGHUP and keeps serving, while SIGTERM stops it',
+    async () => {
+      await withServerConfig('server-command-sighup', minimal, async (env, file) => {
+        const out = memoryStream()
+        env.stdout = out.stream
+        const removeAbort = abortOnSignals(process, env.abortCtrl)
+        try {
+          const finished = runProgram(env, ['hammerkit', 'server', '--config', file], true)
+          const [, url] = await waitForOutput(out.read, /listening on (\S+)/, 'server did not start')
+
+          writeFileSync(
+            file,
+            `${minimal}entitlements:\n  - { subject: { iss: https://idp.corp, sub: alice }, builds: run }\n`
+          )
+          process.kill(process.pid, 'SIGHUP')
+          await waitForOutput(out.read, /reloaded 1 entitlements/, 'entitlements were not reloaded')
+
+          expect(env.abortCtrl.signal.aborted).toBe(false)
+          expect((await fetch(`${url}/healthz`)).status).toBe(200)
+          expect(out.read()).not.toContain('hammerkit server stopped')
+
+          process.kill(process.pid, 'SIGTERM')
+          await finished
+          expect(env.abortCtrl.signal.aborted).toBe(true)
+          expect(out.read()).toContain('hammerkit server stopped')
+        } finally {
+          removeAbort()
+        }
+      })
+    }
+  )
 
   it('needs a config', async () => {
     await createTestCase('server-command-no-config', {}).setup(async (_cwd, env) => {
