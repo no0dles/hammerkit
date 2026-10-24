@@ -1,3 +1,15 @@
+# [1.27.0-next.3](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.2...v1.27.0-next.3) (2026-10-24)
+
+
+### Bug Fixes
+
+* **remote:** remote run waits for the cancel to reach the server, CI guide hardening from review ([7796118](https://github.com/no0dles/hammerkit/commit/779611862e149e26a57d0e9463c2462be57e349e))
+
+
+### Features
+
+* **remote:** remote run starts a run of a published build file from a git ref and follows it ([5839c39](https://github.com/no0dles/hammerkit/commit/5839c39fe00a9acd17ae9b303e26e1ca462dd843))
+
 # [1.27.0-next.2](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.1...v1.27.0-next.2) (2026-10-21)
 
 
