@@ -44,7 +44,7 @@ tasks:
     image: node:22-alpine
     deps: [test]
     secrets:
-      - { from: 'gsm:projects/my-project/secrets/deploy-token', account: deploy, env: DEPLOY_TOKEN }
+      - { from: 'gsm:deploy-token', account: deploy, env: DEPLOY_TOKEN }
     # a task that reads a secret gets no open network on this server, see step 3
     network: { allow: [deploy.example.com] }
     cmds: [node deploy.js]
@@ -153,7 +153,8 @@ runs:
   secretNetwork: { allow: [deploy.example.com] }
 secretProviders:
   github-app: { command: [hammerkit, github-app-token, '{{ref}}'] }
-  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}'] }
+  # the project of the secrets: a federation config names none
+  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}', '--project=my-project'] }
 backend:
   type: kubernetes    # its other keys as in the Kubernetes guide, and providers
   providers:
