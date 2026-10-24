@@ -1,3 +1,11 @@
+# [1.27.0-next.4](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.3...v1.27.0-next.4) (2026-10-24)
+
+
+### Bug Fixes
+
+* keep `hammerkit server` running on SIGHUP, which reloads its entitlements ([80c0c5b](https://github.com/no0dles/hammerkit/commit/80c0c5b3083f0d8a49b0eb7a6383b0b2a614956c))
+* keep a SIGHUP while the server starts and give it back on every exit ([73556d5](https://github.com/no0dles/hammerkit/commit/73556d563d293c10d7faac861d7321ac69dff634))
+
 # [1.27.0-next.3](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.2...v1.27.0-next.3) (2026-10-24)
 
 
