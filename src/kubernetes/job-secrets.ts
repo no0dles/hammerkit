@@ -6,6 +6,7 @@ import { describeSecretSource, getSecretName, WorkSecret, WorkSecretSource } fro
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
 import { getProviderInvocation } from '../secrets/command-secret-provider'
+import { escapeKubernetesText } from '../planner/utils/task-arguments'
 import { getVersion } from '../version'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -302,7 +303,9 @@ export function getJobSecretSpec(
         '-c',
         'umask 022 && "$@" > "$HAMMERKIT_VALUE.part" && mv "$HAMMERKIT_VALUE.part" "$HAMMERKIT_VALUE"',
       ],
-      args: ['sh', command, ...args],
+      // Kubernetes would expand a `$(NAME)` of the container's env in them, the proxy's token
+      // among them: the reference is text, as on any other backend
+      args: ['sh', command, ...args].map(escapeKubernetesText),
       env: [
         ...proxyEnv,
         ...Object.entries(env).map(([name, value]) => ({ name, value })),

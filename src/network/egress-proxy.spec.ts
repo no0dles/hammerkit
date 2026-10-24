@@ -257,6 +257,11 @@ describe('egress proxy with the endpoints of secret providers', () => {
     expect(await tunnel(proxy.port, 'secrets.invalid:443', 'secrets.invalid', '127.0.0.1', [basic('')])).toContain(
       '403 Forbidden'
     )
+    // the token alone, without a user, is no credential of the proxy
+    const bare = `Proxy-Authorization: Basic ${Buffer.from(token).toString('base64')}`
+    expect(await tunnel(proxy.port, 'secrets.invalid:443', 'secrets.invalid', '127.0.0.1', [bare])).toContain(
+      '403 Forbidden'
+    )
     expect(await tunnel(proxy.port, 'secrets.invalid:80', 'secrets.invalid', '127.0.0.1', [basic(token)])).toContain(
       '403 Forbidden'
     )

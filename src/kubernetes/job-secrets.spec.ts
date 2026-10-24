@@ -220,6 +220,15 @@ describe('secrets read in the Job', () => {
     expect(JSON.stringify(spec.command('/bin/sh', 'echo hi'))).not.toContain('HAMMERKIT_PROXY_TOKEN')
   })
 
+  it('passes a reference as text, so Kubernetes puts no variable of the container into it', () => {
+    const { inJob } = splitJobSecrets(
+      [provider('$(HAMMERKIT_PROXY_TOKEN) $HOME $$', 'dev', { type: 'env', name: 'T' })],
+      server
+    )
+    const spec = getJobSecretSpec(item, inJob, server, credentials, environmentMock(tmpdir()))
+    expect(spec.initContainers[0].args).toEqual(['sh', 'printf', '%s', '$$(HAMMERKIT_PROXY_TOKEN) $$HOME $$$$'])
+  })
+
   it('keeps the command as it is for a task without such secrets', () => {
     const spec = getJobSecretSpec(item, [], server, {}, environmentMock(tmpdir()))
     expect(spec.command('/bin/sh', 'echo hi')).toEqual({ command: ['/bin/sh', '-c'], args: ['echo hi'], env: [] })

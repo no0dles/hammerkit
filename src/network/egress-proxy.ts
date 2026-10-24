@@ -88,7 +88,11 @@ function hasSecretToken(req) {
     return false
   }
   const credentials = Buffer.from(match[1], 'base64').toString('utf8')
-  const given = Buffer.from(credentials.substring(credentials.indexOf(':') + 1), 'utf8')
+  const colon = credentials.indexOf(':')
+  if (colon < 0) {
+    return false
+  }
+  const given = Buffer.from(credentials.substring(colon + 1), 'utf8')
   const expected = Buffer.from(secretToken, 'utf8')
   return given.length === expected.length && crypto.timingSafeEqual(given, expected)
 }

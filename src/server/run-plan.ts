@@ -63,8 +63,6 @@ export async function planRun(
   }
 }
 
-const readsOf = getCredentialReads
-
 /**
  * Why a run may not pass its arguments, or null when it may. They go to a task, never a
  * service, and never to a run in which an item reads a secret or takes a variable of the
@@ -95,14 +93,14 @@ export function refuseArguments(
   if (policy.args === 'declared' && entry.args !== true) {
     return `${name} takes no arguments on this server: it takes them only for tasks that say args: true (runs.args: declared)`
   }
-  const reads = readsOf(entry)
+  const reads = getCredentialReads(entry)
   if (reads.length > 0) {
     return `${name} reads ${reads.join(', ')}, it takes no arguments on a server: an argument could make it print them`
   }
   // what a dependency or a service of the run holds reaches the task through its outputs or
   // its answers, where an argument can print it in a form no mask knows (`rev token.txt`)
   for (const [other, item] of Object.entries(plan).sort(([a], [b]) => a.localeCompare(b))) {
-    const held = (other === name ? [] : readsOf(item)).join(', ')
+    const held = (other === name ? [] : getCredentialReads(item)).join(', ')
     if (held.length > 0) {
       return `${name} takes no arguments on a server: ${other} in its run reads ${held}, and an argument could make ${name} print what ${other} hands on`
     }

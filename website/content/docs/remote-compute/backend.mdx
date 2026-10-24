@@ -311,7 +311,8 @@ runs:
   as any other. The Secret goes with the proxy.
 - A task with `network: none` gets a proxy for this alone, which allows its own command no host.
 - The names are exact names or `*.` patterns, without a port; like a pattern of `allow`, they
-  never reach a private address. The provider's command has to read `HTTPS_PROXY`, user and
+  never reach a private address. Name the hosts the command needs, not their domain:
+  `*.googleapis.com` would let it reach every Google API. The provider's command has to read `HTTPS_PROXY`, user and
   password included; `gcloud` does. A command that ignores it can't read a secret under a
   limited network. A federation config that impersonates a Google service account
   (`service_account_impersonation_url`) also needs `iamcredentials.googleapis.com`.
