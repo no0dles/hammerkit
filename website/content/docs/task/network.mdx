@@ -84,7 +84,8 @@ services live.
 Under `allow`, hammerkit starts an egress proxy next to the task and sets
 `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (and their lowercase spellings) for it,
 with the needed services in `NO_PROXY`. Package managers, `curl`, `git` and most
-HTTP clients read these variables. The proxy passes requests and `CONNECT` tunnels
+HTTP clients read these variables; Node's built-in `fetch` only with `NODE_USE_ENV_PROXY=1`
+(Node 22.21 and 24.5 on). The proxy passes requests and `CONNECT` tunnels
 to an allowed host and answers everything else with `403 Forbidden`. Each refused
 host shows up once in the task's log, so a failing install says why:
 

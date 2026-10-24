@@ -25,6 +25,8 @@ With a hammerkit server the job only says what to run:
    job may only request: the run waits until a person who uses the account approves it.
 
 This guide adds that to a server set up with the [Kubernetes guide](/docs/guides/agents/kubernetes).
+Each `server.yaml` block below goes into the config of that guide's ConfigMap, next to the keys
+it already has, and the shell variables are those of its step 1.
 
 ## What you need
 
@@ -47,7 +49,8 @@ tasks:
       - { from: 'gsm:deploy-token', account: deploy, env: DEPLOY_TOKEN }
     # a task that reads a secret gets no open network on this server, see step 3
     network: { allow: [deploy.example.com] }
-    # it reaches the target through the proxy; Node's fetch reads HTTPS_PROXY only with this
+    # it reaches the target through the proxy; Node's fetch reads HTTPS_PROXY only with this,
+    # from Node 22.21 and 24.5 (22 warns that it is experimental)
     envs: { NODE_USE_ENV_PROXY: '1' }
     cmds: [node deploy.js]
 ```
@@ -131,6 +134,7 @@ reviewed code:
 
 ```yaml title="server.yaml"
 accounts:
+  # next to github
   deploy:
     description: production deploys
     source: [ref]      # only code the server checked out itself, never an upload or a sandbox
@@ -139,7 +143,7 @@ accounts:
       gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /var/run/hammerkit/account/gcp.json } }
     kubernetes:
       serviceAccount: deploy    # a ServiceAccount of the server's namespace, trusted by your cloud
-      audience: //iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/hammerkit/providers/cluster
+      audience: $AUDIENCE         # what the pool of the Kubernetes guide's step 1 accepts
       secret: deploy-federation
 ```
 
@@ -156,7 +160,7 @@ runs:
 secretProviders:
   github-app: { command: [hammerkit, github-app-token, '{{ref}}'] }
   # the project of the secrets: a federation config names none
-  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}', '--project=my-project'] }
+  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}', '--project=$PROJECT'] }
 backend:
   type: kubernetes    # its other keys as in the Kubernetes guide, and providers
   providers:
@@ -166,8 +170,8 @@ backend:
 ```
 
 `secretNetwork` is a ceiling for every task that reads a secret: each may name
-`deploy.example.com` now, and one that names nothing stays without a network. A publish of a
-version whose task asks for more, an open network or another host, is refused:
+`deploy.example.com` now, or say `network: none`. One that leaves `network` out asks for an open
+network, and a version with it, or with another host, is refused at publish:
 `deploy: asks for network open, more than this server allows to what reads the secret
 DEPLOY_TOKEN (runs.secretNetwork: allow deploy.example.com)`. The command of `deploy`
 does not reach Secret Manager: its egress proxy lets only the container that reads the secret
@@ -198,8 +202,31 @@ subjects: [{ kind: ServiceAccount, name: hammerkit, namespace: $NAME }]
 EOF
 ```
 
-`deploy-federation` holds the file that tells the secret manager's client to use that token,
-see [Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job) for Google's.
+The secret, readable by the `deploy` ServiceAccount only, and `deploy-federation`, the file that
+tells gcloud to exchange that ServiceAccount's token at Google's STS (`token.txt` holds the
+deploy credential; delete it afterwards):
+
+```bash
+gcloud secrets create deploy-token --project $PROJECT --data-file token.txt
+gcloud secrets add-iam-policy-binding deploy-token --project $PROJECT \
+  --role roles/secretmanager.secretAccessor \
+  --member principal://iam.googleapis.com/$POOL/subject/system:serviceaccount:$NAME:deploy
+cat > deploy-gcp.json <<EOF
+{ "type": "external_account",
+  "audience": "//iam.googleapis.com/$POOL/providers/cluster",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": { "file": "/var/run/hammerkit/account/token" } }
+EOF
+kubectl -n $NAME create secret generic deploy-federation --from-file=gcp.json=deploy-gcp.json
+```
+
+The ServiceAccount reads the secret itself and impersonates no Google service account, so
+`sts.googleapis.com` and `secretmanager.googleapis.com` are all `providers.gsm.allow` needs. A
+config that impersonates one (`service_account_impersonation_url`, what `gcloud iam
+workload-identity-pools create-cred-config --service-account` writes) also needs
+`iamcredentials.googleapis.com`. gcloud tries that host even without, and reads the secret
+anyway: `network: refused iamcredentials.googleapis.com` in the job's output is expected.
 
 Apply the changed config with `kubectl apply` as in step 2 of the Kubernetes guide, then
 restart the server, which reads issuers and accounts when it starts:
@@ -258,8 +285,8 @@ jobs:
 <Callout>
 
 `hammerkit remote run` ships with hammerkit 1.27.0. Until it is released, install the
-prerelease the server runs, for example `1.27.0-next.3` (`npm view hammerkit@next version`
-prints the newest).
+prerelease the server runs, the `$VERSION` of the Kubernetes guide (`npm view hammerkit@next
+version` prints the newest).
 
 </Callout>
 
