@@ -8,6 +8,7 @@ import {
   checkSandboxPath,
   exitCodeOf,
   fetchFailure,
+  followRun,
   oneAtATime,
   quotePosix,
   SandboxClient,
@@ -83,6 +84,39 @@ async function withHttp(
     await new Promise((resolve) => server.close(resolve))
   }
 }
+
+describe('following a run', () => {
+  it('waits for the server to take the cancel before it gives up on a run', async () => {
+    const run = { id: 'run_1', state: 'awaiting-approval', tasks: ['deploy'], results: {} }
+    let cancelled = false
+    await withHttp(
+      (req, res) => {
+        const answer = (body: unknown, ms = 0) =>
+          setTimeout(() => {
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(body))
+          }, ms)
+        if (req.method === 'POST' && req.url === '/v1/runs/run_1/cancel') {
+          // a slow answer, as through a load balancer or a token command that runs again
+          setTimeout(() => (cancelled = true), 300)
+          answer(run, 300)
+        } else if (req.url?.startsWith('/v1/runs/run_1/logs')) {
+          answer({ lines: [], truncated: false })
+        } else {
+          answer(run, 20)
+        }
+      },
+      async (url) => {
+        const abort = new AbortController()
+        const followed = followRun({ url, token: async () => 'tok' }, run as never, { signal: abort.signal })
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        abort.abort()
+        await expect(followed).rejects.toThrow('the run was cancelled')
+        expect(cancelled).toBe(true)
+      }
+    )
+  })
+})
 
 describe('tokens', () => {
   const secret = 'SECRET-refresh-token'
