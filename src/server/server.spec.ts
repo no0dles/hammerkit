@@ -10,6 +10,7 @@ import { getVersion } from '../version'
 import { HOST_ENV_YAML } from '../testing/host-env'
 import { createTestKey, signToken, startTestIssuer } from '../testing/test-issuer'
 import { abortOnSignals } from '../utils/abort-on-signals'
+import { sleep } from '../utils/sleep'
 
 const minimal = `
 ${HOST_ENV_YAML}listen: { port: 0 }
@@ -786,15 +787,30 @@ describe('server command', () => {
 
   // The process gets real signals, wired up as the CLI does (main.ts). Windows has no
   // SIGHUP to send: process.kill would end the test process there.
+  async function withSignalledServer(
+    name: string,
+    fn: (env: Environment, file: string, out: ReturnType<typeof memoryStream>) => Promise<void>
+  ): Promise<void> {
+    await withServerConfig(name, minimal, async (env, file) => {
+      const out = memoryStream()
+      env.stdout = out.stream
+      const removeAbort = abortOnSignals(process, env.abortCtrl)
+      try {
+        await fn(env, file, out)
+      } finally {
+        // a failed test leaves no server running that holds SIGHUP
+        env.abortCtrl.abort()
+        removeAbort()
+      }
+    })
+  }
+
   it.runIf(process.platform !== 'win32')(
     'reloads the entitlements on SIGHUP and keeps serving, while SIGTERM stops it',
     async () => {
-      await withServerConfig('server-command-sighup', minimal, async (env, file) => {
-        const out = memoryStream()
-        env.stdout = out.stream
-        const removeAbort = abortOnSignals(process, env.abortCtrl)
+      await withSignalledServer('server-command-sighup', async (env, file, out) => {
+        const finished = runProgram(env, ['hammerkit', 'server', '--config', file], true)
         try {
-          const finished = runProgram(env, ['hammerkit', 'server', '--config', file], true)
           const [, url] = await waitForOutput(out.read, /listening on (\S+)/, 'server did not start')
 
           writeFileSync(
@@ -813,11 +829,58 @@ describe('server command', () => {
           expect(env.abortCtrl.signal.aborted).toBe(true)
           expect(out.read()).toContain('hammerkit server stopped')
         } finally {
-          removeAbort()
+          env.abortCtrl.abort()
+          await finished.catch(() => undefined)
         }
       })
     }
   )
+
+  it.runIf(process.platform !== 'win32')('keeps a SIGHUP while it starts and reloads once it serves', async () => {
+    await withSignalledServer('server-command-sighup-start', async (env, file, out) => {
+      // the SIGHUP arrives while the server reads its config, before it listens
+      const read = env.file.read.bind(env.file)
+      let first = true
+      env.file.read = async (path) => {
+        if (first) {
+          first = false
+          const delivered = new Promise((resolve) => process.once('SIGHUP', resolve))
+          process.kill(process.pid, 'SIGHUP')
+          await delivered
+          expect(out.read()).not.toContain('listening on')
+        }
+        return read(path)
+      }
+      const finished = runProgram(env, ['hammerkit', 'server', '--config', file], true)
+      try {
+        const [, url] = await waitForOutput(out.read, /listening on (\S+)/, 'server did not start')
+        await waitForOutput(out.read, /reloaded 0 entitlements/, 'entitlements were not reloaded')
+
+        expect(env.abortCtrl.signal.aborted).toBe(false)
+        expect((await fetch(`${url}/healthz`)).status).toBe(200)
+        expect(out.read()).not.toContain('hammerkit server stopped')
+      } finally {
+        env.abortCtrl.abort()
+        await finished.catch(() => undefined)
+      }
+      expect(out.read()).toContain('hammerkit server stopped')
+    })
+  })
+
+  it.runIf(process.platform !== 'win32')('gives SIGHUP back when it does not start', async () => {
+    await withSignalledServer('server-command-sighup-fail', async (env, file) => {
+      writeFileSync(file, 'listen: { port: 0 }\n')
+      const listeners = process.listenerCount('SIGHUP')
+      await expect(runProgram(env, ['hammerkit', 'server', '--config', file], true)).rejects.toThrow('issuers')
+      expect(process.listenerCount('SIGHUP')).toBe(listeners)
+
+      const aborted = new Promise((resolve) => env.abortCtrl.signal.addEventListener('abort', resolve, { once: true }))
+      process.kill(process.pid, 'SIGHUP')
+      await expect(
+        Promise.race([aborted.then(() => 'aborted'), sleep(5000).then(() => 'still running')])
+      ).resolves.toBe('aborted')
+    })
+  })
 
   it('needs a config', async () => {
     await createTestCase('server-command-no-config', {}).setup(async (_cwd, env) => {

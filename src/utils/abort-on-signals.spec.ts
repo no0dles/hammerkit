@@ -61,4 +61,16 @@ describe('takeOverSignal', () => {
     expect(handler).not.toHaveBeenCalled()
     expect(abortCtrl.signal.aborted).toBe(true)
   })
+
+  it('takes the signal over on its own source only', () => {
+    const source = new EventEmitter()
+    const other = new EventEmitter()
+    const abortCtrl = new AbortController()
+    abortOnSignals(other, abortCtrl)
+    const release = takeOverSignal(source, 'SIGHUP', () => undefined)
+
+    other.emit('SIGHUP')
+    expect(abortCtrl.signal.aborted).toBe(true)
+    release()
+  })
 })

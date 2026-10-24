@@ -189,4 +189,6 @@ its `entitlements`: who may use which account, which repositories and which buil
 request, the server keeps running and no run is touched.
 Entitlements that name an account or issuer the running server does not have are refused and the old ones
 stay. Everything else (accounts, issuers, providers, sources, limits) is read at start only, the server says
-which keys of the file differ and need a restart. SIGHUP is not available on Windows.
+which keys of the file differ and need a restart. As SIGHUP is also what a closed terminal sends, closing the
+terminal of a server started in it does not stop it: stop it with Ctrl-C or `SIGTERM`. SIGHUP is not available
+on Windows, where closing the console stops the server.

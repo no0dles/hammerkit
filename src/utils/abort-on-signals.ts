@@ -10,8 +10,18 @@ export interface SignalSource {
 }
 
 // signals a running command gives a meaning of its own (the server reloads its
-// entitlements on SIGHUP), counted by how many hold them: they don't abort the run
-const takenOver = new Map<NodeJS.Signals, number>()
+// entitlements on SIGHUP), per source and counted by how many hold them: they don't
+// abort the run
+const takenOver = new WeakMap<SignalSource, Map<NodeJS.Signals, number>>()
+
+function heldOn(source: SignalSource): Map<NodeJS.Signals, number> {
+  let held = takenOver.get(source)
+  if (!held) {
+    held = new Map()
+    takenOver.set(source, held)
+  }
+  return held
+}
 
 /**
  * Stops the run on the abort signals, all but those a command took over with
@@ -20,7 +30,7 @@ const takenOver = new Map<NodeJS.Signals, number>()
 export function abortOnSignals(source: SignalSource, abortCtrl: AbortController): () => void {
   const listeners = ABORT_SIGNALS.map((signal) => {
     const listener = () => {
-      if (!takenOver.get(signal)) {
+      if (!takenOver.get(source)?.get(signal)) {
         abortCtrl.abort()
       }
     }
@@ -35,7 +45,8 @@ export function abortOnSignals(source: SignalSource, abortCtrl: AbortController)
  * gives the signal back.
  */
 export function takeOverSignal(source: SignalSource, signal: NodeJS.Signals, handler: () => void): () => void {
-  takenOver.set(signal, (takenOver.get(signal) ?? 0) + 1)
+  const held = heldOn(source)
+  held.set(signal, (held.get(signal) ?? 0) + 1)
   source.on(signal, handler)
   let released = false
   return () => {
@@ -44,6 +55,6 @@ export function takeOverSignal(source: SignalSource, signal: NodeJS.Signals, han
     }
     released = true
     source.off(signal, handler)
-    takenOver.set(signal, (takenOver.get(signal) ?? 1) - 1)
+    held.set(signal, (held.get(signal) ?? 1) - 1)
   }
 }
