@@ -7,7 +7,7 @@ import { WorkKubernetesServer } from '../planner/work-environment'
 import { WorkSecret } from '../planner/work-secret'
 import {
   assertJobAccounts,
-  assertSecretsReachable,
+  getSecretHosts,
   ensureJobCredentials,
   getJobSecretSpec,
   JobSecretSpec,
@@ -182,19 +182,51 @@ describe('secrets read in the Job', () => {
     expect(calls).toEqual([])
   })
 
-  it('keeps a task that reads them on an open network, its init containers share the pod’s policy', () => {
+  it('keeps a task that reads them on an open network, unless the proxy may let them reach the provider', () => {
     const { inJob } = splitJobSecrets(secrets, server)
     const task = (network: unknown, networkCeiling: unknown = null) =>
       ({ name: 'deploy', data: { network, networkCeiling } }) as any
-    expect(() => assertSecretsReachable(task({ type: 'open' }), inJob)).not.toThrow()
-    expect(() => assertSecretsReachable(task({ type: 'none' }), [])).not.toThrow()
-    expect(() => assertSecretsReachable(task({ type: 'none' }), inJob)).toThrow(
+    expect(getSecretHosts(task({ type: 'open' }), inJob, server)).toEqual([])
+    expect(getSecretHosts(task({ type: 'none' }), [], server)).toEqual([])
+    expect(() => getSecretHosts(task({ type: 'none' }), inJob, server)).toThrow(
       'task deploy: secret TOKEN is read from echo:the-token-value'
     )
+    expect(() => getSecretHosts(task({ type: 'none' }), inJob, server)).toThrow('backend.providers.echo.allow')
     // a ceiling of the run limits it as much as the build file
-    expect(() => assertSecretsReachable(task({ type: 'open' }, { type: 'allow', hosts: ['a.com'] }), inJob)).toThrow(
+    expect(() => getSecretHosts(task({ type: 'open' }, { type: 'allow', hosts: ['a.com'] }), inJob, server)).toThrow(
       'network allow'
     )
+    // with the provider's endpoints named, the proxy lets the init containers through to them
+    const proxied = {
+      ...server,
+      providers: { echo: { image: 'busybox:1.36', allow: ['b.example.com', 'a.example.com'] } },
+    }
+    expect(getSecretHosts(task({ type: 'none' }), inJob, proxied)).toEqual(['a.example.com', 'b.example.com'])
+    expect(getSecretHosts(task({ type: 'open' }, { type: 'none' }), inJob, proxied)).toEqual([
+      'a.example.com',
+      'b.example.com',
+    ])
+    // without a server the values are read by the machine that runs hammerkit
+    expect(getSecretHosts(task({ type: 'none' }), inJob, undefined)).toEqual([])
+  })
+
+  it('sends the requests of the init containers through the proxy with its token, the task’s own not', () => {
+    const { inJob } = splitJobSecrets(secrets, server)
+    const proxyEnv = [{ name: 'HTTPS_PROXY', value: 'http://hammerkit:$(HAMMERKIT_PROXY_TOKEN)@hammerkit-proxy:3128' }]
+    const spec = getJobSecretSpec(item, inJob, server, credentials, environmentMock(tmpdir()), proxyEnv)
+    for (const container of spec.initContainers) {
+      expect(container.env).toEqual(expect.arrayContaining(proxyEnv))
+    }
+    expect(JSON.stringify(spec.command('/bin/sh', 'echo hi'))).not.toContain('HAMMERKIT_PROXY_TOKEN')
+  })
+
+  it('passes a reference as text, so Kubernetes puts no variable of the container into it', () => {
+    const { inJob } = splitJobSecrets(
+      [provider('$(HAMMERKIT_PROXY_TOKEN) $HOME $$', 'dev', { type: 'env', name: 'T' })],
+      server
+    )
+    const spec = getJobSecretSpec(item, inJob, server, credentials, environmentMock(tmpdir()))
+    expect(spec.initContainers[0].args).toEqual(['sh', 'printf', '%s', '$$(HAMMERKIT_PROXY_TOKEN) $$HOME $$$$'])
   })
 
   it('keeps the command as it is for a task without such secrets', () => {

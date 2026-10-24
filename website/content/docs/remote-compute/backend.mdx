@@ -285,6 +285,40 @@ accounts:
 | `audience` | The audience of that token; the cluster's default when left out. |
 | `secret` | A Secret of the server's namespace, each key a file of the directory: the federation config that points at `token`, or a key file where nothing else works (long-lived, so the second choice). |
 
+#### Secrets of a task with a limited network
+
+A task with `network: none` or an allow list reaches nothing else, and its init containers share
+its policy. `backend.providers.<name>.allow` names the hosts a provider's command reaches:
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  networkPolicy: enforced
+  providers:
+    gsm:
+      image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+      # Google's STS exchanges the token of the account's ServiceAccount, Secret Manager reads the value
+      allow: [sts.googleapis.com, secretmanager.googleapis.com]
+runs:
+  secretNetwork: none
+```
+
+- The task's egress proxy lets a tunnel to one of those hosts, on port 443, through only when it
+  carries the proxy's token. The token is new for each run of the task, in a Secret of the
+  caller's namespace that the init containers read their proxy variables from
+  (`HTTPS_PROXY=http://hammerkit:<token>@hammerkit-proxy:3128`). The task's own container gets
+  neither the token nor those variables, so its command reaches the provider's hosts as little
+  as any other. The Secret goes with the proxy.
+- A task with `network: none` gets a proxy for this alone, which allows its own command no host.
+- The names are exact names or `*.` patterns, without a port; like a pattern of `allow`, they
+  never reach a private address. Name the hosts the command needs, not their domain:
+  `*.googleapis.com` would let it reach every Google API. The provider's command has to read `HTTPS_PROXY`, user and
+  password included; `gcloud` does. A command that ignores it can't read a secret under a
+  limited network. A federation config that impersonates a Google service account
+  (`service_account_impersonation_url`) also needs `iamcredentials.googleapis.com`.
+- With [`runs.secretNetwork`](/docs/remote-compute/runs#tasks-that-read-secrets) every task that
+  reads a secret has to be limited, so each provider of such a task needs `allow`.
+
 On a cluster every account with `providers` needs `kubernetes`, or the server does not start:
 its commands would otherwise run as whatever identity the node or the provider's image has,
 the same for every account.
@@ -314,9 +348,10 @@ of the server (`storage.directory`) belongs on a volume of its own.
 A task's [`network`](/docs/task/network) works on a cluster as in a
 [Kubernetes environment](/docs/task/network#kubernetes): a limited task's Jobs get a `NetworkPolicy`
 that lets them reach only the services they need and, under `allow`, their egress proxy, a
-Deployment on the first pool. A task without an image takes no `network` of its own yet (the
-build file is refused when it is read), but a run's `--network` ceiling limits it like a
-container task, since it runs in a container of the tool image. The policy, the proxy and its
+Deployment on the first pool. A task without an image runs in a container of the
+[tool image](#pools), so it is limited like a container task: it may name its own `network`
+on such a server (elsewhere a local task with a limited network is refused when the build
+file is read), and `runs.network` and `runs.secretNetwork` hold it as well. The policy, the proxy and its
 Service carry `hammerkit.dev/run` and go with the rest of the run. Pods with an open network are
 governed by the policy of the caller's namespace, see [Namespaces](#namespaces).
 
@@ -332,9 +367,11 @@ policy holds, and fails after 60 seconds if it never does (see
 A pod with an open network has no such wait, so on those plugins it can reach a `deniedEgress`
 address in its first moment.
 
-A task that reads a provider's secret keeps an open network for now: its init containers are in
-the task's pod, so its policy would cut them off from the secret manager. Such a build file is
-refused when it is published, and a run whose ceiling would limit such a task fails that task.
+A task that reads a provider's secret can have a limited network when the server names the
+endpoints of the provider: its init containers are in the task's pod, under the same policy,
+and reach the secret manager through the task's egress proxy (under `none` too). See
+[Secrets in the Job](#secrets-in-the-job). Without them such a task keeps an open network: a
+build file that limits it is refused when it is published.
 
 ### Sandboxes
 

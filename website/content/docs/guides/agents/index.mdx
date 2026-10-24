@@ -56,16 +56,20 @@ tasks:
   sh:
     image: node:22-alpine
     mounts: [.]
+    args: true
     cmds: [sh -c]
     network: { allow: [registry.npmjs.org] }
   test:
     image: node:22-alpine
     src: [src/**, test/**]
+    args: true
     cmds: [node --test]
 ```
 
-`mounts: [.]` puts the files of the sandbox into the container, writable. The task reads no
-secrets: a task that does takes no arguments on a server. Publish it with
+`mounts: [.]` puts the files of the sandbox into the container, writable, and `args: true`
+marks the tasks that take arguments, the agent's commands and a test file: a server with
+[`runs.args: declared`](/docs/remote-compute/runs#arguments) passes them to no other.
+The task reads no secrets: a task that does takes no arguments on a server. Publish it with
 [`hammerkit remote publish`](/docs/cli/remote#publishing-a-build-file) as an identity with
 `builds: publish`; it prints the hash of the version. The agent then names the repository,
 the branch and that hash:

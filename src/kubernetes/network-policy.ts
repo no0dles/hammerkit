@@ -7,9 +7,10 @@ import {
   V1NetworkPolicy,
   V1NetworkPolicyIngressRule,
   V1OwnerReference,
+  V1Secret,
   V1Service,
 } from '@kubernetes/client-node'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { PassThrough, Writable } from 'stream'
 import { createInterface } from 'readline'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -30,6 +31,7 @@ import {
   getEgressProxyPorts,
   getItemProxyEnvironment,
   getProxyClientEnvironment,
+  getSecretProxyEnvironment,
   parseEgressProxyEvent,
 } from '../network/egress-proxy'
 import { getErrorMessage } from '../log'
@@ -47,6 +49,9 @@ const NETWORK_OF_LABEL = 'hammerkit.dev/network-of'
 // on the proxy of a task on a sandbox: the sandbox, whose pod of files it stays with
 const PROXY_OF_SANDBOX_LABEL = 'hammerkit.dev/proxy-of-sandbox'
 const PROXY_READY_TIMEOUT_MS = 60000
+// the token of the endpoints of secret providers, in a Secret named like the proxy
+const SECRET_TOKEN_KEY = 'token'
+const SECRET_TOKEN_VARIABLE = 'HAMMERKIT_PROXY_TOKEN'
 // how long the pods of an item may take to end before their policy goes
 const POD_END_TIMEOUT_MS = 120000
 const POD_END_POLL_MS = 500
@@ -64,6 +69,9 @@ export function getNetworkLabels(env: WorkKubernetesEnvironment, item: Container
 export interface KubernetesItemNetwork {
   // the proxy variables under `allow`
   env: V1EnvVar[]
+  // of the init containers that read secrets: the proxy variables with its token, which
+  // let them reach the endpoints of their providers (`secretHosts`)
+  secretEnv: V1EnvVar[]
   // the needed services, and the proxy under `allow`, by name
   hostAliases: V1HostAlias[]
   // run before the item's own containers: under a limited network, the gate
@@ -192,15 +200,16 @@ function getIngress(env: WorkKubernetesEnvironment, item: ContainerItem): V1Netw
 }
 
 // The NetworkPolicy of a limited item: egress to the pods of the services it
-// needs and, under `allow`, to its proxy; nothing else, DNS included (needs
-// and the proxy are host aliases). Ingress only from what needs it. An open
-// item has none.
+// needs and, under `allow` or with secrets read through it, to its proxy;
+// nothing else, DNS included (needs and the proxy are host aliases). Ingress
+// only from what needs it. An open item has none.
 export function buildNetworkPolicy(
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
   network: WorkNetwork,
   scope: KubernetesNetworkScope,
-  proxy: ProxyIdentity = getRunProxy(item, scope)
+  proxy: ProxyIdentity = getRunProxy(item, scope),
+  proxied: boolean = network.type === 'allow'
 ): V1NetworkPolicy & KubernetesObjectHeader {
   const needs = item.needs.filter((need) => isContainerWorkServiceItem(need.service))
   return {
@@ -220,7 +229,7 @@ export function buildNetworkPolicy(
         ...(needs.length > 0
           ? [{ to: needs.map((need) => ({ podSelector: { matchLabels: { [ID_LABEL]: need.service.id() } } })) }]
           : []),
-        ...(network.type === 'allow'
+        ...(proxied
           ? [
               {
                 to: [{ podSelector: { matchLabels: { [PROXY_LABEL]: proxy.key } } }],
@@ -274,11 +283,14 @@ export function buildProxyPolicy(
 // left goes.
 // A task follows the proxy's log while its jobs run. A service outlives the
 // run on a cluster, so its refused hosts are in the proxy's own log.
+// `secretHosts` are the endpoints of the providers whose secrets the init
+// containers of a task on a server read: a limited task gets a proxy for them
+// (under `none` too), which passes them to those containers only.
 export async function ensureKubernetesItemNetwork(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   item: ContainerItem,
-  options: { followLog: boolean } & KubernetesNetworkScope
+  options: { followLog: boolean; secretHosts?: string[] } & KubernetesNetworkScope
 ): Promise<KubernetesItemNetwork> {
   const network = getEffectiveNetwork(item.data)
   if (network.type !== 'open' && !env.networkPolicyEnforced) {
@@ -293,24 +305,33 @@ export async function ensureKubernetesItemNetwork(
       // without the rights to manage NetworkPolicies, hammerkit never made one
       await removeKubernetesItemNetwork(instance, env, item, { run: null }, { ignoreForbidden: true })
     }
-    return { env: [], hostAliases, initContainers: [], close() {} }
+    return { env: [], secretEnv: [], hostAliases, initContainers: [], close() {} }
   }
 
+  const secretHosts = options.secretHosts ?? []
+  if (secretHosts.length > 0 && options.sandbox) {
+    // a run on a sandbox uses no account, so it reads no secret of a provider
+    throw new Error(`${item.name}: a task on a sandbox reads no secret of a provider`)
+  }
   const proxy =
     network.type === 'allow' && options.sandbox
       ? getSandboxProxy(env, item, network, hostAliases, options.sandbox)
       : getRunProxy(item, options)
-  await apply(instance, buildNetworkPolicy(env, item, network, options, proxy))
+  const proxied = network.type === 'allow' || secretHosts.length > 0
+  await apply(instance, buildNetworkPolicy(env, item, network, options, proxy, proxied))
   const initContainers = [getNetworkGateContainer()]
-  if (network.type === 'none') {
+  if (!proxied) {
     if (options.sandbox) {
       await removeSandboxProxies(instance, env.namespace, { sandbox: options.sandbox.label, item })
     } else {
       await removeProxy(instance, env.namespace, proxy.name, [404])
     }
-    return { env: [], hostAliases, initContainers, close() {} }
+    return { env: [], secretEnv: [], hostAliases, initContainers, close() {} }
   }
 
+  // under `none`, a proxy for the secrets only: it allows the item no host
+  const proxyNetwork: Extract<WorkNetwork, { type: 'allow' }> =
+    network.type === 'allow' ? network : { type: 'allow', hosts: [] }
   let started: { ip: string; reused: boolean }
   try {
     if (proxy.sandbox) {
@@ -323,7 +344,7 @@ export async function ensureKubernetesItemNetwork(
       )
       proxy.owner = await getFilesPodOwner(instance, env, proxy.sandbox)
     }
-    started = await ensureProxy(instance, env, item, network, hostAliases, options, proxy)
+    started = await ensureProxy(instance, env, item, proxyNetwork, hostAliases, options, proxy, secretHosts)
   } catch (e) {
     await removeKubernetesItemNetwork(instance, env, item, options).catch(() => undefined)
     throw e
@@ -331,11 +352,19 @@ export async function ensureKubernetesItemNetwork(
   const follow = options.followLog
     ? await followProxyLog(instance, env, item, proxy, { tailLines: started.reused ? 0 : undefined })
     : null
+  const needs = item.needs.map((need) => need.name)
+  const toEnv = (variables: { [name: string]: string }): V1EnvVar[] =>
+    Object.entries(variables).map(([name, value]) => ({ name, value }))
   return {
-    env: Object.entries(getProxyClientEnvironment(item.needs.map((need) => need.name))).map(([name, value]) => ({
-      name,
-      value,
-    })),
+    env: network.type === 'allow' ? toEnv(getProxyClientEnvironment(needs)) : [],
+    // the token from the proxy's Secret, which the item's own container never mounts
+    secretEnv:
+      secretHosts.length > 0
+        ? [
+            { name: SECRET_TOKEN_VARIABLE, valueFrom: { secretKeyRef: { name: proxy.name, key: SECRET_TOKEN_KEY } } },
+            ...toEnv(getProxyClientEnvironment(needs, `$(${SECRET_TOKEN_VARIABLE})`)),
+          ]
+        : [],
     // the item reaches each TCP forward under its host's name, at the proxy
     hostAliases: [
       ...hostAliases,
@@ -461,6 +490,7 @@ export async function removeAllKubernetesItemNetworks(
     if (name) {
       await ignoreStatus(instance.appsApi.deleteNamespacedDeployment({ name, namespace: env.namespace }), [404])
       await ignoreStatus(instance.coreApi.deleteNamespacedService({ name, namespace: env.namespace }), [404])
+      await ignoreStatus(instance.coreApi.deleteNamespacedSecret({ name, namespace: env.namespace }), [404])
     }
   }
 }
@@ -506,7 +536,8 @@ async function ensureProxy(
   network: Extract<WorkNetwork, { type: 'allow' }>,
   hostAliases: V1HostAlias[],
   scope: KubernetesNetworkScope,
-  proxy: ProxyIdentity
+  proxy: ProxyIdentity,
+  secretHosts: string[] = []
 ): Promise<{ ip: string; reused: boolean }> {
   const name = proxy.name
   const labels = { [PROXY_LABEL]: proxy.key }
@@ -546,7 +577,19 @@ async function ensureProxy(
               name: 'proxy',
               image: EGRESS_PROXY_IMAGE,
               command: getEgressProxyCommand(),
-              env: Object.entries(getItemProxyEnvironment(item)).map(([key, value]) => ({ name: key, value })),
+              env: [
+                ...Object.entries({ ...getItemProxyEnvironment(item), ...getSecretProxyEnvironment(secretHosts) }).map(
+                  ([key, value]) => ({ name: key, value })
+                ),
+                ...(secretHosts.length > 0
+                  ? [
+                      {
+                        name: 'HAMMERKIT_SECRET_TOKEN',
+                        valueFrom: { secretKeyRef: { name, key: SECRET_TOKEN_KEY } },
+                      },
+                    ]
+                  : []),
+              ],
               ports: getEgressProxyPorts(network).map((port) => ({ containerPort: port })),
               // in the pod, since its ingress policy may keep the kubelet out;
               // ready once it listens on every port, its TCP forwards' too
@@ -583,6 +626,24 @@ async function ensureProxy(
       )
     : false
   await apply(instance, buildProxyPolicy(env, item, network, scope, proxy))
+  if (secretHosts.length > 0) {
+    // new with each run's proxy, and kept while it is there: its pod read it when it started.
+    // The init containers that read secrets get it, the task not.
+    const secret: V1Secret & KubernetesObjectHeader = {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { ...metadata, annotations: { 'hammerkit.dev/version': getVersion() } },
+      type: 'Opaque',
+      data: { [SECRET_TOKEN_KEY]: Buffer.from(randomBytes(32).toString('hex')).toString('base64') },
+    }
+    const exists = await instance.objectApi.read(secret).then(
+      () => true,
+      (e) => (statusCodeOf(e) === 404 ? false : Promise.reject(e))
+    )
+    if (!exists) {
+      await instance.objectApi.create(secret)
+    }
+  }
   await apply(instance, deployment)
   const created = await apply(instance, service)
   await awaitDeployRunningState(instance, env, name, {
@@ -596,7 +657,9 @@ async function ensureProxy(
   }
   item.status.write(
     'debug',
-    `${reused ? 'egress proxy of the sandbox' : 'egress proxy'} allows ${network.hosts.join(', ') || 'no host'}`
+    `${reused ? 'egress proxy of the sandbox' : 'egress proxy'} allows ${network.hosts.join(', ') || 'no host'}${
+      secretHosts.length > 0 ? `, and ${secretHosts.join(', ')} to the reads of secrets` : ''
+    }`
   )
   return { ip, reused }
 }
@@ -639,9 +702,19 @@ async function followProxyLog(
   }
 }
 
-async function removeProxy(instance: KubernetesInstance, namespace: string, name: string, ignored: number[]) {
+// The token of a proxy for secrets goes with it; a proxy of a sandbox has none.
+async function removeProxy(
+  instance: KubernetesInstance,
+  namespace: string,
+  name: string,
+  ignored: number[],
+  options: { token: boolean } = { token: true }
+) {
   await ignoreStatus(instance.appsApi.deleteNamespacedDeployment({ name, namespace }), ignored)
   await ignoreStatus(instance.coreApi.deleteNamespacedService({ name, namespace }), ignored)
+  if (options.token) {
+    await ignoreStatus(instance.coreApi.deleteNamespacedSecret({ name, namespace }), ignored)
+  }
   await ignoreStatus(
     instance.objectApi.delete({
       apiVersion: 'networking.k8s.io/v1',
@@ -672,7 +745,7 @@ export async function removeSandboxProxies(
   for (const deployment of deployments.items) {
     const name = deployment.metadata?.name
     if (name && !keep(deployment)) {
-      await removeProxy(instance, namespace, name, [404])
+      await removeProxy(instance, namespace, name, [404], { token: false })
     }
   }
 }

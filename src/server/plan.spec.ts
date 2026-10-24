@@ -150,6 +150,44 @@ tasks:
     expect(refuseArguments(run, planned.plan)).toBeNull()
   })
 
+  it('takes arguments for a task with args: false never, and under runs.args: declared only with args: true', async () => {
+    const yaml = `
+tasks:
+  test:
+    image: node:22
+    cmds: [npx vitest run]
+  sh:
+    image: node:22
+    args: true
+    cmds: [sh -c]
+  install:
+    image: node:22
+    args: false
+    cmds: [npm ci]
+`
+    const run = (task: string) => ({ tasks: [task], options: { args: ['x'] } })
+    const planned = await planBundle(bundle(yaml), hosted, { policy })
+    // what a reviewer reads: the build file's word, left out when it says none
+    expect(planned.plan.sh.args).toBe(true)
+    expect(planned.plan.install.args).toBe(false)
+    expect('args' in planned.plan.test).toBe(false)
+    await expect(planRun(bundle(yaml), run('install'), hosted, policy)).rejects.toThrow(
+      'task install takes no arguments after -- (args: false)'
+    )
+    const refusal = async (task: string, args?: 'any' | 'declared') =>
+      refuseArguments(run(task), (await planRun(bundle(yaml), run(task), hosted, policy)).plan, { args })
+    expect(await refusal('test')).toBeNull()
+    expect(await refusal('test', 'any')).toBeNull()
+    expect(await refusal('sh', 'declared')).toBeNull()
+    expect(await refusal('test', 'declared')).toEqual(
+      'test takes no arguments on this server: it takes them only for tasks that say args: true (runs.args: declared)'
+    )
+    // a run without arguments is never refused
+    expect(refuseArguments({ tasks: ['test'], options: {} }, planned.plan, { args: 'declared' })).toBeNull()
+    // a plan stored with args: false (published before planning refused it) is refused as well
+    expect(refuseArguments(run('install'), planned.plan)).toEqual('install takes no arguments (args: false)')
+  })
+
   it('refuses arguments for a run in which an item reads a secret or a variable of the server', async () => {
     const refusal = async (yaml: string, task: string) => {
       const run = { tasks: [task], options: { args: ['-t', 'x'] } }
@@ -308,6 +346,65 @@ tasks:
     ).rejects.toThrow("a: is a local task, which can't be limited to the network this server allows")
   })
 
+  it('limits a local task on a cluster, where it runs in a pod of a tool image', async () => {
+    const onCluster: Environment = { ...hosted, hosted: { ...hosted.hosted!, localTasksInContainers: true } }
+    const cluster = { ...policy, backend: 'kubernetes' as const, network: { type: 'none' as const } }
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    network: none\n    cmds: [echo]\n'), onCluster, { policy: cluster })
+    ).resolves.toMatchObject({ plan: { a: { runtime: 'local', network: 'none' } } })
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    cmds: [echo]\n'), onCluster, { policy: cluster })
+    ).rejects.toThrow('a: asks for network open, more than this server allows (runs.network: none)')
+    // where it runs on the machine, the build file is refused when it is read
+    await expect(
+      planBundle(bundle('tasks:\n  a:\n    network: none\n    cmds: [echo]\n'), hosted, { policy })
+    ).rejects.toThrow("hammerkit can't limit the network of a local task")
+  })
+
+  it('holds what reads a secret or a credential of the server to runs.secretNetwork', async () => {
+    const secretNetwork = { type: 'allow' as const, hosts: ['registry.npmjs.org'] }
+    const limited = { ...policy, envs: ['PATH', 'NPM_TOKEN'], secretNetwork }
+    const yaml = (network: string) => `
+tasks:
+  plain:
+    image: node:22
+    envs: { P: $PATH }
+    cmds: [npm test]
+  publish:
+    image: node:22
+    secrets:
+      - { from: "gsm:npm-token", account: ci, env: NPM_TOKEN }${network}
+    cmds: [npm publish]
+  login:
+    image: node:22
+    envs: { TOKEN: $SERVER_ONLY }${network}
+    cmds: [npm whoami]
+`
+    // the task that reads nothing keeps its open network
+    await expect(planBundle(bundle(yaml('')), hosted, { policy: limited })).rejects.toThrow(
+      'publish: asks for network open, more than this server allows to what reads the secret NPM_TOKEN (runs.secretNetwork: allow registry.npmjs.org)\n' +
+        'login: asks for network open, more than this server allows to what reads $SERVER_ONLY of the server (runs.secretNetwork: allow registry.npmjs.org)'
+    )
+    await expect(
+      planBundle(bundle(yaml('\n    network: { allow: [registry.npmjs.org] }')), hosted, { policy: limited })
+    ).resolves.toBeDefined()
+    await expect(planBundle(bundle(yaml('\n    network: none')), hosted, { policy: limited })).resolves.toBeDefined()
+    // under the ceiling of every run too
+    await expect(
+      planBundle(bundle(yaml('\n    network: none')), hosted, { policy: { ...limited, network: { type: 'none' } } })
+    ).rejects.toThrow('plain: asks for network open, more than this server allows (runs.network: none)')
+    // a local task that reads a secret can't be limited on the machine
+    await expect(
+      planBundle(bundle(build), hosted, { policy: { ...policy, secretNetwork: { type: 'none' } } })
+    ).rejects.toThrow(
+      "deploy: is a local task, which can't be limited to the network this server allows to what reads the secret KUBE_TOKEN (runs.secretNetwork: none)"
+    )
+    // open, the default, holds nothing
+    await expect(
+      planBundle(bundle(yaml('')), hosted, { policy: { ...limited, secretNetwork: { type: 'open' } } })
+    ).resolves.toBeDefined()
+  })
+
   it('requires every provider secret to name its account, a task account does not count', async () => {
     const yaml = `
 tasks:
@@ -359,8 +456,13 @@ tasks:
     const offline =
       'tasks:\n  a:\n    image: alpine:3.19\n    network: none\n    secrets:\n      - { from: "gsm:x", account: ci, env: X }\n    cmds: [echo]\n'
     await expect(planBundle(bundle(offline), hosted, onCluster)).rejects.toThrow(
-      'a: the secret X is read from gsm in the Job of the task, which network none would cut off from it'
+      'a: the secret X is read from gsm in the Job of the task, which network none would cut off from it: ' +
+        'this server names no endpoints of gsm in backend.providers.gsm.allow'
     )
+    // the egress proxy lets its init containers reach the endpoints the server names
+    await expect(
+      planBundle(bundle(offline), hosted, { policy: { ...onCluster.policy, proxiedProviders: ['gsm'] } })
+    ).resolves.toBeTruthy()
     await expect(planBundle(bundle(build), hosted, onCluster)).resolves.toBeTruthy()
     await expect(planBundle(bundle(cached), hosted, { policy })).resolves.toBeTruthy()
     await expect(planBundle(bundle(offline), hosted, { policy })).resolves.toBeTruthy()

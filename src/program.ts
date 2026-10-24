@@ -97,7 +97,8 @@ function printTaskDefinition(environment: Environment, definition: TaskDefinitio
 }
 
 // `ls --json`: what a caller (an agent picking a task) needs to know, with the
-// command that arguments after `--` are appended to (null: it takes none).
+// command that arguments after `--` are appended to (null: it takes none) and
+// `args` as the build file says it (false: it refuses them).
 function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
   return {
     tasks: tasks.map(({ item }) => ({
@@ -109,6 +110,7 @@ function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
       needs: item.needs.map((n) => n.name),
       labels: item.data.labels,
       command: getArgumentsTarget(item.data)?.cmd ?? null,
+      args: item.data.args,
     })),
     services: services.map(({ item }) => ({
       name: item.name,
@@ -118,6 +120,7 @@ function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
       ports: item.data.ports.map((p) => ({ host: p.hostPort, container: p.containerPort })),
       labels: item.data.labels,
       command: getArgumentsTarget(item.data)?.cmd ?? null,
+      args: item.data.type === 'container-service' ? item.data.args : null,
     })),
   }
 }

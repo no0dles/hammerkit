@@ -4,7 +4,9 @@
 // `CONNECT` tunnels to an allowed host pass, everything else gets a 403 and a
 // `refused` event on stdout. For each `host:port` entry it also listens on that
 // port and forwards raw TCP to that host, which the item reaches under the
-// host's name. The script is passed to `node -e`, so the proxy
+// host's name. On a server's cluster it also lets the init containers that read
+// the task's secrets reach the endpoints of their providers: a tunnel to port 443
+// that carries the proxy's token, which those containers get and the task not. The script is passed to `node -e`, so the proxy
 // needs no image of its own, only a stock Node image.
 
 import { getEffectiveNetwork, getTcpForwards, WorkNetwork } from '../planner/work-network'
@@ -33,6 +35,7 @@ export const EGRESS_PROXY_SCRIPT = `
 const http = require('http')
 const net = require('net')
 const dns = require('dns')
+const crypto = require('crypto')
 const entries = JSON.parse(process.env.HAMMERKIT_ALLOW || '[]').map((h) => h.toLowerCase())
 // names and patterns for HTTP(S)
 const allow = entries.filter((e) => !e.includes(':'))
@@ -46,6 +49,9 @@ const publicOnly = JSON.parse(process.env.HAMMERKIT_PUBLIC_ONLY || '[]').map((h)
 // the names of the needed services, for tools that ignore NO_PROXY: exact
 // names only, never patterns
 const needs = JSON.parse(process.env.HAMMERKIT_NEEDS || '[]').map((h) => h.toLowerCase())
+// the endpoints of secret providers, for a request with the token only
+const secretAllow = JSON.parse(process.env.HAMMERKIT_SECRET_ALLOW || '[]').map((h) => h.toLowerCase())
+const secretToken = process.env.HAMMERKIT_SECRET_TOKEN || ''
 const port = parseInt(process.env.HAMMERKIT_PROXY_PORT || '${EGRESS_PROXY_PORT}', 10)
 // the name whose address the proxy listens on, every address when unset
 const bind = process.env.HAMMERKIT_PROXY_BIND
@@ -71,6 +77,31 @@ function allowedBy(host, port) {
     return named.some((entry) => !publicOnly.includes(entry)) ? 'exact' : 'wildcard'
   }
   return allow.some((rule) => rule.startsWith('*.') && name.endsWith(rule.substring(1))) ? 'wildcard' : null
+}
+// Whether the request carries the token as the password of Proxy-Authorization (Basic).
+function hasSecretToken(req) {
+  if (secretToken.length === 0) {
+    return false
+  }
+  const match = /^basic\\s+(\\S+)$/i.exec(String(req.headers['proxy-authorization'] || ''))
+  if (!match) {
+    return false
+  }
+  const credentials = Buffer.from(match[1], 'base64').toString('utf8')
+  const colon = credentials.indexOf(':')
+  if (colon < 0) {
+    return false
+  }
+  const given = Buffer.from(credentials.substring(colon + 1), 'utf8')
+  const expected = Buffer.from(secretToken, 'utf8')
+  return given.length === expected.length && crypto.timingSafeEqual(given, expected)
+}
+// the rule of a tunnel to an endpoint of a secret provider: like a wildcard, it reaches
+// no private address
+function allowedForSecrets(req, host, port) {
+  const name = host.toLowerCase().replace(/\\.$/, '')
+  const listed = secretAllow.some((rule) => (rule.startsWith('*.') ? name.endsWith(rule.substring(1)) : name === rule))
+  return listed && port === 443 && hasSecretToken(req) ? 'wildcard' : null
 }
 function ipv4(address) {
   const mapped = /^::ffff:(\\d+\\.\\d+\\.\\d+\\.\\d+)$/i.exec(address)
@@ -205,7 +236,7 @@ const server = http.createServer((req, res) => {
 server.on('connect', (req, socket, head) => {
   const target = parseAuthority(req.url || '')
   socket.on('error', () => socket.destroy())
-  const rule = target ? allowedBy(target.host, target.port) : null
+  const rule = target ? allowedBy(target.host, target.port) || allowedForSecrets(req, target.host, target.port) : null
   if (!rule) {
     refuse(target ? target.host : String(req.url))
     socket.end('HTTP/1.1 403 Forbidden\\r\\ncontent-type: text/plain\\r\\n\\r\\nhammerkit: network access is not allowed\\n')
@@ -299,7 +330,8 @@ export function getEgressProxyCommand(): string[] {
 // `needs` are the names of the needed services, allowed as exactly those
 // names. `bind` is the name the proxy listens on alone, so that nothing on its
 // other networks reaches it. `publicOnly` are the entries of `hosts` that reach
-// no private address (see WorkNetwork).
+// no private address (see WorkNetwork). The endpoints of secret providers and
+// the token they need are set by the caller (getSecretProxyEnvironment).
 export function getEgressProxyEnvironment(
   hosts: string[],
   needs: string[],
@@ -313,6 +345,12 @@ export function getEgressProxyEnvironment(
     HAMMERKIT_PROXY_PORT: `${EGRESS_PROXY_PORT}`,
     ...(bind ? { HAMMERKIT_PROXY_BIND: bind } : {}),
   }
+}
+
+// The endpoints of secret providers the proxy lets a tunnel with its token reach; the
+// token itself is set where the proxy runs, see HAMMERKIT_SECRET_TOKEN.
+export function getSecretProxyEnvironment(hosts: string[]): { [key: string]: string } {
+  return hosts.length > 0 ? { HAMMERKIT_SECRET_ALLOW: JSON.stringify(hosts) } : {}
 }
 
 // The proxy of a task or service: the hosts of its network in this run (under
@@ -337,8 +375,9 @@ export function getEgressProxyPorts(network: WorkNetwork): number[] {
   return [EGRESS_PROXY_PORT, ...getTcpForwards(network).map((forward) => forward.port)]
 }
 
-export function getProxyClientEnvironment(directHosts: string[]): { [key: string]: string } {
-  const proxy = `http://${EGRESS_PROXY_HOST}:${EGRESS_PROXY_PORT}`
+// `token` is sent as the password, for the endpoints of secret providers.
+export function getProxyClientEnvironment(directHosts: string[], token?: string): { [key: string]: string } {
+  const proxy = `http://${token !== undefined ? `hammerkit:${token}@` : ''}${EGRESS_PROXY_HOST}:${EGRESS_PROXY_PORT}`
   const noProxy = ['localhost', '127.0.0.1', ...directHosts].join(',')
   return {
     HTTP_PROXY: proxy,

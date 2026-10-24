@@ -23,6 +23,7 @@ const baseTask = {
   network: { type: 'open' as const },
   networkCeiling: null,
   runner: null,
+  args: null,
 }
 
 describe('getWorkTaskCacheDescription', () => {

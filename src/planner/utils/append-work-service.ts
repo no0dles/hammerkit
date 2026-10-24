@@ -143,6 +143,7 @@ function parseService(
       volumeSize: service.schema.volumeSize ?? null,
       network: parseWorkNetwork(service.schema.network),
       networkCeiling: null,
+      args: service.schema.args ?? null,
     }
   }
 }

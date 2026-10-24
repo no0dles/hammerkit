@@ -160,7 +160,7 @@ export class HostExecutor implements RunExecutor {
     if (extra.length > 0) {
       throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
     }
-    const refused = refuseArguments(run, planned.plan)
+    const refused = refuseArguments(run, planned.plan, policy)
     if (refused) {
       throw new Error(refused)
     }

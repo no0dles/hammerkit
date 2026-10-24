@@ -63,6 +63,9 @@ export interface ContainerWorkService extends BaseWorkService {
   network: WorkNetwork
   // the run's `--network` ceiling, null for none; see getEffectiveNetwork
   networkCeiling: WorkNetwork | null
+  // whether its `cmd` takes arguments after `--` (`args`): false refuses them, null when
+  // the build file doesn't say
+  args: boolean | null
 }
 
 export interface WorkServiceInit {

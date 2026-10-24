@@ -9,6 +9,7 @@ import {
   EgressProxyEvent,
   getEgressProxyEnvironment,
   getProxyClientEnvironment,
+  getSecretProxyEnvironment,
   formatEgressProxyEvent,
   parseEgressProxyEvent,
 } from './egress-proxy'
@@ -31,7 +32,13 @@ interface RunningProxy {
 // `preload` is a module the script runs after, to stand in for DNS
 async function startProxy(
   hosts: string[],
-  options: { needs?: string[]; bind?: string; preload?: string; publicOnly?: string[] } = {}
+  options: {
+    needs?: string[]
+    bind?: string
+    preload?: string
+    publicOnly?: string[]
+    env?: { [key: string]: string }
+  } = {}
 ): Promise<RunningProxy> {
   const port = await freePort()
   const preload = options.preload ? ['-r', options.preload] : []
@@ -39,6 +46,7 @@ async function startProxy(
     env: {
       ...getEgressProxyEnvironment(hosts, options.needs ?? [], options.bind, options.publicOnly),
       HAMMERKIT_PROXY_PORT: `${port}`,
+      ...options.env,
     },
     stdio: ['ignore', 'pipe', 'inherit'],
   })
@@ -77,10 +85,18 @@ function get(proxyPort: number, url: string, proxyHost = '127.0.0.1'): Promise<{
 }
 
 // a CONNECT tunnel, then a plain HTTP request through it
-function tunnel(proxyPort: number, authority: string, host: string, proxyHost = '127.0.0.1'): Promise<string> {
+function tunnel(
+  proxyPort: number,
+  authority: string,
+  host: string,
+  proxyHost = '127.0.0.1',
+  headers: string[] = []
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = connect(proxyPort, proxyHost, () => {
-      socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`)
+      socket.write(
+        `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n${headers.map((h) => `${h}\r\n`).join('')}\r\n`
+      )
     })
     let received = ''
     let tunneled = false
@@ -200,6 +216,73 @@ describe('egress proxy destinations', () => {
       expect((await get(proxy.port, 'http://169.254.169.254/latest/meta-data')).status).toBe(403)
     } finally {
       proxy.process.kill()
+    }
+  })
+})
+
+describe('egress proxy with the endpoints of secret providers', () => {
+  const token = 'a'.repeat(64)
+  const basic = (password: string) =>
+    `Proxy-Authorization: Basic ${Buffer.from(`hammerkit:${password}`).toString('base64')}`
+  let proxy: RunningProxy
+
+  beforeAll(async () => {
+    proxy = await startProxy([], {
+      env: {
+        ...getSecretProxyEnvironment(['secrets.invalid', '*.auth.invalid']),
+        HAMMERKIT_SECRET_TOKEN: token,
+      },
+    })
+  })
+
+  afterAll(() => {
+    proxy.process.kill()
+  })
+
+  // `.invalid` never resolves: a tunnel the proxy lets through ends in 502, one it refuses in 403
+  it('lets a tunnel with its token through to them, on port 443', async () => {
+    expect(await tunnel(proxy.port, 'secrets.invalid:443', 'secrets.invalid', '127.0.0.1', [basic(token)])).toContain(
+      '502 Bad Gateway'
+    )
+    expect(await tunnel(proxy.port, 'sts.auth.invalid:443', 'sts.auth.invalid', '127.0.0.1', [basic(token)])).toContain(
+      '502 Bad Gateway'
+    )
+  })
+
+  it('refuses them without the token, with another one, on another port or by URL', async () => {
+    expect(await tunnel(proxy.port, 'secrets.invalid:443', 'secrets.invalid')).toContain('403 Forbidden')
+    expect(
+      await tunnel(proxy.port, 'secrets.invalid:443', 'secrets.invalid', '127.0.0.1', [basic('b'.repeat(64))])
+    ).toContain('403 Forbidden')
+    expect(await tunnel(proxy.port, 'secrets.invalid:443', 'secrets.invalid', '127.0.0.1', [basic('')])).toContain(
+      '403 Forbidden'
+    )
+    // the token alone, without a user, is no credential of the proxy
+    const bare = `Proxy-Authorization: Basic ${Buffer.from(token).toString('base64')}`
+    expect(await tunnel(proxy.port, 'secrets.invalid:443', 'secrets.invalid', '127.0.0.1', [bare])).toContain(
+      '403 Forbidden'
+    )
+    expect(await tunnel(proxy.port, 'secrets.invalid:80', 'secrets.invalid', '127.0.0.1', [basic(token)])).toContain(
+      '403 Forbidden'
+    )
+    expect((await get(proxy.port, 'http://secrets.invalid/')).status).toBe(403)
+    await waitFor(() => proxy.events.some((e) => e.type === 'refused' && e.host === 'secrets.invalid'))
+  })
+
+  it('takes the token for nothing else', async () => {
+    expect(await tunnel(proxy.port, 'example.com:443', 'example.com', '127.0.0.1', [basic(token)])).toContain(
+      '403 Forbidden'
+    )
+  })
+
+  it('lets nothing through with the token when it has none', async () => {
+    const tokenless = await startProxy([], { env: getSecretProxyEnvironment(['secrets.invalid']) })
+    try {
+      expect(
+        await tunnel(tokenless.port, 'secrets.invalid:443', 'secrets.invalid', '127.0.0.1', [basic('')])
+      ).toContain('403 Forbidden')
+    } finally {
+      tokenless.process.kill()
     }
   })
 })

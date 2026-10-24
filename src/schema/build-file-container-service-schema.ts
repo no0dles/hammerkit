@@ -43,6 +43,8 @@ export const buildFileContainerServiceSchema = object({
   volumeSize: sizeSchema.describe('size of its claim on Kubernetes, e.g. 10Gi').optional(),
   // what the service reaches besides its needs; tasks needing it always reach it
   network: networkSchema.optional(),
+  // whether its `cmd` takes the arguments after `--` of `up`: false refuses them
+  args: boolean().optional(),
 })
   .strict()
   .describe('container service')

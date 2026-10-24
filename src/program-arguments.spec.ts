@@ -144,6 +144,7 @@ describe('program arguments after --', () => {
     const t = createTestCase('cmd-ls-json', {
       '.hammerkit.yaml': {
         ...buildFile,
+        tasks: { ...buildFile.tasks, install: { cmds: ['npm ci'], args: false } },
         services: { api: { image: 'node', cmd: 'node server.js', ports: ['3000'] }, web: { image: 'nginx' } },
       },
     })
@@ -152,9 +153,10 @@ describe('program arguments after --', () => {
       await runProgram({ ...environment, stdout: stdout.stream }, [HK, 'ls', '--json'], true)
     })
     const listed = JSON.parse(stdout.read())
-    expect(listed.tasks.map((task: any) => [task.name, task.command])).toEqual([
-      ['args', 'node args.js'],
-      ['other', 'node -e 0'],
+    expect(listed.tasks.map((task: any) => [task.name, task.command, task.args])).toEqual([
+      ['args', 'node args.js', null],
+      ['other', 'node -e 0', null],
+      ['install', 'npm ci', false],
     ])
     expect(listed.services.map((service: any) => [service.name, service.command])).toEqual([
       ['api', 'node server.js'],

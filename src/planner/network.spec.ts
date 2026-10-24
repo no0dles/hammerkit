@@ -21,6 +21,7 @@ import {
   buildProxyPolicy,
   ensureKubernetesItemNetwork,
   getNetworkLabels,
+  getNetworkPolicyName,
   getProxyName,
   getProxyReadinessScript,
   KubernetesNetworkScope,
@@ -31,7 +32,10 @@ import { getRunLabelValue } from '../kubernetes/job-placement'
 import { ExecuteOptions } from '../runtime/runtime'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { State } from '../executer/state'
-import { WorkKubernetesEnvironment } from './work-environment'
+import { WorkKubernetesEnvironment, WorkKubernetesServer } from './work-environment'
+import { WorkSecret } from './work-secret'
+import { getJobSecretSpec, splitJobSecrets } from '../kubernetes/job-secrets'
+import { getTaskJobContainers } from './work-runtime-kubernetes'
 
 const noSecrets = { env: {}, binds: [] }
 const serviceOptions = {
@@ -644,7 +648,7 @@ describe('network', () => {
           const instance = {
             objectApi: { read: notFound, create, delete: notFound },
             appsApi: { deleteNamespacedDeployment: notFound },
-            coreApi: { deleteNamespacedService: notFound },
+            coreApi: { deleteNamespacedService: notFound, deleteNamespacedSecret: notFound },
           } as any
           const scope = { followLog: false, run: 'abcd1234' }
 
@@ -676,6 +680,7 @@ describe('network', () => {
                 return { items: pods.splice(0) }
               }),
               deleteNamespacedService: vi.fn().mockImplementation(async ({ name }) => calls.push(`service ${name}`)),
+              deleteNamespacedSecret: vi.fn().mockImplementation(async ({ name }) => calls.push(`secret ${name}`)),
             },
             objectApi: {
               // the items of a list come without kind and apiVersion
@@ -696,6 +701,7 @@ describe('network', () => {
             'NetworkPolicy policy-a',
             'deployment proxy-a',
             'service proxy-a',
+            'secret proxy-a',
           ])
           expect(instance.objectApi.delete).toHaveBeenCalledWith({
             apiVersion: 'networking.k8s.io/v1',
@@ -760,6 +766,7 @@ describe('network', () => {
         },
         coreApi: {
           deleteNamespacedService: async ({ name }: any) => remove('Service', name),
+          deleteNamespacedSecret: async ({ name }: any) => remove('Secret', name),
           readNamespacedPod: async ({ name }: any) =>
             name === files.metadata.name ? files : Promise.reject(notFound()),
           // the pods of a run ended
@@ -886,6 +893,140 @@ describe('network', () => {
           network.close()
           await releaseKubernetesItemNetwork(cluster.instance, enforced, install, scope)
           expect(cluster.objects.size).toBe(0)
+        }
+      )
+    })
+
+    it('gives a task that reads secrets a proxy that lets only the holders of its token reach the provider', async () => {
+      await withCli(
+        'network-k8s-secret-proxy',
+        { tasks: { deploy: { image: 'node:22', cmds: ['true'], network: 'none' } } },
+        async (cli) => {
+          const cluster = memoryCluster()
+          const enforced = { ...env, networkPolicyEnforced: true }
+          const deploy = cli.task('deploy') as WorkItem<ContainerWorkTask>
+          const scope = { run: 'abcd1234' }
+          const network = await ensureKubernetesItemNetwork(cluster.instance, enforced, deploy, {
+            followLog: false,
+            secretHosts: ['secretmanager.googleapis.com', 'sts.googleapis.com'],
+            ...scope,
+          })
+          const name = getProxyName(deploy, scope)
+          // under none the task's own container gets no proxy variables, the proxy allows it no host
+          expect(network.env).toEqual([])
+          const proxy = cluster.of('Deployment')[0].spec.template.spec.containers[0]
+          expect(proxy.env).toEqual(
+            expect.arrayContaining([
+              { name: 'HAMMERKIT_ALLOW', value: '[]' },
+              { name: 'HAMMERKIT_SECRET_ALLOW', value: '["secretmanager.googleapis.com","sts.googleapis.com"]' },
+              { name: 'HAMMERKIT_SECRET_TOKEN', valueFrom: { secretKeyRef: { name, key: 'token' } } },
+            ])
+          )
+          // the token is new for the run, and the init containers that read secrets read it from the Secret
+          const token = Buffer.from(cluster.objects.get(`Secret/${name}`).data.token, 'base64').toString()
+          expect(token).toMatch(/^[0-9a-f]{64}$/)
+          expect(network.secretEnv).toEqual(
+            expect.arrayContaining([
+              { name: 'HAMMERKIT_PROXY_TOKEN', valueFrom: { secretKeyRef: { name, key: 'token' } } },
+              { name: 'HTTPS_PROXY', value: 'http://hammerkit:$(HAMMERKIT_PROXY_TOKEN)@hammerkit-proxy:3128' },
+            ])
+          )
+          expect(network.hostAliases).toEqual([{ ip: '10.0.0.9', hostnames: ['hammerkit-proxy'] }])
+          // the pod reaches the proxy, nothing else
+          const policy = cluster.objects.get(`NetworkPolicy/${getNetworkPolicyName(deploy, scope)}`)
+          expect(policy.spec.egress).toEqual([
+            {
+              to: [{ podSelector: { matchLabels: { 'hammerkit.dev/proxy-for': expect.any(String) } } }],
+              ports: [{ protocol: 'TCP', port: 3128 }],
+            },
+          ])
+          network.close()
+          await releaseKubernetesItemNetwork(cluster.instance, enforced, deploy, scope)
+          // the token goes with the proxy
+          expect(cluster.objects.size).toBe(0)
+        }
+      )
+    })
+
+    it('puts the token into the init containers that read secrets, never into the command of the task', async () => {
+      await withCli(
+        'network-k8s-secret-job',
+        { tasks: { deploy: { image: 'node:22', cmds: ['./deploy.sh'], network: { allow: ['a.com'] } } } },
+        async (cli, environment) => {
+          const cluster = memoryCluster()
+          const enforced = { ...env, networkPolicyEnforced: true }
+          const deploy = cli.task('deploy') as WorkItem<ContainerWorkTask>
+          const scope = { run: 'abcd1234' }
+          const network = await ensureKubernetesItemNetwork(cluster.instance, enforced, deploy, {
+            followLog: false,
+            secretHosts: ['secretmanager.googleapis.com'],
+            ...scope,
+          })
+          const name = getProxyName(deploy, scope)
+          // under allow the task's container reaches the proxy, without the token
+          expect(network.env).toEqual(
+            expect.arrayContaining([{ name: 'HTTPS_PROXY', value: 'http://hammerkit-proxy:3128' }])
+          )
+          expect(network.env.filter((e) => e.valueFrom || e.value?.includes('@'))).toEqual([])
+
+          const server: WorkKubernetesServer = {
+            run: 'run_1',
+            namespace: 'hammerkit',
+            pools: [],
+            providers: { gsm: { image: 'gcloud:slim', allow: ['secretmanager.googleapis.com'] } },
+            accounts: { dev: { serviceAccount: 'dev' } },
+          }
+          const secret: WorkSecret = {
+            source: {
+              type: 'provider',
+              provider: 'gsm',
+              ref: 'api-key',
+              account: 'dev',
+              binding: {
+                definition: {
+                  name: 'gsm',
+                  type: 'command',
+                  command: ['gcloud', 'secrets', 'versions', 'access', 'latest', '--secret={{ref}}'],
+                  env: {},
+                  timeoutMs: 1000,
+                  declaredIn: 'the server config',
+                },
+                account: { name: 'dev', env: {} },
+              },
+            },
+            target: { type: 'env', name: 'API_KEY' },
+            cache: false,
+            digest: () => '',
+          }
+          const { inJob } = splitJobSecrets([secret], server)
+          const credentials = { dev: [{ key: 'dev.token', path: 'token' }] }
+          const secretSpec = getJobSecretSpec(deploy, inJob, server, credentials, environment, network.secretEnv)
+          const pod = getTaskJobContainers({
+            task: deploy,
+            cmd: deploy.data.cmds[0],
+            container: 'cmd-1',
+            envs: {},
+            secrets: { env: [], mounts: [] },
+            network,
+            secretSpec,
+            mounts: [],
+            kubernetes: enforced,
+          })
+          const reader = pod.initContainers?.find((c) => c.name === 'secret-0')
+          expect(reader?.env).toEqual(
+            expect.arrayContaining([
+              { name: 'HAMMERKIT_PROXY_TOKEN', valueFrom: { secretKeyRef: { name, key: 'token' } } },
+              { name: 'HTTPS_PROXY', value: 'http://hammerkit:$(HAMMERKIT_PROXY_TOKEN)@hammerkit-proxy:3128' },
+            ])
+          )
+          expect(pod.containers).toHaveLength(1)
+          const task = JSON.stringify(pod.containers[0])
+          expect(task).not.toContain('HAMMERKIT_PROXY_TOKEN')
+          expect(task).not.toContain(name)
+          expect(task).not.toContain('secretKeyRef')
+          expect(pod.containers[0].env).toEqual(expect.arrayContaining(network.env))
+          network.close()
+          await releaseKubernetesItemNetwork(cluster.instance, enforced, deploy, scope)
         }
       )
     })

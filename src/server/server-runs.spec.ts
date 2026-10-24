@@ -491,6 +491,77 @@ describe('runs api', () => {
     })
   })
 
+  it('passes arguments only to the tasks that say args: true under runs.args: declared', async () => {
+    await withApi(
+      'runs-api-args-declared',
+      done,
+      async (api) => {
+        const refused = await api.submit({ ...request, tasks: ['test'], options: { args: ['-x'] } })
+        expect(refused.status).toBe(400)
+        expect((await refused.json()).error).toBe(
+          'test takes no arguments on this server: it takes them only for tasks that say args: true (runs.args: declared)'
+        )
+        // without arguments the task runs as before
+        expect((await api.submit({ ...request, tasks: ['test'] })).status).toBe(202)
+
+        const shell = { files: { '.hammerkit.yaml': 'tasks:\n  sh:\n    args: true\n    cmds: [echo]\n' } }
+        const published = await api.call('POST', '/v1/definitions', { body: shell, sub: 'bob' })
+        expect(published.status).toBe(201)
+        const { hash } = await published.json()
+        const run = await api.submit({ ...request, definition: hash, tasks: ['sh'], options: { args: ['-x'] } })
+        expect(run.status).toBe(202)
+        expect((await run.json()).plan.sh.args).toBe(true)
+      },
+      '',
+      fakeRepos,
+      'args: declared'
+    )
+  })
+
+  it('refuses a task that reads a secret with more network than runs.secretNetwork allows', async () => {
+    await withApi('runs-api-secret-network', done, async (api) => {
+      // the operator limits what reads a secret, on a server that runs containers only
+      writeFileSync(
+        api.file,
+        readFileSync(api.file, 'utf8')
+          .replace('runtimes: [docker, local]', 'runtimes: [docker]')
+          .replace('runs: {', 'runs: { secretNetwork: none,')
+      )
+      await api.restart()
+      const file = (network: string) => ({
+        files: {
+          '.hammerkit.yaml': [
+            'tasks:',
+            '  ci:',
+            '    image: node:22',
+            network,
+            '    secrets:',
+            '      - { from: "echo:ci", account: op-payments-ci, env: TOKEN }',
+            '    cmds: [echo ci]',
+            '  build:',
+            '    image: node:22',
+            '    cmds: [echo build]',
+            '',
+          ].join('\n'),
+        },
+      })
+      const open = await api.call('POST', '/v1/definitions', { body: file(''), sub: 'bob' })
+      expect(open.status).toBe(400)
+      expect((await open.json()).error).toContain(
+        'ci: asks for network open, more than this server allows to what reads the secret TOKEN (runs.secretNetwork: none)'
+      )
+      // what reads no secret keeps its network, a limited one passes
+      const limited = await api.call('POST', '/v1/definitions', { body: file('    network: none'), sub: 'bob' })
+      expect(limited.status).toBe(201)
+      const { hash } = await limited.json()
+      expect((await api.submit({ ...request, definition: hash, tasks: ['ci', 'build'] })).status).toBe(202)
+      // a version published before the setting is refused when it runs
+      const before = await api.submit({ ...request, tasks: ['ci-secret'] })
+      expect(before.status).toBe(400)
+      expect((await before.json()).error).toContain('ci-secret: is a local task')
+    })
+  })
+
   it('rejects settings that are not for a server or not safe', async () => {
     await withApi('runs-api-bad-options', done, async (api) => {
       for (const options of [

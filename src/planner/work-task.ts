@@ -44,6 +44,9 @@ export interface BaseWorkTask {
   network: WorkNetwork
   // the run's `--network` ceiling, null for none; see getEffectiveNetwork
   networkCeiling: WorkNetwork | null
+  // whether it takes arguments after `--` (`args`): false refuses them, null when the
+  // build file doesn't say
+  args: boolean | null
   // server the task has to run on, null for wherever the run happens
   runner: string | null
 }

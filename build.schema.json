@@ -289,6 +289,9 @@
                     ],
                     "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
                   },
+                  "args": {
+                    "type": "boolean"
+                  },
                   "runner": {
                     "type": "string",
                     "minLength": 1
@@ -369,6 +372,9 @@
                   },
                   "network": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network"
+                  },
+                  "args": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/args"
                   },
                   "runner": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
@@ -511,6 +517,9 @@
                   "network": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network",
                     "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
+                  },
+                  "args": {
+                    "type": "boolean"
                   }
                 },
                 "required": [

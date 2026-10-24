@@ -4,6 +4,7 @@ import { ContainerWorkService, KubernetesWorkService } from './work-service'
 import { ServiceState } from '../executer/scheduler/service-state'
 import { TaskState } from '../executer/scheduler/task-state'
 import { ContainerWorkTask } from './work-task'
+import { WorkCommand } from './work-command'
 import { WorkItem } from './work-item'
 import { State } from '../executer/state'
 import { Environment } from '../executer/environment'
@@ -11,7 +12,7 @@ import { kubernetesService } from '../executer/kubernetes-service'
 import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { V1EnvVar, V1Job, V1Pod } from '@kubernetes/client-node'
+import { V1EnvVar, V1Job, V1Pod, V1PodSpec, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import { DEFINITION_LABEL, ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
@@ -35,7 +36,7 @@ import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 import {
   assertJobAccounts,
-  assertSecretsReachable,
+  getSecretHosts,
   ensureJobCredentials,
   getJobSecretSpec,
   JobSecret,
@@ -184,6 +185,51 @@ export async function describeFailedJob(
   return undefined
 }
 
+/**
+ * The containers of the Job of a command: the network gate first, nothing runs before the
+ * item's policy holds, then the init containers that read its secrets, then the command. The
+ * proxy's token (`network.secretEnv`) reaches the init containers through `secretSpec` only:
+ * the command's container gets the proxy variables of a limited network without it.
+ */
+export function getTaskJobContainers(options: {
+  task: WorkItem<ContainerWorkTask>
+  cmd: WorkCommand
+  container: string
+  envs: { [key: string]: string }
+  secrets: { env: V1EnvVar[]; mounts: V1VolumeMount[] }
+  network: Pick<KubernetesItemNetwork, 'env' | 'initContainers'>
+  secretSpec: JobSecretSpec
+  mounts: V1VolumeMount[]
+  kubernetes: WorkKubernetesEnvironment
+}): Pick<V1PodSpec, 'initContainers' | 'containers'> {
+  const { task, cmd, envs, secrets, network, secretSpec, kubernetes } = options
+  // the arguments after `--` keep their `$` as text, Kubernetes expands `$(NAME)`
+  const command = secretSpec.command(task.data.shell, getKubernetesCommandText(cmd))
+  const initContainers = [...network.initContainers, ...secretSpec.initContainers]
+  return {
+    ...(initContainers.length > 0 ? { initContainers } : {}),
+    containers: [
+      {
+        image: task.data.image,
+        // through the task's shell, as on Docker
+        command: command.command,
+        args: command.args,
+        workingDir: cmd.cwd,
+        env: [
+          ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
+          ...secrets.env,
+          ...network.env,
+          ...command.env,
+        ],
+        name: options.container,
+        volumeMounts: [...options.mounts, ...secrets.mounts, ...secretSpec.mounts],
+        ...getKubernetesResources(task.data.resources),
+        ...getContainerSecurity(kubernetes),
+      },
+    ],
+  }
+}
+
 export function kubernetesTaskRuntime(
   task: WorkItem<ContainerWorkTask>,
   kubernetes: WorkKubernetesEnvironment
@@ -231,8 +277,9 @@ export function kubernetesTaskRuntime(
       const { delivered, inJob } = splitJobSecrets(task.data.secrets, server)
       const secrets = getKubernetesSecretRefs(task, delivered)
       const admitted = environment.hosted?.accounts
+      let secretHosts: string[]
       try {
-        assertSecretsReachable(task, inJob)
+        secretHosts = getSecretHosts(task, inJob, server)
         if (server) {
           assertJobAccounts(inJob, server, admitted)
         }
@@ -274,7 +321,11 @@ export function kubernetesTaskRuntime(
       // NetworkPolicy and proxy of a limited network, both of this run
       let network: KubernetesItemNetwork
       try {
-        network = await ensureKubernetesItemNetwork(instance, kubernetes, task, { followLog: true, ...scope })
+        network = await ensureKubernetesItemNetwork(instance, kubernetes, task, {
+          followLog: true,
+          secretHosts,
+          ...scope,
+        })
       } catch (e) {
         await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
@@ -289,14 +340,12 @@ export function kubernetesTaskRuntime(
           try {
             // made for each Job right before it, so a later command's token is as fresh
             const credentials = await ensureJobCredentials(instance, kubernetes, task, inJob, admitted)
-            secretSpec = getJobSecretSpec(task, inJob, server, credentials, environment)
+            secretSpec = getJobSecretSpec(task, inJob, server, credentials, environment, network.secretEnv)
           } catch (e) {
             await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
             options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
             return
           }
-          // the arguments after `--` keep their `$` as text, Kubernetes expands `$(NAME)`
-          const command = secretSpec.command(task.data.shell, getKubernetesCommandText(cmd))
           const spec: V1Job & KubernetesObjectHeader = {
             kind: 'Job',
             apiVersion: 'batch/v1',
@@ -317,33 +366,17 @@ export function kubernetesTaskRuntime(
                   labels,
                 },
                 spec: {
-                  // the network gate first: nothing runs before the item's policy holds
-                  ...(network.initContainers.length + secretSpec.initContainers.length > 0
-                    ? { initContainers: [...network.initContainers, ...secretSpec.initContainers] }
-                    : {}),
-                  containers: [
-                    {
-                      image: task.data.image,
-                      // through the task's shell, as on Docker
-                      command: command.command,
-                      args: command.args,
-                      workingDir: cmd.cwd,
-                      env: [
-                        ...Object.entries(envs).map<V1EnvVar>(([key, value]) => ({ name: key, value })),
-                        ...secrets.env,
-                        ...network.env,
-                        ...command.env,
-                      ],
-                      name: container,
-                      volumeMounts: [
-                        ...persistence.mounts.map((m) => m.mount),
-                        ...secrets.mounts,
-                        ...secretSpec.mounts,
-                      ],
-                      ...getKubernetesResources(task.data.resources),
-                      ...getContainerSecurity(kubernetes),
-                    },
-                  ],
+                  ...getTaskJobContainers({
+                    task,
+                    cmd,
+                    container,
+                    envs,
+                    secrets,
+                    network,
+                    secretSpec,
+                    mounts: persistence.mounts.map((m) => m.mount),
+                    kubernetes,
+                  }),
                   volumes: [
                     ...persistence.volumes,
                     ...persistence.workspace,

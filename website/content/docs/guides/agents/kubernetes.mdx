@@ -213,6 +213,8 @@ data:
         secret: { from: 'github-app:$REPO', account: github }
     runs:
       env: { allow: [PATH] }    # the variables a command gets from the server
+      args: declared            # only tasks with args: true take arguments
+      secretNetwork: none       # what a task that reads a secret reaches
     sandboxes:
       network: { allow: [registry.npmjs.org] }    # what the agent's commands may reach
     entitlements:
@@ -309,9 +311,10 @@ hammerkit remote add $NAME http://127.0.0.1:8480 --issuer https://accounts.googl
 it prints the same error every second, for example because port 8480 is taken or the cluster
 can not be reached, stop it with `kill %1` and fix that first.
 
-Before you publish, check that the build file's shell task has `mounts: [.]` and
-`cmds: [sh -c]`, as in [The build file](/docs/guides/agents#the-build-file). Without the
-mount, the agent's commands run in an empty directory. Then publish the build file from a
+Before you publish, check that the build file's shell task has `mounts: [.]`, `args: true`
+and `cmds: [sh -c]`, as in [The build file](/docs/guides/agents#the-build-file). Without the
+mount, the agent's commands run in an empty directory; without `args: true` this server refuses
+them. Then publish the build file from a
 checkout of the repository, signed in as the publisher:
 
 ```bash
@@ -425,6 +428,13 @@ hammerkit remote add $NAME https://$DOMAIN --issuer https://accounts.google.com 
   that have to be in the denied ranges. An internal address tasks need goes in `allowedEgress`.
 - **`networkPolicy: enforced`.** The agent's commands only reach what `sandboxes.network`
   allows, here npm. See [Network](/docs/remote-compute/backend#network).
+- **`runs.args: declared`.** Arguments reach only the tasks that say `args: true`, so an agent
+  can't append its own flags to the last command of any other task, for example to an install
+  that has to keep `--ignore-scripts`. See [Arguments](/docs/remote-compute/runs#arguments).
+- **`runs.secretNetwork: none`.** A task that reads a secret reaches only the services it needs,
+  so a tool it runs can't send the value anywhere. Give such a task `network: none`, or set an
+  allow list here and in the task. See
+  [Tasks that read secrets](/docs/remote-compute/runs#tasks-that-read-secrets).
 - **One replica.** The disk holds the server's records of sandboxes and its cache.
 
 ## Secrets for builds
@@ -433,7 +443,17 @@ The agent's shell task reads no secrets. Other tasks of the build file can, for 
 test against a staging API: the Job of such a task reads the secret itself, as a Kubernetes
 ServiceAccount of its [account](/docs/remote-compute/accounts). See
 [Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job) for the setup with
-Secret Manager.
+Secret Manager. With `secretNetwork: none` such a task has a limited network, so its provider
+needs the hosts it reaches, which its egress proxy lets only the reading of the secret through:
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  providers:
+    gsm:
+      image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+      allow: [sts.googleapis.com, secretmanager.googleapis.com]
+```
 
 ## Cleaning up
 

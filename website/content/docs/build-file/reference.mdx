@@ -43,7 +43,8 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
 | `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/task#resources) limits and requests (`2`, `500m`; `512Mi`, `2Gi`); the run is planned by the requests. Not enforced for a local task, not part of the cache key. |
-| `network` | `open` \| `none` \| `{allow: [hosts]}` | What the container [reaches](/docs/task/network) besides the services in `needs` (default `open`); `allow` goes through an egress proxy, and a `host:port` entry forwards raw TCP. An error on a local task, not part of the cache key. |
+| `network` | `open` \| `none` \| `{allow: [hosts]}` | What the container [reaches](/docs/task/network) besides the services in `needs` (default `open`); `allow` goes through an egress proxy, and a `host:port` entry forwards raw TCP. An error on a local task, except on a [server's cluster](/docs/remote-compute/backend#network); not part of the cache key. |
+| `args` | boolean | Whether the last command takes [arguments](/docs/task/arguments#which-tasks-take-arguments) after `--`: `false` refuses them, `true` says it is meant to, which a server with `runs.args: declared` requires. |
 | `volumeSize` | size (`5Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the sources, mounts and outputs of a container task (the environment's `volumeSize` when left out, else `1Gi`). Ignored elsewhere, not part of the cache key. |
 | `runner` | string | Name of the [server](/docs/cli/remote) the task has to run on (experimental, see [runner](/docs/task#runner)). |
 
@@ -80,6 +81,7 @@ service** (it has a `selector`).
 | `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/service/container#resources) limits and requests of the container, as for a task. |
 | `network` | `open` \| `none` \| `{allow: [hosts]}` | What the service [reaches](/docs/task/network) besides the services it needs, as for a task; what needs the service always reaches it. |
+| `args` | boolean | `false` refuses [arguments](/docs/task/arguments#services) after `--` of `up` for its `cmd`. |
 | `volumeSize` | size (`20Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the service's sources, mounts and volumes, as for a task. |
 | `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
 | `mounts` | array of string | `host:container[:ro]` config mounts. |

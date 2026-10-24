@@ -109,6 +109,7 @@ function parseTask(
     resources: parseWorkResources(task.schema.resources),
     network: parseWorkNetwork(task.schema.network),
     networkCeiling: null,
+    args: task.schema.args ?? null,
     runner: task.schema.runner ?? task.scope.schema.runner ?? null,
   }
 
@@ -128,7 +129,9 @@ function parseTask(
         `task ${task.relativeName}: a local task takes secrets as env only (${getSecretName(fileSecret)})`
       )
     }
-    if (baseWorkNode.network.type !== 'open') {
+    // on a server's cluster it runs in a pod of a pool's tool image (runInToolImage)
+    const contained = !!environment.hosted?.kubernetes || !!environment.hosted?.localTasksInContainers
+    if (baseWorkNode.network.type !== 'open' && !contained) {
       throw new Error(
         `task ${task.relativeName}: network ${formatNetwork(baseWorkNode.network)} needs a container, ` +
           `hammerkit can't limit the network of a local task`

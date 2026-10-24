@@ -2,7 +2,7 @@
 
 **Created**: 2026-10-12
 
-**Status**: Implemented, locally (FR-001 to FR-006) and on a server (FR-007, FR-008) (ADR-0011)
+**Status**: Implemented, locally (FR-001 to FR-006, FR-009) and on a server (FR-007, FR-008, FR-010) (ADR-0011)
 
 **Input**: Narrowing a run (one test file, one test name, a flag for a dev server) needs a new task per variation or a `--set` variable the build file has to anticipate. Agents need the same thing on a server: a shell is a task that takes its command as an argument. Pascal decided on raw passthrough, as `npm run x -- ...` and `make` users know it, and that it works locally and remotely.
 
@@ -28,9 +28,11 @@
   - The record of which run produced a task's outputs is kept per task name and holds the id of that run, so it names one variant at a time, and restoring outputs from a cache removes it.
   - An explicit `--cache <method>` on the command line keeps the cache for a run with arguments; that variant then hits only its own entry.
   - A service's definition takes its `init` task by the id without arguments, so running the init with arguments doesn't recreate the service.
-- **FR-005**: The build file declares nothing for arguments. `--set` is unchanged and stays a separate, local mechanism.
+- **FR-005**: A task or service takes arguments without declaring anything (but see FR-009). `--set` is unchanged and stays a separate, local mechanism.
 - **FR-006**: `hammerkit ls --json` and the published versions of a server show each task's last command (and each service's `cmd`), so a caller can tell where arguments land.
 - **FR-007 (server)**: The run request takes `options.args: string[]` with exactly one entry in `tasks`. Limits: 100 arguments, 16 KiB together, no NUL. A server never takes `--set`. An approver sees every argument in full: nothing is cut without a marker, and control and bidi characters are escaped.
+- **FR-009**: A task or container service may say `args: false`, and its last command (its `cmd`) takes no arguments: a run that passes some fails before it starts, locally and on a server. `args: true` says it is meant to take them (FR-010). A task that extends another takes its `args` unless it says its own. `ls --json` and a published version's plan show `args` as the build file says it. (iwentsourcing feedback, 2026-10-24: guarding a command with a trailing `--` had to be remembered for every task.)
+- **FR-010 (server)**: `runs.args: declared` passes arguments only to a task that says `args: true`; any other is refused at submit (`400`) and before it starts. The default `any` keeps FR-007 and FR-008 as they are (not breaking; Pascal chose this over a breaking default, 2026-10-24, D2 b).
 - **FR-008 (server)**: A run that passes arguments is refused at submit (`400`), and again before it starts, when any task or service of the run reads a secret or takes a value of an `envs` entry from the server's environment (`runs.env`), other than `PATH`, `HOME` and `CI`. That covers the task itself, its dependencies and the services it needs: an argument can make the command print what the task holds, and what a dependency wrote into its outputs or a service answers, past the masking of secrets (a transform such as `rev`). So a shell task runs with no account and no server credential, nor next to one (decided by Pascal, 2026-10-13).
 
 ## Implementation notes (server)
