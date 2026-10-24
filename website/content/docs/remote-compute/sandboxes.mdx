@@ -411,7 +411,10 @@ entry for its repository, `agent/**` for example, never to a `main` they may onl
   on the server) and no `.hammerkit/` directory a run wrote. The commit's parent is the commit the sandbox is at.
 * **By whom.** The commit's author and committer are the caller, as their token names them
   (`name`, and `email` unless the token says it is not verified), else their subject at the
-  host of their issuer (`agent-7@login.example.com`). A request can not set the author, and
+  host of their issuer (`agent-7@login.example.com`). A token without `name` or
+  `preferred_username`, such as a Google service account's ID token, is named by the part of
+  its verified address before the `@` (`deploy-bot` for `deploy-bot@my-project.iam.gserviceaccount.com`),
+  and only without one by its subject. A request can not set the author, and
   a message with `Signed-off-by`, `Reviewed-by`, `Acked-by` or `Tested-by` is refused: those
   would attest the commit in somebody else's name. Other trailers, such as `Co-authored-by`,
   are the caller's text.

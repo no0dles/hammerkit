@@ -668,6 +668,21 @@ describe('the author of a push', () => {
     expect(author({ ...principal('a', { email: 'a@corp.test' }), emailVerified: true }).email).toBe('a@corp.test')
   })
 
+  it('is named by the local part of a verified address when the token has no name', () => {
+    // a Google service account's ID token: a verified email, a numeric sub and nothing else
+    const account = 'openchamber-orchestrator@aion-393717.iam.gserviceaccount.com'
+    expect(author({ ...principal('108568892213671605306', { email: account }), emailVerified: true })).toEqual({
+      name: 'openchamber-orchestrator',
+      email: account,
+    })
+    expect(author({ ...principal('108568892213671605306', { email: 'ceo@corp.test' }), emailVerified: false })).toEqual(
+      {
+        name: '108568892213671605306',
+        email: '108568892213671605306@login.corp.test',
+      }
+    )
+  })
+
   it('takes nothing from a claim that would break the commit header', () => {
     expect(author(principal('a b|c', { name: 'Eve <eve@x>\nX', email: 'not an email' }))).toEqual({
       name: 'Eve eve@xX',
