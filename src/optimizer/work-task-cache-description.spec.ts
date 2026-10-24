@@ -7,8 +7,14 @@ const baseTask = {
   cwd: '/work/app',
   projectRoot: '/work',
   description: null,
-  src: [{ source: 'b' }, { source: 'a' }] as any,
-  generates: [{ path: '/work/app/out/b' }, { path: '/work/app/out/a' }] as any,
+  src: [
+    { source: 'b', absolutePath: '/work/app/b.ts', inherited: null },
+    { source: 'a', absolutePath: '/work/app/a.ts', inherited: null },
+  ] as any,
+  generates: [
+    { path: '/work/app/out/b', inherited: null },
+    { path: '/work/app/out/a', inherited: null },
+  ] as any,
   envs: { variables: { B: '2', A: '1' }, replacements: [] } as any,
   envOrigins: {},
   cmds: [{ cwd: '/work/app/sub', cmd: 'tsc' }] as any,
@@ -33,7 +39,10 @@ describe('getWorkTaskCacheDescription', () => {
       type: 'container-task',
       image: 'node:alpine',
       user: null,
-      mounts: [{ mount: 'b:b' }, { mount: 'a:a' }] as any,
+      mounts: [
+        { mount: 'b:b', containerPath: '/work/app/mb' },
+        { mount: 'a:a', containerPath: '/work/app/ma' },
+      ] as any,
       volumeSize: null,
     }
     const d = getWorkTaskCacheDescription({ data: task, deps: [] } as any)
@@ -45,6 +54,38 @@ describe('getWorkTaskCacheDescription', () => {
     expect(d.cmds).toEqual([{ cwd: 'app/sub', cmd: 'tsc' }])
     expect(d.cwd).toBe('app')
     expect(d.shell).toBe('/bin/sh')
+    expect(d.claimLayout).toBeUndefined()
+  })
+
+  it('gives a task with two paths that end alike a new id, which leaves what it made in one folder behind', () => {
+    const task: ContainerWorkTask = {
+      ...baseTask,
+      type: 'container-task',
+      image: 'node:alpine',
+      user: null,
+      mounts: [],
+      volumeSize: null,
+      generates: [
+        { path: '/work/app/node_modules', inherited: null },
+        { path: '/work/app/api/node_modules', inherited: null },
+      ] as any,
+    }
+    expect(getWorkTaskCacheDescription({ data: task, deps: [] } as any).claimLayout).toBe(2)
+    // an output of a dep it mounts is in the dep's claim, not in its own
+    const inherited = { ...task, generates: [task.generates[0], { ...task.generates[1], inherited: {} }] }
+    expect(getWorkTaskCacheDescription({ data: inherited, deps: [] } as any).claimLayout).toBeUndefined()
+    // a source shares the claim with the outputs
+    const source = { ...task, generates: [task.generates[0]], src: [{ absolutePath: '/work/node_modules' }] as any }
+    expect(getWorkTaskCacheDescription({ data: source, deps: [] } as any).claimLayout).toBe(2)
+    // two outputs that shared one cache archive
+    const flat = {
+      ...task,
+      generates: [
+        { path: '/work/app/a-b', inherited: null },
+        { path: '/work/app/a/b', inherited: null },
+      ] as any,
+    }
+    expect(getWorkTaskCacheDescription({ data: flat, deps: [] } as any).claimLayout).toBe(2)
   })
 
   it('describes a local task with the host platform and no mounts', () => {

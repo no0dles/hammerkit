@@ -81,6 +81,15 @@ outputs it already made. On a server, the claim of a task stays for a while afte
 for the next run of the same source, see
 [Kept claims](/docs/remote-compute/backend#kept-claims).
 
+Each path has a folder of its own in the claim, named after its last segment. When two
+paths of a task end alike, such as `node_modules` and `api/node_modules`, the least deep one
+keeps that name and the others' folders also carry a hash of their path in the project.
+Earlier versions put such paths in one folder, so a task with paths that end alike has a new
+id since: the first run after the update runs it again, in a new claim, instead of reusing
+the mixed outputs it made before (kept or cached). A service keeps its claim and its id, so
+a service with two volumes that end alike should have its claim removed once after the
+update (`hammerkit clean`), since the first of them still holds what both wrote.
+
 The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
 (an `npm ci`, a build of many images) states its own:
 
