@@ -1,3 +1,12 @@
+# [1.27.0-next.6](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.5...v1.27.0-next.6) (2026-10-24)
+
+
+### Bug Fixes
+
+* give a task whose outputs shared one cache archive a new id too ([aee0d10](https://github.com/no0dles/hammerkit/commit/aee0d1073c664ae833e65b392863680778451de7)), closes [#112](https://github.com/no0dles/hammerkit/issues/112)
+* give each output of a task its own folder in its Kubernetes claim ([969d2b1](https://github.com/no0dles/hammerkit/commit/969d2b16b193aa6dc8274e5c7818f710feea6a79))
+* name claim folders by the path in the project, whatever the run's directory or order ([f0727f5](https://github.com/no0dles/hammerkit/commit/f0727f517c3cf3f8f4279404799af7494b10116d))
+
 # [1.27.0-next.5](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.4...v1.27.0-next.5) (2026-10-24)
 
 
