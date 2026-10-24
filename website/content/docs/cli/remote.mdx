@@ -216,7 +216,8 @@ What it runs, when you leave the options out, is what is checked out where you a
 
 What follows `--` goes to the one task named, as the
 [arguments](/docs/remote-compute/runs#arguments) of a run. The server refuses them for a
-task that reads a secret or depends on one that does.
+task that reads a secret or depends on one that does, for a task that says `args: false`, and,
+on a server with `runs.args: declared`, for every task that doesn't say `args: true`.
 
 A run on an account you may only `request` waits for an approval, and says so:
 
