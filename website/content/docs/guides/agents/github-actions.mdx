@@ -32,7 +32,7 @@ This guide adds that to a server set up with the [Kubernetes guide](/docs/guides
   internet over [HTTPS](/docs/guides/agents/kubernetes#reaching-the-server-over-https): GitHub's
   runners can not use a port-forward. The examples write it as `https://hammerkit.example.com`.
 - The repository's build file, with the tasks the jobs run. Here `test`, and `deploy`, which
-  reads a secret:
+  reads a secret and reaches the deploy target, written as `deploy.example.com`:
 
 ```yaml title=".hammerkit.yaml"
 tasks:
@@ -45,6 +45,8 @@ tasks:
     deps: [test]
     secrets:
       - { from: 'gsm:projects/my-project/secrets/deploy-token', account: deploy, env: DEPLOY_TOKEN }
+    # a task that reads a secret gets no open network on this server, see step 3
+    network: { allow: [deploy.example.com] }
     cmds: [node deploy.js]
 ```
 
@@ -138,6 +140,36 @@ accounts:
       audience: //iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/hammerkit/providers/cluster
       secret: deploy-federation
 ```
+
+The Kubernetes guide's server gives a task that reads a secret no network at all
+(`runs.secretNetwork: none`), and refuses `deploy`, which has to reach its target. Allow the
+target there, and give Secret Manager's client the hosts it reads the secret from:
+
+```yaml title="server.yaml"
+runs:
+  env: { allow: [PATH] }
+  args: declared
+  # what a task that reads a secret may reach: nothing, or the deploy target
+  secretNetwork: { allow: [deploy.example.com] }
+secretProviders:
+  github-app: { command: [hammerkit, github-app-token, '{{ref}}'] }
+  gsm: { command: [gcloud, secrets, versions, access, latest, '--secret={{ref}}'] }
+backend:
+  type: kubernetes    # its other keys as in the Kubernetes guide, and providers
+  providers:
+    gsm:
+      image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+      allow: [sts.googleapis.com, secretmanager.googleapis.com]
+```
+
+`secretNetwork` is a ceiling for every task that reads a secret: each may name
+`deploy.example.com` now, and one that names nothing stays without a network. A publish of a
+version whose task asks for more, an open network or another host, is refused:
+`deploy: asks for network open, more than this server allows to what reads the secret
+DEPLOY_TOKEN (runs.secretNetwork: allow deploy.example.com)`. The command of `deploy`
+does not reach Secret Manager: its egress proxy lets only the container that reads the secret
+through to `providers.gsm.allow`, see
+[Secrets of a task with a limited network](/docs/remote-compute/backend#secrets-of-a-task-with-a-limited-network).
 
 The server makes a token of the account's ServiceAccount for each Job of `deploy`, and reads
 its Secret, so it needs both, by name, in its namespace:
