@@ -6,12 +6,55 @@ export const ABORT_SIGNALS: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP']
 
 export interface SignalSource {
   on(signal: NodeJS.Signals, listener: () => void): unknown
+  off(signal: NodeJS.Signals, listener: () => void): unknown
 }
 
-export function abortOnSignals(source: SignalSource, abortCtrl: AbortController): void {
-  for (const signal of ABORT_SIGNALS) {
-    source.on(signal, () => {
-      abortCtrl.abort()
-    })
+// signals a running command gives a meaning of its own (the server reloads its
+// entitlements on SIGHUP), per source and counted by how many hold them: they don't
+// abort the run
+const takenOver = new WeakMap<SignalSource, Map<NodeJS.Signals, number>>()
+
+function heldOn(source: SignalSource): Map<NodeJS.Signals, number> {
+  let held = takenOver.get(source)
+  if (!held) {
+    held = new Map()
+    takenOver.set(source, held)
+  }
+  return held
+}
+
+/**
+ * Stops the run on the abort signals, all but those a command took over with
+ * `takeOverSignal`. Returns what removes the listeners again.
+ */
+export function abortOnSignals(source: SignalSource, abortCtrl: AbortController): () => void {
+  const listeners = ABORT_SIGNALS.map((signal) => {
+    const listener = () => {
+      if (!takenOver.get(source)?.get(signal)) {
+        abortCtrl.abort()
+      }
+    }
+    source.on(signal, listener)
+    return { signal, listener }
+  })
+  return () => listeners.forEach(({ signal, listener }) => source.off(signal, listener))
+}
+
+/**
+ * Calls `handler` on `signal` instead of stopping the run, until the returned function
+ * gives the signal back.
+ */
+export function takeOverSignal(source: SignalSource, signal: NodeJS.Signals, handler: () => void): () => void {
+  const held = heldOn(source)
+  held.set(signal, (held.get(signal) ?? 0) + 1)
+  source.on(signal, handler)
+  let released = false
+  return () => {
+    if (released) {
+      return
+    }
+    released = true
+    source.off(signal, handler)
+    held.set(signal, (held.get(signal) ?? 1) - 1)
   }
 }
