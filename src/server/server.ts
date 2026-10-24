@@ -377,6 +377,12 @@ async function submitRun(
   if (request.source.type === 'ref') {
     try {
       const commit = await repos.resolve(request.source.repo, request.source.ref)
+      if (request.source.commit && commit !== request.source.commit) {
+        const error = `${request.source.ref} is at ${commit} now, not at ${request.source.commit}`
+        log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${error}`)
+        send(res, 409, { error })
+        return
+      }
       source = { type: 'ref', repo: request.source.repo, ref: request.source.ref, commit }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)

@@ -4,10 +4,13 @@ import { Environment } from '../executer/environment'
 import { getTokenSource } from './token-source'
 import { HostServer } from './host-config'
 import { collectBundle } from './collect-bundle'
-import { Annotations, Bundle, HASH_PATTERN } from './bundle'
-import { applyAnnotations, collectAnnotations } from './annotations'
+import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
+import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
 import { callServer, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
+import { followRun, ServerConnection, submitRun } from '../harness/sandbox-client'
+import type { Run } from '../server/runs'
+import { dirname } from 'path'
 
 export interface WorkCommandContext {
   environment: Environment
@@ -15,6 +18,10 @@ export interface WorkCommandContext {
   buildFile: string
   getServer: (name: string | undefined) => Promise<{ name: string; server: HostServer }>
   guarded: (failure: string, fn: (...args: any[]) => Promise<void>) => (...args: any[]) => Promise<void>
+  // what follows `--` on the command line
+  passthrough: string[]
+  // ends the command with this exit code, saying why
+  fail: (message: string, exitCode: number) => never
 }
 
 interface PublishedVersion {
@@ -128,6 +135,12 @@ function yankLines(version: { yanked?: { by: { sub: string }; reason?: string } 
     : []
 }
 
+// A line a task printed, shown as it is but for control characters, so it can't rewrite
+// the terminal; tabs stay.
+function printableLine(text: string): string {
+  return text.split('\t').map(printableWhole).join('\t')
+}
+
 const collectOption = (value: string, previous: string[] = []) => [...previous, value]
 
 // What a person who approves is shown of a run: everything the decision rests on.
@@ -209,7 +222,7 @@ export function describePlan(plan: Record<string, PlanView>): string[] {
 }
 
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
-  const { environment, buildFile, getServer, guarded } = context
+  const { environment, buildFile, getServer, guarded, passthrough, fail } = context
 
   const connect = async (name: string | undefined) => {
     const chosen = await getServer(name)
@@ -256,6 +269,116 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             `it can not run before somebody who may publish approves it, until ${printable(version.expiresAt)}\n`
           )
         }
+      })
+    )
+
+  remote
+    .command('run <tasks...>')
+    .description(
+      'run tasks of a published build file on a server from a git ref, print their output and exit as they did'
+    )
+    .addOption(new Option('--server <name>', 'the server to run on; the default of remote use when left out'))
+    .addOption(
+      new Option(
+        '--build <hash>',
+        'the published version to run (sha256:...), or HAMMERKIT_BUILD; the hash of the build file here when left out'
+      )
+    )
+    .addOption(
+      new Option(
+        '--repo <host/path>',
+        'the repository, such as github.com/corp/payments; origin of the checkout here when left out'
+      )
+    )
+    .addOption(new Option('--ref <ref>', 'the branch or tag to run; the branch checked out here when left out'))
+    .addOption(
+      new Option(
+        '--commit <sha>',
+        'the commit the ref has to be at, else the run is refused; the commit checked out here when --ref is left out'
+      )
+    )
+    .addOption(new Option('--env <name>', 'the environment of the build file, as --env of run'))
+    .addOption(new Option('--cache <method>', 'as --cache of run').choices(['checksum', 'modify-date', 'none']))
+    .addOption(new Option('--timeout <duration>', 'stop the run after this long, such as 30m'))
+    .action(
+      guarded('Remote run was not successful', async (tasks: string[], options) => {
+        const named: string | undefined = options.build ?? environment.processEnvs.HAMMERKIT_BUILD
+        const definition = named ?? hashBundle(await collectBundle(buildFile, environment))
+        if (!HASH_PATTERN.test(definition)) {
+          throw new Error(`${printable(definition)} is not the hash of a published version (sha256:...)`)
+        }
+        const checkout = options.repo && options.ref ? {} : await readCheckout(dirname(buildFile))
+        const repo: string | undefined = options.repo ?? checkout.repo
+        const ref: string | undefined = options.ref ?? checkout.branch
+        // the commit checked out here is the code meant, when the ref is the branch it is on
+        const commit: string | undefined = options.commit ?? (options.ref ? undefined : checkout.commit)
+        if (!repo) {
+          throw new Error('name the repository with --repo, the checkout here has no origin it can be told by')
+        }
+        if (!ref) {
+          throw new Error('name the branch or tag with --ref, the checkout here is on no branch')
+        }
+        const { name: serverName, server } = await getServer(options.server)
+        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const runOptions: { [key: string]: unknown } = {}
+        for (const key of ['env', 'cache', 'timeout']) {
+          if (options[key] !== undefined) {
+            runOptions[key] = options[key]
+          }
+        }
+        if (passthrough.length > 0) {
+          runOptions.args = passthrough
+        }
+        let submitted: Run
+        try {
+          submitted = await submitRun(connection, {
+            definition,
+            tasks,
+            source: { type: 'ref', repo, ref, ...(commit ? { commit } : {}) },
+            options: runOptions,
+          })
+        } catch (e) {
+          if ((e as { status?: number }).status === 400 && !named && /no published build file/.test(String(e))) {
+            throw new Error(`the build file here is not published on ${serverName} (${definition}), publish it first`)
+          }
+          throw e
+        }
+        const at = submitted.source.type === 'ref' ? ` at ${printable(submitted.source.commit)}` : ''
+        environment.stdout.write(
+          `${printable(submitted.id)} on ${serverName}: ${tasks.map(printable).join(', ')} from ${printable(
+            ref
+          )}${at}\n`
+        )
+        const prefixed = tasks.length > 1
+        const followed = await followRun(connection, submitted, {
+          signal: environment.abortCtrl.signal,
+          onLine: (line) => {
+            environment.stdout.write(
+              `${prefixed || line.task !== tasks[0] ? `[${printable(line.task)}] ` : ''}${printableLine(line.text)}\n`
+            )
+          },
+          onWaiting: (run) => {
+            for (const approval of run.approvals ?? []) {
+              environment.stdout.write(
+                `waiting until somebody who uses ${printable(approval.account)} approves it, before ${printable(
+                  approval.expiresAt
+                )}: hammerkit remote approve ${printable(run.id)}\n`
+              )
+            }
+          },
+        })
+        const run = followed.run
+        if (run.state === 'succeeded') {
+          environment.stdout.write(`${printable(run.id)} succeeded\n`)
+          return
+        }
+        // the exit code of the first task that failed, as `hammerkit run` would end
+        const failed = tasks
+          .map((task) => run.results?.[task])
+          .concat(Object.values(run.results ?? {}))
+          .find((result) => result?.status === 'failed')
+        const exitCode = failed?.exitCode && failed.exitCode > 0 ? failed.exitCode : 1
+        fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, exitCode)
       })
     )
 

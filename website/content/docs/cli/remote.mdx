@@ -4,8 +4,9 @@ description: "Register the servers hammerkit can send runs to and choose the def
 ---
 <Callout type="warn">
 
-Experimental. This page covers the registry and signing in. Sending a run to a
-server (`--on`, running a task with a `runner:`) arrives in follow-up releases, see
+Experimental. `remote run` runs tasks of a published build file from a git ref of the
+repository. Sending a run of the files on your machine (`--on`, running a task with a
+`runner:`) arrives in follow-up releases, see
 the [remote compute spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md).
 
 </Callout>
@@ -22,6 +23,7 @@ hammerkit remote add build https://build.example.com --issuer https://login.exam
 hammerkit remote login build
 hammerkit remote accounts build
 hammerkit remote publish build
+hammerkit remote run test --server build
 hammerkit remote approvals build
 hammerkit remote approve run_Qx3k9ZpL2mW7vN4a build
 hammerkit remote list
@@ -29,8 +31,8 @@ hammerkit remote use build
 hammerkit remote remove build
 ```
 
-Except for `publish`, the commands only touch your host config and talk to the server,
-so they work with or without a build file in the working directory.
+Except for `publish` and `run`, the commands only touch your host config and talk to the
+server, so they work with or without a build file in the working directory.
 
 ## Commands
 
@@ -44,6 +46,7 @@ so they work with or without a build file in the working directory.
 | `remote logout <name>` | Forget the sign-in. |
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
 | `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). |
+| `remote run <tasks...>` | Run tasks of a published build file on a server from a git ref, print their output and exit as they did, see [Running tasks](#running-tasks). |
 | `remote versions [server]` | List the published versions, newest first, with who published them, where they come from and whether they were yanked. `--filter key=value` (repeatable) keeps the ones with that [annotation](/docs/remote-compute/build-files#annotations). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
 | `remote show <run or hash> [server]` | Show a run that waits for your approval, or a proposed or published version, in full: per task the commands, image, secrets and accounts, and every file of a version, see [Approving runs](#approving-runs) and [Proposing](#proposing-a-version). |
@@ -179,6 +182,54 @@ show what the proposer chose to compare with. `remote reject` drops the proposal
 `--reason` the one who proposed it reads in `remote proposals`. Nobody approves their
 own proposal, and what you may not decide does not exist for you. After a rejection you
 can not propose again for ten minutes, and nobody that version (`approvals.cooldown`).
+
+## Running tasks
+
+`remote run` starts a run of a published version on a server, from a branch or tag of
+your repository that the server checks out itself, and follows it to its end:
+
+```
+$ hammerkit remote run test --server build
+run_Qx3k9ZpL2mW7vN4a on build: test from main at 4be1a07c...
+[hammerkit] checked out github.com/corp/payments at 4be1a07c...
+ ✓ 42 tests passed
+run_Qx3k9ZpL2mW7vN4a succeeded
+```
+
+It prints every line of the run as the server logs it, with the task in front when the line
+is not of the one task you named (`[hammerkit]` is the server's own, so a task of that name
+is best called something else). It exits with `0` when
+the run succeeded and with the exit code of the task that failed otherwise, `1` when the
+run was rejected, cancelled or failed without one. Control characters of the output show as
+`?`, so the output of a run can not rewrite your terminal; tabs stay.
+
+What it runs, when you leave the options out, is what is checked out where you are:
+
+| Option | What it is | Left out |
+| --- | --- | --- |
+| `--build <hash>` | The published version to run, also `HAMMERKIT_BUILD`. | The hash of the build file here (or the one `--file` names), computed as `remote publish` does. A build file that is not published fails with `publish it first`. |
+| `--repo <host/path>` | The repository, such as `github.com/corp/payments`. The server reads it from its own [sources](/docs/remote-compute/sources). | The `origin` of the checkout. |
+| `--ref <ref>` | The branch or tag. | The branch checked out here. A detached checkout has none, name it then. |
+| `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
+| `--server <name>` | The server. | The default of `remote use`. |
+| `--env`, `--cache`, `--timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
+
+What follows `--` goes to the one task named, as the
+[arguments](/docs/remote-compute/runs#arguments) of a run. The server refuses them for a
+task that reads a secret or depends on one that does.
+
+A run on an account you may only `request` waits for an approval, and says so:
+
+```
+waiting until somebody who uses deploy-prod approves it, before 2026-10-24T10:41:00.000Z: hammerkit remote approve run_Qx3k9ZpL2mW7vN4a
+```
+
+The command waits as long as the server lets the run wait (`approvals.timeout`, one hour by
+default). Ctrl-C, or the cancel of a CI job, cancels the run on the server: the command waits
+up to ten seconds for the server to take the cancel before it ends. The token is the one of
+[Signing in](#signing-in), or `HAMMERKIT_TOKEN_COMMAND` / `HAMMERKIT_TOKEN`, which is how a CI
+job signs in with its own identity, see
+[CI through a server](/docs/guides/agents/github-actions).
 
 ## Approving runs
 

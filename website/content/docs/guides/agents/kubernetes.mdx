@@ -339,13 +339,74 @@ The tutorials write the accounts as `hammerkit-agent@my-project…` and
 
 The agent's branches show up in the repository as `agent/…`, pushed by your GitHub App.
 
-## Reaching the server from other machines
+## Reaching the server over HTTPS
 
-`kubectl port-forward` needs access to the cluster on every machine. For a team, put the
-Service behind an HTTPS load balancer with a certificate of your domain, for example a GKE
-Gateway with a Google-managed certificate, and register `https://hammerkit.example.com`
-instead. The config already expects TLS to end in front of the server (`behindTlsProxy`).
-That setup was not part of the run this guide was checked with.
+`kubectl port-forward` needs access to the cluster on every machine. A team, or a CI job such
+as [GitHub Actions](/docs/guides/agents/github-actions), reaches the server through an HTTPS
+load balancer instead: a GKE Ingress with a Google-managed certificate for a domain of yours.
+The config already expects TLS to end in front of the server (`behindTlsProxy`), and the
+server takes nothing without a token of one of its issuers, so the address can be public.
+
+Reserve an address and point your domain at it, with an `A` record at your DNS provider:
+
+```bash
+DOMAIN=hammerkit.example.com    # a name in a zone you control
+gcloud compute addresses create $NAME --global --project $PROJECT
+gcloud compute addresses describe $NAME --global --project $PROJECT --format='value(address)'
+```
+
+Then the certificate and the load balancer:
+
+```bash
+: "${NAME:?}" "${DOMAIN:?}"
+kubectl -n $NAME annotate --overwrite svc hammerkit \
+  cloud.google.com/neg='{"ingress": true}' cloud.google.com/backend-config='{"default": "hammerkit"}'
+kubectl apply -f - <<EOF
+# a run's log and events are followed over long requests: the load balancer's default is 30s
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata: { name: hammerkit, namespace: $NAME }
+spec:
+  timeoutSec: 3600
+  healthCheck: { type: HTTP, requestPath: /.well-known/hammerkit, port: 8480 }
+---
+# plain http only answers with a redirect: a token is never sent over it
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata: { name: hammerkit, namespace: $NAME }
+spec: { redirectToHttps: { enabled: true } }
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata: { name: hammerkit, namespace: $NAME }
+spec: { domains: [$DOMAIN] }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hammerkit
+  namespace: $NAME
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: $NAME
+    networking.gke.io/managed-certificates: hammerkit
+    networking.gke.io/v1beta1.FrontendConfig: hammerkit
+spec:
+  defaultBackend: { service: { name: hammerkit, port: { number: 8480 } } }
+EOF
+```
+
+The load balancer takes about five minutes, the certificate up to an hour once the domain
+points at the address. `kubectl -n $NAME get managedcertificate hammerkit` says `Active` when it
+is done; until then `curl https://$DOMAIN/.well-known/hammerkit` fails with a TLS error.
+Then register the server under its domain, on every machine that uses it:
+
+```bash
+curl -sSf https://$DOMAIN/.well-known/hammerkit && echo
+hammerkit remote add $NAME https://$DOMAIN --issuer https://accounts.google.com --force
+```
+
+`--force` replaces the `http://127.0.0.1:8480` of step 3; the port-forward loop can stop then
+(`kill %1`).
 
 ## What the pieces are for
 
@@ -388,6 +449,7 @@ kubectl delete clusterrolebinding $NAME-server
 kubectl delete validatingadmissionpolicybinding,validatingadmissionpolicy $NAME-managed-namespaces
 gcloud iam workload-identity-pools delete $NAME --location global --project $PROJECT --quiet
 gcloud secrets delete $NAME-github-app-key --project $PROJECT --quiet
+gcloud compute addresses delete $NAME --global --project $PROJECT --quiet   # if you reserved one for HTTPS
 for who in agent publisher; do
   gcloud iam service-accounts delete $NAME-$who@$PROJECT.iam.gserviceaccount.com --project $PROJECT --quiet
 done

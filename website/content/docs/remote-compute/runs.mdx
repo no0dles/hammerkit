@@ -45,7 +45,11 @@ there yet; a run is a `POST /v1/runs`.
   level on one of them gets `403` naming the account, one who may only `request` it
   gets a run in `awaiting-approval`, and a caller without `builds` level may not run.
 - `source` says where the code comes from: `{ "type": "ref", "repo": "github.com/corp/payments", "ref": "main" }`
-  for a branch or tag of a repository (or a full commit hash) that the server checks out itself, or `{ "type": "upload", "snapshot": "sha256:..." }`
+  for a branch or tag of a repository (or a full commit hash) that the server checks out itself. The
+  server pins the ref to the commit it is at when the run is submitted; with `"commit": "4be1a07c..."`
+  (the full hash, 40 or 64 hex digits) the ref has to be at that commit, else the run is refused
+  with `409` (`main is at 9e1f... now, not at 4be1a07c...`), so a CI job runs the commit it was started
+  for and not one pushed after it. Or `{ "type": "upload", "snapshot": "sha256:..." }`
   for the caller's working tree, announced and sent beforehand, see [Source
   files](#source-files), or `{ "type": "sandbox", "id": "sbx_..." }` for a
   [sandbox](/docs/remote-compute/sandboxes) of the caller's. A snapshot that is unknown, or that still lacks files, and a sandbox
@@ -75,7 +79,7 @@ What `POST /v1/runs` answers, in the order the server checks:
 | `400`  | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
 | `401`  | The token is missing or invalid.                                                                                                                                                                                                                                                                                                                        |
 | `403`  | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs its repository and branch in the `sandboxes` of an entitlement.                                                                                                     |
-| `409`  | The version was yanked, was published before accounts were recorded, or nobody may approve an account the caller can only request.                                                                                                                                                                                                                      |
+| `409`  | The version was yanked, was published before accounts were recorded, nobody may approve an account the caller can only request, or the ref is no longer at the `commit` the request names.                                                                                                                                                              |
 | `413`  | The caller's [sandboxes](/docs/remote-compute/sandboxes) take more than their limit (runs on a sandbox only).                                                                                                                                                                                                                                           |
 | `429`  | The caller is over their [limits](#limits-and-restarts).                                                                                                                                                                                                                                                                                                |
 | `501`  | The run is from an `upload`, which the executor does not support yet.                                                                                                                                                                                                                                                                                   |

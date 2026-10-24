@@ -34,6 +34,18 @@ export function remoteRepo(url: string): string | undefined {
   }
 }
 
+// The checkout a directory is in: the repository of its `origin`, the branch it is on and
+// its commit, what can be found of them.
+export async function readCheckout(cwd: string): Promise<{ repo?: string; branch?: string; commit?: string }> {
+  if ((await git(cwd, 'rev-parse', '--is-inside-work-tree')) !== 'true') {
+    return {}
+  }
+  const remote = await git(cwd, 'remote', 'get-url', 'origin')
+  // a detached HEAD is on no branch
+  const branch = await git(cwd, 'symbolic-ref', '--quiet', '--short', 'HEAD')
+  return { repo: remote ? remoteRepo(remote) : undefined, branch, commit: await git(cwd, 'rev-parse', 'HEAD') }
+}
+
 // Where a build file is published from: its path in its repository (or on this
 // machine, outside of one), the repository and commit, this machine and its user.
 // `files` are the paths of the bundle, relative to the build file's directory: when

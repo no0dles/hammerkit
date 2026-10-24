@@ -1,13 +1,15 @@
 import { posix, relative, sep, isAbsolute } from 'path'
 import type { FileStat, ReadResult, SearchQuery, SearchResult, TreeQuery, TreeResult } from '../server/sandbox-files'
 import type { Run, TaskResult } from '../server/runs'
-import type { LogPage } from '../server/run-logs'
+import type { LogLine, LogPage } from '../server/run-logs'
 import { isToken } from '../remote/token-source'
 
 // a write carries up to 32 MiB
 const TIMEOUT_MS = 60_000
 // a run is asked for this long at a time, the log is read in between
 const POLL_WAIT = '1s'
+// a cancelled run waits this long for the server to take the cancel, before it gives up
+const CANCEL_WAIT_MS = 10_000
 
 export class SandboxClientError extends Error {
   constructor(
@@ -205,74 +207,25 @@ export class SandboxClient {
     if (options.timeoutSeconds) {
       runOptions.timeout = `${Math.max(1, Math.ceil(options.timeoutSeconds))}s`
     }
-    const submitted: Run = await json(
-      await call(this.connection, 'POST', '/v1/runs', {
-        body: {
-          definition: this.build.hash,
-          tasks: [task],
-          source: { type: 'sandbox', id: this.id },
-          options: runOptions,
-        },
-      })
-    )
-    const path = `/v1/runs/${encodeURIComponent(submitted.id)}`
-    const cancel = () => {
-      call(this.connection, 'POST', `${path}/cancel`).catch(() => undefined)
-    }
-    options.signal?.addEventListener('abort', cancel, { once: true })
-    const lines: string[] = []
-    let from = 1
-    let truncated = false
-    const readLog = async () => {
-      for (;;) {
-        const page: LogPage = await json(
-          await call(this.connection, 'GET', `${path}/logs`, { query: { task, from, limit: 1000 } })
-        )
-        truncated = page.truncated
-        for (const line of page.lines) {
-          lines.push(line.text)
-          options.onLine?.(line.text)
-          from = line.line + 1
-        }
-        if (!page.next) {
-          return
-        }
-      }
-    }
-    try {
-      let run = submitted
-      let waitingSaid = false
-      for (;;) {
-        if (options.signal?.aborted) {
-          throw new SandboxClientError('the run was cancelled')
-        }
-        if (run.state === 'awaiting-approval' && !waitingSaid) {
-          waitingSaid = true
-          options.onWaiting?.(run)
-        }
-        await readLog()
-        if (['succeeded', 'failed', 'cancelled', 'rejected'].includes(run.state)) {
-          break
-        }
-        run = await json(await call(this.connection, 'GET', path, { query: { wait: POLL_WAIT } }))
-      }
-      const result = run.results?.[task]
-      if (truncated && result) {
-        // the end of a long log is kept in the result
-        for (const line of ['… the server cut the log off at its limit, the last lines were:', ...result.lastLog]) {
-          lines.push(line)
-          options.onLine?.(line)
-        }
-      }
-      return {
-        run,
-        result,
-        output: lines.join('\n'),
-        truncated,
-        exitCode: exitCodeOf(result),
-      }
-    } finally {
-      options.signal?.removeEventListener('abort', cancel)
+    const submitted = await submitRun(this.connection, {
+      definition: this.build.hash,
+      tasks: [task],
+      source: { type: 'sandbox', id: this.id },
+      options: runOptions,
+    })
+    const followed = await followRun(this.connection, submitted, {
+      task,
+      signal: options.signal,
+      onLine: options.onLine ? (line) => options.onLine?.(line.text) : undefined,
+      onWaiting: options.onWaiting,
+    })
+    const result = followed.run.results?.[task]
+    return {
+      run: followed.run,
+      result,
+      output: followed.lines.map((line) => line.text).join('\n'),
+      truncated: followed.truncated,
+      exitCode: exitCodeOf(result),
     }
   }
 
@@ -341,6 +294,114 @@ export function oneAtATime(): <T>(call: () => Promise<T>) => Promise<T> {
     const next = last.then(call)
     last = next.catch(() => undefined)
     return next
+  }
+}
+
+// a run that is over, its state does not change any more
+export const FINAL_RUN_STATES = ['succeeded', 'failed', 'cancelled', 'rejected']
+
+// Submits a run, as `POST /v1/runs` takes it, and answers it as the server queued it or
+// holds it for an approval.
+export async function submitRun(connection: ServerConnection, request: unknown): Promise<Run> {
+  return json(await call(connection, 'POST', '/v1/runs', { body: request }))
+}
+
+export interface FollowRunOptions {
+  // only the lines of this task; every line of the run when left out, the server's own included
+  task?: string
+  // cancels the run on the server
+  signal?: AbortSignal
+  // every line, as it comes
+  onLine?: (line: LogLine) => void
+  // the run waits for somebody to approve it, said once
+  onWaiting?: (run: Run) => void
+}
+
+export interface FollowedRun {
+  // as it ended
+  run: Run
+  lines: LogLine[]
+  // the log of the run was cut off at the server's limit; the lines then end with the last
+  // lines of the results, which are always kept
+  truncated: boolean
+}
+
+/**
+ * Follows a run to its end: its log as it grows, and its state. A signal cancels the run
+ * on the server and fails the follow.
+ */
+export async function followRun(
+  connection: ServerConnection,
+  submitted: Run,
+  options: FollowRunOptions = {}
+): Promise<FollowedRun> {
+  const path = `/v1/runs/${encodeURIComponent(submitted.id)}`
+  let cancelling: Promise<unknown> | undefined
+  const cancel = () => {
+    cancelling ??= call(connection, 'POST', `${path}/cancel`).catch(() => undefined)
+  }
+  options.signal?.addEventListener('abort', cancel, { once: true })
+  const lines: LogLine[] = []
+  let from = 1
+  let truncated = false
+  const add = (line: LogLine) => {
+    lines.push(line)
+    options.onLine?.(line)
+  }
+  const readLog = async () => {
+    for (;;) {
+      const page: LogPage = await json(
+        await call(connection, 'GET', `${path}/logs`, { query: { task: options.task, from, limit: 1000 } })
+      )
+      truncated = page.truncated
+      for (const line of page.lines) {
+        add(line)
+        from = line.line + 1
+      }
+      if (!page.next) {
+        return
+      }
+    }
+  }
+  try {
+    let run = submitted
+    let waitingSaid = false
+    for (;;) {
+      if (options.signal?.aborted) {
+        // the process may exit after this, so the cancel has to reach the server first
+        cancel()
+        let timer: NodeJS.Timeout | undefined
+        await Promise.race([cancelling, new Promise((resolve) => (timer = setTimeout(resolve, CANCEL_WAIT_MS)))])
+        clearTimeout(timer)
+        throw new SandboxClientError('the run was cancelled')
+      }
+      if (run.state === 'awaiting-approval' && !waitingSaid) {
+        waitingSaid = true
+        options.onWaiting?.(run)
+      }
+      await readLog()
+      if (FINAL_RUN_STATES.includes(run.state)) {
+        break
+      }
+      run = await json(await call(connection, 'GET', path, { query: { wait: POLL_WAIT } }))
+    }
+    if (truncated) {
+      // the end of a long log is kept in the results
+      const tasks = options.task !== undefined ? [options.task] : Object.keys(run.results ?? {})
+      for (const task of tasks) {
+        const result = run.results?.[task]
+        if (!result) {
+          continue
+        }
+        const said = options.task !== undefined ? 'the last lines were' : `the last lines of ${task} were`
+        for (const text of [`… the server cut the log off at its limit, ${said}:`, ...result.lastLog]) {
+          add({ line: 0, task, stream: 'stdout', text })
+        }
+      }
+    }
+    return { run, lines, truncated }
+  } finally {
+    options.signal?.removeEventListener('abort', cancel)
   }
 }
 

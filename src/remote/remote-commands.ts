@@ -21,7 +21,13 @@ import { registerMcpCommand } from '../harness/mcp-command'
 
 // Host-level commands: they only touch the machine's config file, so they work
 // with or without a build file in the working directory.
-export function registerRemoteCommands(program: Command, environment: Environment, buildFile: string): void {
+export function registerRemoteCommands(
+  program: Command,
+  environment: Environment,
+  buildFile: string,
+  // what follows `--`, the arguments of `remote run`
+  passthrough: string[] = []
+): void {
   const remote = program.command('remote').description('register the servers runs can be sent to')
 
   const guarded = (failure: string, fn: (...args: any[]) => Promise<void>) => {
@@ -191,6 +197,13 @@ export function registerRemoteCommands(program: Command, environment: Environmen
       })
     )
 
-  registerWorkCommands(remote, { environment, buildFile, getServer, guarded })
+  registerWorkCommands(remote, {
+    environment,
+    buildFile,
+    getServer,
+    guarded,
+    passthrough,
+    fail: (message, exitCode) => program.error(message, { exitCode }),
+  })
   registerMcpCommand(remote, environment)
 }
