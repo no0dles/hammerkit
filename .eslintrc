@@ -18,6 +18,31 @@
         "selector": "VariableDeclarator > Identifier.id[name=/^(exports|module|require|__dirname|__filename)$/], FunctionDeclaration > Identifier.id[name=/^(exports|module|require|__dirname|__filename)$/], :function > Identifier.params[name=/^(exports|module|require|__dirname|__filename)$/], ClassDeclaration > Identifier.id[name=/^(exports|module|require|__dirname|__filename)$/]",
         "message": "Shadows a CommonJS module variable: the compiled code refers to it (exports.NAME), so the local breaks the module at runtime. Pick another name."
       }
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "tar",
+            "importNames": [
+              "create",
+              "c"
+            ],
+            "message": "Use packArchive from src/utils/tar: node-tar hangs on hard links when it packs more than one file at a time."
+          }
+        ]
+      }
     ]
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/utils/tar.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ]
 }

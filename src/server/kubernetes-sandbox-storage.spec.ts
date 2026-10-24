@@ -15,7 +15,8 @@ import { rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { Readable, Writable } from 'stream'
-import { create as createTar, extract as extractTar } from 'tar'
+import { extract as extractTar } from 'tar'
+import { packArchive } from '../utils/tar'
 import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getKubernetesPersistence, getSandboxAffinity, getWorkspacePodSpec } from '../kubernetes/volumes'
 import { getCallerNamespace } from './kubernetes-backend'
@@ -220,7 +221,7 @@ function fakeCluster(root: string) {
             await sandboxPodMain(directory, stdin as Readable, stdout)
           } else if (command[0] === 'tar') {
             await new Promise<void>((resolve, reject) =>
-              Readable.from(createTar({ cwd: realpathSync(local(command[4])), portable: true }, ['.']))
+              Readable.from(packArchive({ cwd: realpathSync(local(command[4])), portable: true }, ['.']))
                 .on('error', reject)
                 .on('end', resolve)
                 .pipe(stdout, { end: false })

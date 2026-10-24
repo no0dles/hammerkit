@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { create, extract } from 'tar'
-import { packOptions } from '../../utils/tar'
+import { extract } from 'tar'
+import { packArchive } from '../../utils/tar'
 import { CacheBackend, CacheEntry } from '../cache-backend'
 import { Environment } from '../../executer/environment'
 import { parseRegistryReference } from './registry/registry-reference'
@@ -91,8 +91,7 @@ export function createRegistryCacheBackend(spec: RegistryCacheBackendSpec): Cach
         const layerFile = join(dir, 'layer.tar')
         const files = (await environment.file.listFiles(from)).sort()
         // portable + mtime-free so identical entries produce identical digests
-        // `noMtime` is supported by tar 6 but missing from its type definitions
-        await create({ ...packOptions, file: layerFile, cwd: from, portable: true, noMtime: true } as any, files)
+        await packArchive({ file: layerFile, cwd: from, portable: true, noMtime: true }, files)
         const layer = await digestFile(layerFile)
 
         const config = Buffer.from(

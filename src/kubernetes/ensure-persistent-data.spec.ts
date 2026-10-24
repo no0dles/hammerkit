@@ -63,9 +63,7 @@ describe('packSource', () => {
     expect(entries).toHaveLength(3)
   })
 
-  it('packs a directory with several hard links', async () => {
-    // node-tar 7.5.14 and later hang on this with more than one file read at a time
-    // (see packOptions)
+  it('packs a directory with several hard links as links', async () => {
     mkdirSync(join(root, 'linked', 'node_modules'), { recursive: true })
     for (let i = 0; i < 5; i++) {
       writeFileSync(join(root, 'linked', 'node_modules', `file-${i}.js`), `${i}`)
@@ -74,13 +72,17 @@ describe('packSource', () => {
         join(root, 'linked', 'node_modules', `link-${i}.js`)
       )
     }
-    for (let i = 0; i < 10; i++) {
-      const archive = packSource({
-        localPath: join(root, 'linked', 'node_modules'),
-        subPath: 'node_modules-0123456789ab',
-        matcher: () => true,
-      })
-      expect(await listEntries(archive)).toHaveLength(11)
-    }
-  }, 10000)
+    const archive = packSource({
+      localPath: join(root, 'linked', 'node_modules'),
+      subPath: 'node_modules-0123456789ab',
+      matcher: () => true,
+    })
+    const entries = await listEntries(archive)
+    expect(entries).toHaveLength(11)
+    expect(
+      entries.filter((entry) =>
+        /^node_modules-0123456789ab\/(file|link)-(\d)\.js -> node_modules-0123456789ab\/(file|link)-\2\.js$/.test(entry)
+      )
+    ).toHaveLength(5)
+  })
 })
