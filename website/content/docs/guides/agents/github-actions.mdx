@@ -220,6 +220,14 @@ jobs:
         run: hammerkit remote run deploy --ref "$REF" --commit "$SHA"
 ```
 
+<Callout>
+
+`hammerkit remote run` ships with hammerkit 1.27.0. Until it is released, install the
+prerelease the server runs, for example `1.27.0-next.3` (`npm view hammerkit@next version`
+prints the newest).
+
+</Callout>
+
 What each step does:
 
 - **The token.** `id-token: write` lets the job ask GitHub for a token. hammerkit runs
