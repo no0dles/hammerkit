@@ -62,4 +62,27 @@ describe('packSource', () => {
     expect(entries.slice(1).every((entry) => entry.startsWith('src-0123456789ab/'))).toBe(true)
     expect(entries).toHaveLength(3)
   })
+
+  it('packs a directory with several hard links as links', async () => {
+    mkdirSync(join(root, 'linked', 'node_modules'), { recursive: true })
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(root, 'linked', 'node_modules', `file-${i}.js`), `${i}`)
+      linkSync(
+        join(root, 'linked', 'node_modules', `file-${i}.js`),
+        join(root, 'linked', 'node_modules', `link-${i}.js`)
+      )
+    }
+    const archive = packSource({
+      localPath: join(root, 'linked', 'node_modules'),
+      subPath: 'node_modules-0123456789ab',
+      matcher: () => true,
+    })
+    const entries = await listEntries(archive)
+    expect(entries).toHaveLength(11)
+    expect(
+      entries.filter((entry) =>
+        /^node_modules-0123456789ab\/(file|link)-(\d)\.js -> node_modules-0123456789ab\/(file|link)-\2\.js$/.test(entry)
+      )
+    ).toHaveLength(5)
+  })
 })
