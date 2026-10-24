@@ -125,6 +125,33 @@ accounts:
       secret: deploy-federation
 ```
 
+The server makes a token of the account's ServiceAccount for each Job of `deploy`, and reads
+its Secret, so it needs both, by name, in its namespace:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: deploy, namespace: $NAME }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: $NAME-accounts, namespace: $NAME }
+rules:
+  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create], resourceNames: [deploy] }
+  - { apiGroups: [''], resources: [secrets], verbs: [get], resourceNames: [deploy-federation] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: $NAME-accounts, namespace: $NAME }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: $NAME-accounts }
+subjects: [{ kind: ServiceAccount, name: hammerkit, namespace: $NAME }]
+EOF
+```
+
+`deploy-federation` holds the file that tells the secret manager's client to use that token,
+see [Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job) for Google's.
+
 Apply the changed config with `kubectl apply` as in step 2 of the Kubernetes guide, then
 restart the server, which reads issuers and accounts when it starts:
 

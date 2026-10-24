@@ -370,6 +370,12 @@ spec:
   timeoutSec: 3600
   healthCheck: { type: HTTP, requestPath: /.well-known/hammerkit, port: 8480 }
 ---
+# plain http only answers with a redirect: a token is never sent over it
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata: { name: hammerkit, namespace: $NAME }
+spec: { redirectToHttps: { enabled: true } }
+---
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
 metadata: { name: hammerkit, namespace: $NAME }
@@ -383,7 +389,7 @@ metadata:
   annotations:
     kubernetes.io/ingress.global-static-ip-name: $NAME
     networking.gke.io/managed-certificates: hammerkit
-    kubernetes.io/ingress.allow-http: 'false'
+    networking.gke.io/v1beta1.FrontendConfig: hammerkit
 spec:
   defaultBackend: { service: { name: hammerkit, port: { number: 8480 } } }
 EOF
