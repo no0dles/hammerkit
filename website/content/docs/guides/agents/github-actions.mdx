@@ -47,6 +47,8 @@ tasks:
       - { from: 'gsm:deploy-token', account: deploy, env: DEPLOY_TOKEN }
     # a task that reads a secret gets no open network on this server, see step 3
     network: { allow: [deploy.example.com] }
+    # it reaches the target through the proxy; Node's fetch reads HTTPS_PROXY only with this
+    envs: { NODE_USE_ENV_PROXY: '1' }
     cmds: [node deploy.js]
 ```
 
