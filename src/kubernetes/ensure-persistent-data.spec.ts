@@ -62,4 +62,25 @@ describe('packSource', () => {
     expect(entries.slice(1).every((entry) => entry.startsWith('src-0123456789ab/'))).toBe(true)
     expect(entries).toHaveLength(3)
   })
+
+  it('packs a directory with several hard links', async () => {
+    // node-tar 7.5.14 and later hang on this with more than one file read at a time
+    // (see packOptions)
+    mkdirSync(join(root, 'linked', 'node_modules'), { recursive: true })
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(join(root, 'linked', 'node_modules', `file-${i}.js`), `${i}`)
+      linkSync(
+        join(root, 'linked', 'node_modules', `file-${i}.js`),
+        join(root, 'linked', 'node_modules', `link-${i}.js`)
+      )
+    }
+    for (let i = 0; i < 10; i++) {
+      const archive = packSource({
+        localPath: join(root, 'linked', 'node_modules'),
+        subPath: 'node_modules-0123456789ab',
+        matcher: () => true,
+      })
+      expect(await listEntries(archive)).toHaveLength(11)
+    }
+  }, 10000)
 })

@@ -6,6 +6,7 @@ import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
 import { create } from 'tar'
+import { packOptions } from '../utils/tar'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
 import { awaitRunningState } from './await-running-state'
@@ -187,6 +188,7 @@ export function packSource(source: Pick<KubernetesPersistenceSource, 'localPath'
   return Readable.from(
     create(
       {
+        ...packOptions,
         cwd: dirname(source.localPath),
         filter(path: string): boolean {
           return source.matcher(path, source.localPath)

@@ -6,6 +6,7 @@ import { finished } from 'stream/promises'
 import { V1NetworkPolicy, V1PersistentVolumeClaim, V1Pod, V1ResourceQuota, V1Status } from '@kubernetes/client-node'
 import type { WebSocket } from 'ws'
 import { create as createTar, extract as extractTar } from 'tar'
+import { packOptions } from '../utils/tar'
 import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { NETWORK_LABEL, removeSandboxProxies } from '../kubernetes/network-policy'
@@ -612,7 +613,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
         this.exec(
           pod,
           ['sh', '-c', 'rm -rf "$1" && mkdir -p "$1" && tar xf - -C "$1"', 'sh', incoming],
-          Readable.from(createTar({ cwd: repository, portable: true }, ['.'])),
+          Readable.from(createTar({ ...packOptions, cwd: repository, portable: true }, ['.'])),
           null,
           fetch.signal
         )

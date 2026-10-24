@@ -18,6 +18,7 @@ import { getArchivePaths } from '../executer/event-cache'
 import { ensureVolumeExists, existsVolume, removeVolume, volumeLabels } from '../executer/get-docker-executor'
 import { basename, dirname } from 'path'
 import { create, extract } from 'tar'
+import { packOptions } from '../utils/tar'
 import { getVolumeName } from './utils/plan-work-volume'
 import { WorkDockerEnvironment } from './work-environment'
 import { getWorkInstanceId } from './work-instance-id'
@@ -354,7 +355,9 @@ async function archiveContainer(
       for (const generatedArchive of getArchivePaths(item.data, path)) {
         // a file output is a bind mount of a host file, so archive it from the host
         const readable = hostFiles.has(generatedArchive.path)
-          ? Readable.from(create({ cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)]))
+          ? Readable.from(
+              create({ ...packOptions, cwd: dirname(generatedArchive.path) }, [basename(generatedArchive.path)])
+            )
           : await container.getArchive({
               path: generatedArchive.path,
             })
