@@ -347,7 +347,7 @@ async function submitRun(
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
     return
   }
-  const refused = refuseArguments(request, planned.plan)
+  const refused = refuseArguments(request, planned.plan, sandbox ? sandboxes.policy : planning.policy)
   if (refused) {
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${refused}`)
     send(res, 400, { error: refused })
@@ -556,7 +556,8 @@ export async function startServer(
     environment: {
       ...environment,
       processEnvs: runEnvironment(config, environment.processEnvs),
-      hosted: { catalog: getSecretCatalog(config) },
+      // on a cluster a local task runs in a pod of a pool's tool image
+      hosted: { catalog: getSecretCatalog(config), localTasksInContainers: config.backend.type === 'kubernetes' },
     },
     policy: {
       envs: config.runs.env.allow,
@@ -564,6 +565,14 @@ export async function startServer(
       runtimes: config.runtimes,
       backend: config.backend.type,
       network: parseWorkNetwork(config.runs.network),
+      secretNetwork: parseWorkNetwork(config.runs.secretNetwork),
+      args: config.runs.args,
+      proxiedProviders:
+        config.backend.type === 'kubernetes'
+          ? Object.entries(config.backend.providers)
+              .filter(([, provider]) => provider.allow)
+              .map(([name]) => name)
+          : [],
     },
   }
   const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')

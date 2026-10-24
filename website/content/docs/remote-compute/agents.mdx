@@ -35,12 +35,14 @@ tasks:
   sh:
     image: node:24
     mounts: [.]
+    args: true
     cmds: [sh -c]
     network: { allow: [registry.npmjs.org] }
 ```
 
 `mounts: [.]` puts the files of the sandbox into the container, writable, as the task's
-working directory. Without it a command in a container runs in an empty directory: the
+working directory. `args: true` marks it as a task that takes arguments, which a server with
+[`runs.args: declared`](/docs/remote-compute/runs#arguments) requires. Without it a command in a container runs in an empty directory: the
 clients then refuse to run it and say the shell task needs `mounts: [.]`.
 
 `bash` with `npm test -- -t login` then runs `sh -c 'npm test -- -t login'` in that image,

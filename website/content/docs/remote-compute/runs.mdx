@@ -76,7 +76,7 @@ What `POST /v1/runs` answers, in the order the server checks:
 | Status | When                                                                                                                                                                                                                                                                                                                                                    |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `202`  | The run is accepted, `queued` or `awaiting-approval`.                                                                                                                                                                                                                                                                                                   |
-| `400`  | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
+| `400`  | The body is malformed or has unknown fields, the build file or version does not exist, a task is unknown, arguments go to anything but one task that reads no secret or server credential and takes arguments, the repository is not readable by the server or the ref is not one branch or tag, the snapshot is unknown or incomplete, or the sandbox is not the caller's. |
 | `401`  | The token is missing or invalid.                                                                                                                                                                                                                                                                                                                        |
 | `403`  | The caller has no `builds` level, may not run from that repository, has no level on an account of the run, or the account refuses that source or ref. A run on a sandbox also needs its repository and branch in the `sandboxes` of an entitlement.                                                                                                     |
 | `409`  | The version was yanked, was published before accounts were recorded, nobody may approve an account the caller can only request, or the ref is no longer at the `commit` the request names.                                                                                                                                                              |
@@ -117,6 +117,15 @@ the last command of each task as `command`, so a caller knows where the argument
   secrets knows (`rev token.txt`). The run is `400` naming the item and what it reads,
   and the executor checks again before it starts. A shell task (`cmds: [sh -c]`) on a
   server therefore runs without any account or credential of the server, nor next to one.
+- A task with [`args: false`](/docs/task/arguments#which-tasks-take-arguments) takes none:
+  the run is `400`. With `runs.args: declared` in the [config](#config) the server passes
+  arguments only to the tasks that say `args: true`, any other task is `400` as well. Use it
+  when a published build file holds tasks nobody wrote for arguments: one of them that takes
+  them runs whatever its last command does with what a caller appends, so each would need
+  `args: false`, and a new task that forgets it takes them again. With `declared` the build
+  file names the tasks that take them, typically the [shell task](/docs/remote-compute/agents#the-shell-task)
+  of agents and a test task, and a reviewer reads `args` in the [plan](/docs/remote-compute/build-files)
+  of each.
 - Such a run never uses an account, so it never waits for an approval.
 - [`remote approvals`](/docs/cli/remote#approving-runs) still lists the arguments of a
   run as JSON strings, and `remote show` prints every command whole, never cut, with
@@ -394,6 +403,8 @@ runs:
     allow: [PATH, DOCKER_HOST] # the only variables of the server a run sees, none by default
     set: { CI: 'true' }
   network: { allow: [registry.npmjs.org] } # open by default
+  secretNetwork: none # open by default, what a task that reads a secret reaches
+  args: declared # any by default, which tasks take arguments
 ```
 
 | Key             | What it does                                                                                                                                                                                                                                                                                                                    |
@@ -406,6 +417,8 @@ runs:
 | `env.allow`     | The variables of the server process that a run, its provider commands and the git fetch can see. Nothing else of the server's environment is passed on, and the list is empty by default. A server that runs tasks needs `PATH` in it, Windows needs its system variables (`SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`) as well. |
 | `env.set`       | Fixed values that are set in addition.                                                                                                                                                                                                                                                                                          |
 | `network`       | The most any task or service of a run reaches besides the services it needs: `open` (the default), `none` or `{ allow: [hosts] }`, as the [`network`](/docs/task/network) of a task. See [Network](#network).                                                                                                                   |
+| `secretNetwork` | The most a task or service that reads a secret, or a variable of the server other than `PATH`, `HOME` and `CI`, reaches: `open` (the default), `none` or `{ allow: [hosts] }`, within `network`. See [Tasks that read secrets](#tasks-that-read-secrets).                                                                     |
+| `args`          | Which tasks take [arguments](#arguments): `any` (the default) but those with `args: false`, or `declared`, only those with `args: true`.                                                                                                                                                                                          |
 
 ## Network
 
@@ -431,9 +444,49 @@ runs:
 - Every run executes under the ceiling as well, and a version published before the
   ceiling was set, which asks for more, is refused when a run of it is submitted.
 - The services a task needs are reachable at every level.
-- Local tasks can't be limited, so a server with a ceiling below `open` allows only the
-  `docker` runtime; `runtimes: [docker, local]` with it is a config error.
-- On a [Kubernetes backend](/docs/remote-compute/backend#network) the ceiling is a NetworkPolicy
-  on every pod, so it needs `backend.networkPolicy: enforced`; without that it is a config error.
-  A task that reads a provider's secret there keeps an open network, so it can't be published
-  under a ceiling.
+- Local tasks can't be limited on the server's machine, so a server with a ceiling below `open`
+  allows only the `docker` runtime; `runtimes: [docker, local]` with it is a config error. On a
+  [Kubernetes backend](/docs/remote-compute/backend#network) a local task runs in a pod of a
+  pool's tool image and is limited like a container task, so there it is allowed, and a local
+  task may name its own `network`.
+- On a Kubernetes backend the ceiling is a NetworkPolicy on every pod, so it needs
+  `backend.networkPolicy: enforced`; without that it is a config error. A task that reads a
+  provider's secret there can be limited only when the server names the provider's endpoints,
+  see [Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job).
+
+### Tasks that read secrets
+
+A task that reads a secret runs its tools next to it: `npm publish` with a token, a deploy
+with a cloud credential. A tool that was changed, a dependency's install script or a
+compromised release, can send the value anywhere the task reaches. `runs.secretNetwork`
+holds every task and service that reads a secret, or takes a variable of the server into its
+`envs` (other than `PATH`, `HOME` and `CI`), to less than the others:
+
+```yaml title="server.yaml"
+runs:
+  secretNetwork: { allow: [registry.npmjs.org] }
+```
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  publish:
+    image: node:24-alpine
+    deps: [build]
+    secrets:
+      - { from: 'gsm:npm-token', account: release, env: NPM_TOKEN }
+    network: { allow: [registry.npmjs.org] }
+    cmds: [npm publish]
+```
+
+- It is checked as `runs.network` is: a version in which such an item asks for more is
+  refused when it is published, proposed and when a run of it is submitted, naming the item
+  and what it reads. The other tasks keep what `runs.network` allows.
+- `open`, the default, holds nothing beyond `runs.network`, so existing build files keep
+  working. `none` suits a server whose secret tasks only talk to the services they need.
+- It limits the task while it holds the value, not what it hands on: a task that writes the
+  secret into its outputs, or a service it needs that has an open network, takes it further.
+  Those are in the build file, which a reviewer reads.
+- An allow list is no wall around a shared host: a task that may reach `*.googleapis.com`
+  reaches another project's buckets there too. Allow the names a task needs, not their domain.
+- Local tasks on the server's machine can't be limited, so with `secretNetwork` below `open`
+  a local task that reads a secret is refused, except on a Kubernetes backend.

@@ -35,7 +35,7 @@ import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 import {
   assertJobAccounts,
-  assertSecretsReachable,
+  getSecretHosts,
   ensureJobCredentials,
   getJobSecretSpec,
   JobSecret,
@@ -231,8 +231,9 @@ export function kubernetesTaskRuntime(
       const { delivered, inJob } = splitJobSecrets(task.data.secrets, server)
       const secrets = getKubernetesSecretRefs(task, delivered)
       const admitted = environment.hosted?.accounts
+      let secretHosts: string[]
       try {
-        assertSecretsReachable(task, inJob)
+        secretHosts = getSecretHosts(task, inJob, server)
         if (server) {
           assertJobAccounts(inJob, server, admitted)
         }
@@ -274,7 +275,11 @@ export function kubernetesTaskRuntime(
       // NetworkPolicy and proxy of a limited network, both of this run
       let network: KubernetesItemNetwork
       try {
-        network = await ensureKubernetesItemNetwork(instance, kubernetes, task, { followLog: true, ...scope })
+        network = await ensureKubernetesItemNetwork(instance, kubernetes, task, {
+          followLog: true,
+          secretHosts,
+          ...scope,
+        })
       } catch (e) {
         await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
@@ -289,7 +294,7 @@ export function kubernetesTaskRuntime(
           try {
             // made for each Job right before it, so a later command's token is as fresh
             const credentials = await ensureJobCredentials(instance, kubernetes, task, inJob, admitted)
-            secretSpec = getJobSecretSpec(task, inJob, server, credentials, environment)
+            secretSpec = getJobSecretSpec(task, inJob, server, credentials, environment, network.secretEnv)
           } catch (e) {
             await removeTaskSecrets(instance, kubernetes, task).catch(() => undefined)
             options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })

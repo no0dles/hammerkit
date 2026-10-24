@@ -59,25 +59,31 @@ export function splitJobSecrets(
 
 /**
  * The init containers that read secrets share the pod, and so the NetworkPolicy, of
- * the task: under a limited network they could not reach the secret manager. Until
- * they run in a pod of their own, a task that reads a provider's secret in its Job
- * keeps an open network.
+ * the task: under a limited network they reach the secret manager only through the
+ * task's egress proxy, which lets them reach the endpoints the server names for the
+ * provider (`backend.providers.<name>.allow`). A task that reads a secret of a provider
+ * without them keeps an open network. Answers the endpoints the proxy lets through.
  */
-export function assertSecretsReachable(
+export function getSecretHosts(
   task: WorkItem<ContainerWorkTask>,
   secrets: JobSecret[],
+  server: WorkKubernetesServer | undefined,
   network: WorkNetwork = getEffectiveNetwork(task.data)
-): void {
-  if (secrets.length === 0 || network.type === 'open') {
-    return
+): string[] {
+  if (!server || secrets.length === 0 || network.type === 'open') {
+    return []
   }
-  const secret = secrets[0]
-  throw new Error(
-    `task ${task.name}: secret ${getSecretName(secret.secret)} is read from ${describeSecretSource(
-      secret.secret
-    )} in the Job of the task, which network ${formatNetwork(network)} would cut off from it; ` +
-      'on this cluster a task that reads secrets of a provider keeps an open network'
-  )
+  const unreachable = secrets.find((secret) => !server.providers[secret.source.provider]?.allow?.length)
+  if (unreachable) {
+    throw new Error(
+      `task ${task.name}: secret ${getSecretName(unreachable.secret)} is read from ${describeSecretSource(
+        unreachable.secret
+      )} in the Job of the task, which network ${formatNetwork(network)} would cut off from it; ` +
+        `on this cluster a task that reads secrets of ${unreachable.source.provider} keeps an open network, ` +
+        `unless the server names its endpoints in backend.providers.${unreachable.source.provider}.allow`
+    )
+  }
+  return [...new Set(secrets.flatMap((secret) => server.providers[secret.source.provider].allow ?? []))].sort()
 }
 
 // The accounts of the secrets, in the order they are first read
@@ -248,7 +254,9 @@ export function getJobSecretSpec(
   secrets: JobSecret[],
   server: WorkKubernetesServer | undefined,
   credentials: CredentialFiles,
-  environment: Environment
+  environment: Environment,
+  // under a limited network, what sends their requests through the egress proxy
+  proxyEnv: V1EnvVar[] = []
 ): JobSecretSpec {
   if (!server || secrets.length === 0) {
     return {
@@ -296,6 +304,7 @@ export function getJobSecretSpec(
       ],
       args: ['sh', command, ...args],
       env: [
+        ...proxyEnv,
         ...Object.entries(env).map(([name, value]) => ({ name, value })),
         { name: 'HAMMERKIT_VALUE', value: `${SECRET_VALUES_PATH}/secret-${index}` },
       ],

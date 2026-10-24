@@ -17,6 +17,9 @@ export interface HostedPolicy {
   // where container tasks and services run: the cluster of the server's Kubernetes
   // backend, in place of the build file's environment
   kubernetes?: WorkKubernetesEnvironment
+  // a local task runs in a container (a pool's tool image on the server's cluster), so
+  // its `network` can be limited; set where the build file is read without `kubernetes`
+  localTasksInContainers?: boolean
 }
 
 export interface Environment {

@@ -36,8 +36,9 @@ export interface WorkKubernetesServer {
   // the first is where container tasks go; a local task runs in the toolImage of
   // the pool that offers its platform
   pools: WorkKubernetesPool[]
-  // the image each secret provider's command runs in
-  providers: { [provider: string]: { image: string } }
+  // the image each secret provider's command runs in, and the hosts it reaches through
+  // the egress proxy of a task with a limited network
+  providers: { [provider: string]: { image: string; allow?: string[] } }
   // what the commands of an account's secrets get in the Job
   accounts: { [account: string]: { serviceAccount?: string; audience?: string; secret?: string } }
   // set when the run works on a sandbox: its files are a claim the tasks mount

@@ -42,6 +42,7 @@ function makeTask(cwd: string): WorkItem<LocalWorkTask> {
       network: { type: 'open' },
       networkCeiling: null,
       runner: null,
+      args: null,
       caching: {
         name: 'none',
         method: 'none',

@@ -5,7 +5,7 @@ import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import { parseDuration, parseSize } from '../utils/units'
 import { getVersion } from '../version'
-import { getAllowListError, networkSchema } from '../schema/network-schema'
+import { getAllowListError, isAllowEntry, networkSchema } from '../schema/network-schema'
 import {
   buildFileSecretAccountSchema,
   buildFileSecretProvidersSchema,
@@ -271,8 +271,29 @@ const kubernetesBackendSchema = z
       .min(1)
       .default([{ name: 'default', platform: { os: 'linux', arch: 'amd64' }, nodeSelector: {}, tolerations: [] }]),
     // per secret provider, the image its command runs in: secrets are read in the
-    // Job of the task, not by the server
-    providers: z.record(z.object({ image: z.string().min(1) }).strict()).default({}),
+    // Job of the task, not by the server. `allow` are the hosts its command reaches, such
+    // as secretmanager.googleapis.com: the egress proxy of a task with a limited network
+    // lets the init containers that read its secrets reach them, and nothing else does
+    providers: z
+      .record(
+        z
+          .object({
+            image: z.string().min(1),
+            allow: z
+              .array(
+                z
+                  .string()
+                  .refine(
+                    (host) => isAllowEntry(host) && !host.includes(':'),
+                    'expected a host name such as secretmanager.googleapis.com or *.example.com'
+                  )
+              )
+              .min(1)
+              .optional(),
+          })
+          .strict()
+      )
+      .default({}),
     // the ResourceQuota of every caller's namespace, such as `requests.cpu: '8'`
     quota: z.record(z.union([z.string().min(1), z.number()]).transform(String)).optional(),
     // what a container without `resources` requests (a LimitRange), so it is
@@ -511,6 +532,13 @@ export const serverConfigSchema = z
         // the most any task or service of a run reaches besides its needs: none, open
         // or { allow: [hosts] }. A version that asks for more is refused at publish.
         network: networkSchema.default('open'),
+        // the most a task or service that reads a secret, or a variable of the server
+        // other than PATH, HOME and CI, reaches, under `network`: so a tool it runs can't
+        // send the value anywhere. Checked like `network`.
+        secretNetwork: networkSchema.default('open'),
+        // which tasks take arguments: `any` but those that say `args: false`, or
+        // `declared`, only those that say `args: true`
+        args: z.enum(['any', 'declared']).default('any'),
       })
       .strict()
       .default({}),
@@ -649,7 +677,12 @@ export const serverConfigSchema = z
         message: `under runs.network, ${shared}`,
       })
     }
-    if (config.sandboxes.runtimes?.includes('local') && config.sandboxes.network !== 'open') {
+    // on a cluster a local task runs in a pod of a pool's tool image, which can be limited
+    if (
+      config.sandboxes.runtimes?.includes('local') &&
+      config.sandboxes.network !== 'open' &&
+      config.backend.type === 'host'
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['sandboxes', 'network'],
@@ -761,6 +794,14 @@ export const serverConfigSchema = z
             'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them',
         })
       }
+      if (config.runs.secretNetwork !== 'open' && backend.networkPolicy !== 'enforced') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['backend', 'networkPolicy'],
+          message:
+            'runs.secretNetwork limits the tasks that read secrets with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them',
+        })
+      }
       if (
         config.sandboxes.network !== 'open' &&
         backend.networkPolicy !== 'enforced' &&
@@ -774,7 +815,7 @@ export const serverConfigSchema = z
         })
       }
     }
-    if (config.runs.network !== 'open' && config.runtimes.includes('local')) {
+    if (config.runs.network !== 'open' && config.runtimes.includes('local') && backend.type === 'host') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['runs', 'network'],

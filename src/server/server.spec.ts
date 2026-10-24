@@ -90,6 +90,19 @@ describe('server config', () => {
     expect(serverConfigSchema.safeParse({ issuers, runs: { network: 'open' }, runtimes: ['local'] }).success).toBe(true)
   })
 
+  it('takes which tasks get arguments and a network ceiling for what reads secrets, both open by default', () => {
+    const issuers = [{ issuer: 'https://idp.corp', audience: 'hammerkit' }]
+    const runs = serverConfigSchema.parse({ issuers }).runs
+    expect(runs.args).toBe('any')
+    expect(runs.secretNetwork).toBe('open')
+    const set = { args: 'declared', secretNetwork: { allow: ['*.googleapis.com'] } }
+    expect(serverConfigSchema.parse({ issuers, runs: set }).runs).toMatchObject(set)
+    expect(serverConfigSchema.safeParse({ issuers, runs: { args: 'none' } }).success).toBe(false)
+    expect(serverConfigSchema.safeParse({ issuers, runs: { secretNetwork: { allow: ['10.0.0.0/8'] } } }).success).toBe(
+      false
+    )
+  })
+
   it('takes only the platforms it knows', () => {
     const issuers = [{ issuer: 'https://idp.corp', audience: 'hammerkit' }]
     const backend = { type: 'host', platform: { os: 'plan9', arch: 'amd64' } }
@@ -695,6 +708,16 @@ describe('server config policy', () => {
       expect(kubernetes({ providers: { gsm: { image: 'cloud-sdk:slim' } } }, extra).success).toBe(true)
     })
 
+    it('takes the host names a provider reaches through the egress proxy of a limited task', () => {
+      const provider = (allow: unknown) => kubernetes({ providers: { gsm: { image: 'cloud-sdk:slim', allow } } })
+      expect(provider(['secretmanager.googleapis.com', '*.googleapis.com']).success).toBe(true)
+      expect(message(provider(['secretmanager.googleapis.com:443']))).toBe(
+        'expected a host name such as secretmanager.googleapis.com or *.example.com'
+      )
+      expect(provider(['10.0.0.0/8']).success).toBe(false)
+      expect(provider([]).success).toBe(false)
+    })
+
     it('takes the credentials of an account on a cluster only', () => {
       const accounts = (credentials: object) => ({ accounts: { dev: { kubernetes: credentials } } })
       expect(kubernetes({}, accounts({ serviceAccount: 'dev', audience: 'sts', secret: 'dev-files' })).success).toBe(
@@ -722,6 +745,16 @@ describe('server config policy', () => {
         'runs.network limits every task with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them'
       )
       expect(kubernetes({ networkPolicy: 'enforced' }, limited).success).toBe(true)
+      expect(message(kubernetes({}, { runs: { secretNetwork: 'none' } }))).toBe(
+        'runs.secretNetwork limits the tasks that read secrets with a NetworkPolicy, set networkPolicy: enforced once the network plugin of the cluster enforces them'
+      )
+      expect(kubernetes({ networkPolicy: 'enforced' }, { runs: { secretNetwork: 'none' } }).success).toBe(true)
+    })
+
+    it('limits local tasks, which run in a pod of a tool image', () => {
+      const pools = [{ name: 'a', toolImage: 'tools:1' }]
+      const local = { runtimes: ['docker', 'local'], runs: { network: 'none' }, sandboxes: { runtimes: ['local'] } }
+      expect(kubernetes({ pools, networkPolicy: 'enforced' }, local).success).toBe(true)
     })
 
     it('runs on sandboxes with a limited network only on a cluster that enforces NetworkPolicies', () => {

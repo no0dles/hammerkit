@@ -120,6 +120,7 @@ tasks:
   sh:
     image: node:22-alpine
     mounts: [.]
+    args: true
     cmds: [sh -c]
     network: { allow: [registry.npmjs.org] }
 ```
@@ -132,6 +133,8 @@ Line by line:
   project needs: the agent can only run `npm`, `go` or `python` if the image has them.
 - `mounts: [.]` puts the files of the sandbox into the container, writable. Without it, the
   commands would run in an empty directory.
+- `args: true` says the task takes [arguments](/docs/task/arguments). A server can be set to
+  pass arguments to such tasks only, so mark the shell task even where nothing requires it.
 - `cmds: [sh -c]` is the trick: the agent's command is appended to the last command as one
   argument, so `npm test` runs as `sh -c 'npm test'`.
 - `network` lists what the commands may reach. The sandbox is a fresh checkout without

@@ -51,6 +51,9 @@ export interface TaskPlan {
   command?: string | null
   // what it reaches besides its needs, as the build file declares it (local tasks: open)
   network?: NetworkSchema
+  // `args` as the build file says it: false refuses arguments, true is required by a
+  // server with `runs.args: declared`; left out when it says nothing
+  args?: boolean
   deps: string[]
   needs: string[]
   // the accounts its secrets are read as
@@ -89,6 +92,31 @@ export interface PlanPolicy {
   // the most any task or service may reach besides its needs (`runs.network`);
   // open when left out
   network?: WorkNetwork
+  // the most a task or service that reads a secret, or a credential of the server, may
+  // reach besides its needs (`runs.secretNetwork`); open when left out
+  secretNetwork?: WorkNetwork
+  // which tasks take arguments (`runs.args`): `any` but those with `args: false` when
+  // left out, `declared` only those with `args: true`
+  args?: 'any' | 'declared'
+  // on a cluster, the secret providers whose endpoints the egress proxy of a limited task
+  // lets its init containers reach (`backend.providers.<name>.allow`): a task reading
+  // their secrets may have a limited network
+  proxiedProviders?: string[]
+}
+
+// Variables of a server that hold no credential (FR-008): a task may read these and
+// still take arguments, or reach any network.
+export const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI']
+
+// What an item holds that its command must not hand out: its secrets, and the variables
+// of the server its `envs` read, but the plain ones.
+export function getCredentialReads(item: { secrets: { target: string }[]; serverEnvs?: string[] }): string[] {
+  return [
+    ...item.secrets.map((secret) => `the secret ${secret.target}`),
+    ...(item.serverEnvs ?? [])
+      .filter((env) => !PLAIN_SERVER_ENVS.includes(env.toUpperCase()))
+      .map((env) => `$${env} of the server`),
+  ]
 }
 
 export interface PlanOptions {
@@ -269,21 +297,34 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
         problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
       }
     }
-    const ceiling = policy.network
-    if (ceiling && isLimitedNetwork(ceiling)) {
-      if (data.type === 'local-task') {
+    // what holds a credential gets at most `runs.secretNetwork`, so a tool it runs can't
+    // send the credential anywhere else
+    const reads = getCredentialReads({
+      secrets: secretsOf(item).map(describeSecret),
+      serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
+    })
+    const ceilings: { ceiling: WorkNetwork; setting: string; reason: string }[] = []
+    if (policy.network && isLimitedNetwork(policy.network)) {
+      ceilings.push({ ceiling: policy.network, setting: 'runs.network', reason: '' })
+    }
+    if (reads.length > 0 && policy.secretNetwork && isLimitedNetwork(policy.secretNetwork)) {
+      ceilings.push({
+        ceiling: policy.secretNetwork,
+        setting: 'runs.secretNetwork',
+        reason: ` to what reads ${reads.join(', ')}`,
+      })
+    }
+    for (const { ceiling, setting, reason } of ceilings) {
+      // on a cluster a local task is a pod of a pool's tool image, limited like any other
+      if (data.type === 'local-task' && policy.backend !== 'kubernetes') {
         problems.push(
-          `${
-            item.name
-          }: is a local task, which can't be limited to the network this server allows (runs.network: ${formatNetwork(
-            ceiling
-          )})`
+          `${item.name}: is a local task, which can't be limited to the network this server allows${reason} ` +
+            `(${setting}: ${formatNetwork(ceiling)})`
         )
       } else if ('network' in data && exceedsNetwork(data.network, ceiling)) {
         problems.push(
-          `${item.name}: asks for network ${formatNetwork(
-            data.network
-          )}, more than this server allows (runs.network: ${formatNetwork(ceiling)})`
+          `${item.name}: asks for network ${formatNetwork(data.network)}, more than this server allows${reason} ` +
+            `(${setting}: ${formatNetwork(ceiling)})`
         )
       }
     }
@@ -315,12 +356,14 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
             `${item.name}: the secret ${describeSecret(secret).target} has cache: true, its digest would need ` +
               'the value before the Job of the task reads it, which this server does not support yet'
           )
-        } else if (item.data.network.type !== 'open') {
-          // the init containers that read it share the pod's NetworkPolicy
+        } else if (isLimitedNetwork(item.data.network) && !policy.proxiedProviders?.includes(source.provider)) {
+          // the init containers that read it share the pod's NetworkPolicy, and reach the
+          // provider only through the egress proxy
           problems.push(
             `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider} in the ` +
-              `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it, ` +
-              'a task that reads secrets of a provider keeps an open network on this server'
+              `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it: ` +
+              `this server names no endpoints of ${source.provider} in backend.providers.${source.provider}.allow ` +
+              'for the egress proxy to let through, so the task keeps an open network'
           )
         }
       }
@@ -376,6 +419,7 @@ function toPlan(root: string, item: Item): TaskPlan {
     cmds: 'cmds' in data ? data.cmds.map((cmd) => cmd.cmd) : 'cmd' in data && data.cmd ? [data.cmd.cmd] : [],
     command: getArgumentsTarget(data)?.cmd ?? null,
     network: toNetworkSchema('network' in data ? data.network : { type: 'open' }),
+    ...('args' in data && data.args !== null ? { args: data.args } : {}),
     deps: item.deps.map((dep) => dep.name).sort(),
     needs: item.needs.map((need) => need.name).sort(),
     accounts,

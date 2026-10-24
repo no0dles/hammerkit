@@ -160,14 +160,18 @@ on one port, one from each list, are an error. A service started by an earlier `
 is recreated when the ceiling changes its network.
 
 A [server](/docs/remote-compute/runs#network) sets the same ceiling for all of its runs
-with `runs.network`, and refuses to publish a build file that asks for more.
+with `runs.network`, and refuses to publish a build file that asks for more. With
+[`runs.secretNetwork`](/docs/remote-compute/runs#tasks-that-read-secrets) it sets a lower one
+for the tasks that read secrets.
 
 ## Local tasks
 
 Hammerkit can't limit the network of a local task (one without an `image`), which
 runs on the host. `network` other than `open` on a local task is an error
 when the build file is read, and so is a `--network` ceiling below `open` with a
-local task in the run. Run the task in a container to limit it.
+local task in the run. Run the task in a container to limit it. On a
+[server with a Kubernetes backend](/docs/remote-compute/backend#network) a local task runs in a
+pod of a tool image, and there it may be limited.
 
 ## Docker
 

@@ -3,7 +3,7 @@ import { LabelValues } from '../executer/label-values'
 import { WorkScope } from '../executer/work-scope'
 import { parseLabelArguments } from '../parser/parse-label-arguments'
 import { Bundle } from '../remote/bundle'
-import { InspectedBundle, planBundle, PlanPolicy } from './plan'
+import { getCredentialReads, InspectedBundle, planBundle, PlanPolicy } from './plan'
 import type { RunOptions } from './run-request'
 
 function labels(values: string[] | undefined): LabelValues | undefined {
@@ -63,18 +63,7 @@ export async function planRun(
   }
 }
 
-// Variables of a server that hold no credential (FR-008): a task may read these and
-// still take arguments.
-const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI']
-
-function readsOf(entry: PlannedRun['plan'][string]): string[] {
-  return [
-    ...entry.secrets.map((secret) => `the secret ${secret.target}`),
-    ...(entry.serverEnvs ?? [])
-      .filter((env) => !PLAIN_SERVER_ENVS.includes(env.toUpperCase()))
-      .map((env) => `$${env} of the server`),
-  ]
-}
+const readsOf = getCredentialReads
 
 /**
  * Why a run may not pass its arguments, or null when it may. They go to a task, never a
@@ -82,11 +71,13 @@ function readsOf(entry: PlannedRun['plan'][string]): string[] {
  * server into its `envs`: an argument can make the command print what the task holds,
  * and what its dependencies write into their outputs or its services serve, past the
  * masking of secrets. So a shell on a server runs with no account and no credential of
- * the server.
+ * the server. Under `runs.args: declared` they go only to a task that says `args: true`,
+ * so a task nobody meant to take them never does.
  */
 export function refuseArguments(
   run: { tasks: string[]; options: RunOptions },
-  plan: PlannedRun['plan']
+  plan: PlannedRun['plan'],
+  policy: Pick<PlanPolicy, 'args'> = {}
 ): string | null {
   if (!run.options.args || run.options.args.length === 0) {
     return null
@@ -96,6 +87,13 @@ export function refuseArguments(
   // a service named as a task is planned as nothing
   if (!entry || entry.kind !== 'task') {
     return `${name} is not a task of this version`
+  }
+  // planning the run refuses it before, this keeps the check with the others
+  if (entry.args === false) {
+    return `${name} takes no arguments (args: false)`
+  }
+  if (policy.args === 'declared' && entry.args !== true) {
+    return `${name} takes no arguments on this server: it takes them only for tasks that say args: true (runs.args: declared)`
   }
   const reads = readsOf(entry)
   if (reads.length > 0) {
