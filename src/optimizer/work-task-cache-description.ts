@@ -5,6 +5,7 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { portablePath } from '../planner/utils/portable-path'
 import { WorkItem } from '../planner/work-item'
 import { getPortableSecretName } from '../planner/work-secret'
+import { hasPathsEndingAlike } from '../kubernetes/claim-layout'
 
 export interface WorkTaskCacheDescription {
   cwd?: string
@@ -20,6 +21,11 @@ export interface WorkTaskCacheDescription {
   arch?: string
   // `cache: true` secrets: name and salted digest, never the value
   secrets?: string[]
+  // 2 when two paths of the task end alike, such as `api/node_modules` and
+  // `cli/node_modules`. In its claim on Kubernetes they shared one folder before
+  // getClaimSubPath named them apart, so what such a task made then (its kept claims,
+  // its cached outputs) is mixed: the new id leaves it behind.
+  claimLayout?: number
 }
 
 // Every path is made project-relative (portablePath) so the description, and the
@@ -57,6 +63,7 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
     cwd: portable(task.cwd),
     deps: item.deps.length > 0 ? item.deps.map((dep) => dep.id()).sort() : undefined,
     secrets: cachedSecrets.length > 0 ? cachedSecrets : undefined,
+    claimLayout: hasPathsEndingAlike(item) ? 2 : undefined,
   }
 }
 

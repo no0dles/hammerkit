@@ -58,6 +58,25 @@ describe('getArchivePaths', () => {
     const result = Array.from(getArchivePaths(task, '/cache'))
     expect(result).toEqual([{ filename: join('/cache', 'dist-sub-out-generates.tgz'), path: nested }])
   })
+
+  it('names two generates that flatten alike apart, the first one as before', () => {
+    const cwd = process.cwd()
+    const task = {
+      type: 'local-task',
+      cwd,
+      generates: [
+        { path: join(cwd, 'a-b'), volumeName: 'x', inherited: null, isFile: false },
+        { path: join(cwd, 'a', 'b'), volumeName: 'y', inherited: null, isFile: false },
+      ],
+    } as any
+
+    const result = Array.from(getArchivePaths(task, '/cache'))
+    expect(result[0]).toEqual({ filename: join('/cache', 'a-b-generates.tgz'), path: join(cwd, 'a-b') })
+    expect(result[1].path).toBe(join(cwd, 'a', 'b'))
+    expect(result[1].filename).toMatch(/a-b-[0-9a-f]{12}-generates\.tgz$/)
+    // the same on every call: store and restore look for the same file
+    expect(Array.from(getArchivePaths(task, '/cache'))).toEqual(result)
+  })
 })
 
 describe('restoreCache', () => {

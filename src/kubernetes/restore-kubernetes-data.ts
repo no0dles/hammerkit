@@ -1,7 +1,6 @@
 import { Environment } from '../executer/environment'
 import { getArchivePaths } from '../executer/event-cache'
 import { getErrorMessage } from '../log'
-import { basename } from 'path'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
@@ -9,6 +8,13 @@ import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getKubernetesPersistence } from './volumes'
 import { clearClaim, getPodForPersistence } from './ensure-persistent-data'
+import { getClaimSubPath } from './claim-layout'
+
+// Where the upload pod (which mounts the work's claim at /dev/hammerkit/<id>) unpacks the
+// archive of an output: the output's place in the claim, which its mount reads
+export function getRestoreTarget(work: WorkItem<ContainerWorkService | ContainerWorkTask>, path: string): string {
+  return `/dev/hammerkit/${work.id()}/${getClaimSubPath(work, path)}`
+}
 
 export async function restoreKubernetesData(
   work: WorkItem<ContainerWorkService | ContainerWorkTask>,
@@ -29,7 +35,7 @@ export async function restoreKubernetesData(
         continue
       }
 
-      const targetPath = `/dev/hammerkit/${work.id()}/${basename(generatedArchive.path)}`
+      const targetPath = getRestoreTarget(work, generatedArchive.path)
       // a claim made for this run (a server removes the claims of a run when it
       // ends) does not have the directory of the output yet
       let failure: string | null = null

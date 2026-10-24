@@ -34,7 +34,10 @@ export function appendWorkDependencies(
       (isContainerWorkTask(depNode.data) || isContainerWorkService(depNode.data)) &&
       (isContainerWorkTask(item.data) || isContainerWorkService(item.data))
     ) {
+      // the outputs of the dep's own deps too, which stay those of the task that made them
+      // (on Kubernetes, they are in its claim)
       for (const generate of depNode.data.generates) {
+        const inherited = generate.inherited ?? depNode
         if (generate.isFile) {
           // TODO check if thats correct
           continue
@@ -46,7 +49,7 @@ export function appendWorkDependencies(
               export: false,
               resetOnChange: false,
               containerPath: generate.path,
-              inherited: depNode,
+              inherited,
               readOnly: false,
             })
           }
@@ -58,7 +61,7 @@ export function appendWorkDependencies(
               exportAlways: false,
               resetOnChange: false,
               path: generate.path,
-              inherited: depNode,
+              inherited,
               isFile: false,
             })
           }

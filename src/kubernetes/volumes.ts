@@ -1,11 +1,12 @@
 import { ContainerWorkService, WorkService } from '../planner/work-service'
-import { basename, dirname, isAbsolute, relative, sep } from 'path'
+import { dirname, isAbsolute, relative, sep } from 'path'
 import { existsSync } from 'fs'
 import { V1Affinity, V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
 import { WorkItem } from '../planner/work-item'
 import { getClaimName, isKeptClaim } from './kept-claims'
+import { getClaimSubPath } from './claim-layout'
 
 export interface KubernetesPersistence {
   // the claims of the work and of what it inherits
@@ -27,6 +28,8 @@ export interface KubernetesPersistence {
 export interface KubernetesPersistenceSource {
   localPath: string
   containerPath: string
+  // where it goes in the claim, relative to its root (see getClaimSubPath)
+  subPath: string
   stateKey: string
   matcher: (fileName: string, cwd: string) => boolean
 }
@@ -157,6 +160,7 @@ export function appendVolume(
   kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
 ): void {
   const volumeName = getVolumeName(sourceWork, kubernetes)
+  const subPath = getClaimSubPath(sourceWork, containerPath)
 
   const existVolume = persistence.volumes.some((v) => v.name === volumeName)
   if (!existVolume) {
@@ -177,7 +181,7 @@ export function appendVolume(
       readOnly,
       mountPath: containerPath,
       name: volumeName,
-      subPath: basename(containerPath),
+      subPath,
     },
     uploadPath: `/dev/hammerkit/${sourceWork.id()}`,
     cwd: isFile ? dirname(containerPath) : containerPath,
@@ -188,6 +192,7 @@ export function appendVolume(
       localPath: localPath,
       matcher: () => true, // TODO
       containerPath,
+      subPath,
       stateKey: '', // TODO
     })
   }

@@ -6,6 +6,7 @@ import { getContainerCli } from './execute-docker'
 import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { join, relative, sep } from 'path'
+import { createHash } from 'crypto'
 import { moveFiles } from '../file/move-files'
 import { WorkTree } from '../planner/work-tree'
 import { ContainerWorkTask, LocalWorkTask } from '../planner/work-task'
@@ -49,8 +50,14 @@ export function* getArchivePaths(task: LocalWorkTask | ContainerWorkTask | Conta
       }
     }
   } else {
+    const ids = new Set<string>()
     for (const generate of task.generates.filter((g) => !g.inherited)) {
-      const generateId = relative(task.cwd, generate.path).split(sep).join('-')
+      let generateId = relative(task.cwd, generate.path).split(sep).join('-')
+      // `a-b` and `a/b` flatten alike: the second one's name carries a hash of its path
+      if (ids.has(generateId)) {
+        generateId += '-' + createHash('sha256').update(generate.path).digest('hex').slice(0, 12)
+      }
+      ids.add(generateId)
       yield {
         filename: join(path, generateId + '-generates.tgz'),
         path: generate.path,

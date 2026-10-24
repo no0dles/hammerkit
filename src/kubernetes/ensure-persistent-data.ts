@@ -1,7 +1,7 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { KubernetesPersistence } from './volumes'
+import { KubernetesPersistence, KubernetesPersistenceSource } from './volumes'
 import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
@@ -180,6 +180,26 @@ export async function clearClaim(
   })
 }
 
+// The archive that uploads a source into the claim: its file or directory, at its place in
+// the claim (see getClaimSubPath) instead of under its own name
+export function packSource(source: Pick<KubernetesPersistenceSource, 'localPath' | 'subPath' | 'matcher'>): Readable {
+  const fileItem = basename(source.localPath)
+  return Readable.from(
+    create(
+      {
+        cwd: dirname(source.localPath),
+        filter(path: string): boolean {
+          return source.matcher(path, source.localPath)
+        },
+        onWriteEntry(entry) {
+          entry.path = source.subPath + entry.path.slice(fileItem.length)
+        },
+      },
+      [fileItem]
+    )
+  )
+}
+
 export async function ensurePersistentData(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -224,18 +244,7 @@ export async function ensurePersistentData(
         continue
       }
 
-      const fileItem = basename(source.localPath)
-      const data = Readable.from(
-        create(
-          {
-            cwd: dirname(source.localPath),
-            filter(path: string): boolean {
-              return source.matcher(path, source.localPath)
-            },
-          },
-          [fileItem]
-        )
-      )
+      const data = packSource(source)
 
       service.status.console('stdout', `upload ${source.localPath}`)
       const targetPath = `/dev/hammerkit/${service.id()}`
