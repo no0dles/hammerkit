@@ -3,9 +3,10 @@ import { basename } from 'path'
 import { WorkItem } from '../planner/work-item'
 import { WorkService } from '../planner/work-service'
 import { WorkTask } from '../planner/work-task'
+import { portablePath } from '../planner/utils/portable-path'
 
-// The paths a work item keeps in its claim, in the order getKubernetesPersistence mounts
-// them. Its consumers mount its outputs by the same paths, so they find the same folders.
+// The paths a work item keeps in its claim. Its consumers mount its outputs by the same
+// paths, so they find the same folders.
 function getClaimPaths(work: Pick<WorkItem<WorkTask | WorkService>, 'data'>): string[] {
   const data = work.data
   const paths: string[] = []
@@ -26,15 +27,28 @@ function getClaimPaths(work: Pick<WorkItem<WorkTask | WorkService>, 'data'>): st
 
 // Where `path` is in the claim of `work`, relative to its root. A path is named after its
 // last segment, so claims without two such paths are laid out as they always were (a
-// service's data among them). The paths after the first one with the same last segment
-// also carry a hash of the whole path, so each has a folder of its own.
+// service's data among them). Of the paths with the same last segment, the least deep one
+// (then the first in sorted order) keeps the name, and the others also carry a hash of
+// their path. Both go by the path
+// relative to the project, as the task's id does, so a run in another checkout directory
+// (each run of a server has its own) or with its `generates` in another order finds the
+// same folders in a kept claim.
 export function getClaimSubPath(work: Pick<WorkItem<WorkTask | WorkService>, 'data'>, path: string): string {
   const name = basename(path) || 'root'
-  const first = getClaimPaths(work).find((other) => basename(other) === basename(path))
-  if (first === undefined || first === path) {
+  const alike = getClaimPaths(work).filter((other) => other !== path && basename(other) === basename(path))
+  if (alike.length === 0) {
     return name
   }
-  return `${name}-${createHash('sha256').update(path).digest('hex').slice(0, 12)}`
+  const own = portablePath(work.data.projectRoot, path)
+  const first = [own, ...alike.map((other) => portablePath(work.data.projectRoot, other))].sort(byDepth)[0]
+  if (first === own) {
+    return name
+  }
+  return `${name}-${createHash('sha256').update(own).digest('hex').slice(0, 12)}`
+}
+
+export function byDepth(a: string, b: string): number {
+  return a.split('/').length - b.split('/').length || (a < b ? -1 : a > b ? 1 : 0)
 }
 
 // Whether two different paths of the claim of `work` end alike. Before getClaimSubPath

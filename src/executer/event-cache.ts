@@ -5,8 +5,9 @@ import { removeOrphanedNetworks } from '../docker/item-network'
 import { getContainerCli } from './execute-docker'
 import { iterateWorkTasks, iterateWorkServices } from '../planner/utils/plan-work-tasks'
 import { getCacheDirectory } from '../optimizer/get-cache-directory'
-import { join, relative, sep } from 'path'
+import { join, posix, relative, sep } from 'path'
 import { createHash } from 'crypto'
+import { byDepth } from '../kubernetes/claim-layout'
 import { moveFiles } from '../file/move-files'
 import { WorkTree } from '../planner/work-tree'
 import { ContainerWorkTask, LocalWorkTask } from '../planner/work-task'
@@ -50,14 +51,24 @@ export function* getArchivePaths(task: LocalWorkTask | ContainerWorkTask | Conta
       }
     }
   } else {
-    const ids = new Set<string>()
-    for (const generate of task.generates.filter((g) => !g.inherited)) {
-      let generateId = relative(task.cwd, generate.path).split(sep).join('-')
-      // `a-b` and `a/b` flatten alike: the second one's name carries a hash of its path
-      if (ids.has(generateId)) {
-        generateId += '-' + createHash('sha256').update(generate.path).digest('hex').slice(0, 12)
+    // `a-b` and `a/b` flatten alike: of those, the least deep (then the first in sorted
+    // order) keeps the name, the others' names carry a hash of their relative path, so a
+    // store and a restore in another directory or order find the same archive
+    const generates = task.generates
+      .filter((g) => !g.inherited)
+      .map((generate) => ({ generate, rel: relative(task.cwd, generate.path).split(sep).join(posix.sep) }))
+    const holders = new Map<string, string>()
+    for (const { rel } of [...generates].sort((a, b) => byDepth(a.rel, b.rel))) {
+      const id = rel.split(posix.sep).join('-')
+      if (!holders.has(id)) {
+        holders.set(id, rel)
       }
-      ids.add(generateId)
+    }
+    for (const { generate, rel } of generates) {
+      let generateId = rel.split(posix.sep).join('-')
+      if (holders.get(generateId) !== rel) {
+        generateId += '-' + createHash('sha256').update(rel).digest('hex').slice(0, 12)
+      }
       yield {
         filename: join(path, generateId + '-generates.tgz'),
         path: generate.path,

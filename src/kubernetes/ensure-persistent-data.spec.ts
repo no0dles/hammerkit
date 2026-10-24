@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { Parser } from 'tar'
@@ -9,7 +9,7 @@ async function listEntries(archive: NodeJS.ReadableStream): Promise<string[]> {
   const paths: string[] = []
   const parser = new Parser({
     onReadEntry: (entry) => {
-      paths.push(entry.path)
+      paths.push(entry.type === 'Link' ? `${entry.path} -> ${entry.linkpath}` : entry.path)
       entry.resume()
     },
   })
@@ -29,6 +29,7 @@ describe('packSource', () => {
     mkdirSync(join(root, 'api', 'src'), { recursive: true })
     writeFileSync(join(root, 'api', 'package.json'), '{}')
     writeFileSync(join(root, 'api', 'src', 'index.ts'), '')
+    linkSync(join(root, 'api', 'src', 'index.ts'), join(root, 'api', 'src', 'linked.ts'))
   })
 
   afterAll(() => {
@@ -50,6 +51,15 @@ describe('packSource', () => {
       subPath: 'src-0123456789ab',
       matcher: () => true,
     })
-    expect((await listEntries(archive)).sort()).toEqual(['src-0123456789ab/', 'src-0123456789ab/index.ts'])
+    const entries = await listEntries(archive)
+    expect(entries[0]).toBe('src-0123456789ab/')
+    // one of two hard-linked files links to the other at its place in the claim
+    expect(entries.slice(1).sort()).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^src-0123456789ab\/(index|linked)\.ts -> src-0123456789ab\/(index|linked)\.ts$/),
+      ])
+    )
+    expect(entries.slice(1).every((entry) => entry.startsWith('src-0123456789ab/'))).toBe(true)
+    expect(entries).toHaveLength(3)
   })
 })

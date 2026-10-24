@@ -193,6 +193,10 @@ export function packSource(source: Pick<KubernetesPersistenceSource, 'localPath'
         },
         onWriteEntry(entry) {
           entry.path = source.subPath + entry.path.slice(fileItem.length)
+          // the second of two hard-linked files links to the first by its path in the archive
+          if (entry.type === 'Link' && entry.linkpath?.startsWith(fileItem)) {
+            entry.linkpath = source.subPath + entry.linkpath.slice(fileItem.length)
+          }
         },
       },
       [fileItem]

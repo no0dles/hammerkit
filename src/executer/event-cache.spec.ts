@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { cleanCache, getArchivePaths, restoreCache, storeCache } from './event-cache'
 import { environmentMock } from './environment-mock'
 import { getCacheDirectory, getHammerkitDirectory } from '../optimizer/get-cache-directory'
@@ -59,23 +59,25 @@ describe('getArchivePaths', () => {
     expect(result).toEqual([{ filename: join('/cache', 'dist-sub-out-generates.tgz'), path: nested }])
   })
 
-  it('names two generates that flatten alike apart, the first one as before', () => {
-    const cwd = process.cwd()
-    const task = {
-      type: 'local-task',
-      cwd,
-      generates: [
-        { path: join(cwd, 'a-b'), volumeName: 'x', inherited: null, isFile: false },
+  it('names two generates that flatten alike apart, the same in another directory and order', () => {
+    const taskAt = (cwd: string, reverse = false) => {
+      const generates = [
         { path: join(cwd, 'a', 'b'), volumeName: 'y', inherited: null, isFile: false },
-      ],
-    } as any
+        { path: join(cwd, 'a-b'), volumeName: 'x', inherited: null, isFile: false },
+      ]
+      return { type: 'local-task', cwd, generates: reverse ? generates.reverse() : generates } as any
+    }
+    const names = (cwd: string, reverse = false) =>
+      Object.fromEntries(
+        Array.from(getArchivePaths(taskAt(cwd, reverse), '/cache')).map((a) => [relative(cwd, a.path), a.filename])
+      )
 
-    const result = Array.from(getArchivePaths(task, '/cache'))
-    expect(result[0]).toEqual({ filename: join('/cache', 'a-b-generates.tgz'), path: join(cwd, 'a-b') })
-    expect(result[1].path).toBe(join(cwd, 'a', 'b'))
-    expect(result[1].filename).toMatch(/a-b-[0-9a-f]{12}-generates\.tgz$/)
-    // the same on every call: store and restore look for the same file
-    expect(Array.from(getArchivePaths(task, '/cache'))).toEqual(result)
+    const result = names(join(tmpdir(), 'checkout-1'))
+    // the least deep keeps the name it had
+    expect(result['a-b']).toBe(join('/cache', 'a-b-generates.tgz'))
+    expect(result[join('a', 'b')]).toMatch(/a-b-[0-9a-f]{12}-generates\.tgz$/)
+    // store and restore find the same archive wherever the project is and in any order
+    expect(names(join(tmpdir(), 'checkout-2'), true)).toEqual(result)
   })
 })
 

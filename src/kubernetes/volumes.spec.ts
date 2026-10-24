@@ -195,31 +195,43 @@ describe('getKubernetesPersistence for a container task', () => {
       export: false,
       isFile: false,
     })
-    const install = makeWorkItem<ContainerWorkTask>('install', {
-      type: 'container-task',
-      name: 'install',
-      mounts: [],
-      src: [
-        { absolutePath: '/repo/package.json', inherited: null, isFile: true, source: '', matcher: () => true },
-        { absolutePath: '/repo/api/package.json', inherited: null, isFile: true, source: '', matcher: () => true },
-      ],
-      generates: [
-        generate('/repo/node_modules'),
-        generate('/repo/api/node_modules'),
-        generate('/repo/cli/node_modules'),
-      ],
-    } as unknown as ContainerWorkTask)
+    // a checkout of the project at `root`, which differs between the runs of a server
+    const installAt = (root: string, reverse = false) => {
+      const order = <T>(items: T[]) => (reverse ? [...items].reverse() : items)
+      return makeWorkItem<ContainerWorkTask>('install', {
+        type: 'container-task',
+        name: 'install',
+        projectRoot: root,
+        mounts: [],
+        src: order([
+          { absolutePath: `${root}/api/package.json`, inherited: null, isFile: true, source: '', matcher: () => true },
+          { absolutePath: `${root}/package.json`, inherited: null, isFile: true, source: '', matcher: () => true },
+        ]),
+        generates: order([
+          generate(`${root}/api/node_modules`),
+          generate(`${root}/node_modules`),
+          generate(`${root}/cli/node_modules`),
+        ]),
+      } as unknown as ContainerWorkTask)
+    }
+    const install = installAt('/repo')
     const subPaths = (persistence: KubernetesPersistence) =>
       Object.fromEntries(persistence.mounts.map((m) => [m.mount.mountPath, m.mount.subPath]))
 
     const own = subPaths(await getKubernetesPersistence(install))
-    // the first keeps the name it had, the others are named apart
+    // the least deep keeps the name it had, the others are named apart
     expect(own['/repo/package.json']).toBe('package.json')
     expect(own['/repo/node_modules']).toBe('node_modules')
     expect(own['/repo/api/package.json']).toMatch(/^package\.json-[0-9a-f]{12}$/)
     expect(own['/repo/api/node_modules']).toMatch(/^node_modules-[0-9a-f]{12}$/)
     expect(own['/repo/cli/node_modules']).toMatch(/^node_modules-[0-9a-f]{12}$/)
     expect(new Set(Object.values(own)).size).toBe(5)
+
+    // the same folders for the same project in another directory, with its paths in another order
+    const moved = subPaths(await getKubernetesPersistence(installAt('/srv/run-2/source', true)))
+    expect(moved).toEqual(
+      Object.fromEntries(Object.entries(own).map(([path, sub]) => [`/srv/run-2/source${path.slice(5)}`, sub]))
+    )
 
     // a task that needs them mounts the same folders of the claim of install
     const build = makeWorkItem<ContainerWorkTask>('build', {
@@ -243,7 +255,7 @@ describe('getKubernetesPersistence for a container task', () => {
 
     // a source goes where its mount reads it
     const sources = (await getKubernetesPersistence(install)).sources
-    expect(sources.map((source) => source.subPath)).toEqual([own['/repo/package.json'], own['/repo/api/package.json']])
+    expect(sources.map((source) => source.subPath)).toEqual([own['/repo/api/package.json'], own['/repo/package.json']])
     // and an output is restored there
     expect(getRestoreTarget(install, '/repo/api/node_modules')).toBe(
       `/dev/hammerkit/install/${own['/repo/api/node_modules']}`
