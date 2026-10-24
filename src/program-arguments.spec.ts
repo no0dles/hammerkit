@@ -135,7 +135,7 @@ describe('program arguments after --', () => {
 
   it('other commands refuse them', async () => {
     const t = createTestCase('cmd-ls-arguments', files)
-    await expect(t.shell([HK, 'ls', '--', 'x'])).rejects.toThrow('ls takes no arguments after --, only run and up do')
+    await expect(t.shell([HK, 'ls', '--', 'x'])).rejects.toThrow('ls takes no arguments after --, only run, up and remote run do')
   })
 
   it('ls --json shows the command the arguments are appended to', async () => {

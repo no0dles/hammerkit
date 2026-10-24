@@ -79,6 +79,12 @@ export const runRequestSchema = z
             return repo
           }),
           ref: name,
+          // the commit the ref has to be at, such as the one a CI job checked out: a ref that
+          // moved since is refused, so the run executes the code that was asked for
+          commit: z
+            .string()
+            .regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/, 'expected a full commit hash, 40 or 64 hex digits')
+            .optional(),
         })
         .strict(),
       // the name of a tree announced with POST /v1/sources

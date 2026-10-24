@@ -181,11 +181,15 @@ export async function getProgram(
   if (fileIndex >= 0) {
     args.splice(fileIndex, 2)
   }
-  registerRemoteCommands(program, environment, fileName)
+  registerRemoteCommands(program, environment, fileName, passthrough)
   program.hook('preAction', (_, actionCommand) => {
-    const takesArguments = actionCommand.parent === program && ['run', 'up'].includes(actionCommand.name())
+    const takesArguments =
+      (actionCommand.parent === program && ['run', 'up'].includes(actionCommand.name())) ||
+      (actionCommand.parent?.name() === 'remote' && actionCommand.name() === 'run')
     if (passthrough.length > 0 && !takesArguments) {
-      program.error(`${actionCommand.name()} takes no arguments after --, only run and up do`, { exitCode: 1 })
+      program.error(`${actionCommand.name()} takes no arguments after --, only run, up and remote run do`, {
+        exitCode: 1,
+      })
     }
   })
 

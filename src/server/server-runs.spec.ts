@@ -596,6 +596,23 @@ describe('runs api', () => {
       const both = await api.submit({ ...request, source: { type: 'ref', repo: REPO, ref: 'both' } })
       expect((await both.json()).error).toContain('both a branch and a tag')
 
+      // a CI job names the commit it checked out: one the ref is no longer at is refused
+      const pinned = await api.submit({ ...request, source: { type: 'ref', repo: REPO, ref: 'main', commit: COMMIT } })
+      expect(pinned.status).toBe(202)
+      expect((await pinned.json()).source.commit).toBe(COMMIT)
+      const moved = await api.submit({
+        ...request,
+        source: { type: 'ref', repo: REPO, ref: 'main', commit: 'd'.repeat(40) },
+      })
+      expect(moved.status).toBe(409)
+      expect((await moved.json()).error).toBe(`main is at ${COMMIT} now, not at ${'d'.repeat(40)}`)
+      const short = await api.submit({
+        ...request,
+        source: { type: 'ref', repo: REPO, ref: 'main', commit: 'abc1234' },
+      })
+      expect(short.status).toBe(400)
+      expect((await short.json()).error).toContain('expected a full commit hash')
+
       // a url is not a repository, however it is written
       for (const repo of ['https://user:pw@github.com/corp/x', 'github.com/corp/../x', 'file:///etc', '-x/y']) {
         const bad = await api.submit({ ...request, source: { type: 'ref', repo, ref: 'main' } })

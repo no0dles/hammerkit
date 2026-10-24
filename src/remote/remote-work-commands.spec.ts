@@ -1,13 +1,14 @@
 import { join } from 'path'
 import { hostname } from 'os'
 import { writeFileSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
 import { createTestKey, signToken, startTestIssuer, TestDeviceFlow } from '../testing/test-issuer'
 import { readServerConfig } from '../server/server-config'
 import { startServer } from '../server/server'
-import { REPO, fakeRepos } from '../testing/repos'
+import { COMMIT, REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { describeApproval, describePlan } from './remote-work-commands'
@@ -38,6 +39,9 @@ interface Harness {
   url: string
   // variables of the environment the commands run in, as a CI job sets them
   env: (vars: { [name: string]: string | undefined }) => void
+  cwd: string
+  // what the last command printed, also when it failed
+  output: () => string
 }
 
 async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
@@ -103,9 +107,22 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
         HAMMERKIT_CREDENTIALS: join(cwd, 'credentials.json'),
       }
       const executed: string[] = []
+      // each task prints where it runs from; an argument that is a number is the exit code it fails with
       const executor: RunExecutor = {
-        execute: async (run) => {
+        execute: async (run, context) => {
           executed.push(run.tasks.join(','))
+          for (const task of run.tasks) {
+            context.emit({ type: 'task', task, state: 'running' })
+            const at = run.source.type === 'ref' ? `${run.source.ref}@${run.source.commit}` : run.source.type
+            context.emit({ type: 'log', task, stream: 'stdout', text: `${task} ${at} ${run.options.args ?? ''}` })
+            const code = Number(run.options.args?.[0])
+            if (code > 0) {
+              context.emit({ type: 'log', task, stream: 'stderr', text: `\tfailing\u001b[2J` })
+              context.emit({ type: 'task', task, state: 'failed', exitCode: code })
+              throw new Error(`${task} failed`)
+            }
+            context.emit({ type: 'task', task, state: 'succeeded', durationMs: 1 })
+          }
         },
       }
       const server = await startServer(await readServerConfig(environment, serverFile), environment, {
@@ -113,8 +130,10 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
         repos: fakeRepos,
       })
       try {
+        let last = memoryStream()
         const run = async (...args: string[]) => {
           const out = memoryStream()
+          last = out
           environment.stdout = out.stream
           await runProgram(environment, [HK, ...args], true)
           return out.read()
@@ -132,7 +151,17 @@ async function withHarness(name: string, fn: (h: Harness) => Promise<void>) {
         }
         await run('remote', 'add', 'build', server.url, '--issuer', idp.url)
         const env: Harness['env'] = (vars) => (environment.processEnvs = { ...environment.processEnvs, ...vars })
-        await fn({ run, as: (sub) => (who = sub), token, call, executed, url: server.url, env })
+        await fn({
+          run,
+          as: (sub) => (who = sub),
+          token,
+          call,
+          executed,
+          url: server.url,
+          env,
+          cwd,
+          output: () => last.read(),
+        })
       } finally {
         await server.close()
       }
@@ -249,6 +278,131 @@ describe('remote publish', () => {
       await expect(h.run('remote', 'publish', 'nowhere')).rejects.toThrow('server nowhere is not registered')
       await expect(h.run('--file', 'missing.yaml', 'remote', 'publish', 'build')).rejects.toThrow(
         'there is no build file'
+      )
+    })
+  })
+})
+
+describe('remote run', () => {
+  // the error and exit code a failed command ends with
+  async function failure(promise: Promise<unknown>): Promise<{ message: string; exitCode: number }> {
+    try {
+      await promise
+    } catch (e) {
+      return { message: (e as Error).message, exitCode: (e as { exitCode: number }).exitCode }
+    }
+    throw new Error('the command did not fail')
+  }
+
+  const from = ['--repo', REPO, '--ref', 'main']
+
+  it('runs the published build file of the checkout from a ref, prints its output and ends as it did', async () => {
+    await withHarness('remote-run', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'publish', 'build')
+      h.as('alice')
+      await h.run('remote', 'login', 'build')
+      const out = await h.run('remote', 'run', 'build', '--server', 'build', ...from)
+      expect(out).toMatch(new RegExp(`^run_\\S+ on build: build from main at ${COMMIT}$`, 'm'))
+      expect(out).toContain(`build main@${COMMIT}`)
+      expect(out).toMatch(/^run_\S+ succeeded$/m)
+      expect(h.executed).toEqual(['build'])
+
+      // two tasks: each line says whose it is
+      const both = await h.run('remote', 'run', 'build', 'more:lint', '--server', 'build', ...from)
+      expect(both).toContain(`[build] build main@${COMMIT}`)
+      expect(both).toContain(`[more:lint] more:lint main@${COMMIT}`)
+    })
+  })
+
+  it('passes what follows -- to the task and exits with the code of the task that failed', async () => {
+    await withHarness('remote-run-fails', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await h.run('remote', 'publish')
+      const run = h.run('remote', 'run', 'build', ...from, '--', '3', 'more')
+      const failed = await failure(run)
+      expect(failed.exitCode).toBe(3)
+      expect(failed.message).toMatch(/^run_\S+ failed: build failed$/)
+      // the output came before, control characters written out but tabs kept
+      expect(h.output()).toContain(`build main@${COMMIT} 3,more\n\tfailing?[2J\n`)
+      const [submitted] = (await h.call('bob', 'GET', '/v1/runs')).body.runs
+      expect(submitted.options.args).toEqual(['3', 'more'])
+    })
+  })
+
+  it('waits for an approval and says who has to give it', async () => {
+    await withHarness('remote-run-approval', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'publish', 'build')
+      h.as('alice')
+      await h.run('remote', 'login', 'build')
+      const running = h.run('remote', 'run', 'deploy', '--server', 'build', ...from)
+      let waiting: { id: string } | undefined
+      for (let i = 0; i < 200 && !waiting; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        waiting = (await h.call('bob', 'GET', '/v1/approvals')).body.approvals[0]
+      }
+      expect(waiting).toBeDefined()
+      expect((await h.call('bob', 'POST', `/v1/approvals/${waiting?.id}/approve`, {})).status).toBe(200)
+      const out = await running
+      expect(out).toContain(`waiting until somebody who uses op-payments-prod approves it, before `)
+      expect(out).toContain(`: hammerkit remote approve ${waiting?.id}`)
+      expect(out).toContain(`\ndeploy main@${COMMIT}`)
+      expect(out).toMatch(/succeeded$/m)
+
+      // rejected: the command fails with 1
+      const again = h.run('remote', 'run', 'deploy', '--server', 'build', ...from)
+      let next: { id: string } | undefined
+      for (let i = 0; i < 200 && !next; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        next = (await h.call('bob', 'GET', '/v1/approvals')).body.approvals[0]
+      }
+      await h.call('bob', 'POST', `/v1/approvals/${next?.id}/reject`, { reason: 'not today' })
+      const rejected = await failure(again)
+      expect(rejected.exitCode).toBe(1)
+      expect(rejected.message).toContain(`${next?.id} rejected`)
+    })
+  })
+
+  it('takes the repository, branch and commit of the checkout, and refuses when the ref moved', async () => {
+    await withHarness('remote-run-checkout', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'publish', 'build')
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: h.cwd, stdio: 'pipe' }).toString().trim()
+      git('init', '-q', '-b', 'main')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
+        'name the repository with --repo'
+      )
+      git('remote', 'add', 'origin', 'https://github.com/corp/payments.git')
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'x')
+      const head = git('rev-parse', 'HEAD')
+      // the server's main is at COMMIT, not at the commit checked out here
+      await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
+        `main is at ${COMMIT} now, not at ${head}`
+      )
+      // a ref of its own is not pinned to the checkout
+      expect(await h.run('remote', 'run', 'build', '--server', 'build', '--ref', 'main')).toContain('succeeded')
+      git('checkout', '-q', '--detach')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build')).rejects.toThrow(
+        'name the branch or tag with --ref'
+      )
+    })
+  })
+
+  it('says when the build file here is not published, and takes a version by its hash', async () => {
+    await withHarness('remote-run-unpublished', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
+        /the build file here is not published on build \(sha256:[0-9a-f]{64}\), publish it first/
+      )
+      const [hash] = /sha256:[0-9a-f]{64}/.exec(await h.run('--file', 'more.yaml', 'remote', 'publish', 'build')) ?? [
+        '',
+      ]
+      expect(await h.run('remote', 'run', 'lint', '--server', 'build', '--build', hash, ...from)).toContain('succeeded')
+      h.env({ HAMMERKIT_BUILD: 'sha256:nope' })
+      await expect(h.run('remote', 'run', 'lint', '--server', 'build', ...from)).rejects.toThrow(
+        'is not the hash of a published version'
       )
     })
   })
