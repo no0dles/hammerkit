@@ -1,0 +1,303 @@
+---
+title: 'CI through the server'
+description: 'GitHub Actions jobs that hold nothing but their own token: the server checks out the commit, runs the tasks with its accounts, and a person approves the deploy.'
+---
+
+<Callout type="warn">
+
+Experimental. The commands and settings can still change between releases. The server side
+of this guide was tested on a GKE server with a stand-in for the CI job's identity; the
+workflow of step 4 has not run on GitHub's runners yet.
+
+</Callout>
+
+A CI job usually builds, tests and deploys on its runner, with the credentials of the cloud
+and the registry in the job. Whoever can change a workflow or a build script can read them.
+With a hammerkit server the job only says what to run:
+
+1. The job signs in to the server with the token GitHub gives every job, which names the
+   repository and the branch it runs for. Nothing else is stored in GitHub.
+2. [`hammerkit remote run`](/docs/cli/remote#running-tasks) asks the server to run a task of the
+   published build file at the job's commit. The server checks the commit out itself, runs
+   the task in its cluster and streams the output back. The job fails when the task does.
+3. A task that reads a secret reads it on the server, as a service
+   [account](/docs/remote-compute/accounts) of the server. A production deploy account is one the
+   job may only request: the run waits until a person who uses the account approves it.
+
+This guide adds that to a server set up with the [Kubernetes guide](/docs/guides/agents/kubernetes).
+
+## What you need
+
+- The server of the [Kubernetes guide](/docs/guides/agents/kubernetes), reachable from the
+  internet over [HTTPS](/docs/guides/agents/kubernetes#reaching-the-server-over-https): GitHub's
+  runners can not use a port-forward. The examples write it as `https://hammerkit.example.com`.
+- The repository's build file, with the tasks the jobs run. Here `test`, and `deploy`, which
+  reads a secret:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  test:
+    image: node:22-alpine
+    src: [src/**, test/**]
+    cmds: [node --test]
+  deploy:
+    image: node:22-alpine
+    deps: [test]
+    secrets:
+      - { from: 'gsm:projects/my-project/secrets/deploy-token', account: deploy, env: DEPLOY_TOKEN }
+    cmds: [node deploy.js]
+```
+
+- The repository's id, which stays the same when the repository is renamed or moved:
+  `curl -sS https://api.github.com/repos/acme/shop | jq .id` (with a token for a private one,
+  or `gh api repos/acme/shop --jq .id`).
+
+## 1. Let the server take GitHub's tokens
+
+Add GitHub's issuer to `issuers` in the server's config (the ConfigMap of step 2 of the
+Kubernetes guide), next to Google's:
+
+```yaml title="server.yaml"
+issuers:
+  - { issuer: https://accounts.google.com, audience: hammerkit }
+  - { issuer: https://token.actions.githubusercontent.com, audience: https://hammerkit.example.com }
+```
+
+The `audience` is what a job asks its token for. The address of the server makes it a token
+for this server alone: a token a job got for another service, or another hammerkit server, is
+refused here. The server checks the token's signature with GitHub's keys and takes the claims
+GitHub puts in it, such as `repository_id` and `ref`, as they are. See
+[GitHub Actions](/docs/remote-compute/authentication#github-actions).
+
+## 2. Say what the jobs may do
+
+```yaml title="server.yaml"
+entitlements:
+  # the ci workflow, on a push to main: publish the build file, run it, and ask for deploys
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match:
+        repository_id: '123456789'
+        ref: refs/heads/main
+        event_name: push
+        job_workflow_ref: acme/shop/.github/workflows/ci.yaml@refs/heads/main
+    repos: [github.com/acme/shop]
+    builds: publish
+    accounts: { deploy: request }
+  # every job of the repository, pull requests too: run what is published
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository_id: '123456789' }
+    repos: [github.com/acme/shop]
+    builds: run
+  # who approves deploys, and new versions of what they run: a person, or a group
+  - subject: { iss: https://accounts.google.com, sub: '<id of the approver>' }
+    repos: [github.com/acme/shop]
+    builds: publish
+    accounts: { deploy: use }
+```
+
+A claim matches when it is exactly the value written, and every claim of `match` has to.
+`ref: refs/heads/main` alone would be any job on `main`: a scheduled one, one started by hand,
+or one of another workflow file with `id-token: write`. `event_name` and `job_workflow_ref` keep
+it to the `ci` workflow of step 4 on a push. Entitlements add up: that job matches both, and
+gets the higher level.
+
+That job publishes. What the build file's tasks run is then what the `ci` workflow on `main`
+publishes, and not whatever somebody with a publisher account uploads. Once this works, take
+`builds: publish` away from the people and service accounts that only published, such as the
+publisher of the Kubernetes guide.
+
+The server still takes the files the job uploads as they are: any step of that job, an action
+or an install script of a package, could upload another build file. Tasks that read secrets as
+`deploy` are protected by the approval of
+[When the build file changes](#when-the-build-file-changes); tasks without secrets are
+published at once.
+
+The approver keeps `builds: publish`: a new version that changes what `deploy` runs needs their
+approval (see [When the build file changes](#when-the-build-file-changes)), and approving a
+version takes `publish`. It also lets them upload a version themselves, so keep it to the
+few people who approve deploys.
+
+## 3. Keep the deploy account to main
+
+The `deploy` account is set up like any account that reads secrets on the cluster, see
+[Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job). Two lines keep it to
+reviewed code:
+
+```yaml title="server.yaml"
+accounts:
+  deploy:
+    description: production deploys
+    source: [ref]      # only code the server checked out itself, never an upload or a sandbox
+    refs: [main]       # and only from main
+    providers:
+      gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /var/run/hammerkit/account/gcp.json } }
+    kubernetes:
+      serviceAccount: deploy    # a ServiceAccount of the server's namespace, trusted by your cloud
+      audience: //iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/hammerkit/providers/cluster
+      secret: deploy-federation
+```
+
+The server makes a token of the account's ServiceAccount for each Job of `deploy`, and reads
+its Secret, so it needs both, by name, in its namespace:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: deploy, namespace: $NAME }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: $NAME-accounts, namespace: $NAME }
+rules:
+  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create], resourceNames: [deploy] }
+  - { apiGroups: [''], resources: [secrets], verbs: [get], resourceNames: [deploy-federation] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: $NAME-accounts, namespace: $NAME }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: $NAME-accounts }
+subjects: [{ kind: ServiceAccount, name: hammerkit, namespace: $NAME }]
+EOF
+```
+
+`deploy-federation` holds the file that tells the secret manager's client to use that token,
+see [Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job) for Google's.
+
+Apply the changed config with `kubectl apply` as in step 2 of the Kubernetes guide, then
+restart the server, which reads issuers and accounts when it starts:
+
+```bash
+kubectl -n $NAME rollout restart deploy/hammerkit
+kubectl -n $NAME rollout status deploy/hammerkit --timeout 10m
+```
+
+When the config has a mistake, the server does not start and says which key is wrong in its
+log: `kubectl -n $NAME logs deploy/hammerkit`.
+
+## 4. The workflow
+
+```yaml title=".github/workflows/ci.yaml"
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions:
+  contents: read
+  id-token: write   # the job may ask GitHub for its token
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      # prints a token of this job for the server, valid for minutes; it runs again when it expires
+      HAMMERKIT_TOKEN_COMMAND: >-
+        curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+        "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://hammerkit.example.com" | jq -r .value
+      # the branch and commit the server checks out: a pull request's head, or the pushed commit
+      REF: ${{ github.head_ref || github.ref_name }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    # a deploy that waits for its approval holds the job, an hour at most
+    timeout-minutes: 75
+    concurrency:
+      group: ci-${{ github.ref }}
+      # a newer push to a pull request stops the older job, and its run on the server
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ env.SHA }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm install -g hammerkit@1.27.0
+      - run: |
+          hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://token.actions.githubusercontent.com
+          hammerkit remote use hammerkit
+      - if: github.event_name == 'push'
+        run: hammerkit remote publish
+      - run: hammerkit remote run test --ref "$REF" --commit "$SHA"
+      - if: github.event_name == 'push'
+        run: hammerkit remote run deploy --ref "$REF" --commit "$SHA"
+```
+
+<Callout>
+
+`hammerkit remote run` ships with hammerkit 1.27.0. Until it is released, install the
+prerelease the server runs, for example `1.27.0-next.3` (`npm view hammerkit@next version`
+prints the newest).
+
+</Callout>
+
+What each step does:
+
+- **The token.** `id-token: write` lets the job ask GitHub for a token. hammerkit runs
+  `HAMMERKIT_TOKEN_COMMAND` when it first calls the server, and again when the server no
+  longer accepts the token, so a long run outlives one token.
+- **`remote add`** registers the server with GitHub as the issuer of the job's tokens. It
+  checks that the server takes them.
+- **`remote publish`**, on `main` only, publishes the build file of the commit. A build file
+  that did not change since the last push is `already published`.
+- **`REF` and `SHA`** come from the event: a pull request's job would check out a merge commit
+  the server does not know, so the job checks out the head of the branch and names it. They go
+  to the commands as variables, not into the script: a branch name is chosen by whoever opens
+  the pull request, and may hold shell.
+- **`remote run test`** runs `test` at that commit. It names the build file by the hash of the
+  one checked out. A ref that moved since, after a newer push, is refused, and the newer push's
+  job runs it.
+- **A pull request that changes the build file** fails at `remote run` with
+  `the build file here is not published on hammerkit, publish it first`: its job may only run
+  what is published, and its version is published once it is merged. Read that failure as
+  "the tasks changed", and look at what `main`'s job does after the merge.
+- **`remote run deploy`** runs `deploy` from `main` at the pushed commit.
+- **`concurrency`** stops an older job of a pull request when a newer push arrives, which
+  cancels its run on the server. Jobs on `main` are not stopped, so a deploy is never cut off
+  halfway: a newer push waits until the older deploy is approved or rejected.
+
+The job exits as the task did, with its exit code, and prints its output as it comes. The
+runner holds no cloud credentials, no registry login and no deploy key: nothing a changed
+workflow could print.
+
+## 5. Approve a deploy
+
+The job of a push to `main` waits at `deploy`:
+
+```
+run_Qx3k9ZpL2mW7vN4a on hammerkit: deploy from main at 4be1a07c...
+waiting until somebody who uses deploy approves it, before 2026-10-24T10:41:00.000Z: hammerkit remote approve run_Qx3k9ZpL2mW7vN4a
+```
+
+The approver looks at it and lets it go, signed in as themselves:
+
+```bash
+hammerkit remote approvals hammerkit
+hammerkit remote show run_Qx3k9ZpL2mW7vN4a hammerkit
+hammerkit remote approve run_Qx3k9ZpL2mW7vN4a hammerkit
+```
+
+`remote show` lists every command the run executes, its image and the secrets it reads, so the
+approver does not need to read the build file. The job then prints the deploy's output and
+ends. A run nobody approves within an hour (`approvals.timeout`) is rejected, and the job
+fails. See [Approving runs](/docs/cli/remote#approving-runs).
+
+## When the build file changes
+
+The job of `main` may only request `deploy`. A version of the build file that reads secrets as
+`deploy` is therefore not published by it but proposed: somebody who uses `deploy` and may
+publish approves it first, so a change to what the deploy runs takes a second person. The job prints
+`proposed to hammerkit`, and the runs after it fail with
+`the build file here is not published on hammerkit, publish it first`. The approver:
+
+```bash
+hammerkit remote proposals hammerkit
+hammerkit remote show sha256:9f2c… hammerkit     # every file of the new version
+hammerkit remote approve sha256:9f2c… hammerkit
+```
+
+Then re-run the job. A version that changes only tasks without secrets is published at once.
+
+## What is not covered yet
+
+- The server does not watch the repository itself: a job still starts each run, so GitHub
+  Actions is still needed.
+- Image builds need a Docker daemon, which the cluster does not offer to tasks.
+- Pull requests from forks get no token from GitHub, so their jobs can not use the server.

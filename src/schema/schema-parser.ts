@@ -1,8 +1,8 @@
 import { buildFileSchema } from './build-file-schema'
 import { Environment } from '../executer/environment'
 import { read } from '../parser/read-build-file'
-import { ParseContext, ParseScope } from './parse-context'
-import { dirname, join } from 'path'
+import { BuildFileDirectory, ParseContext, ParseScope } from './parse-context'
+import { dirname, join, relative } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
 import { ParseError } from './parse-error'
 import { BuildFileGitSourceSchema, BuildFileIncludeSchema, isGitSource } from './build-file-include-schema'
@@ -12,14 +12,15 @@ import { isWithin, refreshGitSource, ResolvedGitSource, resolveGitSource } from 
 export async function createParseContext(
   fileName: string,
   environment: Environment,
-  options?: { refresh?: boolean }
+  options?: { refresh?: boolean; directory?: BuildFileDirectory }
 ): Promise<{ ctx: ParseContext; scope: ParseScope }> {
   const ctx: ParseContext = {
     files: {},
     refreshed: options?.refresh ? new Map() : undefined,
+    directory: options?.directory,
   }
 
-  const scope = await appendBuildFile(dirname(fileName), ctx, environment, fileName, [])
+  const scope = await appendBuildFile(workDirectory(ctx, dirname(fileName)), ctx, environment, fileName, [])
 
   return { ctx, scope }
 }
@@ -61,11 +62,11 @@ export async function appendBuildFile(
           scope,
           scope.schema.references[referenceName],
           // a remote file's paths resolve within its repository
-          remote ? dirname(scope.fileName) : scope.cwd,
+          remote ? dirname(scope.fileName) : readDirectory(ctx, scope.cwd),
           environment
         )
         const referenceScope = await appendBuildFile(
-          dirname(target.fileName),
+          workDirectory(ctx, dirname(target.fileName)),
           ctx,
           environment,
           target.fileName,
@@ -109,6 +110,21 @@ export async function appendBuildFile(
   } else {
     throw new ParseError(result.error, fileName)
   }
+}
+
+// The directory a build file works in, for the directory it was read from: the same
+// one, unless the files were read from elsewhere (see BuildFileDirectory).
+function workDirectory(ctx: ParseContext, directory: string): string {
+  return ctx.directory ? moveDirectory(directory, ctx.directory.read, ctx.directory.work) : directory
+}
+
+// Where the build file of a directory it works in is read from.
+function readDirectory(ctx: ParseContext, directory: string): string {
+  return ctx.directory ? moveDirectory(directory, ctx.directory.work, ctx.directory.read) : directory
+}
+
+function moveDirectory(directory: string, from: string, to: string): string {
+  return isWithin(from, directory) ? join(to, relative(from, directory)) : directory
 }
 
 // A string is a local path below `base`; an object is a git source, fetched once

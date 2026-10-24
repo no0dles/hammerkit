@@ -157,11 +157,15 @@ describe('task arguments', () => {
         local: { cmds: ['node args.js'] },
         migrate: { image: 'alpine', cmds: ['migrate up'] },
         cmdexe: { image: 'alpine', shell: 'cmd.exe', cmds: ['echo hi'] },
+        install: { image: 'alpine', args: false, cmds: ['npm ci'] },
+        sh: { image: 'alpine', args: true, cmds: ['sh -c'] },
+        ci: { extend: 'install', cmds: ['npm test'] },
       },
       services: {
         api: { image: 'node', cmd: 'node server.js', labels: { svc: 'api' } },
         shelled: { image: 'node', shell: 'bash', cmd: 'node server.js', labels: { svc: 'shelled' } },
         plain: { image: 'nginx', labels: { svc: 'plain' } },
+        fixed: { image: 'node', cmd: 'node server.js', args: false, labels: { svc: 'fixed' } },
         db: { image: 'postgres', cmd: 'postgres', init: 'migrate', healthcheck: { cmd: 'pg_isready' } },
         forwarded: {
           context: 'docker-desktop',
@@ -317,6 +321,23 @@ describe('task arguments', () => {
       await expect(plan(service('forwarded', ['x']), () => undefined)).rejects.toThrow(
         'service forwarded is a kubernetes service and has no cmd for the arguments after --'
       )
+    })
+
+    it('refuses a task or service that says args: false, and a task extending it', async () => {
+      await expect(
+        plan({ taskName: 'install', args: { values: ['x'], services: false } }, () => undefined)
+      ).rejects.toThrow('task install takes no arguments after -- (args: false)')
+      await expect(plan({ taskName: 'ci', args: { values: ['x'], services: false } }, () => undefined)).rejects.toThrow(
+        'task ci takes no arguments after -- (args: false)'
+      )
+      await expect(plan(service('fixed', ['x']), () => undefined)).rejects.toThrow(
+        'service fixed takes no arguments after -- (args: false)'
+      )
+      // without arguments it runs as declared
+      await plan({ taskName: 'install' }, (cli) => expect(cli.task('install').data.args).toBe(false))
+      await plan({ taskName: 'sh', args: { values: ['ls'], services: false } }, (cli) => {
+        expect(cli.task('sh').data.cmds.map((c) => c.cmd)).toEqual([`sh -c 'ls'`])
+      })
     })
 
     it('refuses a service without cmd', async () => {

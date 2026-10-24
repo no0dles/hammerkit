@@ -7,7 +7,7 @@ const record = (id: string, createdAt: string): RunRecord => ({
   run: {
     id,
     owner: { iss: 'https://idp.corp', sub: 'alice' },
-    definition: { name: 'payments', hash: 'sha256:' + 'a'.repeat(64) },
+    definition: 'sha256:' + 'a'.repeat(64),
     tasks: ['build'],
     accounts: [],
     source: { type: 'upload', snapshot: 'snap' },
@@ -48,6 +48,17 @@ describe('FileRunStore', () => {
     if (process.platform !== 'win32') {
       expect(statSync(join(directory, 'records', 'run_aaaaaaaaaaaaaaaa.json')).mode & 0o077).toBe(0)
     }
+  })
+
+  it('keeps only the hash of the build file a run of an older server named', async () => {
+    const old = record('run_aaaaaaaaaaaaaaaa', '2026-01-01T00:00:00.000Z')
+    const hash = old.run.definition
+    writeFileSync(
+      join(directory, 'run_aaaaaaaaaaaaaaaa.json'),
+      JSON.stringify({ ...old, run: { ...old.run, definition: { name: 'payments', hash } } })
+    )
+    const { records } = await new FileRunStore(directory).load()
+    expect(records[0].run.definition).toBe(hash)
   })
 
   it('removes a record, and what is not there is no error', async () => {

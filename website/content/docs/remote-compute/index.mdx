@@ -12,7 +12,7 @@ Experimental. The config and the API can still change between releases, see the
 A hammerkit server runs tasks for other people and agents on a machine that has what the
 work needs: a Mac mini for iOS builds, a Linux box with big CPUs, the credentials to deploy.
 Callers never get those credentials, and they can not change what a task does: they name a
-published build file, the tasks to run and where the code comes from, and the server
+published build file by its hash, the tasks to run and where the code comes from, and the server
 decides with its config whether they may.
 
 ## How it fits together
@@ -30,7 +30,8 @@ decides with its config whether they may.
 4. **What runs.** A run executes tasks of a [published build file](/docs/remote-compute/build-files),
    pinned to a version, so whoever may run can not change what a task does.
 5. **Which code.** The code comes from a git ref of a repository the server reads itself,
-   see [Sources](/docs/remote-compute/sources), or from files the caller uploads.
+   see [Sources](/docs/remote-compute/sources), from files the caller uploads, or from a
+   [sandbox](/docs/remote-compute/sandboxes): a checkout of the caller's that stays on the server.
 6. **Where it runs.** [Runs](/docs/remote-compute/runs) are queued, limited per caller and
    executed in a process of their own on the [backend](/docs/remote-compute/backend).
 
@@ -47,7 +48,8 @@ The server runs until it is interrupted. `HAMMERKIT_SERVER_CONFIG` can stand in 
 
 ## Setting up a server
 
-The pieces, in the order an operator sets them up.
+For coding agents on a GKE cluster, [Server on Kubernetes](/docs/guides/agents/kubernetes)
+does all of this step by step. The pieces, in the order an operator sets them up.
 
 1. **Identity provider.** Register an API audience for the server and list the issuer
    under `issuers` ([Authentication](/docs/remote-compute/authentication)). Nothing else
@@ -100,8 +102,8 @@ entitlements:
 ```
 
 A developer then registers and signs in with [`remote add` and `remote login`](/docs/cli/remote),
-someone in `platform` publishes the build file with `remote publish`, and a run is a
-`POST /v1/runs` (`remote run` does not exist yet). A run that reads the production secret
+someone in `platform` publishes the build file with `remote publish`, which prints its
+hash, and a run is a `POST /v1/runs` naming that hash (`remote run` does not exist yet). A run that reads the production secret
 waits in `remote approvals` until a member of `platform` approves it.
 
 ## Config
@@ -176,6 +178,7 @@ runs:
   env:
     allow: [PATH, DOCKER_HOST]   # the only variables of the server a run sees, none by default
     set: { CI: 'true' }
+  network: open      # default, the most any task reaches besides its needs
 backend:
   type: host
   platform: { os: macos, arch: arm64 }   # detected when left out
@@ -191,11 +194,12 @@ backend:
 | `accounts` | The service accounts a secret can be read as, see [Accounts](/docs/remote-compute/accounts). |
 | `entitlements` | Who may use or request which account, which repositories and what they may do with build files, see [Entitlements](/docs/remote-compute/entitlements). |
 | `approvals` | How long requested runs and proposals wait, see [Approvals](/docs/remote-compute/entitlements#approvals). |
-| `sources` | The repositories a run may get its code from, see [Sources](/docs/remote-compute/sources). |
-| `runs` | Concurrency, limits per caller, durations and the environment of runs, see [Runs](/docs/remote-compute/runs#config). |
+| `sources` | The repositories a run may get its code from, and the credential the server reads and pushes them with, see [Sources](/docs/remote-compute/sources). |
+| `runs` | Concurrency, limits per caller, durations, the environment and the network ceiling of runs, see [Runs](/docs/remote-compute/runs#config). |
+| `sandboxes` | The runtimes, network and limits of sandboxes, see [Sandboxes](/docs/remote-compute/sandboxes#config). |
 | `runtimes` | What tasks may run on, see [Backend](/docs/remote-compute/backend#runtimes). |
 | `backend` | Where tasks run and what the machine offers, see [Backend](/docs/remote-compute/backend). |
-| `storage` | Where the server keeps what must survive a restart: the published build files, the uploaded source files, the task cache and the records of the runs (`records/`). Runs work in `runs/` below it while they run. |
+| `storage` | Where the server keeps what must survive a restart: the published build files, the uploaded source files, the sandboxes (`sandboxes/`), the task cache and the records of the runs (`records/`). Runs work in `runs/` below it while they run. |
 
 Plain http carries OAuth tokens, so it is accepted on the loopback interface only.
 Anywhere else the config needs `tls`, or `behindTlsProxy: true`.

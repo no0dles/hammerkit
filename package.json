@@ -1,7 +1,7 @@
 {
   "name": "hammerkit",
   "description": "Containerized build tool with incremental caching that runs the same build file locally, in Docker and on Kubernetes.",
-  "version": "1.26.0",
+  "version": "1.27.0-next.6",
   "keywords": [
     "build",
     "build-tool",
@@ -19,8 +19,14 @@
     "!dist/**/*.spec.*",
     "!dist/testing",
     "!dist/**/*.map",
-    "build.schema.json"
+    "build.schema.json",
+    "harness"
   ],
+  "pi": {
+    "extensions": [
+      "./harness/pi.ts"
+    ]
+  },
   "bugs": {
     "url": "https://github.com/no0dles/hammerkit/issues"
   },

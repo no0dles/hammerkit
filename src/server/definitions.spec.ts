@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, relative } from 'path'
 import { environmentMock } from '../executer/environment-mock'
@@ -137,72 +137,143 @@ describe('DefinitionStore', () => {
 
   it('keeps what is published under the hash of its files', async () => {
     const s = store()
-    const { version, created } = await s.publish('payments', bundle(), alice)
+    const { version, created } = await s.publish(bundle(), alice)
     expect(created).toBe(true)
     expect(version).toMatchObject({
-      name: 'payments',
       hash: hashBundle(bundle()),
       entry: '.hammerkit.yaml',
       publishedBy: alice,
       tasks: ['build', 'test'],
       services: [],
     })
-    expect(s.find('payments', version.hash)).toEqual(version)
+    expect(version).not.toHaveProperty('name')
+    expect(s.find(version.hash)).toEqual(version)
     expect(await s.files(version)).toEqual(bundle())
-    expect(s.names()).toEqual(['payments'])
+    expect(readdirSync(directory)).toEqual([`${version.hash.slice('sha256:'.length)}.json`])
   })
 
-  it('does nothing when the same files are published again', async () => {
+  it('does nothing when the same files are published again, by anybody', async () => {
     const s = store()
-    const first = await s.publish('payments', bundle(), alice)
+    const first = await s.publish(bundle(), alice)
     clock += 60_000
-    const again = await s.publish('payments', bundle(), { iss: alice.iss, sub: 'bob' })
+    const again = await s.publish(bundle(), { iss: alice.iss, sub: 'bob' })
     expect(again.created).toBe(false)
     expect(again.version).toEqual(first.version)
-    expect(s.list('payments')).toHaveLength(1)
+    expect(s.list()).toHaveLength(1)
   })
 
-  it('knows the latest version and keeps the older ones', async () => {
+  it('lists every version, newest first', async () => {
     const s = store()
-    const one = await s.publish('payments', bundle(), alice)
+    const one = await s.publish(bundle(), alice)
     clock += 60_000
-    const two = await s.publish(
-      'payments',
-      bundle({ '.hammerkit.yaml': `${tasks}  deploy:\n    cmds: [echo deploy]\n` }),
-      alice
-    )
+    const two = await s.publish(bundle({ '.hammerkit.yaml': `${tasks}  deploy:\n    cmds: [echo deploy]\n` }), alice)
     expect(two.version.hash).not.toBe(one.version.hash)
-    expect(s.find('payments', 'latest')?.hash).toBe(two.version.hash)
-    expect(s.list('payments').map((v) => v.hash)).toEqual([two.version.hash, one.version.hash])
-    expect(s.find('payments', one.version.hash)?.tasks).toEqual(['build', 'test'])
-    expect(s.find('payments', 'sha256:' + '0'.repeat(64))).toBeUndefined()
-    expect(s.find('nothing', 'latest')).toBeUndefined()
-    expect(s.list('constructor')).toEqual([])
-  })
-
-  it('names are separate: the same files under another name are another build file', async () => {
-    const s = store()
-    await s.publish('payments', bundle(), alice)
-    const other = await s.publish('web', bundle(), alice)
-    expect(other.created).toBe(true)
-    expect(s.names()).toEqual(['payments', 'web'])
+    expect(s.list().map((v) => v.hash)).toEqual([two.version.hash, one.version.hash])
+    expect(s.find(one.version.hash)?.tasks).toEqual(['build', 'test'])
+    expect(s.find('sha256:' + '0'.repeat(64))).toBeUndefined()
+    expect(s.find('latest')).toBeUndefined()
+    expect(s.find('constructor')).toBeUndefined()
   })
 
   it('remembers what was published after a restart', async () => {
     const first = store()
-    const { version } = await first.publish('payments', bundle(), alice)
+    const { version } = await first.publish(bundle(), alice)
     const restarted = store()
     await restarted.load()
-    expect(restarted.find('payments', 'latest')).toEqual(version)
+    expect(restarted.find(version.hash)).toEqual(version)
     expect(await restarted.files(version)).toEqual(bundle())
     await store().load() // an empty directory is fine too
   })
 
+  it('reads the versions an older server kept under a name, once each and yanked if any copy is', async () => {
+    const hash = hashBundle(bundle())
+    const file = `${hash.slice('sha256:'.length)}.json`
+    const version = (sub: string, publishedAt: string, yanked?: object) => ({
+      version: {
+        name: sub,
+        hash,
+        entry: '.hammerkit.yaml',
+        publishedAt,
+        publishedBy: { iss: alice.iss, sub },
+        tasks: ['build', 'test'],
+        services: [],
+        plan: {},
+        ...(yanked ? { yanked } : {}),
+      },
+      bundle: bundle(),
+    })
+    for (const [name, stored] of [
+      ['payments', version('alice', '2026-10-11T08:00:00Z')],
+      ['web', version('bob', '2026-10-11T09:00:00Z', { at: '2026-10-11T10:00:00Z', by: alice, reason: 'broken' })],
+    ] as const) {
+      mkdirSync(join(directory, name))
+      writeFileSync(join(directory, name, file), JSON.stringify(stored))
+    }
+    const s = store()
+    await s.load()
+    expect(s.list()).toHaveLength(1)
+    const found = s.find(hash)
+    expect(found).not.toHaveProperty('name')
+    expect(found?.yanked?.reason).toBe('broken')
+    expect(await s.files(found!)).toEqual(bundle())
+
+    // letting it go on writes it as `<hex>.json`, which counts over the old copies
+    await s.yank(hash, alice, { undo: true })
+    const restarted = store()
+    await restarted.load()
+    expect(restarted.list()).toHaveLength(1)
+    expect(restarted.find(hash)?.yanked).toBeUndefined()
+    expect(restarted.find(hash)).toEqual(s.find(hash))
+    expect(readdirSync(directory)).toContain(file)
+  })
+
+  it('lets a version of an older server go on that was yanked under every name', async () => {
+    const hash = hashBundle(bundle())
+    const file = `${hash.slice('sha256:'.length)}.json`
+    for (const [name, sub] of [
+      ['payments', 'alice'],
+      ['web', 'bob'],
+    ]) {
+      mkdirSync(join(directory, name))
+      writeFileSync(
+        join(directory, name, file),
+        JSON.stringify({
+          version: {
+            name,
+            hash,
+            entry: '.hammerkit.yaml',
+            publishedAt: '2026-10-11T08:00:00Z',
+            publishedBy: { iss: alice.iss, sub },
+            tasks: ['build', 'test'],
+            services: [],
+            plan: {},
+            yanked: { at: '2026-10-11T10:00:00Z', by: alice, reason: `broken in ${name}` },
+          },
+          bundle: bundle(),
+        })
+      )
+    }
+    const s = store()
+    await s.load()
+    expect(s.find(hash)?.yanked).toBeDefined()
+    await s.yank(hash, alice, { undo: true })
+    for (const restarted of [store(), store()]) {
+      await restarted.load()
+      expect(restarted.find(hash)?.yanked).toBeUndefined()
+    }
+
+    // and pulling it back again holds as well
+    await s.yank(hash, alice, { reason: 'again' })
+    const restarted = store()
+    await restarted.load()
+    expect(restarted.find(hash)?.yanked?.reason).toBe('again')
+  })
+
   it('does not publish a build file that does not load', async () => {
     const s = store()
-    await expect(s.publish('broken', bundle({ '.hammerkit.yaml': 'tasks: [' }), alice)).rejects.toThrow(DefinitionError)
-    expect(s.names()).toEqual([])
-    expect(() => readdirSync(join(directory, 'broken'))).toThrow()
+    await expect(s.publish(bundle({ '.hammerkit.yaml': 'tasks: [' }), alice)).rejects.toThrow(DefinitionError)
+    expect(s.list()).toEqual([])
+    expect(readdirSync(directory)).toEqual([])
   })
 })
 
@@ -215,37 +286,33 @@ describe('DefinitionStore yank', () => {
 
   const other = bundle({ '.hammerkit.yaml': 'tasks:\n  other:\n    cmds: [echo other]\n' })
 
-  it('takes a version out of latest, keeps it, and gives it back', async () => {
+  it('pulls a version back, keeps it, and gives it back', async () => {
     const store = new DefinitionStore(root, environmentMock(root))
-    const first = (await store.publish('payments', bundle(), alice)).version
-    await new Promise((resolve) => setTimeout(resolve, 5))
-    const second = (await store.publish('payments', other, alice)).version
-    expect(store.find('payments', 'latest')?.hash).toBe(second.hash)
+    const first = (await store.publish(bundle(), alice)).version
+    const second = (await store.publish(other, alice)).version
 
-    const yanked = await store.yank('payments', second.hash, alice, { reason: 'broken' })
+    const yanked = await store.yank(second.hash, alice, { reason: 'broken' })
     expect(yanked?.yanked).toMatchObject({ by: alice, reason: 'broken' })
-    expect(store.find('payments', 'latest')?.hash).toBe(first.hash)
-    expect(store.find('payments', second.hash)?.yanked?.reason).toBe('broken')
+    expect(store.find(second.hash)?.yanked?.reason).toBe('broken')
+    expect(store.find(first.hash)?.yanked).toBeUndefined()
     expect(await store.files(second)).toEqual(other)
 
     // a second yank changes nothing, the first one stands
-    const again = await store.yank('payments', second.hash, { iss: 'x', sub: 'y' }, { reason: 'later' })
+    const again = await store.yank(second.hash, { iss: 'x', sub: 'y' }, { reason: 'later' })
     expect(again?.yanked).toMatchObject({ by: alice, reason: 'broken' })
 
-    await store.yank('payments', second.hash, alice, { undo: true })
-    expect(store.find('payments', 'latest')?.hash).toBe(second.hash)
-    expect(store.find('payments', second.hash)?.yanked).toBeUndefined()
-    expect(await store.yank('payments', 'sha256:' + '0'.repeat(64), alice)).toBeUndefined()
+    await store.yank(second.hash, alice, { undo: true })
+    expect(store.find(second.hash)?.yanked).toBeUndefined()
+    expect(await store.yank('sha256:' + '0'.repeat(64), alice)).toBeUndefined()
   })
 
   it('keeps a yank over a restart', async () => {
     const store = new DefinitionStore(root, environmentMock(root))
-    const { version } = await store.publish('payments', bundle(), alice)
-    await store.yank('payments', version.hash, alice, { reason: 'broken' })
+    const { version } = await store.publish(bundle(), alice)
+    await store.yank(version.hash, alice, { reason: 'broken' })
 
     const restarted = new DefinitionStore(root, environmentMock(root))
     await restarted.load()
-    expect(restarted.find('payments', version.hash)?.yanked?.reason).toBe('broken')
-    expect(restarted.find('payments', 'latest')).toBeUndefined()
+    expect(restarted.find(version.hash)?.yanked?.reason).toBe('broken')
   })
 })

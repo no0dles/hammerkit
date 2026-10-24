@@ -10,8 +10,14 @@ import { DefinitionStore } from './definitions'
 import { checkoutRef } from './git-checkout'
 import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
-import { PlanContext, planRun } from './run-plan'
+import { PlanContext, planRun, refuseArguments } from './run-plan'
+import { PlanPolicy } from './plan'
+import { SandboxRegistry } from './sandboxes'
+import { SandboxAttachment, SandboxClaim } from './sandbox-storage'
+import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { toNetworkSchema } from '../planner/work-network'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -20,7 +26,8 @@ function isGitDirectory(segment: string): boolean {
   return name === '.git' || name === 'git~1'
 }
 
-// A cancelled run gets this long to stop its tasks and remove its containers
+// A cancelled run gets this long to stop its tasks and remove its containers, after that
+// its process is killed
 const STOP_GRACE_MS = 15_000
 
 // what is kept of the error output of a process that died without saying why
@@ -47,13 +54,55 @@ export interface HostExecutorOptions {
   cache: string
   // the command that starts the process of a run, see defaultWorker
   worker?: string[]
+  // the sandboxes runs may work on, and what such a run may do
+  sandboxes?: SandboxRunOptions
+  // where container tasks run when not on this machine's docker daemon
+  placement?: RunPlacement
+  // the operator's log, which hears of a run directory that could not be removed
+  log?: (line: string) => void
+  // how long a cancelled run gets to stop before its process is killed
+  stopGraceMs?: number
+}
+
+export interface SandboxRunOptions {
+  registry: SandboxRegistry
+  // the policy of a run on a sandbox: the runtimes of `sandboxes.runtimes`
+  policy: PlanPolicy
+  // the most open network a task or service of such a run gets
+  network: NetworkSchema
+}
+
+/**
+ * Where the container tasks and services of a run execute when it is not this
+ * machine (see KubernetesExecutor): `prepare` before the process of the run starts,
+ * which says the cluster and namespace and the variables the process needs to reach
+ * it, and `release` when it ended, whatever the outcome.
+ */
+export interface RunPlacement {
+  prepare(
+    run: Run,
+    context: RunContext,
+    // where the run works, and the claim its tasks mount for it on a sandbox
+    work?: { root: string; claim?: SandboxClaim }
+  ): Promise<{ kubernetes: WorkKubernetesEnvironment; env: NodeJS.ProcessEnv }>
+  release(run: Run, context: RunContext): Promise<void>
 }
 
 // The cache a run shares with others is the one of its source: the runs of a repository
-// share one, those of an upload only the uploader's. Somebody who can only upload can
-// not leave an entry for a run from a reviewed repository to find.
-function cacheNamespace(run: Run): string {
-  const key = run.source.type === 'ref' ? `ref\0${run.source.repo}` : `upload\0${run.owner.iss}\0${run.owner.sub}`
+// share one, those of an upload or a sandbox only their owner's. Somebody who can only
+// upload, or an agent on a sandbox, can not leave an entry for a run from a reviewed
+// repository to find.
+export function cacheNamespace(run: Run): string {
+  const key =
+    run.source.type === 'ref' ? `ref\0${run.source.repo}` : `${run.source.type}\0${run.owner.iss}\0${run.owner.sub}`
+  return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
+}
+
+// The docker volumes of a run's services are its caller's, within the cache's source trust:
+// two callers of one repository share a cache, a task is keyed by what it reads, but not the
+// data their services keep.
+export function volumeScope(run: Run): string {
+  const key = `${cacheNamespace(run)}\0${run.owner.iss}\0${run.owner.sub}`
   return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
 }
 
@@ -61,9 +110,9 @@ function cacheNamespace(run: Run): string {
  * Runs the tasks of a run on this machine with the engine of `hammerkit run`, in a
  * process of its own.
  *
- * The working directory is made for the run and removed afterwards. Its build
- * file is the published version the run is pinned to, written over the code of the
- * source, so the commands are the published ones whatever the source says. The process
+ * The working directory is made for the run and removed afterwards, or reported if it can
+ * not be. Its build file is the published version the run is pinned to, written over the
+ * code of the source, so the commands are the published ones whatever the source says. The process
  * starts with an environment the server builds: the variables `runs.env` lists, a home
  * directory that is the run's alone, and a cache directory per source trust. So what
  * the engine reads of its process (the docker host, the registry logins in the home
@@ -76,25 +125,27 @@ export class HostExecutor implements RunExecutor {
 
   async execute(run: Run, context: RunContext): Promise<void> {
     const { definitions, planning, repos } = this.options
-    const version = definitions.find(run.definition.name, run.definition.hash)
+    const version = definitions.find(run.definition)
     const bundle = version ? await definitions.files(version) : undefined
     if (!version || !bundle) {
-      throw new Error(`the build file ${run.definition.name} at ${run.definition.hash} is no longer on this server`)
+      throw new Error(`the build file ${run.definition} is no longer on this server`)
     }
     // pulled back after the run was accepted, while it waited for an approval or in the queue
     if (version.yanked) {
       throw new Error(
-        `the build file ${run.definition.name} at ${run.definition.hash} was yanked${
-          version.yanked.reason ? `: ${version.yanked.reason}` : ''
-        }`
+        `the build file ${run.definition} was yanked${version.yanked.reason ? `: ${version.yanked.reason}` : ''}`
       )
     }
-    if (run.source.type !== 'ref') {
+    if (run.source.type === 'upload') {
       throw new Error('runs from an upload are not supported by this server yet, use a git ref')
     }
-    const { repo, ref, commit: pinned } = run.source
-    if (!repos.readable(repo)) {
-      throw new Error(`this server can not read ${repo}, the operator lists it in sources`)
+    const source = run.source
+    const sandboxes = this.options.sandboxes
+    if (source.type === 'sandbox' && !sandboxes) {
+      throw new Error('this server keeps no sandboxes')
+    }
+    if (source.type === 'ref' && !repos.readable(source.repo)) {
+      throw new Error(`this server can not read ${source.repo}, the operator lists it in sources`)
     }
     const worker = this.options.worker ?? defaultWorker()
     if (!worker) {
@@ -103,10 +154,15 @@ export class HostExecutor implements RunExecutor {
 
     // what was approved is what runs: the accounts are read again from the files with
     // the environment of the run, and the run may use no more than it was admitted for
-    const planned = await planRun(bundle, run, planning.environment, planning.policy)
+    const policy = source.type === 'sandbox' && sandboxes ? sandboxes.policy : planning.policy
+    const planned = await planRun(bundle, run, planning.environment, policy)
     const extra = planned.accounts.filter((account) => !run.accounts.includes(account))
     if (extra.length > 0) {
       throw new Error(`the run would use ${extra.join(', ')}, which it was not admitted for`)
+    }
+    const refused = refuseArguments(run, planned.plan, policy)
+    if (refused) {
+      throw new Error(refused)
     }
 
     const abortCtrl = new AbortController()
@@ -117,33 +173,127 @@ export class HostExecutor implements RunExecutor {
     context.signal.addEventListener('abort', abort, { once: true })
 
     const root = join(this.options.directory, run.id)
-    const checkout = join(root, 'source')
+    let attachment: SandboxAttachment | undefined
     try {
-      const credentials = await repos.credentials(repo)
-      let commit: string
-      try {
-        commit = await checkoutRef(repos.url(repo), ref, checkout, credentials.env, abortCtrl.signal, pinned)
-      } catch (e) {
-        throw repos.scrub(e, credentials.values)
+      // where the process of the run starts: the checkout of a ref, or for a sandbox the
+      // published files, so what the process and the secret providers it starts read of
+      // their directory is never what a task wrote
+      let cwd: string
+      let input: Pick<WorkerInput, 'entry' | 'directory' | 'network' | 'sandboxNetwork'>
+      let claim: SandboxClaim | undefined
+      // the files of the sandbox the tasks work on
+      let work: string | undefined
+      if (source.type === 'ref') {
+        cwd = join(root, 'source')
+        const { repo, ref, commit: pinned } = source
+        const credentials = await repos.credentials(repo)
+        let commit: string
+        try {
+          commit = await checkoutRef(repos.url(repo), ref, cwd, credentials.env, abortCtrl.signal, pinned)
+        } catch (e) {
+          throw repos.scrub(e, credentials.values)
+        }
+        context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
+        await this.writeBundle(cwd, bundle.files)
+        // what the version was checked against at publish holds while it runs too
+        input = {
+          entry: join(cwd, version.entry),
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+        }
+      } else {
+        // the published files are read from a directory of the run and work on the
+        // sandbox, whose own build files are just files
+        const { registry, network } = sandboxes as SandboxRunOptions
+        // read before the run attaches: until then the walk of the last run's measure holds
+        const state = await registry.state(source.id, abortCtrl.signal)
+        attachment = await registry.attach(source.id, join(root, 'sandbox'))
+        work = attachment.directory
+        claim = attachment.claim
+        // what was approved is what runs: the files may have changed since, by a run
+        // before this one on the sandbox
+        if (run.approvals?.length && state.tree !== source.tree) {
+          throw new Error(
+            `the files of the sandbox ${source.id} changed since the run was approved, they are ${state.tree} now and were ${source.tree}, submit the run again`
+          )
+        }
+        if (claim && !this.options.placement) {
+          throw new Error(`the sandbox ${source.id} is a claim on a cluster, this server runs tasks on its own docker`)
+        }
+        context.emit({
+          type: 'log',
+          task: 'hammerkit',
+          stream: 'stdout',
+          text: `sandbox ${source.id} of ${source.repo} at ${state.commit}, files ${state.tree}${
+            state.clean ? '' : ' with changes'
+          }`,
+        })
+        const published = join(root, 'bundle')
+        await mkdir(published, { recursive: true })
+        await this.writeBundle(published, bundle.files)
+        cwd = published
+        input = {
+          entry: join(published, version.entry),
+          directory: { read: published, work },
+          // the worker takes the lower of sandboxes.network and runs.network
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+          sandboxNetwork: network,
+        }
       }
-      context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `checked out ${repo} at ${commit}` })
-      await this.writeBundle(checkout, bundle.files)
 
       const home = join(root, 'home')
       await mkdir(home, { recursive: true })
       const cache = join(this.options.cache, cacheNamespace(run))
       await mkdir(cache, { recursive: true })
-      const input: WorkerInput = {
-        entry: join(checkout, version.entry),
-        tasks: run.tasks,
-        options: run.options,
-        accounts: run.accounts,
-        catalog: planning.environment.hosted?.catalog as SecretCatalog,
+      const placement = this.options.placement
+      const placed = placement ? await placement.prepare(run, context, { root: work ?? cwd, claim }) : undefined
+      try {
+        await this.runInProcess(
+          worker,
+          {
+            ...input,
+            tasks: run.tasks,
+            options: run.options,
+            accounts: run.accounts,
+            volumeScope: volumeScope(run),
+            catalog: planning.environment.hosted?.catalog as SecretCatalog,
+            ...(placed ? { kubernetes: placed.kubernetes } : {}),
+          },
+          cwd,
+          { ...this.processEnvironment(home, cache), ...placed?.env },
+          context,
+          abortCtrl.signal
+        )
+      } finally {
+        if (placement && placed) {
+          await placement.release(run, context)
+        }
       }
-      await this.runInProcess(worker, input, checkout, this.processEnvironment(home, cache), context, abortCtrl.signal)
     } finally {
       context.signal.removeEventListener('abort', abort)
-      await rm(root, { recursive: true, force: true })
+      attachment?.release?.()
+      await this.removeRunDirectory(run, root, context)
+      if (source.type === 'sandbox') {
+        // what the run wrote counts against the owner's limits, from their next run or create
+        sandboxes?.registry.measure(source.id).catch(() => undefined)
+      }
+    }
+  }
+
+  // A task of the run may still hold a file of its directory for a moment after the run
+  // ended, which Windows refuses to remove. A directory that stays is reported, to the run
+  // by its error code and to the operator with its path; it does not change how the run ended.
+  private async removeRunDirectory(run: Run, root: string, context: RunContext): Promise<void> {
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    } catch (e) {
+      const error = e as NodeJS.ErrnoException
+      context.emit({
+        type: 'log',
+        task: 'hammerkit',
+        stream: 'stderr',
+        text: `the working directory of the run could not be removed: ${error.code ?? 'unknown error'}`,
+      })
+      this.options.log?.(`run=${run.id} could not remove its directory: ${error.message}`)
     }
   }
 
@@ -164,9 +314,11 @@ export class HostExecutor implements RunExecutor {
     return env
   }
 
-  // Starts the process, hands it the run on its standard input and relays what it reports. It
-  // is stopped with SIGTERM when the run is cancelled, so the engine removes its containers
-  // and stops its tasks, and killed if it does not stop in time.
+  // Starts the process, hands it the run on its standard input and relays what it reports.
+  // A cancelled run is told so on the standard input, the same on every platform, so the
+  // engine stops its tasks and removes its containers; a signal on Windows would end the
+  // process at once and leave its tasks running in the directory of the run. The process is
+  // killed if it has not stopped after the grace period.
   private runInProcess(
     command: string[],
     input: WorkerInput,
@@ -182,12 +334,19 @@ export class HostExecutor implements RunExecutor {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
+      child.stdin.on('error', () => undefined)
+      // the run first, so a cancel comes after it; kept open, it is how a cancel reaches the process
+      child.stdin.write(`${JSON.stringify(input)}\n`)
       let result: Extract<WorkerMessage, { kind: 'result' }> | undefined
       let stderr = ''
       let killTimer: NodeJS.Timeout | undefined
       const stop = () => {
-        child.kill('SIGTERM')
-        killTimer = setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS)
+        child.stdin.write('cancel\n', (e) => {
+          if (e) {
+            child.kill()
+          }
+        })
+        killTimer = setTimeout(() => child.kill('SIGKILL'), this.options.stopGraceMs ?? STOP_GRACE_MS)
         killTimer.unref()
       }
       if (signal.aborted) {
@@ -203,6 +362,8 @@ export class HostExecutor implements RunExecutor {
             context.emit(message.event)
           } else if (message.kind === 'result') {
             result = message
+            // nothing left to tell the process
+            child.stdin.end()
           }
         } catch {
           // not ours: whatever else the process prints is not an event of the run
@@ -211,8 +372,6 @@ export class HostExecutor implements RunExecutor {
       child.stderr.on('data', (chunk: Buffer) => {
         stderr = (stderr + chunk.toString('utf8')).slice(-MAX_STDERR)
       })
-      child.stdin.on('error', () => undefined)
-      child.stdin.end(JSON.stringify(input))
       child.on('error', (e) => {
         signal.removeEventListener('abort', stop)
         clearTimeout(killTimer)

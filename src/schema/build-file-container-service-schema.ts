@@ -5,6 +5,8 @@ import { labelsSchema } from './labels-schema'
 import { buildFileServiceContainerHealthcheck } from './build-file-service-container-healthcheck'
 import { buildFileSecretSchema } from './build-file-secret-schema'
 import { resourcesSchema } from './resources-schema'
+import { sizeSchema } from './size-schema'
+import { networkSchema } from './network-schema'
 
 export const buildFileContainerServiceSchema = object({
   image: string(),
@@ -37,6 +39,12 @@ export const buildFileContainerServiceSchema = object({
   // the service account its provider secrets are read as, unless a secret names one
   account: string().optional(),
   resources: resourcesSchema.optional(),
+  // on Kubernetes, the size of the claim that holds its sources, mounts and volumes
+  volumeSize: sizeSchema.describe('size of its claim on Kubernetes, e.g. 10Gi').optional(),
+  // what the service reaches besides its needs; tasks needing it always reach it
+  network: networkSchema.optional(),
+  // whether its `cmd` takes the arguments after `--` of `up`: false refuses them
+  args: boolean().optional(),
 })
   .strict()
   .describe('container service')

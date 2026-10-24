@@ -1,9 +1,10 @@
 ---
 title: "Backend"
-description: "Where the tasks of a run execute, what the machine offers and which runtimes tasks may use."
+description: "Where the tasks of a run execute: this machine, or Jobs on a Kubernetes cluster, and which runtimes tasks may use."
 ---
-`backend` says where the tasks of runs execute. Today that is `host`: this machine, with the
-same engine as `hammerkit run`. `runtimes` says which runtimes of that engine tasks may use.
+`backend` says where the tasks of runs execute. `host` is this machine, with the same engine
+as `hammerkit run`. `kubernetes` runs them as Jobs on a cluster, see [Kubernetes](#kubernetes).
+`runtimes` says which runtimes of the engine tasks may use.
 
 ```yaml title="server.yaml"
 backend:
@@ -14,8 +15,8 @@ runtimes: [docker]   # what tasks may run on, docker by default
 
 | Key | What it does |
 | --- | --- |
-| `backend.type` | `host`, this machine. It is the only backend so far and the default, so it can be left out. `type` is there for the backends that follow, such as Kubernetes (Jobs on node pools, see the [spec](https://github.com/no0dles/hammerkit/blob/master/specs/remote-compute/spec.md)), which will bring keys of their own. |
-| `backend.platform` | What the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. Detected when left out. Clients read it from the [discovery document](/docs/remote-compute#discovery). |
+| `backend.type` | `host` (this machine, the default) or `kubernetes` (a cluster). |
+| `backend.platform` | `host` only. What the machine offers: `os` is `linux`, `macos` or `windows`, `arch` is `amd64` or `arm64`. Detected when left out. Clients read it from the [discovery document](/docs/remote-compute#discovery). |
 | `runtimes` | What tasks may run on, see [Runtimes](#runtimes). |
 
 ## Runtimes
@@ -29,13 +30,16 @@ runtimes: [docker, local]
 
 A build file with a task on a runtime that is not listed is refused when it is published
 or proposed, see [What a build file may not do](/docs/remote-compute/build-files#what-a-build-file-may-not-do).
-The server logs a warning at startup when `local` is allowed. A container task uses the
+The server logs a warning at startup when `local` is allowed on a host. A container task uses the
 docker daemon of the server's environment, so name `DOCKER_HOST` in
 [`runs.env.allow`](/docs/remote-compute/runs#config) when it is not the default.
 
+On a cluster `local` means a task without an image runs in the `toolImage` of a pool, see
+[Pools](#pools).
+
 ## One server is one trust level
 
-The process of a run is not a sandbox. It runs as the user
+On a host, the process of a run is not a sandbox. It runs as the user
 of the server, a `local` task reads everything that user can read, and a container task can
 use the docker daemon the server is configured for. Accounts keep credentials apart (a task
 only reads the secrets of the accounts its run was admitted for), but they do not keep code
@@ -43,3 +47,415 @@ apart on one machine. Do not mix production and untrusted agents on one server: 
 them on different servers, each with the accounts of its own level, and with `local` only on
 a server whose users you trust with the machine. The storage directory and the other runs of
 a server are inside what a `local` task can read.
+
+The containers of a run with an open network are on a network of the run, not on Docker's
+default bridge, so they don't reach the containers of other runs or other callers. The volumes
+of a service are its caller's: the server puts a scope of the caller and the source in front of
+each name (`pg-data` becomes `hammerkit-ref-<hash>-pg-data`), so a build file can't open, or
+with `resetOnChange` remove, the data of somebody else's services. A volume named like a path
+is refused, since docker would mount that path of the host. The outputs a service gets from
+the tasks it depends on keep their names, which come from the run's own files. Nothing removes
+the scoped volumes, and volumes of a server from before the scope are no run's any more: both
+are listed by `docker volume ls --filter label=app=hammerkit`.
+
+Each running run takes one Docker network, and each limited task or service one more, out of
+the daemon's address pools, which hold about 30 by default. A server with many runs at a time
+needs larger pools (`default-address-pools` in `daemon.json`). A daemon that runs Windows
+containers has no such networks: there the open containers of all runs stay on its default
+network, so it doesn't keep runs apart.
+
+What lies beyond the host is not hammerkit's to block on Docker: an open container reaches the
+LAN, the host's own services through the gateway of its network and the cloud's metadata
+address (`169.254.169.254`), which hands out the machine's credentials. So `open` means the
+internet only once the host's firewall says so. On a host that runs nothing but the server,
+rules like these do it (the run networks are `br-*` bridges, the egress proxies of `allow`
+items are on `docker0`). They need Docker's `iptables` firewall backend, which has the
+`DOCKER-USER` chain (not `firewall-backend: nftables`), and a daemon with IPv6 off, its
+default; with IPv6 on, the same rules are needed in `ip6tables` for `fe80::/10`, `fc00::/7`
+and `fd00:ec2::/32`. The script can run again, replacing what it set, and the rules stay when
+Docker restarts. Test them with an open task that has to fail `wget -T 3 http://169.254.169.254/`
+and still resolve names:
+
+```sh title="firewall of the server's host"
+# the resolvers the containers use, the only private addresses they reach on port 53: like
+# Docker, read systemd-resolved's upstream list when /etc/resolv.conf names only its stub
+RESOLV_CONF=/etc/resolv.conf
+grep -q '^nameserver 127\.0\.0\.53' "$RESOLV_CONF" && RESOLV_CONF=/run/systemd/resolve/resolv.conf
+RESOLVERS=$(awk '/^nameserver/ && $2 !~ /^127\./ && !seen[$2]++ { print $2 }' "$RESOLV_CONF")
+iptables -N HAMMERKIT-RUNS 2>/dev/null || iptables -F HAMMERKIT-RUNS
+iptables -A HAMMERKIT-RUNS -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+for resolver in $RESOLVERS; do
+  iptables -A HAMMERKIT-RUNS -d "$resolver" -p udp --dport 53 -j RETURN
+  iptables -A HAMMERKIT-RUNS -d "$resolver" -p tcp --dport 53 -j RETURN
+done
+iptables -A HAMMERKIT-RUNS -d 10.20.0.15 -j RETURN       # an internal registry runs may reach anyway
+for range in 169.254.0.0/16 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10; do
+  iptables -A HAMMERKIT-RUNS -d "$range" -j DROP
+done
+# leaving a network of containers for anywhere else; Docker keeps the networks apart itself
+for bridge in 'br-+' docker0; do
+  iptables -C DOCKER-USER -i "$bridge" ! -o "$bridge" -j HAMMERKIT-RUNS 2>/dev/null ||
+    iptables -I DOCKER-USER -i "$bridge" ! -o "$bridge" -j HAMMERKIT-RUNS
+  # the host itself, through the gateway of the network
+  iptables -C INPUT -i "$bridge" -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP 2>/dev/null ||
+    iptables -I INPUT -i "$bridge" -m conntrack ! --ctstate ESTABLISHED,RELATED -j DROP
+done
+```
+
+Saved as `/usr/local/sbin/hammerkit-firewall.sh`, a unit puts the rules back after a reboot. Start
+the server after it (`After=hammerkit-firewall.service` in the server's unit), so no run starts
+before the rules are in:
+
+```txt title="/etc/systemd/system/hammerkit-firewall.service"
+[Unit]
+Description=Firewall rules for the containers of hammerkit runs
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/local/sbin/hammerkit-firewall.sh
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`systemctl enable --now hammerkit-firewall` applies them now and on every boot.
+
+On a cluster every task is a pod of its own in the caller's namespace, without a token of the
+cluster. The boundary is the container, the namespace and the network policies the server puts
+in it (see [Namespaces](#namespaces)), which only hold on a network plugin that enforces
+`NetworkPolicy`. They keep an open pod off the metadata and private ranges by default, so there
+`open` means the internet without a firewall of your own (see `deniedEgress` in [Kubernetes](#kubernetes)). Keep the server off the nodes of the pools, so a task that escapes its
+container does not share a node with the server's token. The server still holds the
+right to mint the tokens of every account (see [Secrets in the Job](#secrets-in-the-job)), so
+the advice stands: one server, and one set of accounts, per trust level.
+
+## Kubernetes
+
+<Callout type="warn">
+Experimental, like the server. Linux nodes only.
+</Callout>
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  namespace: hammerkit              # the server's own; the namespace of its pod when left out
+  # kubeconfig: /etc/hammerkit/kubeconfig   # with context, for a cluster the server is not in
+  # context: prod
+  storageClass: standard-rwo        # of the claims of tasks; the cluster's default when left out
+  volumeSize: 1Gi                   # default, of a task's claim that states no volumeSize
+  maxVolumeSize: 50Gi               # the most a task may state; 10Gi (or volumeSize, if more) when left out
+  keepVolumes: 15m                  # default; how long a task's claim stays for the next run, false for not at all
+  pools:
+    - name: builds
+      platform: { os: linux, arch: amd64 }
+      nodeSelector: { cloud.google.com/gke-nodepool: builds }
+      tolerations: [{ key: builds, operator: Exists, effect: NoSchedule }]
+      toolImage: ghcr.io/corp/build-tools:2026.10
+  providers:
+    gsm: { image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim }
+  quota: { requests.cpu: '8', requests.memory: 16Gi, persistentvolumeclaims: '20', requests.storage: 100Gi }
+  defaultResources: { requests: { cpu: 250m, memory: 256Mi } }
+  sandboxes: { size: 4Gi, storageClass: sandboxes }
+  # runRole: hammerkit-runs           # the ClusterRole the server binds in each caller's namespace
+  # deniedEgress: [169.254.0.0/16, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, fe80::/10, fc00::/7]
+  allowedEgress: [10.20.0.15/32]     # an internal registry open tasks may reach anyway
+  networkPolicy: enforced            # the network plugin enforces NetworkPolicy; limited tasks need it
+```
+
+The server runs as before (it checks the code out, plans the run with the engine in a process
+of its own and keeps the cache), but every container task of a run becomes a Job and every
+service a Deployment, in a namespace of the caller.
+
+| Key | What it does |
+| --- | --- |
+| `namespace` | The server's own namespace, where the [credentials of the accounts](#secrets-in-the-job) are. Found on its own when the server runs in a pod. |
+| `kubeconfig`, `context` | The cluster, for a server outside of it. Without them the server uses its default kubeconfig, else the cluster it runs in. |
+| `namespacePrefix` | A caller's namespace is this and the first 16 hex digits of the sha-256 of their issuer and subject, `hammerkit-` by default. Two servers on one cluster need a prefix each. |
+| `storageClass` | The storage class of the claims tasks get. |
+| `volumeSize`, `maxVolumeSize` | The size of a task's or service's claim when it states no [`volumeSize`](/docs/task/kubernetes#claims) (`1Gi`), and the most one may state: `10Gi` when left out, or `volumeSize` if that is more, since a build file states its own. A task over it fails before its pods start. Each claim counts as its size in a `requests.storage` quota, which bounds what a caller's claims take together. |
+| `keepVolumes` | How long the claim of a task stays after the run that mounted it last (`15m`), see [Kept claims](#kept-claims). `false` removes it at the end of the run. |
+| `pools` | Where pods are placed, see [Pools](#pools). One `linux`/`amd64` pool when left out. |
+| `providers` | Per secret provider, the image its command runs in. Every provider an account reads needs one. |
+| `quota` | The `ResourceQuota` of each caller's namespace, as Kubernetes writes it (`requests.cpu`, `limits.memory`, `pods`, `persistentvolumeclaims`, `requests.storage`). |
+| `defaultResources` | `requests` and `limits` (`cpu`, `memory`) for containers without [`resources`](/docs/task#resources), as a `LimitRange`, so they are admitted under a quota that limits compute. |
+| `sandboxes` | Where [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes) are kept: two claims per sandbox in its caller's namespace, their size and storage class, and the image and resources of the pod that reads and edits its files. |
+| `runRole` | The ClusterRole the server binds to itself in each caller's namespace, `hammerkit-runs` by default, see [What the server may do](#what-the-server-may-do). |
+| `deniedEgress` | Address ranges a pod of a run with an open network, or an egress proxy, may not connect to. By default the link-local ranges, where the clouds' metadata endpoints hand out the node's identity (`169.254.0.0/16`, `fe80::/10`), and the private ones (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`), where the cluster's nodes, pods and services and the networks behind it are. So `open` means the internet. A cluster with pod or service ranges outside of them (GKE's `34.118.224.0/20`) adds those. |
+| `allowedEgress` | Addresses inside `deniedEgress` they may reach anyway, such as an internal registry, a package mirror, the secret manager a provider reads in a Job, or the database of an `allow` [TCP forward](/docs/task/network). None by default. The pods of the caller's own namespace and DNS are reachable without it. |
+
+### Namespaces
+
+The first run of a caller makes their namespace, labelled `hammerkit.dev/managed`. A namespace
+of that name without the label is refused, the server runs no task in a namespace it did not
+make. On every run the server puts in it, replacing what was there:
+
+- a RoleBinding of `runRole` to itself, its only rights in the namespace;
+- a `NetworkPolicy` that lets each pod with an open network accept connections from the pods of
+  its namespace only (the services a task needs), so callers can not reach each other's pods;
+- a `NetworkPolicy` for the pods with an open network and the egress proxies: they reach their
+  namespace, DNS, any address outside `deniedEgress` and the addresses of `allowedEgress`;
+- a `NetworkPolicy` that lets nothing into an egress proxy, so a proxy takes connections only
+  from the task its own policy names, and from nobody once that policy is gone;
+- `quota` and `defaultResources`; removing one from the config removes it from the namespace.
+
+Policies add up, so none of them widens a pod with a limited [network](#network) (labelled
+`hammerkit.dev/network: limited`): its own policy alone decides what it reaches, DNS left out, and
+what reaches it. An egress proxy takes connections from its task only.
+
+The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
+no privileged pods, host paths or host network. Every container of a run runs with
+`allowPrivilegeEscalation: false` (so `sudo` and other setuid programs do not work), without
+the `NET_RAW` capability (no `ping`) and with the runtime's seccomp profile, and without a token
+of the cluster.
+
+What a run makes there carries the label `hammerkit.dev/run` and is deleted when the run ends,
+whether it succeeded or not, and the end of the run waits until its pods and claims are gone:
+an idle caller costs nothing on the cluster but the [claims it keeps](#kept-claims) for a while.
+What a run left because the server stopped before its end is deleted when the caller's next run
+starts. The runs of one caller execute one after
+the other, since the Jobs and claims of a task are named after its cache id; the next waits in
+the queue, without counting against `runs.maxDuration`. The runs of different callers run side
+by side. A pod that does not fit the nodes waits for one, and a pod over the quota is not
+created until the quota has room: the task waits in both cases, until `runs.maxDuration`.
+
+### Kept claims
+
+The claim of a container task stays after the run for `keepVolumes` (`15m`), and each run
+that mounts it again starts the time anew. The next run of the same source finds the task's
+outputs in it: when the task's inputs did not change, the task is cached and the tasks that
+depend on it mount its outputs from there, without restoring them from the cache. A restore
+copies the outputs into a new claim through a pod, which for a `node_modules` of an `npm ci`
+takes a while; with the claim kept, a change to code the install does not read goes straight
+to the compile and test steps.
+
+When the inputs did change, the task runs on its kept claim emptied first, as on a new one,
+so a run's outputs never mix with those of an earlier one. Without a kept claim, a cache hit
+restores into a new claim as before.
+
+A kept claim is the source's, as its [cache](#cache-and-sources) is: the runs of a
+repository share theirs, and a run on a sandbox mounts only those of the same sandbox, never
+what a run of the repository or of another sandbox kept. Its name carries a hash of the
+source, and its label `hammerkit.dev/volume-scope` the source.
+
+The disk they take is bounded by the time and the quota of the namespace: the server removes
+a claim once it expired, and when a claim of a run does not fit a `requests.storage` or
+`persistentvolumeclaims` quota, the kept claims the run does not use make room: those of the
+caller's other sources, and those of its own a task no longer has (one renamed or changed).
+After a restart, the server finds the claims it kept before when its first run starts, and
+removes them as they expire. Services keep no claim; theirs go with the run.
+
+### Pools
+
+A pool is a set of nodes: `platform` (`linux`, with `amd64` or `arm64`), `nodeSelector`
+(the labels besides `kubernetes.io/os` and `kubernetes.io/arch`, which come from `platform`)
+and `tolerations`. Container tasks and services go to the first pool. A task without an image
+runs in the `toolImage` of the first pool that has one and offers the `platform` the task
+declares (`platform: { arch: arm64 }` picks an `arm64` pool). A task for macOS or
+Windows has no pool and fails when the run starts. `runtimes` has to list `local` for such tasks,
+and at least one pool needs a `toolImage` then.
+
+### Secrets in the Job
+
+The server reads no secret of a provider for a task on a cluster: the Job of the task does,
+with only the credentials of the accounts it uses. Each provider secret gets an init container
+in the provider's image, which runs the provider's command with the provider's and the account's
+`env` and writes the value into a volume in memory. The task's container mounts only that
+volume: a `path:` secret is the file, an `env:` secret is set before the command runs.
+
+The credential of an account is set under `accounts.<name>.kubernetes` and is put at
+`/var/run/hammerkit/account/` in the init containers of that account only:
+
+```yaml title="server.yaml"
+accounts:
+  payments-dev:
+    providers:
+      gsm: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /var/run/hammerkit/account/gcp.json } }
+    kubernetes:
+      serviceAccount: payments-dev    # a ServiceAccount in backend.namespace
+      audience: //iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/hk/providers/cluster
+      secret: payments-dev-federation # a Secret in backend.namespace, each key a file
+```
+
+| Key | What it does |
+| --- | --- |
+| `serviceAccount` | A ServiceAccount of the server's namespace. Right before each Job of the task, the server asks for a token of it (an hour, for `audience`) and puts it at `token`; the Secret that carries it is deleted when the Job is done. A cloud that trusts the cluster's issuer for that ServiceAccount (GCP workload identity federation, AWS `AssumeRoleWithWebIdentity`, Azure federated credentials) exchanges it for the account's credentials. Short-lived, and one trust binding per account whoever the caller is. |
+| `audience` | The audience of that token; the cluster's default when left out. |
+| `secret` | A Secret of the server's namespace, each key a file of the directory: the federation config that points at `token`, or a key file where nothing else works (long-lived, so the second choice). |
+
+#### Secrets of a task with a limited network
+
+A task with `network: none` or an allow list reaches nothing else, and its init containers share
+its policy. `backend.providers.<name>.allow` names the hosts a provider's command reaches:
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  networkPolicy: enforced
+  providers:
+    gsm:
+      image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+      # Google's STS exchanges the token of the account's ServiceAccount, Secret Manager reads the value
+      allow: [sts.googleapis.com, secretmanager.googleapis.com]
+runs:
+  secretNetwork: none
+```
+
+- The task's egress proxy lets a tunnel to one of those hosts, on port 443, through only when it
+  carries the proxy's token. The token is new for each run of the task, in a Secret of the
+  caller's namespace that the init containers read their proxy variables from
+  (`HTTPS_PROXY=http://hammerkit:<token>@hammerkit-proxy:3128`). The task's own container gets
+  neither the token nor those variables, so its command reaches the provider's hosts as little
+  as any other. The Secret goes with the proxy.
+- A task with `network: none` gets a proxy for this alone, which allows its own command no host.
+- The names are exact names or `*.` patterns, without a port; like a pattern of `allow`, they
+  never reach a private address. Name the hosts the command needs, not their domain:
+  `*.googleapis.com` would let it reach every Google API. The provider's command has to read `HTTPS_PROXY`, user and
+  password included; `gcloud` does. A command that ignores it can't read a secret under a
+  limited network. A federation config that impersonates a Google service account
+  (`service_account_impersonation_url`) also needs `iamcredentials.googleapis.com`.
+- With [`runs.secretNetwork`](/docs/remote-compute/runs#tasks-that-read-secrets) every task that
+  reads a secret has to be limited, so each provider of such a task needs `allow`.
+
+On a cluster every account with `providers` needs `kubernetes`, or the server does not start:
+its commands would otherwise run as whatever identity the node or the provider's image has,
+the same for every account.
+
+The values never reach the server, so it can not mask them in the log. The task's output is
+masked in the pod instead, with `awk`, line by line, before it leaves the pod: the image of a
+task that reads such a secret needs `awk` (busybox, alpine, debian and their kin have it), and
+stdout and stderr arrive as one stream. Encodings of a value (base64, hex) are not masked
+there. `env:` secrets (variables of `runs.env.allow`) are the server's own and are handed over
+as before.
+
+Not yet on a cluster, and refused when a build file is published: a provider secret on a
+service, and a provider secret with `cache: true` (its digest would be needed before the Job
+reads the value).
+
+### Cache and sources
+
+The cache stays on the server, one per source trust as on a host (a repository's runs share it).
+After a task ran, its outputs are copied from its claim into the cache, and a later run that
+hits restores them into a new claim before its dependents start, unless the claim is still
+[kept](#kept-claims). The files of a task's `src`
+are copied from the server's checkout into its claim. So on a cluster the storage directory
+of the server (`storage.directory`) belongs on a volume of its own.
+
+### Network
+
+A task's [`network`](/docs/task/network) works on a cluster as in a
+[Kubernetes environment](/docs/task/network#kubernetes): a limited task's Jobs get a `NetworkPolicy`
+that lets them reach only the services they need and, under `allow`, their egress proxy, a
+Deployment on the first pool. A task without an image runs in a container of the
+[tool image](#pools), so it is limited like a container task: it may name its own `network`
+on such a server (elsewhere a local task with a limited network is refused when the build
+file is read), and `runs.network` and `runs.secretNetwork` hold it as well. The policy, the proxy and its
+Service carry `hammerkit.dev/run` and go with the rest of the run. Pods with an open network are
+governed by the policy of the caller's namespace, see [Namespaces](#namespaces).
+
+The cluster's network plugin has to enforce `NetworkPolicy` (Calico and Cilium do, and recent
+kind), for `network:` and for keeping callers apart. Without it nothing is isolated. Hammerkit
+can't tell from the API, so `backend.networkPolicy: enforced` states it; without it a task with a
+limited network fails instead of running open. With
+[sandboxes](/docs/remote-compute/sandboxes#on-kubernetes), whose runs are limited by
+`sandboxes.network`, a config without it is refused unless that is `open`. Some apply a
+policy a moment after the pod started, so a limited pod waits in an init container until its
+policy holds, and fails after 60 seconds if it never does (see
+[Kubernetes](/docs/task/network#kubernetes)). A run's policies go only after its pods are gone.
+A pod with an open network has no such wait, so on those plugins it can reach a `deniedEgress`
+address in its first moment.
+
+A task that reads a provider's secret can have a limited network when the server names the
+endpoints of the provider: its init containers are in the task's pod, under the same policy,
+and reach the secret manager through the task's egress proxy (under `none` too). See
+[Secrets in the Job](#secrets-in-the-job). Without them such a task keeps an open network: a
+build file that limits it is refused when it is published.
+
+### Sandboxes
+
+A [sandbox](/docs/remote-compute/sandboxes#on-kubernetes) is two claims in its caller's
+namespace, next to the namespace's runs: its files, and its git data. A short pod of
+`backend.sandboxes.image` fetches into them, reads and edits the files and commits what the
+server pushes; the Jobs of a run on the sandbox mount the files only. The quota of sandboxes
+is a `ResourceQuota` on their storage class, when they have one of their own. The pod runs as
+root with only the capabilities to own and change files (the `baseline` Pod Security level
+allows it, `restricted` does not).
+
+### What the server may do
+
+Across the cluster the server makes namespaces and binds `runRole` in the ones it made. With
+[sandboxes](#sandboxes) it also lists namespaces when it starts, to find the claims of sandboxes
+in the ones it made. It needs
+no rights on Secrets or pods outside of them: those come from `runRole`, which it binds in each
+caller's namespace (Kubernetes lets it bind that role only, by `bind`). In its own namespace it
+reads the Secrets of the accounts and makes tokens of their ServiceAccounts, by name. The
+processes of runs use the same identity.
+
+```yaml title="rbac.yaml"
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: hammerkit-server }
+rules:
+  - { apiGroups: [''], resources: [namespaces], verbs: [get, list, create] }   # list: with sandboxes
+  - { apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, create, update] }
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    verbs: [bind]
+    resourceNames: [hammerkit-runs]
+---
+# bound by the server in each caller's namespace, never across the cluster
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: hammerkit-runs }
+rules:
+  - { apiGroups: [''], resources: [resourcequotas, limitranges], verbs: [get, create, update, delete] }
+  - apiGroups: ['']
+    resources: [pods, pods/exec, pods/log, persistentvolumeclaims, secrets, services]
+    verbs: [get, list, create, patch, delete, deletecollection]
+  - apiGroups: [batch]
+    resources: [jobs, jobs/status]
+    verbs: [get, list, create, patch, delete, deletecollection]
+  - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: hammerkit-accounts, namespace: hammerkit }
+rules:
+  # the secret and serviceAccount of each account
+  - { apiGroups: [''], resources: [secrets], verbs: [get], resourceNames: [payments-dev-federation] }
+  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create], resourceNames: [payments-dev] }
+```
+Bind `hammerkit-server` with a ClusterRoleBinding and `hammerkit-accounts` with a RoleBinding to
+the server's ServiceAccount; do not bind `hammerkit-runs` yourself. Making RoleBindings across the
+cluster still lets the server bind `hammerkit-runs` in a namespace it did not make. To rule that
+out, admit its RoleBindings only in the namespaces of its own callers, its `namespacePrefix`
+and 16 hex digits, and not in those of another server on the cluster:
+
+```yaml title="admission.yaml"
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: hammerkit-managed-namespaces }
+spec:
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [rbac.authorization.k8s.io], apiVersions: ['*'], operations: [CREATE, UPDATE], resources: [rolebindings] }
+  matchConditions:
+    - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:hammerkit:hammerkit'" }
+  validations:
+    - expression: "namespaceObject.metadata.?labels['hammerkit.dev/managed'].orValue('') == 'true'"
+    - expression: "namespaceObject.metadata.name.matches('^hammerkit-[0-9a-f]{16}$')"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: hammerkit-managed-namespaces }
+spec: { policyName: hammerkit-managed-namespaces, validationActions: [Deny] }
+```
+
+Not yet: Windows nodes, holding a pod with an open network back until the policy of its namespace holds, a cache in a registry or a bucket, a limited network for a task
+that reads a provider's secret, and failing a task early whose pod can not start (an image that
+can not be pulled, no node for its pool).

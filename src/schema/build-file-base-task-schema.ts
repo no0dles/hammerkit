@@ -9,6 +9,7 @@ import { durationSchema } from './duration-schema'
 import { buildFileSecretSchema } from './build-file-secret-schema'
 import { resourcesSchema } from './resources-schema'
 import { runnerSchema } from './runner-schema'
+import { networkSchema } from './network-schema'
 
 // what `extend` adds to (the rest, e.g. `image` or `shell`, the task just overrides)
 export const RESET_PROPERTIES = ['deps', 'needs', 'src', 'generates', 'cmds', 'mounts', 'envs', 'labels'] as const
@@ -39,6 +40,12 @@ export const buildFileBaseTaskSchema = object({
   account: string().optional(),
   // CPU and memory limits of the container; a local task is not limited
   resources: resourcesSchema.optional(),
+  // what the container reaches besides its needs; a local task can be limited only where
+  // it runs in a container, on a server's cluster
+  network: networkSchema.optional(),
+  // whether its last command takes the arguments after `--`: false refuses them, true
+  // says it is meant to, which a server with `runs.args: declared` requires
+  args: boolean().optional(),
   // Name of the server (see `hammerkit remote`) the task has to run on; defaults
   // to the build file's `runner`. Never a local fallback when it is unknown.
   runner: runnerSchema.optional(),

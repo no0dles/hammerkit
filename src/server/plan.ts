@@ -12,12 +12,16 @@ import { getWorkContext } from '../schema/work-scope-parser'
 import { WorkScope } from '../executer/work-scope'
 import { WorkTree } from '../planner/work-tree'
 import { WorkSecret } from '../planner/work-secret'
-import { isContainerWorkTask } from '../planner/work-task'
+import { isContainerWorkTask, isWorkTask } from '../planner/work-task'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
+import { isVolumeName } from '../planner/utils/hosted-volumes'
 import { WorkTask } from '../planner/work-task'
 import { Bundle } from '../remote/bundle'
 import { getErrorMessage } from '../log'
 import { ParseError } from '../schema/parse-error'
+import { NetworkSchema } from '../schema/network-schema'
+import { getArgumentsTarget } from '../planner/utils/task-arguments'
+import { exceedsNetwork, formatNetwork, isLimitedNetwork, toNetworkSchema, WorkNetwork } from '../planner/work-network'
 
 export class DefinitionError extends Error {}
 
@@ -42,11 +46,22 @@ export interface TaskPlan {
   runtime: 'docker' | 'local'
   image?: string
   cmds: string[]
+  // where arguments land: the last command of a task, the `cmd` of a service;
+  // null when there is none. Versions published before this was recorded have none.
+  command?: string | null
+  // what it reaches besides its needs, as the build file declares it (local tasks: open)
+  network?: NetworkSchema
+  // `args` as the build file says it: false refuses arguments, true is required by a
+  // server with `runs.args: declared`; left out when it says nothing
+  args?: boolean
   deps: string[]
   needs: string[]
   // the accounts its secrets are read as
   accounts: string[]
   secrets: { from: string; account: string | null; target: string }[]
+  // the variables of the server its `envs` read (`$NAME`, `${NAME}`); versions
+  // published before this was recorded have none
+  serverEnvs?: string[]
   mounts: string[]
   ports: string[]
   generates: string[]
@@ -66,10 +81,42 @@ export interface InspectedBundle {
 export interface PlanPolicy {
   // the variables of the server an `env:NAME` secret may read
   envs: string[]
+  // where the operator lists them, for the message; `runs.env.allow` when left out
+  envsFrom?: string
   // the accounts that only the server uses, such as the one that reads repositories
   reserved?: string[]
   // what tasks may run on; every runtime when left out
   runtimes?: ('docker' | 'local')[]
+  // where tasks run: on a cluster, the secrets of providers are read in the Job of a task
+  backend?: 'host' | 'kubernetes'
+  // the most any task or service may reach besides its needs (`runs.network`);
+  // open when left out
+  network?: WorkNetwork
+  // the most a task or service that reads a secret, or a credential of the server, may
+  // reach besides its needs (`runs.secretNetwork`); open when left out
+  secretNetwork?: WorkNetwork
+  // which tasks take arguments (`runs.args`): `any` but those with `args: false` when
+  // left out, `declared` only those with `args: true`
+  args?: 'any' | 'declared'
+  // on a cluster, the secret providers whose endpoints the egress proxy of a limited task
+  // lets its init containers reach (`backend.providers.<name>.allow`): a task reading
+  // their secrets may have a limited network
+  proxiedProviders?: string[]
+}
+
+// Variables of a server that hold no credential (FR-008): a task may read these and
+// still take arguments, or reach any network.
+export const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI']
+
+// What an item holds that its command must not hand out: its secrets, and the variables
+// of the server its `envs` read, but the plain ones.
+export function getCredentialReads(item: { secrets: { target: string }[]; serverEnvs?: string[] }): string[] {
+  return [
+    ...item.secrets.map((secret) => `the secret ${secret.target}`),
+    ...(item.serverEnvs ?? [])
+      .filter((env) => !PLAIN_SERVER_ENVS.includes(env.toUpperCase()))
+      .map((env) => `$${env} of the server`),
+  ]
 }
 
 export interface PlanOptions {
@@ -238,6 +285,49 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
       )
     }
     const data = item.data
+    // what a task reads and writes is the bundle's: `src: ../..` would have the server
+    // copy its own files (its credentials, other callers' caches) into the task
+    for (const source of 'src' in data ? data.src : []) {
+      if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
+        problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
+      }
+    }
+    for (const generate of isWorkTask(data) ? data.generates : []) {
+      if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
+        problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
+      }
+    }
+    // what holds a credential gets at most `runs.secretNetwork`, so a tool it runs can't
+    // send the credential anywhere else
+    const reads = getCredentialReads({
+      secrets: secretsOf(item).map(describeSecret),
+      serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
+    })
+    const ceilings: { ceiling: WorkNetwork; setting: string; reason: string }[] = []
+    if (policy.network && isLimitedNetwork(policy.network)) {
+      ceilings.push({ ceiling: policy.network, setting: 'runs.network', reason: '' })
+    }
+    if (reads.length > 0 && policy.secretNetwork && isLimitedNetwork(policy.secretNetwork)) {
+      ceilings.push({
+        ceiling: policy.secretNetwork,
+        setting: 'runs.secretNetwork',
+        reason: ` to what reads ${reads.join(', ')}`,
+      })
+    }
+    for (const { ceiling, setting, reason } of ceilings) {
+      // on a cluster a local task is a pod of a pool's tool image, limited like any other
+      if (data.type === 'local-task' && policy.backend !== 'kubernetes') {
+        problems.push(
+          `${item.name}: is a local task, which can't be limited to the network this server allows${reason} ` +
+            `(${setting}: ${formatNetwork(ceiling)})`
+        )
+      } else if ('network' in data && exceedsNetwork(data.network, ceiling)) {
+        problems.push(
+          `${item.name}: asks for network ${formatNetwork(data.network)}, more than this server allows${reason} ` +
+            `(${setting}: ${formatNetwork(ceiling)})`
+        )
+      }
+    }
     if (isContainerWorkTask(data) || isContainerWorkService(data)) {
       for (const mount of data.mounts) {
         // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
@@ -246,8 +336,37 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
         }
       }
     }
+    for (const volume of isContainerWorkService(data) ? data.volumes : []) {
+      // docker takes anything else for a path of the host, such as the docker socket
+      if (!isVolumeName(volume.name)) {
+        problems.push(`${item.name}: volume ${volume.name} is not a volume name, a path of the server can't be mounted`)
+      }
+    }
     for (const secret of secretsOf(item)) {
       const source = secret.source
+      if (policy.backend === 'kubernetes' && source.type === 'provider') {
+        // the server reads no secret of a provider on a cluster: the Job of a task does
+        if (!isWorkTask(item.data)) {
+          problems.push(
+            `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider}, which ` +
+              'this server does for tasks only, a service on its cluster gets no provider secret yet'
+          )
+        } else if (secret.cache) {
+          problems.push(
+            `${item.name}: the secret ${describeSecret(secret).target} has cache: true, its digest would need ` +
+              'the value before the Job of the task reads it, which this server does not support yet'
+          )
+        } else if (isLimitedNetwork(item.data.network) && !policy.proxiedProviders?.includes(source.provider)) {
+          // the init containers that read it share the pod's NetworkPolicy, and reach the
+          // provider only through the egress proxy
+          problems.push(
+            `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider} in the ` +
+              `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it: ` +
+              `this server names no endpoints of ${source.provider} in backend.providers.${source.provider}.allow ` +
+              'for the egress proxy to let through, so the task keeps an open network'
+          )
+        }
+      }
       if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
         problems.push(
           `${item.name}: the secret ${describeSecret(secret).target} is read as ${
@@ -260,7 +379,7 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
         problems.push(
           `${item.name}: the secret ${describeSecret(secret).target} reads env:${
             source.name
-          }, which the server does not list in runs.env.allow`
+          }, which the server does not list in ${policy.envsFrom ?? 'runs.env.allow'}`
         )
       }
     }
@@ -298,10 +417,14 @@ function toPlan(root: string, item: Item): TaskPlan {
     runtime: data.type === 'local-task' ? 'local' : 'docker',
     ...(isContainerWorkTask(data) || isContainerWorkService(data) ? { image: data.image } : {}),
     cmds: 'cmds' in data ? data.cmds.map((cmd) => cmd.cmd) : 'cmd' in data && data.cmd ? [data.cmd.cmd] : [],
+    command: getArgumentsTarget(data)?.cmd ?? null,
+    network: toNetworkSchema('network' in data ? data.network : { type: 'open' }),
+    ...('args' in data && data.args !== null ? { args: data.args } : {}),
     deps: item.deps.map((dep) => dep.name).sort(),
     needs: item.needs.map((need) => need.name).sort(),
     accounts,
     secrets,
+    serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
     mounts,
     ports,
     generates: 'generates' in data ? data.generates.map((generate) => generate.path) : [],

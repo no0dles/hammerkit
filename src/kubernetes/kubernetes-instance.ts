@@ -1,4 +1,13 @@
-import { AppsV1Api, BatchV1Api, CoreV1Api, Exec, KubeConfig, KubernetesObjectApi } from '@kubernetes/client-node'
+import {
+  AppsV1Api,
+  AuthenticationV1Api,
+  BatchV1Api,
+  CoreV1Api,
+  Exec,
+  KubeConfig,
+  KubernetesObjectApi,
+  Log,
+} from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getErrorMessage } from '../log'
 
@@ -8,6 +17,8 @@ export interface KubernetesInstance {
   coreApi: CoreV1Api
   appsApi: AppsV1Api
   batchApi: BatchV1Api
+  authApi: AuthenticationV1Api
+  log: Log
 }
 
 export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment): KubernetesInstance {
@@ -19,24 +30,31 @@ export function createKubernetesInstances(kubernetes: WorkKubernetesEnvironment)
       kc.loadFromDefault()
     }
 
-    kc.setCurrentContext(kubernetes.context)
+    if (kubernetes.context) {
+      kc.setCurrentContext(kubernetes.context)
+    }
 
     const coreApi = kc.makeApiClient(CoreV1Api)
     const batchApi = kc.makeApiClient(BatchV1Api)
     const appsApi = kc.makeApiClient(AppsV1Api)
     const objectApi = kc.makeApiClient(KubernetesObjectApi)
+    const authApi = kc.makeApiClient(AuthenticationV1Api)
     const exec = new Exec(kc)
 
     return {
       objectApi,
+      log: new Log(kc),
       exec,
       appsApi,
       coreApi,
       batchApi,
+      authApi,
     }
   } catch (e) {
     if (getErrorMessage(e) === 'No active cluster!') {
-      if (kubernetes.kubeConfig) {
+      if (!kubernetes.context) {
+        throw new Error('No cluster found: no kubeconfig names a current context, and this is not a pod of a cluster')
+      } else if (kubernetes.kubeConfig) {
         throw new Error(`No cluster found for context ${kubernetes.context} in ${kubernetes.kubeConfig}`)
       } else {
         throw new Error(`No cluster found for context ${kubernetes.context}`)

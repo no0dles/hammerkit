@@ -3,7 +3,7 @@ import { createServer as createHttpsServer } from 'https'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
+import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
 import { canUse, decideRun, getGrant, mayRun } from './policy'
@@ -12,7 +12,9 @@ import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSo
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
-import { PlanContext, planRun } from './run-plan'
+import { KubernetesExecutor } from './kubernetes-backend'
+import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
+import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
 import { runRequestSchema } from './run-request'
@@ -24,7 +26,14 @@ import { handleProposals } from './proposals-api'
 import { ProposalRegistry } from './proposals'
 import { SourceStore } from './sources'
 import { handleSources } from './sources-api'
-import { parseDuration } from '../utils/units'
+import { Sandbox, SandboxError, SandboxRegistry } from './sandboxes'
+import { HostSandboxStorage } from './sandbox-storage'
+import { KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
+import { DockerSandboxContainers } from './sandbox-docker'
+import { handleSandboxes } from './sandboxes-api'
+import { PlanPolicy } from './plan'
+import { formatDuration, parseDuration, parseSize } from '../utils/units'
+import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 
@@ -42,7 +51,14 @@ export function getDiscoveryDocument(config: ServerConfig): DiscoveryDocument {
       ...(i.clientId ? { clientId: i.clientId } : {}),
       scope: i.scope,
     })),
-    backend: { type: config.backend.type, platform: config.backend.platform ?? detectPlatform() },
+    backend:
+      config.backend.type === 'kubernetes'
+        ? {
+            type: 'kubernetes',
+            platform: config.backend.pools[0].platform,
+            pools: config.backend.pools.map((pool) => ({ name: pool.name, platform: pool.platform })),
+          }
+        : { type: 'host', platform: config.backend.platform ?? detectPlatform() },
   }
 }
 
@@ -75,6 +91,10 @@ export interface ServerOptions extends TokenVerifierOptions {
 }
 
 const HEARTBEAT_MS = 15_000
+
+// the longest `?wait=` of a run: below the 60 seconds after which a proxy in front of the
+// server (nginx by default) closes a connection that says nothing
+const MAX_WAIT_MS = 50_000
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -124,11 +144,18 @@ function streamEvents(
   })
 }
 
+// What a run on a sandbox is checked against: the sandboxes, and the runtimes they allow.
+interface SandboxContext {
+  registry: SandboxRegistry
+  policy: PlanPolicy
+}
+
 async function handleRuns(
   config: ServerConfig,
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
   log: (line: string) => void,
@@ -137,7 +164,7 @@ async function handleRuns(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
@@ -145,9 +172,16 @@ async function handleRuns(
   const method = req.method
   if (!id) {
     if (method === 'GET') {
-      send(res, 200, { runs: registry.list(principal).map(toRunResponse) })
+      // the results of each task are read one run at a time
+      send(res, 200, {
+        runs: registry.list(principal).map((run) => {
+          const { results, ...listed } = toRunResponse(run)
+          void results
+          return listed
+        }),
+      })
     } else if (method === 'POST') {
-      await submitRun(config, registry, definitions, sources, planning, repos, log, principal, req, res)
+      await submitRun(config, registry, definitions, sources, sandboxes, planning, repos, log, principal, req, res)
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -167,9 +201,36 @@ async function handleRuns(
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
     streamEvents(registry, config, principal, id, req, res, url)
+  } else if (action === 'logs') {
+    let query
+    try {
+      query = parseLogQuery(url.searchParams)
+    } catch (e) {
+      send(res, 400, { error: e instanceof Error ? e.message : String(e) })
+      return true
+    }
+    const logs = registry.logs(principal, id, accountsOf(config, principal))
+    logs
+      ? send(res, 200, readLogs(logs.events, logs.index, query, logs.truncated))
+      : send(res, 404, { error: 'not found' })
   } else {
-    const run = registry.get(principal, id, accountsOf(config, principal))
-    run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+    let wait = 0
+    const waitParam = url.searchParams.get('wait')
+    if (waitParam !== null) {
+      try {
+        wait = Math.min(parseDuration(waitParam), MAX_WAIT_MS)
+      } catch {
+        send(res, 400, { error: `wait is a duration up to ${formatDuration(MAX_WAIT_MS)}, for example 30s` })
+        return true
+      }
+    }
+    // a caller that hangs up stops waiting
+    const gone = new AbortController()
+    res.on('close', () => gone.abort())
+    const run = await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)
+    if (!gone.signal.aborted) {
+      run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+    }
   }
   return true
 }
@@ -183,7 +244,7 @@ function accountsOf(config: ServerConfig, principal: Principal): (account: strin
 function toRunResponse(run: Run): Omit<Run, 'owner'> {
   const { owner, ...visible } = run
   void owner
-  return visible
+  return { ...visible, results: run.results ?? {} }
 }
 
 async function submitRun(
@@ -191,6 +252,7 @@ async function submitRun(
   registry: RunRegistry,
   definitions: DefinitionStore,
   sources: SourceStore,
+  sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
   log: (line: string) => void,
@@ -212,23 +274,26 @@ async function submitRun(
     send(res, 403, { error: 'you are not entitled to run anything on this server' })
     return
   }
-  const version = definitions.find(request.definition.name, request.definition.hash)
+  const version = definitions.find(request.definition)
   if (!version) {
-    send(res, 400, { error: `there is no build file ${request.definition.name} at ${request.definition.hash}` })
+    send(res, 400, { error: `there is no published build file ${request.definition}` })
     return
   }
   if (version.yanked) {
     send(res, 409, {
-      error: `${version.name} at ${version.hash} was yanked${
-        version.yanked.reason ? `: ${version.yanked.reason}` : ''
-      }`,
+      error: `${version.hash} was yanked${version.yanked.reason ? `: ${version.yanked.reason}` : ''}`,
     })
     return
   }
   const known = [...version.tasks, ...version.services]
   const unknown = request.tasks.filter((task) => !known.includes(task))
   if (unknown.length > 0) {
-    send(res, 400, { error: `${version.name} has no task ${unknown.map(quote).join(', ')}` })
+    send(res, 400, { error: `${version.hash} has no task ${unknown.map(quote).join(', ')}` })
+    return
+  }
+  const argued = (request.options.args ?? []).length > 0 ? request.tasks[0] : undefined
+  if (argued !== undefined && version.services.includes(argued)) {
+    send(res, 400, { error: `${argued} is a service, arguments go to a task` })
     return
   }
   if (request.source.type === 'upload') {
@@ -247,19 +312,45 @@ async function submitRun(
       return
     }
   }
+  const sandbox = request.source.type === 'sandbox' ? sandboxes.registry.get(principal, request.source.id) : undefined
+  if (request.source.type === 'sandbox') {
+    if (!sandbox) {
+      send(res, 400, { error: `there is no sandbox ${request.source.id}, create one with POST /v1/sandboxes` })
+      return
+    }
+    if (sandboxes.policy.runtimes?.length === 0) {
+      send(res, 403, {
+        error: 'this server runs only local tasks, which it runs on no sandbox unless sandboxes.runtimes names local',
+      })
+      return
+    }
+    await sandboxes.registry.measured(principal)
+    const over = sandboxes.registry.overLimit(principal)
+    if (over) {
+      send(res, 413, { error: over })
+      return
+    }
+  }
   // the accounts of a run are read from the files it is pinned to, with the engine
   const bundle = version.plan ? await definitions.files(version) : undefined
   if (!version.plan || !bundle) {
     send(res, 409, {
-      error: `${version.name} at ${version.hash} was published before accounts were recorded, publish it again`,
+      error: `${version.hash} was published before accounts were recorded, publish it again`,
     })
     return
   }
-  let planned
+  let planned: PlannedRun
   try {
-    planned = await planRun(bundle, request, planning.environment, planning.policy)
+    // a run on a sandbox may only use the runtimes of `sandboxes.runtimes`
+    planned = await planRun(bundle, request, planning.environment, sandbox ? sandboxes.policy : planning.policy)
   } catch (e) {
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
+    return
+  }
+  const refused = refuseArguments(request, planned.plan, sandbox ? sandboxes.policy : planning.policy)
+  if (refused) {
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${refused}`)
+    send(res, 400, { error: refused })
     return
   }
   const decision = decideRun({
@@ -269,7 +360,9 @@ async function submitRun(
     source:
       request.source.type === 'ref'
         ? { type: 'ref', repo: request.source.repo, ref: request.source.ref }
-        : { type: 'upload' },
+        : sandbox
+          ? { type: 'sandbox', repo: sandbox.repo, branch: sandbox.ref }
+          : { type: 'upload' },
     approvable: (account) => config.entitlements.some((entitlement) => entitlement.accounts[account] === 'use'),
     readable: (repo) => repos.readable(repo),
   })
@@ -280,10 +373,16 @@ async function submitRun(
   }
   const approvals = decision.type === 'approval' ? decision.accounts : []
   // the ref is pinned now: the approver sees the commit, and the run executes that one
-  let source: RunSource
+  let source: RunSource | undefined
   if (request.source.type === 'ref') {
     try {
       const commit = await repos.resolve(request.source.repo, request.source.ref)
+      if (request.source.commit && commit !== request.source.commit) {
+        const error = `${request.source.ref} is at ${commit} now, not at ${request.source.commit}`
+        log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${error}`)
+        send(res, 409, { error })
+        return
+      }
       source = { type: 'ref', repo: request.source.repo, ref: request.source.ref, commit }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -293,31 +392,55 @@ async function submitRun(
       })
       return
     }
-  } else {
+  } else if (request.source.type === 'upload') {
     source = request.source
   }
-  try {
-    const run = registry.submit(
+  const submit = (runSource: RunSource) =>
+    registry.submit(
       principal,
       {
-        definition: { name: version.name, hash: version.hash },
+        definition: version.hash,
         tasks: request.tasks,
         accounts: planned.accounts,
         plan: planned.plan,
-        source,
+        source: runSource,
         options: request.options,
       },
       approvals
     )
+  try {
+    // a sandbox is read and the run submitted while nothing else changes it: the run
+    // records what the sandbox held, and holds it from now on
+    const run = source
+      ? submit(source)
+      : await sandboxes.registry.withSandbox(principal, (sandbox as Sandbox).id, async (current) => {
+          const state = await sandboxes.registry.state(current.id)
+          return submit({
+            type: 'sandbox',
+            id: current.id,
+            repo: current.repo,
+            commit: state.commit,
+            tree: state.tree,
+            clean: state.clean,
+          })
+        })
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
         run.source.type
-      } tasks=${run.tasks.length}${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
+      }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}` : ''} tasks=${run.tasks.length}${
+        approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''
+      }`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {
     if (e instanceof RunError) {
       send(res, e.status, { error: e.message })
+      return
+    }
+    if (e instanceof SandboxError) {
+      send(res, e.status === 404 ? 400 : e.status, {
+        error: e.status === 404 ? `there is no sandbox ${(sandbox as Sandbox).id}` : e.message,
+      })
       return
     }
     throw e
@@ -356,6 +479,7 @@ async function handle(
   definitions: DefinitionStore,
   proposals: ProposalRegistry,
   sources: SourceStore,
+  sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
   verifier: TokenVerifier,
@@ -388,7 +512,12 @@ async function handle(
   if (await handleSources(config, sources, log, principal, req, res, url)) {
     return
   }
-  if (await handleRuns(config, registry, definitions, sources, planning, repos, log, principal, req, res, url)) {
+  if (await handleSandboxes(config, sandboxes.registry, repos, log, principal, req, res, url)) {
+    return
+  }
+  if (
+    await handleRuns(config, registry, definitions, sources, sandboxes, planning, repos, log, principal, req, res, url)
+  ) {
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {
@@ -415,7 +544,7 @@ export async function startServer(
   const write = options.log ?? (() => undefined)
   // request urls and subjects come from callers: no control characters, so no forged log lines
   const log = (line: string) => write(line.replace(/\p{Cc}/gu, '?').slice(0, 1000))
-  if (config.runtimes.includes('local')) {
+  if (config.runtimes.includes('local') && config.backend.type === 'host') {
     log(
       'warning: the local runtime is allowed, local tasks run as the user of this server and read all it can read; ' +
         'an account is then an approval class, not a credential boundary'
@@ -427,9 +556,24 @@ export async function startServer(
     environment: {
       ...environment,
       processEnvs: runEnvironment(config, environment.processEnvs),
-      hosted: { catalog: getSecretCatalog(config) },
+      // on a cluster a local task runs in a pod of a pool's tool image
+      hosted: { catalog: getSecretCatalog(config), localTasksInContainers: config.backend.type === 'kubernetes' },
     },
-    policy: { envs: config.runs.env.allow, reserved: getSourceAccounts(config), runtimes: config.runtimes },
+    policy: {
+      envs: config.runs.env.allow,
+      reserved: getSourceAccounts(config),
+      runtimes: config.runtimes,
+      backend: config.backend.type,
+      network: parseWorkNetwork(config.runs.network),
+      secretNetwork: parseWorkNetwork(config.runs.secretNetwork),
+      args: config.runs.args,
+      proxiedProviders:
+        config.backend.type === 'kubernetes'
+          ? Object.entries(config.backend.providers)
+              .filter(([, provider]) => provider.allow)
+              .map(([name]) => name)
+          : [],
+    },
   }
   const storage = config.storage.directory ?? join(getHammerkitDirectory(), 'server')
   const definitions = new DefinitionStore(join(storage, 'definitions'), planning.environment, {
@@ -437,16 +581,71 @@ export async function startServer(
   })
   await definitions.load()
   const repos = new RepoAccess(config, planning.environment, options.repos)
+  const sandboxRuntimes = getSandboxRuntimes(config)
+  const sandboxLimits = {
+    count: config.sandboxes.limits.count,
+    bytes: parseSize(config.sandboxes.limits.bytes),
+    total: parseSize(config.sandboxes.total),
+  }
+  const sandboxes: SandboxContext = {
+    registry: new SandboxRegistry({
+      // on a cluster a claim per sandbox in the caller's namespace, else a directory
+      storage:
+        config.backend.type === 'kubernetes'
+          ? new KubernetesSandboxStorage(
+              { ...config, backend: config.backend },
+              sandboxLimits,
+              planning.environment.processEnvs,
+              join(storage, 'sandboxes', 'staging')
+            )
+          : new HostSandboxStorage(
+              join(storage, 'sandboxes', 'files'),
+              planning.environment.processEnvs,
+              // what containers of runs leave behind is given back and removed with a container
+              sandboxRuntimes.includes('docker')
+                ? new DockerSandboxContainers(planning.environment.processEnvs.DOCKER_HOST)
+                : undefined
+            ),
+      records: join(storage, 'sandboxes', 'records'),
+      limits: sandboxLimits,
+      repos,
+      log,
+    }),
+    // a sandbox holds code nobody reviewed: only the variables of `sandboxes.env`
+    policy: {
+      ...planning.policy,
+      envs: config.sandboxes.env.allow,
+      envsFrom: 'sandboxes.env.allow',
+      runtimes: sandboxRuntimes,
+    },
+  }
+  if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
+    log(
+      'warning: entitlements keep sandboxes, but this server runs only local tasks, which it runs on no sandbox; ' +
+        'runs on sandboxes are refused until sandboxes.runtimes names a runtime'
+    )
+  }
+  // on a cluster that lists the claims of sandboxes in the namespaces of callers, which a
+  // server without sandboxes need not be allowed to
+  if (config.backend.type === 'host' || config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
+    await sandboxes.registry.load()
+  }
+  const executorOptions = {
+    definitions,
+    planning,
+    repos,
+    directory: join(storage, 'runs'),
+    cache: join(storage, 'cache'),
+    worker: options.worker,
+    sandboxes: { ...sandboxes, network: config.sandboxes.network },
+    log,
+  }
+  const backend = config.backend
   const executor =
     options.executor ??
-    new HostExecutor({
-      definitions,
-      planning,
-      repos,
-      directory: join(storage, 'runs'),
-      cache: join(storage, 'cache'),
-      worker: options.worker,
-    })
+    (backend.type === 'kubernetes'
+      ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
+      : new HostExecutor(executorOptions))
   const sources = new SourceStore(join(storage, 'sources'))
   const registry = new RunRegistry({
     executor,
@@ -461,13 +660,30 @@ export async function startServer(
     log,
   })
   await registry.restore()
+  sandboxes.registry.useRuns({
+    holder: (id) => registry.holder(id),
+    stop: (id) => registry.stopSandbox(id, 'the sandbox was deleted'),
+  })
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),
     cooldown: parseDuration(config.approvals.cooldown),
   })
   const listener = (req: IncomingMessage, res: ServerResponse) => {
-    handle(config, registry, definitions, proposals, sources, planning, repos, verifier, log, req, res).catch((e) => {
+    handle(
+      config,
+      registry,
+      definitions,
+      proposals,
+      sources,
+      sandboxes,
+      planning,
+      repos,
+      verifier,
+      log,
+      req,
+      res
+    ).catch((e) => {
       if (e instanceof HttpError) {
         send(res, e.status, { error: e.message })
         return

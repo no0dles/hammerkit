@@ -1,4 +1,8 @@
+import { join } from 'path'
+import { consoleContext } from './log'
+import { runProgram } from './run-program'
 import { createTestCase } from './testing/test-case'
+import { memoryStream } from './testing/test-streams'
 
 // Fast unit-suite coverage for program.ts: every command that does not actually
 // run a container (ls, validate, clean --cache, init, --file, unknown task).
@@ -12,6 +16,17 @@ import { createTestCase } from './testing/test-case'
 const HK = 'hammerkit'
 
 describe('program commands (fast)', () => {
+  it('prints the bare version, so a script can read it', async () => {
+    const t = createTestCase('cmd-version', {})
+    await t.setup(async (cwd, env) => {
+      const out = memoryStream()
+      env.stdout = out.stream
+      env.console = consoleContext(out.stream)
+      await expect(runProgram(env, [HK, '--version'], true)).rejects.toThrow()
+      expect(out.read()).toMatch(/^\d+\.\d+\.\d+(-[\w.]+)?\n$/)
+    })
+  })
+
   it('ls lists tasks and services without running them', async () => {
     const t = createTestCase('cmd-ls', {
       '.hammerkit.yaml': {
@@ -86,6 +101,37 @@ describe('program commands (fast)', () => {
       'input.txt': 'x\n',
     })
     await t.shell([HK, 'run', '--dry-run'])
+  })
+
+  it('runs a task named mcp, the MCP server is remote mcp', async () => {
+    const t = createTestCase('cmd-task-mcp', {
+      '.hammerkit.yaml': { tasks: { mcp: { cmds: ['true'] } } },
+    })
+    await t.setup(async (cwd, env) => {
+      const out = memoryStream()
+      env.stdout = out.stream
+      env.console = consoleContext(out.stream)
+      await runProgram(env, [HK, 'mcp', '--dry-run'], true)
+      expect(out.read()).toContain('mcp')
+    })
+  })
+
+  it('writes nothing but the protocol to stdout for remote mcp', async () => {
+    const t = createTestCase('cmd-remote-mcp-stdout', {
+      '.hammerkit.yaml': { tasks: { a: { cmds: ['true'] } } },
+      'build.yaml': { tasks: { b: { cmds: ['true'] } } },
+    })
+    await t.setup(async (cwd, env) => {
+      const out = memoryStream()
+      const err = memoryStream()
+      env.stdout = out.stream
+      env.stderr = err.stream
+      env.console = consoleContext(out.stream)
+      env.processEnvs = { ...env.processEnvs, HAMMERKIT_CONFIG: join(cwd, 'host-config.yaml') }
+      await expect(runProgram(env, [HK, 'remote', 'mcp', '--build', 'payments'], true)).rejects.toThrow(/name a server/)
+      expect(out.read()).toBe('')
+      expect(err.read()).toContain('multiple hammerkit files')
+    })
   })
 
   it('explain reports tasks without running them', async () => {

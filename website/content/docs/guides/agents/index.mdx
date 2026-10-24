@@ -1,0 +1,109 @@
+---
+title: 'Agents on a server'
+description: "Set up a hammerkit server for coding agents and connect pi or opencode to it, so the agent's files and commands stay on the server."
+icon: Bot
+---
+
+<Callout type="warn">
+
+Experimental. The tools and settings can still change between releases.
+
+</Callout>
+
+A coding agent on a hammerkit server works on a [sandbox](/docs/remote-compute/sandboxes): a
+checkout of a branch that stays on the server. The agent runs where you start it, on a laptop
+or in CI, but every file it reads or edits and every command it runs is on the server, in the
+images, network and accounts of a published build file. When it is done it pushes a branch
+for review.
+
+These guides set it up end to end, the way it was run to check them:
+
+<Steps>
+<Step>
+
+**A server.** [On Kubernetes (GKE)](/docs/guides/agents/kubernetes), where every command of
+an agent is a Job in a namespace of its own, or [on one machine](/docs/remote-compute#setting-up-a-server).
+
+</Step>
+<Step>
+
+**A build file with a shell task**, published to the server (below).
+
+</Step>
+<Step>
+
+**An identity for the agent**: a service account of your identity provider with an
+[entitlement](/docs/remote-compute/entitlements) that may start sandboxes from `main` and
+push to `agent/**`.
+
+</Step>
+<Step>
+
+**A harness**: [pi](/docs/guides/agents/pi), [opencode](/docs/guides/agents/opencode), or any
+MCP client with [`hammerkit remote mcp`](/docs/remote-compute/agents#hammerkit-remote-mcp).
+
+</Step>
+</Steps>
+
+## The build file
+
+The agent's commands run as the arguments of a [shell task](/docs/remote-compute/agents#the-shell-task),
+so the build file decides the image, the network and the accounts of everything the agent
+runs. Other tasks, such as `test`, are there for the agent to run as they are.
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  sh:
+    image: node:22-alpine
+    mounts: [.]
+    args: true
+    cmds: [sh -c]
+    network: { allow: [registry.npmjs.org] }
+  test:
+    image: node:22-alpine
+    src: [src/**, test/**]
+    args: true
+    cmds: [node --test]
+```
+
+`mounts: [.]` puts the files of the sandbox into the container, writable, and `args: true`
+marks the tasks that take arguments, the agent's commands and a test file: a server with
+[`runs.args: declared`](/docs/remote-compute/runs#arguments) passes them to no other.
+The task reads no secrets: a task that does takes no arguments on a server. Publish it with
+[`hammerkit remote publish`](/docs/cli/remote#publishing-a-build-file) as an identity with
+`builds: publish`; it prints the hash of the version. The agent then names the repository,
+the branch and that hash:
+
+| Variable                  | Example                              | What it names                                              |
+| ------------------------- | ------------------------------------ | ---------------------------------------------------------- |
+| `HAMMERKIT_SERVER`        | `hammerkit`                          | The server, as `hammerkit remote add` registered it.       |
+| `HAMMERKIT_REPO`          | `github.com/acme/shop`               | The repository of the sandbox.                             |
+| `HAMMERKIT_REF`           | `main`                               | The branch it starts from.                                 |
+| `HAMMERKIT_BUILD`         | `sha256:9f2c…`                       | The published version of the build file.                   |
+| `HAMMERKIT_TOKEN_COMMAND` | `gcloud auth print-identity-token …` | Prints a short-lived token of the agent's service account. |
+
+A run names exactly the version it runs, so nothing follows a newer one: when the build file
+changes, publish it again and set the new hash. See [Settings](/docs/remote-compute/agents#settings) for the rest, such as `HAMMERKIT_SANDBOX`
+to come back to a sandbox with work in progress.
+
+## On the agent's machine
+
+The server is registered per user, in `~/.hammerkit/config.yaml`. Register it as the user
+that starts the agent, with the issuer of the agent's tokens:
+
+```bash
+npx hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://accounts.google.com
+```
+
+The token command runs again whenever the server stops accepting a token, so a session
+outlives one token. It is the agent's own identity, never a person's sign-in.
+
+## What it is not yet
+
+- A dev server or another service on the sandbox for the agent to send requests to.
+- Commands that read input, or keep running in the background.
+
+## CI on the same server
+
+CI jobs can use the server too, with nothing but their own token: see
+[CI through the server](/docs/guides/agents/github-actions).
