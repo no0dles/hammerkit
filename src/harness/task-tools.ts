@@ -1,8 +1,11 @@
 import { PublishedTask, SandboxClient, TaskRun } from './sandbox-client'
 
-// the most tasks a description lists, and of a command it shows for a task without a description
+// the most tasks a description lists, and of a task's description or command it shows
 const MAX_LISTED = 40
+const MAX_DESCRIPTION_CHARS = 200
 const MAX_COMMAND_CHARS = 100
+// how long a client waits for the tasks of the build file when it starts, it goes on without them
+export const LIST_TASKS_MS = 15_000
 
 /**
  * The tools of the harnesses that run the named tasks of the published build file: `run_task`
@@ -27,6 +30,25 @@ export type TaskToolParameter =
  * could not be read, or nothing when the harness did not ask.
  */
 export type TaskListing = PublishedTask[] | { error: string } | undefined
+
+// The tasks of the published version, or why they could not be read within `ms`.
+export async function readTaskListing(
+  list: () => Promise<PublishedTask[]>,
+  ms = LIST_TASKS_MS
+): Promise<PublishedTask[] | { error: string }> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${ms / 1000} s`)), ms)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([list(), timeout])
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 // the hint at the end of a cut output or a result, for the model
 export function readLogHint(run: string, task: string): string {
@@ -78,12 +100,9 @@ export function describeTasks(listing: TaskListing, shell?: string): string {
   const lines = tasks.slice(0, MAX_LISTED).map((task) => {
     const parts = [`- ${task.name}`]
     if (task.description) {
-      parts.push(`: ${oneLine(task.description)}`)
+      parts.push(`: ${cut(oneLine(task.description), MAX_DESCRIPTION_CHARS)}`)
     } else if (task.command) {
-      const command = oneLine(task.command)
-      parts.push(
-        `: runs \`${command.length > MAX_COMMAND_CHARS ? `${command.slice(0, MAX_COMMAND_CHARS)}…` : command}\``
-      )
+      parts.push(`: runs \`${cut(oneLine(task.command), MAX_COMMAND_CHARS)}\``)
     }
     if (task.args === null) {
       parts.push(' (takes args)')
@@ -100,6 +119,10 @@ export function describeTasks(listing: TaskListing, shell?: string): string {
 
 function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
+}
+
+function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
 /**

@@ -78,17 +78,22 @@ tasks:
 
 The description of `run_task` lists the tasks of the published version, so the model knows
 what it can run without guessing: each with its `description` (its last command when it has
-none) and whether a run of it takes arguments on this server, as the server answers it. A
-task takes none when it says `args: false`, when it or anything in its run reads a secret or
-a variable of the server, and under [`runs.args: declared`](/docs/remote-compute/runs#arguments)
-when it does not say `args: true`. The clients read the list of the version `HAMMERKIT_BUILD`
-names when they start.
+none) and whether a run of it takes arguments, as the server's runs see it. A task takes none
+when it says `args: false`, when it or anything in its run reads a secret or a variable of the
+server, and under [`runs.args: declared`](/docs/remote-compute/runs#arguments) when it does not
+say `args: true`. The server still checks every run. The clients read the list of the version
+`HAMMERKIT_BUILD` names when they start, and wait up to 15 seconds for it; without an answer the
+tools work, and the description says the list is missing.
 
 Set [`HAMMERKIT_SHELL`](#settings) to an empty value and the build file needs no shell task:
 `hammerkit remote mcp` has no `bash` then, and the opencode plugin no shell (on opencode 1
-its `bash` refuses, see [opencode](#opencode)). The agent runs only the tasks of the build
-file. pi has no `run_task` yet and its `bash` refuses without a shell, so keep a shell task
-for pi.
+its `bash` refuses, see [opencode](#opencode)). pi has no `run_task` yet and its `bash` refuses
+without a shell, so keep a shell task for pi.
+
+Leaving the shell out is a setting of the client, which whoever starts the agent picks. To keep
+agents off a shell, publish a version without a shell task, or with `args: false` on it:
+`run_task` runs every task of the version, a shell task included, and the server runs only what
+the version has.
 
 What follows from running a command as a task, a shell command or a named one:
 

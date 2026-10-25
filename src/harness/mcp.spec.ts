@@ -324,7 +324,8 @@ describe('mcp tools on a sandbox', () => {
     })
   })
 
-  itExceptWindows('leaves out bash for an empty shell and runs the tasks of the build file', async () => {
+  // blank as the plugins read HAMMERKIT_SHELL
+  itExceptWindows('leaves out bash for a blank shell and runs the tasks of the build file', async () => {
     await withSandboxServer(
       'harness-mcp-no-shell',
       async ({ client: sandbox, url, environment, connection, build }) => {
@@ -332,7 +333,7 @@ describe('mcp tools on a sandbox', () => {
         environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_TOKEN: await connection.token() }
         const program = new Command().exitOverride()
         const remote = program.command('remote')
-        const args = ['remote', 'mcp', '--server', 'corp', '--sandbox', sandbox.id, '--build', build, '--shell', '']
+        const args = ['remote', 'mcp', '--server', 'corp', '--sandbox', sandbox.id, '--build', build, '--shell', ' ']
         const client = connect(async (input, output) => {
           environment.stdout = output
           environment.stderr = new PassThrough()

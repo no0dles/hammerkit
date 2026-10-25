@@ -6,16 +6,15 @@ import { getVersion } from '../version'
 import { connectSandbox, DEFAULT_SHELL_TASK } from './connect'
 import { createMcpTools, serveMcp } from './mcp'
 import { SandboxClient } from './sandbox-client'
-import { TaskListing } from './task-tools'
+import { readTaskListing, TaskListing } from './task-tools'
 
 // the tasks run_task lists; a server that does not answer leaves them out, the tools still work
 async function listTasks(sandbox: SandboxClient, log: (line: string) => void): Promise<TaskListing> {
-  try {
-    return await sandbox.tasks()
-  } catch (e) {
-    log(`the tasks of ${sandbox.build.hash} could not be listed: ${getErrorMessage(e)}`)
-    return { error: getErrorMessage(e) }
+  const listing = await readTaskListing(() => sandbox.tasks())
+  if (!Array.isArray(listing)) {
+    log(`the tasks of ${sandbox.build.hash} could not be listed: ${listing.error}`)
   }
+  return listing
 }
 
 // `hammerkit remote mcp`: a Model Context Protocol server on stdio for one sandbox of a
@@ -48,7 +47,8 @@ export function registerMcpCommand(remote: Command, environment: Environment, in
       try {
         // stdout carries the protocol only, everything else goes to stderr
         const log = (line: string) => environment.stderr.write(`hammerkit remote mcp: ${line}\n`)
-        const sandbox = await connectSandbox(environment, options, log)
+        // as the plugins read it: blank is no shell
+        const sandbox = await connectSandbox(environment, { ...options, shell: options.shell.trim() }, log)
         log(`sandbox ${sandbox.id} of ${sandbox.sandbox.repo} at ${sandbox.sandbox.commit}`)
         const shell = sandbox.build.shell
         const instructions =

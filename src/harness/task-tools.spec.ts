@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { createTaskTools, describeTasks, taskToolArgs, taskToolSchema } from './task-tools'
+import { createTaskTools, describeTasks, readTaskListing, taskToolArgs, taskToolSchema } from './task-tools'
 
 describe('task tools', () => {
   it('lists the tasks for the model: what each is for and whether it takes arguments', () => {
@@ -30,6 +30,8 @@ describe('task tools', () => {
     expect(describeTasks({ error: 'no answer within 15 s' })).toBe(
       'The tasks of the build file could not be listed (no answer within 15 s); name one as the build file does.'
     )
+    // a long description is cut, it goes into every request of the model
+    expect(describeTasks([{ name: 'e2e', description: 'y'.repeat(300) }])).toContain(`- e2e: ${'y'.repeat(200)}…`)
     const many = Array.from({ length: 45 }, (_, index) => ({ name: `t${index}` }))
     expect(describeTasks(many).split('\n').slice(-2)).toEqual(['- t39', '- and 5 more'])
   })
@@ -65,5 +67,15 @@ describe('task tools', () => {
     const task = z.object(taskToolArgs(runTask, z) as z.ZodRawShape)
     expect(task.safeParse({ task: 'test', args: ['src/a.spec.ts'] }).success).toBe(true)
     expect(task.safeParse({ task: 'test', args: 'src/a.spec.ts' }).success).toBe(false)
+  })
+
+  it('reads the tasks within a time, and says why it could not', async () => {
+    expect(await readTaskListing(async () => [{ name: 'test' }])).toEqual([{ name: 'test' }])
+    expect(await readTaskListing(() => new Promise(() => undefined), 20)).toEqual({ error: 'no answer within 0.02 s' })
+    expect(
+      await readTaskListing(async () => {
+        throw new Error('name a server')
+      })
+    ).toEqual({ error: 'name a server' })
   })
 })

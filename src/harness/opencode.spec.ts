@@ -137,6 +137,25 @@ describe('opencode tools on a sandbox', () => {
         tools.bash.execute({ command: 'cat src/app.ts' }, context()),
       ])
       expect(again).toContain('answer = 43')
+
+      // run_task takes its turn too: a write sent before it lands before the task starts, one
+      // sent after it waits for the task to end instead of being refused by the held sandbox
+      const done: string[] = []
+      const track = <T>(name: string, call: Promise<T>) =>
+        call.then((value) => {
+          done.push(name)
+          return value
+        })
+      const turn = (content: string) => ({ filePath: join(directory, 'turn.txt'), content })
+      const [, ran, written] = await Promise.all([
+        track('write', tools.write.execute(turn('first\n'), context())),
+        track('run_task', tools.run_task.execute({ task: 'sh', args: ['sleep 1; cat turn.txt'] }, context())),
+        track('write again', tools.write.execute(turn('second\n'), context())),
+      ])
+      expect(done).toEqual(['write', 'run_task', 'write again'])
+      expect((ran as { output: string }).output).toContain('last lines:\nfirst\n')
+      expect(written).toBe('Wrote file successfully.')
+      expect((await client.readRaw('turn.txt')).toString()).toBe('second\n')
     })
   })
 

@@ -14,7 +14,7 @@ import {
 } from './connect'
 import { capOutput, formatTree, toColonNumbers } from './format'
 import { listPublishedTasks, oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
-import { createTaskTools, readLogHint, TaskListing, taskToolArgs, taskToolSchema } from './task-tools'
+import { createTaskTools, readLogHint, readTaskListing, TaskListing, taskToolArgs, taskToolSchema } from './task-tools'
 
 // What opencode passes a tool (`ToolContext` of `@opencode-ai/plugin`), the parts used here.
 export interface OpencodeToolContext {
@@ -42,8 +42,6 @@ export interface OpencodePluginOptions {
   client?: () => Promise<SandboxClient>
 }
 
-// how long a plugin waits for the tasks of the build file when it starts, it goes on without them
-const LIST_TASKS_MS = 15_000
 const DEFAULT_READ_LINES = 2000
 const LIST_LIMIT = 100
 const SEARCH_LIMIT = 100
@@ -98,23 +96,15 @@ function connectHarness(directory: string, settings: OpencodePluginOptions): Har
     client,
     // the version is read without a sandbox, which the first call of a tool takes
     tasks: () =>
-      withTimeout(
-        settings.client
-          ? client().then((sandbox) => sandbox.tasks())
-          : connectServer(environment, options).then((server) => listPublishedTasks(server.connection, server.build)),
-        LIST_TASKS_MS
-      ).catch((e) => ({ error: e instanceof Error ? e.message : String(e) })),
+      readTaskListing(async () => {
+        if (settings.client) {
+          return (await client()).tasks()
+        }
+        const server = await connectServer(environment, options)
+        return listPublishedTasks(server.connection, server.build)
+      }),
     shell: options.shell ?? DEFAULT_SHELL_TASK,
   }
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`no answer within ${ms / 1000} s`)), ms)
-    timer.unref?.()
-  })
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 // the names of the tools of the plugin, which stand in for opencode's own
