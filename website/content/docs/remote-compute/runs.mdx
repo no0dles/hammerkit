@@ -371,7 +371,8 @@ One caller can not take the machine. Per caller (issuer and subject) the server 
 for an approval (`runs.limits.waiting`) and the runs in the queue (`runs.limits.queued`); a submit over
 either is answered `429` and says which. At most `runs.limits.running` runs of one caller execute at the
 same time, and the next run in the queue whose caller has a place left starts first, so one caller with
-many runs does not keep the others waiting. A run that executes longer than `runs.maxDuration` is stopped
+many runs does not keep the others waiting. On a Kubernetes backend, runs of one caller that share
+kept claims also run one at a time, see [Namespaces](/docs/remote-compute/backend#namespaces). A run that executes longer than `runs.maxDuration` is stopped
 and fails with that reason. The log of a run is cut off at `runs.maxLogBytes` with a `truncated` event;
 the state changes and the results of the tasks, with their last lines, are always kept.
 

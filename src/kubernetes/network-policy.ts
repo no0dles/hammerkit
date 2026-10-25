@@ -38,10 +38,10 @@ import { getErrorMessage } from '../log'
 import { sleep } from '../utils/sleep'
 import { getNetworkGateContainer, HELPER_SECURITY_CONTEXT } from './network-gate'
 import { getPodPlacement, getRunLabels, RUN_LABEL } from './job-placement'
+import { getItemLabels, ID_LABEL } from './resources'
 
 type ContainerItem = WorkItem<ContainerWorkTask | ContainerWorkService>
 
-const ID_LABEL = 'hammerkit.dev/id'
 // the run a task's pods belong to (on a server, the run of the server)
 export { RUN_LABEL }
 const PROXY_LABEL = 'hammerkit.dev/proxy-for'
@@ -194,7 +194,12 @@ function getIngress(env: WorkKubernetesEnvironment, item: ContainerItem): V1Netw
   if (ids.length === 0) {
     return []
   }
-  const from: V1LabelSelector = { matchExpressions: [{ key: ID_LABEL, operator: 'In', values: ids }] }
+  // on a server, of this run: the runs of a caller share their namespace
+  const run = getRunLabels(env)
+  const from: V1LabelSelector = {
+    matchExpressions: [{ key: ID_LABEL, operator: 'In', values: ids }],
+    ...(Object.keys(run).length > 0 ? { matchLabels: run } : {}),
+  }
   // the client's name for `from`, a reserved word
   return [{ _from: [{ podSelector: from }] }]
 }
@@ -227,7 +232,7 @@ export function buildNetworkPolicy(
       ingress: getIngress(env, item),
       egress: [
         ...(needs.length > 0
-          ? [{ to: needs.map((need) => ({ podSelector: { matchLabels: { [ID_LABEL]: need.service.id() } } })) }]
+          ? [{ to: needs.map((need) => ({ podSelector: { matchLabels: getItemLabels(need.service, env) } })) }]
           : []),
         ...(proxied
           ? [
@@ -443,16 +448,18 @@ export async function releaseKubernetesItemNetwork(
 }
 
 // Every policy and proxy of the item, of any run, once none of its pods runs:
-// what `down` and `clean` remove.
+// what `down` and `clean` remove. On a server, those of the server's run only: the
+// runs of a caller share their namespace, and the pods of another run of the same item
+// would run unlimited without their policy.
 export async function removeAllKubernetesItemNetworks(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   item: ContainerItem
 ): Promise<void> {
-  if (!(await awaitPodsEnded(instance, env, { [ID_LABEL]: item.id() }))) {
+  if (!(await awaitPodsEnded(instance, env, getItemLabels(item, env)))) {
     throw new Error(`pods of ${item.name} are still running, so its network policy stays`)
   }
-  const labelSelector = `${NETWORK_OF_LABEL}=${item.id()}`
+  const labelSelector = toSelector({ [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) })
   let policies: V1NetworkPolicy[]
   try {
     const list = await instance.objectApi.list<V1NetworkPolicy & KubernetesObjectHeader>(

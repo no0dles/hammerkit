@@ -140,8 +140,9 @@ export interface RunContext {
 // succeeds when `execute` resolves and fails when it throws.
 export interface RunExecutor {
   execute(run: Run, context: RunContext): Promise<void>
-  // runs of one caller it executes at a time; the others wait in the queue
-  readonly runningPerCaller?: number
+  // what a run holds while it executes, if anything: two runs that hold the same execute
+  // one after the other, the second waits in the queue
+  exclusive?(run: Run): string | undefined
 }
 
 // The server can not take the run now; `status` is what the caller is told
@@ -680,17 +681,24 @@ export class RunRegistry {
     )
   }
 
+  // Whether a run that executes holds what the run would (RunExecutor.exclusive)
+  private held(run: Run): boolean {
+    const exclusive = this.options.executor.exclusive?.bind(this.options.executor)
+    const key = exclusive?.(run)
+    return (
+      key !== undefined &&
+      [...this.entries.values()].some((entry) => entry.run.state === 'running' && exclusive?.(entry.run) === key)
+    )
+  }
+
   // The first run in the queue whose caller has a place left: one caller with many runs
   // does not keep the others from the machine. A run on a sandbox another run works on
-  // waits for it.
+  // waits for it, as does one that needs what an executing run holds.
   private dispatch(): void {
     while (this.running < this.maxConcurrent) {
-      const perCaller = Math.min(
-        this.options.limits?.running ?? Infinity,
-        this.options.executor.runningPerCaller ?? Infinity
-      )
+      const perCaller = this.options.limits?.running ?? Infinity
       const index = this.queue.findIndex(
-        (entry) => this.runningOf(entry.run.owner) < perCaller && !this.sandboxBusy(entry.run)
+        (entry) => this.runningOf(entry.run.owner) < perCaller && !this.sandboxBusy(entry.run) && !this.held(entry.run)
       )
       if (index < 0) {
         return

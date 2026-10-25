@@ -441,10 +441,11 @@ describe('RunRegistry limits', () => {
     await registry.close()
   })
 
-  it('keeps a caller’s runs queued, without a timer, while the backend runs one at a time per caller', async () => {
+  it('keeps a run queued, without a timer, while a run that holds the same executes', async () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({
-      executor: { ...executor, runningPerCaller: 1 },
+      // what the backend holds: here, one run of a caller at a time
+      executor: { ...executor, exclusive: (run) => run.owner.sub },
       maxConcurrent: 4,
       maxDuration: 200,
       limits: { waiting: 5, queued: 5, running: 2 },

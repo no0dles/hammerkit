@@ -1,9 +1,11 @@
 import type { Mock } from 'vitest'
 import { ApiException } from '@kubernetes/client-node'
-import { apply, statusCodeOf } from './apply'
+import { apply, replace, statusCodeOf } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 
-function makeInstance(objectApi: Partial<{ read: Mock; patch: Mock; create: Mock }>): KubernetesInstance {
+function makeInstance(
+  objectApi: Partial<{ read: Mock; patch: Mock; create: Mock; replace: Mock }>
+): KubernetesInstance {
   return { objectApi } as any
 }
 
@@ -66,6 +68,30 @@ describe('apply', () => {
 
     await expect(apply(makeInstance({ read, patch, create }), spec)).rejects.toThrow('create failed')
     expect(create).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('replace', () => {
+  const conflict = () => Object.assign(new Error('conflict'), { code: 409 })
+
+  it('reads the object again when another replaced it since it was read', async () => {
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({ metadata: { resourceVersion: '1' } })
+      .mockResolvedValueOnce({ metadata: { resourceVersion: '2' } })
+    const replaced = vi.fn().mockRejectedValueOnce(conflict()).mockResolvedValueOnce({ replaced: true })
+    await expect(replace(makeInstance({ read, replace: replaced }), spec)).resolves.toEqual({ replaced: true })
+    expect(replaced.mock.calls.map(([object]) => object.metadata.resourceVersion)).toEqual(['1', '2'])
+  })
+
+  it('gives up after three conflicts and on any other error', async () => {
+    const read = vi.fn().mockResolvedValue({ metadata: { resourceVersion: '1' } })
+    const always = vi.fn().mockRejectedValue(conflict())
+    await expect(replace(makeInstance({ read, replace: always }), spec)).rejects.toThrow('conflict')
+    expect(always).toHaveBeenCalledTimes(3)
+    const forbidden = vi.fn().mockRejectedValue(Object.assign(new Error('forbidden'), { code: 403 }))
+    await expect(replace(makeInstance({ read, replace: forbidden }), spec)).rejects.toThrow('forbidden')
+    expect(forbidden).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -36,7 +36,7 @@ export interface KubernetesPersistenceSource {
 
 export function getVolumeName(
   service: WorkItem<WorkService | WorkTask>,
-  kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
 ) {
   return getClaimName(service, kubernetes)
 }
@@ -85,7 +85,7 @@ function appendWorkspaceMount(
 
 export async function getKubernetesPersistence(
   work: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
 ): Promise<KubernetesPersistence> {
   const persistence: KubernetesPersistence = {
     volumes: [],
@@ -96,7 +96,7 @@ export async function getKubernetesPersistence(
     mounts: [],
     initCommands: [],
   }
-  const workspace = kubernetes?.server?.workspace
+  const workspace = kubernetes.server?.workspace
 
   for (const mount of work.data.mounts) {
     if (
@@ -157,7 +157,7 @@ export function appendVolume(
   localPath: string | null,
   isFile: boolean,
   readOnly: boolean,
-  kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
 ): void {
   const volumeName = getVolumeName(sourceWork, kubernetes)
   const subPath = getClaimSubPath(sourceWork, containerPath)
@@ -171,7 +171,7 @@ export function appendVolume(
       },
     })
     persistence.sizes[volumeName] = 'volumeSize' in sourceWork.data ? sourceWork.data.volumeSize : null
-    if (kubernetes && isKeptClaim(sourceWork, kubernetes)) {
+    if (isKeptClaim(sourceWork, kubernetes)) {
       persistence.kept.push(volumeName)
     }
   }

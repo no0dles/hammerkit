@@ -670,15 +670,15 @@ describe('the author of a push', () => {
 
   it('is named by the local part of a verified address when the token has no name', () => {
     // a Google service account's ID token: a verified email, a numeric sub and nothing else
-    const account = 'openchamber-orchestrator@aion-393717.iam.gserviceaccount.com'
-    expect(author({ ...principal('108568892213671605306', { email: account }), emailVerified: true })).toEqual({
-      name: 'openchamber-orchestrator',
+    const account = 'deploy-bot@my-project.iam.gserviceaccount.com'
+    expect(author({ ...principal('112233445566778899000', { email: account }), emailVerified: true })).toEqual({
+      name: 'deploy-bot',
       email: account,
     })
-    expect(author({ ...principal('108568892213671605306', { email: 'ceo@corp.test' }), emailVerified: false })).toEqual(
+    expect(author({ ...principal('112233445566778899000', { email: 'ceo@corp.test' }), emailVerified: false })).toEqual(
       {
-        name: '108568892213671605306',
-        email: '108568892213671605306@login.corp.test',
+        name: '112233445566778899000',
+        email: '112233445566778899000@login.corp.test',
       }
     )
   })

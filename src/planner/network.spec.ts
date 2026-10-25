@@ -568,6 +568,49 @@ describe('network', () => {
       )
     })
 
+    it('keeps the limits of a service and of what needs it within the run on a server', async () => {
+      // two runs of a caller (two sandboxes of a repository) share their namespace and run
+      // the same service and task side by side
+      await withCli(
+        'network-k8s-server-runs',
+        {
+          services: { db: { image: 'postgres:16', network: 'none' } },
+          tasks: { test: { image: 'node:22', cmds: ['true'], network: 'none', needs: ['db'] } },
+        },
+        async (cli) => {
+          const server = (run: string) => ({ run, namespace: 'hammerkit', pools: [], providers: {}, accounts: {} })
+          const db = cli.service('db') as WorkItem<ContainerWorkService>
+          const test = cli.task('test') as WorkItem<ContainerWorkTask>
+          const policies = ['run_1', 'run_2'].map((id) =>
+            buildNetworkPolicy({ ...env, server: server(id) }, db, { type: 'none' }, { run: getRunLabelValue(id) })
+          )
+          expect(policies[0].metadata.name).not.toEqual(policies[1].metadata.name)
+          const label = getRunLabelValue('run_1')
+          expect(policies[0].spec?.podSelector).toEqual({
+            matchLabels: { 'hammerkit.dev/id': db.id(), 'hammerkit.dev/run': label },
+          })
+          expect(policies[0].spec?.ingress).toEqual([
+            {
+              _from: [
+                {
+                  podSelector: {
+                    matchExpressions: [{ key: 'hammerkit.dev/id', operator: 'In', values: [test.id()] }],
+                    matchLabels: { 'hammerkit.dev/run': label },
+                  },
+                },
+              ],
+            },
+          ])
+          // the task reaches the service of its own run
+          expect(
+            buildNetworkPolicy({ ...env, server: server('run_1') }, test, { type: 'none' }, { run: label }).spec?.egress
+          ).toEqual([
+            { to: [{ podSelector: { matchLabels: { 'hammerkit.dev/id': db.id(), 'hammerkit.dev/run': label } } }] },
+          ])
+        }
+      )
+    })
+
     it('takes the proxy as ready once it listens on every port', async () => {
       const server = createServer((socket) => socket.destroy())
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -707,6 +750,22 @@ describe('network', () => {
             apiVersion: 'networking.k8s.io/v1',
             kind: 'NetworkPolicy',
             metadata: { name: 'policy-a', namespace: 'ns' },
+          })
+
+          // on a server, those of its run only: another run's pods keep their limits
+          const server = { run: 'run_1', namespace: 'hammerkit', pools: [], providers: {}, accounts: {} }
+          await removeAllKubernetesItemNetworks(instance, { ...env, server }, db)
+          const label = getRunLabelValue('run_1')
+          expect(instance.coreApi.listNamespacedPod).toHaveBeenLastCalledWith({
+            namespace: 'ns',
+            labelSelector: `hammerkit.dev/id=${db.id()},hammerkit.dev/run=${label}`,
+          })
+          expect(instance.objectApi.list.mock.lastCall[7]).toEqual(
+            `hammerkit.dev/network-of=${db.id()},hammerkit.dev/run=${label}`
+          )
+          expect(instance.appsApi.listNamespacedDeployment).toHaveBeenLastCalledWith({
+            namespace: 'ns',
+            labelSelector: `hammerkit.dev/network-of=${db.id()},hammerkit.dev/run=${label}`,
           })
         }
       )

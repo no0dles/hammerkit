@@ -1,3 +1,18 @@
+# [1.27.0-next.10](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.9...v1.27.0-next.10) (2026-10-25)
+
+
+### Bug Fixes
+
+* note that Windows archives can grow, and place the link cache comment ([2e504ca](https://github.com/no0dles/hammerkit/commit/2e504ca73b81cd58ace5857cb0416faf7bda9b32)), closes [#117](https://github.com/no0dles/hammerkit/issues/117)
+* pack a hard link as a link only when its file id is exact ([fdcb03d](https://github.com/no0dles/hammerkit/commit/fdcb03d8ee87de3cdd46d948adc7c319d719e8bf))
+
+# [1.27.0-next.9](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.8...v1.27.0-next.9) (2026-10-25)
+
+
+### Features
+
+* run the runs of one caller side by side on Kubernetes ([a54f5bd](https://github.com/no0dles/hammerkit/commit/a54f5bdd0a8805bbf0fd39712c298f4c32818ae3))
+
 # [1.27.0-next.8](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.7...v1.27.0-next.8) (2026-10-25)
 
 

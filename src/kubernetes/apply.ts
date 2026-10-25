@@ -47,24 +47,34 @@ export async function replace<T extends KubernetesObject>(
   instance: KubernetesInstance,
   spec: T & KubernetesObjectHeader
 ): Promise<T> {
-  let current: KubernetesObject | undefined
-  try {
-    current = await instance.objectApi.read(spec)
-  } catch (e) {
-    if (statusCodeOf(e) !== 404) {
-      throw e
+  for (let attempt = 1; ; attempt++) {
+    let current: KubernetesObject | undefined
+    try {
+      current = await instance.objectApi.read(spec)
+    } catch (e) {
+      if (statusCodeOf(e) !== 404) {
+        throw e
+      }
+      try {
+        return await instance.objectApi.create(spec)
+      } catch (createError) {
+        if (statusCodeOf(createError) !== 409) {
+          throw createError
+        }
+        current = await instance.objectApi.read(spec)
+      }
     }
     try {
-      return await instance.objectApi.create(spec)
-    } catch (createError) {
-      if (statusCodeOf(createError) !== 409) {
-        throw createError
+      return await instance.objectApi.replace<T>({
+        ...spec,
+        metadata: { ...spec.metadata, resourceVersion: current.metadata?.resourceVersion },
+      })
+    } catch (e) {
+      // replaced by someone else since it was read (the server sets up a caller's
+      // namespace for a run and for a sandbox at the same time): read it again
+      if (statusCodeOf(e) !== 409 || attempt >= 3) {
+        throw e
       }
-      current = await instance.objectApi.read(spec)
     }
   }
-  return await instance.objectApi.replace<T>({
-    ...spec,
-    metadata: { ...spec.metadata, resourceVersion: current.metadata?.resourceVersion },
-  })
 }

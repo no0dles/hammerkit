@@ -6,6 +6,7 @@ import {
   getCallerNamespace,
   getClusterAccess,
   getNamespacePolicies,
+  getVolumeScope,
   isCallerNamespace,
   KubernetesExecutor,
 } from './kubernetes-backend'
@@ -87,12 +88,13 @@ describe('kubernetes backend', () => {
     )
   })
 
-  it('runs the runs of one caller one after the other, and those of different callers side by side', async () => {
-    const config = serverConfigSchema.parse({
-      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
-      backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
-    }) as any
-    const executor = new KubernetesExecutor(config, {}, {} as any)
+  it('runs the runs of one caller side by side, and holds the scope of kept claims for one run at a time', async () => {
+    const config = (keepVolumes?: false) =>
+      serverConfigSchema.parse({
+        issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+        backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit', keepVolumes },
+      }) as any
+    const executor = new KubernetesExecutor(config(), {}, {} as any)
     const order: string[] = []
     const release: { [id: string]: () => void } = {}
     ;(executor as any).host = {
@@ -105,31 +107,151 @@ describe('kubernetes backend', () => {
           }
         }),
     }
-    const run = (id: string, sub: string) => ({ id, owner: { iss: 'https://idp.corp', sub } }) as Run
+    const sandbox = (id: string) =>
+      ({ type: 'sandbox', id, repo: 'git.test/corp/app', commit: 'c'.repeat(40), tree: 't' }) as Run['source']
+    const ref = { type: 'ref', repo: 'git.test/corp/app', ref: 'main' } as Run['source']
+    const run = (id: string, sub: string, source: Run['source']) =>
+      ({ id, owner: { iss: 'https://idp.corp', sub }, source }) as Run
     const context: RunContext = { emit: () => undefined, signal: new AbortController().signal }
-    const first = executor.execute(run('a1', 'alice'), context)
-    const second = executor.execute(run('a2', 'alice'), context)
-    const other = executor.execute(run('b1', 'bob'), context)
+    // three coders of one caller, each on a sandbox of their own
+    const runs = ['s1', 's2', 's3'].map((id) => run(id, 'alice', sandbox(`sbx_${id}`)))
+    const executing = runs.map((one) => executor.execute(one, context))
     await new Promise((resolve) => setImmediate(resolve))
-    expect(order).toEqual(['start a1', 'start b1'])
-    release.a1()
-    await first
-    await new Promise((resolve) => setImmediate(resolve))
-    expect(order).toEqual(['start a1', 'start b1', 'end a1', 'start a2'])
-    release.a2()
-    release.b1()
-    await Promise.all([second, other])
+    expect(order).toEqual(['start s1', 'start s2', 'start s3'])
 
-    // a run cancelled while it waits does not start
-    const cancelled = new AbortController()
-    const blocking = executor.execute(run('a3', 'alice'), context)
-    const waiting = executor.execute(run('a4', 'alice'), { ...context, signal: cancelled.signal })
-    cancelled.abort()
+    // what the registry holds back: two runs of one scope share its kept claims
+    expect(executor.exclusive(runs[0])).not.toBe(executor.exclusive(runs[1]))
+    expect(executor.exclusive(run('s4', 'alice', sandbox('sbx_s1')))).toBe(executor.exclusive(runs[0]))
+    expect(executor.exclusive(run('r1', 'alice', ref))).toBe(executor.exclusive(run('r2', 'alice', ref)))
+    // a scope is the caller's: their namespace holds the claims
+    expect(executor.exclusive(run('r3', 'bob', ref))).not.toBe(executor.exclusive(run('r1', 'alice', ref)))
+    // without kept claims, runs share no object
+    expect(new KubernetesExecutor(config(false), {}, {} as any).exclusive(run('r1', 'alice', ref))).toBeUndefined()
+
+    // the kept claims of the executing scopes stay when the namespace is swept
+    expect([...(executor as any).scopesInUse(getCallerNamespace('hammerkit-', runs[0].owner))].length).toBe(3)
+    for (const one of runs) {
+      release[one.id]()
+    }
+    await Promise.all(executing)
+    expect((executor as any).active.size).toBe(0)
+  })
+
+  it('changes what is the whole namespace’s for one run at a time, and leaves what executing runs made', async () => {
+    const config = serverConfigSchema.parse({
+      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+      backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+    }) as any
+    const executor = new KubernetesExecutor(config, {}, {} as any)
+    const placement = (executor as any).placement()
+    const steps: string[] = []
+    const gates: (() => void)[] = []
+    ;(executor as any).namespaces = {
+      prepare: (namespace: string) =>
+        new Promise<void>((resolve) => {
+          steps.push(`prepare ${namespace}`)
+          gates.push(resolve)
+        }),
+    }
+    const selectors: string[] = []
+    ;(executor as any).instance = {
+      batchApi: { deleteCollectionNamespacedJob: async (r: any) => selectors.push(r.labelSelector) },
+      appsApi: { deleteCollectionNamespacedDeployment: async () => undefined },
+      coreApi: {
+        deleteCollectionNamespacedPod: async () => undefined,
+        deleteCollectionNamespacedService: async () => undefined,
+        deleteCollectionNamespacedSecret: async () => undefined,
+        deleteCollectionNamespacedPersistentVolumeClaim: async () => undefined,
+        listNamespacedPod: async () => ({ items: [] }),
+        listNamespacedPersistentVolumeClaim: async () => ({ items: [] }),
+        listNamespace: async () => ({ items: [] }),
+      },
+      objectApi: { list: async () => ({ items: [] }) },
+    }
+    const owner = { iss: 'https://idp.corp', sub: 'alice' }
+    const source = { type: 'sandbox', id: 'sbx_1', repo: 'r', commit: 'c', tree: 't' } as Run['source']
+    const runs = ['run_1', 'run_2'].map((id) => ({ id, owner, source: { ...source, id: `sbx_${id}` } }) as Run)
+    const context: RunContext = { emit: () => undefined, signal: new AbortController().signal }
+    let finish = () => undefined as void
+    const finished = new Promise<void>((resolve) => (finish = resolve))
+    // the runs execute until the end of the test
+    ;(executor as any).host = {
+      execute: async (one: Run) => {
+        await placement.prepare(one, context)
+        await finished
+      },
+    }
+    const executing = runs.map((one) => executor.execute(one, context))
+    await vi.waitFor(() => expect(steps).toHaveLength(1))
+    // the second waits for the first one's setup of the namespace
     await new Promise((resolve) => setImmediate(resolve))
-    release.a3()
-    await blocking
-    await expect(waiting).rejects.toThrow('the run was cancelled')
-    expect(order).not.toContain('start a4')
+    expect(steps).toHaveLength(1)
+    gates[0]()
+    await vi.waitFor(() => expect(steps).toHaveLength(2))
+    gates[1]()
+    await vi.waitFor(() => expect(selectors).toHaveLength(2))
+    finish()
+    await Promise.all(executing)
+    // what a stopped server left goes, not what the other run makes
+    const both = runs.map((one) => getRunLabelValue(one.id))
+    expect(selectors).toEqual([
+      `hammerkit.dev/run,hammerkit.dev/run notin (${both.join(',')})`,
+      `hammerkit.dev/run,hammerkit.dev/run notin (${[both[1], both[0]].join(',')})`,
+    ])
+  })
+
+  it('does not start a run cancelled while it waits for the namespace', async () => {
+    const config = serverConfigSchema.parse({
+      issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+      backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+    }) as any
+    const executor = new KubernetesExecutor(config, {}, {} as any)
+    const placement = (executor as any).placement()
+    let open = () => undefined as void
+    const prepared: string[] = []
+    ;(executor as any).namespaces = {
+      prepare: (namespace: string) => {
+        prepared.push(namespace)
+        return new Promise<void>((resolve) => (open = resolve))
+      },
+    }
+    ;(executor as any).instance = {
+      batchApi: { deleteCollectionNamespacedJob: async () => undefined },
+      appsApi: { deleteCollectionNamespacedDeployment: async () => undefined },
+      coreApi: {
+        deleteCollectionNamespacedPod: async () => undefined,
+        deleteCollectionNamespacedService: async () => undefined,
+        deleteCollectionNamespacedSecret: async () => undefined,
+        deleteCollectionNamespacedPersistentVolumeClaim: async () => undefined,
+        listNamespacedPod: async () => ({ items: [] }),
+        listNamespacedPersistentVolumeClaim: async () => ({ items: [] }),
+        listNamespace: async () => ({ items: [] }),
+      },
+      objectApi: { list: async () => ({ items: [] }) },
+    }
+    const owner = { iss: 'https://idp.corp', sub: 'alice' }
+    const source = { type: 'ref', repo: 'r', ref: 'main' } as Run['source']
+    const first = placement.prepare({ id: 'run_1', owner, source } as Run, {
+      emit: () => undefined,
+      signal: new AbortController().signal,
+    })
+    const abort = new AbortController()
+    const second = placement.prepare({ id: 'run_2', owner, source } as Run, {
+      emit: () => undefined,
+      signal: abort.signal,
+    })
+    await vi.waitFor(() => expect(prepared).toHaveLength(1))
+    abort.abort()
+    open()
+    await first
+    const outcome = await Promise.race([
+      second.then(
+        () => 'started',
+        (e: Error) => e.message
+      ),
+      vi.waitFor(() => expect(prepared).toHaveLength(2)).then(() => 'prepared the namespace'),
+    ])
+    expect(outcome).toBe('the run was cancelled')
   })
 
   it('keeps the pods of a caller from other namespaces and from the metadata endpoint of the cloud', () => {
@@ -279,10 +401,11 @@ describe('kubernetes backend', () => {
         // no defaultResources: one an earlier config made goes
         'delete LimitRange hammerkit',
         ...['Job', 'Deployment', 'Pod', 'Service', 'Secret', 'PersistentVolumeClaim'].map(
-          (kind) => `delete ${kind} hammerkit.dev/run,hammerkit.dev/run!=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`
+          (kind) =>
+            `delete ${kind} hammerkit.dev/run,hammerkit.dev/run notin (${getRunLabelValue('run_AAAAAAAAAAAAAAA-')})`
         ),
         // the policy of a limited pod goes once the pod is gone
-        `await Pod hammerkit.dev/run,hammerkit.dev/run!=${getRunLabelValue('run_AAAAAAAAAAAAAAA-')}`,
+        `await Pod hammerkit.dev/run,hammerkit.dev/run notin (${getRunLabelValue('run_AAAAAAAAAAAAAAA-')})`,
         'delete NetworkPolicy hammerkit-network-build',
       ])
 
@@ -364,6 +487,51 @@ describe('kubernetes backend', () => {
       // what the run kept expires once it ended
       await placement.release(ref('run_1', 'git.test/corp/app'), context)
       expect(patched).toEqual(['hammerkit-kept hammerkit.dev/expires'])
+    })
+
+    it('leaves the expired claims of a scope that another run executes in until that run ended', async () => {
+      const { instance } = cluster(null)
+      const deleted: string[] = []
+      const busy = { id: 'run_busy', owner, source: { type: 'ref', repo: 'git.test/corp/app', ref: 'main' } } as Run
+      const other = { id: 'run_other', owner, source: { type: 'ref', repo: 'git.test/corp/lib', ref: 'main' } } as Run
+      const claim = {
+        metadata: {
+          name: 'hammerkit-busy',
+          labels: { 'hammerkit.dev/volume-scope': getVolumeScope(busy) },
+          annotations: { 'hammerkit.dev/expires': '2000-01-01T00:00:00Z' },
+        },
+      }
+      ;(instance.coreApi as any).listNamespacedPersistentVolumeClaim = async (request: any) => ({
+        items: request.labelSelector === 'hammerkit.dev/volume-scope' && deleted.length === 0 ? [claim] : [],
+      })
+      ;(instance.coreApi as any).deleteNamespacedPersistentVolumeClaim = async ({ name }: any) => {
+        deleted.push(name)
+      }
+      ;(instance.coreApi as any).readNamespacedPersistentVolumeClaim = async () =>
+        Promise.reject(Object.assign(new Error('not found'), { code: 404 }))
+      const config = serverConfigSchema.parse({
+        issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+        backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit', keepVolumes: '10m' },
+      }) as any
+      const executor = new KubernetesExecutor(config, {}, {} as any)
+      ;(executor as any).instance = instance
+      ;(executor as any).namespaces = new CallerNamespaces(instance as any, config.backend)
+      ;(executor as any).swept = true
+      let end = () => undefined as void
+      ;(executor as any).host = { execute: () => new Promise<void>((resolve) => (end = resolve)) }
+      // a run of the scope executes, about to mount its claim
+      const executing = executor.execute(busy, context)
+
+      // neither another run's look at the namespace nor the timer takes it
+      await (executor as any).placement().prepare(other, context)
+      await (executor as any).sweep(namespace)
+      expect(deleted).toEqual([])
+
+      // once the run ended, it goes
+      end()
+      await executing
+      await (executor as any).sweep(namespace)
+      expect(deleted).toEqual(['hammerkit-busy'])
     })
 
     it('hands the tasks of a run on a sandbox its claim and the pod that holds it', async () => {
