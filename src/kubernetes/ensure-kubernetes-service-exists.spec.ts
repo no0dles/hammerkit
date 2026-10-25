@@ -53,8 +53,20 @@ describe('ensureKubernetesServiceExists', () => {
   it('maps the ports of a service with ports', async () => {
     const { instance, created } = cluster(null)
     await ensureKubernetesServiceExists(instance, env, service([{ containerPort: 5432, hostPort: 15432 }]))
-    expect(created[0].spec).toMatchObject({ type: 'ClusterIP', ports: [{ port: 15432, targetPort: 5432 }] })
+    expect(created[0].spec).toMatchObject({
+      type: 'ClusterIP',
+      ports: [{ name: 'tcp-15432', port: 15432, targetPort: 5432 }],
+    })
     expect(created[0].spec.clusterIP).toBeUndefined()
+  })
+
+  it('names each port, which the cluster wants of a Service with more than one', async () => {
+    const { instance, created } = cluster(null)
+    await ensureKubernetesServiceExists(instance, env, service([{ containerPort: 8080 }, { containerPort: 9090 }]))
+    expect(created[0].spec.ports).toEqual([
+      { name: 'tcp-8080', port: 8080, targetPort: 8080 },
+      { name: 'tcp-9090', port: 9090, targetPort: 9090 },
+    ])
   })
 
   it('makes a headless Service for a service without ports, which a ClusterIP one needs', async () => {

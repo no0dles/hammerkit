@@ -36,7 +36,9 @@ export async function ensureKubernetesServiceExists(
       ...(headless
         ? {}
         : {
+            // a Service of more than one port needs a name for each
             ports: service.data.ports.map((port) => ({
+              name: `tcp-${port.hostPort ?? port.containerPort}`,
               port: port.hostPort ?? port.containerPort,
               targetPort: port.containerPort,
             })),
