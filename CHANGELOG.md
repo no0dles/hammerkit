@@ -1,3 +1,11 @@
+# [1.27.0-next.11](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.10...v1.27.0-next.11) (2026-10-25)
+
+
+### Bug Fixes
+
+* cover the gzip archive in the empty linked file specs ([6e8086f](https://github.com/no0dles/hammerkit/commit/6e8086fdba350aefb59d2b72bca92d3b623f67f4))
+* keep node-tar from ending an archive twice on an empty linked file ([6c8f8df](https://github.com/no0dles/hammerkit/commit/6c8f8df363b9334a4464a131befe732782936d2c)), closes [#117](https://github.com/no0dles/hammerkit/issues/117)
+
 # [1.27.0-next.10](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.9...v1.27.0-next.10) (2026-10-25)
 
 
