@@ -25,6 +25,8 @@ yields wrong build outputs).
 
 ### Smaller TODOs (lower priority)
 
+- **Pack archives in parallel again once node-tar is fixed**: [src/utils/tar.ts](src/utils/tar.ts) `packArchive` packs with `jobs: 1`, because node-tar 7.5.14 and later (still 7.5.22) hang or fail with "write after end" on a directory with several hard links when they read more than one file at a time. One file at a time packs a large `node_modules` about 1.3x (gzip) to 1.7x slower. When a newer node-tar is out, drop `jobs: 1` and run [tar.spec.ts](src/utils/tar.spec.ts): it hangs while the bug is there. No upstream issue is filed (#114).
+
 - **Server startup probe for open egress on Docker** — on a Docker backend, the server could start one short container on a run-like network at startup, try `169.254.169.254` and the network's gateway (2 s each) and log a warning naming the firewall section of [backend.mdx](website/content/docs/remote-compute/backend.mdx) when either answers. Without it, a Docker server whose operator skipped the firewall keeps the metadata address reachable from open runs without saying so (review of #107, M1).
 
 - **Windows: stopping a local task ends only its shell** — [src/executer/execute-command.ts](src/executer/execute-command.ts) aborts a command on Windows with `ps.kill()`, which ends `powershell.exe` but not a program it started (node, npm, …). That program keeps running after `hammerkit run` is interrupted or a server run is cancelled, and can hold the run's directory. Node has no built-in way to end a process tree on Windows (POSIX uses the process group), so a fix needs a Windows mechanism such as a job object or `taskkill /T`.

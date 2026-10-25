@@ -5,7 +5,7 @@ import { KubernetesPersistence, KubernetesPersistenceSource } from './volumes'
 import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
-import { create } from 'tar'
+import { packArchive } from '../utils/tar'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getResourceName } from './resources'
 import { awaitRunningState } from './await-running-state'
@@ -185,7 +185,7 @@ export async function clearClaim(
 export function packSource(source: Pick<KubernetesPersistenceSource, 'localPath' | 'subPath' | 'matcher'>): Readable {
   const fileItem = basename(source.localPath)
   return Readable.from(
-    create(
+    packArchive(
       {
         cwd: dirname(source.localPath),
         filter(path: string): boolean {
