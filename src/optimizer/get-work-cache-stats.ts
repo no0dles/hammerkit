@@ -159,5 +159,12 @@ export function getStateKey(stats: WorkCacheFileStats, cacheMethod: CacheMethod)
       contents.push(`${key}:${stats.files[key].lastModified}`)
     }
   }
-  return createHash('sha256').update(contents.join(',')).digest('hex')
+  return stateKeyDigest(contents.join(','))
+}
+
+// A state key is also the value of the `hammerkit.dev/state` label on Kubernetes, which
+// takes at most 63 characters: the sha256 in base 36 has 50.
+export function stateKeyDigest(content: string): string {
+  const hex = createHash('sha256').update(content).digest('hex')
+  return BigInt(`0x${hex}`).toString(36).padStart(50, '0')
 }

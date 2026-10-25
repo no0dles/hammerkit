@@ -143,7 +143,11 @@ function fakeCluster(root: string) {
         const terms = labelSelector.split(',')
         const matches = (labels: { [key: string]: string } = {}) =>
           terms.every((term: string) =>
-            term.startsWith('!') ? !(term.slice(1) in labels) : labels[term.split('=')[0]] === term.split('=')[1]
+            term.startsWith('!')
+              ? !(term.slice(1) in labels)
+              : term.includes('=')
+                ? labels[term.split('=')[0]] === term.split('=')[1]
+                : term in labels
           )
         return {
           items: [...objects.values()].filter(

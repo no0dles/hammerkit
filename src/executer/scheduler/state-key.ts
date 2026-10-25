@@ -1,5 +1,4 @@
-import { createHash } from 'crypto'
-import { getStateKey, getWorkItemCacheStats } from '../../optimizer/get-work-cache-stats'
+import { getStateKey, getWorkItemCacheStats, stateKeyDigest } from '../../optimizer/get-work-cache-stats'
 import { WorkCacheFileStats } from '../../optimizer/work-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
@@ -51,9 +50,7 @@ export function combineStateKeys(ownKey: string, depKeys: string[]): string {
   }
   // Sort so the key is independent of dependency declaration order.
   const sorted = [...depKeys].sort()
-  return createHash('sha256')
-    .update([ownKey, ...sorted].join(','))
-    .digest('hex')
+  return stateKeyDigest([ownKey, ...sorted].join(','))
 }
 
 // `none` only disables the cache *check* for a task; its sources still influence

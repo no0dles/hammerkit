@@ -342,6 +342,17 @@ describe('remote run', () => {
     })
   })
 
+  it('sends the timeout and the cap of a run along', async () => {
+    await withHarness('remote-run-timeouts', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await h.run('remote', 'publish')
+      await h.run('remote', 'run', 'build', ...from, '--timeout', '30m', '--max-timeout', '2m')
+      const [submitted] = (await h.call('bob', 'GET', '/v1/runs')).body.runs
+      expect(submitted.options).toEqual({ timeout: '30m', maxTimeout: '2m' })
+    })
+  })
+
   it('waits for an approval and says who has to give it', async () => {
     await withHarness('remote-run-approval', async (h) => {
       await h.run('remote', 'login', 'build')

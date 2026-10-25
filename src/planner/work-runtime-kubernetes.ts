@@ -56,6 +56,7 @@ import {
 } from '../kubernetes/network-policy'
 import { getRunId } from '../utils/run-id'
 import { getEffectiveNetwork, isLimitedNetwork } from './work-network'
+import { canUseRunner, executeInRunner } from '../kubernetes/sandbox-runner'
 import { describeSecretSource, getSecretName } from './work-secret'
 
 async function listJobNames(
@@ -262,6 +263,28 @@ export function kubernetesTaskRuntime(
 
       const persistence = await getKubernetesPersistence(task, kubernetes)
       const workspace = getWorkspacePodSpec(kubernetes, persistence, { name: task.name, pool: task.data.pool })
+
+      // a shell of a sandbox: its commands go into the sandbox's runner, when it has one now
+      if (canUseRunner(task, kubernetes, persistence)) {
+        try {
+          const result = await executeInRunner(instance, task, kubernetes, persistence, options.abort)
+          if (result.type === 'crash') {
+            options.state.set({ stateKey: options.stateKey, type: 'crash', exitCode: result.exitCode })
+            return
+          }
+          // stopped while the runner started: no Job for it either
+          if (result.type === 'canceled' || options.abort.aborted) {
+            options.state.set({ stateKey: options.stateKey, type: 'canceled' })
+            return
+          }
+          if (result.type === 'done') {
+            return
+          }
+        } catch (e) {
+          options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
+          return
+        }
+      }
 
       await ensureNamespace(instance, kubernetes.namespace)
       try {

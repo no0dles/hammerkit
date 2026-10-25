@@ -214,7 +214,7 @@ What it runs, when you leave the options out, is what is checked out where you a
 | `--ref <ref>` | The branch or tag. | The branch checked out here. A detached checkout has none, name it then. |
 | `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
 | `--server <name>` | The server. | The default of `remote use`. |
-| `--env`, `--cache`, `--timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
+| `--env`, `--cache`, `--timeout`, `--max-timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
 | `--detach` | Submit the run and exit, without following it: it prints the run and `follow it with: hammerkit remote show <id>`. For a [check](#verifying-checks) that CI verifies later. | Follow the run to its end. |
 
 What follows `--` goes to the one task named, as the

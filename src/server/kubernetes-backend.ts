@@ -24,6 +24,8 @@ const POLICY_NAME = 'hammerkit'
 const MANAGED_LABEL = 'hammerkit.dev/managed'
 // how long the end of a run waits for its pods and claims to be gone
 const RELEASE_TIMEOUT = 120_000
+// how long the setup of a caller's namespace is taken as it is, before it is applied again
+const NAMESPACE_SETUP_REUSE_MS = 5 * 60_000
 // where a pod of the cluster finds the token and certificate of its ServiceAccount
 const IN_CLUSTER_NAMESPACE = '/var/run/secrets/kubernetes.io/serviceaccount/namespace'
 
@@ -211,6 +213,9 @@ export class KubernetesExecutor implements RunExecutor {
   private readonly sweeps = new Map<string, { at: number; timer: NodeJS.Timeout }>()
   // whether the kept claims a server left when it stopped were looked for
   private swept = false
+  // the namespaces where no run of this process left anything: what a run makes goes at its
+  // end, unless its release failed
+  private readonly tidy = new Set<string>()
   private readonly log?: (line: string) => void
 
   constructor(
@@ -311,16 +316,19 @@ export class KubernetesExecutor implements RunExecutor {
             throw new Error('the run was cancelled')
           }
           await this.namespaces.prepare(namespace)
-          // what an earlier run left when the server stopped before its end: the objects of
-          // a run that does not execute. One that starts after this waits for it here
-          // before it makes any.
-          const running = [...new Set([label, ...(this.active.get(namespace)?.keys() ?? [])])]
-          await removeRunObjects(
-            this.instance,
-            namespace,
-            `${RUN_LABEL},${RUN_LABEL} notin (${running.join(',')})`,
-            RELEASE_TIMEOUT
-          )
+          // what an earlier run left when the server stopped before its end, or when its
+          // release failed: the objects of a run that does not execute. One that starts
+          // after this waits for it here before it makes any.
+          if (!this.tidy.has(namespace)) {
+            const running = [...new Set([label, ...(this.active.get(namespace)?.keys() ?? [])])]
+            await removeRunObjects(
+              this.instance,
+              namespace,
+              `${RUN_LABEL},${RUN_LABEL} notin (${running.join(',')})`,
+              RELEASE_TIMEOUT
+            )
+            this.tidy.add(namespace)
+          }
           // the claims earlier runs kept that expired; the others this run may mount
           const { next } = await sweepKeptClaims(this.instance, namespace, {
             now: new Date(),
@@ -354,7 +362,9 @@ export class KubernetesExecutor implements RunExecutor {
                 account.kubernetes ? [[name, account.kubernetes]] : []
               )
             ),
-            ...(work?.claim ? { workspace: getWorkspace(work.root, work.claim, namespace) } : {}),
+            ...(work?.claim
+              ? { workspace: getWorkspace(work.root, work.claim, namespace, backend.sandboxes.runner) }
+              : {}),
             ...(this.keep > 0 ? { volumeScope: getVolumeScope(run) } : {}),
           },
         }
@@ -366,6 +376,8 @@ export class KubernetesExecutor implements RunExecutor {
           const selector = `${RUN_LABEL}=${getRunLabelValue(run.id)}`
           await removeRunObjects(this.instance, namespace, selector, RELEASE_TIMEOUT)
         } catch (e) {
+          // the next run removes what is left
+          this.tidy.delete(namespace)
           context.emit({
             type: 'log',
             task: 'hammerkit',
@@ -467,6 +479,8 @@ export function getVolumeScope(run: Run): string {
 export class CallerNamespaces {
   // who the server is to the cluster, the subject of its RoleBinding in a caller's namespace
   private subject: Promise<RbacV1Subject> | undefined
+  // the namespaces this process set up, by their uid, and when
+  private readonly applied = new Map<string, { uid: string; at: number }>()
 
   constructor(
     private readonly instance: KubernetesInstance,
@@ -480,8 +494,10 @@ export class CallerNamespaces {
   // The caller's namespace: made by the server and kept apart from the others. The
   // server binds its rights there, isolates the network of the pods, applies the
   // operator's quota and gives containers without resources default requests, so they
-  // are admitted under a quota on compute. All of it is replaced on every run, so the
-  // namespace follows the config.
+  // are admitted under a quota on compute. All of it is replaced when the server sets up
+  // a namespace it did not set up in the last `NAMESPACE_SETUP_REUSE_MS` (it reads the
+  // config once, at its start), so the namespace follows the config; a namespace made anew
+  // since (deleted and made again) is set up again at once.
   async prepare(namespace: string): Promise<void> {
     const backend = this.backend
     let existing
@@ -495,9 +511,21 @@ export class CallerNamespaces {
     if (existing && existing.metadata?.labels?.[MANAGED_LABEL] !== 'true') {
       throw new Error(`the namespace ${namespace} was not made by hammerkit, the server does not run tasks in it`)
     }
+    const started = Date.now()
+    const applied = this.applied.get(namespace)
+    if (
+      existing &&
+      !existing.metadata?.deletionTimestamp &&
+      applied &&
+      applied.uid === existing.metadata?.uid &&
+      started - applied.at < NAMESPACE_SETUP_REUSE_MS
+    ) {
+      return
+    }
+    this.applied.delete(namespace)
     if (!existing) {
       try {
-        await this.instance.coreApi.createNamespace({
+        existing = await this.instance.coreApi.createNamespace({
           body: {
             metadata: {
               name: namespace,
@@ -565,6 +593,10 @@ export class CallerNamespaces {
         })
       }
     }
+    const uid = existing?.metadata?.uid
+    if (uid) {
+      this.applied.set(namespace, { uid, at: started })
+    }
   }
 
   private whoAmI(): Promise<RbacV1Subject> {
@@ -588,7 +620,7 @@ export class CallerNamespaces {
 
 // The claim of a sandbox as the Jobs of its run mount it: the run's copy of the files is
 // `root`, a source below it is the same path below `subPath` in the claim.
-function getWorkspace(root: string, claim: SandboxClaim, namespace: string): WorkKubernetesWorkspace {
+function getWorkspace(root: string, claim: SandboxClaim, namespace: string, runner: boolean): WorkKubernetesWorkspace {
   if (claim.namespace !== namespace) {
     throw new Error(`the sandbox is in ${claim.namespace}, the run in ${namespace}`)
   }
@@ -598,6 +630,7 @@ function getWorkspace(root: string, claim: SandboxClaim, namespace: string): Wor
     subPath: claim.subPath,
     label: claim.label,
     ...(claim.pod ? { pod: claim.pod } : {}),
+    ...(runner ? { runner: true as const } : {}),
   }
 }
 

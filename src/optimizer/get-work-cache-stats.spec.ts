@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { getStateKey, getWorkCacheStats } from './get-work-cache-stats'
 import { WorkCacheFileStats } from './work-cache-stats'
+import { combineStateKeys } from '../executer/scheduler/state-key'
 import { environmentMock } from '../executer/environment-mock'
 
 function stats(files: WorkCacheFileStats['files']): WorkCacheFileStats {
@@ -49,6 +50,13 @@ describe('getStateKey', () => {
 
   it('returns a constant key for method "none" regardless of files', () => {
     expect(getStateKey(sample, 'none')).toBe(getStateKey(stats({}), 'none'))
+  })
+
+  it('fits a Kubernetes label value, also when combined with the keys of dependencies', () => {
+    const label = /^[a-z0-9]{1,63}$/
+    expect(getStateKey(sample, 'checksum')).toMatch(label)
+    expect(getStateKey(stats({}), 'checksum')).toMatch(label)
+    expect(combineStateKeys(getStateKey(sample, 'checksum'), ['x', 'api=y'])).toMatch(label)
   })
 })
 

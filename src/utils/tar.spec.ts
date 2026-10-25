@@ -97,4 +97,69 @@ describe('utils/tar', () => {
     }
     expect(statSync(join(target, 'node_modules', 'file-1.js')).nlink).toBe(1)
   })
+
+  // node-tar ends the archive a second time ("write after end", thrown in an fs callback)
+  // when the last file it packs is empty and its other links are not in the archive yet
+  describe('an empty file with more than one link, packed last', () => {
+    let errors: Error[]
+    const onError = (error: Error) => errors.push(error)
+
+    beforeEach(() => {
+      errors = []
+      process.prependListener('uncaughtException', onError)
+    })
+
+    afterEach(() => {
+      process.removeListener('uncaughtException', onError)
+    })
+
+    async function packEmpty(cwd: string, file: string, gzip = false): Promise<string> {
+      const target = mkdtempSync(join(root, 'empty-'))
+      await pipeline(Readable.from(packArchive({ cwd, gzip }, [file])), extract({ cwd: target }))
+      // the second end is thrown in the stat callback, outside the pipeline; wait a little so
+      // a slower platform can't miss it
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      return target
+    }
+
+    it('packs it when its other link is outside the packed directory, as in a pnpm node_modules', async () => {
+      mkdirSync(join(root, 'store'), { recursive: true })
+      mkdirSync(join(root, 'project', 'node_modules'), { recursive: true })
+      writeFileSync(join(root, 'store', 'empty.js'), '')
+      linkSync(join(root, 'store', 'empty.js'), join(root, 'project', 'node_modules', 'empty.js'))
+
+      // with gzip, the second end is a zlib stream error instead
+      for (const gzip of [false, true]) {
+        for (let i = 0; i < 5; i++) {
+          const target = await packEmpty(join(root, 'project'), 'node_modules', gzip)
+          expect(readFileSync(join(target, 'node_modules', 'empty.js'), 'utf8')).toBe('')
+        }
+      }
+      expect(errors).toEqual([])
+    })
+
+    it('packs it when its id may be rounded, as on Windows', async () => {
+      mkdirSync(join(root, 'empty-links'), { recursive: true })
+      writeFileSync(join(root, 'empty-links', 'empty.js'), '')
+      linkSync(join(root, 'empty-links', 'empty.js'), join(root, 'empty-links', 'linked.js'))
+      const lstat = fs.lstat
+      vi.spyOn(fs, 'lstat').mockImplementation(((
+        path: string,
+        callback: (err: Error | null, stat?: fs.Stats) => void
+      ) =>
+        lstat(path, (err, stat) => {
+          if (stat && stat.isFile()) {
+            Object.defineProperty(stat, 'ino', { value: 2 ** 60 })
+          }
+          callback(err, stat)
+        })) as typeof fs.lstat)
+
+      for (let i = 0; i < 5; i++) {
+        const target = await packEmpty(root, 'empty-links')
+        expect(readFileSync(join(target, 'empty-links', 'empty.js'), 'utf8')).toBe('')
+        expect(readFileSync(join(target, 'empty-links', 'linked.js'), 'utf8')).toBe('')
+      }
+      expect(errors).toEqual([])
+    })
+  })
 })

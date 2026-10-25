@@ -88,9 +88,13 @@ export interface KubernetesItemNetwork {
 // stays for the next runs on the sandbox while the pod of the sandbox's files runs:
 // the runs on a sandbox go one at a time, and each would otherwise wait for a proxy
 // to start.
+// The runner of a sandbox (sandbox-runner.ts) outlives the runs that exec into it: its
+// policy has no run (`run: null`) and goes with its `owners`, the pods of the sandbox's
+// files and of the runner, once both are gone.
 export interface KubernetesNetworkScope {
   run: string | null
   sandbox?: KubernetesSandboxScope
+  owners?: V1OwnerReference[]
 }
 
 export interface KubernetesSandboxScope {
@@ -224,7 +228,8 @@ export function buildNetworkPolicy(
       namespace: env.namespace,
       name: getNetworkPolicyName(item, scope),
       annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { [NETWORK_OF_LABEL]: item.id(), ...getRunLabels(env) },
+      labels: { [NETWORK_OF_LABEL]: item.id(), ...(scope.owners ? {} : getRunLabels(env)) },
+      ...(scope.owners ? { ownerReferences: scope.owners } : {}),
     },
     spec: {
       podSelector: { matchLabels: getItemPodLabels(item, scope) },
