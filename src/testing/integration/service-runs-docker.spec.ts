@@ -3,13 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { request as httpRequest } from 'http'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../test-case'
 import { createTestKey, signToken, startTestIssuer } from '../test-issuer'
-import { HOST_ENV_ALLOW } from '../host-env'
+import { HOST_ENV_ALLOW, hostEnvs } from '../host-env'
 import { TEST_WORKER } from '../worker'
 import { requiresLinuxContainers } from '../requires-linux-containers'
 import { readServerConfig } from '../../server/server-config'
 import { startServer } from '../../server/server'
+import { WorkerMessage, workerMain } from '../../server/run-worker'
 
 const REPO = 'github.com/corp/shop'
 const DOMAIN = 'run.test'
@@ -229,6 +231,67 @@ describe('service runs (docker)', () => {
       } finally {
         await idp.close()
         rmSync(repository, { recursive: true, force: true })
+      }
+    }),
+    180_000
+  )
+
+  // The process of a service run has nothing that ends it but the server: once its input
+  // ends, as when the server is gone, it stops the services instead of keeping them up.
+  it(
+    'stops the services of its process when the input of the process ends',
+    requiresLinuxContainers(async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hammerkit-service-worker-'))
+      try {
+        writeFileSync(
+          join(directory, '.hammerkit.yaml'),
+          [
+            'services:',
+            '  web:',
+            '    image: nginx:alpine',
+            '    ports: [0:80]',
+            '    healthcheck: { cmd: wget -q -O /dev/null http://127.0.0.1/ }',
+            '',
+          ].join('\n')
+        )
+        const lines: string[] = []
+        const stdout = new Writable({
+          write(chunk, _encoding, callback) {
+            lines.push(...chunk.toString().split('\n').filter(Boolean))
+            callback()
+          },
+        })
+        const messages = () => lines.map((line) => JSON.parse(line) as WorkerMessage)
+        const stdin = new PassThrough()
+        stdin.write(
+          `${JSON.stringify({
+            entry: join(directory, '.hammerkit.yaml'),
+            tasks: [],
+            options: { cache: 'none' },
+            accounts: [],
+            catalog: { providers: {}, accounts: {} },
+            up: { services: ['web'], endpoints: [{ service: 'web', port: 80 }] },
+          })}\n`
+        )
+        const done = workerMain(stdin, stdout, hostEnvs(), directory, new AbortController())
+        const until = Date.now() + 100_000
+        let up = messages().find((message) => message.kind === 'up')
+        while (!up && Date.now() < until && !messages().some((message) => message.kind === 'result')) {
+          await new Promise((resolve) => setTimeout(resolve, 200))
+          up = messages().find((message) => message.kind === 'up')
+        }
+        expect(up).toBeDefined()
+        const address = up?.kind === 'up' ? up.targets[0].address : undefined
+        const url = `http://${address?.host}:${address?.port}/`
+        expect(await (await fetch(url)).text()).toContain('Welcome to nginx')
+
+        // the server is gone: the input ends without a cancel
+        stdin.end()
+        await done
+        expect(messages()[messages().length - 1]).toMatchObject({ kind: 'result' })
+        await expect(fetch(url)).rejects.toThrow()
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
       }
     }),
     180_000

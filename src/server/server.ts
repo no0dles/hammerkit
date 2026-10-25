@@ -300,6 +300,40 @@ async function extendRun(
   }
 }
 
+// Why the owner of a service run that sleeps may no longer run it, with the entitlements of
+// the moment: a wake is started by who opens an endpoint, but runs as the owner, as a new
+// run of theirs would.
+export function refuseWake(config: ServerConfig, repos: Pick<RepoAccess, 'readable'>, run: Run): string | undefined {
+  if (run.source.type !== 'ref') {
+    return 'a run from a sandbox does not wake'
+  }
+  const grant = getGrant(config.entitlements, {
+    iss: run.owner.iss,
+    sub: run.owner.sub,
+    groups: run.owner.groups ?? [],
+    claims: run.owner.claims ?? {},
+  })
+  const decision = decideRun({
+    grant,
+    accounts: run.accounts,
+    catalog: config.accounts,
+    source: { type: 'ref', repo: run.source.repo, ref: run.source.ref },
+    // an account it may only request is refused, the wake has nobody to approve it
+    approvable: () => true,
+    readable: (repo) => repos.readable(repo),
+  })
+  if (decision.type === 'refuse') {
+    return `its owner ${run.owner.sub} may no longer run it: ${decision.error.replace(/^you /, 'they ')}`
+  }
+  if (decision.type === 'approval') {
+    return `its owner ${run.owner.sub} may only request ${decision.accounts.join(', ')} now, start it again`
+  }
+  if (run.up?.endpoints.length && endpointLevel(grant, run.source.repo) !== 'publish') {
+    return `its owner ${run.owner.sub} may no longer publish endpoints of ${run.source.repo}`
+  }
+  return undefined
+}
+
 function toRunResponse(run: Run): Omit<Run, 'owner'> {
   const { owner, ...visible } = run
   void owner
@@ -513,9 +547,15 @@ async function submitRun(
           ),
         }
       : undefined
+  // a run that may sleep keeps what its owner is entitled by, for the check of a wake
+  const claimNames = new Set(config.entitlements.flatMap((entitlement) => Object.keys(entitlement.claims?.match ?? {})))
+  const owner = {
+    ...principal,
+    claims: Object.fromEntries(Object.entries(principal.claims).filter(([name]) => claimNames.has(name))),
+  }
   const submit = (runSource: RunSource) =>
     registry.submit(
-      principal,
+      owner,
       {
         definition: version.hash,
         tasks: request.tasks,
@@ -822,6 +862,7 @@ export async function startServer(
         log,
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.now ? { now: options.now } : {}),
+        mayWake: (run) => refuseWake(config, repos, run),
       })
     : undefined
   await gateway?.load()

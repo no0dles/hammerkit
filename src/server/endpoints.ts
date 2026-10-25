@@ -37,6 +37,8 @@ export interface EndpointGatewayOptions {
   log: (line: string) => void
   fetch?: typeof fetch
   now?: () => number
+  // why the owner of a run that sleeps may no longer run it, which a wake checks
+  mayWake?: (run: Run) => string | undefined
 }
 
 interface Session {
@@ -188,7 +190,7 @@ export class EndpointGateway {
       return page(res, 404, 'Not found', '<p>There is no such page.</p>')
     }
     // a request keeps the services up, or wakes them
-    const refused = this.registry.visit(found.run.id)
+    const refused = this.registry.visit(found.run.id, this.options.mayWake)
     if (!found.target) {
       return this.notUp(res, this.registry.endpoint(label)?.run ?? found.run, refused)
     }
@@ -215,7 +217,7 @@ export class EndpointGateway {
     if (new URL(req.url ?? '/', 'http://endpoint').pathname.startsWith(OWN_PATH)) {
       return refuse(404, 'Not Found')
     }
-    this.registry.visit(found.run.id)
+    this.registry.visit(found.run.id, this.options.mayWake)
     const target = found.target
     if (!target) {
       return refuse(503, 'Service Unavailable')
@@ -276,8 +278,8 @@ export class EndpointGateway {
   }
 
   // Whether the browser sends the request for another page than the endpoint's own: an
-  // upgrade from another origin, or a request a page of another site makes, but a link
-  // followed to the endpoint. Without Sec-Fetch-Site, by its Origin.
+  // upgrade from another origin, or a request a page of another site makes (a frame too),
+  // but a link followed to the endpoint. Without Sec-Fetch-Site, by its Origin.
   private fromElsewhere(label: string, req: IncomingMessage): boolean {
     const origin = req.headers.origin
     const own = this.url(label, '/').slice(0, -1)
@@ -286,7 +288,13 @@ export class EndpointGateway {
     }
     const site = req.headers['sec-fetch-site']
     if (site === 'same-site' || site === 'cross-site') {
-      return !(req.headers['sec-fetch-mode'] === 'navigate' && (req.method === 'GET' || req.method === 'HEAD'))
+      // a page of its own the person goes to, not one framed by another site
+      const dest = req.headers['sec-fetch-dest']
+      return !(
+        req.headers['sec-fetch-mode'] === 'navigate' &&
+        (dest === undefined || dest === 'document') &&
+        (req.method === 'GET' || req.method === 'HEAD')
+      )
     }
     return site === undefined && origin !== undefined && origin !== own
   }

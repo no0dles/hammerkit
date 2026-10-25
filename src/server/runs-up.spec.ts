@@ -244,6 +244,29 @@ describe('RunRegistry service runs', () => {
     expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4200))
   })
 
+  it('ends instead of waking when its owner may no longer run it, and keeps their rights for the check', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor })
+    const owner = { ...alice, groups: ['dev'], claims: { repository: 'corp/shop' } }
+    const run = registry.submit(owner, spec('feature', HOUR, 10))
+    const plain = registry.submit(owner, spec('plain'))
+    await tick()
+    started[0].up([target(4100)])
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(registry.get(alice, run.id)?.state).toBe('asleep')
+    const seen: unknown[] = []
+    const refused = registry.visit(run.id, (asleep) => {
+      seen.push(asleep.owner)
+      return 'its owner alice may no longer run it'
+    })
+    expect(refused).toBe('its owner alice may no longer run it')
+    expect(seen).toEqual([owner])
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'failed', error: refused })
+    expect(started).toHaveLength(2)
+    // a run that does not sleep keeps no more of its owner than who they are
+    expect(registry.get(alice, plain.id)?.owner).toEqual(alice)
+  })
+
   it('ends at its ttl, asleep or not, and when it is stopped or replaced while asleep', async () => {
     const { executor, started } = services()
     const registry = new RunRegistry({ executor })
@@ -290,6 +313,32 @@ describe('RunRegistry service runs', () => {
       await tick()
       expect(next.started).toHaveLength(1)
       await restarted.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('is asleep after the server went away while it was up, when it may sleep', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      const { executor, started } = services()
+      const registry = new RunRegistry({ executor, store: new FileRunStore(directory) })
+      const run = registry.submit(alice, spec('sleepy', HOUR, HOUR))
+      await vi.waitFor(() => expect(started).toHaveLength(1))
+      started[0].up([target(4100)])
+      // the record says it is up, as it does when the server is killed
+      await vi.waitFor(
+        async () => {
+          const { records } = await new FileRunStore(directory).load()
+          expect(records.find((record) => record.run.id === run.id)?.run.state).toBe('up')
+        },
+        { timeout: 10_000 }
+      )
+      const restarted = new RunRegistry({ executor: services().executor, store: new FileRunStore(directory) })
+      await restarted.restore()
+      expect(restarted.get(alice, run.id)?.state).toBe('asleep')
+      await restarted.close()
+      await registry.close()
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }

@@ -1,6 +1,7 @@
 import { runRequestSchema } from './run-request'
 import { serverConfigSchema } from './server-config'
 import { getEndpointHosts, getServiceRunName, mayOpenEndpoints, refuseEndpoints } from './service-runs'
+import { refuseWake } from './server'
 import { getEndpointTargets, publishEndpoints } from './run-worker'
 import { getServiceRunNamespace, getServerIngressPolicy, isCallerNamespace } from './kubernetes-backend'
 import type { TaskPlan } from './plan'
@@ -214,5 +215,50 @@ describe('the namespace of a service run', () => {
     const names = [0, 1, 2].map((wakes) => getServiceRunNamespace('hk-', 'run_abc', wakes))
     expect(new Set(names).size).toBe(3)
     expect(names[0]).toBe(getServiceRunNamespace('hk-', 'run_abc'))
+  })
+})
+
+describe('refuseWake', () => {
+  const config = (entitlements: object[]) =>
+    serverConfigSchema.parse({
+      issuers: [{ issuer: ISS, audience: 'hammerkit' }],
+      runs: { env: { allow: ['PATH'] } },
+      secretProviders: { echo: { command: ['echo', '{{ref}}'] } },
+      accounts: { 'shop-dev': { providers: { echo: { env: {} } } } },
+      entitlements,
+    })
+  const repos = { readable: () => true }
+  const run = (accounts: string[] = []) =>
+    ({
+      id: 'run_abc',
+      owner: { iss: ISS, sub: 'alice', groups: ['dev'], claims: {} },
+      accounts,
+      source: { ...source, commit: 'c'.repeat(40) },
+      up: { endpoints: [{ service: 'web', port: 80 }] },
+    }) as any
+  const dev = { group: { iss: ISS, name: 'dev' }, repos: ['github.com/corp/*'], builds: 'run' }
+  const publish = { endpoints: [{ repo: 'github.com/corp/*', level: 'publish' }] }
+
+  it('lets a run wake while its owner may still run and publish it', () => {
+    expect(refuseWake(config([{ ...dev, ...publish }]), repos, run())).toBeUndefined()
+    expect(
+      refuseWake(config([{ ...dev, ...publish, accounts: { 'shop-dev': 'use' } }]), repos, run(['shop-dev']))
+    ).toBeUndefined()
+  })
+
+  it('ends it once the owner lost what it needs', () => {
+    expect(refuseWake(config([{ ...dev, group: { iss: ISS, name: 'ops' }, ...publish }]), repos, run())).toMatch(
+      /^its owner alice may no longer run it: they are not entitled/
+    )
+    expect(refuseWake(config([dev]), repos, run())).toBe(
+      'its owner alice may no longer publish endpoints of github.com/corp/shop'
+    )
+    expect(refuseWake(config([{ ...dev, ...publish }]), { readable: () => false }, run())).toMatch(
+      /^its owner alice may no longer run it/
+    )
+    // an account it may only request has nobody to approve it on a wake
+    expect(
+      refuseWake(config([{ ...dev, ...publish, accounts: { 'shop-dev': 'request' } }]), repos, run(['shop-dev']))
+    ).toBe('its owner alice may only request shop-dev now, start it again')
   })
 })

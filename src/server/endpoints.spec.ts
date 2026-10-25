@@ -454,6 +454,9 @@ describe('EndpointGateway', () => {
     // a link followed from a sibling page, and the endpoint's own requests
     const link = { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' }
     expect((await get(host, '/', link)).status).toBe(200)
+    expect((await get(host, '/', { ...link, 'sec-fetch-dest': 'document' })).status).toBe(200)
+    // not the endpoint in a frame of a sibling page
+    expect((await get(host, '/', { ...link, 'sec-fetch-dest': 'iframe' })).status).toBe(401)
     const own = { cookie, 'sec-fetch-site': 'same-origin', origin: `http://${host}.${DOMAIN}:${port}` }
     expect((await get(host, '/api/save', own, 'POST')).status).toBe(200)
   })

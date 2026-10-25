@@ -124,8 +124,9 @@ export interface TaskResult {
 
 export interface Run extends RunSpec {
   id: string
-  // who submitted it: only they see it
-  owner: { iss: string; sub: string }
+  // who submitted it: only they see it. A run that may sleep keeps the groups and claims
+  // its owner was entitled by, so a wake checks the owner's rights of the moment.
+  owner: { iss: string; sub: string; groups?: string[]; claims?: Record<string, string> }
   approvals?: RunApproval[]
   state: RunState
   createdAt: string
@@ -389,7 +390,11 @@ export class RunRegistry {
 
   // A run that needs approvals (for the accounts named) waits for them, the others
   // are queued at once.
-  submit(owner: Pick<Principal, 'iss' | 'sub'>, spec: RunSpec, approvalAccounts: string[] = []): Run {
+  submit(
+    owner: Pick<Principal, 'iss' | 'sub'> & Partial<Pick<Principal, 'groups' | 'claims'>>,
+    spec: RunSpec,
+    approvalAccounts: string[] = []
+  ): Run {
     if (this.closed) {
       throw new RunError('the server is shutting down')
     }
@@ -405,7 +410,11 @@ export class RunRegistry {
     const run: Run = {
       ...spec,
       id: `run_${randomBytes(12).toString('base64url')}`,
-      owner: { iss: owner.iss, sub: owner.sub },
+      owner: {
+        iss: owner.iss,
+        sub: owner.sub,
+        ...(spec.up?.sleepTtl ? { groups: [...(owner.groups ?? [])], claims: { ...(owner.claims ?? {}) } } : {}),
+      },
       state: waiting ? 'awaiting-approval' : 'queued',
       createdAt: this.timestamp(),
     }
@@ -1048,9 +1057,10 @@ export class RunRegistry {
   /**
    * A request to an endpoint of a service run: one that is up stays up for its sleepTtl from
    * now, one that is asleep is started again (it holds its place of runs.up.limits while it
-   * sleeps). Answers why it was not woken, or undefined.
+   * sleeps), if `mayWake` finds its owner may still run it: else it ends. Answers why it was
+   * not woken, or undefined.
    */
-  visit(id: string): string | undefined {
+  visit(id: string, mayWake?: (run: Run) => string | undefined): string | undefined {
     const entry = this.entries.get(id)
     if (!entry?.run.up) {
       return undefined
@@ -1067,6 +1077,11 @@ export class RunRegistry {
     if (!this.maySleep(entry)) {
       this.expireLater(entry)
       return 'its time ran out'
+    }
+    const refused = mayWake?.(this.copy(entry.run))
+    if (refused) {
+      this.finish(entry, 'failed', refused)
+      return refused
     }
     this.clearTimer(entry)
     entry.abort = new AbortController()

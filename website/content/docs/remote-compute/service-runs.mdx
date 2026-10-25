@@ -121,6 +121,12 @@ reloads until they are up (`503` with `Retry-After` for other clients). Every re
 WebSocket keeps it up for its `sleepTtl` from then. The `ttl` goes on counting while it
 sleeps; at its end the run ends, as one that never slept.
 
+A wake runs as the run's owner, whoever opened the endpoint, so it checks the owner's
+entitlements of the moment (by the groups and claims of their token when they started it): an
+owner who may no longer run from the repository, use its accounts or publish its endpoints
+ends the run instead, with the reason as its error. An account they may only request ends it
+too, nobody is there to approve it; start the run again.
+
 A woken run starts from nothing: what its services kept in their containers is gone, as on a
 new run. A run from a sandbox doesn't sleep, its files change under it; push the sandbox and
 start the branch.
@@ -172,8 +178,9 @@ somebody who may not open it, `403`.
 
 The endpoints share one site, so a browser sends the cookie of one along when the page of
 another asks it something. The app of one endpoint is not to act as its visitor on another:
-a request that a page of another endpoint (or site) makes, and a WebSocket whose `Origin` is
-not the endpoint's own, don't count as signed in. Following a link to an endpoint does.
+a request that a page of another endpoint (or site) makes, the endpoint in a frame of such a
+page, and a WebSocket whose `Origin` is not the endpoint's own, don't count as signed in.
+Following a link to an endpoint does.
 
 ## What the app gets
 
@@ -267,7 +274,8 @@ gets a new one): the services stay up for hours while the caller's other runs go
 theirs. The server reaches an endpoint at the Service of its service, so it has to run in the
 cluster (not with a `kubeconfig`), and one more NetworkPolicy of the namespace lets the
 server's namespace in, to the ports of the endpoints only: a database of the run stays for
-its pods. Keep other pods out of the server's namespace.
+its pods. Any pod in the server's namespace gets that way in too, so run the server alone in
+its namespace: no runs, sandboxes or other workloads there.
 
 Its ClusterRole needs `delete` on namespaces, which an admission policy keeps to the
 namespaces of its service runs (see
