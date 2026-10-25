@@ -1,3 +1,11 @@
+# [1.27.0-next.18](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.17...v1.27.0-next.18) (2026-10-25)
+
+
+### Bug Fixes
+
+* clearer errors and local-run fixes from iwentsourcing next.17 ([4e17c7b](https://github.com/no0dles/hammerkit/commit/4e17c7ba9c7a098635c44ba8dcd5255066291622))
+* review round 1 of the next.17 fixes ([9d8a066](https://github.com/no0dles/hammerkit/commit/9d8a066fa55787ab9f3b8d390ffb884cae05d53f))
+
 # [1.27.0-next.17](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.16...v1.27.0-next.17) (2026-10-25)
 
 
