@@ -1,3 +1,15 @@
+# [1.27.0-next.14](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.13...v1.27.0-next.14) (2026-10-25)
+
+
+### Bug Fixes
+
+* review of the task tools: their turn tested, shell guardrail documented ([9670445](https://github.com/no0dles/hammerkit/commit/967044599ea93338c2d0732f59107296b1efa2b3))
+
+
+### Features
+
+* run_task and run_logs in the opencode plugin, and no shell task needed ([f6331c2](https://github.com/no0dles/hammerkit/commit/f6331c21fcb0a224738468aa87aeb7756675d663))
+
 # [1.27.0-next.13](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.12...v1.27.0-next.13) (2026-10-25)
 
 
