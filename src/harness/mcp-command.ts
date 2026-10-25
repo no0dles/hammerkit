@@ -5,6 +5,18 @@ import { getErrorMessage } from '../log'
 import { getVersion } from '../version'
 import { connectSandbox, DEFAULT_SHELL_TASK } from './connect'
 import { createMcpTools, serveMcp } from './mcp'
+import { SandboxClient } from './sandbox-client'
+import { TaskListing } from './task-tools'
+
+// the tasks run_task lists; a server that does not answer leaves them out, the tools still work
+async function listTasks(sandbox: SandboxClient, log: (line: string) => void): Promise<TaskListing> {
+  try {
+    return await sandbox.tasks()
+  } catch (e) {
+    log(`the tasks of ${sandbox.build.hash} could not be listed: ${getErrorMessage(e)}`)
+    return { error: getErrorMessage(e) }
+  }
+}
 
 // `hammerkit remote mcp`: a Model Context Protocol server on stdio for one sandbox of a
 // server. It lives under `remote`, which already is a command: a top-level `mcp` would hide a
@@ -28,7 +40,7 @@ export function registerMcpCommand(remote: Command, environment: Environment, in
       )
     )
     .addOption(
-      new Option('--shell <task>', 'its task whose last command is a shell, like sh -c')
+      new Option('--shell <task>', "its task whose last command is a shell, like sh -c; '' for no bash tool")
         .env('HAMMERKIT_SHELL')
         .default(DEFAULT_SHELL_TASK)
     )
@@ -38,15 +50,21 @@ export function registerMcpCommand(remote: Command, environment: Environment, in
         const log = (line: string) => environment.stderr.write(`hammerkit remote mcp: ${line}\n`)
         const sandbox = await connectSandbox(environment, options, log)
         log(`sandbox ${sandbox.id} of ${sandbox.sandbox.repo} at ${sandbox.sandbox.commit}`)
+        const shell = sandbox.build.shell
         const instructions =
           `The tools work on hammerkit sandbox ${sandbox.id}, a checkout of ${sandbox.sandbox.repo} at ` +
-          `${sandbox.sandbox.commit} on a server. Paths are relative to its root. bash runs a command as the ` +
-          `task ${sandbox.build.shell} of the published build file ${sandbox.build.hash}, run_task runs its other ` +
-          'tasks; only the files are kept between commands. changes shows what changed since the fetch.'
+          `${sandbox.sandbox.commit} on a server. Paths are relative to its root. ` +
+          (shell
+            ? `bash runs a command as the task ${shell} of the published build file ${sandbox.build.hash}, ` +
+              'run_task runs its other tasks; only the files are kept between commands. '
+            : `run_task runs the tasks of the published build file ${sandbox.build.hash}; only the files are ` +
+              'kept between runs. ') +
+          'changes shows what changed since the fetch.'
+        const tasks = await listTasks(sandbox, log)
         const served = serveMcp(
           input,
           environment.stdout,
-          createMcpTools(async () => sandbox),
+          createMcpTools(async () => sandbox, { tasks, shell: shell || false }),
           {
             name: 'hammerkit',
             version: getVersion(),
