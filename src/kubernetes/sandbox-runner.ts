@@ -38,8 +38,8 @@ import { getSandboxAffinity, KubernetesPersistence, SANDBOX_LABEL } from './volu
  *   node of the pod of the sandbox's files. It is named after all of that (getRunnerKey),
  *   so a change starts a new one and the one before goes. Its first process only waits.
  * - Every command runs in a wrapper that first and last kills every other process of the
- *   container and empties /tmp and /dev/shm: the container is reused, what a command
- *   started is not. A command cancelled, out of time or whose connection broke is killed
+ *   container and empties /tmp and /dev/shm (unless a mount of the task is in one): the
+ *   container is reused, what a command started is not. A command cancelled, out of time or whose connection broke is killed
  *   the same way, or the pod is deleted. The first process and the wrapper run a static
  *   busybox from a read-only mount, so a command can not replace what cleans up after it.
  * - Under a limited network it has a NetworkPolicy of its own and, under `allow`, the
@@ -61,6 +61,7 @@ export const RUNNER_TOOLS_IMAGE =
   'busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092'
 const RUNNER_START_MS = 5 * 60 * 1000
 const RUNNER_POLL_MS = 250
+const PULL_FAILURES = ['ErrImagePull', 'ImagePullBackOff', 'InvalidImageName']
 const KILL_TIMEOUT_MS = 10000
 // a command's output is kept to this, as the log of a Job
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -70,24 +71,40 @@ const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 // the commands left
 export const IDLE_COMMAND = [BUSYBOX, 'sh', '-c', `trap "exit 0" TERM; while :; do ${BUSYBOX} sleep 3600 & wait; done`]
 
+const SCRATCH_DIRECTORIES = ['/tmp', '/dev/shm']
+
+// The scratch directories the runner empties: not one that holds a mount of the task, or is
+// in one, such as the sandbox's files when the server keeps its runs below /tmp
+export function getScratchDirectories(persistence: Pick<KubernetesPersistence, 'mounts'>): string[] {
+  const within = (path: string, directory: string) => path === directory || path.startsWith(`${directory}/`)
+  return SCRATCH_DIRECTORIES.filter((directory) =>
+    persistence.mounts.every(({ mount }) => !within(mount.mountPath, directory) && !within(directory, mount.mountPath))
+  )
+}
+
 // Kills every process of the container but the first and the shell itself (`kill` is the
-// shell's own), again while one forked meanwhile, then empties /tmp and /dev/shm
-export const CLEAN_UP = [
-  'i=0',
-  'while kill -KILL -1 2>/dev/null && [ $i -lt 10 ]; do i=$((i+1)); done',
-  `${BUSYBOX} rm -rf /tmp/* /tmp/.[!.]* /tmp/..?* /dev/shm/* /dev/shm/.[!.]* /dev/shm/..?* 2>/dev/null`,
-].join('\n')
+// shell's own), again while one forked meanwhile, then empties the scratch directories
+export function getCleanUp(directories: string[]): string {
+  const patterns = directories.flatMap((directory) => [`${directory}/*`, `${directory}/.[!.]*`, `${directory}/..?*`])
+  return [
+    'i=0',
+    'while kill -KILL -1 2>/dev/null && [ $i -lt 10 ]; do i=$((i+1)); done',
+    ...(patterns.length > 0 ? [`${BUSYBOX} rm -rf ${patterns.join(' ')} 2>/dev/null`] : []),
+  ].join('\n')
+}
 
 // Runs `"$@"` in the directory `$1`, alone in the container: what an earlier command left
 // is cleaned up before, what this one left after. Its exit code is the command's.
-export const WRAPPER = [CLEAN_UP, 'cd "$1" || exit 126', 'shift', '"$@"', 'code=$?', CLEAN_UP, 'exit $code'].join('\n')
+export function getWrapper(cleanUp: string): string {
+  return [cleanUp, 'cd "$1" || exit 126', 'shift', '"$@"', 'code=$?', cleanUp, 'exit $code'].join('\n')
+}
 
 // the sandboxes whose runner a task of this process uses: one command at a time each, the
 // other tasks of the run run as Jobs meanwhile
 const inUse = new Set<string>()
-// runners whose container ended as it started (an image without `sh`, say): their tasks
-// run as Jobs while the pod of the sandbox's files, part of the key, stays
-const failed = new Set<string>()
+// per sandbox, the runners whose container ended as it started (an image without `sh`, or
+// one that can not be pulled): their tasks run as Jobs while that pod of the files stays
+const failed = new Map<string, { pod: string; keys: Set<string> }>()
 
 // Whether the task's commands may run in the sandbox's runner
 export function canUseRunner(
@@ -255,7 +272,8 @@ export async function executeInRunner(
     }
     const key = getRunnerKey(task, kubernetes, persistence)
     const name = getRunnerName(key)
-    if (failed.has(key)) {
+    const failedOf = failed.get(workspace.label)
+    if (failedOf?.pod === filesPod.uid && failedOf.keys.has(key)) {
       return { type: 'unavailable' }
     }
     // its policy and proxy select it by the key, and stay for the next runs
@@ -285,7 +303,10 @@ export async function executeInRunner(
         )
         if (!('pod' in started)) {
           if (started.reason === 'ended') {
-            failed.add(key)
+            if (failedOf?.pod !== filesPod.uid) {
+              failed.set(workspace.label, { pod: filesPod.uid, keys: new Set() })
+            }
+            failed.get(workspace.label)!.keys.add(key)
           }
           task.status.write(
             'debug',
@@ -306,6 +327,7 @@ export async function executeInRunner(
       } else {
         task.status.write('debug', `runs in the runner ${name} of the sandbox`)
       }
+      const cleanUp = getCleanUp(getScratchDirectories(persistence))
       for (const cmd of task.data.cmds) {
         task.status.write('debug', `execute ${cmd.cmd} in the runner of the sandbox`)
         const exitCode = await execInRunner(
@@ -314,6 +336,7 @@ export async function executeInRunner(
           name,
           cmd.cwd,
           [task.data.shell, '-c', cmd.cmd],
+          cleanUp,
           task,
           abort
         )
@@ -423,11 +446,21 @@ async function startRunner(
     if (pod.status?.phase === 'Running' && status?.state?.running) {
       return { pod }
     }
-    const ended = pod.status?.phase === 'Failed' || pod.status?.phase === 'Succeeded' || !!status?.state?.terminated
+    // an image that can not be pulled waits forever, as good as ended
+    const unpulled = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])].find(
+      (s) => PULL_FAILURES.includes(s.state?.waiting?.reason ?? '')
+    )
+    const ended =
+      pod.status?.phase === 'Failed' || pod.status?.phase === 'Succeeded' || !!status?.state?.terminated || !!unpulled
     if (ended || abort.aborted || Date.now() > deadline) {
       await deletePod(instance, namespace, name).catch(() => undefined)
       return ended
-        ? { reason: 'ended', message: `its container ended with ${status?.state?.terminated?.exitCode ?? 'no code'}` }
+        ? {
+            reason: 'ended',
+            message: unpulled
+              ? `${unpulled.state?.waiting?.reason} of ${unpulled.image}`
+              : `its container ended with ${status?.state?.terminated?.exitCode ?? 'no code'}`,
+          }
         : { reason: 'stopped', message: abort.aborted ? 'the task was stopped' : 'it took too long' }
     }
     await sleep(RUNNER_POLL_MS)
@@ -440,8 +473,12 @@ export async function removeSandboxRunners(
   instance: KubernetesInstance,
   namespace: string,
   sandbox: string,
-  keep: (pod: V1Pod) => boolean = () => false
+  keep?: (pod: V1Pod) => boolean
 ): Promise<void> {
+  if (!keep) {
+    // all of the sandbox's runners go: so does what was remembered of them
+    failed.delete(sandbox)
+  }
   const pods = await instance.coreApi.listNamespacedPod({
     namespace,
     labelSelector: `${SANDBOX_LABEL}=${sandbox},${RUNNER_LABEL}`,
@@ -449,7 +486,7 @@ export async function removeSandboxRunners(
   for (const pod of pods.items) {
     const name = pod.metadata?.name
     const key = pod.metadata?.labels?.[ID_LABEL]
-    if (!name || keep(pod)) {
+    if (!name || keep?.(pod)) {
       continue
     }
     await deletePod(instance, namespace, name)
@@ -496,6 +533,7 @@ async function execInRunner(
   pod: string,
   cwd: string,
   command: string[],
+  cleanUp: string,
   task: WorkItem<ContainerWorkTask>,
   abort: AbortSignal
 ): Promise<number> {
@@ -536,7 +574,7 @@ async function execInRunner(
     namespace,
     pod,
     RUNNER_CONTAINER,
-    [BUSYBOX, 'sh', '-c', WRAPPER, 'hammerkit', cwd, ...command],
+    [BUSYBOX, 'sh', '-c', getWrapper(cleanUp), 'hammerkit', cwd, ...command],
     stdout,
     stderr,
     null,
@@ -551,7 +589,7 @@ async function execInRunner(
   })
   const kill = async () => {
     try {
-      await killInRunner(instance, namespace, pod)
+      await killInRunner(instance, namespace, pod, cleanUp)
     } catch (e) {
       task.status.write('debug', `the command could not be stopped in the runner, it goes: ${getErrorMessage(e)}`)
       await deletePod(instance, namespace, pod).catch(() => undefined)
@@ -601,13 +639,18 @@ async function execInRunner(
   return exitCode
 }
 
-async function killInRunner(instance: KubernetesInstance, namespace: string, pod: string): Promise<void> {
+async function killInRunner(
+  instance: KubernetesInstance,
+  namespace: string,
+  pod: string,
+  cleanUp: string
+): Promise<void> {
   let status: V1Status | undefined
   const socket = await instance.exec.exec(
     namespace,
     pod,
     RUNNER_CONTAINER,
-    [BUSYBOX, 'sh', '-c', CLEAN_UP],
+    [BUSYBOX, 'sh', '-c', cleanUp],
     null,
     null,
     null,

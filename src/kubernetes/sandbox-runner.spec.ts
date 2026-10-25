@@ -3,15 +3,19 @@ import { Writable } from 'stream'
 import {
   buildRunnerPod,
   canUseRunner,
-  CLEAN_UP,
+  getCleanUp,
+  getScratchDirectories,
+  getWrapper,
   executeInRunner,
   getExecExitCode,
   getRunnerKey,
   getRunnerName,
   removeSandboxRunners,
   RUNNER_TOOLS_IMAGE,
-  WRAPPER,
 } from './sandbox-runner'
+
+const CLEAN_UP = getCleanUp(['/tmp', '/dev/shm'])
+const WRAPPER = getWrapper(CLEAN_UP)
 import { ensureKubernetesItemNetwork } from './network-policy'
 import { KubernetesPersistence } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -204,6 +208,22 @@ describe('the runner of a sandbox', () => {
       { name: 'hammerkit-runner-tmp', emptyDir: {} },
       { name: 'hammerkit-runner-tools', emptyDir: {} },
     ])
+  })
+
+  it('leaves a scratch directory alone that holds a mount of the task, or is in one', () => {
+    const at = (mountPath: string) => ({
+      mount: { name: 'hammerkit-sandbox', mountPath },
+      cwd: mountPath,
+      uploadPath: '',
+    })
+    expect(getScratchDirectories({ mounts: [at('/build')] })).toEqual(['/tmp', '/dev/shm'])
+    // a server that keeps its runs below /tmp: the files of the sandbox are there
+    expect(getScratchDirectories({ mounts: [at('/tmp/hammerkit-1/run/sandbox/src')] })).toEqual(['/dev/shm'])
+    expect(getScratchDirectories({ mounts: [at('/tmp')] })).toEqual(['/dev/shm'])
+    expect(getScratchDirectories({ mounts: [at('/dev')] })).toEqual(['/tmp'])
+    expect(getScratchDirectories({ mounts: [at('/tmpfiles')] })).toEqual(['/tmp', '/dev/shm'])
+    expect(getCleanUp([])).not.toContain('rm')
+    expect(getCleanUp(['/dev/shm'])).not.toContain('/tmp')
   })
 
   it('cleans up with the busybox of the tools only, before and after the command', () => {
@@ -482,6 +502,29 @@ describe('the runner of a sandbox', () => {
         { type: 'unavailable' }
       )
       expect(calls.filter((call) => call.startsWith('create'))).toHaveLength(tried)
+    })
+
+    it('leaves a task to its Jobs at once when an image of the runner can not be pulled', async () => {
+      const { instance, calls, pods } = cluster(() => ({ status: { status: 'Success' } }))
+      instance.objectApi.create = async (spec: any) => {
+        calls.push(`create ${spec.metadata.name}`)
+        pods.set(spec.metadata.name, {
+          metadata: spec.metadata,
+          status: {
+            phase: 'Pending',
+            initContainerStatuses: [
+              { name: 'hammerkit-runner-tools', image: 'busybox', state: { waiting: { reason: 'ImagePullBackOff' } } },
+            ],
+          },
+        })
+        return spec
+      }
+      const task = shell({ image: 'node:20-alpine' })
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'unavailable' }
+      )
+      expect(task.status.write).toHaveBeenCalledWith('debug', expect.stringContaining('ImagePullBackOff of busybox'))
+      expect(pods.size).toBe(1)
     })
 
     it('leaves a task to its Jobs when the cluster refuses the runner, and tries again next time', async () => {

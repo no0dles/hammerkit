@@ -98,15 +98,19 @@ tasks:
     cmds:
       - echo "host=$(hostname)"
       - sleep 300 > /dev/null 2>&1 &
-      - echo left > /tmp/mark && echo kept > /root/kept
+      # the files of the sandbox are below /tmp when the server's root (a temporary
+      # directory) is: the runner then leaves /tmp alone and empties /dev/shm only
+      - echo left > /dev/shm/mark && echo left > /tmp/mark && echo kept > /root/kept
   look:
     image: alpine:3.19
     src: [src]
     cmds:
       - echo "host=$(hostname)"
       - echo "sleeping=$(ps -o args | grep -c '[s]leep 300')"
-      - test -e /tmp/mark || echo tmp-empty
+      - test -e /dev/shm/mark || echo shm-empty
+      - test -e /tmp/mark && echo tmp-kept || echo tmp-empty
       - echo "root=$(cat /root/kept)"
+      - test -e /dev/shm/cancelled || echo cancel-cleaned
   fail:
     image: alpine:3.19
     src: [src]
@@ -116,7 +120,7 @@ tasks:
     image: alpine:3.19
     src: [src]
     cmds:
-      - echo slow-started && sleep 300
+      - echo cancelled > /dev/shm/cancelled && echo slow-started && sleep 300
 `
 
 describe('sandboxes on a kubernetes backend', () => {
@@ -378,7 +382,7 @@ describe('sandboxes on a kubernetes backend', () => {
       expect((seen as string).split(',').filter((name) => name && name !== 'lost+found')).toEqual(['files'])
 
       // a shell's commands go into the runner of the sandbox, the next ones into the same pod:
-      // the container stays, but no process of a command, nor what it left in /tmp
+      // the container stays, but no process of a command, nor what it left in /dev/shm
       const runners = async () =>
         (
           await core.listNamespacedPod({
@@ -396,7 +400,8 @@ describe('sandboxes on a kubernetes backend', () => {
       expect(runner?.metadata?.ownerReferences?.[0]?.uid).toBe(await filesPod())
       expect([...hosts(left.text), ...hosts(looked.text)]).toEqual(Array(2).fill(runner?.metadata?.name))
       expect(looked.text).toContain('sleeping=0')
-      expect(looked.text).toContain('tmp-empty')
+      expect(looked.text).toContain('shm-empty')
+      expect(looked.text).toContain(root.startsWith('/tmp/') ? 'tmp-kept' : 'tmp-empty')
       expect(looked.text).toContain('root=kept')
       // a command's exit code is the task's
       const failed = await execute('run_sbx_fail', 'fail')
@@ -423,6 +428,9 @@ describe('sandboxes on a kubernetes backend', () => {
       const after = await execute('run_sbx_look_2', 'look')
       expect(after.error, after.text).toBeUndefined()
       expect(after.text).toContain('sleeping=0')
+      expect(after.text).toContain('cancel-cleaned')
+      // and the files of the sandbox, below /tmp, are all still there
+      expect((await registry.files(alice, sandbox.id).read('src/app.ts', {})).content).toContain('42')
       expect(hosts(after.text)).toEqual([runner?.metadata?.name])
 
       await registry.remove(alice, sandbox.id)
