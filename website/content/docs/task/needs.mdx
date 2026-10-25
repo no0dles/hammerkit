@@ -82,9 +82,10 @@ tasks:
 
 ## Naming a need
 
-A bare `needs: [postgres]` uses the service under its own name. To depend on a
-service under a different local alias — handy when a referenced/included file
-exposes it under a prefix — use the object form:
+A bare `needs: [postgres]` uses the service under its own name. A service of an
+included or referenced file has a prefixed name, such as `db:postgres`. A host name
+can't contain a colon, so the task reaches it as `db-postgres`, with dashes in place
+of the colons. To use another alias, such as plain `postgres`, use the object form:
 
 ```yaml
 tasks:
@@ -96,6 +97,9 @@ tasks:
     cmds:
       - node index.js
 ```
+
+Two needs of one task can't share a name: a build file that would reach two services
+under the same name is an error that asks for a `name:` on one of them.
 
 See [services](/docs/service) for defining services, lifecycle and the
 [connection-string details](/docs/service#environment-hints-for-local-tasks).

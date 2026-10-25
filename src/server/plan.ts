@@ -15,6 +15,8 @@ import { WorkSecret } from '../planner/work-secret'
 import { isContainerWorkTask, isWorkTask } from '../planner/work-task'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { isVolumeName } from '../planner/utils/hosted-volumes'
+import { getHomeReference } from '../planner/utils/normalize-path'
+import { WorkMount } from '../planner/work-mount'
 import { WorkTask } from '../planner/work-task'
 import { Bundle } from '../remote/bundle'
 import { getErrorMessage } from '../log'
@@ -276,117 +278,144 @@ function describeSecret(secret: WorkSecret): { from: string; account: string | n
 // server has no account, so nothing would stand between the build file and the
 // operator's own credentials.
 function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): string[] {
-  const problems: string[] = []
+  // the problems of each item, said once for the items of a directory that share one, such
+  // as the tasks of an included file that all mount the docker socket
+  const grouped = new Map<string, { names: string[]; problem: string }>()
   for (const item of items) {
-    const runtime = item.data.type === 'local-task' ? 'local' : 'docker'
-    if (policy.runtimes && !policy.runtimes.includes(runtime)) {
-      problems.push(
-        `${
-          item.name
-        }: runs on the ${runtime} runtime, which this server does not allow (runtimes: ${policy.runtimes.join(', ')})`
-      )
-    }
-    const data = item.data
-    // what a task reads and writes is the bundle's: `src: ../..` would have the server
-    // copy its own files (its credentials, other callers' caches) into the task
-    for (const source of 'src' in data ? data.src : []) {
-      if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
-        problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
-      }
-    }
-    for (const generate of isWorkTask(data) ? data.generates : []) {
-      if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
-        problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
-      }
-    }
-    // what holds a credential gets at most `runs.secretNetwork`, so a tool it runs can't
-    // send the credential anywhere else
-    const reads = getCredentialReads({
-      secrets: secretsOf(item).map(describeSecret),
-      serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
-    })
-    const ceilings: { ceiling: WorkNetwork; setting: string; reason: string }[] = []
-    if (policy.network && isLimitedNetwork(policy.network)) {
-      ceilings.push({ ceiling: policy.network, setting: 'runs.network', reason: '' })
-    }
-    if (reads.length > 0 && policy.secretNetwork && isLimitedNetwork(policy.secretNetwork)) {
-      ceilings.push({
-        ceiling: policy.secretNetwork,
-        setting: 'runs.secretNetwork',
-        reason: ` to what reads ${reads.join(', ')}`,
-      })
-    }
-    for (const { ceiling, setting, reason } of ceilings) {
-      // on a cluster a local task is a pod of a pool's tool image, limited like any other
-      if (data.type === 'local-task' && policy.backend !== 'kubernetes') {
-        problems.push(
-          `${item.name}: is a local task, which can't be limited to the network this server allows${reason} ` +
-            `(${setting}: ${formatNetwork(ceiling)})`
-        )
-      } else if ('network' in data && exceedsNetwork(data.network, ceiling)) {
-        problems.push(
-          `${item.name}: asks for network ${formatNetwork(data.network)}, more than this server allows${reason} ` +
-            `(${setting}: ${formatNetwork(ceiling)})`
-        )
-      }
-    }
-    if (isContainerWorkTask(data) || isContainerWorkService(data)) {
-      for (const mount of data.mounts) {
-        // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
-        if (insideBundle(root, data.cwd, mount.localPath).length === 0) {
-          problems.push(`${item.name}: mounts ${mount.localPath}, which is outside of the bundle`)
-        }
-      }
-    }
-    for (const volume of isContainerWorkService(data) ? data.volumes : []) {
-      // docker takes anything else for a path of the host, such as the docker socket
-      if (!isVolumeName(volume.name)) {
-        problems.push(`${item.name}: volume ${volume.name} is not a volume name, a path of the server can't be mounted`)
-      }
-    }
-    for (const secret of secretsOf(item)) {
-      const source = secret.source
-      if (policy.backend === 'kubernetes' && source.type === 'provider') {
-        // the server reads no secret of a provider on a cluster: the Job of a task does
-        if (!isWorkTask(item.data)) {
-          problems.push(
-            `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider}, which ` +
-              'this server does for tasks only, a service on its cluster gets no provider secret yet'
-          )
-        } else if (secret.cache) {
-          problems.push(
-            `${item.name}: the secret ${describeSecret(secret).target} has cache: true, its digest would need ` +
-              'the value before the Job of the task reads it, which this server does not support yet'
-          )
-        } else if (isLimitedNetwork(item.data.network) && !policy.proxiedProviders?.includes(source.provider)) {
-          // the init containers that read it share the pod's NetworkPolicy, and reach the
-          // provider only through the egress proxy
-          problems.push(
-            `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider} in the ` +
-              `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it: ` +
-              `this server names no endpoints of ${source.provider} in backend.providers.${source.provider}.allow ` +
-              'for the egress proxy to let through, so the task keeps an open network'
-          )
-        }
-      }
-      if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
-        problems.push(
-          `${item.name}: the secret ${describeSecret(secret).target} is read as ${
-            source.account
-          }, which the server uses to read repositories`
-        )
-      } else if (source.type === 'file') {
-        problems.push(`${item.name}: a secret can not read a file of the server (file:), use a secret provider`)
-      } else if (source.type === 'env' && !policy.envs.includes(source.name)) {
-        problems.push(
-          `${item.name}: the secret ${describeSecret(secret).target} reads env:${
-            source.name
-          }, which the server does not list in ${policy.envsFrom ?? 'runs.env.allow'}`
-        )
+    const prefix = `${item.name}: `
+    for (const problem of findItemPolicyProblems(item, policy, root)) {
+      const said = problem.startsWith(prefix) ? problem.slice(prefix.length) : problem
+      const key = `${item.data.cwd}\0${said}`
+      const group = grouped.get(key)
+      if (group) {
+        group.names.push(item.name)
+      } else {
+        grouped.set(key, { names: [item.name], problem: said })
       }
     }
   }
+  return [...grouped.values()].map(({ names: [name, ...others], problem }) =>
+    others.length > 0 ? `${name} (also ${others.join(', ')}): ${problem}` : `${name}: ${problem}`
+  )
+}
+
+function findItemPolicyProblems(item: Item, policy: PlanPolicy, root: string): string[] {
+  const problems: string[] = []
+  const runtime = item.data.type === 'local-task' ? 'local' : 'docker'
+  if (policy.runtimes && !policy.runtimes.includes(runtime)) {
+    problems.push(
+      `${item.name}: runs on the ${runtime} runtime, which this server does not allow (runtimes: ${policy.runtimes.join(
+        ', '
+      )})`
+    )
+  }
+  const data = item.data
+  // what a task reads and writes is the bundle's: `src: ../..` would have the server
+  // copy its own files (its credentials, other callers' caches) into the task
+  for (const source of 'src' in data ? data.src : []) {
+    if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
+      problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
+    }
+  }
+  for (const generate of isWorkTask(data) ? data.generates : []) {
+    if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
+      problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
+    }
+  }
+  // what holds a credential gets at most `runs.secretNetwork`, so a tool it runs can't
+  // send the credential anywhere else
+  const reads = getCredentialReads({
+    secrets: secretsOf(item).map(describeSecret),
+    serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
+  })
+  const ceilings: { ceiling: WorkNetwork; setting: string; reason: string }[] = []
+  if (policy.network && isLimitedNetwork(policy.network)) {
+    ceilings.push({ ceiling: policy.network, setting: 'runs.network', reason: '' })
+  }
+  if (reads.length > 0 && policy.secretNetwork && isLimitedNetwork(policy.secretNetwork)) {
+    ceilings.push({
+      ceiling: policy.secretNetwork,
+      setting: 'runs.secretNetwork',
+      reason: ` to what reads ${reads.join(', ')}`,
+    })
+  }
+  for (const { ceiling, setting, reason } of ceilings) {
+    // on a cluster a local task is a pod of a pool's tool image, limited like any other
+    if (data.type === 'local-task' && policy.backend !== 'kubernetes') {
+      problems.push(
+        `${item.name}: is a local task, which can't be limited to the network this server allows${reason} ` +
+          `(${setting}: ${formatNetwork(ceiling)})`
+      )
+    } else if ('network' in data && exceedsNetwork(data.network, ceiling)) {
+      problems.push(
+        `${item.name}: asks for network ${formatNetwork(data.network)}, more than this server allows${reason} ` +
+          `(${setting}: ${formatNetwork(ceiling)})`
+      )
+    }
+  }
+  if (isContainerWorkTask(data) || isContainerWorkService(data)) {
+    for (const mount of data.mounts) {
+      // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
+      if (insideBundle(root, data.cwd, mount.localPath).length === 0) {
+        problems.push(`${item.name}: mounts ${describeMountSource(mount)}, which is outside of the bundle`)
+      }
+    }
+  }
+  for (const volume of isContainerWorkService(data) ? data.volumes : []) {
+    // docker takes anything else for a path of the host, such as the docker socket
+    if (!isVolumeName(volume.name)) {
+      problems.push(`${item.name}: volume ${volume.name} is not a volume name, a path of the server can't be mounted`)
+    }
+  }
+  for (const secret of secretsOf(item)) {
+    const source = secret.source
+    if (policy.backend === 'kubernetes' && source.type === 'provider') {
+      // the server reads no secret of a provider on a cluster: the Job of a task does
+      if (!isWorkTask(item.data)) {
+        problems.push(
+          `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider}, which ` +
+            'this server does for tasks only, a service on its cluster gets no provider secret yet'
+        )
+      } else if (secret.cache) {
+        problems.push(
+          `${item.name}: the secret ${describeSecret(secret).target} has cache: true, its digest would need ` +
+            'the value before the Job of the task reads it, which this server does not support yet'
+        )
+      } else if (isLimitedNetwork(item.data.network) && !policy.proxiedProviders?.includes(source.provider)) {
+        // the init containers that read it share the pod's NetworkPolicy, and reach the
+        // provider only through the egress proxy
+        problems.push(
+          `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider} in the ` +
+            `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it: ` +
+            `this server names no endpoints of ${source.provider} in backend.providers.${source.provider}.allow ` +
+            'for the egress proxy to let through, so the task keeps an open network'
+        )
+      }
+    }
+    if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
+      problems.push(
+        `${item.name}: the secret ${describeSecret(secret).target} is read as ${
+          source.account
+        }, which the server uses to read repositories`
+      )
+    } else if (source.type === 'file') {
+      problems.push(`${item.name}: a secret can not read a file of the server (file:), use a secret provider`)
+    } else if (source.type === 'env' && !policy.envs.includes(source.name)) {
+      problems.push(
+        `${item.name}: the secret ${describeSecret(secret).target} reads env:${
+          source.name
+        }, which the server does not list in ${policy.envsFrom ?? 'runs.env.allow'}`
+      )
+    }
+  }
   return problems
+}
+
+// A mount of the home directory says so: `$PWD` in a mount is the home directory, not the
+// project, which reads like a path of the checkout
+function describeMountSource(mount: WorkMount): string {
+  const home = getHomeReference(mount.mount.split(':')[0])
+  return home ? `${mount.localPath} (${home} is the home directory)` : mount.localPath
 }
 
 function toPlan(root: string, item: Item): TaskPlan {

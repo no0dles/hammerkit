@@ -270,10 +270,26 @@ describe('validate (generator)', () => {
 
   it('warns about a container service mount that does not exist', async () => {
     const tree = workTree({
-      services: [serviceItem('db', { mounts: [{ localPath: '/data' } as any] })],
+      services: [serviceItem('db', { mounts: [{ localPath: '/data', mount: '/data' } as any] })],
     })
     const result = await collect(validate(tree, fakeEnv([])))
     expect(result).toContainEqual(expect.objectContaining({ type: 'warn', message: 'mount /data does not exist' }))
+  })
+
+  it('warns that $PWD in a mount is the home directory, not the project', async () => {
+    const mount = { localPath: '/home/me/.local/share/app', mount: '$PWD/.local/share/app:/data' } as any
+    const tree = workTree({
+      services: [serviceItem('db', { mounts: [mount] })],
+      tasks: [
+        taskItem('serve', { type: 'container-task', mounts: [mount] } as any),
+        taskItem('home', { type: 'container-task', mounts: [{ ...mount, mount: '~/.local/share/app:/data' }] } as any),
+      ],
+    })
+    const result = await collect(validate(tree, fakeEnv([mount.localPath])))
+    const message =
+      'mount $PWD/.local/share/app is /home/me/.local/share/app: $PWD in a mount is the home directory, not the ' +
+      'project. Write ~/.local/share/app for the home directory, or a relative path for the project'
+    expect(result.filter((entry) => entry.message === message).map((entry) => entry.item.name)).toEqual(['db', 'serve'])
   })
 
   it('warns when a kubernetes service kubeconfig is missing', async () => {

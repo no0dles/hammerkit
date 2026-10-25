@@ -77,8 +77,20 @@ A mount is written `host[:container]`:
   default). Any other third part is an error.
 
 Host paths can be relative (resolved against the build file's directory), absolute,
-or `~`-relative to your home directory. Relative container paths resolve against the
-task's working directory.
+or in your home directory with `~/` (`~/.npm:/root/.npm`). `$HOME/` means the home
+directory too, unless the task declares a `HOME` in its `envs`, which then takes its
+place. Relative container paths resolve against the task's working directory.
+
+<Callout type="warn">
+
+`$PWD/` at the start of a host path is also your **home directory**, not the project,
+for compatibility with older build files. [`validate`](/docs/cli/validate) warns about
+it. Write `~/` for the home directory, or a relative path for the project.
+
+</Callout>
+
+On a [server](/docs/remote-compute), a host path outside the published files is
+refused, and a home-directory path is named as such in the error.
 
 ### Working directory
 

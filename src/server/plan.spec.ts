@@ -570,6 +570,34 @@ tasks:
     )
   })
 
+  it('says when a mount is in the home directory, which $PWD names', async () => {
+    const refused = (mount: string) =>
+      planBundle(
+        bundle(`tasks:\n  a:\n    image: alpine\n    mounts: ["${mount}:/data"]\n    cmds: [echo]\n`),
+        hosted,
+        {
+          policy,
+        }
+      )
+    await expect(refused('$PWD/.local/share/app')).rejects.toThrow(
+      /a: mounts \S*\.local\/share\/app \(\$PWD is the home directory\), which is outside of the bundle/
+    )
+    await expect(refused('~/.local/share/app')).rejects.toThrow(/\(~ is the home directory\)/)
+    await expect(refused('$HOME/.local/share/app')).rejects.toThrow(/\(\$HOME is the home directory\)/)
+  })
+
+  it('says a problem that several tasks share once, with every name', async () => {
+    const task = '    image: alpine\n    mounts: ["/var/run/docker.sock:/sock"]\n    cmds: [echo]\n'
+    const files = { 'infra/infra.yaml': `tasks:\n  serve:\n${task}  watch:\n${task}` }
+    const yaml = 'includes:\n  infra: ./infra/infra.yaml\ntasks:\n  own:\n' + task
+    const error = await planBundle(bundle(yaml, files), hosted, { policy }).catch((e) => e)
+    expect(error).toBeInstanceOf(DefinitionError)
+    // an included file's tasks run in the directory of the file that includes it
+    expect((error as Error).message).toBe(
+      'own (also infra:serve, infra:watch): mounts /var/run/docker.sock, which is outside of the bundle'
+    )
+  })
+
   it('takes services with named volumes', async () => {
     const yaml =
       'services:\n  db:\n    image: postgres\n    volumes: ["pg-data:/var/lib/postgresql/data", "cache:/cache:ro"]\n' +

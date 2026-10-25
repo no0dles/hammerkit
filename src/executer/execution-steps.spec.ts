@@ -171,7 +171,7 @@ describe('setUserPermissions', () => {
     expect(setUserPermission).not.toHaveBeenCalled()
   })
 
-  it('chowns the cwd and every bind containerPath', async () => {
+  it('chowns the cwd and every bind containerPath but the mounts', async () => {
     const container = {} as any
     const environment = environmentMock(tmpDir)
     const item = makeItem({
@@ -188,13 +188,14 @@ describe('setUserPermissions', () => {
     })
     await setUserPermissions(item, container, environment)
 
-    expect(setUserPermission).toHaveBeenCalledTimes(5)
+    // a mount is a path of the host the build file names (the docker socket): its owner stays
+    expect(setUserPermission).toHaveBeenCalledTimes(4)
+    expect(setUserPermission).not.toHaveBeenCalledWith('/mnt', item.status, environment, container, '1000:1000')
     expect(setUserPermission).toHaveBeenNthCalledWith(1, '/w', item.status, environment, container, '1000:1000')
-    expect(setUserPermission).toHaveBeenNthCalledWith(2, '/mnt', item.status, environment, container, '1000:1000')
-    expect(setUserPermission).toHaveBeenNthCalledWith(3, '/host/src', item.status, environment, container, '1000:1000')
-    expect(setUserPermission).toHaveBeenNthCalledWith(4, '/gen/vol1', item.status, environment, container, '1000:1000')
+    expect(setUserPermission).toHaveBeenNthCalledWith(2, '/host/src', item.status, environment, container, '1000:1000')
+    expect(setUserPermission).toHaveBeenNthCalledWith(3, '/gen/vol1', item.status, environment, container, '1000:1000')
     expect(setUserPermission).toHaveBeenNthCalledWith(
-      5,
+      4,
       '/gen/file.txt',
       item.status,
       environment,

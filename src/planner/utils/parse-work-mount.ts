@@ -1,5 +1,5 @@
 import { homedir } from 'os'
-import { normalizePath } from './normalize-path'
+import { normalizeHostPath, normalizePath } from './normalize-path'
 import { WorkMount } from '../work-mount'
 import { extname } from 'path'
 
@@ -24,7 +24,7 @@ function parseLocalMount(
   readOnly: boolean
 ): WorkMount {
   return {
-    localPath: normalizePath(cwd, homedir(), localPath),
+    localPath: normalizeHostPath(cwd, homedir(), localPath),
     containerPath: normalizePath(cwd, cwd, containerPath),
     isFile: extname(localPath).length > 1,
     mount,

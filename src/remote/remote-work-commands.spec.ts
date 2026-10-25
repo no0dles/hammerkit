@@ -813,7 +813,9 @@ describe('remote verify', () => {
     try {
       await createTestCase(name, {
         '.git/HEAD': 'ref: refs/heads/main\n',
-        '.hammerkit.yaml': 'tasks:\n  test:\n    src: [src]\n    cmds: [echo]\n  lint:\n    cmds: [echo]\n',
+        '.hammerkit.yaml':
+          'includes:\n  ci: ./ci.yaml\ntasks:\n  test:\n    src: [src]\n    cmds: [echo]\n  lint:\n    cmds: [echo]\n',
+        'ci.yaml': 'tasks:\n  lint:\n    cmds: [echo]\n',
         'src/a.ts': 'a\n',
       }).setup(async (cwd, environment) => {
         environment.processEnvs = {
@@ -868,6 +870,11 @@ describe('remote verify', () => {
         expect(unkeyed.ok).toBe(false)
         expect(unkeyed.exitCode).toBe(1)
         expect(unkeyed.out).toContain('lint: can not be verified')
+        // the summary names a task of an include whole, not cut at its colon
+        const included = await run('remote', 'verify', 'test', 'ci:lint', '--server', 'build', '--repo', REPO)
+        expect(included.ok).toBe(false)
+        expect(included.out).toContain('ci:lint: can not be verified')
+        expect(included.out).toContain('not verified: ci:lint')
       }
     )
   })
