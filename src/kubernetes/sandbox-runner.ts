@@ -307,7 +307,8 @@ export async function executeInRunner(
     }
     // its policy and proxy select it by the key, and stay for the next runs
     const item: WorkItem<ContainerWorkTask> = { ...task, id: () => key }
-    let runner = await getRunner(instance, kubernetes.namespace, name, filesPod.uid)
+    const found = await getRunner(instance, kubernetes.namespace, name, filesPod.uid)
+    let runner = found?.ready ? found.pod : undefined
     const sandbox = { label: workspace.label, pod: workspace.pod }
     const owners = (pod?: V1Pod) => [filesPod, ...(pod ? [ownerOf(pod)] : [])]
     const network = await ensureKubernetesItemNetwork(instance, kubernetes, item, {
@@ -318,18 +319,24 @@ export async function executeInRunner(
     })
     try {
       if (!runner) {
-        // one of something else goes, with its limits
-        await removeSandboxRunners(
-          instance,
-          kubernetes.namespace,
-          workspace.label,
-          (pod) => pod.metadata?.name === name
-        )
-        const started = await startRunner(
-          instance,
-          buildRunnerPod({ task, kubernetes, persistence, key, network, owner: filesPod }),
-          abort
-        )
+        let started: Awaited<ReturnType<typeof startRunner>>
+        if (found) {
+          // one a task before started, which stopped while it did: it goes on starting
+          started = await waitForRunner(instance, kubernetes.namespace, found.pod, abort)
+        } else {
+          // one of something else goes, with its limits
+          await removeSandboxRunners(
+            instance,
+            kubernetes.namespace,
+            workspace.label,
+            (pod) => pod.metadata?.name === name
+          )
+          started = await startRunner(
+            instance,
+            buildRunnerPod({ task, kubernetes, persistence, key, network, owner: filesPod }),
+            abort
+          )
+        }
         if (!('pod' in started)) {
           if (started.reason === 'ended') {
             if (failedOf?.pod !== filesPod.uid) {
@@ -408,28 +415,51 @@ function ownerOf(pod: V1Pod): V1OwnerReference {
   return { apiVersion: 'v1', kind: 'Pod', name: pod.metadata!.name!, uid: pod.metadata!.uid! }
 }
 
-// The runner of that name, when it runs and belongs to the pod of the files
+// The runner of that name, when it belongs to the pod of the files and runs, or still
+// starts (`ready` false); one that ended or is going is deleted
 async function getRunner(
   instance: KubernetesInstance,
   namespace: string,
   name: string,
   owner: string
-): Promise<V1Pod | undefined> {
+): Promise<{ pod: V1Pod; ready: boolean } | undefined> {
   const pod = await instance.coreApi
     .readNamespacedPod({ name, namespace })
     .catch((e) => (statusCodeOf(e) === 404 ? undefined : Promise.reject(e)))
   if (!pod) {
     return undefined
   }
-  const running =
-    pod.status?.phase === 'Running' &&
+  const ours =
     !pod.metadata?.deletionTimestamp &&
-    (pod.metadata?.ownerReferences ?? []).some((reference) => reference.uid === owner) &&
-    pod.status.containerStatuses?.some((status) => status.name === RUNNER_CONTAINER && status.state?.running)
-  if (running) {
-    return pod
+    (pod.metadata?.ownerReferences ?? []).some((reference) => reference.uid === owner)
+  if (ours && isRunning(pod)) {
+    return { pod, ready: true }
+  }
+  if (ours && pod.status?.phase === 'Pending' && !getStartFailure(pod)) {
+    return { pod, ready: false }
   }
   await deletePod(instance, namespace, name)
+  return undefined
+}
+
+function isRunning(pod: V1Pod): boolean {
+  const status = pod.status?.containerStatuses?.find((s) => s.name === RUNNER_CONTAINER)
+  return pod.status?.phase === 'Running' && !!status?.state?.running
+}
+
+// Why the runner will not run: its container ended, or an image can not be pulled, which
+// waits forever and is as good as ended
+function getStartFailure(pod: V1Pod): string | undefined {
+  const status = pod.status?.containerStatuses?.find((s) => s.name === RUNNER_CONTAINER)
+  const unpulled = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])].find((s) =>
+    PULL_FAILURES.includes(s.state?.waiting?.reason ?? '')
+  )
+  if (unpulled) {
+    return `${unpulled.state?.waiting?.reason} of ${unpulled.image}`
+  }
+  if (pod.status?.phase === 'Failed' || pod.status?.phase === 'Succeeded' || status?.state?.terminated) {
+    return `its container ended with ${status?.state?.terminated?.exitCode ?? 'no code'}`
+  }
   return undefined
 }
 
@@ -463,35 +493,38 @@ async function startRunner(
   spec: V1Pod & KubernetesObjectHeader,
   abort: AbortSignal
 ): Promise<{ pod: V1Pod } | { reason: 'refused' | 'ended' | 'stopped'; message: string }> {
-  const { name, namespace } = spec.metadata
   try {
     await instance.objectApi.create(spec)
   } catch (e) {
     return { reason: 'refused', message: getErrorMessage(e) }
   }
-  const deadline = Date.now() + RUNNER_START_MS
+  return await waitForRunner(instance, spec.metadata.namespace, spec, abort)
+}
+
+// Waits until the runner runs. A task stopped meanwhile (cancelled, out of time) leaves it
+// starting, for the next command, which would time out the same way if each started anew;
+// one that ends, or does not run within RUNNER_START_MS of being made, goes.
+async function waitForRunner(
+  instance: KubernetesInstance,
+  namespace: string,
+  runner: V1Pod,
+  abort: AbortSignal
+): Promise<{ pod: V1Pod } | { reason: 'ended' | 'stopped'; message: string }> {
+  const name = runner.metadata!.name!
+  const created = runner.metadata?.creationTimestamp ? new Date(runner.metadata.creationTimestamp).getTime() : NaN
+  const deadline = (Number.isNaN(created) ? Date.now() : Math.min(created, Date.now())) + RUNNER_START_MS
   for (;;) {
     const pod = await instance.coreApi.readNamespacedPod({ name, namespace })
-    const status = pod.status?.containerStatuses?.find((s) => s.name === RUNNER_CONTAINER)
-    if (pod.status?.phase === 'Running' && status?.state?.running) {
+    if (isRunning(pod)) {
       return { pod }
     }
-    // an image that can not be pulled waits forever, as good as ended
-    const unpulled = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])].find(
-      (s) => PULL_FAILURES.includes(s.state?.waiting?.reason ?? '')
-    )
-    const ended =
-      pod.status?.phase === 'Failed' || pod.status?.phase === 'Succeeded' || !!status?.state?.terminated || !!unpulled
-    if (ended || abort.aborted || Date.now() > deadline) {
+    const failure = getStartFailure(pod)
+    if (failure || Date.now() > deadline) {
       await deletePod(instance, namespace, name).catch(() => undefined)
-      return ended
-        ? {
-            reason: 'ended',
-            message: unpulled
-              ? `${unpulled.state?.waiting?.reason} of ${unpulled.image}`
-              : `its container ended with ${status?.state?.terminated?.exitCode ?? 'no code'}`,
-          }
-        : { reason: 'stopped', message: abort.aborted ? 'the task was stopped' : 'it took too long' }
+      return failure ? { reason: 'ended', message: failure } : { reason: 'stopped', message: 'it took too long' }
+    }
+    if (abort.aborted) {
+      return { reason: 'stopped', message: 'the task was stopped' }
     }
     await sleep(RUNNER_POLL_MS)
   }

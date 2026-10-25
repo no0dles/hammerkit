@@ -545,7 +545,8 @@ above are the same.
   resources, mounts and network of the task: a task that differs in any of them gets a new
   runner, and the old one goes. A second task of the same run, while the first is in the
   runner, runs as a Job, and so does a task whose runner the cluster refuses (a full quota) or
-  whose runner does not start (an image without `sh`). With `backend.sandboxes.runner: false`
+  whose runner does not start (an image without `sh`). A command stopped while the runner
+  starts (cancelled, or a short timeout) leaves it starting for the next command. With `backend.sandboxes.runner: false`
   every task is a Job.
 * **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
   `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a

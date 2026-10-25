@@ -522,6 +522,32 @@ describe('the runner of a sandbox', () => {
       expect(calls.filter((call) => call.startsWith('create'))).toHaveLength(tried)
     })
 
+    it('leaves the runner starting when its command stops meanwhile, for the next command', async () => {
+      const { instance, calls, pods } = cluster(() => ({ status: { status: 'Success' } }))
+      const create = instance.objectApi.create
+      instance.objectApi.create = async (spec: any) => {
+        const made = await create(spec)
+        pods.get(spec.metadata.name).status = { phase: 'Pending' }
+        return made
+      }
+      const task = shell({ image: 'node:18-alpine' })
+      const name = getRunnerName(getRunnerKey(task, environment(), persistence()))
+      const abort = new AbortController()
+      const first = executeInRunner(instance, task, environment(), persistence(), abort.signal)
+      await vi.waitFor(() => expect(calls).toContain(`create ${name}`))
+      // a short timeout of the agent
+      abort.abort()
+      expect(await first).toEqual({ type: 'unavailable' })
+      expect(calls).not.toContain(`delete ${name}`)
+      // it runs by the next command, which takes it
+      pods.get(name).status = { phase: 'Running', containerStatuses: [{ name: 'runner', state: { running: {} } }] }
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'done' }
+      )
+      expect(calls.filter((call) => call === `create ${name}`)).toHaveLength(1)
+      expect(calls).toContainEqual(expect.stringContaining(`exec ${name}`))
+    })
+
     it('leaves a task to its Jobs at once when an image of the runner can not be pulled', async () => {
       const { instance, calls, pods } = cluster(() => ({ status: { status: 'Success' } }))
       instance.objectApi.create = async (spec: any) => {
