@@ -921,11 +921,7 @@ export const serverConfigSchema = z
           message: 'the certificate of the endpoints is served next to the one of the server, set tls as well',
         })
       }
-      if (
-        !endpoints.tls &&
-        !config.behindTlsProxy &&
-        (config.tls || !LOOPBACK_HOSTS.includes(config.listen.host))
-      ) {
+      if (!endpoints.tls && !config.behindTlsProxy && (config.tls || !LOOPBACK_HOSTS.includes(config.listen.host))) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['endpoints', 'tls'],
@@ -945,7 +941,11 @@ export const serverConfigSchema = z
         const kind = from.substring(0, from.indexOf(':'))
         const where = ['endpoints', 'login', 'clientSecret'] as (string | number)[]
         if (!config.accounts[account]) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...where, 'account'], message: `unknown account ${account}` })
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...where, 'account'],
+            message: `unknown account ${account}`,
+          })
         } else if (!config.accounts[account].providers[kind]) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

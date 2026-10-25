@@ -10,6 +10,7 @@ import { callServer, printable, printableWhole, ServerError } from './server-cli
 import { showBundle } from './bundle-text'
 import { followRun, ServerConnection, submitRun } from '../harness/sandbox-client'
 import type { Run } from '../server/runs'
+import { parseEndpoint } from '../harness/service-tools'
 import { dirname } from 'path'
 
 export interface WorkCommandContext {
@@ -224,6 +225,26 @@ export function describePlan(plan: Record<string, PlanView>): string[] {
 export function registerWorkCommands(remote: Command, context: WorkCommandContext): void {
   const { environment, buildFile, getServer, guarded, passthrough, fail } = context
 
+  // the ref a run starts from: what the options name, else the checkout here
+  const refSource = async (options: {
+    repo?: string
+    ref?: string
+    commit?: string
+  }): Promise<{ type: 'ref'; repo: string; ref: string; commit?: string }> => {
+    const checkout = options.repo && options.ref ? {} : await readCheckout(dirname(buildFile))
+    const repo: string | undefined = options.repo ?? checkout.repo
+    const ref: string | undefined = options.ref ?? checkout.branch
+    // the commit checked out here is the code meant, when the ref is the branch it is on
+    const commit: string | undefined = options.commit ?? (options.ref ? undefined : checkout.commit)
+    if (!repo) {
+      throw new Error('name the repository with --repo, the checkout here has no origin it can be told by')
+    }
+    if (!ref) {
+      throw new Error('name the branch or tag with --ref, the checkout here is on no branch')
+    }
+    return { type: 'ref', repo, ref, ...(commit ? { commit } : {}) }
+  }
+
   const connect = async (name: string | undefined) => {
     const chosen = await getServer(name)
     // a CI job or an agent brings its own token, a person signs in
@@ -307,17 +328,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (!HASH_PATTERN.test(definition)) {
           throw new Error(`${printable(definition)} is not the hash of a published version (sha256:...)`)
         }
-        const checkout = options.repo && options.ref ? {} : await readCheckout(dirname(buildFile))
-        const repo: string | undefined = options.repo ?? checkout.repo
-        const ref: string | undefined = options.ref ?? checkout.branch
-        // the commit checked out here is the code meant, when the ref is the branch it is on
-        const commit: string | undefined = options.commit ?? (options.ref ? undefined : checkout.commit)
-        if (!repo) {
-          throw new Error('name the repository with --repo, the checkout here has no origin it can be told by')
-        }
-        if (!ref) {
-          throw new Error('name the branch or tag with --ref, the checkout here is on no branch')
-        }
+        const source = await refSource(options)
+        const ref = source.ref
         const { name: serverName, server } = await getServer(options.server)
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
         const runOptions: { [key: string]: unknown } = {}
@@ -334,7 +346,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           submitted = await submitRun(connection, {
             definition,
             tasks,
-            source: { type: 'ref', repo, ref, ...(commit ? { commit } : {}) },
+            source,
             options: runOptions,
           })
         } catch (e) {
@@ -379,6 +391,132 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           .find((result) => result?.status === 'failed')
         const exitCode = failed?.exitCode && failed.exitCode > 0 ? failed.exitCode : 1
         fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, exitCode)
+      })
+    )
+
+  remote
+    .command('up <services...>')
+    .description(
+      'start services of a published build file on a server from a git ref and keep them up until their ttl ends, ' +
+        'with their endpoints at addresses of their own behind the sign-in of the server'
+    )
+    .addOption(new Option('--server <name>', 'the server to run on; the default of remote use when left out'))
+    .addOption(
+      new Option(
+        '--endpoint <service:port>',
+        'publish this port of a service, such as web:8080; may be given more than once'
+      ).argParser(collectOption)
+    )
+    .addOption(
+      new Option('--ttl <duration>', 'how long they stay up once ready, such as 2h; the server default when left out')
+    )
+    .addOption(
+      new Option(
+        '--name <name>',
+        'a later run of yours with the same name replaces this one and keeps its addresses; the branch when left out'
+      )
+    )
+    .addOption(
+      new Option(
+        '--build <hash>',
+        'the published version to run (sha256:...), or HAMMERKIT_BUILD; the hash of the build file here when left out'
+      )
+    )
+    .addOption(new Option('--repo <host/path>', 'the repository; origin of the checkout here when left out'))
+    .addOption(new Option('--ref <ref>', 'the branch or tag to start; the branch checked out here when left out'))
+    .addOption(
+      new Option(
+        '--commit <sha>',
+        'the commit the ref has to be at; the commit checked out here when --ref is left out'
+      )
+    )
+    .addOption(new Option('--env <name>', 'the environment of the build file, as --env of run'))
+    .action(
+      guarded('Remote up was not successful', async (services: string[], options) => {
+        const named: string | undefined = options.build ?? environment.processEnvs.HAMMERKIT_BUILD
+        const definition = named ?? hashBundle(await collectBundle(buildFile, environment))
+        if (!HASH_PATTERN.test(definition)) {
+          throw new Error(`${printable(definition)} is not the hash of a published version (sha256:...)`)
+        }
+        const endpoints = ((options.endpoint ?? []) as string[]).map(parseEndpoint)
+        const source = await refSource(options)
+        const { name: serverName, server } = await getServer(options.server)
+        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const submitted = await submitRun(connection, {
+          definition,
+          services,
+          endpoints,
+          ...(options.ttl ? { ttl: options.ttl } : {}),
+          ...(options.name ? { name: options.name } : {}),
+          source,
+          options: options.env ? { env: options.env } : {},
+        })
+        environment.stdout.write(
+          `${printable(submitted.id)} on ${serverName}: ${services.map(printable).join(', ')} from ${printable(
+            source.ref
+          )}${submitted.source.type === 'ref' ? ` at ${printable(submitted.source.commit)}` : ''}\n`
+        )
+        const followed = await followRun(connection, submitted, {
+          signal: environment.abortCtrl.signal,
+          untilUp: true,
+          onLine: (line) => environment.stdout.write(`[${printable(line.task)}] ${printableLine(line.text)}\n`),
+          onWaiting: (run) => {
+            for (const approval of run.approvals ?? []) {
+              environment.stdout.write(
+                `waiting until somebody who uses ${printable(approval.account)} approves it, before ${printable(
+                  approval.expiresAt
+                )}: hammerkit remote approve ${printable(run.id)}\n`
+              )
+            }
+          },
+        })
+        const run = followed.run
+        if (run.state !== 'up') {
+          fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, 1)
+        }
+        environment.stdout.write(`${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}\n`)
+        for (const endpoint of run.up?.endpoints ?? []) {
+          environment.stdout.write(`  ${printable(endpoint.service)}:${endpoint.port}  ${printable(endpoint.url)}\n`)
+        }
+        environment.stdout.write(
+          `extend it with: hammerkit remote extend ${printable(
+            run.id
+          )} 8h, stop it with: hammerkit remote stop ${printable(run.id)}\n`
+        )
+      })
+    )
+
+  remote
+    .command('extend <run> <ttl> [server]')
+    .description('keep a service run that is up for this long from now, such as 8h, at most the maxTtl of the server')
+    .action(
+      guarded('Remote extend was not successful', async (id: string, ttl: string, name: string | undefined) => {
+        if (!RUN_ID.test(id)) {
+          throw new Error(`${printable(id)} is not a run id (run_...)`)
+        }
+        const { name: serverName, server, token } = await connect(name)
+        const run = (await callServer<Run>(server, token, 'POST', `/v1/runs/${id}/extend`, { ttl })).body
+        environment.stdout.write(
+          `${printable(run.id)} on ${serverName} stays up until ${printable(run.expiresAt ?? '-')}\n`
+        )
+      })
+    )
+
+  remote
+    .command('stop <run> [server]')
+    .description('stop a run: a service run takes its services and endpoints down')
+    .action(
+      guarded('Remote stop was not successful', async (id: string, name: string | undefined) => {
+        if (!RUN_ID.test(id)) {
+          throw new Error(`${printable(id)} is not a run id (run_...)`)
+        }
+        const { name: serverName, server, token } = await connect(name)
+        const run = (await callServer<Run>(server, token, 'POST', `/v1/runs/${id}/cancel`)).body
+        environment.stdout.write(
+          `${printable(run.id)} on ${serverName}: ${
+            run.state === 'up' || run.state === 'running' ? 'stopping' : printable(run.state)
+          }\n`
+        )
       })
     )
 

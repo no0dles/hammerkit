@@ -7,6 +7,7 @@ import { Environment } from '../executer/environment'
 import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
 import { capOutput, formatTree, toColonNumbers } from './format'
 import { oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
+import { SERVICE_TOOLS, serviceToolArgs, serviceToolSchema } from './service-tools'
 
 // What opencode passes a tool (`ToolContext` of `@opencode-ai/plugin`), the parts used here.
 export interface OpencodeToolContext {
@@ -365,6 +366,9 @@ export function createOpencodeV2Tools(client: () => Promise<SandboxClient>, dire
       ),
       same
     ),
+    ...SERVICE_TOOLS.map((service) =>
+      tool(service.name, service.name, { ...serviceToolSchema(service), additionalProperties: false }, same)
+    ),
   ]
 }
 
@@ -381,6 +385,22 @@ const object = (properties: { [name: string]: unknown }, required: string[]) => 
 export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>): { [name: string]: OpencodeTool } {
   return Object.fromEntries(
     Object.entries(opencodeTools(client)).map(([name, { args, ...tool }]) => [name, { ...tool, args: args(z) }])
+  )
+}
+
+// services_up, endpoint_get and services_stop, with their parameters for the zod of opencode 1
+function opencodeServiceTools(client: () => Promise<SandboxClient>): { [name: string]: OpencodeToolBody } {
+  return Object.fromEntries(
+    SERVICE_TOOLS.map((tool) => [
+      tool.name,
+      {
+        description: tool.description,
+        args: (z: any) => serviceToolArgs(tool, z),
+        async execute(args: unknown, context: OpencodeToolContext) {
+          return { title: tool.title, output: await tool.call(await client(), args, context.abort) }
+        },
+      },
+    ])
   )
 }
 
@@ -650,6 +670,8 @@ function opencodeTools(client: () => Promise<SandboxClient>): { [name: string]: 
         return lines.join('\n')
       },
     },
+
+    ...opencodeServiceTools(client),
   })
 }
 

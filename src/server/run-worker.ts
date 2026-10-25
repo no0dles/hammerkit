@@ -263,7 +263,9 @@ export async function runTasks(
         // on a cluster the services stay in their Deployments once they are ready, until
         // the namespace of the run goes
         if (input.up && input.kubernetes && ready && result.success && !abortCtrl.signal.aborted) {
-          await new Promise<void>((resolve) => abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true }))
+          await new Promise<void>((resolve) =>
+            abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
+          )
           return
         }
         if (input.up && ready) {

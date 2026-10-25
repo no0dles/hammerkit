@@ -3,6 +3,7 @@ import { Readable, Writable } from 'stream'
 import { capOutput, formatSearch, formatTree } from './format'
 import { oneAtATime, SandboxClient } from './sandbox-client'
 import type { TaskRun } from './sandbox-client'
+import { SERVICE_TOOLS, serviceToolSchema } from './service-tools'
 
 // the newest first; a client asking for an older one gets it
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
@@ -362,6 +363,17 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
         return `pushed ${pushed.commit} to ${pushed.branch}`
       },
     },
+    ...SERVICE_TOOLS.map(
+      (tool): McpTool => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: serviceToolSchema(tool),
+        annotations: { title: tool.title, readOnlyHint: tool.name === 'endpoint_get', openWorldHint: false },
+        async call(args, signal) {
+          return tool.call(await client(), args, signal)
+        },
+      })
+    ),
   ])
 }
 

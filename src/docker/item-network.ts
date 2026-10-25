@@ -455,9 +455,7 @@ async function startPortRelay(
     ExposedPorts: Object.fromEntries(ports.map((port) => [`${port.containerPort}/tcp`, {}])),
     HostConfig: {
       ...HELPER_HOST_CONFIG,
-      PortBindings: Object.fromEntries(
-        ports.map((port) => [`${port.containerPort}/tcp`, [getPortBinding(port)]])
-      ),
+      PortBindings: Object.fromEntries(ports.map((port) => [`${port.containerPort}/tcp`, [getPortBinding(port)]])),
     },
   })
   await docker.getNetwork(networkName).connect({ Container: container.id })

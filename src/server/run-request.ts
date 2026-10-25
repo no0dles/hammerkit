@@ -115,18 +115,13 @@ export const runRequestSchema = z
       .optional(),
     // ports of the run's services published at hosts of their own, behind the server's sign-in
     endpoints: z
-      .array(
-        z
-          .object({ service: name, port: z.number().int().min(1).max(65535) })
-          .strict()
-      )
+      .array(z.object({ service: name, port: z.number().int().min(1).max(65535) }).strict())
       .max(MAX_ENDPOINTS)
       .default([]),
   })
   .strict()
   .refine(
-    (request) =>
-      request.services.length > 0 || request.tasks.length > 0 || (request.options.filter ?? []).length > 0,
+    (request) => request.services.length > 0 || request.tasks.length > 0 || (request.options.filter ?? []).length > 0,
     {
       message: 'name at least one task, or filter by labels',
       path: ['tasks'],

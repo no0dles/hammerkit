@@ -65,7 +65,9 @@ export function refuseEndpoints(
     }
     const reads = getCredentialReads(item)
     if (!secretNetworkOpen && reads.length > 0) {
-      return `${endpoint.service} reads ${reads.join(', ')}, it can not be behind an endpoint on this server (runs.secretNetwork): a page could show it`
+      return `${endpoint.service} reads ${reads.join(
+        ', '
+      )}, it can not be behind an endpoint on this server (runs.secretNetwork): a page could show it`
     }
   }
   return null

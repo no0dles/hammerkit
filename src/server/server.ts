@@ -437,7 +437,9 @@ async function submitRun(
   }
   const runRepo = request.source.type === 'ref' ? request.source.repo : sandbox?.repo
   if (request.endpoints.length > 0 && (!runRepo || endpointLevel(grant, runRepo) !== 'publish')) {
-    const error = `you may not publish endpoints of ${runRepo ?? 'this source'}, an entitlement needs endpoints with level publish for it`
+    const error = `you may not publish endpoints of ${
+      runRepo ?? 'this source'
+    }, an entitlement needs endpoints with level publish for it`
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${error}`)
     send(res, 403, { error })
     return
@@ -537,10 +539,10 @@ async function submitRun(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
         run.source.type
       }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}` : ''} tasks=${run.tasks.length}${
-        run.up ? ` services=[${run.up.services.join(',')}] name=${run.up.name} endpoints=${run.up.endpoints.length}` : ''
-      }${
-        approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''
-      }`
+        run.up
+          ? ` services=[${run.up.services.join(',')}] name=${run.up.name} endpoints=${run.up.endpoints.length}`
+          : ''
+      }${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {
@@ -879,8 +881,12 @@ export async function startServer(
   } else {
     server = createHttpServer(listener)
   }
-  // WebSockets of the apps behind endpoints; the API has none
+  // WebSockets of the apps behind endpoints; the API has none. An upgraded connection is
+  // no longer the HTTP server's, it goes when the server closes.
+  const upgraded = new Set<Duplex>()
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    upgraded.add(socket)
+    socket.once('close', () => upgraded.delete(socket))
     const label = gateway?.hostOf(req)
     if (!gateway || !label) {
       socket.end('HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n')
@@ -938,6 +944,7 @@ export async function startServer(
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()))
         server.closeAllConnections()
+        upgraded.forEach((socket) => socket.destroy())
       })
     },
   }

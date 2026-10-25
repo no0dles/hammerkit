@@ -260,9 +260,7 @@ export class EndpointGateway {
       }
     }
     const session = this.readSession(label, req.headers.cookie)
-    return session
-      ? { iss: session.iss, sub: session.sub, groups: session.groups, claims: session.claims }
-      : null
+    return session ? { iss: session.iss, sub: session.sub, groups: session.groups, claims: session.claims } : null
   }
 
   private forward(target: EndpointTarget, principal: Principal, req: IncomingMessage, res: ServerResponse): void {
@@ -303,7 +301,9 @@ export class EndpointGateway {
     }
     const cookies = (req.headers.cookie ?? '')
       .split(/;\s*/)
-      .filter((cookie) => cookie && !cookie.startsWith(`${SESSION_COOKIE}=`) && !cookie.startsWith(`${PLAIN_SESSION_COOKIE}=`))
+      .filter(
+        (cookie) => cookie && !cookie.startsWith(`${SESSION_COOKIE}=`) && !cookie.startsWith(`${PLAIN_SESSION_COOKIE}=`)
+      )
     if (cookies.length > 0) {
       headers.cookie = cookies.join('; ')
     } else {
@@ -446,7 +446,12 @@ ${
       const pending = this.pending.get(state)
       this.pending.delete(state)
       if (!pending || pending.expires < this.now()) {
-        return page(res, 400, 'Sign-in expired', '<p>The sign-in took too long or was used already, open the endpoint again.</p>')
+        return page(
+          res,
+          400,
+          'Sign-in expired',
+          '<p>The sign-in took too long or was used already, open the endpoint again.</p>'
+        )
       }
       const code = url.searchParams.get('code')
       if (!code) {
@@ -543,7 +548,12 @@ ${
     const issued = this.codes.get(code)
     this.codes.delete(code)
     if (!issued || issued.host !== label || issued.expires < this.now()) {
-      return page(res, 400, 'Sign-in expired', '<p>The sign-in took too long or was used already, open the endpoint again.</p>')
+      return page(
+        res,
+        400,
+        'Sign-in expired',
+        '<p>The sign-in took too long or was used already, open the endpoint again.</p>'
+      )
     }
     const found = this.registry.endpoint(label)
     const ends = Date.parse(found?.run.expiresAt ?? '')
@@ -566,7 +576,9 @@ ${
 
   // Only the claims an entitlement matches on go into the cookie, which stays small.
   private matchedClaims(principal: Principal): Record<string, string> {
-    const names = new Set(this.config.entitlements.flatMap((entitlement) => Object.keys(entitlement.claims?.match ?? {})))
+    const names = new Set(
+      this.config.entitlements.flatMap((entitlement) => Object.keys(entitlement.claims?.match ?? {}))
+    )
     return Object.fromEntries(Object.entries(principal.claims).filter(([name]) => names.has(name)))
   }
 
@@ -584,7 +596,9 @@ ${
   }
 
   private clearCookie(): string {
-    return `${this.cookieName()}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${this.base.scheme === 'https' ? '; Secure' : ''}`
+    return `${this.cookieName()}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${
+      this.base.scheme === 'https' ? '; Secure' : ''
+    }`
   }
 
   private readSession(label: string, header: string | undefined): Session | null {
@@ -668,9 +682,11 @@ function page(res: ServerResponse, status: number, title: string, body: string):
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
     'x-frame-options': 'DENY',
   })
-  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(
-    title
-  )}</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#222}code{background:#f2f2f2;padding:0 .2em}dt{font-weight:600}dd{margin:0 0 .5rem}</style></head><body><h1>${escape(
-    title
-  )}</h1>${body}<p><small>hammerkit</small></p></body></html>`)
+  res.end(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(
+      title
+    )}</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#222}code{background:#f2f2f2;padding:0 .2em}dt{font-weight:600}dd{margin:0 0 .5rem}</style></head><body><h1>${escape(
+      title
+    )}</h1>${body}<p><small>hammerkit</small></p></body></html>`
+  )
 }

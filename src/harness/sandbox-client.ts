@@ -72,6 +72,15 @@ export interface RunTaskOptions {
   onWaiting?: (run: Run) => void
 }
 
+export interface ServiceRunRequest {
+  services: string[]
+  endpoints?: { service: string; port: number }[]
+  ttl?: string
+  name?: string
+  // start from this branch of the sandbox's repository instead of the sandbox
+  branch?: string
+}
+
 export interface TaskRun {
   run: Run
   result: TaskResult | undefined
@@ -230,6 +239,71 @@ export class SandboxClient {
   }
 
   /**
+   * Starts services of the published build file on the sandbox, or on a branch of its
+   * repository, and follows them until they are up: the run then holds their endpoints
+   * until its ttl ends or it is stopped. A signal cancels the run.
+   */
+  async up(request: ServiceRunRequest, options: { signal?: AbortSignal } = {}): Promise<FollowedRun> {
+    if (options.signal?.aborted) {
+      throw new SandboxClientError('the run was cancelled')
+    }
+    const submitted = await submitRun(this.connection, {
+      definition: this.build.hash,
+      services: request.services,
+      endpoints: request.endpoints ?? [],
+      ...(request.ttl ? { ttl: request.ttl } : {}),
+      ...(request.name ? { name: request.name } : {}),
+      source: request.branch
+        ? { type: 'ref', repo: this.sandbox.repo, ref: request.branch }
+        : { type: 'sandbox', id: this.id },
+    })
+    return followRun(this.connection, submitted, { signal: options.signal, untilUp: true })
+  }
+
+  // Stops a run: a service run takes its services and endpoints down.
+  async stop(id: string): Promise<Run> {
+    return json(await call(this.connection, 'POST', `/v1/runs/${encodeURIComponent(id)}/cancel`))
+  }
+
+  /**
+   * A page of an endpoint of a service run, as the caller sees it: only at an address the
+   * server gave the run, so the token goes to the server and nowhere else.
+   */
+  async fetchEndpoint(
+    id: string,
+    path: string,
+    service?: string,
+    signal?: AbortSignal
+  ): Promise<{ url: string; status: number; type: string; body: string }> {
+    const run = await this.getRun(id)
+    const endpoint = run.up?.endpoints.find((candidate) => service === undefined || candidate.service === service)
+    if (!endpoint) {
+      throw new SandboxClientError(
+        run.up
+          ? `${id} has no endpoint${service ? ` of ${service}` : ''}, it has ${
+              run.up.endpoints.map((candidate) => `${candidate.service}:${candidate.port}`).join(', ') || 'none'
+            }`
+          : `${id} is not a service run`
+      )
+    }
+    const url = new URL(path.startsWith('/') ? path : `/${path}`, endpoint.url)
+    if (url.origin !== new URL(endpoint.url).origin) {
+      throw new SandboxClientError(`${path} is not a path of ${endpoint.url}`)
+    }
+    const response = await fetch(url, {
+      headers: { 'hammerkit-authorization': `Bearer ${await this.connection.token()}` },
+      redirect: 'manual',
+      signal: AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), ...(signal ? [signal] : [])]),
+    })
+    return {
+      url: url.toString(),
+      status: response.status,
+      type: response.headers.get('content-type') ?? '',
+      body: await response.text(),
+    }
+  }
+
+  /**
    * A shell command on the sandbox: the shell task of the build file with the command as
    * its argument. `cwd` is a directory of the sandbox, `''` for its root.
    */
@@ -315,6 +389,8 @@ export interface FollowRunOptions {
   onLine?: (line: LogLine) => void
   // the run waits for somebody to approve it, said once
   onWaiting?: (run: Run) => void
+  // a service run: followed until its services are up, which they stay after
+  untilUp?: boolean
 }
 
 export interface FollowedRun {
@@ -380,7 +456,7 @@ export async function followRun(
         options.onWaiting?.(run)
       }
       await readLog()
-      if (FINAL_RUN_STATES.includes(run.state)) {
+      if (FINAL_RUN_STATES.includes(run.state) || (options.untilUp && run.state === 'up')) {
         break
       }
       run = await json(await call(connection, 'GET', path, { query: { wait: POLL_WAIT } }))
