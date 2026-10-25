@@ -13,7 +13,7 @@ import {
   Dependent,
 } from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
-import { withDeadline } from './deadline'
+import { getTaskTimeout, withDeadline } from './deadline'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
@@ -127,7 +127,7 @@ export async function executeWorkTask(
           started,
         })
 
-        const timeout = work.data.timeout ?? options.timeout
+        const timeout = getTaskTimeout(work.data.timeout, options)
         const deadline = withDeadline(abort, timeout)
         try {
           await work.runtime.execute(environment, {
