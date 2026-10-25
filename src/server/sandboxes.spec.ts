@@ -134,6 +134,32 @@ describe('SandboxRegistry', () => {
     expect(await sandboxes.state(sandbox.id)).toEqual({ commit: first, tree: expect.any(String), clean: true })
   })
 
+  it('exports the files of a tree, what a commit of them holds, and nothing that is ignored', async () => {
+    const sandboxes = registryWith()
+    const sandbox = await sandboxes.create(alice, REPO, 'main')
+    const files = (await sandboxes.attach(sandbox.id, root)).directory
+    writeFileSync(join(files, 'input.txt'), 'changed')
+    writeFileSync(join(files, 'new.txt'), 'new')
+    mkdirSync(join(files, 'node_modules', '.bin'), { recursive: true })
+    writeFileSync(join(files, 'node_modules', '.bin', 'vitest'), 'exit 0')
+    const { tree } = await sandboxes.state(sandbox.id)
+    const into = join(root, 'export')
+    await sandboxes.exportTree(sandbox.id, tree, into, AbortSignal.timeout(60_000))
+    expect(readFileSync(join(into, 'input.txt'), 'utf8')).toBe('changed')
+    expect(readFileSync(join(into, 'new.txt'), 'utf8')).toBe('new')
+    expect(existsSync(join(into, 'node_modules'))).toBe(false)
+    expect(existsSync(join(into, '.git'))).toBe(false)
+    // the sandbox and its index are as they were
+    expect(await sandboxes.state(sandbox.id)).toEqual({ commit: first, tree, clean: false })
+
+    // files that changed since are not the tree a run was submitted with
+    writeFileSync(join(files, 'input.txt'), 'again')
+    await expect(
+      sandboxes.exportTree(sandbox.id, tree, join(root, 'export-2'), AbortSignal.timeout(60_000))
+    ).rejects.toThrow(`are ${(await sandboxes.state(sandbox.id)).tree} now, not ${tree}`)
+    expect(existsSync(join(root, 'export-2'))).toBe(false)
+  })
+
   it("is its owner's: anybody else does not find it", async () => {
     const sandboxes = registryWith()
     const sandbox = await sandboxes.create(alice, REPO, 'main')

@@ -60,12 +60,10 @@ describe('check key', () => {
     expect(await keyIn('check-key-cmd-changed', changed, 'test')).not.toBe(base)
   })
 
-  it('leaves out what dependencies generate and files outside of src', async () => {
-    const base = await keyIn('check-key-outputs-base', project(), 'test')
-    const after = await keyIn('check-key-outputs-written', project(), 'test', async (cwd, environment) => {
-      // what a dependency made, and files no src names: in a fresh checkout they are not there
-      await environment.file.createDirectory(join(cwd, 'dist'))
-      await environment.file.writeFile(join(cwd, 'dist/app.js'), 'anything\n')
+  it('leaves out files outside of src and .git', async () => {
+    const base = await keyIn('check-key-outside-base', project(), 'test')
+    const after = await keyIn('check-key-outside-written', project(), 'test', async (cwd, environment) => {
+      // files no src names: a dependency's output nothing reads, and docs
       await environment.file.createDirectory(join(cwd, 'node_modules/.bin'))
       await environment.file.writeFile(join(cwd, 'node_modules/.bin/vitest'), 'exit 0\n')
       await environment.file.writeFile(join(cwd, 'README.md'), 'docs\n')
@@ -74,6 +72,37 @@ describe('check key', () => {
       await environment.file.writeFile(join(cwd, 'test/.git/HEAD'), 'ref: refs/heads/other\n')
     })
     expect(after).toBe(base)
+  })
+
+  // the key is computed on a checkout before anything ran: a file there where a dependency
+  // generates is one the commit holds, and a tool that finds it up to date leaves it as it is
+  it('covers a file a commit holds where a dependency generates', async () => {
+    const base = await keyIn('check-key-generated-base', project(), 'test')
+    expect(await keyIn('check-key-generated-held', project({ 'dist/app.js': 'stale\n' }), 'test')).not.toBe(base)
+  })
+
+  it('covers the services a task needs and the sources of what they depend on', async () => {
+    const files = (image: string, api: string) => ({
+      '.git/HEAD': 'ref: refs/heads/main\n',
+      '.hammerkit.yaml': {
+        tasks: {
+          'build-api': { image: 'node:24-alpine', src: ['api'], generates: ['api-dist'], cmds: ['cp -r api api-dist'] },
+          e2e: { image: 'node:24-alpine', src: ['e2e'], needs: ['api'], cmds: ['node e2e/a.js'] },
+        },
+        services: { api: { image, deps: ['build-api'], ports: ['3000'] } },
+      },
+      'api/main.js': api,
+      'e2e/a.js': 'e2e\n',
+    })
+    const base = await keyIn('check-key-needs-base', files('node:24-alpine', 'ok\n'), 'e2e')
+    expect(base).toMatch(/^[0-9a-f]{64}$/)
+    expect(await keyIn('check-key-needs-image', files('node:20-alpine', 'ok\n'), 'e2e')).not.toBe(base)
+    expect(await keyIn('check-key-needs-src', files('node:24-alpine', 'broken\n'), 'e2e')).not.toBe(base)
+    // a service whose dependency can not be proven makes the task unprovable
+    const unprovable = files('node:24-alpine', 'ok\n')
+    const buildFile = unprovable['.hammerkit.yaml'] as { tasks: { 'build-api': { src: string[] } } }
+    buildFile.tasks['build-api'].src = ['missing']
+    expect(await keyIn('check-key-needs-unprovable', unprovable, 'e2e')).toBeNull()
   })
 
   it('is none for a task that can not be proven up to date', async () => {

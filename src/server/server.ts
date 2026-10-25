@@ -6,7 +6,7 @@ import { getVersion } from '../version'
 import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { canUse, decideRun, getGrant, mayRun } from './policy'
+import { canUse, decideRun, getGrant, mayRun, sandboxPushBranches } from './policy'
 import { matchesAnyRepo } from './repo'
 import { FileRunStore } from './run-store'
 import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSource, StoredEvent } from './runs'
@@ -336,12 +336,21 @@ async function submitRun(
       send(res, 413, { error: over })
       return
     }
-    // a check counts like a run from a commit of the repository, which the caller must be
-    // allowed to start
+    // a check counts like a run from a commit of the repository, and leaves what it made in
+    // the repository's cache, which runs from main restore from: the caller must be allowed
+    // to start runs from it, and to push a branch of it, which with a run from that branch
+    // leaves the same
     if (request.source.check && !matchesAnyRepo(grant.repos, sandbox.repo)) {
       log(`refuse run iss=${principal.iss} sub=${principal.sub}: check on ${sandbox.repo} without the repository`)
       send(res, 403, {
         error: `a check counts like a run from ${sandbox.repo}, which no entitlement of yours lists in repos`,
+      })
+      return
+    }
+    if (request.source.check && sandboxPushBranches(grant, sandbox.repo).length === 0) {
+      log(`refuse run iss=${principal.iss} sub=${principal.sub}: check on ${sandbox.repo} without a branch to push`)
+      send(res, 403, {
+        error: `a check counts like a run from a branch you pushed, and you may push no branch of ${sandbox.repo}`,
       })
       return
     }

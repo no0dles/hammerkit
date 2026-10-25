@@ -138,7 +138,8 @@ export async function runTasks(
     const options = input.options
     const execOptions: Partial<CliExecOptions> = {
       logMode: 'live',
-      cacheDefault: options.cache ?? 'checksum',
+      // a check takes a cached result only for the same files, never for the same dates
+      cacheDefault: input.check && options.cache === 'modify-date' ? 'checksum' : options.cache ?? 'checksum',
       cacheReadOnly: options.cacheReadOnly ?? false,
       timeout: options.timeout ? parseDuration(options.timeout) : null,
       skipDeps: options.skipDeps !== false,
@@ -147,7 +148,17 @@ export async function runTasks(
       explain: true,
     }
 
-    for (const { name, scope } of getRunScopes(input.tasks, options)) {
+    const scopes = getRunScopes(input.tasks, options)
+    if (input.check) {
+      // the files as they are before any task wrote to them, a second task's too: a first
+      // one that formats or generates into src would key it by files no commit holds
+      for (const { scope } of scopes) {
+        for (const [task, { key }] of Object.entries(await getCheckKeys(input.entry, environment, scope))) {
+          emit({ type: 'key', task, key })
+        }
+      }
+    }
+    for (const { name, scope } of scopes) {
       const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
         directory: input.directory,
       })
@@ -159,13 +170,6 @@ export async function runTasks(
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0) {
         throw new Error(`no tasks found for ${name}`)
-      }
-      if (input.check) {
-        // the files as they are before any task of the scope wrote to them
-        const keys = await getCheckKeys(input.entry, environment, scope)
-        for (const [task, { key }] of Object.entries(keys)) {
-          emit({ type: 'key', task, key })
-        }
       }
       const execution = cli.exec({ ...execOptions, workers: cli.defaultWorkers() })
       const seen = new Map<string, Seen>()

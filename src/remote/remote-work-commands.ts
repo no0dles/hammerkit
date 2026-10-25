@@ -466,14 +466,17 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             ? await callServer<{ checks: LookedUpCheck[] }>(server, token, 'POST', '/v1/checks/lookup', { repo, keys })
             : { body: { checks: [] as LookedUpCheck[] } }
         const missing: string[] = []
-        for (const check of answer.body.checks) {
-          if (check.passed) {
-            environment.stdout.write(`${printable(check.task)}: ${printable(describePassed(check.passed))}\n`)
+        // by what was asked, never by what was answered: a task the answer leaves out, or
+        // answers for another key, is not verified
+        for (const { task, key } of keys) {
+          const check = answer.body.checks.find((answered) => answered.task === task && answered.key === key)
+          if (check?.passed) {
+            environment.stdout.write(`${printable(task)}: ${printable(describePassed(check.passed))}\n`)
           } else {
-            missing.push(check.task)
+            missing.push(task)
             environment.stdout.write(
-              `${printable(check.task)}: no run on ${serverName} passed it for these files${
-                check.reason ? `, ${printable(check.reason)}` : ''
+              `${printable(task)}: no run on ${serverName} passed it for these files${
+                check?.reason ? `, ${printable(check.reason)}` : ''
               }\n`
             )
           }

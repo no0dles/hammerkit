@@ -35,8 +35,9 @@ const lookupSchema = z
   })
   .strict()
 
-// What a caller is told of a passed check: no more than who ran it, where and when.
-export type CheckView = Omit<CheckRecord, 'repo' | 'key'>
+// What a caller is told of a passed check: no more than who ran it, where and when. Not the
+// accounts it ran with: CI logs are often readable more widely than the server.
+export type CheckView = Omit<CheckRecord, 'repo' | 'key' | 'accounts'>
 
 /**
  * What runs passed, for CI that verifies instead of running (`hammerkit remote verify`):
@@ -88,9 +89,10 @@ export async function handleChecks(
           ...(yanked ? { reason: `it passed with ${record?.definition}, which was yanked since` } : {}),
         }
       }
-      const { repo: _repo, key: _key, ...view } = record
+      const { repo: _repo, key: _key, accounts: _accounts, ...view } = record
       void _repo
       void _key
+      void _accounts
       return { task, key, passed: view satisfies CheckView }
     })
   )

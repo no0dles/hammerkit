@@ -137,12 +137,17 @@ async function answer(
       try {
         await storage.exportTree(key, request.tree, into, AbortSignal.timeout(10 * 60_000))
         await write(out, JSON.stringify({ ok: true, result: null, stream: true } satisfies SandboxPodHeader) + '\n')
+        const pack = packArchive({ cwd: into, portable: true }, ['.'])
         try {
-          for await (const chunk of packArchive({ cwd: into, portable: true }, ['.'])) {
+          for await (const chunk of pack) {
             await write(out, chunk as Buffer)
           }
         } catch (e) {
           throw new AnswerStarted(e instanceof Error ? e.message : String(e))
+        } finally {
+          // a reader that went away (over its size limit) leaves the pack reading files
+          // that are removed next: what fails then is no answer of anybody's
+          pack.on('error', () => undefined)
         }
         return
       } finally {

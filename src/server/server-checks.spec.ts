@@ -87,6 +87,11 @@ describe('verified checks', () => {
               `  - subject: { iss: "${idp.url}", sub: mallory }`,
               '    builds: run',
               '    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull } }]',
+              // runs from the repository, but no branch to push
+              `  - subject: { iss: "${idp.url}", sub: reader }`,
+              '    repos: [github.com/corp/*]',
+              '    builds: run',
+              '    sandboxes: [{ repo: github.com/corp/*, branches: { main: pull } }]',
               // the CI job: reads checks, and nothing more
               `  - subject: { iss: "${idp.url}", sub: ci }`,
               `    repos: [${REPO}]`,
@@ -148,13 +153,24 @@ describe('verified checks', () => {
               HAMMERKIT_CONFIG: join(cwd, 'host-config.yaml'),
               HAMMERKIT_CREDENTIALS: join(cwd, 'credentials.json'),
             }
-            env.cwd = checkout
-            const verify = async (task: string) => ci('remote', 'verify', task, '--repo', REPO)
+            const verify = async (task: string, at = checkout) => {
+              env.cwd = at
+              return ci('remote', 'verify', task, '--repo', REPO)
+            }
+            const main = join(cwd, 'ci-main')
+            git(cwd, 'clone', '--quiet', '--branch', 'main', repository, main)
 
             // an ignored file makes the test pass in the sandbox, not in a check of it
             await agent.writeRaw('.cache/pass', 'yes\n')
             expect((await agent.runTask('test')).result?.status).toBe('succeeded')
+            // the run that passed is no check: nothing verifies for the files of main
+            await ci('remote', 'add', 'build', server.url, '--issuer', idp.url)
+            await ci('remote', 'use', 'build')
+            const unchecked = await verify('test', main)
+            expect(unchecked.ok).toBe(false)
+            expect(unchecked.out).toContain('test: no run on build passed it for these files')
             expect((await agent.runTask('test', { check: true })).result?.status).toBe('failed')
+            expect((await verify('test', main)).ok).toBe(false)
 
             // the agent fixes the app; its check passes, it pushes the files the check ran on
             await agent.writeRaw('src/app.ts', 'export const greeting = "goodbye"\n')
@@ -164,12 +180,20 @@ describe('verified checks', () => {
 
             git(cwd, 'clone', '--quiet', '--branch', 'agent/fix', repository, checkout)
             expect(git(checkout, 'rev-parse', 'HEAD')).toBe(pushed.commit)
-            await ci('remote', 'add', 'build', server.url, '--issuer', idp.url)
-            await ci('remote', 'use', 'build')
             const verified = await verify('test')
             expect(verified.out).toContain(`test: passed`)
             expect(verified.out).toContain(`a check of sandbox ${agent.id}`)
             expect(verified.ok).toBe(true)
+
+            // a version that was yanked since passes nothing any more
+            expect((await call('agent', 'POST', `/v1/definitions/${build}/yank`, { reason: 'broken' })).status).toBe(
+              200
+            )
+            const yanked = await verify('test')
+            expect(yanked.ok).toBe(false)
+            expect(yanked.out).toContain('which was yanked since')
+            expect((await call('agent', 'POST', `/v1/definitions/${build}/unyank`, {})).status).toBe(200)
+            expect((await verify('test')).ok).toBe(true)
 
             // a change to a file the test reads is not verified
             writeFileSync(join(checkout, 'src/app.ts'), 'export const greeting = "goodbye!"\n')
@@ -201,6 +225,15 @@ describe('verified checks', () => {
               source: { type: 'sandbox', id: mallory.id, check: true },
             })
             expect(refused.status).toBe(403)
+            // a check leaves what it made in the cache of the repository: only for who may push to it
+            const reader = await SandboxClient.create(connection('reader'), REPO, 'main')
+            const pullOnly = await call('reader', 'POST', '/v1/runs', {
+              definition: build,
+              tasks: ['test'],
+              source: { type: 'sandbox', id: reader.id, check: true },
+            })
+            expect(pullOnly.status).toBe(403)
+            expect(pullOnly.body.error).toContain('you may push no branch of')
             const withArgs = await call('agent', 'POST', '/v1/runs', {
               definition: build,
               tasks: ['lint'],

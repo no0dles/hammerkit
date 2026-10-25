@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'crypto'
 import { mkdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { PassThrough, Readable, Writable } from 'stream'
-import { finished } from 'stream/promises'
+import { finished, pipeline } from 'stream/promises'
 import { V1NetworkPolicy, V1PersistentVolumeClaim, V1Pod, V1ResourceQuota, V1Status } from '@kubernetes/client-node'
 import type { WebSocket } from 'ws'
 import { extract as extractTar } from 'tar'
@@ -390,7 +390,9 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     counted.pipe(extract)
     const answer = await this.exclusive(key.id, () => this.call(key, { op: 'archive', id: key.id, tree }, signal, true))
     if ('stream' in answer) {
-      await finished(answer.stream.pipe(counted))
+      // a pipeline, so the answer is ended with the copy: an error of the pod after the copy
+      // stopped (over the size limit) lands nowhere else
+      await pipeline(answer.stream, counted)
     } else {
       counted.end(answer.body)
     }
@@ -1143,6 +1145,11 @@ class AnswerReader extends Writable {
 
   _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     if (this.stream) {
+      if (this.stream.destroyed) {
+        // its reader stopped (over a size limit): the rest of the answer is nobody's
+        callback()
+        return
+      }
       this.stream.write(chunk, callback)
       return
     }

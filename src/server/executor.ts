@@ -96,7 +96,9 @@ export interface RunPlacement {
 //
 // A check on a sandbox runs on a copy of the files a commit of them would hold, so it is a
 // run of the repository like a ref run of that commit, and shares its cache: what its
-// owner may write in the sandbox is not part of it.
+// owner may write in the sandbox is not part of it. It leaves entries a run from main can
+// find, keyed by the files it ran on, as a ref run of a branch does: so only a caller who
+// may push a branch of the repository and run from it may check (server.ts).
 export function cacheNamespace(run: Run): string {
   const repository = run.source.type === 'ref' || (run.source.type === 'sandbox' && run.source.check)
   const key = repository

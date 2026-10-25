@@ -61,8 +61,12 @@ What the key covers, besides the files:
   the task, so `cmds: [true]` published on the side does not pass for the real `test`. It
   also means a check runs with the version of the build file the commit holds: when a change
   touches a check task, publish the new version first and check with it.
-- Not what dependencies generate (`node_modules` above): they are made again from their own
-  `src`, which is in the key.
+- The services the task `needs`: their definitions, the files of their `src`, and the keys of
+  the tasks they depend on. An `e2e` that needs an `api` service is not verified after the
+  source of `api` changed.
+- What dependencies generate (`node_modules` above) only as far as the commit holds it: the key
+  is computed on the checkout before anything ran in it, where those files are not there
+  unless they are committed. They are made again from their own `src`, which is in the key.
 - Not `.git`, and not the run's arguments: a run with arguments is never a check.
 
 A task without `src`, or whose `src` matches no file, here or in a dependency, can not be
@@ -90,8 +94,8 @@ entitlements:
 ```
 
 `builds: run` or more also lets a caller read the checks of its `repos`, so the entitlements
-of the CI guide already do. Who may run checks needs `repos` for the repository as well: a
-check counts like a run from the repository.
+of the CI guide already do. Who may check a sandbox needs `repos` for the repository as well,
+and a branch of it to push to: a check counts like a run from a branch they pushed.
 
 ```yaml title="server.yaml"
 entitlements:
@@ -159,22 +163,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}' }
-      - run: npm install -g hammerkit@1.28.0
+      - run: npm install -g hammerkit@1.27.0
       - run: |
           hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://token.actions.githubusercontent.com
           hammerkit remote use hammerkit
       - run: hammerkit remote verify test e2e --repo github.com/acme/shop
 ```
 
+<Callout>
+
+`hammerkit remote verify` ships with hammerkit 1.27.0. Until it is released, install the
+prerelease the server runs, the `$VERSION` of the Kubernetes guide (`npm view hammerkit@next
+version` prints the newest).
+
+</Callout>
+
 The checkout is of the pull request's head, the commit that was pushed, not the merge commit
 GitHub makes. Both usually have the same files for `test`, but the head is what was checked.
 `--repo` names the repository as the server knows it; left out, it is the `origin` of the
-checkout.
+checkout. Verify right after the checkout, before any other step writes files.
 
 A job that passes prints what passed, and when:
 
 ```
-test: passed 2026-10-25T09:14:03.120Z in 1m 12s, run_Qx3k9ZpL2mW7vN4a by agent-x, from a check of sandbox sbx_4vJ0mT2cX9qLw1aB, fetched at 4be1a07c1a2b
+test: passed 2026-10-25T09:14:03.120Z in 1m12s, run_Qx3k9ZpL2mW7vN4a by agent-x, from a check of sandbox sbx_4vJ0mT2cX9qLw1aB, fetched at 4be1a07c1a2b
 e2e: passed 2026-10-25T09:15:40.002Z from the cache, run_8Lw2… by 1180…, from feature-x at 9e1f20aa31c4
 ```
 
@@ -196,7 +208,7 @@ checks:
   id_tokens:
     HAMMERKIT_TOKEN: { aud: https://hammerkit.example.com }
   script:
-    - npm install -g hammerkit@1.28.0
+    - npm install -g hammerkit@1.27.0
     - hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://gitlab.com
     - hammerkit remote use hammerkit
     - hammerkit remote verify test e2e --repo gitlab.com/acme/shop

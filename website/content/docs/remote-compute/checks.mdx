@@ -27,7 +27,12 @@ Only the server writes checks, from runs it executed, for each task that `succee
 | From uploaded files                                                                      | no                                                    |
 | Any run with arguments                                                                   | no: it ran something other than the task              |
 
-A task without a [check key](#check-keys), and a task that failed, leave nothing.
+A task without a [check key](#check-keys), and a task that failed, leave nothing. A `cached`
+task counts because the cache found its entry by the same inputs the check key covers.
+
+Checks hold only where tasks are isolated from the server: in containers or on a cluster. A
+[`local`](/docs/remote-compute/runs#config) task runs as the user of the server, and could write
+the server's records itself.
 
 ## Checks of a sandbox
 
@@ -49,26 +54,34 @@ Otherwise it is a run on the sandbox: it holds the sandbox while it runs, its ne
 accounts are those of a run on a sandbox. Its cache is the one of the repository's runs from a
 ref, since it runs on files a commit holds. Two more rules:
 
-- The caller needs `repos` for the sandbox's repository, as for a run from a ref: `403` without.
+- The caller needs `repos` for the sandbox's repository, as for a run from a ref, and a branch of
+  it they may push to (`push` in `sandboxes`): `403` without. A check leaves what it made in the
+  repository's cache, which runs from `main` restore from, and so can a caller who pushes a
+  branch and runs it. A caller who may only pull can not.
 - It takes no arguments: `400`.
+- It takes a cached result only by the files' checksums, never by their dates
+  (`cache: modify-date` is taken as `checksum`).
 
 The agents' [`check` tool](/docs/remote-compute/agents) submits such a run.
 
 ## Check keys
 
 A check is found by its key, which both the server and `remote verify` compute from the build
-file and the files, before anything runs:
+file and the files of a checkout, before anything ran in it:
 
 - the task's definition, as for its [cache](/docs/task/caching): commands, image, variables,
-  mounts, and so on,
-- the sha256 of every file its `src` matches, by path, without `.git` and without what its
-  dependencies generate,
-- the keys of the tasks it depends on.
+  mounts, the definitions of the services it `needs`, and so on,
+- the sha256 of every file its `src` matches, by path, without `.git`,
+- the keys of the tasks it depends on,
+- for each service it needs, the files of the service's `src` and the keys of the tasks the
+  service depends on: an `e2e` that needs `api` gets another key when the source of `api`
+  changes.
 
 So the key of a commit's task is the same wherever the commit is checked out, and a check
-counts for every commit with the same files. The cache hashes with sha1 and md5, which is
-enough to find an entry; a check key hashes with sha256 throughout, so a file made to share
-the hash of another does not pass for it.
+counts for every commit with the same files. It hashes with sha256 throughout, as the cache
+does, so a file made to share the hash of another does not pass for it. Run `remote verify` in
+a fresh checkout: a file a task generated there, where the `src` of a task reads, gives
+another key than the commit has.
 
 The build file is read as a server reads it (no `.env`, no placement on a cluster, any secret
 provider and account). A task has no key when it, or a task it depends on, declares no `src`
@@ -97,7 +110,6 @@ Up to 100 keys. The answer has an entry per key, the newest run that passed it, 
         "by": { "iss": "https://accounts.google.com", "sub": "1180…" },
         "source": { "type": "sandbox", "sandbox": "sbx_4vJ0mT2cX9qLw1aB", "commit": "4be1a07c…", "tree": "a1f3…" },
         "definition": "sha256:9f2c…",
-        "accounts": [],
         "finishedAt": "2026-10-25T09:14:03.120Z",
         "durationMs": 72000
       }
@@ -109,7 +121,8 @@ Up to 100 keys. The answer has an entry per key, the newest run that passed it, 
 A check that passed with a version of the build file that was [yanked](/docs/remote-compute/build-files)
 since is `null`, with a `reason`. The caller needs `checks: read`, or a `builds` level, and
 `repos` that cover the repository, see [Entitlements](/docs/remote-compute/entitlements): `403`
-otherwise.
+otherwise. The answer leaves out the accounts the run used: a CI job's log is often readable by
+more people than the server.
 
 ## Config
 
