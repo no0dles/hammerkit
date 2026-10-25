@@ -218,6 +218,27 @@ describe('RunRegistry service runs', () => {
     }
   })
 
+  it('fails a service run that was up when the server shut down', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      const { executor, started } = services()
+      const registry = new RunRegistry({ executor, store: new FileRunStore(directory) })
+      const run = registry.submit(alice, spec())
+      await vi.waitFor(() => expect(started).toHaveLength(1))
+      started[0].up([target(4100)])
+      await registry.close()
+      const failed = { state: 'failed', error: 'the server stopped while the services were up, start them again' }
+      expect(registry.get(alice, run.id)).toMatchObject(failed)
+      expect(registry.get(alice, run.id)?.stoppedBy).toBeUndefined()
+      const restarted = new RunRegistry({ executor: services().executor, store: new FileRunStore(directory) })
+      await restarted.restore()
+      expect(restarted.get(alice, run.id)).toMatchObject(failed)
+      await restarted.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('sleeps without a request for its sleepTtl, and wakes on the next, as the same run', async () => {
     const { executor, started } = services()
     const registry = new RunRegistry({ executor })

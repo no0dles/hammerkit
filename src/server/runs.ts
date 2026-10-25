@@ -925,11 +925,7 @@ export class RunRegistry {
         this.sleep(entry)
       } else if (entry.run.upAt) {
         // services stay until they are stopped: ones that stopped on their own failed
-        this.finish(
-          entry,
-          entry.abort.signal.aborted && !entry.timedOut ? 'succeeded' : 'failed',
-          entry.timedOut ? this.tooLong() : entry.abort.signal.aborted ? undefined : 'the services stopped on their own'
-        )
+        this.endServices(entry, 'the services stopped on their own')
       } else {
         this.finish(
           entry,
@@ -942,11 +938,7 @@ export class RunRegistry {
       if (entry.sleeping) {
         this.sleep(entry)
       } else if (entry.run.upAt) {
-        this.finish(
-          entry,
-          entry.abort.signal.aborted && !entry.timedOut ? 'succeeded' : 'failed',
-          entry.timedOut ? this.tooLong() : entry.abort.signal.aborted ? undefined : message
-        )
+        this.endServices(entry, message)
       } else {
         const cancelled = entry.abort.signal.aborted && !entry.timedOut
         this.finish(
@@ -1093,6 +1085,20 @@ export class RunRegistry {
     this.queue.push(entry)
     this.dispatch()
     return undefined
+  }
+
+  // The end of a run that was up: stopped by somebody, its ttl or a newer run it succeeded,
+  // stopped by the server going away it failed, as its record says after a restart.
+  private endServices(entry: Entry, failure: string): void {
+    if (entry.timedOut) {
+      this.finish(entry, 'failed', this.tooLong())
+    } else if (!entry.abort.signal.aborted) {
+      this.finish(entry, 'failed', failure)
+    } else if (entry.run.stoppedBy) {
+      this.finish(entry, 'succeeded')
+    } else {
+      this.finish(entry, 'failed', 'the server stopped while the services were up, start them again')
+    }
   }
 
   private tooLong(): string {
