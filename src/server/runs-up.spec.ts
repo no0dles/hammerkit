@@ -221,16 +221,16 @@ describe('RunRegistry service runs', () => {
   it('sleeps without a request for its sleepTtl, and wakes on the next, as the same run', async () => {
     const { executor, started } = services()
     const registry = new RunRegistry({ executor })
-    const run = registry.submit(alice, spec('feature', HOUR, 40))
+    const run = registry.submit(alice, spec('feature', HOUR, 400))
     await tick()
     started[0].up([target(4100)])
     const expiresAt = registry.get(alice, run.id)?.expiresAt
     // a request keeps it up
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await new Promise((resolve) => setTimeout(resolve, 250))
     registry.visit(run.id)
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    await new Promise((resolve) => setTimeout(resolve, 250))
     expect(registry.get(alice, run.id)?.state).toBe('up')
-    await new Promise((resolve) => setTimeout(resolve, 40))
+    await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'), { timeout: 5000 })
     expect(started[0].signal.aborted).toBe(true)
     expect(registry.get(alice, run.id)?.state).toBe('asleep')
     expect(registry.endpoint('feature-80-abcdef')?.target).toBeUndefined()

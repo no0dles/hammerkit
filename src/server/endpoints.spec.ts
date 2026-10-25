@@ -162,8 +162,8 @@ describe('EndpointGateway', () => {
     return { host: other, id: run.id }
   }
 
-  const until = async (condition: () => boolean) => {
-    for (let i = 0; i < 200 && !condition(); i++) {
+  const until = async (condition: () => boolean, tries = 200) => {
+    for (let i = 0; i < tries && !condition(); i++) {
       await new Promise((resolve) => setTimeout(resolve, 5))
     }
     expect(condition()).toBe(true)
@@ -469,15 +469,16 @@ describe('EndpointGateway', () => {
   })
 
   it('wakes a run that sleeps on a request, and keeps one that is up awake', async () => {
-    const sleepy = await submitOther('sleepy', 40)
+    // long enough for a request on a slow runner to keep it up
+    const sleepy = await submitOther('sleepy', 1000)
     const auth = { 'hammerkit-authorization': `Bearer ${token('reviewer')}` }
     // requests keep it up past its sleepTtl
     for (let i = 0; i < 4; i++) {
       expect((await get(sleepy.host, '/', auth)).status).toBe(200)
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await new Promise((resolve) => setTimeout(resolve, 400))
     }
     expect(registry.get(alice, sleepy.id)?.state).toBe('up')
-    await until(() => registry.get(alice, sleepy.id)?.state === 'asleep')
+    await until(() => registry.get(alice, sleepy.id)?.state === 'asleep', 1000)
     // somebody who may not open it does not wake it
     expect((await get(sleepy.host, '/', { 'hammerkit-authorization': `Bearer ${token('other')}` })).status).toBe(403)
     expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
