@@ -481,7 +481,7 @@ backend:
 Stop the port-forward loop first (`kill %1`, or close its terminal), then:
 
 ```bash
-# the callers' namespaces of this server: namespacePrefix and 16 hex digits; look before you delete
+# the namespaces of this server's callers and service runs: namespacePrefix and 16 hex digits; look before you delete
 kubectl get ns -l hammerkit.dev/managed -o name | grep -E "^namespace/$NAME-[0-9a-f]{16}$"
 kubectl get ns -l hammerkit.dev/managed -o name | grep -E "^namespace/$NAME-[0-9a-f]{16}$" | xargs -r kubectl delete
 kubectl delete ns $NAME
