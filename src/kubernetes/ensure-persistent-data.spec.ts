@@ -1,4 +1,4 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { linkSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { EventEmitter } from 'events'
@@ -22,6 +22,12 @@ async function listEntries(archive: NodeJS.ReadableStream): Promise<string[]> {
     archive.pipe(parser)
   })
   return paths
+}
+
+// whether a file's id is exact, so packArchive packs its other links as links (on Windows
+// it is not always)
+function hasExactId(path: string): boolean {
+  return Number.isSafeInteger(statSync(path).ino)
 }
 
 describe('packSource', () => {
@@ -57,16 +63,18 @@ describe('packSource', () => {
     const entries = await listEntries(archive)
     expect(entries[0]).toBe('src-0123456789ab/')
     // one of two hard-linked files links to the other at its place in the claim
-    expect(entries.slice(1).sort()).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/^src-0123456789ab\/(index|linked)\.ts -> src-0123456789ab\/(index|linked)\.ts$/),
-      ])
-    )
+    if (hasExactId(join(root, 'api', 'src', 'index.ts'))) {
+      expect(entries.slice(1).sort()).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^src-0123456789ab\/(index|linked)\.ts -> src-0123456789ab\/(index|linked)\.ts$/),
+        ])
+      )
+    }
     expect(entries.slice(1).every((entry) => entry.startsWith('src-0123456789ab/'))).toBe(true)
     expect(entries).toHaveLength(3)
   })
 
-  it('packs a directory with several hard links as links', async () => {
+  it('packs a directory with several hard links, as links where their id is exact', async () => {
     mkdirSync(join(root, 'linked', 'node_modules'), { recursive: true })
     for (let i = 0; i < 5; i++) {
       writeFileSync(join(root, 'linked', 'node_modules', `file-${i}.js`), `${i}`)
@@ -86,7 +94,9 @@ describe('packSource', () => {
       entries.filter((entry) =>
         /^node_modules-0123456789ab\/(file|link)-(\d)\.js -> node_modules-0123456789ab\/(file|link)-\2\.js$/.test(entry)
       )
-    ).toHaveLength(5)
+    ).toHaveLength(
+      [0, 1, 2, 3, 4].filter((i) => hasExactId(join(root, 'linked', 'node_modules', `file-${i}.js`))).length
+    )
   })
 })
 
