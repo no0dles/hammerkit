@@ -1,3 +1,10 @@
+# [1.27.0-next.8](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.7...v1.27.0-next.8) (2026-10-25)
+
+
+### Bug Fixes
+
+* name sandbox commits by their email and keep k8s setup out of task output ([#115](https://github.com/no0dles/hammerkit/issues/115)) ([f0f81fc](https://github.com/no0dles/hammerkit/commit/f0f81fc46e8ab6fc2e374a62fac2f5abf34d480c))
+
 # [1.27.0-next.7](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.6...v1.27.0-next.7) (2026-10-25)
 
 
