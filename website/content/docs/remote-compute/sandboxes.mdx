@@ -129,7 +129,8 @@ A run names the sandbox as its `source`, the rest of the request is a normal
 * **One run at a time.** A run holds its sandbox from when it is submitted until it is over,
   waiting for an approval and in the queue included. A second run on the same sandbox waits
   in the queue for the first, runs on other sandboxes start next to it within the caller's
-  [limits](/docs/remote-compute/runs#limits-and-restarts).
+  [limits](/docs/remote-compute/runs#limits-and-restarts) (`runs.limits.running`, 2 by
+  default), on [Kubernetes](/docs/remote-compute/backend#namespaces) too.
 * **What it started from** is recorded in the run: the `commit` the sandbox was fetched at,
   the git `tree` of its files when the run was submitted, which together name the changes
   it held, and whether it held any (`clean`). The run logs the tree again when it starts,

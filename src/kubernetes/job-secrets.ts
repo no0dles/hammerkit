@@ -10,8 +10,8 @@ import { escapeKubernetesText } from '../planner/utils/task-arguments'
 import { getVersion } from '../version'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
-import { getResourceName } from './resources'
-import { getContainerSecurity, getRunLabels } from './job-placement'
+import { getItemLabels, getResourceName } from './resources'
+import { getContainerSecurity } from './job-placement'
 import { formatNetwork, getEffectiveNetwork, WorkNetwork } from '../planner/work-network'
 
 // Where the values are in the pod (an in-memory volume), and where the init container
@@ -92,8 +92,11 @@ function accountsOf(secrets: JobSecret[]): string[] {
   return [...new Set(secrets.map((s) => s.source.account))]
 }
 
-export function getCredentialsName(item: WorkItem<ContainerWorkTask | ContainerWorkService>): string {
-  return getResourceName(item, '-credentials')
+export function getCredentialsName(
+  item: WorkItem<ContainerWorkTask | ContainerWorkService>,
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+): string {
+  return getResourceName(item, kubernetes, '-credentials')
 }
 
 // The keys of the credentials Secret: `<account>.token` and `<account>.file.<key>`
@@ -170,9 +173,9 @@ export async function ensureJobCredentials(
     apiVersion: 'v1',
     metadata: {
       namespace: kubernetes.namespace,
-      name: getCredentialsName(item),
+      name: getCredentialsName(item, kubernetes),
       annotations: { 'hammerkit.dev/version': getVersion() },
-      labels: { 'hammerkit.dev/id': item.id(), ...getRunLabels(kubernetes) },
+      labels: getItemLabels(item, kubernetes),
     },
     type: 'Opaque',
     data,
@@ -217,7 +220,10 @@ export async function removeJobCredentials(
     return
   }
   try {
-    await instance.coreApi.deleteNamespacedSecret({ name: getCredentialsName(item), namespace: kubernetes.namespace })
+    await instance.coreApi.deleteNamespacedSecret({
+      name: getCredentialsName(item, kubernetes),
+      namespace: kubernetes.namespace,
+    })
   } catch (e) {
     if (statusCodeOf(e) !== 404) {
       throw e
@@ -278,7 +284,7 @@ export function getJobSecretSpec(
     }
     const name = `hammerkit-account-${index}`
     accountVolume.set(account, name)
-    volumes.push({ name, secret: { secretName: getCredentialsName(item), items, defaultMode: 0o444 } })
+    volumes.push({ name, secret: { secretName: getCredentialsName(item, { server }), items, defaultMode: 0o444 } })
   })
 
   const initContainers = secrets.map(({ index, secret, source }): V1Container => {

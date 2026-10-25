@@ -100,7 +100,14 @@ describe('the kept claim of a task', () => {
     let quotaFull = !!options.quotaFull
     const calls: string[] = []
     const notFound = () => Object.assign(new Error('not found'), { code: 404 })
-    const other = { metadata: { name: 'hammerkit-other', labels: { [VOLUME_SCOPE_LABEL]: 'sandbox-1' } } }
+    // released by its last run, so it has an expiry
+    const other = {
+      metadata: {
+        name: 'hammerkit-other',
+        labels: { [VOLUME_SCOPE_LABEL]: 'sandbox-1' },
+        annotations: { [EXPIRES_ANNOTATION]: '2026-01-01T00:00:00.000Z' },
+      },
+    }
     let others = [other]
     const instance = {
       objectApi: {

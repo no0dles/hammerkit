@@ -7,9 +7,8 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { WorkSecret, resolveSecretValue } from '../planner/work-secret'
 import { Environment } from '../executer/environment'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
-import { getResourceName } from './resources'
+import { getItemLabels, getResourceName } from './resources'
 import { getVersion } from '../version'
-import { getRunLabels } from './job-placement'
 
 const SECRET_VOLUME_NAME = 'hammerkit-secrets'
 
@@ -19,20 +18,24 @@ export interface KubernetesSecretRefs {
   volumes: V1Volume[]
 }
 
-export function getSecretResourceName(item: WorkItem<ContainerWorkService | ContainerWorkTask>): string {
-  return getResourceName(item, '-secrets')
+export function getSecretResourceName(
+  item: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+): string {
+  return getResourceName(item, kubernetes, '-secrets')
 }
 
 // The values go into a Secret of the item; the pod only references it, so no
 // value is part of a Job or Deployment spec.
 export function getKubernetesSecretRefs(
   item: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
   secrets: WorkSecret[]
 ): KubernetesSecretRefs {
   if (secrets.length === 0) {
     return { env: [], mounts: [], volumes: [] }
   }
-  const secretName = getSecretResourceName(item)
+  const secretName = getSecretResourceName(item, kubernetes)
   const refs: KubernetesSecretRefs = {
     env: [],
     mounts: [],
@@ -71,14 +74,11 @@ export async function ensureKubernetesSecret(
     apiVersion: 'v1',
     metadata: {
       namespace: kubernetes.namespace,
-      name: getSecretResourceName(item),
+      name: getSecretResourceName(item, kubernetes),
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
-      labels: {
-        'hammerkit.dev/id': item.id(),
-        ...getRunLabels(kubernetes),
-      },
+      labels: getItemLabels(item, kubernetes),
     },
     type: 'Opaque',
     stringData,
@@ -93,7 +93,7 @@ export async function removeKubernetesSecret(
 ): Promise<void> {
   try {
     await instance.coreApi.deleteNamespacedSecret({
-      name: getSecretResourceName(item),
+      name: getSecretResourceName(item, kubernetes),
       namespace: kubernetes.namespace,
     })
   } catch (e) {
