@@ -18,6 +18,8 @@ export interface WorkTaskScope {
 export interface WorkLabelScope {
   filterLabels?: LabelValues
   excludeLabels?: LabelValues
+  // the services to start by name, no task: what a service run on a server names
+  serviceNames?: string[]
   environmentName?: string | null
   args?: WorkArguments
 }

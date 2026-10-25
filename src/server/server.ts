@@ -1,12 +1,14 @@
 import { createServer as createHttpServer, IncomingMessage, Server, ServerResponse } from 'http'
 import { createServer as createHttpsServer } from 'https'
+import { createSecureContext, SecureContext } from 'tls'
+import { Duplex } from 'stream'
 import { AddressInfo } from 'net'
 import { Environment } from '../executer/environment'
 import { getVersion } from '../version'
-import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getSourceAccounts, ServerConfig } from './server-config'
+import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getServerAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { canUse, decideRun, getGrant, mayRun } from './policy'
+import { canUse, decideRun, endpointLevel, getGrant, mayRun } from './policy'
 import { FileRunStore } from './run-store'
 import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSource, StoredEvent } from './runs'
 import { RefError } from './git-checkout'
@@ -32,6 +34,8 @@ import { KubernetesSandboxStorage } from './kubernetes-sandbox-storage'
 import { DockerSandboxContainers } from './sandbox-docker'
 import { handleSandboxes } from './sandboxes-api'
 import { PlanPolicy } from './plan'
+import { EndpointGateway } from './endpoints'
+import { getEndpointHosts, getServiceRunName, mayOpenEndpoints, refuseEndpoints, toRunEndpoints } from './service-runs'
 import { formatDuration, parseDuration, parseSize } from '../utils/units'
 import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
@@ -158,13 +162,14 @@ async function handleRuns(
   sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
+  endpointUrl: (host: string) => string,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
-  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs))?)?$/.exec(url.pathname)
+  const match = /^\/v1\/runs(?:\/([^/]+)(?:\/(cancel|events|logs|extend))?)?$/.exec(url.pathname)
   if (!match) {
     return false
   }
@@ -181,7 +186,20 @@ async function handleRuns(
         }),
       })
     } else if (method === 'POST') {
-      await submitRun(config, registry, definitions, sources, sandboxes, planning, repos, log, principal, req, res)
+      await submitRun(
+        config,
+        registry,
+        definitions,
+        sources,
+        sandboxes,
+        planning,
+        repos,
+        endpointUrl,
+        log,
+        principal,
+        req,
+        res
+      )
     } else {
       send(res, 405, { error: 'method not allowed' }, { allow: 'GET, POST' })
     }
@@ -197,6 +215,12 @@ async function handleRuns(
     const run = registry.cancel(principal, id, accountsOf(config, principal))
     log(`cancel iss=${principal.iss} sub=${principal.sub} run=${id} found=${Boolean(run)}`)
     run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+  } else if (action === 'extend') {
+    if (method !== 'POST') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+      return true
+    }
+    await extendRun(config, registry, log, principal, id, req, res)
   } else if (method !== 'GET') {
     send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
   } else if (action === 'events') {
@@ -241,6 +265,41 @@ function accountsOf(config: ServerConfig, principal: Principal): (account: strin
   return (account) => canUse(grant, account)
 }
 
+async function extendRun(
+  config: ServerConfig,
+  registry: RunRegistry,
+  log: (line: string) => void,
+  principal: Principal,
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  const body = (await readJson(req)) as { ttl?: unknown }
+  let ttl: number
+  try {
+    if (typeof body !== 'object' || body === null || typeof body.ttl !== 'string') {
+      throw new Error()
+    }
+    ttl = parseDuration(body.ttl)
+    if (!(ttl > 0)) {
+      throw new Error()
+    }
+  } catch {
+    send(res, 400, { error: 'ttl: expected a duration like 30m, 8h or 1d' })
+    return
+  }
+  const grant = getGrant(config.entitlements, principal)
+  const result = registry.extend(principal, id, ttl, (run) => mayOpenEndpoints(grant, run))
+  log(`extend iss=${principal.iss} sub=${principal.sub} run=${id} result=${result.status}`)
+  if (result.status === 'not-found') {
+    send(res, 404, { error: 'not found' })
+  } else if (result.status === 'not-up') {
+    send(res, 409, { error: `the run is ${result.state}, only a service run that is up can be extended` })
+  } else {
+    send(res, 200, toRunResponse(result.run))
+  }
+}
+
 function toRunResponse(run: Run): Omit<Run, 'owner'> {
   const { owner, ...visible } = run
   void owner
@@ -255,6 +314,7 @@ async function submitRun(
   sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
+  endpointUrl: (host: string) => string,
   log: (line: string) => void,
   principal: Principal,
   req: IncomingMessage,
@@ -291,6 +351,20 @@ async function submitRun(
     send(res, 400, { error: `${version.hash} has no task ${unknown.map(quote).join(', ')}` })
     return
   }
+  const notServices = request.services.filter((service) => !version.services.includes(service))
+  if (notServices.length > 0) {
+    send(res, 400, { error: `${version.hash} has no service ${notServices.map(quote).join(', ')}` })
+    return
+  }
+  if (request.endpoints.length > 0 && !config.endpoints) {
+    send(res, 400, { error: 'this server publishes no endpoints (endpoints is not configured)' })
+    return
+  }
+  const ttl = request.services.length > 0 ? parseDuration(request.ttl ?? config.runs.up.ttl) : 0
+  if (ttl > parseDuration(config.runs.up.maxTtl)) {
+    send(res, 400, { error: `ttl: at most ${config.runs.up.maxTtl} on this server (runs.up.maxTtl)` })
+    return
+  }
   const argued = (request.options.args ?? []).length > 0 ? request.tasks[0] : undefined
   if (argued !== undefined && version.services.includes(argued)) {
     send(res, 400, { error: `${argued} is a service, arguments go to a task` })
@@ -311,6 +385,12 @@ async function submitRun(
       })
       return
     }
+  }
+  if (request.services.length > 0 && request.source.type === 'sandbox' && config.backend.type === 'kubernetes') {
+    send(res, 400, {
+      error: 'on a cluster a service run starts from a branch, push the sandbox and start it from there',
+    })
+    return
   }
   const sandbox = request.source.type === 'sandbox' ? sandboxes.registry.get(principal, request.source.id) : undefined
   if (request.source.type === 'sandbox') {
@@ -347,10 +427,19 @@ async function submitRun(
     send(res, 400, { error: `the run does not load: ${e instanceof Error ? e.message : String(e)}` })
     return
   }
-  const refused = refuseArguments(request, planned.plan, sandbox ? sandboxes.policy : planning.policy)
+  const refused =
+    refuseArguments(request, planned.plan, sandbox ? sandboxes.policy : planning.policy) ??
+    refuseEndpoints(request, planned.plan, config.runs.secretNetwork === 'open')
   if (refused) {
     log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${refused}`)
     send(res, 400, { error: refused })
+    return
+  }
+  const runRepo = request.source.type === 'ref' ? request.source.repo : sandbox?.repo
+  if (request.endpoints.length > 0 && (!runRepo || endpointLevel(grant, runRepo) !== 'publish')) {
+    const error = `you may not publish endpoints of ${runRepo ?? 'this source'}, an entitlement needs endpoints with level publish for it`
+    log(`refuse run iss=${principal.iss} sub=${principal.sub}: ${error}`)
+    send(res, 403, { error })
     return
   }
   const decision = decideRun({
@@ -395,6 +484,25 @@ async function submitRun(
   } else if (request.source.type === 'upload') {
     source = request.source
   }
+  // a service run is named after its branch unless it says, and its endpoints after that
+  const serviceName =
+    request.services.length > 0
+      ? request.name ??
+        getServiceRunName(request.source.type === 'ref' ? request.source.ref : (sandbox as Sandbox | undefined)?.ref)
+      : ''
+  const up =
+    request.services.length > 0
+      ? {
+          services: request.services,
+          ttl,
+          name: serviceName,
+          endpoints: toRunEndpoints(
+            request.endpoints,
+            getEndpointHosts(serviceName, principal, request.endpoints),
+            endpointUrl
+          ),
+        }
+      : undefined
   const submit = (runSource: RunSource) =>
     registry.submit(
       principal,
@@ -405,6 +513,7 @@ async function submitRun(
         plan: planned.plan,
         source: runSource,
         options: request.options,
+        ...(up ? { up } : {}),
       },
       approvals
     )
@@ -428,6 +537,8 @@ async function submitRun(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
         run.source.type
       }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}` : ''} tasks=${run.tasks.length}${
+        run.up ? ` services=[${run.up.services.join(',')}] name=${run.up.name} endpoints=${run.up.endpoints.length}` : ''
+      }${
         approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''
       }`
     )
@@ -476,6 +587,7 @@ async function authenticate(
 async function handle(
   config: ServerConfig,
   registry: RunRegistry,
+  gateway: EndpointGateway | undefined,
   definitions: DefinitionStore,
   proposals: ProposalRegistry,
   sources: SourceStore,
@@ -487,6 +599,12 @@ async function handle(
   req: IncomingMessage,
   res: ServerResponse
 ): Promise<void> {
+  // the hosts of endpoints are the apps of service runs, not the API
+  const label = gateway?.hostOf(req)
+  if (gateway && label) {
+    await gateway.handle(label, req, res)
+    return
+  }
   const url = new URL(req.url ?? '/', 'http://localhost')
   const path = url.pathname
   if (path === DISCOVERY_PATH || path === '/healthz') {
@@ -516,7 +634,21 @@ async function handle(
     return
   }
   if (
-    await handleRuns(config, registry, definitions, sources, sandboxes, planning, repos, log, principal, req, res, url)
+    await handleRuns(
+      config,
+      registry,
+      definitions,
+      sources,
+      sandboxes,
+      planning,
+      repos,
+      (host) => gateway?.url(host) ?? host,
+      log,
+      principal,
+      req,
+      res,
+      url
+    )
   ) {
     return
   }
@@ -561,7 +693,7 @@ export async function startServer(
     },
     policy: {
       envs: config.runs.env.allow,
-      reserved: getSourceAccounts(config),
+      reserved: getServerAccounts(config),
       runtimes: config.runtimes,
       backend: config.backend.type,
       network: parseWorkNetwork(config.runs.network),
@@ -656,10 +788,29 @@ export async function startServer(
     limits: config.runs.limits,
     maxDuration: parseDuration(config.runs.maxDuration),
     maxLogBytes: config.runs.maxLogBytes,
+    up: {
+      maxTtl: parseDuration(config.runs.up.maxTtl),
+      perCaller: config.runs.up.limits.up,
+      total: config.runs.up.total,
+    },
     store: new FileRunStore(join(storage, 'records')),
     log,
   })
   await registry.restore()
+  const login = config.endpoints?.login
+  const gateway = config.endpoints
+    ? new EndpointGateway(config, registry, {
+        keyFile: join(storage, 'endpoints', 'session.key'),
+        verifier,
+        ...(login?.clientSecret
+          ? { clientSecret: () => repos.serverSecret(login.clientSecret as { from: string; account: string }) }
+          : {}),
+        log,
+        ...(options.fetch ? { fetch: options.fetch } : {}),
+        ...(options.now ? { now: options.now } : {}),
+      })
+    : undefined
+  await gateway?.load()
   sandboxes.registry.useRuns({
     holder: (id) => registry.holder(id),
     stop: (id) => registry.stopSandbox(id, 'the sandbox was deleted'),
@@ -673,6 +824,7 @@ export async function startServer(
     handle(
       config,
       registry,
+      gateway,
       definitions,
       proposals,
       sources,
@@ -702,10 +854,43 @@ export async function startServer(
       environment.file.read(config.tls.cert),
       environment.file.read(config.tls.key),
     ])
-    server = createHttpsServer({ cert, key }, listener)
+    // the hosts of endpoints have a wildcard certificate of their own
+    const endpointsTls = config.endpoints?.tls
+    const endpointContext = endpointsTls
+      ? createSecureContext({
+          cert: await environment.file.read(endpointsTls.cert),
+          key: await environment.file.read(endpointsTls.key),
+        })
+      : undefined
+    const domain = config.endpoints?.domain
+    server = createHttpsServer(
+      {
+        cert,
+        key,
+        ...(endpointContext && domain
+          ? {
+              SNICallback: (servername: string, done: (err: Error | null, ctx?: SecureContext) => void) =>
+                done(null, servername.toLowerCase().endsWith(`.${domain}`) ? endpointContext : undefined),
+            }
+          : {}),
+      },
+      listener
+    )
   } else {
     server = createHttpServer(listener)
   }
+  // WebSockets of the apps behind endpoints; the API has none
+  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const label = gateway?.hostOf(req)
+    if (!gateway || !label) {
+      socket.end('HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n')
+      return
+    }
+    gateway.upgrade(label, req, socket, head).catch((e) => {
+      log(`error upgrade ${label}: ${e instanceof Error ? e.message : String(e)}`)
+      socket.destroy()
+    })
+  })
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
@@ -716,11 +901,12 @@ export async function startServer(
   })
 
   const address = server.address() as AddressInfo
+  gateway?.listening(address.port, Boolean(config.tls))
   const host = address.family === 'IPv6' ? `[${address.address}]` : address.address
   return {
     url: `${config.tls ? 'https' : 'http'}://${host}:${address.port}`,
     reload: (next) => {
-      const readers = getSourceAccounts(config)
+      const readers = getServerAccounts(config)
       next.entitlements.forEach((entitlement, index) => {
         const iss = (entitlement.subject ?? entitlement.group ?? entitlement.claims)?.iss
         if (iss && !config.issuers.some((issuer) => issuer.issuer === iss)) {

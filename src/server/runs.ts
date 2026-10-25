@@ -10,6 +10,8 @@ export type RunState =
   | 'awaiting-approval'
   | 'queued'
   | 'running'
+  // the services of a service run are ready, and stay until its ttl ends or it is stopped
+  | 'up'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
@@ -62,6 +64,34 @@ export interface RunSpec {
   source: RunSource
   // the settings of `hammerkit run` the caller chose, see run-request.ts
   options: RunOptions
+  // a service run: the services it starts instead of tasks, see ServiceRunSpec
+  up?: ServiceRunSpec
+}
+
+// What a service run keeps up, and for how long.
+export interface ServiceRunSpec {
+  services: string[]
+  // how long the services stay once ready (ms)
+  ttl: number
+  // a later service run of the same caller with this name replaces it
+  name: string
+  // the ports published at hosts of their own
+  endpoints: RunEndpoint[]
+}
+
+export interface RunEndpoint {
+  service: string
+  port: number
+  // the label of its host below the endpoints domain, and the address it is opened at
+  host: string
+  url: string
+}
+
+// Where the server reaches the port of an endpoint, once its service is up.
+export interface EndpointTarget {
+  service: string
+  port: number
+  address: { host: string; port: number }
 }
 
 // How a task of a run went, or goes. `skipped` is a dependency no task of the run needed,
@@ -100,6 +130,12 @@ export interface Run extends RunSpec {
   error?: string
   // per task, by its name, from the moment it starts
   results?: Record<string, TaskResult>
+  // a service run: when its services were ready, and when they stop
+  upAt?: string
+  expiresAt?: string
+  // a service run that was up: why it stopped, `ttl`, `replaced` by one of the same name,
+  // or who cancelled it
+  stoppedBy?: 'ttl' | 'replaced' | Identity
 }
 
 // What an executor reports while it works. `seq` and `time` are added by the registry.
@@ -121,14 +157,18 @@ export type RunEvent =
   | RunEventData
   | { type: 'state'; state: RunState; error?: string }
   | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; accounts: string[]; reason?: string }
+  | { type: 'extended'; by: Identity; expiresAt: string }
   | { type: 'truncated' }
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
 
 export interface RunContext {
   emit(event: RunEventData): void
-  // aborted when the run is cancelled or the server stops
+  // aborted when the run is cancelled or the server stops, or a service run's ttl ended
   signal: AbortSignal
+  // a service run: its services are ready, the endpoints are reached at these addresses.
+  // The executor keeps them up until `signal` aborts.
+  up?(targets: EndpointTarget[]): void
 }
 
 // What actually carries out a run. The registry only keeps its state; a run
@@ -176,6 +216,9 @@ export interface RunRegistryOptions {
   maxDuration?: number
   // log output kept per run (bytes of text), the rest is cut off with a `truncated` event
   maxLogBytes?: number
+  // service runs: how long they stay at most (ms) from a start or an extend, and how many
+  // one caller and the whole server have starting or up
+  up?: { maxTtl: number; perCaller: number; total: number }
   // keeps the runs over a restart
   store?: RunStore
   log?: (line: string) => void
@@ -207,6 +250,12 @@ interface Entry {
   timedOut?: boolean
   // writes of the record one after the other
   saving: Promise<void>
+  // the stop of a run that takes too long, until a service run is up
+  durationTimer?: NodeJS.Timeout
+  // a service run that is up gave its place of maxConcurrent back
+  released?: boolean
+  // where the endpoints of a service run that is up are reached
+  targets?: EndpointTarget[]
 }
 
 type AccountCheck = (account: string) => boolean
@@ -311,6 +360,9 @@ export class RunRegistry {
         }
       } else if (run.state === 'queued' || run.state === 'running') {
         this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
+      } else if (run.state === 'up') {
+        // the services went with the process that held them
+        this.finish(entry, 'failed', 'the server stopped while the services were up, start them again')
       }
     }
     this.evict()
@@ -327,6 +379,9 @@ export class RunRegistry {
       throw new RunError('too many runs are waiting for an approval')
     }
     this.checkLimits(owner, waiting)
+    if (spec.up) {
+      this.checkUpLimits(owner)
+    }
     const run: Run = {
       ...spec,
       id: `run_${randomBytes(12).toString('base64url')}`,
@@ -379,39 +434,93 @@ export class RunRegistry {
       .reverse()
   }
 
-  // A queued run is cancelled at once; a running one when its executor stops.
+  // A queued run is cancelled at once; a running one when its executor stops. A service run
+  // that is up stops its services, and says who stopped it.
   cancel(owner: Pick<Principal, 'iss' | 'sub'>, id: string, canUse?: AccountCheck): Run | undefined {
     const entry = this.find(owner, id, canUse)
     if (!entry) {
       return undefined
     }
-    this.stop(entry)
+    this.stop(entry, undefined, { iss: owner.iss, sub: owner.sub })
     return this.copy(entry.run)
   }
 
+  /**
+   * Moves the end of a service run that is up to `ttl` (ms) from now, at most the
+   * server's maxTtl. Its owner may, and whoever `mayOpen` says may open its endpoints.
+   */
+  extend(
+    caller: Pick<Principal, 'iss' | 'sub'>,
+    id: string,
+    ttl: number,
+    mayOpen?: (run: Run) => boolean
+  ): { status: 'ok'; run: Run } | { status: 'not-found' } | { status: 'not-up'; state: RunState } {
+    const entry = this.entries.get(id)
+    if (!entry || !(this.owns(caller, entry) || (entry.run.up && mayOpen?.(this.copy(entry.run))))) {
+      return { status: 'not-found' }
+    }
+    if (entry.run.state !== 'up') {
+      return { status: 'not-up', state: entry.run.state }
+    }
+    const ms = Math.min(ttl, this.options.up?.maxTtl ?? ttl)
+    entry.run.expiresAt = new Date(this.now() + ms).toISOString()
+    this.record(entry, { type: 'extended', by: { iss: caller.iss, sub: caller.sub }, expiresAt: entry.run.expiresAt })
+    this.expireLater(entry)
+    return { status: 'ok', run: this.copy(entry.run) }
+  }
+
+  /**
+   * The service run an endpoint host belongs to: the newest that is up, so one that replaces
+   * a run of the same name takes its hosts over as soon as it is up; else the newest that
+   * had it, for a page that says how it stands. With the address of the endpoint when up.
+   */
+  endpoint(host: string): { run: Run; endpoint: RunEndpoint; target?: EndpointTarget } | undefined {
+    let found: { entry: Entry; endpoint: RunEndpoint } | undefined
+    for (const entry of this.entries.values()) {
+      const endpoint = entry.run.up?.endpoints.find((candidate) => candidate.host === host)
+      if (endpoint && (entry.run.state === 'up' || found?.entry.run.state !== 'up')) {
+        found = { entry, endpoint }
+      }
+    }
+    if (!found) {
+      return undefined
+    }
+    const { entry, endpoint } = found
+    const target =
+      entry.run.state === 'up'
+        ? entry.targets?.find((candidate) => candidate.service === endpoint.service && candidate.port === endpoint.port)
+        : undefined
+    return { run: this.copy(entry.run), endpoint: { ...endpoint }, ...(target ? { target } : {}) }
+  }
+
   // The run that holds a sandbox: the oldest on it that is not over. It holds it from
-  // when it is submitted, so the files are not moved under what an approver saw.
+  // when it is submitted, so the files are not moved under what an approver saw. A service
+  // run that is up works on a copy of the files, and holds it no longer.
   holder(sandbox: string): string | undefined {
-    return [...this.entries.values()].find((entry) => onSandbox(entry.run, sandbox) && !isFinal(entry.run.state))?.run
-      .id
+    return [...this.entries.values()].find(
+      (entry) => onSandbox(entry.run, sandbox) && !isFinal(entry.run.state) && entry.run.state !== 'up'
+    )?.run.id
   }
 
   // Cancels every run on a sandbox and resolves when none of them runs anymore.
   async stopSandbox(sandbox: string, reason: string): Promise<void> {
     const on = () => [...this.entries.values()].filter((entry) => onSandbox(entry.run, sandbox))
     on().forEach((entry) => this.stop(entry, reason))
-    while (on().some((entry) => entry.run.state === 'running')) {
+    while (on().some((entry) => entry.run.state === 'running' || entry.run.state === 'up')) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
   }
 
-  private stop(entry: Entry, reason?: string): void {
+  private stop(entry: Entry, reason?: string, by?: Identity): void {
     if (entry.run.state === 'queued') {
       this.queue.splice(this.queue.indexOf(entry), 1)
       this.finish(entry, 'cancelled', reason)
     } else if (entry.run.state === 'awaiting-approval') {
       this.finish(entry, 'cancelled', reason)
     } else if (entry.run.state === 'running') {
+      entry.abort.abort()
+    } else if (entry.run.state === 'up') {
+      entry.run.stoppedBy ??= by ?? 'replaced'
       entry.abort.abort()
     }
   }
@@ -507,8 +616,9 @@ export class RunRegistry {
   }
 
   /**
-   * The run once it is over, or as it is after `ms` or when `signal` aborts, for clients
-   * that can not hold a stream of events open (a tool call of an agent).
+   * The run once it is over (a service run: once it is up), or as it is after `ms` or when
+   * `signal` aborts, for clients that can not hold a stream of events open (a tool call of
+   * an agent).
    */
   async wait(
     owner: Pick<Principal, 'iss' | 'sub'>,
@@ -521,10 +631,11 @@ export class RunRegistry {
     if (!entry) {
       return undefined
     }
-    if (!isFinal(entry.run.state) && ms > 0 && !this.closed && !signal?.aborted) {
+    if (!isFinal(entry.run.state) && entry.run.state !== 'up' && ms > 0 && !this.closed && !signal?.aborted) {
       await new Promise<void>((resolve) => {
         const listener = (event: StoredEvent) => {
-          if (event.type === 'state' && isFinal(event.state)) {
+          // a service run is there once it is up
+          if (event.type === 'state' && (isFinal(event.state) || event.state === 'up')) {
             done()
           }
         }
@@ -582,11 +693,14 @@ export class RunRegistry {
       done()
     }
     for (const entry of this.entries.values()) {
-      if (entry.run.state === 'running') {
+      if (entry.run.state === 'running' || entry.run.state === 'up') {
         entry.abort.abort()
       }
     }
-    while (this.running > 0) {
+    while (
+      this.running > 0 ||
+      [...this.entries.values()].some((entry) => entry.run.state === 'running' || entry.run.state === 'up')
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
     // the runs that were stopped are written down before the server is gone
@@ -623,6 +737,8 @@ export class RunRegistry {
   private copy(run: Run): Run {
     return {
       ...run,
+      ...(run.up ? { up: JSON.parse(JSON.stringify(run.up)) } : {}),
+      ...(run.stoppedBy && typeof run.stoppedBy === 'object' ? { stoppedBy: { ...run.stoppedBy } } : {}),
       tasks: [...run.tasks],
       source: { ...run.source },
       options: JSON.parse(JSON.stringify(run.options)),
@@ -653,8 +769,25 @@ export class RunRegistry {
     }
   }
 
-  private runningOf(owner: Pick<Principal, 'iss' | 'sub'>): number {
-    return [...this.entries.values()].filter((entry) => entry.run.state === 'running' && this.owns(owner, entry)).length
+  // Service runs that are not over, of the caller and of everybody, against what may be.
+  private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>): void {
+    const limits = this.options.up
+    if (!limits) {
+      return
+    }
+    const open = [...this.entries.values()].filter((entry) => entry.run.up && !isFinal(entry.run.state))
+    if (open.filter((entry) => this.owns(owner, entry)).length >= limits.perCaller) {
+      throw new QuotaError(`you have ${limits.perCaller} service runs starting or up, stop one or wait for its end`)
+    }
+    if (open.length >= limits.total) {
+      throw new RunError(`the server has ${limits.total} service runs starting or up, try again later`)
+    }
+  }
+
+  private runningOf(owner: Pick<Principal, 'iss' | 'sub'>, tasksOnly = false): number {
+    return [...this.entries.values()].filter(
+      (entry) => entry.run.state === 'running' && this.owns(owner, entry) && !(tasksOnly && entry.run.up)
+    ).length
   }
 
   // Whether a run on the same sandbox executes: a sandbox runs one at a time.
@@ -668,15 +801,17 @@ export class RunRegistry {
 
   // The first run in the queue whose caller has a place left: one caller with many runs
   // does not keep the others from the machine. A run on a sandbox another run works on
-  // waits for it.
+  // waits for it. The executor's own limit is for runs of tasks: a service run starts in a
+  // place of its own (a namespace on a cluster), next to the caller's other runs.
   private dispatch(): void {
     while (this.running < this.maxConcurrent) {
-      const perCaller = Math.min(
-        this.options.limits?.running ?? Infinity,
-        this.options.executor.runningPerCaller ?? Infinity
-      )
+      const limit = this.options.limits?.running ?? Infinity
+      const executorLimit = this.options.executor.runningPerCaller ?? Infinity
       const index = this.queue.findIndex(
-        (entry) => this.runningOf(entry.run.owner) < perCaller && !this.sandboxBusy(entry.run)
+        (entry) =>
+          this.runningOf(entry.run.owner) < limit &&
+          (entry.run.up !== undefined || this.runningOf(entry.run.owner, true) < executorLimit) &&
+          !this.sandboxBusy(entry.run)
       )
       if (index < 0) {
         return
@@ -684,7 +819,10 @@ export class RunRegistry {
       const [entry] = this.queue.splice(index, 1)
       this.running++
       this.execute(entry).finally(() => {
-        this.running--
+        // a service run that is up gave its place back already
+        if (!entry.released) {
+          this.running--
+        }
         this.dispatch()
       })
     }
@@ -694,34 +832,109 @@ export class RunRegistry {
     entry.run.state = 'running'
     entry.run.startedAt = this.timestamp()
     this.record(entry, { type: 'state', state: 'running' })
+    // a service run gets this long to be up, then its ttl counts
     const limit = this.options.maxDuration
-    const timer = limit
+    entry.durationTimer = limit
       ? setTimeout(() => {
           entry.timedOut = true
           entry.abort.abort()
         }, limit)
       : undefined
-    timer?.unref()
+    entry.durationTimer?.unref()
     try {
       await this.options.executor.execute(this.copy(entry.run), {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
+        ...(entry.run.up ? { up: (targets: EndpointTarget[]) => this.markUp(entry, targets) } : {}),
       })
-      this.finish(
-        entry,
-        entry.timedOut ? 'failed' : entry.abort.signal.aborted ? 'cancelled' : 'succeeded',
-        entry.timedOut ? this.tooLong() : undefined
-      )
+      if (entry.run.upAt) {
+        // services stay until they are stopped: ones that stopped on their own failed
+        this.finish(
+          entry,
+          entry.abort.signal.aborted ? 'succeeded' : 'failed',
+          entry.abort.signal.aborted ? undefined : 'the services stopped on their own'
+        )
+      } else {
+        this.finish(
+          entry,
+          entry.timedOut ? 'failed' : entry.abort.signal.aborted ? 'cancelled' : 'succeeded',
+          entry.timedOut ? this.tooLong() : undefined
+        )
+      }
     } catch (e) {
-      const cancelled = entry.abort.signal.aborted && !entry.timedOut
-      this.finish(
-        entry,
-        cancelled ? 'cancelled' : 'failed',
-        entry.timedOut ? this.tooLong() : cancelled ? undefined : e instanceof Error ? e.message : String(e)
-      )
+      const message = e instanceof Error ? e.message : String(e)
+      if (entry.run.upAt) {
+        this.finish(
+          entry,
+          entry.abort.signal.aborted ? 'succeeded' : 'failed',
+          entry.abort.signal.aborted ? undefined : message
+        )
+      } else {
+        const cancelled = entry.abort.signal.aborted && !entry.timedOut
+        this.finish(
+          entry,
+          cancelled ? 'cancelled' : 'failed',
+          entry.timedOut ? this.tooLong() : cancelled ? undefined : message
+        )
+      }
     } finally {
-      clearTimeout(timer)
+      clearTimeout(entry.durationTimer)
     }
+  }
+
+  // The services of a service run are ready: its ttl counts from now, its place of
+  // maxConcurrent goes to the next run, and an older run of its owner with the same name
+  // stops, so its hosts are this run's.
+  private markUp(entry: Entry, targets: EndpointTarget[]): void {
+    const spec = entry.run.up
+    if (!spec || entry.run.state !== 'running' || entry.abort.signal.aborted) {
+      return
+    }
+    clearTimeout(entry.durationTimer)
+    entry.durationTimer = undefined
+    entry.targets = targets.map((target) => ({ ...target, address: { ...target.address } }))
+    entry.run.state = 'up'
+    entry.run.upAt = this.timestamp()
+    entry.run.expiresAt = new Date(this.now() + spec.ttl).toISOString()
+    this.record(entry, { type: 'state', state: 'up' })
+    this.expireLater(entry)
+    entry.released = true
+    this.running--
+    const entries = [...this.entries.values()]
+    for (const other of entries.slice(0, entries.indexOf(entry))) {
+      if (
+        other.run.up?.name === spec.name &&
+        this.owns(entry.run.owner, other) &&
+        !isFinal(other.run.state) &&
+        other.run.state !== 'awaiting-approval'
+      ) {
+        other.run.stoppedBy = 'replaced'
+        this.stop(other, `replaced by ${entry.run.id}`)
+      }
+    }
+    this.dispatch()
+  }
+
+  // Stops a service run that is up at its expiry. A timer can't wait longer than about 24
+  // days, so a longer one looks again then.
+  private expireLater(entry: Entry): void {
+    this.clearTimer(entry)
+    const left = Date.parse(entry.run.expiresAt ?? '') - this.now()
+    entry.timer = setTimeout(
+      () => {
+        if (entry.run.state !== 'up') {
+          return
+        }
+        if (Date.parse(entry.run.expiresAt ?? '') > this.now()) {
+          this.expireLater(entry)
+          return
+        }
+        entry.run.stoppedBy ??= 'ttl'
+        entry.abort.abort()
+      },
+      Math.max(0, Math.min(left, 2 ** 31 - 1))
+    )
+    entry.timer.unref()
   }
 
   private tooLong(): string {
@@ -730,6 +943,8 @@ export class RunRegistry {
 
   private finish(entry: Entry, state: RunState, error?: string): void {
     this.clearTimer(entry)
+    clearTimeout(entry.durationTimer)
+    entry.targets = undefined
     entry.run.state = state
     entry.run.finishedAt = this.timestamp()
     if (error) {
@@ -833,7 +1048,7 @@ export class RunRegistry {
     }
     // what a restart must not lose: the runs that wait, and how a run ended. A running
     // run is not kept up to date, it fails with the server.
-    if (event.type === 'state' || event.type === 'approval') {
+    if (event.type === 'state' || event.type === 'approval' || event.type === 'extended') {
       this.persist(entry)
     }
   }

@@ -268,6 +268,7 @@ entitlements:
         repos: ['github.com/corp/payments'],
         builds: 'run',
         sandboxes: [],
+        endpoints: [],
       })
       expect(log.join('\n')).toMatch(
         /grant iss=\S+ sub=alice accounts=\[op-payments-dev:use,op-payments-prod:request,op-web-dev:use\] entitlements=\[0,1\]/

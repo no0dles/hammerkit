@@ -53,7 +53,8 @@ export interface DockerItemNetwork {
   options: ContainerNetworkOptions
   // joins the networks of limited services the item needs; after the
   // container was created, before anything runs in it
-  connect(container: Container): Promise<void>
+  // returns the relay that publishes the item's ports, when one does
+  connect(container: Container): Promise<Container | void>
   // removes the item's network and proxy once its container is gone
   release(): Promise<void>
 }
@@ -317,7 +318,7 @@ export async function prepareItemNetwork(
     throw e
   }
 
-  const publish = (options.publish ?? []).filter((port) => !!port.hostPort)
+  const publish = (options.publish ?? []).filter((port) => port.hostPort !== null)
   return {
     options: {
       mode: name,
@@ -331,8 +332,9 @@ export async function prepareItemNetwork(
           await docker.getNetwork(getProxyNetworkName(name)).connect({ Container: container.id })
         }
         if (publish.length > 0) {
-          await startPortRelay(docker, item, environment, name, container, publish, options)
+          return await startPortRelay(docker, item, environment, name, container, publish, options)
         }
+        return undefined
       } catch (e) {
         await removeItemNetwork(docker, name)
         throw e
@@ -438,7 +440,7 @@ async function startPortRelay(
   service: Container,
   ports: WorkPort[],
   options: { daemon: boolean }
-): Promise<void> {
+): Promise<Container> {
   await pull(item.status, docker, EGRESS_PROXY_IMAGE, environment)
   // a container is found by its name on a user-defined network
   const host = (await service.inspect()).Name.replace(/^\//, '')
@@ -454,13 +456,14 @@ async function startPortRelay(
     HostConfig: {
       ...HELPER_HOST_CONFIG,
       PortBindings: Object.fromEntries(
-        ports.map((port) => [`${port.containerPort}/tcp`, [{ HostPort: `${port.hostPort}` }]])
+        ports.map((port) => [`${port.containerPort}/tcp`, [getPortBinding(port)]])
       ),
     },
   })
   await docker.getNetwork(networkName).connect({ Container: container.id })
   await container.start()
-  item.status.write('debug', `ports ${ports.map((port) => port.hostPort).join(', ')} published by a relay`)
+  item.status.write('debug', `ports ${ports.map((port) => port.hostPort || 'any').join(', ')} published by a relay`)
+  return container
 }
 
 // The network, its proxy network, its proxy and relay, and every endpoint on
@@ -507,6 +510,12 @@ async function removeNetwork(docker: Dockerode, name: string): Promise<void> {
       await sleep(500)
     }
   }
+}
+
+// A port of the host for a port of a container: a free one for 0, on one address of it
+// when the port names one.
+export function getPortBinding(port: WorkPort): { HostPort: string; HostIp?: string } {
+  return { HostPort: port.hostPort ? `${port.hostPort}` : '', ...(port.hostIp ? { HostIp: port.hostIp } : {}) }
 }
 
 export function getNetworkHostConfig(network: ContainerNetworkOptions): {

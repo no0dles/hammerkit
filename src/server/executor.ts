@@ -256,6 +256,14 @@ export class HostExecutor implements RunExecutor {
             accounts: run.accounts,
             volumeScope: volumeScope(run),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
+            ...(run.up
+              ? {
+                  up: {
+                    services: run.up.services,
+                    endpoints: run.up.endpoints.map(({ service, port }) => ({ service, port })),
+                  },
+                }
+              : {}),
             ...(placed ? { kubernetes: placed.kubernetes } : {}),
           },
           cwd,
@@ -360,6 +368,8 @@ export class HostExecutor implements RunExecutor {
           const message = JSON.parse(line) as WorkerMessage
           if (message.kind === 'event') {
             context.emit(message.event)
+          } else if (message.kind === 'up') {
+            context.up?.(message.targets)
           } else if (message.kind === 'result') {
             result = message
             // nothing left to tell the process

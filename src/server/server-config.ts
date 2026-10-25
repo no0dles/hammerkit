@@ -381,6 +381,15 @@ export const sandboxGrantSchema = z
   .strict()
 export type SandboxGrant = z.infer<typeof sandboxGrantSchema>
 
+// `open`: open the endpoints of the service runs of a repository, whoever started them, and
+// extend those runs; `publish`: also name endpoints in one's own service runs.
+export const endpointLevelSchema = z.enum(['open', 'publish'])
+export type EndpointLevel = z.infer<typeof endpointLevelSchema>
+
+// One repository (`host/path` pattern) whose endpoints an entitlement opens or publishes.
+export const endpointGrantSchema = z.object({ repo: repoPatternSchema, level: endpointLevelSchema }).strict()
+export type EndpointGrant = z.infer<typeof endpointGrantSchema>
+
 export const entitlementSchema = z
   .object({
     ...whoShape,
@@ -393,6 +402,8 @@ export const entitlementSchema = z
     // the repositories the caller may keep sandboxes of, checkouts on the server that runs
     // work on: a list of its own, the `repos` above are for runs from a ref
     sandboxes: z.array(sandboxGrantSchema).optional(),
+    // the repositories whose service runs' endpoints the caller may open, or publish
+    endpoints: z.array(endpointGrantSchema).optional(),
   })
   .strict()
   .superRefine((entitlement, ctx) => {
@@ -400,11 +411,12 @@ export const entitlementSchema = z
     if (
       Object.keys(entitlement.accounts).length === 0 &&
       entitlement.builds === undefined &&
-      !entitlement.sandboxes?.length
+      !entitlement.sandboxes?.length &&
+      !entitlement.endpoints?.length
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, a builds level or sandboxes',
+        message: 'name accounts to use or request, a builds level, sandboxes or endpoints',
       })
     }
   })
@@ -539,6 +551,28 @@ export const serverConfigSchema = z
         // which tasks take arguments: `any` but those that say `args: false`, or
         // `declared`, only those that say `args: true`
         args: z.enum(['any', 'declared']).default('any'),
+        // runs of services (`services` in a run), kept up until their ttl ends
+        up: z
+          .object({
+            // how long the services stay up once ready, when the run names no ttl
+            ttl: duration.default('8h'),
+            // the furthest a run, or an extend, sets the end from now
+            maxTtl: duration.default('72h'),
+            limits: z
+              .object({
+                // service runs one caller has starting or up at a time; one more is 429
+                up: z.number().int().min(1).default(3),
+              })
+              .strict()
+              .default({}),
+            // service runs starting or up on the whole server; one more is 503
+            total: z.number().int().min(1).default(20),
+            // on a Kubernetes backend, the ResourceQuota of the namespace of each service
+            // run; backend.quota when left out
+            quota: z.record(z.union([z.string().min(1), z.number()]).transform(String)).optional(),
+          })
+          .strict()
+          .default({}),
       })
       .strict()
       .default({}),
@@ -576,6 +610,48 @@ export const serverConfigSchema = z
       })
       .strict()
       .default({}),
+    // ports of service runs published at hosts of their own below `domain`, behind the
+    // server's sign-in. Absent, a run naming endpoints is refused.
+    endpoints: z
+      .object({
+        // `run.example.com`: an endpoint is https://<label>.run.example.com, all of them
+        // pointing at this server with one wildcard DNS record
+        domain: z
+          .string()
+          .regex(
+            /^(?=.{1,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/,
+            'expected a domain name in lower case, such as run.example.com'
+          ),
+        // a wildcard certificate for *.<domain>, served for the hosts of endpoints; left out
+        // behind a TLS proxy, which holds it
+        tls: z
+          .object({ cert: z.string().min(1), key: z.string().min(1) })
+          .strict()
+          .optional(),
+        // how a person signs in with a browser: the authorization code flow of an issuer of
+        // `issuers`, with a client of its own; without it only tokens open endpoints
+        login: z
+          .object({
+            issuer: z.string().min(1),
+            clientId: z.string().min(1),
+            // for providers whose web clients need one (Google): read as an account no
+            // entitlement may name, as the secret of a source is
+            clientSecret: z
+              .object({
+                from: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]*:.+$/, 'expected provider:reference'),
+                account: accountNameSchema,
+              })
+              .strict()
+              .optional(),
+            scope: z.string().min(1).default('openid'),
+          })
+          .strict()
+          .optional(),
+        // how long a sign-in at one endpoint lasts, at most until its run ends
+        session: duration.default('8h'),
+      })
+      .strict()
+      .optional(),
     backend: z.discriminatedUnion('type', [hostBackendSchema, kubernetesBackendSchema]).default({ type: 'host' }),
   })
   .strict()
@@ -644,7 +720,7 @@ export const serverConfigSchema = z
         })
       }
     })
-    const readers = getSourceAccounts(config)
+    const readers = getServerAccounts(config)
     config.entitlements.forEach((entitlement, index) => {
       for (const account of Object.keys(entitlement.accounts)) {
         if (readers.includes(account)) {
@@ -731,7 +807,7 @@ export const serverConfigSchema = z
       })
       // the secrets of tasks are read in their Job, with the image of the provider; the
       // ones of the sources are read by the server, which checks the code out itself
-      const readers = getSourceAccounts(config)
+      const readers = getServerAccounts(config)
       for (const [name, account] of Object.entries(config.accounts)) {
         if (readers.includes(name)) {
           continue
@@ -822,6 +898,78 @@ export const serverConfigSchema = z
         message: 'the network of a local task can not be limited, allow only the docker runtime with runs.network',
       })
     }
+    if (parseDuration(config.runs.up.ttl) > parseDuration(config.runs.up.maxTtl)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['runs', 'up', 'ttl'],
+        message: `a ttl of ${config.runs.up.ttl} is more than maxTtl of ${config.runs.up.maxTtl}`,
+      })
+    }
+    const endpoints = config.endpoints
+    if (endpoints) {
+      if (endpoints.tls && config.behindTlsProxy) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['endpoints', 'tls'],
+          message: 'behind a TLS proxy the proxy holds the certificate of the endpoints, leave out endpoints.tls',
+        })
+      }
+      if (endpoints.tls && !config.tls) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['endpoints', 'tls'],
+          message: 'the certificate of the endpoints is served next to the one of the server, set tls as well',
+        })
+      }
+      if (
+        !endpoints.tls &&
+        !config.behindTlsProxy &&
+        (config.tls || !LOOPBACK_HOSTS.includes(config.listen.host))
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['endpoints', 'tls'],
+          message: `name the certificate of *.${endpoints.domain} in endpoints.tls, or set behindTlsProxy: true when a proxy in front holds it`,
+        })
+      }
+      const login = endpoints.login
+      if (login && !config.issuers.some((issuer) => issuer.issuer === login.issuer)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['endpoints', 'login', 'issuer'],
+          message: `issuer ${login.issuer} is not one of the accepted issuers`,
+        })
+      }
+      if (login?.clientSecret) {
+        const { from, account } = login.clientSecret
+        const kind = from.substring(0, from.indexOf(':'))
+        const where = ['endpoints', 'login', 'clientSecret'] as (string | number)[]
+        if (!config.accounts[account]) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: [...where, 'account'], message: `unknown account ${account}` })
+        } else if (!config.accounts[account].providers[kind]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...where, 'from'],
+            message: `account ${account} has no credentials for the provider ${kind}`,
+          })
+        }
+        if (!config.secretProviders[kind]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...where, 'from'],
+            message: `secret provider ${kind} is not declared in secretProviders`,
+          })
+        }
+      }
+      if (backend.type === 'kubernetes' && backend.kubeconfig) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['endpoints'],
+          message:
+            'endpoints reach the services of runs at their Service in the cluster, run the server in the cluster rather than with a kubeconfig',
+        })
+      }
+    }
     if (!config.tls && !config.behindTlsProxy && !LOOPBACK_HOSTS.includes(config.listen.host)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -840,9 +988,16 @@ export function getSandboxRuntimes(config: Pick<ServerConfig, 'runtimes' | 'sand
   return config.sandboxes.runtimes ?? config.runtimes.filter((runtime) => runtime === 'docker')
 }
 
-// The accounts that read repositories: no caller uses them and no build file names them.
-export function getSourceAccounts(config: Pick<ServerConfig, 'sources'>): string[] {
-  return [...new Set(config.sources.flatMap((source) => (source.secret ? [source.secret.account] : [])))]
+// The accounts only the server reads secrets as: those that read the repositories of
+// `sources`, and the one of the client secret of `endpoints.login`. No caller uses them and
+// no build file names them.
+export function getServerAccounts(config: Pick<ServerConfig, 'sources' | 'endpoints'>): string[] {
+  return [
+    ...new Set([
+      ...config.sources.flatMap((source) => (source.secret ? [source.secret.account] : [])),
+      ...(config.endpoints?.login?.clientSecret ? [config.endpoints.login.clientSecret.account] : []),
+    ]),
+  ]
 }
 export type ServerPlatform = z.infer<typeof serverPlatformSchema>
 

@@ -124,7 +124,13 @@ export class RepoAccess {
     return { env, values: credentials.values }
   }
 
-  private async token(secret: NonNullable<Source['secret']>): Promise<string> {
+  // A secret only the server reads, as an account no caller may use: the client secret of
+  // the sign-in at endpoints, read like the credential of a source.
+  serverSecret(secret: { from: string; account: string }): Promise<string> {
+    return this.token(secret)
+  }
+
+  private async token(secret: { from: string; account: string }): Promise<string> {
     const key = `${secret.account}\0${secret.from}`
     const known = this.tokens.get(key)
     if (known && this.now() - known.at < TOKEN_TTL_MS) {
