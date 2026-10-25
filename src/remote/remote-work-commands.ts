@@ -602,7 +602,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           throw new Error('name the repository with --repo, the checkout here has no origin it can be told by')
         }
         const keys: { task: string; key: string }[] = []
-        const unkeyed: string[] = []
+        const unkeyed: { task: string; reason: string }[] = []
         for (const task of tasks) {
           const found = (
             await getCheckKeys(buildFile, environment, { taskName: task, environmentName: options.env ?? null })
@@ -611,7 +611,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             throw new Error(`the build file has no task ${printable(task)}`)
           }
           if (found.key === null) {
-            unkeyed.push(`${printable(task)}: can not be verified, ${printable(found.reason)}`)
+            unkeyed.push({ task, reason: found.reason })
           } else {
             keys.push({ task, key: found.key })
           }
@@ -637,13 +637,15 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             )
           }
         }
-        for (const line of unkeyed) {
-          environment.stdout.write(`${line}\n`)
+        for (const { task, reason } of unkeyed) {
+          environment.stdout.write(`${printable(task)}: can not be verified, ${printable(reason)}\n`)
         }
         if (missing.length > 0 || unkeyed.length > 0) {
           const run =
             missing.length > 0 ? `; run on the server: hammerkit remote run ${missing.map(printable).join(' ')}` : ''
-          fail(`not verified: ${[...missing, ...unkeyed.map((line) => line.split(':')[0])].join(', ')}${run}`, 1)
+          // whole names: a task of an include is named like build:all
+          const names = [...missing, ...unkeyed.map(({ task }) => task)].map(printable)
+          fail(`not verified: ${names.join(', ')}${run}`, 1)
         }
       })
     )

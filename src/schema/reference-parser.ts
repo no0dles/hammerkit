@@ -326,7 +326,9 @@ function resolveNeeds(
   for (const needName of schema.needs || []) {
     if (typeof needName === 'string') {
       taskOrService.needs.push({
-        relativeName: needName,
+        // the host name it is reached by: a service of an include, `services:postgres`, as
+        // `services-postgres`, since Docker and DNS take no colon
+        relativeName: needName.replace(/:/g, '-'),
         service: findService(reference, scope, needName),
       })
     } else {
@@ -335,6 +337,11 @@ function resolveNeeds(
         service: findService(reference, scope, needName.service),
       })
     }
+  }
+  const names = taskOrService.needs.map((need) => need.relativeName)
+  const twice = names.find((name, index) => names.indexOf(name) !== index)
+  if (twice) {
+    throw new Error(`${taskOrService.relativeName} needs two services as ${twice}, give one another name with name:`)
   }
 }
 

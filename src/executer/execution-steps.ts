@@ -109,8 +109,13 @@ export async function setUserPermissions(
 ): Promise<void> {
   if (item.data.user) {
     // On a server only the volumes: a chown as the container's root on a path of the host
-    // would follow a link a task put there after the binds were checked
-    const binds = getContainerBinds(item).filter((bind) => !environment.hosted || !isAbsolute(bind.localPath))
+    // would follow a link a task put there after the binds were checked. Never a mount: it
+    // is a path of the host the build file names, such as /var/run/docker.sock, whose owner
+    // is not hammerkit's to change
+    const mounted = new Set(item.data.mounts.map((mount) => mount.containerPath))
+    const binds = getContainerBinds(item).filter(
+      (bind) => !mounted.has(bind.containerPath) && (!environment.hosted || !isAbsolute(bind.localPath))
+    )
 
     if (!environment.hosted) {
       await setUserPermission(item.data.cwd, item.status, environment, container, item.data.user)

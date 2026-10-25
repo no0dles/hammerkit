@@ -1,4 +1,4 @@
-import { Command } from 'commander'
+import { Command, CommanderError } from 'commander'
 import { Environment } from '../executer/environment'
 import { getErrorMessage } from '../log'
 import { githubAppToken } from './github-app-token'
@@ -17,7 +17,8 @@ export function registerGithubAppTokenCommand(program: Command, environment: Env
         environment.stdout.write(await githubAppToken(repo, environment.processEnvs))
       } catch (e) {
         environment.stderr.write(`github-app-token: ${getErrorMessage(e)}\n`)
-        throw e
+        // said already: the CLI does not print it again
+        throw new CommanderError(1, 'hammerkit.githubAppToken', getErrorMessage(e))
       }
     })
 }

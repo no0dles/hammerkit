@@ -77,8 +77,21 @@ A mount is written `host[:container]`:
   default). Any other third part is an error.
 
 Host paths can be relative (resolved against the build file's directory), absolute,
-or `~`-relative to your home directory. Relative container paths resolve against the
-task's working directory.
+or in your home directory with `~/` (`~/.npm:/root/.npm`). `$HOME/` means the home
+directory too, unless the task declares a `HOME` in its `envs`, which then takes its
+place. A mount in the home directory names its container path (`~/.npm` alone is an
+error). Relative container paths resolve against the task's working directory.
+
+<Callout type="warn">
+
+`$PWD/` at the start of a host path is also your **home directory**, not the project,
+for compatibility with older build files. [`validate`](/docs/cli/validate) warns about
+it. Write `~/` for the home directory, or a relative path for the project.
+
+</Callout>
+
+On a [server](/docs/remote-compute), a host path outside the published files is
+refused, and a home-directory path is named as such in the error.
 
 ### Working directory
 
@@ -116,8 +129,11 @@ mounted paths come back owned by you rather than by `root`. That user has no hom
 directory in the image, so hammerkit sets `HOME=/tmp` for the task (unless its
 `envs` set `HOME`): tools like npm, Go, Maven and the .NET SDK keep their caches
 under it. To avoid permission
-conflicts on the mount points themselves, hammerkit `chown`s the working directory
-and each mount to your `uid:gid` before the task runs.
+conflicts on the mount points themselves, hammerkit `chown`s the working directory,
+the sources, the generated directories and the volumes to your `uid:gid` before the
+task runs. A `mounts` entry keeps its owner: it is a path of your machine, such as the
+docker socket, whose owner is not hammerkit's to change. A mounted path the task writes
+to has to be writable for you already.
 
 The blast radius is small and deliberate: the `chown` is **not** recursive, so it
 only re-owns those top-level directories — files already inside an image (for

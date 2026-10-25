@@ -23,6 +23,17 @@ export function printable(value: unknown): string {
   return text.length > 300 ? `${text.slice(0, 300)}… (+${text.length - 300} chars)` : text
 }
 
+// Text of several lines, such as every problem of a refused publish: each line made
+// printable and cut like `printable`, one per line, and at most `MAX_LINES` of them.
+const MAX_LINES = 100
+export function printableLines(value: unknown): string[] {
+  const lines = String(value)
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+  const shown = lines.slice(0, MAX_LINES).map(printable)
+  return lines.length > MAX_LINES ? [...shown, `… (+${lines.length - MAX_LINES} lines)`] : shown
+}
+
 // The same, never cut: for what somebody decides on, such as a command.
 export function printableWhole(value: unknown): string {
   return String(value)
@@ -114,7 +125,10 @@ export async function callServer<T = any>(
     throw new ServerError(`${server.url} did not accept the token`)
   }
   if (!response.ok) {
-    const said = answer && typeof answer.error === 'string' ? `: ${printable(answer.error)}` : ''
+    const lines = answer && typeof answer.error === 'string' ? printableLines(answer.error) : []
+    // a refused publish says every problem, each on a line of its own
+    const said =
+      lines.length > 1 ? `:\n${lines.map((line) => `  ${line}`).join('\n')}` : lines.length === 1 ? `: ${lines[0]}` : ''
     throw new ServerError(`${server.url} answered ${response.status}${said}`, response.status)
   }
   return { status: response.status, body: answer as T }
