@@ -1,3 +1,10 @@
+# [1.27.0-next.9](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.8...v1.27.0-next.9) (2026-10-25)
+
+
+### Features
+
+* run the runs of one caller side by side on Kubernetes ([a54f5bd](https://github.com/no0dles/hammerkit/commit/a54f5bdd0a8805bbf0fd39712c298f4c32818ae3))
+
 # [1.27.0-next.8](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.7...v1.27.0-next.8) (2026-10-25)
 
 

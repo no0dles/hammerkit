@@ -63,6 +63,9 @@ What follows from running a command as a task:
   tool calls in parallel, so each client takes the calls of its model one at a time, in the
   order the model made them: an edit sent along with `npm test` lands before the tests start.
   A command of another client still holds the sandbox, and an edit then is refused.
+- Agents on sandboxes of their own run their commands side by side, also when they sign in
+  as one identity, up to [`runs.limits.running`](/docs/remote-compute/runs#limits-and-restarts)
+  of that identity (2 by default); a server for more agents raises it.
 - A command starts in the root of the sandbox. The paths of the agent's machine do not exist
   there, which the clients tell the model.
 - What it printed comes from the [log of the run](/docs/remote-compute/runs#logs). A long

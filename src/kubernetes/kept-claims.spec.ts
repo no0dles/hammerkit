@@ -108,14 +108,18 @@ const kept = (name: string, scope: string, annotations: { [key: string]: string 
 
 describe('kept claims', () => {
   it('names the claim of a task by the scope of the run, and keeps only those of tasks', () => {
-    expect(getClaimName(task)).toBe(`hammerkit-${'a'.repeat(40)}`)
-    expect(getClaimName(task, env())).toBe(`hammerkit-${'a'.repeat(40)}`)
+    expect(getClaimName(task, {})).toBe(`hammerkit-${'a'.repeat(40)}`)
+    // on a server that keeps none, the run's own: the runs of a caller share the namespace
+    const own = `hammerkit-${'a'.repeat(32)}-${getRunLabelValue('run_1').substring(0, 8)}`
+    expect(getClaimName(task, env())).toBe(own)
     const ref = getClaimName(task, env('ref-1'))
     expect(ref).toMatch(new RegExp(`^hammerkit-${'a'.repeat(40)}-[0-9a-f]{12}$`))
     // a pod's volume name
     expect(ref.length).toBeLessThanOrEqual(63)
     expect(getClaimName(task, env('sandbox-1'))).not.toBe(ref)
-    expect(getClaimName(service, env('ref-1'))).toBe(`hammerkit-${'b'.repeat(40)}`)
+    expect(getClaimName(service, env('ref-1'))).toBe(
+      `hammerkit-${'b'.repeat(32)}-${getRunLabelValue('run_1').substring(0, 8)}`
+    )
     expect([isKeptClaim(task, env('ref-1')), isKeptClaim(task, env()), isKeptClaim(service, env('ref-1'))]).toEqual([
       true,
       false,
@@ -172,17 +176,38 @@ describe('kept claims', () => {
     expect(off).toEqual({ removed: ['later', 'sooner'], next: null })
   })
 
+  it('leaves the kept claims of a scope a run executes in, expired or not', async () => {
+    const now = new Date('2026-10-18T12:00:00Z')
+    const { instance, calls } = cluster([
+      kept('expired', 'ref-1', { [EXPIRES_ANNOTATION]: '2026-10-18T11:59:59Z' }),
+      // mounted by the run on the sandbox, which cleared its expiry
+      kept('mounted', 'sandbox-1', {}, 'run-b'),
+      kept('due', 'sandbox-1', { [EXPIRES_ANNOTATION]: '2026-10-18T11:00:00Z' }),
+    ])
+    const swept = await sweepKeptClaims(instance, 'ns', {
+      now,
+      keep: true,
+      timeout: 1000,
+      inUse: new Set(['sandbox-1']),
+    })
+    expect(swept).toEqual({ removed: ['expired'], next: null })
+    expect(calls).toEqual(['delete expired'])
+  })
+
   it('makes way under a quota by removing the kept claims the run did not take', async () => {
     const run = getRunLabelValue('run_1')
+    const released = { [EXPIRES_ANNOTATION]: '2026-01-01T00:00:00.000Z' }
     const { instance, claims } = cluster([
       kept('mine', 'ref-1', {}, run),
       // of a task renamed since, which no task of the run takes
       kept('renamed', 'ref-1'),
-      kept('other', 'sandbox-1'),
-      kept('third', 'ref-2'),
+      kept('other', 'sandbox-1', released),
+      kept('third', 'ref-2', released),
+      // mounted by a run on another sandbox that executes now: it has no expiry yet
+      kept('busy', 'sandbox-2', {}, getRunLabelValue('run_2')),
     ])
     expect(await evictKeptClaims(instance, env('ref-1'), 1000)).toEqual(['renamed', 'other', 'third'])
-    expect(claims.map((c) => c.name)).toEqual(['mine'])
+    expect(claims.map((c) => c.name)).toEqual(['mine', 'busy'])
     expect(await evictKeptClaims(instance, env(), 1000)).toEqual([])
   })
 

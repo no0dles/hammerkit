@@ -142,7 +142,7 @@ export function getEndpointTargets(
       targets.push({
         service: endpoint.service,
         port: endpoint.port,
-        address: { host: `${getResourceName(service)}.${kubernetes.namespace}.svc`, port: endpoint.port },
+        address: { host: `${getResourceName(service, kubernetes)}.${kubernetes.namespace}.svc`, port: endpoint.port },
       })
       continue
     }

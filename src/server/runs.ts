@@ -175,8 +175,9 @@ export interface RunContext {
 // succeeds when `execute` resolves and fails when it throws.
 export interface RunExecutor {
   execute(run: Run, context: RunContext): Promise<void>
-  // runs of one caller it executes at a time; the others wait in the queue
-  readonly runningPerCaller?: number
+  // what a run holds while it executes, if anything: two runs that hold the same execute
+  // one after the other, the second waits in the queue
+  exclusive?(run: Run): string | undefined
 }
 
 // The server can not take the run now; `status` is what the caller is told
@@ -784,10 +785,8 @@ export class RunRegistry {
     }
   }
 
-  private runningOf(owner: Pick<Principal, 'iss' | 'sub'>, tasksOnly = false): number {
-    return [...this.entries.values()].filter(
-      (entry) => entry.run.state === 'running' && this.owns(owner, entry) && !(tasksOnly && entry.run.up)
-    ).length
+  private runningOf(owner: Pick<Principal, 'iss' | 'sub'>): number {
+    return [...this.entries.values()].filter((entry) => entry.run.state === 'running' && this.owns(owner, entry)).length
   }
 
   // Whether a run on the same sandbox executes: a sandbox runs one at a time.
@@ -799,19 +798,24 @@ export class RunRegistry {
     )
   }
 
+  // Whether a run that executes holds what the run would (RunExecutor.exclusive)
+  private held(run: Run): boolean {
+    const exclusive = this.options.executor.exclusive?.bind(this.options.executor)
+    const key = exclusive?.(run)
+    return (
+      key !== undefined &&
+      [...this.entries.values()].some((entry) => entry.run.state === 'running' && exclusive?.(entry.run) === key)
+    )
+  }
+
   // The first run in the queue whose caller has a place left: one caller with many runs
   // does not keep the others from the machine. A run on a sandbox another run works on
-  // waits for it. The executor's own limit is for runs of tasks: a service run starts in a
-  // place of its own (a namespace on a cluster), next to the caller's other runs.
+  // waits for it, as does one that needs what an executing run holds.
   private dispatch(): void {
     while (this.running < this.maxConcurrent) {
-      const limit = this.options.limits?.running ?? Infinity
-      const executorLimit = this.options.executor.runningPerCaller ?? Infinity
+      const perCaller = this.options.limits?.running ?? Infinity
       const index = this.queue.findIndex(
-        (entry) =>
-          this.runningOf(entry.run.owner) < limit &&
-          (entry.run.up !== undefined || this.runningOf(entry.run.owner, true) < executorLimit) &&
-          !this.sandboxBusy(entry.run)
+        (entry) => this.runningOf(entry.run.owner) < perCaller && !this.sandboxBusy(entry.run) && !this.held(entry.run)
       )
       if (index < 0) {
         return

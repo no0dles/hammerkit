@@ -54,15 +54,15 @@ describe('volume size (kubernetes)', () => {
         const file = join(cwd, '.hammerkit.yaml')
         const cli = await createCli(file, environment, { taskName: 'big', environmentName: 'default' })
         await expectSuccessfulResult(await cli.runExec(), environment)
-        expect(await requestedStorage(getVolumeName(cli.task('big')))).toBe('2Gi')
-        expect(await requestedStorage(getVolumeName(cli.task('small')))).toBe('1536Mi')
+        expect(await requestedStorage(getVolumeName(cli.task('big'), {}))).toBe('2Gi')
+        expect(await requestedStorage(getVolumeName(cli.task('small'), {}))).toBe('1536Mi')
 
         // more for the next run, whose input changed
         writeFileSync(file, stringify(buildFile('3Gi')))
         writeFileSync(join(cwd, 'input.txt'), `${Date.now()}-again\n`)
         const again = await createCli(file, environment, { taskName: 'big', environmentName: 'default' })
         const result = await again.runExec()
-        const big = getVolumeName(again.task('big'))
+        const big = getVolumeName(again.task('big'), {})
         if (result.success) {
           expect(await requestedStorage(big)).toBe('3Gi')
         } else {

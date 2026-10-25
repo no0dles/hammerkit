@@ -16,10 +16,10 @@ import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { awaitDeployRunningState } from './await-running-state'
-import { getResourceName } from './resources'
+import { getItemLabels, getItemSelector, getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { getKubernetesResources } from './container-resources'
-import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
+import { getContainerSecurity, getPodPlacement } from './job-placement'
 import { getNetworkLabels } from './network-policy'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 
@@ -37,7 +37,7 @@ export async function ensureKubernetesDeploymentExists(
   network: { env: V1EnvVar[]; hostAliases: V1HostAlias[]; initContainers: V1Container[] }
 ) {
   const envs = getEnvironmentVariables(service.data.envs)
-  const name = getResourceName(service)
+  const name = getResourceName(service, env)
   const healthcheckCommand = getHealthcheckCommand(service.data)
   const serviceCommand = getServiceCommand(service.data, { kubernetes: true })
   const probe: V1Probe | undefined = healthcheckCommand
@@ -63,25 +63,21 @@ export async function ensureKubernetesDeploymentExists(
         'hammerkit.dev/version': getVersion(),
       },
       labels: {
-        'hammerkit.dev/id': service.id(),
+        ...getItemLabels(service, env),
         'hammerkit.dev/state': stateKey,
-        ...getRunLabels(env),
         [DEFINITION_LABEL]: getServiceDefinitionHash(service),
       },
     },
     spec: {
       selector: {
-        matchLabels: {
-          'hammerkit.dev/id': service.id(),
-        },
+        matchLabels: getItemLabels(service, env),
       },
       replicas: 1,
       template: {
         metadata: {
           labels: {
-            'hammerkit.dev/id': service.id(),
+            ...getItemLabels(service, env),
             'hammerkit.dev/state': stateKey,
-            ...getRunLabels(env),
             ...workspace.labels,
             ...getNetworkLabels(env, service),
           },
@@ -145,7 +141,7 @@ export async function ensureKubernetesDeploymentExists(
   }
 
   await awaitDeployRunningState(instance, env, name, {
-    podSelector: `hammerkit.dev/id=${service.id()}`,
+    podSelector: getItemSelector(service, env),
     timeout: service.data.healthcheck?.timeout ?? null,
     timeoutMessage: service.data.healthcheck
       ? getHealthcheckTimeoutMessage(service.name, service.data.healthcheck)

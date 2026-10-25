@@ -38,7 +38,8 @@ const target = (port: number): EndpointTarget => ({
 function services() {
   const started: { up: (targets: EndpointTarget[]) => void; signal: AbortSignal; end: () => void }[] = []
   const executor: RunExecutor = {
-    runningPerCaller: 1,
+    // like the cluster's: a run of tasks holds the caller's claims, a service run a namespace of its own
+    exclusive: (run) => (run.up ? undefined : 'claims'),
     execute: (_run, context) =>
       new Promise<void>((resolve) => {
         started.push({ up: (targets) => context.up?.(targets), signal: context.signal, end: resolve })
@@ -88,13 +89,15 @@ describe('RunRegistry service runs', () => {
     expect(registry.get(alice, second.id)?.state).toBe('running')
   })
 
-  it('starts next to a run of tasks of the same caller, which the executor runs one at a time', async () => {
+  it('starts next to a run of tasks of the same caller that holds what the next run of tasks waits for', async () => {
     const { executor, started } = services()
     const registry = new RunRegistry({ executor })
     registry.submit(alice, { ...spec(), up: undefined, tasks: ['build'] })
+    const tasks = registry.submit(alice, { ...spec(), up: undefined, tasks: ['build'] })
     const service = registry.submit(alice, spec())
     await tick()
     expect(started).toHaveLength(2)
+    expect(registry.get(alice, tasks.id)?.state).toBe('queued')
     expect(registry.get(alice, service.id)?.state).toBe('running')
   })
 

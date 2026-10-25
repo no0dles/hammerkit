@@ -13,6 +13,10 @@ import {
   JobSecretSpec,
   splitJobSecrets,
 } from './job-secrets'
+import { getRunLabelValue } from './job-placement'
+
+// the part of an object's name that is the run's (getItemKey)
+const RUN_KEY = getRunLabelValue('run_1').substring(0, 8)
 
 const server: WorkKubernetesServer = {
   run: 'run_1',
@@ -97,11 +101,11 @@ describe('secrets read in the Job', () => {
       { name: 'hammerkit-secret-values', emptyDir: { medium: 'Memory' } },
       {
         name: 'hammerkit-account-0',
-        secret: { secretName: 'deploy-abc-credentials', items: credentials.dev, defaultMode: 0o444 },
+        secret: { secretName: `deploy-abc-${RUN_KEY}-credentials`, items: credentials.dev, defaultMode: 0o444 },
       },
       {
         name: 'hammerkit-account-1',
-        secret: { secretName: 'deploy-abc-credentials', items: credentials.ops, defaultMode: 0o444 },
+        secret: { secretName: `deploy-abc-${RUN_KEY}-credentials`, items: credentials.ops, defaultMode: 0o444 },
       },
     ])
     // the task sees the values, never the credentials
@@ -168,7 +172,7 @@ describe('secrets read in the Job', () => {
     expect(calls).toEqual([
       'token dev 3600',
       'read ops-files',
-      'create deploy-abc-credentials dev.token,ops.file.key.json',
+      `create deploy-abc-${RUN_KEY}-credentials dev.token,ops.file.key.json`,
     ])
 
     calls.length = 0
