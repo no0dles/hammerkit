@@ -91,7 +91,13 @@ export const runRequestSchema = z
       z.object({ type: z.literal('upload'), snapshot: z.string().regex(HASH_PATTERN) }).strict(),
       // a sandbox of the caller's, see POST /v1/sandboxes
       z
-        .object({ type: z.literal('sandbox'), id: z.string().regex(SANDBOX_ID_PATTERN, 'expected a sandbox id') })
+        .object({
+          type: z.literal('sandbox'),
+          id: z.string().regex(SANDBOX_ID_PATTERN, 'expected a sandbox id'),
+          // a check: run on a copy of the files a push of the sandbox would commit, so what
+          // passes counts for that commit (remote verify)
+          check: z.literal(true).optional(),
+        })
         .strict(),
     ]),
     options: runOptionsSchema.default({}),
@@ -105,6 +111,11 @@ export const runRequestSchema = z
     message: 'arguments go to one task, name exactly one in tasks',
     path: ['options', 'args'],
   })
+  .refine(
+    (request) =>
+      request.source.type !== 'sandbox' || !request.source.check || (request.options.args ?? []).length === 0,
+    { message: 'a check runs the task as the build file says, it takes no arguments', path: ['options', 'args'] }
+  )
 
 export type RunRequest = z.infer<typeof runRequestSchema>
 export type RunOptions = z.infer<typeof runOptionsSchema>

@@ -119,6 +119,10 @@ export interface SandboxStorage {
   // moves the sandbox to a commit it pushed, keeping its files: its changes are then what
   // is not pushed yet
   moveTo(key: SandboxKey, commit: string): Promise<void>
+  // writes the files git tree `tree` names into `into`, which must be what the files are
+  // now (the `tree` of `state`): the files a push would commit, without what `.gitignore`
+  // leaves out. A check runs on them (see checks.ts).
+  exportTree(key: SandboxKey, tree: string, into: string, signal: AbortSignal): Promise<void>
   remove(key: SandboxKey): Promise<void>
   // what has storage, to clean up what a crash left behind
   list(): Promise<StoredSandbox[]>
@@ -452,6 +456,29 @@ export class HostSandboxStorage implements SandboxStorage {
   // files change, and what it wrote to the git data is pruned again. Files a task made
   // unreadable are made readable first: git would leave them out and call the sandbox
   // clean.
+  async exportTree({ id }: SandboxKey, tree: string, into: string, signal: AbortSignal): Promise<void> {
+    if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(tree)) {
+      throw new Error(`${JSON.stringify(tree.slice(0, 80))} is not a git tree`)
+    }
+    return this.withIndex(id, signal, async (run) => {
+      const now = (await run(['write-tree'], 'read')).trim()
+      if (now !== tree) {
+        throw new Error(`the files of the sandbox ${id} are ${now} now, not ${tree}`)
+      }
+      // an index of its own holds the tree alone, whatever the sandbox's index says of its
+      // entries; the files are written as git has them, through no filter of the server's
+      const index = join(this.root(id), `export-${randomBytes(6).toString('hex')}`)
+      await mkdir(into, { recursive: true })
+      try {
+        const env = this.readEnv({ GIT_INDEX_FILE: index })
+        await this.git(id, ['read-tree', tree], env, signal, 'read')
+        await this.git(id, ['checkout-index', '--all', '--force', `--prefix=${join(into, '/')}`], env, signal, 'read')
+      } finally {
+        await rm(index, { force: true })
+      }
+    })
+  }
+
   async state({ id }: SandboxKey, signal: AbortSignal = AbortSignal.timeout(5 * 60 * 1000)): Promise<SandboxState> {
     return this.withIndex(id, signal, async (run) => {
       const tree = (await run(['write-tree'], 'read')).trim()

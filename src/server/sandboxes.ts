@@ -504,6 +504,15 @@ export class SandboxRegistry {
     return this.options.storage.state(keyOf(this.existing(id)), signal)
   }
 
+  // The files of `tree`, which the sandbox's files must be now, written into `into`: what a
+  // check runs on.
+  async exportTree(id: string, tree: string, into: string, signal: AbortSignal): Promise<void> {
+    const sandbox = this.existing(id)
+    sandbox.lastUsedAt = this.timestamp()
+    await this.save(sandbox)
+    await this.options.storage.exportTree(keyOf(sandbox), tree, into, signal)
+  }
+
   // What a run works on, `into` a directory of the run when the storage copies the files;
   // the run is the sandbox's use.
   async attach(id: string, into: string): Promise<SandboxAttachment> {

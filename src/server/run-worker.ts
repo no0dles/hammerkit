@@ -23,6 +23,7 @@ import { getRunScopes } from './run-plan'
 import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { RunEventData, TaskStatus } from './runs'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { getCheckKey } from '../optimizer/check-key'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -65,6 +66,8 @@ export const workerInputSchema = z
       .string()
       .regex(/^[a-z]+-[0-9a-f]{24}$/)
       .optional(),
+    // the run's results count as checks: report each task's check key before it runs
+    check: z.boolean().optional(),
   })
   .strict()
 
@@ -156,6 +159,13 @@ export async function runTasks(
       const cli = getCli(workTree, environment)
       if (cli.tasks().length === 0) {
         throw new Error(`no tasks found for ${name}`)
+      }
+      if (input.check) {
+        // the files as they are before any task of the scope wrote to them
+        const memo = new Map<string, Promise<string | null>>()
+        for (const task of iterateWorkTasks(workTree)) {
+          emit({ type: 'key', task: task.name, key: await getCheckKey(task, environment, memo) })
+        }
       }
       const execution = cli.exec({ ...execOptions, workers: cli.defaultWorkers() })
       const seen = new Map<string, Seen>()

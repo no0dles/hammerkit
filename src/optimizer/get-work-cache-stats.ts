@@ -10,6 +10,8 @@ import { lstat, readlink } from 'fs/promises'
 import { WorkItem } from '../planner/work-item'
 import { WorkSource } from '../planner/work-source'
 
+type ChecksumAlgorithm = 'sha1' | 'sha256'
+
 export interface SourceStats {
   stats: WorkCacheFileStats
   // declared (not inherited) src entries that match no file
@@ -27,7 +29,8 @@ async function addWorkCacheStats(
   matcher: (file: string, partial?: boolean) => boolean,
   context: Environment,
   root: boolean,
-  excluded: string[]
+  excluded: string[],
+  algorithm: ChecksumAlgorithm
 ): Promise<number> {
   if (isExcluded(path, excluded)) {
     return 0
@@ -41,7 +44,7 @@ async function addWorkCacheStats(
       if (!matcher(path)) {
         return 0
       }
-      const checksum = createHash('sha1')
+      const checksum = createHash(algorithm)
         .update(`link:${await readlink(path)}`)
         .digest('hex')
       result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: link.mtimeMs, checksum }
@@ -59,7 +62,7 @@ async function addWorkCacheStats(
     if (!matcher(path)) {
       return 0
     }
-    const checksum = await calculateChecksum(context, path)
+    const checksum = await calculateChecksum(context, path, algorithm)
     // '/'-separated on every OS, so a Windows host keys a container task like Linux
     result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: stats.lastModified, checksum }
     return 1
@@ -71,7 +74,7 @@ async function addWorkCacheStats(
     }
     let matched = 0
     for (const file of await context.file.listFiles(path)) {
-      matched += await addWorkCacheStats(result, cwd, join(path, file), matcher, context, false, excluded)
+      matched += await addWorkCacheStats(result, cwd, join(path, file), matcher, context, false, excluded, algorithm)
     }
     return matched
   }
@@ -90,7 +93,8 @@ export async function getWorkCacheStats(
 async function collectSourceStats(
   work: WorkTask | WorkService,
   environment: Environment,
-  excluded: string[]
+  excluded: string[],
+  algorithm: ChecksumAlgorithm = 'sha1'
 ): Promise<SourceStats> {
   const result: WorkCacheFileStats = {
     created: new Date(),
@@ -100,7 +104,16 @@ async function collectSourceStats(
 
   for (const src of work.src) {
     const matcher = (file: string, partial?: boolean) => src.matcher(file, work.cwd, partial)
-    const matched = await addWorkCacheStats(result, work.cwd, src.absolutePath, matcher, environment, true, excluded)
+    const matched = await addWorkCacheStats(
+      result,
+      work.cwd,
+      src.absolutePath,
+      matcher,
+      environment,
+      true,
+      excluded,
+      algorithm
+    )
     if (matched === 0 && !src.inherited && !isExcluded(src.absolutePath, excluded)) {
       unmatched.push(src)
     }
@@ -116,9 +129,10 @@ async function collectSourceStats(
 // before they do.
 export function getWorkItemCacheStats(
   item: WorkItem<WorkTask | WorkService>,
-  environment: Environment
+  environment: Environment,
+  algorithm: ChecksumAlgorithm = 'sha1'
 ): Promise<SourceStats> {
-  return collectSourceStats(item.data, environment, dependencyOutputs(item))
+  return collectSourceStats(item.data, environment, dependencyOutputs(item), algorithm)
 }
 
 function dependencyOutputs(item: WorkItem<WorkTask | WorkService>): string[] {

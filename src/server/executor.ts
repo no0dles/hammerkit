@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import { createHash } from 'crypto'
+import { isCheckRun } from './checks'
 import { existsSync } from 'fs'
 import { lstat, mkdir, rm, writeFile } from 'fs/promises'
 import { dirname, join, relative, resolve, sep } from 'path'
@@ -92,10 +93,16 @@ export interface RunPlacement {
 // share one, those of an upload or a sandbox only their owner's. Somebody who can only
 // upload, or an agent on a sandbox, can not leave an entry for a run from a reviewed
 // repository to find.
+//
+// A check on a sandbox runs on a copy of the files a commit of them would hold, so it is a
+// run of the repository like a ref run of that commit, and shares its cache: what its
+// owner may write in the sandbox is not part of it.
 export function cacheNamespace(run: Run): string {
-  const key =
-    run.source.type === 'ref' ? `ref\0${run.source.repo}` : `${run.source.type}\0${run.owner.iss}\0${run.owner.sub}`
-  return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
+  const repository = run.source.type === 'ref' || (run.source.type === 'sandbox' && run.source.check)
+  const key = repository
+    ? `ref\0${(run.source as { repo: string }).repo}`
+    : `${run.source.type}\0${run.owner.iss}\0${run.owner.sub}`
+  return `${repository ? 'ref' : run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
 }
 
 // The docker volumes of a run's services are its caller's, within the cache's source trust:
@@ -183,7 +190,33 @@ export class HostExecutor implements RunExecutor {
       let claim: SandboxClaim | undefined
       // the files of the sandbox the tasks work on
       let work: string | undefined
-      if (source.type === 'ref') {
+      if (source.type === 'sandbox' && source.check) {
+        // a check works on the files a push of the sandbox commits, copied out of it: never
+        // on the sandbox, whose ignored files (node_modules, outputs) its owner writes
+        const { registry, network } = sandboxes as SandboxRunOptions
+        cwd = join(root, 'source')
+        try {
+          await registry.exportTree(source.id, source.tree, cwd, abortCtrl.signal)
+        } catch (e) {
+          throw new Error(
+            `the files of the sandbox ${source.id} could not be copied for the check, submit it again: ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          )
+        }
+        context.emit({
+          type: 'log',
+          task: 'hammerkit',
+          stream: 'stdout',
+          text: `check of sandbox ${source.id} of ${source.repo}: files ${source.tree}, fetched at ${source.commit}`,
+        })
+        await this.writeBundle(cwd, bundle.files)
+        input = {
+          entry: join(cwd, version.entry),
+          ...(planning.policy.network ? { network: toNetworkSchema(planning.policy.network) } : {}),
+          sandboxNetwork: network,
+        }
+      } else if (source.type === 'ref') {
         cwd = join(root, 'source')
         const { repo, ref, commit: pinned } = source
         const credentials = await repos.credentials(repo)
@@ -255,6 +288,7 @@ export class HostExecutor implements RunExecutor {
             options: run.options,
             accounts: run.accounts,
             volumeScope: volumeScope(run),
+            ...(isCheckRun(run) ? { check: true } : {}),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(placed ? { kubernetes: placed.kubernetes } : {}),
           },
