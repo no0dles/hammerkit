@@ -1,3 +1,11 @@
+# [1.27.0-next.7](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.6...v1.27.0-next.7) (2026-10-25)
+
+
+### Bug Fixes
+
+* pack archives one file at a time to avoid node-tar's hard link hang ([52902b5](https://github.com/no0dles/hammerkit/commit/52902b5115defd1c282256178b838505399373b0))
+* pack every archive through packArchive and test that links survive ([3c78ee1](https://github.com/no0dles/hammerkit/commit/3c78ee1d1e80aa7c68c07735b377a0cfb4c7f61f))
+
 # [1.27.0-next.6](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.5...v1.27.0-next.6) (2026-10-24)
 
 
