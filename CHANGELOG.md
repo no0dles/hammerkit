@@ -1,3 +1,15 @@
+# [1.27.0-next.19](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.18...v1.27.0-next.19) (2026-10-25)
+
+
+### Bug Fixes
+
+* an aggregate task runs on a no-op runtime ([19d0e0b](https://github.com/no0dles/hammerkit/commit/19d0e0b7bece756a61e0cb30979a5a2fd84e66e1))
+
+
+### Features
+
+* aggregate tasks that only bundle their deps ([280c3f3](https://github.com/no0dles/hammerkit/commit/280c3f32d6da75fdb5e7856ae2e92579cc680344))
+
 # [1.27.0-next.18](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.17...v1.27.0-next.18) (2026-10-25)
 
 
