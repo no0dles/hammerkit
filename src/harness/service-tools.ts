@@ -64,6 +64,9 @@ export function describeServiceRun(run: Run): string {
   const lines = [`run ${run.id}: ${run.state}${run.up ? ` (${run.up.name})` : ''}`]
   if (run.state === 'up') {
     lines.push(`up until ${run.expiresAt}, stop it with services_stop when it is no longer needed`)
+    if (run.up?.sleepTtl) {
+      lines.push('without a request for a while the services sleep, the next request wakes them')
+    }
     for (const endpoint of run.up?.endpoints ?? []) {
       lines.push(`${endpoint.service}:${endpoint.port} -> ${endpoint.url}`)
     }
@@ -92,13 +95,21 @@ export const SERVICE_TOOLS: ServiceTool[] = [
       'Start services of the published build file on the hammerkit server, with the files of the sandbox (or of ' +
       'a branch), and keep them up for a person to look at: each endpoint (service:port) gets an address of its ' +
       'own behind the sign-in of the server. Answers once they are up, with the addresses and until when they ' +
-      'stay. A second start with the same name replaces the first, so its addresses stay the same.',
+      'stay. A second start with the same name replaces the first, so its addresses stay the same. A server on ' +
+      'Kubernetes starts services from a branch only: push the sandbox and pass branch.',
     parameters: {
       services: { type: 'string[]', description: 'The services to start, as the build file names them' },
       endpoints: { type: 'string[]', description: 'The ports to publish, as service:port, such as web:8080' },
       ttl: {
         type: 'string',
-        description: 'How long they stay up once ready, such as 2h; the server default when left out',
+        description:
+          'How long they stay once ready, such as 2h, then they are removed; the server default when left out',
+      },
+      sleepTtl: {
+        type: 'string',
+        description:
+          'How long they stay up without a request, such as 30m, then they sleep until the next request wakes ' +
+          'them (from a branch only); the server default when left out',
       },
       name: {
         type: 'string',
@@ -116,6 +127,7 @@ export const SERVICE_TOOLS: ServiceTool[] = [
           services: args.services,
           endpoints: (args.endpoints ?? []).map(parseEndpoint),
           ttl: args.ttl || undefined,
+          sleepTtl: args.sleepTtl || undefined,
           name: args.name || undefined,
           branch: args.branch || undefined,
         },

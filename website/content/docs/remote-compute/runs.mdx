@@ -410,7 +410,7 @@ runs:
   network: { allow: [registry.npmjs.org] } # open by default
   secretNetwork: none # open by default, what a task that reads a secret reaches
   args: declared # any by default, which tasks take arguments
-  up: { ttl: 8h, maxTtl: 72h } # the defaults, see Service runs
+  up: { ttl: 8h, maxTtl: 72h } # the defaults, sleepTtl unset, see Service runs
 ```
 
 | Key             | What it does                                                                                                                                                                                                                                                                                                                    |

@@ -5,6 +5,7 @@ import {
   CallerNamespaces,
   getCallerNamespace,
   getClusterAccess,
+  getServiceRunNamespace,
   getNamespacePolicies,
   getVolumeScope,
   isCallerNamespace,
@@ -556,6 +557,88 @@ describe('kubernetes backend', () => {
         `the namespace ${namespace} was not made by hammerkit, the server does not run tasks in it`
       )
       expect(calls).toEqual([])
+    })
+  })
+
+  describe('service runs', () => {
+    const config = () =>
+      serverConfigSchema.parse({
+        issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+        backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+      }) as any
+    const owner = { iss: 'https://idp.corp', sub: 'alice' }
+    const ref = { type: 'ref', repo: 'git.test/corp/app', ref: 'main', commit: 'c'.repeat(40) } as Run['source']
+    const up = { services: ['web'], ttl: 1000, name: 'main', endpoints: [] }
+    const context: RunContext = { emit: () => undefined, signal: new AbortController().signal }
+
+    it('holds nothing of the caller, and starts from a branch only', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      expect(executor.exclusive({ id: 'run_1', owner, source: ref, up } as unknown as Run)).toBeUndefined()
+      const sandbox = { type: 'sandbox', id: 'sbx_1', repo: 'r', commit: 'c', tree: 't' } as Run['source']
+      await expect(
+        executor.execute({ id: 'run_2', owner, source: sandbox, up } as unknown as Run, context)
+      ).rejects.toThrow(/starts from a branch/)
+    })
+
+    it('removes the namespaces of service runs no run is in when the server starts', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const active = getServiceRunNamespace('hammerkit-', 'run_active')
+      ;(executor as any).serviceRuns.add(active)
+      const left = getServiceRunNamespace('hammerkit-', 'run_left')
+      const deleted: string[] = []
+      const selectors: string[] = []
+      ;(executor as any).instance = {
+        coreApi: {
+          listNamespace: async ({ labelSelector }: any) => {
+            selectors.push(labelSelector)
+            return {
+              items: [
+                { metadata: { name: active } },
+                { metadata: { name: left } },
+                { metadata: { name: 'elsewhere-0123456789abcdef' } },
+              ],
+            }
+          },
+          deleteNamespace: async ({ name }: any) => deleted.push(name),
+        },
+      }
+      executor.sweepServiceRuns()
+      await vi.waitFor(() => expect(deleted).toEqual([left]))
+      expect(selectors).toEqual(['hammerkit.dev/managed=true,hammerkit.dev/service-run'])
+      // the sweep of kept claims leaves them be: a service run keeps none
+      ;(executor as any).sweepLeftClaims()
+      await vi.waitFor(() => expect(selectors).toHaveLength(2))
+      expect(selectors[1]).toBe('hammerkit.dev/managed=true,!hammerkit.dev/service-run')
+    })
+
+    it('removes what runs in the namespace when the server may not delete it, and looks again later', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const removed: string[] = []
+      const forbidden = Object.assign(new Error('forbidden'), { code: 403 })
+      ;(executor as any).serviceRunsSwept = true
+      ;(executor as any).instance = {
+        batchApi: {
+          deleteCollectionNamespacedJob: async (r: any) => removed.push(`${r.namespace} ${r.labelSelector}`),
+        },
+        appsApi: { deleteCollectionNamespacedDeployment: async () => undefined },
+        coreApi: {
+          deleteNamespace: async () => {
+            throw forbidden
+          },
+          deleteCollectionNamespacedPod: async () => undefined,
+          deleteCollectionNamespacedService: async () => undefined,
+          deleteCollectionNamespacedSecret: async () => undefined,
+          deleteCollectionNamespacedPersistentVolumeClaim: async () => undefined,
+        },
+        objectApi: { list: async () => ({ items: [] }) },
+      }
+      const lines: string[] = []
+      const run = { id: 'run_3', owner, source: ref, up } as unknown as Run
+      await (executor as any).placement().release(run, { ...context, emit: (event: any) => lines.push(event.text) })
+      const namespace = getServiceRunNamespace('hammerkit-', 'run_3')
+      expect(removed).toEqual([`${namespace} hammerkit.dev/run`])
+      expect(lines[0]).toMatch(/needs delete on namespaces/)
+      expect((executor as any).serviceRunsSwept).toBe(false)
     })
   })
 })

@@ -500,6 +500,11 @@ metadata: { name: hammerkit-service-run-namespaces }
 spec: { policyName: hammerkit-service-run-namespaces, validationActions: [Deny] }
 ```
 
+Upgrading a server for [service runs](/docs/remote-compute/service-runs): add `delete` on
+namespaces to `hammerkit-server` and the second policy. Without them a service run still
+ends, but its namespace stays: the server removes what runs in it, and says in its log and
+in the run's what its ClusterRole needs.
+
 Not yet: Windows nodes, holding a pod with an open network back until the policy of its namespace holds, a cache in a registry or a bucket, a limited network for a task
 that reads a provider's secret, and failing a task early whose pod can not start (an image that
 can not be pulled, no node for its pool).

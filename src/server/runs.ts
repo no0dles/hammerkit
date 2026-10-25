@@ -12,6 +12,9 @@ export type RunState =
   | 'running'
   // the services of a service run are ready, and stay until its ttl ends or it is stopped
   | 'up'
+  // a service run whose services stopped after its sleepTtl without a request: the next
+  // request to one of its endpoints starts them again, until its ttl ends
+  | 'asleep'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
@@ -71,8 +74,10 @@ export interface RunSpec {
 // What a service run keeps up, and for how long.
 export interface ServiceRunSpec {
   services: string[]
-  // how long the services stay once ready (ms)
+  // how long the services stay once ready (ms), whether they sleep in between or not
   ttl: number
+  // how long the services stay up without a request to an endpoint before they sleep (ms)
+  sleepTtl?: number
   // a later service run of the same caller with this name replaces it
   name: string
   // the ports published at hosts of their own
@@ -133,6 +138,10 @@ export interface Run extends RunSpec {
   // a service run: when its services were ready, and when they stop
   upAt?: string
   expiresAt?: string
+  // a service run with a sleepTtl: when its services sleep without a request, how often
+  // a request woke them
+  sleepsAt?: string
+  wakes?: number
   // a service run that was up: why it stopped, `ttl`, `replaced` by one of the same name,
   // or who cancelled it
   stoppedBy?: 'ttl' | 'replaced' | Identity
@@ -257,6 +266,8 @@ interface Entry {
   released?: boolean
   // where the endpoints of a service run that is up are reached
   targets?: EndpointTarget[]
+  // the services of a service run are stopped to sleep, not for good
+  sleeping?: boolean
 }
 
 type AccountCheck = (account: string) => boolean
@@ -359,6 +370,13 @@ export class RunRegistry {
         } else {
           this.finish(entry, 'rejected', 'nobody approved it in time')
         }
+      } else if (this.maySleep(entry) && ['queued', 'running', 'up', 'asleep'].includes(run.state)) {
+        // the services went with the process that held them, the next request wakes them
+        if (run.state === 'queued' || run.state === 'running' || run.state === 'up') {
+          this.sleep(entry)
+        } else {
+          this.expireLater(entry)
+        }
       } else if (run.state === 'queued' || run.state === 'running') {
         this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
       } else if (run.state === 'up') {
@@ -382,6 +400,7 @@ export class RunRegistry {
     this.checkLimits(owner, waiting)
     if (spec.up) {
       this.checkUpLimits(owner)
+      this.checkHosts(owner, spec.up)
     }
     const run: Run = {
       ...spec,
@@ -447,8 +466,9 @@ export class RunRegistry {
   }
 
   /**
-   * Moves the end of a service run that is up to `ttl` (ms) from now, at most the
-   * server's maxTtl. Its owner may, and whoever `mayOpen` says may open its endpoints.
+   * Moves the end of a service run that is up (or asleep) to `ttl` (ms) from now, at most
+   * the server's maxTtl, and never sooner than it was. Its owner may, and whoever `mayOpen`
+   * says may open its endpoints.
    */
   extend(
     caller: Pick<Principal, 'iss' | 'sub'>,
@@ -460,11 +480,14 @@ export class RunRegistry {
     if (!entry || !(this.owns(caller, entry) || (entry.run.up && mayOpen?.(this.copy(entry.run))))) {
       return { status: 'not-found' }
     }
-    if (entry.run.state !== 'up') {
+    // up, asleep, or woken and starting again
+    if (!entry.run.upAt || isFinal(entry.run.state)) {
       return { status: 'not-up', state: entry.run.state }
     }
+    // never sooner than it was: who wants it gone stops it
     const ms = Math.min(ttl, this.options.up?.maxTtl ?? ttl)
-    entry.run.expiresAt = new Date(this.now() + ms).toISOString()
+    const expiresAt = Math.max(Date.parse(entry.run.expiresAt ?? '') || 0, this.now() + ms)
+    entry.run.expiresAt = new Date(expiresAt).toISOString()
     this.record(entry, { type: 'extended', by: { iss: caller.iss, sub: caller.sub }, expiresAt: entry.run.expiresAt })
     this.expireLater(entry)
     return { status: 'ok', run: this.copy(entry.run) }
@@ -499,7 +522,11 @@ export class RunRegistry {
   // run that is up works on a copy of the files, and holds it no longer.
   holder(sandbox: string): string | undefined {
     return [...this.entries.values()].find(
-      (entry) => onSandbox(entry.run, sandbox) && !isFinal(entry.run.state) && entry.run.state !== 'up'
+      (entry) =>
+        onSandbox(entry.run, sandbox) &&
+        !isFinal(entry.run.state) &&
+        entry.run.state !== 'up' &&
+        entry.run.state !== 'asleep'
     )?.run.id
   }
 
@@ -522,7 +549,11 @@ export class RunRegistry {
       entry.abort.abort()
     } else if (entry.run.state === 'up') {
       entry.run.stoppedBy ??= by ?? 'replaced'
+      entry.sleeping = false
       entry.abort.abort()
+    } else if (entry.run.state === 'asleep') {
+      entry.run.stoppedBy ??= by ?? 'replaced'
+      this.finish(entry, 'succeeded')
     }
   }
 
@@ -677,10 +708,17 @@ export class RunRegistry {
   async close(): Promise<void> {
     this.closed = true
     for (const entry of this.queue.splice(0)) {
-      this.finish(entry, 'cancelled')
+      if (this.maySleep(entry) && this.options.store) {
+        // a woken service run sleeps again, the next start keeps it
+        this.sleep(entry)
+      } else {
+        this.finish(entry, 'cancelled')
+      }
     }
     for (const entry of this.entries.values()) {
-      if (entry.run.state === 'awaiting-approval') {
+      if (entry.run.state === 'asleep') {
+        this.clearTimer(entry)
+      } else if (entry.run.state === 'awaiting-approval') {
         if (this.options.store) {
           // the record keeps it waiting, the next start takes it back
           this.clearTimer(entry)
@@ -695,6 +733,9 @@ export class RunRegistry {
     }
     for (const entry of this.entries.values()) {
       if (entry.run.state === 'running' || entry.run.state === 'up') {
+        // a service run that may sleep is asleep in its record, the next request after the
+        // start wakes it
+        entry.sleeping = this.maySleep(entry) && !!this.options.store
         entry.abort.abort()
       }
     }
@@ -770,7 +811,8 @@ export class RunRegistry {
     }
   }
 
-  // Service runs that are not over, of the caller and of everybody, against what may be.
+  // Service runs that are not over, of the caller and of everybody, against what may be:
+  // one that is asleep counts, it wakes without asking for a place.
   private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>): void {
     const limits = this.options.up
     if (!limits) {
@@ -778,10 +820,29 @@ export class RunRegistry {
     }
     const open = [...this.entries.values()].filter((entry) => entry.run.up && !isFinal(entry.run.state))
     if (open.filter((entry) => this.owns(owner, entry)).length >= limits.perCaller) {
-      throw new QuotaError(`you have ${limits.perCaller} service runs starting or up, stop one or wait for its end`)
+      throw new QuotaError(
+        `you have ${limits.perCaller} service runs starting, up or asleep, stop one or wait for its end`
+      )
     }
     if (open.length >= limits.total) {
-      throw new RunError(`the server has ${limits.total} service runs starting or up, try again later`)
+      throw new RunError(`the server has ${limits.total} service runs starting, up or asleep, try again later`)
+    }
+  }
+
+  // A host is one run's, or a run's that replaces it (same owner and name) once it is up:
+  // two labels that come out the same are refused, they would reach each other's services.
+  private checkHosts(owner: Pick<Principal, 'iss' | 'sub'>, up: ServiceRunSpec): void {
+    const hosts = new Set(up.endpoints.map((endpoint) => endpoint.host))
+    for (const entry of this.entries.values()) {
+      if (isFinal(entry.run.state) || !entry.run.up) {
+        continue
+      }
+      const taken = entry.run.up.endpoints.find((endpoint) => hosts.has(endpoint.host))
+      if (taken && !(this.owns(owner, entry) && entry.run.up.name === up.name)) {
+        const error = new RunError(`the address ${taken.host} is another service run's, pick another name`)
+        error.status = 409
+        throw error
+      }
     }
   }
 
@@ -851,12 +912,14 @@ export class RunRegistry {
         signal: entry.abort.signal,
         ...(entry.run.up ? { up: (targets: EndpointTarget[]) => this.markUp(entry, targets) } : {}),
       })
-      if (entry.run.upAt) {
+      if (entry.sleeping) {
+        this.sleep(entry)
+      } else if (entry.run.upAt) {
         // services stay until they are stopped: ones that stopped on their own failed
         this.finish(
           entry,
-          entry.abort.signal.aborted ? 'succeeded' : 'failed',
-          entry.abort.signal.aborted ? undefined : 'the services stopped on their own'
+          entry.abort.signal.aborted && !entry.timedOut ? 'succeeded' : 'failed',
+          entry.timedOut ? this.tooLong() : entry.abort.signal.aborted ? undefined : 'the services stopped on their own'
         )
       } else {
         this.finish(
@@ -867,11 +930,13 @@ export class RunRegistry {
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      if (entry.run.upAt) {
+      if (entry.sleeping) {
+        this.sleep(entry)
+      } else if (entry.run.upAt) {
         this.finish(
           entry,
-          entry.abort.signal.aborted ? 'succeeded' : 'failed',
-          entry.abort.signal.aborted ? undefined : message
+          entry.abort.signal.aborted && !entry.timedOut ? 'succeeded' : 'failed',
+          entry.timedOut ? this.tooLong() : entry.abort.signal.aborted ? undefined : message
         )
       } else {
         const cancelled = entry.abort.signal.aborted && !entry.timedOut
@@ -898,8 +963,14 @@ export class RunRegistry {
     entry.durationTimer = undefined
     entry.targets = targets.map((target) => ({ ...target, address: { ...target.address } }))
     entry.run.state = 'up'
-    entry.run.upAt = this.timestamp()
-    entry.run.expiresAt = new Date(this.now() + spec.ttl).toISOString()
+    // the ttl counts from the first time, not from a wake
+    if (!entry.run.upAt) {
+      entry.run.upAt = this.timestamp()
+      entry.run.expiresAt = new Date(this.now() + spec.ttl).toISOString()
+    }
+    if (spec.sleepTtl) {
+      entry.run.sleepsAt = new Date(this.now() + spec.sleepTtl).toISOString()
+    }
     this.record(entry, { type: 'state', state: 'up' })
     this.expireLater(entry)
     entry.released = true
@@ -919,26 +990,94 @@ export class RunRegistry {
     this.dispatch()
   }
 
-  // Stops a service run that is up at its expiry. A timer can't wait longer than about 24
-  // days, so a longer one looks again then.
+  // Stops a service run at its expiry, and puts one that is up to sleep at its sleepsAt. A
+  // timer can't wait longer than about 24 days, so a longer one looks again then.
   private expireLater(entry: Entry): void {
     this.clearTimer(entry)
-    const left = Date.parse(entry.run.expiresAt ?? '') - this.now()
+    const expiresAt = Date.parse(entry.run.expiresAt ?? '')
+    const sleepsAt = entry.run.state === 'up' ? Date.parse(entry.run.sleepsAt ?? '') : NaN
+    const next = Number.isFinite(sleepsAt) ? Math.min(expiresAt, sleepsAt) : expiresAt
     entry.timer = setTimeout(
       () => {
-        if (entry.run.state !== 'up') {
+        if (isFinal(entry.run.state)) {
           return
         }
-        if (Date.parse(entry.run.expiresAt ?? '') > this.now()) {
-          this.expireLater(entry)
+        if (Date.parse(entry.run.expiresAt ?? '') <= this.now()) {
+          entry.run.stoppedBy ??= 'ttl'
+          entry.sleeping = false
+          if (entry.run.state === 'asleep') {
+            this.finish(entry, 'succeeded')
+          } else {
+            this.stop(entry)
+          }
           return
         }
-        entry.run.stoppedBy ??= 'ttl'
-        entry.abort.abort()
+        if (entry.run.state === 'up' && Date.parse(entry.run.sleepsAt ?? '') <= this.now()) {
+          entry.sleeping = true
+          entry.abort.abort()
+          return
+        }
+        this.expireLater(entry)
       },
-      Math.max(0, Math.min(left, 2 ** 31 - 1))
+      Math.max(0, Math.min(next - this.now(), 2 ** 31 - 1))
     )
     entry.timer.unref()
+  }
+
+  // Whether a service run sleeps instead of ending: it has a sleepTtl, its ttl has not
+  // ended, and it starts from a commit (the files of a sandbox change under it).
+  private maySleep(entry: Entry): boolean {
+    return (
+      !!entry.run.up?.sleepTtl &&
+      !!entry.run.upAt &&
+      entry.run.source.type === 'ref' &&
+      Date.parse(entry.run.expiresAt ?? '') > this.now()
+    )
+  }
+
+  // The services stopped, the run waits for a request to wake it, or for its end.
+  private sleep(entry: Entry): void {
+    entry.sleeping = false
+    entry.targets = undefined
+    entry.run.state = 'asleep'
+    delete entry.run.sleepsAt
+    this.record(entry, { type: 'state', state: 'asleep' })
+    this.expireLater(entry)
+  }
+
+  /**
+   * A request to an endpoint of a service run: one that is up stays up for its sleepTtl from
+   * now, one that is asleep is started again (it holds its place of runs.up.limits while it
+   * sleeps). Answers why it was not woken, or undefined.
+   */
+  visit(id: string): string | undefined {
+    const entry = this.entries.get(id)
+    if (!entry?.run.up) {
+      return undefined
+    }
+    const sleepTtl = entry.run.up.sleepTtl
+    if (entry.run.state === 'up' && sleepTtl) {
+      // only kept in memory: a server that stops puts the run to sleep anyway
+      entry.run.sleepsAt = new Date(this.now() + sleepTtl).toISOString()
+      return undefined
+    }
+    if (entry.run.state !== 'asleep' || this.closed) {
+      return undefined
+    }
+    if (!this.maySleep(entry)) {
+      this.expireLater(entry)
+      return 'its time ran out'
+    }
+    this.clearTimer(entry)
+    entry.abort = new AbortController()
+    entry.released = false
+    entry.timedOut = false
+    entry.run.wakes = (entry.run.wakes ?? 0) + 1
+    entry.run.state = 'queued'
+    this.record(entry, { type: 'state', state: 'queued' })
+    this.queue.push(entry)
+    this.dispatch()
+    return undefined
   }
 
   private tooLong(): string {

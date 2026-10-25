@@ -24,7 +24,7 @@ describe('service run requests', () => {
     }
     expect(issue({ services: ['web'], tasks: ['build'] })).toBe('a run names tasks or services, not both')
     expect(issue({ tasks: ['build'], endpoints: [{ service: 'web', port: 80 }] })).toBe(
-      'ttl, name and endpoints are for a run of services'
+      'ttl, sleepTtl, name and endpoints are for a run of services'
     )
     expect(issue({ services: ['web'], name: 'Feature/Login' })).toMatch(/DNS label/)
     expect(issue({ services: ['web'], options: { args: ['x'] } })).toBe('a service run takes no arguments')
@@ -51,7 +51,7 @@ describe('service run names and hosts', () => {
   it('gives each caller hosts of their own, and two endpoints on one port hosts apart', () => {
     const [mine] = getEndpointHosts('pr-12', { iss: ISS, sub: 'alice' }, [{ service: 'web', port: 80 }])
     const [theirs] = getEndpointHosts('pr-12', { iss: ISS, sub: 'bob' }, [{ service: 'web', port: 80 }])
-    expect(mine).toMatch(/^pr-12-80-[0-9a-f]{6}$/)
+    expect(mine).toMatch(/^pr-12-80-[0-9a-f]{12}$/)
     expect(theirs).not.toBe(mine)
     const hosts = getEndpointHosts('pr-12', { iss: ISS, sub: 'alice' }, [
       { service: 'web', port: 80 },
@@ -193,11 +193,26 @@ describe('the namespace of a service run', () => {
     expect(name).not.toBe(getServiceRunNamespace('hk-', 'run_abd'))
   })
 
-  it('lets the server in', () => {
-    expect(getServerIngressPolicy('hk-0123', 'hammerkit').spec).toEqual({
+  it('lets the server in, to the ports of the endpoints only', () => {
+    expect(getServerIngressPolicy('hk-0123', 'hammerkit', [8080, 8080, 3000]).spec).toEqual({
       podSelector: {},
       policyTypes: ['Ingress'],
-      ingress: [{ _from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'hammerkit' } } }] }],
+      ingress: [
+        {
+          _from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'hammerkit' } } }],
+          ports: [
+            { protocol: 'TCP', port: 8080 },
+            { protocol: 'TCP', port: 3000 },
+          ],
+        },
+      ],
     })
+    expect(getServerIngressPolicy('hk-0123', 'hammerkit', []).spec?.ingress).toEqual([])
+  })
+
+  it('is another one for every wake of the run', () => {
+    const names = [0, 1, 2].map((wakes) => getServiceRunNamespace('hk-', 'run_abc', wakes))
+    expect(new Set(names).size).toBe(3)
+    expect(names[0]).toBe(getServiceRunNamespace('hk-', 'run_abc'))
   })
 })

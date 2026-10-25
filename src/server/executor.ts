@@ -189,7 +189,9 @@ export class HostExecutor implements RunExecutor {
         const credentials = await repos.credentials(repo)
         let commit: string
         try {
-          commit = await checkoutRef(repos.url(repo), ref, cwd, credentials.env, abortCtrl.signal, pinned)
+          // a woken service run starts the commit it started first, where the ref is now or not
+          const fetched = run.wakes ? pinned : ref
+          commit = await checkoutRef(repos.url(repo), fetched, cwd, credentials.env, abortCtrl.signal, pinned)
         } catch (e) {
           throw repos.scrub(e, credentials.values)
         }

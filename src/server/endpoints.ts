@@ -9,7 +9,7 @@ import { getGrant } from './policy'
 import { mayOpenEndpoints } from './service-runs'
 import type { ServerConfig } from './server-config'
 import type { EndpointTarget, Run, RunEndpoint, RunRegistry } from './runs'
-import { parseDuration } from '../utils/units'
+import { formatDuration, parseDuration } from '../utils/units'
 
 // The cookie of a sign-in at one endpoint host. `__Host-` keeps a page on another host of the
 // domain from setting or overwriting it; it needs https, so plain http (on the loopback
@@ -187,8 +187,10 @@ export class EndpointGateway {
     if (url.pathname.startsWith(OWN_PATH)) {
       return page(res, 404, 'Not found', '<p>There is no such page.</p>')
     }
+    // a request keeps the services up, or wakes them
+    const refused = this.registry.visit(found.run.id)
     if (!found.target) {
-      return this.notUp(res, found.run)
+      return this.notUp(res, this.registry.endpoint(label)?.run ?? found.run, refused)
     }
     this.forward(found.target, principal, req, res)
   }
@@ -210,6 +212,10 @@ export class EndpointGateway {
       this.options.log(`deny endpoint ${label} iss=${principal.iss} sub=${principal.sub}`)
       return refuse(403, 'Forbidden')
     }
+    if (new URL(req.url ?? '/', 'http://endpoint').pathname.startsWith(OWN_PATH)) {
+      return refuse(404, 'Not Found')
+    }
+    this.registry.visit(found.run.id)
     const target = found.target
     if (!target) {
       return refuse(503, 'Service Unavailable')
@@ -260,8 +266,29 @@ export class EndpointGateway {
         return null
       }
     }
+    // the cookie is sent along when a page of another endpoint asks: the endpoints share
+    // one site, and the app of one is not to act as its visitor on another
+    if (this.fromElsewhere(label, req)) {
+      return null
+    }
     const session = this.readSession(label, req.headers.cookie)
     return session ? { iss: session.iss, sub: session.sub, groups: session.groups, claims: session.claims } : null
+  }
+
+  // Whether the browser sends the request for another page than the endpoint's own: an
+  // upgrade from another origin, or a request a page of another site makes, but a link
+  // followed to the endpoint. Without Sec-Fetch-Site, by its Origin.
+  private fromElsewhere(label: string, req: IncomingMessage): boolean {
+    const origin = req.headers.origin
+    const own = this.url(label, '/').slice(0, -1)
+    if (req.headers.upgrade) {
+      return origin !== own
+    }
+    const site = req.headers['sec-fetch-site']
+    if (site === 'same-site' || site === 'cross-site') {
+      return !(req.headers['sec-fetch-mode'] === 'navigate' && (req.method === 'GET' || req.method === 'HEAD'))
+    }
+    return site === undefined && origin !== undefined && origin !== own
   }
 
   private forward(target: EndpointTarget, principal: Principal, req: IncomingMessage, res: ServerResponse): void {
@@ -317,10 +344,26 @@ export class EndpointGateway {
     return headers
   }
 
-  private notUp(res: ServerResponse, run: Run): void {
+  private notUp(res: ServerResponse, run: Run, refused?: string): void {
     if (run.state === 'queued' || run.state === 'running' || run.state === 'awaiting-approval') {
       res.setHeader('refresh', '5')
-      return page(res, 503, 'Starting', `<p>The services of this endpoint are starting (${escape(run.state)}).</p>`)
+      res.setHeader('retry-after', '5')
+      return page(
+        res,
+        503,
+        'Starting',
+        `<p>The services of this endpoint are ${run.wakes ? 'waking up' : 'starting'} (${escape(
+          run.state
+        )}), this page reloads until they are up.</p>`
+      )
+    }
+    if (run.state === 'asleep') {
+      return page(
+        res,
+        503,
+        'Asleep',
+        `<p>The services of this endpoint sleep and can not wake now: ${escape(refused ?? 'try again')}.</p>`
+      )
     }
     const why =
       run.stoppedBy === 'ttl'
@@ -361,6 +404,9 @@ export class EndpointGateway {
       let ttl: number
       try {
         ttl = parseDuration(form.get('ttl') ?? '')
+        if (!(ttl > 0)) {
+          throw new Error('no time')
+        }
       } catch {
         return page(res, 400, 'Not a duration', '<p>Pick how long it should stay.</p>')
       }
@@ -390,7 +436,13 @@ export class EndpointGateway {
 <dt>Run</dt><dd><code>${escape(run.id)}</code> of <code>${escape(run.owner.sub)}</code>, ${escape(run.state)}</dd>
 <dt>Source</dt><dd>${escape(source)}</dd>
 <dt>Ends</dt><dd>${escape(run.expiresAt ?? 'when it is up and its time ran out')}</dd>
-<dt>Signed in</dt><dd><code>${escape(principal.sub)}</code></dd>
+${
+  run.up?.sleepTtl
+    ? `<dt>Sleeps</dt><dd>after ${escape(formatDuration(run.up.sleepTtl))} without a request${
+        run.sleepsAt ? `, next at ${escape(run.sleepsAt)}` : ''
+      }; a request wakes it</dd>\n`
+    : ''
+}<dt>Signed in</dt><dd><code>${escape(principal.sub)}</code></dd>
 </dl>
 ${
   run.state === 'up'
@@ -424,7 +476,7 @@ ${
       const nonce = randomBytes(24).toString('base64url')
       this.pending.set(state, {
         host,
-        path: path.startsWith('/') && !path.startsWith('//') ? path : '/',
+        path: ownPath(path),
         verifier,
         nonce,
         expires: this.now() + LOGIN_TIMEOUT_MS,
@@ -690,4 +742,18 @@ function page(res: ServerResponse, status: number, title: string, body: string):
       title
     )}</h1>${body}<p><small>hammerkit</small></p></body></html>`
   )
+}
+
+// Where on its own host a person goes back to after the sign-in: a path, never an address a
+// browser reads as another host (`//x`, `/\\x`, control characters).
+export function ownPath(path: string): string {
+  if (
+    !path.startsWith('/') ||
+    [...path].some((char) => char === '\\' || char.charCodeAt(0) < 0x20 || char === '\u007f')
+  ) {
+    return '/'
+  }
+  const base = 'http://endpoint.invalid'
+  const target = new URL(path, base)
+  return target.origin === base ? target.pathname + target.search : '/'
 }

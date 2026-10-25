@@ -4,7 +4,7 @@ import { createServer, IncomingMessage, request as httpRequest, Server } from 'h
 import { AddressInfo, connect } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { EndpointGateway } from './endpoints'
+import { EndpointGateway, ownPath } from './endpoints'
 import { TokenVerifier } from './oauth'
 import { EndpointTarget, RunExecutor, RunRegistry } from './runs'
 import { serverConfigSchema, ServerConfig } from './server-config'
@@ -98,6 +98,8 @@ describe('EndpointGateway', () => {
   let host: string
   let runId: string
   let issuer: ReturnType<typeof fakeIssuer>
+  // how far the gateway's clock is ahead
+  let ahead: number
 
   const token = (sub: string) =>
     signToken(key, { iss: ISS, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 300 })
@@ -117,7 +119,7 @@ describe('EndpointGateway', () => {
     })
 
   // the browser's way through the sign-in, up to the cookie of the endpoint host
-  const signIn = async (path = '/page?x=1') => {
+  const signIn = async (path = '/page?x=1', beforeCallback?: () => void) => {
     const first = await get(host, path, { accept: 'text/html' })
     expect(first.status).toBe(302)
     const start = new URL(first.headers.location as string)
@@ -128,6 +130,7 @@ describe('EndpointGateway', () => {
     expect(authorize.searchParams.get('code_challenge_method')).toBe('S256')
     issuer.sent.challenge = authorize.searchParams.get('code_challenge') ?? undefined
     issuer.sent.nonce = authorize.searchParams.get('nonce') ?? undefined
+    beforeCallback?.()
     const callback = await get('login', `/callback?code=the-code&state=${authorize.searchParams.get('state')}`)
     return { callback, state: authorize.searchParams.get('state') as string }
   }
@@ -138,7 +141,36 @@ describe('EndpointGateway', () => {
     return { taken, cookie: String(taken.headers['set-cookie']).split(';')[0] }
   }
 
+  // a second run of alice's, another endpoint of the same domain (a site)
+  const submitOther = async (name: string, sleepTtl?: number) => {
+    const [other] = getEndpointHosts(name, alice, [{ service: 'web', port: 80 }])
+    const run = registry.submit(alice, {
+      definition: 'sha256:' + 'a'.repeat(64),
+      tasks: [],
+      accounts: [],
+      source: { type: 'ref', repo: 'github.com/corp/shop', ref: name, commit: 'c'.repeat(40) },
+      options: {},
+      up: {
+        services: ['web'],
+        ttl: 60_000,
+        ...(sleepTtl ? { sleepTtl } : {}),
+        name,
+        endpoints: [{ service: 'web', port: 80, host: other, url: `http://${other}.${DOMAIN}:${port}/` }],
+      },
+    })
+    await until(() => registry.get(alice, run.id)?.state === 'up')
+    return { host: other, id: run.id }
+  }
+
+  const until = async (condition: () => boolean) => {
+    for (let i = 0; i < 200 && !condition(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(condition()).toBe(true)
+  }
+
   beforeEach(async () => {
+    ahead = 0
     directory = mkdtempSync(join(tmpdir(), 'hammerkit-endpoints-'))
     app = await startApp()
     issuer = fakeIssuer()
@@ -166,13 +198,14 @@ describe('EndpointGateway', () => {
           context.signal.addEventListener('abort', () => resolve())
         }),
     }
-    registry = new RunRegistry({ executor })
+    registry = new RunRegistry({ executor, up: { maxTtl: 3_600_000, perCaller: 5, total: 10 } })
     const verifierOptions = { fetch: issuer.fetcher }
     const gateway = new EndpointGateway(config, registry, {
       keyFile: join(directory, 'session.key'),
       verifier: new TokenVerifier(config.issuers, verifierOptions),
       log: () => undefined,
       fetch: issuer.fetcher,
+      now: () => Date.now() + ahead,
     })
     await gateway.load()
     gatewayServer = createServer((req, res) => {
@@ -331,6 +364,126 @@ describe('EndpointGateway', () => {
     issuer.sent.sub = 'reviewer'
     const { callback } = await signIn()
     const { cookie } = await takeCookie(callback.headers.location as string)
-    expect(await upgrade(`cookie: ${cookie}\r\norigin: http://${host}.${DOMAIN}\r\n`)).toMatch(/^HTTP\/1.1 101/)
+    expect(await upgrade(`cookie: ${cookie}\r\norigin: http://${host}.${DOMAIN}:${port}\r\n`)).toMatch(/^HTTP\/1.1 101/)
+    // not one the page of another endpoint opens, nor one without an origin
+    const sibling = `origin: http://evil-80-123456.${DOMAIN}:${port}\r\n`
+    expect(await upgrade(`cookie: ${cookie}\r\n${sibling}`)).toMatch(/^HTTP\/1.1 401/)
+    expect(await upgrade(`cookie: ${cookie}\r\n`)).toMatch(/^HTTP\/1.1 401/)
+    // nor by somebody who may not open it
+    expect(await upgrade(`hammerkit-authorization: Bearer ${token('other')}\r\n`)).toMatch(/^HTTP\/1.1 403/)
+    // the server's own paths are not the app's
+    const own = await new Promise<string>((resolve) => {
+      const socket = connect(port, '127.0.0.1', () => {
+        socket.write(
+          `GET /.hammerkit/status HTTP/1.1\r\nhost: ${host}.${DOMAIN}\r\nconnection: upgrade\r\nupgrade: echo\r\n` +
+            `hammerkit-authorization: Bearer ${token('alice')}\r\n\r\n`
+        )
+      })
+      socket.on('data', (data) => {
+        socket.end()
+        resolve(data.toString())
+      })
+    })
+    expect(own).toMatch(/^HTTP\/1.1 404/)
+  })
+
+  it('refuses a cookie that is forged, or of another endpoint host', async () => {
+    issuer.sent.sub = 'reviewer'
+    const { callback } = await signIn()
+    const { cookie } = await takeCookie(callback.headers.location as string)
+    expect((await get(host, '/', { cookie })).status).toBe(200)
+    // a payload of somebody else with the signature of this one
+    const [name, value] = cookie.split('=')
+    const [payload, signature] = value.split('.')
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString())
+    const forged = Buffer.from(JSON.stringify({ ...session, sub: 'alice' })).toString('base64url')
+    expect((await get(host, '/', { cookie: `${name}=${forged}.${signature}` })).status).toBe(401)
+    expect((await get(host, '/', { cookie: `${name}=${payload}.${'A'.repeat(signature.length)}` })).status).toBe(401)
+    // a real endpoint the same person may open is another host: the cookie is not its
+    const other = await submitOther('second')
+    expect((await get(other.host, '/', { cookie })).status).toBe(401)
+    expect(app.seen.filter((headers) => headers['x-hammerkit-caller'] === `${ISS} reviewer`)).toHaveLength(1)
+  })
+
+  it('takes the one-time code of the sign-in at its own host only, and for a minute', async () => {
+    issuer.sent.sub = 'reviewer'
+    const other = await submitOther('second')
+    const first = await signIn()
+    const elsewhere = new URL(first.callback.headers.location as string)
+    elsewhere.hostname = `${other.host}.${DOMAIN}`
+    expect((await takeCookie(elsewhere.toString())).taken.status).toBe(400)
+    const late = await signIn()
+    ahead = 61_000
+    expect((await takeCookie(late.callback.headers.location as string)).taken.status).toBe(400)
+  })
+
+  it('refuses an ID token of another sign-in (nonce)', async () => {
+    const { callback } = await signIn('/', () => {
+      issuer.sent.nonce = 'another'
+    })
+    expect(callback.status).toBe(400)
+  })
+
+  it('goes back to a path of the endpoint after the sign-in, never to another host', async () => {
+    for (const path of ['/\\evil.example', '//evil.example', '/%5Cevil']) {
+      const { callback } = await signIn(path)
+      const { taken } = await takeCookie(callback.headers.location as string)
+      expect(new URL(taken.headers.location as string, 'http://x').host).toBe('x')
+    }
+    expect(ownPath('/\\evil.example')).toBe('/')
+    expect(ownPath('//evil.example')).toBe('/')
+    expect(ownPath('https://evil.example/')).toBe('/')
+    expect(ownPath('/a\tb')).toBe('/')
+    expect(ownPath('/page?x=1')).toBe('/page?x=1')
+  })
+
+  it('does not act as the person for a page of another endpoint', async () => {
+    issuer.sent.sub = 'reviewer'
+    const { callback } = await signIn()
+    const { cookie } = await takeCookie(callback.headers.location as string)
+    const sibling = `http://evil-80-123456.${DOMAIN}:${port}`
+    const seen = app.seen.length
+    // a form or fetch of a sibling page
+    const post = { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors', origin: sibling }
+    expect((await get(host, '/api/delete', post, 'POST')).status).toBe(401)
+    const form = { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate', origin: sibling }
+    expect((await get(host, '/api/delete', form, 'POST')).status).toBe(401)
+    // a browser without Sec-Fetch-*, by its Origin
+    expect((await get(host, '/api/delete', { cookie, origin: sibling }, 'POST')).status).toBe(401)
+    expect(app.seen.length).toBe(seen)
+    // a link followed from a sibling page, and the endpoint's own requests
+    const link = { cookie, 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'navigate' }
+    expect((await get(host, '/', link)).status).toBe(200)
+    const own = { cookie, 'sec-fetch-site': 'same-origin', origin: `http://${host}.${DOMAIN}:${port}` }
+    expect((await get(host, '/api/save', own, 'POST')).status).toBe(200)
+  })
+
+  it('keeps its own paths from the app', async () => {
+    const auth = { 'hammerkit-authorization': `Bearer ${token('alice')}` }
+    const seen = app.seen.length
+    expect((await get(host, '/.hammerkit/anything', auth)).status).toBe(404)
+    expect(app.seen.length).toBe(seen)
+  })
+
+  it('wakes a run that sleeps on a request, and keeps one that is up awake', async () => {
+    const sleepy = await submitOther('sleepy', 40)
+    const auth = { 'hammerkit-authorization': `Bearer ${token('reviewer')}` }
+    // requests keep it up past its sleepTtl
+    for (let i = 0; i < 4; i++) {
+      expect((await get(sleepy.host, '/', auth)).status).toBe(200)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    expect(registry.get(alice, sleepy.id)?.state).toBe('up')
+    await until(() => registry.get(alice, sleepy.id)?.state === 'asleep')
+    // somebody who may not open it does not wake it
+    expect((await get(sleepy.host, '/', { 'hammerkit-authorization': `Bearer ${token('other')}` })).status).toBe(403)
+    expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
+    const waking = await get(sleepy.host, '/', { ...auth, accept: 'text/html' })
+    expect(waking.status).toBe(503)
+    expect(waking.body).toContain('waking up')
+    expect(waking.headers.refresh).toBe('5')
+    await until(() => registry.get(alice, sleepy.id)?.state === 'up')
+    expect(registry.get(alice, sleepy.id)?.wakes).toBe(1)
+    expect((await get(sleepy.host, '/', auth)).status).toBe(200)
   })
 })

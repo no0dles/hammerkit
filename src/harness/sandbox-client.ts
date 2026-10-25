@@ -76,6 +76,7 @@ export interface ServiceRunRequest {
   services: string[]
   endpoints?: { service: string; port: number }[]
   ttl?: string
+  sleepTtl?: string
   name?: string
   // start from this branch of the sandbox's repository instead of the sandbox
   branch?: string
@@ -252,6 +253,7 @@ export class SandboxClient {
       services: request.services,
       endpoints: request.endpoints ?? [],
       ...(request.ttl ? { ttl: request.ttl } : {}),
+      ...(request.sleepTtl ? { sleepTtl: request.sleepTtl } : {}),
       ...(request.name ? { name: request.name } : {}),
       source: request.branch
         ? { type: 'ref', repo: this.sandbox.repo, ref: request.branch }

@@ -9,6 +9,7 @@ import { applyAnnotations, collectAnnotations, readCheckout } from './annotation
 import { callServer, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
 import { followRun, ServerConnection, submitRun } from '../harness/sandbox-client'
+import { formatDuration } from '../utils/units'
 import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
 import { dirname } from 'path'
@@ -408,7 +409,17 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       ).argParser(collectOption)
     )
     .addOption(
-      new Option('--ttl <duration>', 'how long they stay up once ready, such as 2h; the server default when left out')
+      new Option(
+        '--ttl <duration>',
+        'how long they stay once ready, such as 2h, then they are removed; the server default when left out'
+      )
+    )
+    .addOption(
+      new Option(
+        '--sleep-ttl <duration>',
+        'how long they stay up without a request, such as 30m, then they sleep until the next request wakes them; ' +
+          'the server default when left out'
+      )
     )
     .addOption(
       new Option(
@@ -447,6 +458,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           services,
           endpoints,
           ...(options.ttl ? { ttl: options.ttl } : {}),
+          ...(options.sleepTtl ? { sleepTtl: options.sleepTtl } : {}),
           ...(options.name ? { name: options.name } : {}),
           source,
           options: options.env ? { env: options.env } : {},
@@ -474,7 +486,11 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         if (run.state !== 'up') {
           fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, 1)
         }
-        environment.stdout.write(`${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}\n`)
+        environment.stdout.write(
+          `${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}${
+            run.up?.sleepTtl ? `, asleep after ${formatDuration(run.up.sleepTtl)} without a request` : ''
+          }\n`
+        )
         for (const endpoint of run.up?.endpoints ?? []) {
           environment.stdout.write(`  ${printable(endpoint.service)}:${endpoint.port}  ${printable(endpoint.url)}\n`)
         }

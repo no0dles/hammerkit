@@ -5,20 +5,21 @@ description: "Keep services of a build file up on the server for a while, with t
 A service run starts services of a published build file on the server, the way
 [`hammerkit up`](/docs/cli/up) starts them, and keeps them up until its time ends. Ports of
 its services can be published as endpoints: each gets an address of its own, such as
-`https://feature-login-8080-3fa2c1.run.example.com`, that the server answers behind its own
+`https://feature-login-8080-3fa2c1e09b7d.run.example.com`, that the server answers behind its own
 sign-in and passes on to the service. A person opens it in a browser, an agent reads it with
 its token.
 
 It is for whatever needs the app running for a while: somebody reviews a branch before it is
-merged, a demo, an agent that checks its change in the real app. When nobody looks, the run
-ends on its own, so a forgotten one doesn't hold the server.
+merged, a demo, an agent that checks its change in the real app. The run ends on its own at
+its `ttl`, so a forgotten one doesn't hold the server, and with a `sleepTtl` its services
+sleep while nobody looks and wake on the next request.
 
 ```txt
-$ hammerkit remote up web --endpoint web:8080 --ttl 4h
+$ hammerkit remote up web --endpoint web:8080 --ttl 3d --sleep-ttl 30m
 run_Vd1rX9pQ2mT7wN4a on build: web from feature/login at 4be1a07c...
 [hammerkit] checked out github.com/corp/shop at 4be1a07c...
-run_Vd1rX9pQ2mT7wN4a is up until 2026-10-25T14:12:00.000Z
-  web:8080  https://feature-login-8080-3fa2c1.run.example.com/
+run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m without a request
+  web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com/
 extend it with: hammerkit remote extend run_Vd1rX9pQ2mT7wN4a 8h, stop it with: hammerkit remote stop run_Vd1rX9pQ2mT7wN4a
 ```
 
@@ -34,7 +35,8 @@ install packages run first.
   "definition": "sha256:9f2c...",
   "services": ["web"],
   "endpoints": [{ "service": "web", "port": 8080 }],
-  "ttl": "4h",
+  "ttl": "3d",
+  "sleepTtl": "30m",
   "name": "feature-login",
   "source": { "type": "ref", "repo": "github.com/corp/shop", "ref": "feature/login" }
 }
@@ -44,12 +46,13 @@ install packages run first.
 | --- | --- |
 | `services` | The services of the build file to start, by name. A run names tasks or services, not both, and takes no [arguments](/docs/remote-compute/runs#arguments) or label filters. |
 | `endpoints` | Ports to publish, up to 5: each a `service` the run starts and a `port` it declares in `ports` (the container port). Needs an `endpoints` level `publish` for the repository, see [Who opens an endpoint](#who-opens-an-endpoint). |
-| `ttl` | How long the services stay up once they are ready, such as `30m` or `8h`. `runs.up.ttl` when left out (`8h`), at most `runs.up.maxTtl` (`72h`). |
+| `ttl` | How long the run lasts once its services are ready, such as `8h` or `3d`, asleep or not; then they are removed. `runs.up.ttl` when left out (`8h`), at most `runs.up.maxTtl` (`72h`). |
+| `sleepTtl` | How long the services stay up without a request to one of its endpoints, such as `30m`; then they [sleep](#sleeping) until the next request wakes them. `runs.up.sleepTtl` when left out; without either, they never sleep. A run from a ref only. |
 | `name` | Lower case letters, digits and `-`, at most 40, which the addresses carry. The branch of the source when left out (`feature/login` is `feature-login`). |
 | `source` | A ref, or a [sandbox](/docs/remote-compute/sandboxes) on a host backend. |
 
-The run goes through the states of every run, with one more: `up` once every service it
-names is ready (its healthcheck passed). From then on its time counts, and it no longer
+The run goes through the states of every run, with two more: `up` once every service it
+names is ready (its healthcheck passed), and `asleep` while its services sleep. From then on its time counts, and it no longer
 takes a place of `runs.maxConcurrent` or holds its sandbox: the next run starts, and an
 agent can go on working. `GET /v1/runs/<id>?wait=30s` answers as soon as the run is up. A
 run that is up says when, and until when:
@@ -59,13 +62,15 @@ run that is up says when, and until when:
   "id": "run_Vd1rX9pQ2mT7wN4a",
   "state": "up",
   "upAt": "2026-10-25T10:12:00.000Z",
-  "expiresAt": "2026-10-25T14:12:00.000Z",
+  "expiresAt": "2026-10-28T10:12:00.000Z",
+  "sleepsAt": "2026-10-25T10:42:00.000Z",
   "up": {
     "services": ["web"],
-    "ttl": 14400000,
+    "ttl": 259200000,
+    "sleepTtl": 1800000,
     "name": "feature-login",
     "endpoints": [
-      { "service": "web", "port": 8080, "host": "feature-login-8080-3fa2c1", "url": "https://feature-login-8080-3fa2c1.run.example.com/" }
+      { "service": "web", "port": 8080, "host": "feature-login-8080-3fa2c1e09b7d", "url": "https://feature-login-8080-3fa2c1e09b7d.run.example.com/" }
     ]
   }
 }
@@ -80,30 +85,49 @@ the [agent tools](/docs/remote-compute/agents#service-runs) from a coding agent.
 
 ## Addresses
 
-The host of an endpoint is the run's `name`, the port and six hex digits of who started it:
-`<name>-<port>-<owner>.<domain>`. So the runs of several branches stand side by side, each at
-addresses of its own, and two people with a branch of the same name don't take each other's.
+The host of an endpoint is the run's `name`, the port and twelve hex digits of who started
+it: `<name>-<port>-<owner>.<domain>`. So the runs of several branches stand side by side, each
+at addresses of its own, and two people with a branch of the same name don't take each
+other's. A run whose address would be one of another run that is not over, of somebody else
+or of another name, is refused with `409`.
 
 A second service run of yours with the same name replaces the first: once the new one is up,
 the old one stops, and the addresses stay. Push a fix, start the branch again, and the
 reviewer reloads the same page. Until the new one is up, the old one answers.
 
-Each caller has at most `runs.up.limits.up` service runs starting or up at a time (`3` by
-default); one more is answered `429`. The server takes `runs.up.total` of them (`20`).
+Each caller has at most `runs.up.limits.up` service runs starting, up or asleep at a time
+(`3` by default); one more is answered `429`. The server takes `runs.up.total` of them
+(`20`). A run that sleeps keeps its place, so it wakes without waiting for one.
 
 ## Time
 
-The time of a run is its `ttl` from the moment it is up. Its owner, and whoever may open its
-endpoints, give it more: `POST /v1/runs/<id>/extend` with `{ "ttl": "8h" }` sets the end to
-that long from now, at most `runs.up.maxTtl`. So does `hammerkit remote extend`, and the
-status page of every endpoint, `/.hammerkit/status`, which shows the run, its source and
-until when it stays, with a form to extend it.
+The time of a run is its `ttl` from the moment it is first up, asleep or not. Its owner, and
+whoever may open its endpoints, give it more: `POST /v1/runs/<id>/extend` with
+`{ "ttl": "8h" }` sets the end to that long from now, at most `runs.up.maxTtl`, and never
+sooner than it was. So does `hammerkit remote extend`, and the status page of every endpoint,
+`/.hammerkit/status`, which shows the run, its source and until when it stays, with a form
+to extend it.
 
-`POST /v1/runs/<id>/cancel` (or `hammerkit remote stop`) takes the services down at once.
-An endpoint whose run ended says so, and who to ask, with status `410`.
+`POST /v1/runs/<id>/cancel` (or `hammerkit remote stop`) takes the services down at once,
+asleep or not. An endpoint whose run ended says so, and who to ask, with status `410`.
 
-The services live with the server: when it stops, they stop, and the runs that were up fail
-with `the server stopped while the services were up, start them again`.
+### Sleeping
+
+With a `sleepTtl`, a run whose endpoints get no request for that long stops its services and
+is `asleep`: nothing of it runs, its addresses and its id stay. The next request of somebody
+who may open an endpoint wakes it: the run starts the services again, from the commit it
+started first (where its branch is now or not), and the page says they are waking up and
+reloads until they are up (`503` with `Retry-After` for other clients). Every request and
+WebSocket keeps it up for its `sleepTtl` from then. The `ttl` goes on counting while it
+sleeps; at its end the run ends, as one that never slept.
+
+A woken run starts from nothing: what its services kept in their containers is gone, as on a
+new run. A run from a sandbox doesn't sleep, its files change under it; push the sandbox and
+start the branch.
+
+The services live with the server: when it stops, they stop. A run that may sleep is asleep
+then, and the next request after the server is back wakes it. The others fail with
+`the server stopped while the services were up, start them again`.
 
 ## Who opens an endpoint
 
@@ -140,11 +164,16 @@ Anybody else sends a token as the API takes it, in `Hammerkit-Authorization` (no
 `Authorization`, which stays the app's):
 
 ```sh
-curl -H "Hammerkit-Authorization: Bearer $(agent-token)" https://feature-login-8080-3fa2c1.run.example.com/api/health
+curl -H "Hammerkit-Authorization: Bearer $(agent-token)" https://feature-login-8080-3fa2c1e09b7d.run.example.com/api/health
 ```
 
 Without a sign-in a browser is sent to the login, any other client gets `401`. Signed in as
 somebody who may not open it, `403`.
+
+The endpoints share one site, so a browser sends the cookie of one along when the page of
+another asks it something. The app of one endpoint is not to act as its visitor on another:
+a request that a page of another endpoint (or site) makes, and a WebSocket whose `Origin` is
+not the endpoint's own, don't count as signed in. Following a link to an endpoint does.
 
 ## What the app gets
 
@@ -188,6 +217,7 @@ endpoints:
 runs:
   up:
     ttl: 8h # default, when a run names none
+    sleepTtl: 30m # unset by default: services never sleep unless the run says
     maxTtl: 72h # default, the furthest a run or an extend sets the end
     limits: { up: 3 } # default, per caller, 429 over it
     total: 20 # default, on the whole server, 503 over it
@@ -232,12 +262,19 @@ server's machine. No other port of a service run is published, whatever its buil
 ### On Kubernetes
 
 A service run gets a namespace of its own, with the policies, quota (`runs.up.quota`) and
-rights of a caller's namespace, and goes with it at the end: the services stay up for hours
-while the caller's other runs go on in theirs. The server reaches an endpoint at the Service
-of its service, so it has to run in the cluster (not with a `kubeconfig`), and one more
-NetworkPolicy of the namespace lets the server's namespace in. Its ClusterRole needs `delete`
-on namespaces, which an admission policy keeps to the namespaces of its service runs (see
-[What the server may do](/docs/remote-compute/backend#what-the-server-may-do)).
+rights of a caller's namespace, and goes with it at the end, or when it sleeps (a woken run
+gets a new one): the services stay up for hours while the caller's other runs go on in
+theirs. The server reaches an endpoint at the Service of its service, so it has to run in the
+cluster (not with a `kubeconfig`), and one more NetworkPolicy of the namespace lets the
+server's namespace in, to the ports of the endpoints only: a database of the run stays for
+its pods. Keep other pods out of the server's namespace.
+
+Its ClusterRole needs `delete` on namespaces, which an admission policy keeps to the
+namespaces of its service runs (see
+[What the server may do](/docs/remote-compute/backend#what-the-server-may-do)). A server
+without it (an upgrade that didn't add it) says so in its log and in the run's, and removes
+what runs in the namespace instead, which stays. When the server starts, it removes the
+namespaces of service runs that none of its runs is in.
 
 On a cluster a service run starts from a branch, not from a sandbox, whose claim is in the
 caller's namespace: push the sandbox to a branch and start that.
@@ -247,4 +284,5 @@ caller's namespace: push the sandbox to a branch and start that.
 - The app's own sign-in at a provider that wants its redirect URIs registered, see
   [What the app gets](#what-the-app-gets).
 - A service run from a sandbox on Kubernetes.
-- Services that keep running over a restart of the server.
+- Services that keep running over a restart of the server: a run that may sleep wakes after
+  it, the others fail.

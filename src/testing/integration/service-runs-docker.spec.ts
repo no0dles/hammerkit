@@ -113,7 +113,7 @@ describe('service runs (docker)', () => {
             expect(submitted.status).toBe(202)
             expect(submitted.body.up).toMatchObject({ name: 'feature-login', services: ['web'] })
             const endpoint = submitted.body.up.endpoints[0]
-            expect(endpoint.host).toMatch(/^feature-login-80-[0-9a-f]{6}$/)
+            expect(endpoint.host).toMatch(/^feature-login-80-[0-9a-f]{12}$/)
             expect(endpoint.url).toMatch(new RegExp(`^http://${endpoint.host}\\.run\\.test:\\d+/$`))
             const host = `${endpoint.host}.${DOMAIN}`
 
@@ -153,6 +153,55 @@ describe('service runs (docker)', () => {
             const extended = await call('POST', `/v1/runs/${run.id}/extend`, 'reviewer', { ttl: '1h' })
             expect(extended.status).toBe(200)
             expect(Date.parse(extended.body.expiresAt) - Date.now()).toBeGreaterThan(50 * 60 * 1000)
+
+            // a run with a sleepTtl stops its services without a request, and the next wakes it
+            const sleepy = await call('POST', '/v1/runs', 'agent', {
+              definition: published.body.hash,
+              services: ['web'],
+              endpoints: [{ service: 'web', port: 80 }],
+              sleepTtl: '3s',
+              name: 'sleepy',
+              source: { type: 'ref', repo: REPO, ref: 'feature-login' },
+            })
+            expect(sleepy.status).toBe(202)
+            const sleepyHost = `${sleepy.body.up.endpoints[0].host}.${DOMAIN}`
+            const stateOf = async () => (await call('GET', `/v1/runs/${sleepy.body.id}`, 'agent')).body
+            const waitFor = async (state: string) => {
+              const deadline = Date.now() + 100_000
+              let current = await stateOf()
+              while (current.state !== state && Date.now() < deadline) {
+                await new Promise((resolve) => setTimeout(resolve, 200))
+                current = await stateOf()
+              }
+              expect({ state: current.state, error: current.error }).toEqual({ state, error: undefined })
+              return current
+            }
+            const containers = () =>
+              execFileSync('docker', ['ps', '-q', '--filter', 'label=hammerkit-type=service'], { encoding: 'utf8' })
+                .trim()
+                .split('\n')
+                .filter(Boolean).length
+            const firstUp = await waitFor('up')
+            expect(containers()).toBe(2)
+            await waitFor('asleep')
+            expect(containers()).toBe(1)
+            const waking = await get(server.url, sleepyHost, {
+              'hammerkit-authorization': `Bearer ${token('reviewer')}`,
+              accept: 'text/html',
+            })
+            expect(waking.status).toBe(503)
+            expect(waking.body).toContain('waking up')
+            const woken = await waitFor('up')
+            expect({ wakes: woken.wakes, expiresAt: woken.expiresAt }).toEqual({
+              wakes: 1,
+              expiresAt: firstUp.expiresAt,
+            })
+            const again = await get(server.url, sleepyHost, {
+              'hammerkit-authorization': `Bearer ${token('reviewer')}`,
+            })
+            expect(again.body).toContain('Welcome to nginx')
+            expect((await call('POST', `/v1/runs/${sleepy.body.id}/cancel`, 'agent')).status).toBe(200)
+            await waitFor('succeeded')
 
             const cancelled = await call('POST', `/v1/runs/${run.id}/cancel`, 'agent')
             expect(cancelled.status).toBe(200)

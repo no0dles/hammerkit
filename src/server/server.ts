@@ -365,6 +365,13 @@ async function submitRun(
     send(res, 400, { error: `ttl: at most ${config.runs.up.maxTtl} on this server (runs.up.maxTtl)` })
     return
   }
+  // the files of a sandbox change under a run that sleeps, it would wake to others
+  if (request.sleepTtl !== undefined && request.source.type === 'sandbox') {
+    send(res, 400, { error: 'sleepTtl: a service run from a sandbox does not sleep, start it from a branch' })
+    return
+  }
+  const sleepTtlText = request.source.type === 'ref' ? request.sleepTtl ?? config.runs.up.sleepTtl : undefined
+  const sleepTtl = request.services.length > 0 && sleepTtlText ? parseDuration(sleepTtlText) : undefined
   const argued = (request.options.args ?? []).length > 0 ? request.tasks[0] : undefined
   if (argued !== undefined && version.services.includes(argued)) {
     send(res, 400, { error: `${argued} is a service, arguments go to a task` })
@@ -497,6 +504,7 @@ async function submitRun(
       ? {
           services: request.services,
           ttl,
+          ...(sleepTtl ? { sleepTtl } : {}),
           name: serviceName,
           endpoints: toRunEndpoints(
             request.endpoints,
@@ -799,6 +807,10 @@ export async function startServer(
     log,
   })
   await registry.restore()
+  if (executor instanceof KubernetesExecutor) {
+    // the services of the runs of a server that stopped are gone with it
+    executor.sweepServiceRuns()
+  }
   const login = config.endpoints?.login
   const gateway = config.endpoints
     ? new EndpointGateway(config, registry, {

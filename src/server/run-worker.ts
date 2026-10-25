@@ -350,9 +350,16 @@ function reportTasks(
 // The run is the first line of the standard input. The server keeps it open and writes
 // `cancel` on it to stop the run: that works the same on every platform, where a signal
 // on Windows ends the process without letting it stop its tasks.
-function readInput(stdin: NodeJS.ReadableStream, cancel: () => void): { input: Promise<string>; close: () => void } {
+// `onEnd` is told when the input ends before the run does: the server is gone.
+export function readInput(
+  stdin: NodeJS.ReadableStream,
+  cancel: () => void
+): { input: Promise<string>; close: () => void; onEnd: (listener: () => void) => void } {
   const lines = createInterface({ input: stdin, crlfDelay: Infinity })
   let first: string | undefined
+  let closing = false
+  let ended = false
+  let onEnd: (() => void) | undefined
   const input = new Promise<string>((resolve) => {
     lines.on('line', (line) => {
       if (first === undefined) {
@@ -362,9 +369,27 @@ function readInput(stdin: NodeJS.ReadableStream, cancel: () => void): { input: P
         cancel()
       }
     })
-    lines.on('close', () => resolve(first ?? ''))
+    lines.on('close', () => {
+      resolve(first ?? '')
+      if (!closing) {
+        ended = true
+        onEnd?.()
+      }
+    })
   })
-  return { input, close: () => lines.close() }
+  return {
+    input,
+    close: () => {
+      closing = true
+      lines.close()
+    },
+    onEnd: (listener) => {
+      onEnd = listener
+      if (ended) {
+        listener()
+      }
+    },
+  }
 }
 
 /**
@@ -397,6 +422,11 @@ export async function workerMain(
     signals.forEach((signal) => process.off(signal, stop))
     say({ kind: 'result', ok: false, error: `the run could not be read: ${e instanceof Error ? e.message : e}` })
     return
+  }
+  if (input.up) {
+    // services stay until they are stopped: without the server that would stop them, at
+    // their ttl or on a cancel, nothing would
+    reader.onEnd(stop)
   }
   try {
     await runTasks(

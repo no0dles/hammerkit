@@ -105,8 +105,12 @@ export const runRequestSchema = z
     // a service run: these services of the build file, started as `hammerkit up` starts
     // them and kept up until `ttl` ends or the run is cancelled, instead of tasks
     services: z.array(name).max(20).default([]),
-    // how long the services stay up once they are ready; `runs.up.ttl` when left out
+    // how long the services stay once they are ready, whether they sleep in between or not;
+    // `runs.up.ttl` when left out. At its end they are removed.
     ttl: duration.optional(),
+    // how long the services stay up without a request to one of the endpoints, then they
+    // sleep until the next request wakes them; `runs.up.sleepTtl` when left out
+    sleepTtl: duration.optional(),
     // a second service run of the caller with the same name replaces the first; the branch
     // of the source when left out
     name: z
@@ -144,8 +148,11 @@ export const runRequestSchema = z
   .refine(
     (request) =>
       request.services.length > 0 ||
-      (request.ttl === undefined && request.name === undefined && request.endpoints.length === 0),
-    { message: 'ttl, name and endpoints are for a run of services', path: ['services'] }
+      (request.ttl === undefined &&
+        request.sleepTtl === undefined &&
+        request.name === undefined &&
+        request.endpoints.length === 0),
+    { message: 'ttl, sleepTtl, name and endpoints are for a run of services', path: ['services'] }
   )
   .refine(
     (request) =>

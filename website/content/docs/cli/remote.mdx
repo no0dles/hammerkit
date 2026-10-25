@@ -242,23 +242,24 @@ version from a branch or tag, kept up until their time ends, and follows it unti
 up. Then it prints the address of each endpoint and exits; the services stay.
 
 ```
-$ hammerkit remote up web --endpoint web:8080 --ttl 4h
+$ hammerkit remote up web --endpoint web:8080 --ttl 3d --sleep-ttl 30m
 run_Vd1rX9pQ2mT7wN4a on build: web from feature/login at 4be1a07c...
 [hammerkit] checked out github.com/corp/shop at 4be1a07c...
-run_Vd1rX9pQ2mT7wN4a is up until 2026-10-25T14:12:00.000Z
-  web:8080  https://feature-login-8080-3fa2c1.run.example.com/
+run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m without a request
+  web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com/
 ```
 
 | Option | What it is | Left out |
 | --- | --- | --- |
 | `--endpoint <service:port>` | A port of a service to publish, the container port it declares. More than once for more. | No endpoints. |
-| `--ttl <duration>` | How long the services stay up once ready. | The server's `runs.up.ttl`. |
+| `--ttl <duration>` | How long the run lasts once its services are ready, asleep or not; then they are removed. | The server's `runs.up.ttl`. |
+| `--sleep-ttl <duration>` | How long the services stay up without a request, then they [sleep](/docs/remote-compute/service-runs#sleeping) until the next request wakes them. | The server's `runs.up.sleepTtl`, or never. |
 | `--name <name>` | Lower case letters, digits and `-`. A later run of yours with this name replaces this one and keeps its addresses. | The branch. |
 | `--build`, `--repo`, `--ref`, `--commit`, `--server`, `--env` | As for [`remote run`](#running-tasks). | As there. |
 
 It exits with `1` when the run failed before it was up. Ctrl-C while it starts cancels it.
-`remote extend <run> 8h` keeps it up for that long from now, `remote stop <run>` takes it
-down.
+`remote extend <run> 8h` keeps it for that long from now (never shorter than it was),
+`remote stop <run>` takes it down, asleep or not.
 
 ## Approving runs
 

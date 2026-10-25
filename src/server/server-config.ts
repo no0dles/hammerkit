@@ -554,8 +554,11 @@ export const serverConfigSchema = z
         // runs of services (`services` in a run), kept up until their ttl ends
         up: z
           .object({
-            // how long the services stay up once ready, when the run names no ttl
+            // how long the services stay once ready, when the run names no ttl; then they are removed
             ttl: duration.default('8h'),
+            // how long the services stay up without a request to an endpoint before they sleep,
+            // when the run names none: the next request wakes them. Unset, they never sleep.
+            sleepTtl: duration.optional(),
             // the furthest a run, or an extend, sets the end from now
             maxTtl: duration.default('72h'),
             limits: z

@@ -18,8 +18,8 @@ export function getServiceRunName(branch: string | undefined): string {
 }
 
 /**
- * The host labels of a run's endpoints: its name, the port and six hex digits of its
- * owner, so two callers with a branch of the same name get hosts of their own, and a run
+ * The host labels of a run's endpoints: its name, the port and twelve hex digits of its
+ * owner (at most 40 + 5 + 2 + 12 and three dashes: a DNS label), so two callers with a branch of the same name get hosts of their own, and a run
  * that replaces another of the same name takes over its hosts. Two endpoints on the same
  * port (of two services) are told apart by their place.
  */
@@ -28,7 +28,7 @@ export function getEndpointHosts(
   owner: { iss: string; sub: string },
   endpoints: { service: string; port: number }[]
 ): string[] {
-  const of = createHash('sha256').update(`${owner.iss}\0${owner.sub}`).digest('hex').slice(0, 6)
+  const of = createHash('sha256').update(`${owner.iss}\0${owner.sub}`).digest('hex').slice(0, 12)
   return endpoints.map((endpoint, index) =>
     endpoints.findIndex((other) => other.port === endpoint.port) === index
       ? `${name}-${endpoint.port}-${of}`

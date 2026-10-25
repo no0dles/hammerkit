@@ -17,14 +17,14 @@ function up(name: string, ttl = HOUR): ServiceRunSpec {
   }
 }
 
-function spec(name = 'feature', ttl = HOUR) {
+function spec(name = 'feature', ttl = HOUR, sleepTtl?: number) {
   return {
     definition: 'sha256:' + 'a'.repeat(64),
     tasks: [],
     accounts: [] as string[],
     source: { type: 'ref' as const, repo: 'github.com/corp/shop', ref: name, commit: 'c'.repeat(40) },
     options: {},
-    up: up(name, ttl),
+    up: { ...up(name, ttl), ...(sleepTtl ? { sleepTtl } : {}) },
   }
 }
 
@@ -170,10 +170,15 @@ describe('RunRegistry service runs', () => {
     registry.submit(alice, spec('a'))
     registry.submit(alice, spec('b'))
     expect(() => registry.submit(alice, spec('c'))).toThrow(QuotaError)
-    registry.submit(bob, spec('a'))
+    const bobs = (name: string) => {
+      const request = spec(name)
+      request.up.endpoints = [{ ...request.up.endpoints[0], host: `${name}-80-123456` }]
+      return request
+    }
+    registry.submit(bob, bobs('a'))
     let error: unknown
     try {
-      registry.submit(bob, spec('b'))
+      registry.submit(bob, bobs('b'))
     } catch (e) {
       error = e
     }
@@ -190,9 +195,17 @@ describe('RunRegistry service runs', () => {
       const store = new FileRunStore(directory)
       const registry = new RunRegistry({ executor, store })
       const run = registry.submit(alice, spec())
-      await tick()
+      await vi.waitFor(() => expect(started).toHaveLength(1))
       started[0].up([target(4100)])
-      await tick()
+      expect(registry.get(alice, run.id)?.state).toBe('up')
+      // the record says it is up when the server stops
+      await vi.waitFor(
+        async () => {
+          const { records } = await new FileRunStore(directory).load()
+          expect(records.find((record) => record.run.id === run.id)?.run.state).toBe('up')
+        },
+        { timeout: 10_000 }
+      )
       const restarted = new RunRegistry({ executor: services().executor, store: new FileRunStore(directory) })
       await restarted.restore()
       expect(restarted.get(alice, run.id)).toMatchObject({
@@ -203,5 +216,106 @@ describe('RunRegistry service runs', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+
+  it('sleeps without a request for its sleepTtl, and wakes on the next, as the same run', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor })
+    const run = registry.submit(alice, spec('feature', HOUR, 40))
+    await tick()
+    started[0].up([target(4100)])
+    const expiresAt = registry.get(alice, run.id)?.expiresAt
+    // a request keeps it up
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    registry.visit(run.id)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(registry.get(alice, run.id)?.state).toBe('up')
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(started[0].signal.aborted).toBe(true)
+    expect(registry.get(alice, run.id)?.state).toBe('asleep')
+    expect(registry.endpoint('feature-80-abcdef')?.target).toBeUndefined()
+
+    expect(registry.visit(run.id)).toBeUndefined()
+    await tick()
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'running', wakes: 1 })
+    started[1].up([target(4200)])
+    // the ttl counts from the first time it was up
+    expect(registry.get(alice, run.id)).toMatchObject({ state: 'up', expiresAt })
+    expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4200))
+  })
+
+  it('ends at its ttl, asleep or not, and when it is stopped or replaced while asleep', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor })
+    const short = registry.submit(alice, spec('short', 80, 10))
+    const stopped = registry.submit(alice, spec('stopped', HOUR, 10))
+    const replaced = registry.submit(alice, spec('feature', HOUR, 10))
+    await tick()
+    started.forEach((one, index) => one.up([target(4100 + index)]))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect([short, stopped, replaced].map((run) => registry.get(alice, run.id)?.state)).toEqual([
+      'asleep',
+      'asleep',
+      'asleep',
+    ])
+    registry.cancel(alice, stopped.id)
+    expect(registry.get(alice, stopped.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice })
+    registry.submit(alice, spec('feature'))
+    await tick()
+    started[3].up([target(4300)])
+    expect(registry.get(alice, replaced.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'replaced' })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(registry.get(alice, short.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'ttl' })
+    expect(registry.visit(short.id)).toBeUndefined()
+    expect(registry.get(alice, short.id)?.state).toBe('succeeded')
+  })
+
+  it('is asleep after the server stopped, when it may sleep', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      const { executor, started } = services()
+      const registry = new RunRegistry({ executor, store: new FileRunStore(directory) })
+      const sleepy = registry.submit(alice, spec('sleepy', HOUR, HOUR))
+      const awake = registry.submit(alice, spec('awake'))
+      await tick()
+      started[0].up([target(4100)])
+      started[1].up([target(4200)])
+      await registry.close()
+      const next = services()
+      const restarted = new RunRegistry({ executor: next.executor, store: new FileRunStore(directory) })
+      await restarted.restore()
+      expect(restarted.get(alice, sleepy.id)?.state).toBe('asleep')
+      expect(restarted.get(alice, awake.id)?.state).not.toBe('asleep')
+      restarted.visit(sleepy.id)
+      await tick()
+      expect(next.started).toHaveLength(1)
+      await restarted.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('is not made to end sooner by an extend', async () => {
+    const now = Date.parse('2026-10-25T10:00:00Z')
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, now: () => now, up: { maxTtl: 4 * HOUR, perCaller: 3, total: 10 } })
+    const run = registry.submit(alice, spec('feature', 2 * HOUR))
+    await tick()
+    started[0].up([target(4100)])
+    expect(registry.extend(bob, run.id, 1000, () => true)).toMatchObject({
+      run: { expiresAt: '2026-10-25T12:00:00.000Z' },
+    })
+  })
+
+  it('refuses a run whose address is another run of somebody else', async () => {
+    const { executor } = services()
+    const registry = new RunRegistry({ executor })
+    registry.submit(alice, spec())
+    expect(() => registry.submit(bob, spec())).toThrow(/is another service run's/)
+    // of the same owner and name, it replaces the first once up
+    expect(() => registry.submit(alice, spec())).not.toThrow()
+    const other = spec('other')
+    other.up.endpoints = [{ ...other.up.endpoints[0], host: 'feature-80-abcdef' }]
+    expect(() => registry.submit(alice, other)).toThrow(/is another service run's/)
   })
 })
