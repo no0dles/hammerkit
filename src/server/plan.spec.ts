@@ -580,7 +580,7 @@ tasks:
         }
       )
     await expect(refused('$PWD/.local/share/app')).rejects.toThrow(
-      /a: mounts \S*\.local\/share\/app \(\$PWD is the home directory\), which is outside of the bundle/
+      /a: mounts \S*\.local[\\/]share[\\/]app \(\$PWD is the home directory\), which is outside of the bundle/
     )
     await expect(refused('~/.local/share/app')).rejects.toThrow(/\(~ is the home directory\)/)
     await expect(refused('$HOME/.local/share/app')).rejects.toThrow(/\(\$HOME is the home directory\)/)
