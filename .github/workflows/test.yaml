@@ -213,7 +213,9 @@ jobs:
             echo "hit=false" >> "$GITHUB_OUTPUT"
           fi
       # A current Kubernetes: the Gateway API CRDs below need 1.31+ (their CEL
-      # validations use isIP). Pinned by digest, as kind recommends.
+      # validations use isIP). Pinned by digest, as kind recommends. The versions
+      # here are not part of the suite's cache key: put [no-cache] in the commit
+      # message that bumps them, so the specs run against the new ones.
       - name: Create kind cluster
         if: matrix.suite == 'kubernetes' && steps.plan.outputs.hit != 'true'
         uses: helm/kind-action@v1.15.0

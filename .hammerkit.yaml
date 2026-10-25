@@ -60,6 +60,7 @@ tasks:
     deps: [install]
     src:
       - src
+      - catalog
       - examples
       - tsconfig.json
       - vitest.config.ts
@@ -96,6 +97,7 @@ tasks:
     deps: [install]
     src:
       - src
+      - catalog
       - examples
       - tsconfig.json
       - vitest.config.ts
@@ -119,6 +121,7 @@ tasks:
     deps: [install]
     src:
       - src
+      - catalog
       - examples
       - scripts
       - tsconfig.json
