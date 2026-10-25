@@ -64,6 +64,8 @@ export interface WorkTaskGenerate {
 
 export interface LocalWorkTask extends BaseWorkTask {
   type: 'local-task'
+  // only groups its dependencies (deps, nothing to run or read, see isAggregateTask)
+  aggregate?: boolean
 }
 
 export interface ContainerWorkTask extends BaseWorkTask {
@@ -84,3 +86,9 @@ export const isContainerWorkTask = (val: WorkTask | WorkService): val is Contain
   val.type === 'container-task'
 export const isWorkTask = (val: WorkTask | WorkService): val is WorkTask =>
   val.type === 'container-task' || val.type === 'local-task'
+
+// A task that only groups its dependencies: `deps`, and no `image`, `cmds`, `generates`,
+// `secrets` or `needs`. It needs no runtime, hands on what its dependencies generate to what
+// depends on it, and is up to date (or verified) when all its dependencies are.
+export const isAggregateTask = (val: WorkTask | WorkService): boolean =>
+  val.type === 'local-task' && val.aggregate === true

@@ -3,7 +3,7 @@ import { WorkCacheFileStats } from '../../optimizer/work-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
 import { WorkItem, WorkItemState } from '../../planner/work-item'
-import { WorkTask } from '../../planner/work-task'
+import { isAggregateTask, WorkTask } from '../../planner/work-task'
 import { WorkService } from '../../planner/work-service'
 import { ResolvedCache } from '../../cache/resolve-cache'
 import { WorkSource } from '../../planner/work-source'
@@ -30,8 +30,13 @@ export function resolveEffective(
 // whose `src` entries all match no file (a typo, a moved path). Services are not
 // affected.
 export function isOwnProvable(item: WorkItem<WorkTask | WorkService>, unmatched: WorkSource[]): boolean {
+  const declared = item.data.src.filter((src) => !src.inherited).length
+  if (declared === 0 && isAggregateTask(item.data)) {
+    // it runs nothing and reads nothing: what its dependencies prove is all there is
+    return true
+  }
   // unmatched ⊆ declared, so this is also false when nothing is declared
-  return unmatched.length < item.data.src.filter((src) => !src.inherited).length
+  return unmatched.length < declared
 }
 
 interface EffectiveStateKey {

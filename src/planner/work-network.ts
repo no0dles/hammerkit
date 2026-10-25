@@ -1,5 +1,6 @@
 import { getAllowListError, isAllowEntry, isNeedName, NetworkSchema, parseAllowEntry } from '../schema/network-schema'
 import { WorkTree } from './work-tree'
+import { isAggregateTask } from './work-task'
 
 // What a task or service reaches besides the services it needs, which it
 // reaches at every level. Ordered none < allow < open. The hosts of `allow`
@@ -174,7 +175,10 @@ export function formatNetwork(network: WorkNetwork): string {
 export function applyNetworkCeiling(workTree: WorkTree, ceiling: WorkNetwork | null): void {
   const limit = ceiling && isLimitedNetwork(ceiling) ? ceiling : null
   if (limit) {
-    const local = Object.values(workTree.tasks).find((task) => task.data.type === 'local-task')
+    // an aggregate runs nothing, so there is nothing of it to limit
+    const local = Object.values(workTree.tasks).find(
+      (task) => task.data.type === 'local-task' && !isAggregateTask(task.data)
+    )
     if (local) {
       throw new Error(
         `--network ${formatNetwork(limit)} needs every task in a container, ` +
