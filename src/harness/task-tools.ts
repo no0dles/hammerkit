@@ -1,4 +1,4 @@
-import { PublishedTask, SandboxClient, TaskRun } from './sandbox-client'
+import { CHECK_DESCRIPTION, PublishedTask, runCheck, SandboxClient, TaskRun } from './sandbox-client'
 
 // the most tasks a description lists, and of a task's description or command it shows
 const MAX_LISTED = 40
@@ -8,8 +8,8 @@ const MAX_COMMAND_CHARS = 100
 export const LIST_TASKS_MS = 15_000
 
 /**
- * The tools of the harnesses that run the named tasks of the published build file: `run_task`
- * and `run_logs`. Each harness has the same two in its own shape, with the same parameters and
+ * The tools of the harnesses that run the named tasks of the published build file: `run_task`,
+ * `run_logs` and `check`. Each harness has the same two in its own shape, with the same parameters and
  * answers: only how a harness declares the parameters differs, which every schema of them says.
  */
 export interface TaskTool {
@@ -126,7 +126,7 @@ function cut(text: string, max: number): string {
 }
 
 /**
- * `run_task` and `run_logs`, with the tasks the description of `run_task` lists. Without a
+ * `run_task`, `run_logs` and `check`, with the tasks the description of `run_task` lists. Without a
  * listing it names none, as the MCP tools before a version could be read.
  */
 export function createTaskTools(listing?: TaskListing, shell?: string): TaskTool[] {
@@ -195,6 +195,16 @@ export function createTaskTools(listing?: TaskListing, shell?: string): TaskTool
           })`
         )
         return lines.join('\n')
+      },
+    },
+    {
+      name: 'check',
+      title: 'Run a check',
+      description: CHECK_DESCRIPTION,
+      parameters: { task: { type: 'string', description: 'The name of the task' } },
+      required: ['task'],
+      call(client, args, signal) {
+        return runCheck(client, args.task, signal)
       },
     },
   ]

@@ -34,6 +34,7 @@ describe('opencode tools on a sandbox', () => {
         'glob',
         'run_task',
         'run_logs',
+        'check',
         'push',
         'list',
         'services_up',

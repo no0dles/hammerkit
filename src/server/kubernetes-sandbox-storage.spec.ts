@@ -436,6 +436,38 @@ describe('sandboxes on a cluster', () => {
     expect(stale.status).toBe(422)
   })
 
+  it('exports the files of a tree from the pod for a check, within the size limit', async () => {
+    const registry = registryWith()
+    const sandbox = await registry.create(alice, REPO, 'main')
+    await registry.edit(alice, sandbox.id, [
+      { op: 'replace', path: 'src/app.ts', old_string: '41', new_string: '42' },
+      { op: 'write', path: 'data.bin', content: Buffer.from([0, 1, 2, 255]) },
+    ])
+    const { tree } = await registry.state(sandbox.id)
+    const into = join(root, 'export')
+    await registry.exportTree(sandbox.id, tree, into, AbortSignal.timeout(60_000))
+    expect(readFileSync(join(into, 'src', 'app.ts'), 'utf8')).toBe('export const answer = 42\n')
+    expect(readFileSync(join(into, 'data.bin'))).toEqual(Buffer.from([0, 1, 2, 255]))
+    expect(existsSync(join(into, '.git'))).toBe(false)
+
+    // another tree than the one of the files is refused in the pod
+    const other = 'f'.repeat(40)
+    await expect(
+      registry.exportTree(sandbox.id, other, join(root, 'other'), AbortSignal.timeout(60_000))
+    ).rejects.toThrow(`not ${other}`)
+    // and files over the limit are not written out
+    const small = new KubernetesSandboxStorage(
+      config,
+      { ...limits, bytes: 16 },
+      process.env,
+      join(root, 'staging'),
+      cluster.instance
+    )
+    await expect(
+      small.exportTree({ id: sandbox.id, owner: alice }, tree, join(root, 'small'), AbortSignal.timeout(60_000))
+    ).rejects.toThrow('take more than')
+  })
+
   it('reads one file while a run holds the sandbox, as on a host, and edits nothing', async () => {
     const registry = registryWith()
     const sandbox = await registry.create(alice, REPO, 'main')

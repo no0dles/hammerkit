@@ -43,6 +43,16 @@ describe('task tools', () => {
     expect(runLogs.name).toBe('run_logs')
   })
 
+  it('has the check tool of every harness, which takes a task', () => {
+    const tools = createTaskTools()
+    expect(tools.map((tool) => tool.name)).toEqual(['run_task', 'run_logs', 'check'])
+    expect(taskToolSchema(tools[2])).toEqual({
+      type: 'object',
+      properties: { task: { type: 'string', description: 'The name of the task' } },
+      required: ['task'],
+    })
+  })
+
   it('declares the same parameters as a JSON schema and with the zod of opencode 1', () => {
     const [runTask, runLogs] = createTaskTools()
     expect(taskToolSchema(runTask)).toEqual({

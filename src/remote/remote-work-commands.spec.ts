@@ -2,6 +2,8 @@ import { join } from 'path'
 import { hostname } from 'os'
 import { writeFileSync } from 'fs'
 import { execFileSync } from 'child_process'
+import { createServer } from 'http'
+import { AddressInfo } from 'net'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
@@ -788,5 +790,104 @@ describe('describeApproval', () => {
     expect(lines).toContain('  accounts: none, source ref main, cache=none')
     expect(lines).toContain(`  arguments: "--region" "${long}" "a\\u{202e}b" "say \\"hi\\", twice"`)
     expect(lines.join('\n')).not.toContain('\u202e')
+  })
+})
+
+describe('remote verify', () => {
+  // a stand-in server that answers lookups as `answer` says, to see what the command makes of it
+  async function withLookups(
+    name: string,
+    answer: (keys: { task: string; key: string }[]) => unknown[],
+    fn: (run: (...args: string[]) => Promise<{ ok: boolean; out: string; exitCode?: number }>) => Promise<void>
+  ) {
+    const server = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ checks: answer(JSON.parse(body).keys) }))
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    try {
+      await createTestCase(name, {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': 'tasks:\n  test:\n    src: [src]\n    cmds: [echo]\n  lint:\n    cmds: [echo]\n',
+        'src/a.ts': 'a\n',
+      }).setup(async (cwd, environment) => {
+        environment.processEnvs = {
+          ...environment.processEnvs,
+          HAMMERKIT_CONFIG: join(cwd, 'config.yaml'),
+          HAMMERKIT_CREDENTIALS: join(cwd, 'credentials.json'),
+          HAMMERKIT_TOKEN: 'a-token',
+        }
+        const run = async (...args: string[]) => {
+          const out = memoryStream()
+          environment.stdout = out.stream
+          try {
+            await runProgram(environment, [HK, ...args], true)
+            return { ok: true, out: out.read() }
+          } catch (e) {
+            return {
+              ok: false,
+              out: `${out.read()}${(e as Error).message}`,
+              exitCode: (e as { exitCode: number }).exitCode,
+            }
+          }
+        }
+        await run('remote', 'add', 'build', url, '--issuer', 'https://idp.corp')
+        await fn(run)
+      })
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  }
+
+  const passed = {
+    task: 'test',
+    status: 'succeeded',
+    run: 'run_Qx3k9ZpL2mW7vN4a',
+    by: { iss: 'https://idp.corp', sub: 'agent' },
+    source: { type: 'ref', ref: 'main', commit: 'c'.repeat(40) },
+    definition: 'sha256:' + 'a'.repeat(64),
+    finishedAt: '2026-10-25T09:14:03.120Z',
+    durationMs: 72000,
+  }
+
+  it('passes for what the server passed, and fails at once for a task it did not', async () => {
+    await withLookups(
+      'remote-verify-answers',
+      (keys) => keys.map(({ task, key }) => ({ task, key, passed: { ...passed, task } })),
+      async (run) => {
+        const verified = await run('remote', 'verify', 'test', '--server', 'build', '--repo', REPO)
+        expect(verified.ok).toBe(true)
+        expect(verified.out).toContain('test: passed 2026-10-25T09:14:03.120Z in 1m12s, run_Qx3k9ZpL2mW7vN4a by agent')
+        // a task without src has no key: it is never verified, whatever the server knows
+        const unkeyed = await run('remote', 'verify', 'test', 'lint', '--server', 'build', '--repo', REPO)
+        expect(unkeyed.ok).toBe(false)
+        expect(unkeyed.exitCode).toBe(1)
+        expect(unkeyed.out).toContain('lint: can not be verified')
+      }
+    )
+  })
+
+  it('fails a task the answer leaves out, or answers for another key', async () => {
+    await withLookups(
+      'remote-verify-short',
+      () => [],
+      async (run) => {
+        const missing = await run('remote', 'verify', 'test', '--server', 'build', '--repo', REPO)
+        expect(missing.ok).toBe(false)
+        expect(missing.out).toContain('test: no run on build passed it for these files')
+      }
+    )
+    await withLookups(
+      'remote-verify-other-key',
+      (keys) => keys.map(({ task }) => ({ task, key: 'f'.repeat(64), passed: { ...passed, task } })),
+      async (run) => {
+        expect((await run('remote', 'verify', 'test', '--server', 'build', '--repo', REPO)).ok).toBe(false)
+      }
+    )
   })
 })

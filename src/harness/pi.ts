@@ -3,7 +3,7 @@ import { Environment } from '../executer/environment'
 import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
 import { formatSearch } from './format'
 import { SERVICE_TOOLS, serviceToolSchema } from './service-tools'
-import { oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
+import { CHECK_DESCRIPTION, oneAtATime, runCheck, SandboxClient, toSandboxPath } from './sandbox-client'
 
 // The parts of pi (`@earendil-works/pi-coding-agent`) this extension uses, as pi declares
 // them. pi hands its own module to the extension, hammerkit does not depend on it.
@@ -283,6 +283,22 @@ export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOp
         },
       })
     }
+
+    register({
+      name: 'check',
+      label: 'check',
+      description: CHECK_DESCRIPTION,
+      promptSnippet: 'Run a task as a check that CI verifies after the push',
+      parameters: {
+        type: 'object',
+        properties: { task: { type: 'string', description: 'The name of the task' } },
+        required: ['task'],
+      },
+      execute: async (_id: string, params: { task: string }, signal?: AbortSignal) => {
+        const text = await runCheck(await client(), params.task, signal)
+        return { content: [{ type: 'text', text }], details: { task: params.task } }
+      },
+    })
 
     pi.on('session_start', async (_event, ctx) => {
       try {

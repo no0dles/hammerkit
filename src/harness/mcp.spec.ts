@@ -192,6 +192,7 @@ describe('mcp tools on a sandbox', () => {
         'glob',
         'bash',
         'run_task',
+        'check',
         'run_logs',
         'changes',
         'push',

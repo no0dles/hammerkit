@@ -57,7 +57,7 @@ export function createMcpTools(
   client: () => Promise<SandboxClient>,
   options: { tasks?: TaskListing; shell?: string | false } = {}
 ): McpTool[] {
-  const [runTask, runLogs] = createTaskTools(options.tasks, options.shell || undefined).map(
+  const [runTask, runLogs, check] = createTaskTools(options.tasks, options.shell || undefined).map(
     (tool): McpTool => fromTaskTool(tool, client)
   )
   const bash: McpTool = {
@@ -227,6 +227,7 @@ export function createMcpTools(
     },
     ...(options.shell === false ? [] : [bash]),
     runTask,
+    check,
     { ...runLogs, annotations: { ...runLogs.annotations, ...READ_ONLY } },
     {
       name: 'changes',

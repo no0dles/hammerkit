@@ -68,6 +68,16 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'GitHub Actions workflow that runs tasks on a server with its OIDC token, not a hammerkit build file',
   },
   {
+    file: join('guides', 'agents', 'verified-checks.mdx'),
+    snippet: 'id-token: write',
+    reason: 'GitHub Actions workflow that verifies checks on a server with its OIDC token, not a hammerkit build file',
+  },
+  {
+    file: join('guides', 'agents', 'verified-checks.mdx'),
+    snippet: 'id_tokens:',
+    reason: 'GitLab CI (.gitlab-ci.yml) job that verifies checks with an ID token, not a hammerkit build file',
+  },
+  {
     file: join('remote-compute', 'authentication.mdx'),
     snippet: 'id_tokens:',
     reason: 'GitLab CI (.gitlab-ci.yml) job that asks for an ID token, not a hammerkit build file',

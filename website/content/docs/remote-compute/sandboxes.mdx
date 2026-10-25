@@ -157,6 +157,9 @@ A run names the sandbox as its `source`, the rest of the request is a normal
 * **Cache.** Runs on sandboxes share a cache per owner, never with runs from a ref: a
   sandbox holds changes nobody reviewed, and an entry they leave must not reach a reviewed
   run.
+* **Checks.** With `"check": true` in the `source` the run works on a copy of the files a
+  push would commit instead of the sandbox, and what it passes counts for a CI job that
+  verifies the pushed commit, see [Checks of a sandbox](/docs/remote-compute/checks#checks-of-a-sandbox).
 
 What a run wrote stays in the sandbox and counts against the owner's bytes, the docker
 volumes of its outputs included, whatever permissions a task gave its files. While a
@@ -166,7 +169,7 @@ caller's sandboxes take more than their limit, their runs on sandboxes are refus
 | Status | When |
 | --- | --- |
 | `400` | The sandbox does not exist or is somebody else's, or a task reads an `env:` secret that `sandboxes.env.allow` does not list. |
-| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox (any more), an account of the run does not list `sandbox` in its `source`, or the server runs no tasks on sandboxes (only `runtimes: [local]`, see below). |
+| `403` | No entry in the `sandboxes` of the caller's entitlements covers the repository and the branch of the sandbox (any more), a check's caller has no `repos` for the repository, an account of the run does not list `sandbox` in its `source`, or the server runs no tasks on sandboxes (only `runtimes: [local]`, see below). |
 | `413` | The caller's sandboxes take more than their limit. |
 
 ## Files

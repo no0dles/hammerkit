@@ -61,6 +61,36 @@ export interface ChangedFile {
   deletions: number | null
 }
 
+// What the agent is told of a check, on each harness.
+export const CHECK_DESCRIPTION =
+  'Run a task as a check before you push, such as test or e2e: it runs on a copy of the files a push ' +
+  'would commit (what .gitignore leaves out is not there, so dependencies are installed by the tasks ' +
+  'the build file names), and when it passes, CI verifies it for that commit instead of running it. ' +
+  'Push without changing files afterwards, or the check no longer counts for the files that changed.'
+
+// A check, run to its end, in a few lines: how it went and the last lines of a failure.
+export async function runCheck(client: SandboxClient, task: string, signal?: AbortSignal): Promise<string> {
+  const ran = await client.runTask(task, { check: true, signal })
+  const result = ran.result
+  const lines = [
+    result?.status === 'succeeded' || result?.status === 'cached'
+      ? `check ${task} passed (run ${ran.run.id}${
+          result.status === 'cached' ? ', from the cache' : ''
+        }): CI can verify it for a push of these files`
+      : `check ${task} did not pass (run ${ran.run.id}: ${result?.status ?? ran.run.state}${
+          result?.exitCode !== undefined ? `, exit code ${result.exitCode}` : ''
+        })`,
+  ]
+  const error = result?.error ?? ran.run.error
+  if (error) {
+    lines.push(`error: ${error}`)
+  }
+  if (result && result.status !== 'succeeded' && result.status !== 'cached' && result.lastLog.length > 0) {
+    lines.push('last lines:', ...result.lastLog)
+  }
+  return lines.join('\n')
+}
+
 // A task of a published version, as the clients list them for the model.
 export interface PublishedTask {
   name: string
@@ -103,6 +133,9 @@ export interface RunTaskOptions {
   onLine?: (text: string) => void
   // the run waits for somebody to approve it
   onWaiting?: (run: Run) => void
+  // a check: the task runs on a copy of the files a push would commit, and what passes
+  // counts for that commit (remote verify); it takes no arguments
+  check?: boolean
 }
 
 export interface ServiceRunRequest {
@@ -259,7 +292,7 @@ export class SandboxClient {
     const submitted = await submitRun(this.connection, {
       definition: this.build.hash,
       tasks: [task],
-      source: { type: 'sandbox', id: this.id },
+      source: { type: 'sandbox', id: this.id, ...(options.check ? { check: true } : {}) },
       options: runOptions,
     })
     const followed = await followRun(this.connection, submitted, {

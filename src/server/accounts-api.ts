@@ -41,6 +41,7 @@ export async function handleAccounts(
       accounts,
       repos: grant.repos,
       builds: grant.builds,
+      checks: grant.checks || grant.builds !== null ? 'read' : null,
       sandboxes: grant.sandboxes,
       endpoints: grant.endpoints,
     })

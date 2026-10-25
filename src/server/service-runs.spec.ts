@@ -29,6 +29,9 @@ describe('service run requests', () => {
     )
     expect(issue({ services: ['web'], name: 'Feature/Login' })).toMatch(/DNS label/)
     expect(issue({ services: ['web'], options: { args: ['x'] } })).toBe('a service run takes no arguments')
+    expect(issue({ services: ['web'], source: { type: 'sandbox', id: 'sbx_Jp0dY8m2kQ1aZt5x', check: true } })).toBe(
+      'a check runs tasks, a run of services keeps them up and passes nothing'
+    )
     expect(
       issue({
         services: ['web'],

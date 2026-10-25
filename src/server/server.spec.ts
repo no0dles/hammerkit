@@ -267,6 +267,7 @@ entitlements:
         ],
         repos: ['github.com/corp/payments'],
         builds: 'run',
+        checks: 'read',
         sandboxes: [],
         endpoints: [],
       })

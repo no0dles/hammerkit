@@ -27,6 +27,8 @@ export interface Grant {
   // the repositories (patterns) whose service runs' endpoints the caller may open or
   // publish, one entry per pattern with the higher level
   endpoints: EndpointGrant[]
+  // whether an entitlement gives `checks: read` (a builds level includes it)
+  checks: boolean
   // the entitlements that matched, for the log
   matched: number[]
 }
@@ -54,6 +56,12 @@ function atLeast(grant: Grant, level: BuildsLevel): boolean {
 }
 
 export const mayRun = (grant: Grant): boolean => atLeast(grant, 'run')
+
+// Who may run from a repository's refs may see what passed for its files, and so may who
+// is entitled to just that (a CI job that only verifies).
+export function mayReadChecks(grant: Grant, repo: string): boolean {
+  return (grant.checks || grant.builds !== null) && matchesAnyRepo(grant.repos, repo)
+}
 export const mayPropose = (grant: Grant): boolean => atLeast(grant, 'propose')
 export const mayPublish = (grant: Grant): boolean => atLeast(grant, 'publish')
 
@@ -88,12 +96,14 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const sandboxes: SandboxGrant[] = []
   const endpoints: EndpointGrant[] = []
   let builds: BuildsLevel | null = null
+  let checks = false
 
   entitlements.forEach((entitlement, index) => {
     if (!matches(entitlement, principal)) {
       return
     }
     matched.push(index)
+    checks = checks || entitlement.checks === 'read'
     for (const [account, level] of Object.entries(entitlement.accounts)) {
       if (accounts[account] !== 'use') {
         accounts[account] = level
@@ -129,7 +139,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
       }
     }
   })
-  return { accounts, repos, builds, sandboxes, endpoints, matched }
+  return { accounts, repos, builds, sandboxes, endpoints, checks, matched }
 }
 
 // What the caller may do with the endpoints of service runs of a repository: the higher

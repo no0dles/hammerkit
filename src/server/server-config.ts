@@ -403,6 +403,9 @@ export const entitlementSchema = z
     // the repositories (`host/path` patterns) the caller may run from a git ref
     repos: z.array(repoPatternSchema).default([]),
     builds: buildsLevelSchema.optional(),
+    // `read`: may look up which tasks runs passed for files of the `repos` (remote verify),
+    // and nothing more; a builds level includes it
+    checks: z.literal('read').optional(),
     // the repositories the caller may keep sandboxes of, checkouts on the server that runs
     // work on: a list of its own, the `repos` above are for runs from a ref
     sandboxes: z.array(sandboxGrantSchema).optional(),
@@ -415,12 +418,20 @@ export const entitlementSchema = z
     if (
       Object.keys(entitlement.accounts).length === 0 &&
       entitlement.builds === undefined &&
+      entitlement.checks === undefined &&
       !entitlement.sandboxes?.length &&
       !entitlement.endpoints?.length
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, a builds level, sandboxes or endpoints',
+        message: 'name accounts to use or request, a builds level, checks, sandboxes or endpoints',
+      })
+    }
+    if (entitlement.checks && entitlement.repos.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['repos'],
+        message: 'checks are read for repositories: name them in repos',
       })
     }
   })
@@ -580,6 +591,8 @@ export const serverConfigSchema = z
           })
           .strict()
           .default({}),
+        // how long a passed check stays for `remote verify` to find (see checks.ts)
+        checksKeep: duration.default('30d'),
       })
       .strict()
       .default({}),

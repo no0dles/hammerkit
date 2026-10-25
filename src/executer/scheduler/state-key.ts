@@ -1,9 +1,8 @@
-import { createHash } from 'crypto'
-import { getStateKey, getWorkItemCacheStats } from '../../optimizer/get-work-cache-stats'
+import { getStateKey, getWorkItemCacheStats, stateKeyDigest } from '../../optimizer/get-work-cache-stats'
 import { WorkCacheFileStats } from '../../optimizer/work-cache-stats'
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
-import { WorkItemState } from '../../planner/work-item'
+import { WorkItem, WorkItemState } from '../../planner/work-item'
 import { WorkTask } from '../../planner/work-task'
 import { WorkService } from '../../planner/work-service'
 import { ResolvedCache } from '../../cache/resolve-cache'
@@ -30,7 +29,7 @@ export function resolveEffective(
 // dependencies say nothing about the files its own commands read — and a task
 // whose `src` entries all match no file (a typo, a moved path). Services are not
 // affected.
-function isOwnProvable(item: WorkItemState<WorkTask | WorkService, any>, unmatched: WorkSource[]): boolean {
+export function isOwnProvable(item: WorkItem<WorkTask | WorkService>, unmatched: WorkSource[]): boolean {
   // unmatched ⊆ declared, so this is also false when nothing is declared
   return unmatched.length < item.data.src.filter((src) => !src.inherited).length
 }
@@ -51,9 +50,7 @@ export function combineStateKeys(ownKey: string, depKeys: string[]): string {
   }
   // Sort so the key is independent of dependency declaration order.
   const sorted = [...depKeys].sort()
-  return createHash('md5')
-    .update([ownKey, ...sorted].join(','))
-    .digest('hex')
+  return stateKeyDigest([ownKey, ...sorted].join(','))
 }
 
 // `none` only disables the cache *check* for a task; its sources still influence
@@ -116,6 +113,46 @@ export async function computeStateKey(
     depKeys.push(effective.stateKey)
     provable = provable && effective.provable
   }
+  // what a task that needs a service passed against: the sources of the service and of the
+  // tasks it depends on (its definition is in the task id, getWorkServiceCacheIdentity)
+  for (const need of item.needs) {
+    const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
+    depKeys.push(`${need.name}=${effective.stateKey}`)
+  }
 
   return { stateKey: combineStateKeys(ownKey, depKeys), stats, resolved, provable, unmatched }
+}
+
+// A needed service's sources folded with the state keys of its dependencies and needs. It
+// does not make the task that needs it unprovable: a dependency without `src` (resetting the
+// service's data, say) is skipped with the service when the task is a cache hit.
+async function resolveNeedStateKey(
+  service: WorkItemState<WorkService, any>,
+  defaultCacheMethod: CacheMethod,
+  environment: Environment,
+  memo: Map<string, EffectiveStateKey>
+): Promise<EffectiveStateKey> {
+  const memoKey = `need\0${service.name}`
+  const existing = memo.get(memoKey)
+  if (existing !== undefined) {
+    return existing
+  }
+  // services that need each other in a loop fail to plan (checkForLoop): this only has to end
+  memo.set(memoKey, { stateKey: 'loop', provable: true })
+  const resolved = resolveEffective(service, defaultCacheMethod)
+  const { stats } = await getWorkItemCacheStats(service, environment)
+  const keys: string[] = []
+  for (const dep of service.deps) {
+    keys.push((await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo)).stateKey)
+  }
+  for (const need of service.needs) {
+    const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
+    keys.push(`${need.name}=${effective.stateKey}`)
+  }
+  const effective = {
+    stateKey: combineStateKeys(getStateKey(stats, concreteMethod(resolved, defaultCacheMethod)), keys),
+    provable: true,
+  }
+  memo.set(memoKey, effective)
+  return effective
 }

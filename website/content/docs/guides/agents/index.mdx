@@ -106,4 +106,6 @@ outlives one token. It is the agent's own identity, never a person's sign-in.
 ## CI on the same server
 
 CI jobs can use the server too, with nothing but their own token: see
-[CI through the server](/docs/guides/agents/github-actions).
+[CI through the server](/docs/guides/agents/github-actions). A job does not even have to wait
+for the tests when the agent checked them before its push: see
+[Checks that ran before CI](/docs/guides/agents/verified-checks).

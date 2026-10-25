@@ -119,6 +119,7 @@ export const OPENCODE_TOOLS = [
   'glob',
   'run_task',
   'run_logs',
+  'check',
   'push',
   'list',
   'services_up',
@@ -249,6 +250,7 @@ export const OPENCODE_V2_TOOLS = [
   'grep',
   'run_task',
   'run_logs',
+  'check',
   'push',
   'services_up',
   'endpoint_get',
@@ -441,7 +443,7 @@ export function createOpencodeV2Tools(
       ),
       same
     ),
-    ...['run_task', 'run_logs'].map((name) =>
+    ...['run_task', 'run_logs', 'check'].map((name) =>
       tool(name, name, { ...taskToolSchema(taskTools[name]), additionalProperties: false }, same)
     ),
     tool(
@@ -519,7 +521,13 @@ function opencodeTools(
         args: (z) => taskToolArgs(task, z),
         async execute(args: { task?: string; run?: string }, context) {
           const output = await task.call(await client(), args, context.abort)
-          return { title: task.name === 'run_task' ? `run ${args.task}` : `log of ${args.run}`, output }
+          return {
+            title:
+              task.name === 'run_logs'
+                ? `log of ${args.run}`
+                : `${task.name === 'check' ? 'check' : 'run'} ${args.task}`,
+            output,
+          }
         },
       },
     ])

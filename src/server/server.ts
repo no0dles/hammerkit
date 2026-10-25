@@ -8,7 +8,8 @@ import { getVersion } from '../version'
 import { detectPlatform, getSandboxRuntimes, getSecretCatalog, getServerAccounts, ServerConfig } from './server-config'
 import { DiscoveryDocument, DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } from './oauth'
-import { canUse, decideRun, endpointLevel, getGrant, mayRun } from './policy'
+import { canUse, decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
+import { matchesAnyRepo } from './repo'
 import { FileRunStore } from './run-store'
 import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSource, StoredEvent } from './runs'
 import { RefError } from './git-checkout'
@@ -40,6 +41,8 @@ import { formatDuration, parseDuration, parseSize } from '../utils/units'
 import { parseLogQuery, readLogs } from './run-logs'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
+import { CheckStore, getCheckRecords } from './checks'
+import { handleChecks } from './checks-api'
 
 export { DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 export type { DiscoveredIssuer, DiscoveryDocument } from './discovery'
@@ -99,6 +102,9 @@ const HEARTBEAT_MS = 15_000
 // the longest `?wait=` of a run: below the 60 seconds after which a proxy in front of the
 // server (nginx by default) closes a connection that says nothing
 const MAX_WAIT_MS = 50_000
+
+// how often checks older than `runs.checksKeep` are removed
+const CHECK_SWEEP_MS = 6 * 60 * 60 * 1000
 
 // Server-sent events: `id` is the sequence number, so a client that lost the
 // connection continues with Last-Event-ID (or ?after=) and misses nothing.
@@ -451,6 +457,24 @@ async function submitRun(
       send(res, 413, { error: over })
       return
     }
+    // a check counts like a run from a commit of the repository, and leaves what it made in
+    // the repository's cache, which runs from main restore from: the caller must be allowed
+    // to start runs from it, and to push a branch of it, which with a run from that branch
+    // leaves the same
+    if (request.source.check && !matchesAnyRepo(grant.repos, sandbox.repo)) {
+      log(`refuse run iss=${principal.iss} sub=${principal.sub}: check on ${sandbox.repo} without the repository`)
+      send(res, 403, {
+        error: `a check counts like a run from ${sandbox.repo}, which no entitlement of yours lists in repos`,
+      })
+      return
+    }
+    if (request.source.check && sandboxPushBranches(grant, sandbox.repo).length === 0) {
+      log(`refuse run iss=${principal.iss} sub=${principal.sub}: check on ${sandbox.repo} without a branch to push`)
+      send(res, 403, {
+        error: `a check counts like a run from a branch you pushed, and you may push no branch of ${sandbox.repo}`,
+      })
+      return
+    }
   }
   // the accounts of a run are read from the files it is pinned to, with the engine
   const bundle = version.plan ? await definitions.files(version) : undefined
@@ -581,12 +605,15 @@ async function submitRun(
             commit: state.commit,
             tree: state.tree,
             clean: state.clean,
+            ...(request.source.type === 'sandbox' && request.source.check ? { check: true as const } : {}),
           })
         })
     log(
       `run ${run.id} iss=${principal.iss} sub=${principal.sub} accounts=[${planned.accounts.join(',')}] source=${
         run.source.type
-      }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}` : ''} tasks=${run.tasks.length}${
+      }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}${run.source.check ? ' check' : ''}` : ''} tasks=${
+        run.tasks.length
+      }${
         run.up
           ? ` services=[${run.up.services.join(',')}] name=${run.up.name} endpoints=${run.up.endpoints.length}`
           : ''
@@ -644,6 +671,7 @@ async function handle(
   sandboxes: SandboxContext,
   planning: PlanContext,
   repos: RepoAccess,
+  checks: CheckStore,
   verifier: TokenVerifier,
   log: (line: string) => void,
   req: IncomingMessage,
@@ -706,6 +734,9 @@ async function handle(
     return
   }
   if (await handleProposals(config, definitions, proposals, log, principal, req, res, url)) {
+    return
+  }
+  if (await handleChecks(config, checks, definitions, log, principal, req, res, url)) {
     return
   }
   send(res, 404, { error: 'not found' })
@@ -829,6 +860,12 @@ export async function startServer(
       ? new KubernetesExecutor({ ...config, backend }, environment.processEnvs, executorOptions)
       : new HostExecutor(executorOptions))
   const sources = new SourceStore(join(storage, 'sources'))
+  const checks = new CheckStore(join(storage, 'checks'), { keep: parseDuration(config.runs.checksKeep) })
+  const sweepChecks = () =>
+    checks.sweep().catch((e) => log(`the old checks could not be removed: ${e instanceof Error ? e.message : e}`))
+  void sweepChecks()
+  const sweeping = setInterval(sweepChecks, CHECK_SWEEP_MS)
+  sweeping.unref()
   const registry = new RunRegistry({
     executor,
     maxConcurrent: config.runs.maxConcurrent,
@@ -844,6 +881,16 @@ export async function startServer(
       total: config.runs.up.total,
     },
     store: new FileRunStore(join(storage, 'records')),
+    // what a check run passed, for `remote verify` to find
+    onFinished: (run, keys) => {
+      const passed = getCheckRecords(run, keys)
+      if (passed.length > 0) {
+        checks
+          .save(passed)
+          .then(() => log(`checks run=${run.id} passed=[${passed.map((record) => record.task).join(',')}]`))
+          .catch((e) => log(`the checks of run ${run.id} were not kept: ${e instanceof Error ? e.message : e}`))
+      }
+    },
     log,
   })
   await registry.restore()
@@ -886,6 +933,7 @@ export async function startServer(
       sandboxes,
       planning,
       repos,
+      checks,
       verifier,
       log,
       req,
@@ -992,6 +1040,7 @@ export async function startServer(
       return { restart }
     },
     close: async () => {
+      clearInterval(sweeping)
       proposals.close()
       await registry.close()
       await new Promise<void>((resolve, reject) => {

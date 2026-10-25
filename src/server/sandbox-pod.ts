@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto'
 import { rm } from 'fs/promises'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
@@ -5,6 +6,7 @@ import { Readable, Writable } from 'stream'
 import { GitOutputTooLarge } from './git-checkout'
 import { EditOp, PatchAuthor, ReadQuery, SandboxFileError, SearchQuery, TreeQuery } from './sandbox-files'
 import { HostSandboxStorage, SandboxKey } from './sandbox-storage'
+import { packArchive } from '../utils/tar'
 
 // On a cluster a sandbox is a claim, and what the server does with its files runs in a
 // short pod that mounts it (see KubernetesSandboxStorage): `hammerkit server-sandbox
@@ -35,6 +37,8 @@ export type SandboxPodRequest =
   | { op: 'commit'; id: string; author: PatchAuthor }
   // moves the sandbox to a commit it has, its files stay: what the server pushed
   | { op: 'move'; id: string; commit: string }
+  // the files of a git tree that must be what the files are now, as a tar after the answer
+  | { op: 'archive'; id: string; tree: string }
 
 // The first line of the answer. A raw read sends the bytes of the file after it; `stream`
 // says there are more than an answer holds in memory.
@@ -126,6 +130,29 @@ async function answer(
         await plan.commit()
       }
       return send({ files: plan.files, bytes: plan.bytes })
+    }
+    case 'archive': {
+      // written beside the sandbox on the claim, sent, and removed
+      const into = join(directory, `${request.id}-archive-${randomBytes(6).toString('hex')}`)
+      try {
+        await storage.exportTree(key, request.tree, into, AbortSignal.timeout(10 * 60_000))
+        await write(out, JSON.stringify({ ok: true, result: null, stream: true } satisfies SandboxPodHeader) + '\n')
+        const pack = packArchive({ cwd: into, portable: true }, ['.'])
+        try {
+          for await (const chunk of pack) {
+            await write(out, chunk as Buffer)
+          }
+        } catch (e) {
+          throw new AnswerStarted(e instanceof Error ? e.message : String(e))
+        } finally {
+          // a reader that went away (over its size limit) leaves the pack reading files
+          // that are removed next: what fails then is no answer of anybody's
+          pack.on('error', () => undefined)
+        }
+        return
+      } finally {
+        await rm(into, { recursive: true, force: true })
+      }
     }
     case 'raw': {
       const raw = await files().raw(request.path)

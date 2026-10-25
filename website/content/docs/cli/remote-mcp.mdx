@@ -12,7 +12,7 @@ Experimental. The tools and options can still change between releases.
 `remote mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server on stdio for one
 [sandbox](/docs/remote-compute/sandboxes) on a server. An MCP client starts it as a command
 and gets tools to read, search and edit the sandbox's files, run commands and published
-tasks on it, show what changed and push it to a branch. Like `remote`, it needs no build file: the tasks are the
+tasks on it, check them before a push, show what changed and push it to a branch. Like `remote`, it needs no build file: the tasks are the
 published ones. The tools, the sign-in and the shell task are described in
 [Agents](/docs/remote-compute/agents). It is a [`remote`](/docs/cli/remote) command, so a task
 named `mcp` still runs with `hammerkit mcp`.

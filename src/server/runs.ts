@@ -51,7 +51,9 @@ export interface RunApproval {
 export type RunSource =
   | { type: 'ref'; repo: string; ref: string; commit: string }
   | { type: 'upload'; snapshot: string }
-  | { type: 'sandbox'; id: string; repo: string; commit: string; tree: string; clean?: boolean }
+  // `check`: the run works on a copy of the files `tree` names, not on the sandbox, so
+  // what it passes counts for any commit with the same files (see checks.ts)
+  | { type: 'sandbox'; id: string; repo: string; commit: string; tree: string; clean?: boolean; check?: true }
 
 export interface RunSpec {
   // the hash of the published version of the build file the run executes
@@ -151,6 +153,9 @@ export interface Run extends RunSpec {
 // What an executor reports while it works. `seq` and `time` are added by the registry.
 export type RunEventData =
   | { type: 'log'; task: string; stream: 'stdout' | 'stderr'; text: string }
+  // the check key of a task (check-key.ts), before anything ran; null when its result says
+  // nothing about its files. Kept by the registry, not shown in the events.
+  | { type: 'key'; task: string; key: string | null }
   | {
       type: 'task'
       task: string
@@ -232,6 +237,8 @@ export interface RunRegistryOptions {
   up?: { maxTtl: number; perCaller: number; total: number }
   // keeps the runs over a restart
   store?: RunStore
+  // told of every run that ended, with the check keys its executor reported per task
+  onFinished?: (run: Run, keys: Record<string, string | null>) => void
   log?: (line: string) => void
   now?: () => number
 }
@@ -269,6 +276,8 @@ interface Entry {
   targets?: EndpointTarget[]
   // the services of a service run are stopped to sleep, not for good
   sleeping?: boolean
+  // the check keys the executor reported, by task
+  keys: Record<string, string | null>
 }
 
 type AccountCheck = (account: string) => boolean
@@ -279,6 +288,9 @@ export const SANDBOX_ID_PATTERN = /^sbx_[A-Za-z0-9_-]{16}$/
 function onSandbox(run: Run, sandbox: string): boolean {
   return run.source.type === 'sandbox' && run.source.id === sandbox
 }
+
+// the tasks of a run whose check keys are kept, a build file has fewer
+const MAX_KEYED_TASKS = 1000
 
 // how much of the end of a task's output its result carries
 const TAIL_LINES = 20
@@ -361,6 +373,7 @@ export class RunRegistry {
         bytes: 0,
         tails: new Map(Object.entries(run.results ?? {}).map(([task, result]) => [task, result.lastLog])),
         saving: Promise.resolve(),
+        keys: {},
       }
       this.entries.set(run.id, entry)
       if (run.state === 'awaiting-approval') {
@@ -427,6 +440,7 @@ export class RunRegistry {
       bytes: 0,
       tails: new Map(),
       saving: Promise.resolve(),
+      keys: {},
     }
     this.entries.set(run.id, entry)
     if (waiting) {
@@ -1125,10 +1139,25 @@ export class RunRegistry {
     }
     this.record(entry, { type: 'state', state, ...(error ? { error } : {}) }, true)
     entry.listeners.clear()
+    try {
+      this.options.onFinished?.(this.copy(entry.run), { ...entry.keys })
+    } catch (e) {
+      this.options.log?.(
+        `run ${entry.run.id} ended, but what it passed was not kept: ${e instanceof Error ? e.message : e}`
+      )
+    }
     this.evict()
   }
 
   private record(entry: Entry, recorded: RunEvent, force = false): void {
+    if (recorded.type === 'key') {
+      // a task name is the executor's; the first key it reports for a task is the one
+      // computed before anything of the run had run
+      if (!(recorded.task in entry.keys) && Object.keys(entry.keys).length < MAX_KEYED_TASKS) {
+        entry.keys[recorded.task] = recorded.key
+      }
+      return
+    }
     const event = recorded.type === 'task' ? bounded(recorded) : recorded
     if (event.type === 'log') {
       this.keepTail(entry, event.task, event.text)

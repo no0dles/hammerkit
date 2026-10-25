@@ -57,6 +57,23 @@ describe('RunRegistry', () => {
     expect(registry.watch(alice, run.id, 3, () => undefined)?.events).toHaveLength(1)
   })
 
+  it('keeps the first check key a task reported, and hands the keys to onFinished only', async () => {
+    const { executor, pending } = manual()
+    const finished: Record<string, string | null>[] = []
+    const registry = new RunRegistry({ executor, onFinished: (_run, keys) => finished.push(keys) })
+    const run = registry.submit(alice, spec)
+    await tick()
+    pending[0].emit({ type: 'key', task: 'build', key: 'a'.repeat(64) })
+    // a later key, after the task wrote to its files, is not the one of the files it started from
+    pending[0].emit({ type: 'key', task: 'build', key: 'b'.repeat(64) })
+    pending[0].emit({ type: 'key', task: 'lint', key: null })
+    pending[0].resolve()
+    await tick()
+    expect(finished).toEqual([{ build: 'a'.repeat(64), lint: null }])
+    // keys are not events anybody watching the run sees
+    expect(registry.watch(alice, run.id, 0, () => undefined)?.events.map((e) => e.type)).not.toContain('key')
+  })
+
   it('fails a run whose executor throws, with the reason', async () => {
     const { executor, pending } = manual()
     const registry = new RunRegistry({ executor })

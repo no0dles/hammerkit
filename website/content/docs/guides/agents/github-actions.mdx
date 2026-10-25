@@ -357,6 +357,13 @@ hammerkit remote approve sha256:9f2c… hammerkit
 
 Then re-run the job. A version that changes only tasks without secrets is published at once.
 
+## Checks without waiting
+
+The `test` step above holds the runner while the server runs the tests. When the agent or the
+person who pushed already ran them on the server, the job only has to verify that they passed
+for the files of its commit, which takes seconds: see
+[Checks that ran before CI](/docs/guides/agents/verified-checks).
+
 ## What is not covered yet
 
 - The server does not watch the repository itself: a job still starts each run, so GitHub

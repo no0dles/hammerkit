@@ -22,13 +22,17 @@ A task's cache key has two parts:
 
 - the task's **definition**: `cmds` (with any [arguments](/docs/task/arguments) after `--`), `image` (or the host OS for a local task),
   the CPU architecture, `envs`, `mounts`, `shell`, `src` and `generates` paths,
-  the working directory, and the definitions of its **dependencies**, and
-- its **state**: the declared **`src`** files (their content checksum by default,
+  the working directory, the definitions of its **dependencies**, and the definitions of the
+  **services** it `needs` (image, command, variables, ports, healthcheck, and what they
+  depend on), and
+- its **state**: the declared **`src`** files (their sha256 content checksum by default,
   or their modification dates with `modify-date`) combined with the state of its
-  **dependencies**, recursively.
+  **dependencies** and of the services it needs (their `src` and the state of the tasks they
+  depend on), recursively.
 
 So a task is re-run when its definition changes, when its `src` changes, or when
-anything it depends on changes — its dependencies' sources _or_ their definitions.
+anything it depends on changes — its dependencies' sources _or_ their definitions, and the
+services an `e2e` task tests against.
 Use [`hammerkit explain`](/docs/cli/explain) to see which of these caused a
 rebuild.
 
@@ -274,7 +278,6 @@ these are the places to look when you set up a build.
 | **Inputs passed through `mounts`.** A mount is part of the key only by its path, never its contents.                                                                                                                                                                                                         | A changed file behind a mount is not noticed.                                                                                                                       | Use `mounts` only for caches and tooling (`~/.npm`, a docker socket); put inputs in `src`.                                                       |
 | **Host tools of a local task.** A local task's key includes the operating system and CPU architecture, but not the versions of Node, Go, a compiler or anything else on the host's `PATH`.                                                                                                                   | Upgrading a tool on one machine reuses results built with the old one; two developers with different versions share entries.                                        | Use container tasks for anything you cache or share. For a local task, add the tool's version file (`.nvmrc`, `.tool-versions`) to `src`.        |
 | **Image tags that move.** An `image` is identified by its name, not its content.                                                                                                                                                                                                                             | `node:24-alpine` is republished; hammerkit keeps reusing results built with the old image.                                                                          | Pin images by digest (`node:24-alpine@sha256:…`) where it matters, and bump the digest deliberately.                                             |
-| **Services a task needs.** `needs` is not part of a task's key.                                                                                                                                                                                                                                              | A test task stays cached after only the database image or its configuration changed.                                                                                | Drive the service image from a build-file variable (`image: $POSTGRES_IMAGE`): build-file `envs` are part of the key of every task in that file. |
 | **The network.** Installs without a lockfile, `apt-get update`, downloads of "latest", calls to live APIs.                                                                                                                                                                                                   | The output depends on the day it was built, and a cache hit pins whatever the first run fetched.                                                                    | Make the inputs explicit: lockfiles in `src`, pinned versions in commands and images. Give a task that must fetch fresh data `cache: none`.      |
 | **Time, randomness and version stamps.** Build dates, random seeds, versions from `git describe`, `$GITHUB_SHA` or a build number.                                                                                                                                                                           | Read through a declared env, the value changes on every commit and the task never hits. Read from `.git` or the clock, it is invisible and a stale stamp is served. | Keep stamping out of cached tasks: put it in a small final task with `cache: none` that reads the cached outputs.                                |
 

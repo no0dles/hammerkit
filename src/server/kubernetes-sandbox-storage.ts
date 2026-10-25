@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'crypto'
 import { mkdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { PassThrough, Readable, Writable } from 'stream'
-import { finished } from 'stream/promises'
+import { finished, pipeline } from 'stream/promises'
 import { V1NetworkPolicy, V1PersistentVolumeClaim, V1Pod, V1ResourceQuota, V1Status } from '@kubernetes/client-node'
 import type { WebSocket } from 'ws'
 import { extract as extractTar } from 'tar'
@@ -364,6 +364,42 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     }
   }
 
+  // The pod writes the tree's files beside the sandbox on the claim and sends them as a tar,
+  // which is extracted here as the files of `attach` are: what a run plans with, up to the
+  // bytes a sandbox may take.
+  async exportTree(key: SandboxKey, tree: string, into: string, signal: AbortSignal): Promise<void> {
+    await mkdir(into, { recursive: true })
+    let bytes = 0
+    const extract = extractTar({
+      cwd: into,
+      filter: (_path, entry) =>
+        'type' in entry && ['File', 'OldFile', 'Directory', 'SymbolicLink'].includes(entry.type),
+    })
+    const counted = new PassThrough()
+    counted.on('data', (chunk: Buffer) => {
+      bytes += chunk.length
+      if (bytes > this.limits.bytes) {
+        counted.destroy(new Error(`the files of the sandbox ${key.id} take more than ${formatSize(this.limits.bytes)}`))
+      }
+    })
+    const extracted = new Promise<void>((resolve, reject) => {
+      extract.on('finish', resolve)
+      extract.on('error', reject)
+      counted.on('error', reject)
+    })
+    extracted.catch(() => undefined)
+    counted.pipe(extract)
+    const answer = await this.exclusive(key.id, () => this.call(key, { op: 'archive', id: key.id, tree }, signal, true))
+    if ('stream' in answer) {
+      // a pipeline, so the answer is ended with the copy: an error of the pod after the copy
+      // stopped (over the size limit) lands nowhere else
+      await pipeline(answer.stream, counted)
+    } else {
+      counted.end(answer.body)
+    }
+    await extracted
+  }
+
   async moveTo(key: SandboxKey, commit: string): Promise<void> {
     await this.request(key, { op: 'move', id: key.id, commit }, AbortSignal.timeout(FETCH_TIMEOUT_MS))
   }
@@ -679,7 +715,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     // the process ends when the server stops waiting for it: closing the connection does
     // not end a command in a pod
     const seconds = Math.ceil(
-      (['create', 'fetch', 'move'].includes(request.op) ? FETCH_TIMEOUT_MS : REQUEST_TIMEOUT_MS) / 1000
+      (['create', 'fetch', 'move', 'archive'].includes(request.op) ? FETCH_TIMEOUT_MS : REQUEST_TIMEOUT_MS) / 1000
     )
     const done = this.withPod(key, (pod) =>
       this.exec(
@@ -1115,6 +1151,11 @@ class AnswerReader extends Writable {
 
   _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     if (this.stream) {
+      if (this.stream.destroyed) {
+        // its reader stopped (over a size limit): the rest of the answer is nobody's
+        callback()
+        return
+      }
       this.stream.write(chunk, callback)
       return
     }

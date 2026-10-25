@@ -25,6 +25,7 @@ import type { EndpointTarget, RunEventData, TaskStatus } from './runs'
 import { WorkTree } from '../planner/work-tree'
 import { getResourceName } from '../kubernetes/resources'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
+import { getCheckKeys } from '../optimizer/check-keys'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -76,6 +77,8 @@ export const workerInputSchema = z
       })
       .strict()
       .optional(),
+    // the run's results count as checks: report each task's check key before it runs
+    check: z.boolean().optional(),
   })
   .strict()
 
@@ -216,7 +219,8 @@ export async function runTasks(
     const options = input.options
     const execOptions: Partial<CliExecOptions> = {
       logMode: 'live',
-      cacheDefault: options.cache ?? 'checksum',
+      // a check takes a cached result only for the same files, never for the same dates
+      cacheDefault: input.check && options.cache === 'modify-date' ? 'checksum' : options.cache ?? 'checksum',
       cacheReadOnly: options.cacheReadOnly ?? false,
       timeout: options.timeout ? parseDuration(options.timeout) : null,
       maxTimeout: options.maxTimeout ? parseDuration(options.maxTimeout) : null,
@@ -226,7 +230,17 @@ export async function runTasks(
       explain: true,
     }
 
-    for (const { name, scope } of getRunScopes(input.tasks, options, input.up?.services)) {
+    const scopes = getRunScopes(input.tasks, options, input.up?.services)
+    if (input.check) {
+      // the files as they are before any task wrote to them, a second task's too: a first
+      // one that formats or generates into src would key it by files no commit holds
+      for (const { scope } of scopes) {
+        for (const [task, { key }] of Object.entries(await getCheckKeys(input.entry, environment, scope))) {
+          emit({ type: 'key', task, key })
+        }
+      }
+    }
+    for (const { name, scope } of scopes) {
       const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
         directory: input.directory,
       })

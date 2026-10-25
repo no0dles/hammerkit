@@ -640,7 +640,7 @@ export class KubernetesExecutor implements RunExecutor {
 // cache, and on a sandbox the runs of that sandbox only, whose claim is on the same node or
 // zone as the kept ones. The owner is the namespace's.
 export function getVolumeScope(run: Run): string {
-  if (run.source.type === 'sandbox') {
+  if (run.source.type === 'sandbox' && !run.source.check) {
     return `sandbox-${createHash('sha256').update(run.source.id).digest('hex').slice(0, 24)}`
   }
   return cacheNamespace(run)
