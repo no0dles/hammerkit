@@ -964,13 +964,15 @@ export class RunRegistry {
     entry.durationTimer = undefined
     entry.targets = targets.map((target) => ({ ...target, address: { ...target.address } }))
     entry.run.state = 'up'
+    // one reading of the clock, so the ttl is exactly expiresAt - upAt
+    const now = this.now()
     // the ttl counts from the first time, not from a wake
     if (!entry.run.upAt) {
-      entry.run.upAt = this.timestamp()
-      entry.run.expiresAt = new Date(this.now() + spec.ttl).toISOString()
+      entry.run.upAt = new Date(now).toISOString()
+      entry.run.expiresAt = new Date(now + spec.ttl).toISOString()
     }
     if (spec.sleepTtl) {
-      entry.run.sleepsAt = new Date(this.now() + spec.sleepTtl).toISOString()
+      entry.run.sleepsAt = new Date(now + spec.sleepTtl).toISOString()
     }
     this.record(entry, { type: 'state', state: 'up' })
     this.expireLater(entry)
