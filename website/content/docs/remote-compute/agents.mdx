@@ -47,7 +47,7 @@ working directory. `args: true` marks it as a task that takes arguments, which a
 clients then refuse to run it and say the shell task needs `mounts: [.]`. The
 [`timeout`](/docs/task#timeouts) stops a command that hangs, such as a test that never ends,
 before it holds the sandbox for the server's own limit. The clients pass the agent's own
-timeout of a command too, which applies when the task sets none: a task's `timeout` comes first.
+timeout of a command too, and the command stops after the shorter of the two.
 
 `bash` with `npm test -- -t login` then runs `sh -c 'npm test -- -t login'` in that image,
 on the files of the sandbox. Name the task `sh` or tell the client its name. Use `bash -c`
