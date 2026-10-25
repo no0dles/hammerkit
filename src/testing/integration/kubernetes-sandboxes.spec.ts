@@ -86,6 +86,32 @@ tasks:
       allow: [registry.npmjs.org]
     cmds:
       - echo "left-pad:$(npm view left-pad version)"
+  # shells of the sandbox: their commands run in its runner, one pod for all of them
+  leave:
+    image: alpine:3.19
+    src: [src]
+    cmds:
+      - echo "host=$(hostname)"
+      - sleep 300 > /dev/null 2>&1 &
+      - echo left > /tmp/mark && echo kept > /root/kept
+  look:
+    image: alpine:3.19
+    src: [src]
+    cmds:
+      - echo "host=$(hostname)"
+      - echo "sleeping=$(ps -o args | grep -c '[s]leep 300')"
+      - test -e /tmp/mark || echo tmp-empty
+      - echo "root=$(cat /root/kept)"
+  fail:
+    image: alpine:3.19
+    src: [src]
+    cmds:
+      - echo before-the-exit && exit 7
+  slow:
+    image: alpine:3.19
+    src: [src]
+    cmds:
+      - echo slow-started && sleep 300
 `
 
 describe('sandboxes on a kubernetes backend', () => {
@@ -230,7 +256,12 @@ describe('sandboxes on a kubernetes backend', () => {
       ).toBe(false)
       await registry.remove(bob, other.id)
 
-      const execute = async (id: string, task: string) => {
+      const execute = async (
+        id: string,
+        task: string,
+        signal = new AbortController().signal,
+        onEvent: (event: RunEventData) => void = () => undefined
+      ) => {
         const current = await registry.state(sandbox.id)
         const run: Run = {
           id,
@@ -245,7 +276,13 @@ describe('sandboxes on a kubernetes backend', () => {
         }
         const events: RunEventData[] = []
         const error = await executor
-          .execute(run, { emit: (e) => events.push(e), signal: new AbortController().signal })
+          .execute(run, {
+            emit: (e) => {
+              events.push(e)
+              onEvent(e)
+            },
+            signal,
+          })
           .then(
             () => undefined,
             (e: Error) => e
@@ -333,7 +370,60 @@ describe('sandboxes on a kubernetes backend', () => {
       expect(seen, escape.text).toBeDefined()
       expect((seen as string).split(',').filter((name) => name && name !== 'lost+found')).toEqual(['files'])
 
+      // a shell's commands go into the runner of the sandbox, the next ones into the same pod:
+      // the container stays, but no process of a command, nor what it left in /tmp
+      const runners = async () =>
+        (
+          await core.listNamespacedPod({
+            namespace: callerNamespace,
+            labelSelector: `hammerkit.dev/sandbox=${names.label},hammerkit.dev/runner`,
+          })
+        ).items.filter((pod) => !pod.metadata?.deletionTimestamp)
+      const hosts = (text: string) => [...text.matchAll(/host=(\S+)/g)].map((match) => match[1])
+      const left = await execute('run_sbx_leave', 'leave')
+      expect(left.error, left.text).toBeUndefined()
+      const looked = await execute('run_sbx_look', 'look')
+      expect(looked.error, looked.text).toBeUndefined()
+      const [runner] = await runners()
+      expect(runner?.metadata?.name).toMatch(/^hammerkit-runner-[0-9a-f]{20}$/)
+      expect(runner?.metadata?.ownerReferences?.[0]?.uid).toBe(await filesPod())
+      expect([...hosts(left.text), ...hosts(looked.text)]).toEqual(Array(2).fill(runner?.metadata?.name))
+      expect(looked.text).toContain('sleeping=0')
+      expect(looked.text).toContain('tmp-empty')
+      expect(looked.text).toContain('root=kept')
+      // a command's exit code is the task's
+      const failed = await execute('run_sbx_fail', 'fail')
+      expect(failed.error?.message).toBe('fail failed')
+      expect(failed.text).toContain('before-the-exit')
+      expect(failed.events).toContainEqual(
+        expect.objectContaining({ type: 'task', task: 'fail', state: 'failed', exitCode: 7 })
+      )
+      // a cancelled command is killed in the runner, which stays
+      const cancel = new AbortController()
+      let started = false
+      const slow = execute('run_sbx_slow', 'slow', cancel.signal, (event) => {
+        started ||= event.type === 'log' && event.text.includes('slow-started')
+      })
+      for (let attempt = 0; !started && attempt < 240; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      expect(started).toBe(true)
+      const cancelled = Date.now()
+      cancel.abort()
+      const stopped = await slow
+      expect(stopped.error?.message).toBe('the run was cancelled')
+      expect(Date.now() - cancelled).toBeLessThan(20_000)
+      const after = await execute('run_sbx_look_2', 'look')
+      expect(after.error, after.text).toBeUndefined()
+      expect(after.text).toContain('sleeping=0')
+      expect(hosts(after.text)).toEqual([runner?.metadata?.name])
+
       await registry.remove(alice, sandbox.id)
+      // the runner and its limits go with the sandbox
+      for (let attempt = 0; (await runners()).length > 0 && attempt < 60; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+      expect(await runners()).toEqual([])
       // the proxies go with the pod of the files, which owned them
       for (let attempt = 0; Object.keys(await proxies()).length > 0 && attempt < 60; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 1000))

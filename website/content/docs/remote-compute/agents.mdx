@@ -54,9 +54,14 @@ shell holds no account. Its network is the lower of its own `network`,
 
 What follows from running a command as a task:
 
-- Commands run one at a time, each in a fresh container: only the files are kept between
-  them. A background process ends with its command, and `cd` or `export` in one command does
-  not reach the next. The clients run a command in a directory with `cd <dir> || exit 1` on a
+- Commands run one at a time, and only the files are kept between them. A background process
+  ends with its command, and `cd` or `export` in one command does not reach the next. On a
+  host each command gets a fresh container. On
+  [Kubernetes](/docs/remote-compute/sandboxes#on-kubernetes) the commands of a sandbox run in
+  one container that stays, so a command starts in about a second instead of waiting for a pod:
+  before and after each command every process in it is killed and `/tmp` is emptied, but what a
+  command writes elsewhere outside the sandbox, such as the home directory, can still be there
+  for the next one. The clients run a command in a directory with `cd <dir> || exit 1` on a
   line before it.
 - The command reads no input and gets none of the agent's variables.
 - While a command runs, the sandbox is held: an edit in the meantime is `409`. Agents send

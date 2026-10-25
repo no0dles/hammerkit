@@ -59,8 +59,11 @@ export interface WorkKubernetesWorkspace {
   subPath: string
   label: string
   // the pod of the sandbox's files the run holds: what stays with the sandbox for its
-  // next runs (the egress proxy of a task) goes with this pod
+  // next runs (the egress proxy of a task, its runner) goes with this pod
   pod?: { name: string; uid: string }
+  // set when commands of a task shaped like a shell are exec'd into the sandbox's runner
+  // (`backend.sandboxes.runner`, see sandbox-runner.ts)
+  runner?: true
 }
 
 export interface WorkKubernetesPool {

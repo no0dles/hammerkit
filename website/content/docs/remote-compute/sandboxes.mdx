@@ -523,6 +523,16 @@ above are the same.
   files' claim itself where their sources are, read and write, so what a task writes is in
   the sandbox afterwards, as on a host. A source outside of the sandbox goes into the task's
   own claim as before. A source or mount that goes through a link is refused, as on a host.
+* **Commands.** A task of a run on a sandbox that only mounts the sandbox's files (no
+  volumes, needed services, secrets or `generates`), such as the shell task of an
+  [agent](/docs/remote-compute/agents), runs in the sandbox's runner: one pod next to the pod
+  of the files that stays while that pod does and takes each command over `pods/exec`. A
+  command then starts in about a second, where a Job takes several seconds to get a pod. Before
+  and after each command every process in the runner is killed and `/tmp` is emptied, so
+  nothing a command started is left to the next one. The runner has the image, variables,
+  resources, mounts and network of the task: a task that differs in any of them gets a new
+  runner, and the old one goes. A second task of the same run, while the first is in the
+  runner, runs as a Job. With `backend.sandboxes.runner: false` every task is a Job.
 * **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
   `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a
   `sandboxes.network` other than `open`, the config needs `backend.networkPolicy: enforced`.
@@ -551,6 +561,7 @@ backend:
     size: 4Gi                        # default, what each claim of a sandbox requests
     storageClass: sandboxes          # default: the class of tasks' claims
     idle: 1m                         # default, how long the pod of the files stays
+    runner: true                     # default, commands of a sandbox go into one pod that stays
     resources:                       # default, of the pod of the files
       requests: { cpu: 100m, memory: 256Mi }
       limits: { memory: 2Gi }
@@ -561,7 +572,8 @@ backend:
 | `image` | The image of the pod of a sandbox's files: hammerkit with git and ripgrep, as the published image of the server's version is. It reads and changes every sandbox's files, so pin it by digest. |
 | `size` | What each of the two claims of a sandbox requests: the most its files, and its git data, can take. No more than `sandboxes.limits.bytes`. |
 | `storageClass` | The storage class of sandboxes' claims. When it is one of their own, each caller's namespace gets a `ResourceQuota` on that class (`requests.storage` of twice `sandboxes.limits.bytes` and `persistentvolumeclaims` of twice `sandboxes.limits.count`, two claims a sandbox), so the cluster holds the limits too. It can not be the class of tasks' claims, whose claims would count against it. |
-| `idle` | How long the pod of a sandbox's files stays after the last request. |
+| `idle` | How long the pod of a sandbox's files stays after the last request. Its runner and egress proxies go with it. |
+| `runner` | Whether a task that only mounts the sandbox's files runs in the sandbox's [runner](#on-kubernetes) instead of a Job of its own. |
 | `resources` | The requests and limits of the pod of a sandbox's files, which runs git and ripgrep over all of them. |
 
 The server keeps the record of each sandbox in its storage directory as on a host, and the

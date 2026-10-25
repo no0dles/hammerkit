@@ -10,6 +10,7 @@ import { packArchive } from '../utils/tar'
 import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { NETWORK_LABEL, removeSandboxProxies } from '../kubernetes/network-policy'
+import { removeSandboxRunners } from '../kubernetes/sandbox-runner'
 import { getSandboxAffinity, SANDBOX_LABEL } from '../kubernetes/volumes'
 import { getErrorMessage } from '../log'
 import { sleep } from '../utils/sleep'
@@ -394,6 +395,10 @@ export class KubernetesSandboxStorage implements SandboxStorage {
       await removeSandboxProxies(this.instance, namespace, { sandbox: names.label }, (deployment) =>
         isOwnedBy(deployment, pod.uid)
       ).catch(() => undefined)
+      // and a runner, which the pod did not own when it made way for a run
+      await removeSandboxRunners(this.instance, namespace, names.label, (runner) => isOwnedBy(runner, pod.uid)).catch(
+        () => undefined
+      )
       await mkdir(into, { recursive: true })
       await this.copyOut(
         key,
@@ -522,7 +527,8 @@ export class KubernetesSandboxStorage implements SandboxStorage {
   private async removeIn(namespace: string, id: string): Promise<void> {
     const names = getSandboxNames(id)
     await this.stopPod({ id, owner: { iss: '', sub: '' } }, namespace)
-    // the cluster removes the proxies the pod owned; those it did not own go here
+    // the cluster removes the proxies and the runner the pod owned; those it did not own go here
+    await removeSandboxRunners(this.instance, namespace, names.label)
     await removeSandboxProxies(this.instance, namespace, { sandbox: names.label })
     for (const name of [names.claim, names.git]) {
       try {
