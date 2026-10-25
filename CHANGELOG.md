@@ -1,3 +1,20 @@
+# [1.27.0-next.15](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.14...v1.27.0-next.15) (2026-10-25)
+
+
+### Bug Fixes
+
+* a service run stopped by the server shutting down fails, with why ([294e59b](https://github.com/no0dles/hammerkit/commit/294e59bad8c6d0c38bd651239b0a98656562383e))
+* a service with more than one port starts on Kubernetes ([b2277a1](https://github.com/no0dles/hammerkit/commit/b2277a16a833f5f3e074b2172e5f5d96bb2d4597))
+* a wake of a service run checks its owner's rights; review round 2 ([9ad7843](https://github.com/no0dles/hammerkit/commit/9ad78439c783ce8930cefcfe95a62db263067156))
+* log refused endpoint upgrades; test a browser's WebSocket with the sign-in cookie ([1d4a050](https://github.com/no0dles/hammerkit/commit/1d4a050004fbd86e118d7ab2c9e42c846446caac))
+
+
+### Features
+
+* cli and agent tools for service runs, tests (wip) ([c72f7d8](https://github.com/no0dles/hammerkit/commit/c72f7d86135c021d24bd8dfbbd74279715935e1e))
+* service runs sleep without requests and wake on a visit; first review round ([21ac262](https://github.com/no0dles/hammerkit/commit/21ac2629e07c58e6fb56d1c467a4cdfe8ec51284)), closes [#118](https://github.com/no0dles/hammerkit/issues/118)
+* service runs with endpoints behind the server's sign-in (wip) ([adbd63c](https://github.com/no0dles/hammerkit/commit/adbd63cbc8c9a0d27d3a5e28f68c08e3c1c438f3))
+
 # [1.27.0-next.14](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.13...v1.27.0-next.14) (2026-10-25)
 
 
