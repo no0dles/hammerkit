@@ -1,3 +1,20 @@
+# [1.27.0-next.13](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.12...v1.27.0-next.13) (2026-10-25)
+
+
+### Bug Fixes
+
+* check the runner's mounts before each command ([4163726](https://github.com/no0dles/hammerkit/commit/416372663cec0533ffe04f69fe2d164e48c65eb4))
+* clean up the sandbox runner with a busybox commands can not replace ([95a3cb1](https://github.com/no0dles/hammerkit/commit/95a3cb158f035f85afa0fc4a5c606767ed8382fe))
+* keep one runner for the runs of a sandbox ([5ea7737](https://github.com/no0dles/hammerkit/commit/5ea7737630e4c856e35c51db928b0d5aa093a406))
+* keep starting the runner when its command stops meanwhile ([586a097](https://github.com/no0dles/hammerkit/commit/586a097136bf7c132cf3bb0fab4a43eecb0fe79a))
+* leave the sandbox's files alone when they are below /tmp in the runner ([fb3716e](https://github.com/no0dles/hammerkit/commit/fb3716ee0473843d00f6fe734b3f81387b0e47fb))
+* use the runner only for tasks that mount the whole sandbox ([90f4c5f](https://github.com/no0dles/hammerkit/commit/90f4c5f571c285c0b8630d11419f2384acc1766d))
+
+
+### Features
+
+* run sandbox commands in a warm runner pod on kubernetes ([81e4a01](https://github.com/no0dles/hammerkit/commit/81e4a01199180cd6d7300579f8bd79625b55e8c6))
+
 # [1.27.0-next.12](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.11...v1.27.0-next.12) (2026-10-25)
 
 
