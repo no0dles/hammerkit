@@ -20,7 +20,7 @@ jobs:
         # is the separator-sensitive platform we most need to cover. ubuntu and
         # macOS instead run the integration suite (the integration jobs below),
         # which is a superset of the unit suite plus the full container/k8s path;
-        # the ubuntu run is the single coverage report uploaded to Codacy.
+        # the ubuntu runs are the coverage reports uploaded to Codacy.
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -151,10 +151,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      - name: Set up hammerkit and the shared cache
-        uses: ./.github/actions/hammerkit
-        with:
-          tasks: test:${{ matrix.suite }}
       # hammerkit reads the credentials `docker login` stores when it pulls an image.
       # Without the secret (forks, or not set up) the login is skipped and pulls
       # stay anonymous, as before.
@@ -195,6 +191,13 @@ jobs:
           printf '%s' "$OP_OTHER_TOKEN" > "$RUNNER_TEMP/op-other.token"
           echo "OP_TEST_TOKEN_FILE=$RUNNER_TEMP/op-reader.token" >> "$GITHUB_ENV"
           echo "OP_OTHER_TOKEN_FILE=$RUNNER_TEMP/op-other.token" >> "$GITHUB_ENV"
+      # After the steps above: the paths of the key and token files they write are
+      # variables of test:docker:containers, so they are part of its cache key, and a
+      # pull without them looks for an entry no run pushed.
+      - name: Set up hammerkit and the shared cache
+        uses: ./.github/actions/hammerkit
+        with:
+          tasks: test:${{ matrix.suite }}
       # The suite is a hammerkit task: when this tree was already tested green, the
       # pull above restored its result, and the cluster and registry below are not
       # worth starting. Without a reachable cache this is always a miss, so the job
@@ -210,7 +213,9 @@ jobs:
             echo "hit=false" >> "$GITHUB_OUTPUT"
           fi
       # A current Kubernetes: the Gateway API CRDs below need 1.31+ (their CEL
-      # validations use isIP). Pinned by digest, as kind recommends.
+      # validations use isIP). Pinned by digest, as kind recommends. The versions
+      # here are not part of the suite's cache key: put [no-cache] in the commit
+      # message that bumps them, so the specs run against the new ones.
       - name: Create kind cluster
         if: matrix.suite == 'kubernetes' && steps.plan.outputs.hit != 'true'
         uses: helm/kind-action@v1.15.0
@@ -244,8 +249,10 @@ jobs:
       - name: Install ripgrep
         if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      # Serialize (inside the task): one single-node kind cluster on a 4-vCPU
-      # runner, so running suites one at a time avoids scheduling/volume races.
+      # Inside the task, the docker suite runs its unit specs (two files at a time)
+      # next to the specs that use Docker (one file at a time, they share one
+      # daemon); the kubernetes suite runs two spec files at a time on the
+      # single-node cluster.
       # HAMMERKIT_TEST_RUN_ID is not passed on: hammerkit hands a task only the
       # variables it declares, and a per-run value would defeat the cache.
       - name: Run integration tests
@@ -255,11 +262,12 @@ jobs:
         with:
           tasks: test:${{ matrix.suite }}
       # The coverage job below merges the reports of both suites.
-      - name: Keep the coverage report
+      # docker has two reports (docker-unit and docker), kubernetes one
+      - name: Keep the coverage reports
         uses: actions/upload-artifact@v5
         with:
           name: coverage-${{ matrix.suite }}
-          path: coverage/${{ matrix.suite }}/lcov.info
+          path: coverage/*/lcov.info
       - name: Archive logs on failure
         if: failure()
         uses: actions/upload-artifact@v5
@@ -272,9 +280,10 @@ jobs:
   # The single coverage source for Codacy, and the one check that stands for the
   # integration suite (the name is unchanged from when it was a single job, so a
   # required check keeps working). It runs on every push, PRs included, so coverage
-  # shows up on PRs. Integration mode is a superset of the unit suite (see
-  # vitest.config.ts): the docker suite carries the fast unit and error-path specs,
-  # the kubernetes suite the cluster path, and Codacy gets both reports in one upload.
+  # shows up on PRs. Together the two suites run every spec: the docker suite runs
+  # the unit specs (in unit mode, a report of their own) and the specs that need at
+  # most Docker, the kubernetes suite the cluster path. Codacy gets all three reports
+  # in one upload.
   integration-result:
     name: integration (ubuntu-latest)
     needs: linux-integration
@@ -290,9 +299,11 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           pattern: coverage-*
+          path: coverage
+          merge-multiple: true
       - name: Upload coverage
         continue-on-error: true
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage-docker/lcov.info,coverage-kubernetes/lcov.info
+          coverage-reports: coverage/docker-unit/lcov.info,coverage/docker/lcov.info,coverage/kubernetes/lcov.info
