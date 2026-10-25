@@ -1,3 +1,10 @@
+# [1.27.0-next.16](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.15...v1.27.0-next.16) (2026-10-25)
+
+
+### Bug Fixes
+
+* read the clock once when a service run comes up ([5d17b81](https://github.com/no0dles/hammerkit/commit/5d17b81478d1dfed4133d7579aacc97925a23b14))
+
 # [1.27.0-next.15](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.14...v1.27.0-next.15) (2026-10-25)
 
 
