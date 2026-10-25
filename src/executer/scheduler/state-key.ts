@@ -51,7 +51,7 @@ export function combineStateKeys(ownKey: string, depKeys: string[]): string {
   }
   // Sort so the key is independent of dependency declaration order.
   const sorted = [...depKeys].sort()
-  return createHash('md5')
+  return createHash('sha256')
     .update([ownKey, ...sorted].join(','))
     .digest('hex')
 }
@@ -116,6 +116,48 @@ export async function computeStateKey(
     depKeys.push(effective.stateKey)
     provable = provable && effective.provable
   }
+  // what a task that needs a service passed against: the sources of the service and of the
+  // tasks it depends on (its definition is in the task id, getWorkServiceCacheIdentity)
+  for (const need of item.needs) {
+    const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
+    depKeys.push(`${need.name}=${effective.stateKey}`)
+    provable = provable && effective.provable
+  }
 
   return { stateKey: combineStateKeys(ownKey, depKeys), stats, resolved, provable, unmatched }
+}
+
+// A needed service's sources folded with the state keys of its dependencies and needs. It
+// is provable when they are: a service without `src` of its own is a definition, not a guess.
+async function resolveNeedStateKey(
+  service: WorkItemState<WorkService, any>,
+  defaultCacheMethod: CacheMethod,
+  environment: Environment,
+  memo: Map<string, EffectiveStateKey>
+): Promise<EffectiveStateKey> {
+  const memoKey = `need\0${service.name}`
+  const existing = memo.get(memoKey)
+  if (existing !== undefined) {
+    return existing
+  }
+  const resolved = resolveEffective(service, defaultCacheMethod)
+  const { stats } = await getWorkItemCacheStats(service, environment)
+  const keys: string[] = []
+  let provable = true
+  for (const dep of service.deps) {
+    const effective = await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo)
+    keys.push(effective.stateKey)
+    provable = provable && effective.provable
+  }
+  for (const need of service.needs) {
+    const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
+    keys.push(`${need.name}=${effective.stateKey}`)
+    provable = provable && effective.provable
+  }
+  const effective = {
+    stateKey: combineStateKeys(getStateKey(stats, concreteMethod(resolved, defaultCacheMethod)), keys),
+    provable,
+  }
+  memo.set(memoKey, effective)
+  return effective
 }

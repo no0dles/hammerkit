@@ -45,7 +45,7 @@ describe('getWorkTaskCacheDescription', () => {
       ] as any,
       volumeSize: null,
     }
-    const d = getWorkTaskCacheDescription({ data: task, deps: [] } as any)
+    const d = getWorkTaskCacheDescription({ data: task, deps: [], needs: [] } as any)
     expect(d.platform).toBe('node:alpine')
     expect(d.mounts).toEqual(['a:a', 'b:b'])
     expect(d.src).toEqual(['a', 'b'])
@@ -70,13 +70,13 @@ describe('getWorkTaskCacheDescription', () => {
         { path: '/work/app/api/node_modules', inherited: null },
       ] as any,
     }
-    expect(getWorkTaskCacheDescription({ data: task, deps: [] } as any).claimLayout).toBe(2)
+    expect(getWorkTaskCacheDescription({ data: task, deps: [], needs: [] } as any).claimLayout).toBe(2)
     // an output of a dep it mounts is in the dep's claim, not in its own
     const inherited = { ...task, generates: [task.generates[0], { ...task.generates[1], inherited: {} }] }
-    expect(getWorkTaskCacheDescription({ data: inherited, deps: [] } as any).claimLayout).toBeUndefined()
+    expect(getWorkTaskCacheDescription({ data: inherited, deps: [], needs: [] } as any).claimLayout).toBeUndefined()
     // a source shares the claim with the outputs
     const source = { ...task, generates: [task.generates[0]], src: [{ absolutePath: '/work/node_modules' }] as any }
-    expect(getWorkTaskCacheDescription({ data: source, deps: [] } as any).claimLayout).toBe(2)
+    expect(getWorkTaskCacheDescription({ data: source, deps: [], needs: [] } as any).claimLayout).toBe(2)
     // two outputs that shared one cache archive
     const flat = {
       ...task,
@@ -85,12 +85,12 @@ describe('getWorkTaskCacheDescription', () => {
         { path: '/work/app/a/b', inherited: null },
       ] as any,
     }
-    expect(getWorkTaskCacheDescription({ data: flat, deps: [] } as any).claimLayout).toBe(2)
+    expect(getWorkTaskCacheDescription({ data: flat, deps: [], needs: [] } as any).claimLayout).toBe(2)
   })
 
   it('describes a local task with the host platform and no mounts', () => {
     const task: LocalWorkTask = { ...baseTask, type: 'local-task' }
-    const d = getWorkTaskCacheDescription({ data: task, deps: [] } as any)
+    const d = getWorkTaskCacheDescription({ data: task, deps: [], needs: [] } as any)
     expect(d.platform).toBe(platform())
     expect(d.mounts).toBeUndefined()
   })

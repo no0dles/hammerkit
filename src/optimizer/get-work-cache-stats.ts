@@ -10,8 +10,6 @@ import { lstat, readlink } from 'fs/promises'
 import { WorkItem } from '../planner/work-item'
 import { WorkSource } from '../planner/work-source'
 
-type ChecksumAlgorithm = 'sha1' | 'sha256'
-
 export interface SourceStats {
   stats: WorkCacheFileStats
   // declared (not inherited) src entries that match no file
@@ -29,8 +27,7 @@ async function addWorkCacheStats(
   matcher: (file: string, partial?: boolean) => boolean,
   context: Environment,
   root: boolean,
-  excluded: string[],
-  algorithm: ChecksumAlgorithm
+  excluded: string[]
 ): Promise<number> {
   if (isExcluded(path, excluded)) {
     return 0
@@ -44,7 +41,7 @@ async function addWorkCacheStats(
       if (!matcher(path)) {
         return 0
       }
-      const checksum = createHash(algorithm)
+      const checksum = createHash('sha256')
         .update(`link:${await readlink(path)}`)
         .digest('hex')
       result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: link.mtimeMs, checksum }
@@ -62,7 +59,7 @@ async function addWorkCacheStats(
     if (!matcher(path)) {
       return 0
     }
-    const checksum = await calculateChecksum(context, path, algorithm)
+    const checksum = await calculateChecksum(context, path)
     // '/'-separated on every OS, so a Windows host keys a container task like Linux
     result.files[relative(cwd, path).split(sep).join(posix.sep)] = { lastModified: stats.lastModified, checksum }
     return 1
@@ -74,7 +71,7 @@ async function addWorkCacheStats(
     }
     let matched = 0
     for (const file of await context.file.listFiles(path)) {
-      matched += await addWorkCacheStats(result, cwd, join(path, file), matcher, context, false, excluded, algorithm)
+      matched += await addWorkCacheStats(result, cwd, join(path, file), matcher, context, false, excluded)
     }
     return matched
   }
@@ -93,8 +90,7 @@ export async function getWorkCacheStats(
 async function collectSourceStats(
   work: WorkTask | WorkService,
   environment: Environment,
-  excluded: string[],
-  algorithm: ChecksumAlgorithm = 'sha1'
+  excluded: string[]
 ): Promise<SourceStats> {
   const result: WorkCacheFileStats = {
     created: new Date(),
@@ -104,16 +100,7 @@ async function collectSourceStats(
 
   for (const src of work.src) {
     const matcher = (file: string, partial?: boolean) => src.matcher(file, work.cwd, partial)
-    const matched = await addWorkCacheStats(
-      result,
-      work.cwd,
-      src.absolutePath,
-      matcher,
-      environment,
-      true,
-      excluded,
-      algorithm
-    )
+    const matched = await addWorkCacheStats(result, work.cwd, src.absolutePath, matcher, environment, true, excluded)
     if (matched === 0 && !src.inherited && !isExcluded(src.absolutePath, excluded)) {
       unmatched.push(src)
     }
@@ -129,10 +116,19 @@ async function collectSourceStats(
 // before they do.
 export function getWorkItemCacheStats(
   item: WorkItem<WorkTask | WorkService>,
-  environment: Environment,
-  algorithm: ChecksumAlgorithm = 'sha1'
+  environment: Environment
 ): Promise<SourceStats> {
-  return collectSourceStats(item.data, environment, dependencyOutputs(item), algorithm)
+  return collectSourceStats(item.data, environment, dependencyOutputs(item))
+}
+
+// The source stats of a task with what its dependencies generate: on a checkout nothing ran
+// in, those are the files a commit holds there, see check-key.ts.
+export async function getWorkItemCheckoutStats(
+  item: WorkItem<WorkTask>,
+  environment: Environment
+): Promise<SourceStats> {
+  const { stats } = await collectSourceStats(item.data, environment, [])
+  return { stats, unmatched: (await getWorkItemCacheStats(item, environment)).unmatched }
 }
 
 function dependencyOutputs(item: WorkItem<WorkTask | WorkService>): string[] {
@@ -163,5 +159,5 @@ export function getStateKey(stats: WorkCacheFileStats, cacheMethod: CacheMethod)
       contents.push(`${key}:${stats.files[key].lastModified}`)
     }
   }
-  return createHash('md5').update(contents.join(',')).digest('hex')
+  return createHash('sha256').update(contents.join(',')).digest('hex')
 }
