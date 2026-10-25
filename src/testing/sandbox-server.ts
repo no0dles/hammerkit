@@ -16,9 +16,11 @@ export const SANDBOX_REPO = 'github.com/corp/payments'
 // The published build file: a shell, a task that takes arguments, one that fails and
 // takes none, and one with a long log. They are local tasks, which this server lets sandboxes run. `elsewhere` is a
 // shell that runs in an empty directory, as a shell in a container without the files does.
+// The shell has a timeout of its own, as the agents guide suggests, longer than a test runs.
 const BUILD_FILE = [
   'tasks:',
   '  sh:',
+  '    timeout: 10m',
   '    cmds: [sh -c]',
   '  elsewhere:',
   `    cmds: ["sh -c 'cd \\"$(mktemp -d)\\" && exec sh -c \\"$1\\"' sh"]`,

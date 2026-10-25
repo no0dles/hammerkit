@@ -618,6 +618,7 @@ describe('server config policy', () => {
           image: `no0dles/hammerkit:${getVersion()}`,
           size: '4Gi',
           idle: '1m',
+          runner: true,
           resources: { requests: { cpu: '100m', memory: '256Mi' }, limits: { memory: '2Gi' } },
         },
       })

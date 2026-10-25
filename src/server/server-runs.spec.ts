@@ -421,6 +421,7 @@ describe('runs api', () => {
         cache: 'none',
         cacheReadOnly: true,
         timeout: '1h30m',
+        maxTimeout: '2m',
         skipDeps: false,
       }
       const response = await api.submit({ ...request, options })
@@ -568,6 +569,7 @@ describe('runs api', () => {
         { file: 'ci/hammerkit.yaml' },
         { cache: 'forever' },
         { timeout: 'soon' },
+        { maxTimeout: 'soon' },
         { watch: true },
         { concurrency: 64 },
         { filter: 'unit' },

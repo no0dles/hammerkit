@@ -299,7 +299,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     )
     .addOption(new Option('--env <name>', 'the environment of the build file, as --env of run'))
     .addOption(new Option('--cache <method>', 'as --cache of run').choices(['checksum', 'modify-date', 'none']))
-    .addOption(new Option('--timeout <duration>', 'stop the run after this long, such as 30m'))
+    .addOption(new Option('--timeout <duration>', 'as --timeout of run: for tasks without their own, such as 30m'))
+    .addOption(
+      new Option('--max-timeout <duration>', 'as --max-timeout of run: for every task, also one with its own timeout')
+    )
     .action(
       guarded('Remote run was not successful', async (tasks: string[], options) => {
         const named: string | undefined = options.build ?? environment.processEnvs.HAMMERKIT_BUILD
@@ -321,7 +324,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         const { name: serverName, server } = await getServer(options.server)
         const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
         const runOptions: { [key: string]: unknown } = {}
-        for (const key of ['env', 'cache', 'timeout']) {
+        for (const key of ['env', 'cache', 'timeout', 'maxTimeout']) {
           if (options[key] !== undefined) {
             runOptions[key] = options[key]
           }

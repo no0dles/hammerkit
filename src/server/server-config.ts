@@ -219,8 +219,12 @@ const kubernetesSandboxesSchema = z
     // when left out. With a class of their own, a ResourceQuota on that class in each
     // caller's namespace holds `sandboxes.limits`.
     storageClass: z.string().min(1).optional(),
-    // how long the pod of a sandbox's files stays after the last request
+    // how long the pod of a sandbox's files stays after the last request; the runner of the
+    // sandbox goes with it
     idle: duration.default('1m'),
+    // exec the commands of a task shaped like a shell (it mounts the sandbox only, has no
+    // needs, outputs or secrets) into one pod per sandbox, in place of a Job each
+    runner: z.boolean().default(true),
     // of the pod of a sandbox's files, which runs git and ripgrep over all of them
     resources: z
       .object({ requests: quantitiesSchema.optional(), limits: quantitiesSchema.optional() })

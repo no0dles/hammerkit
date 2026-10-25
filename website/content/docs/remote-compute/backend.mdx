@@ -190,7 +190,7 @@ service a Deployment, in a namespace of the caller.
 
 The first run of a caller makes their namespace, labelled `hammerkit.dev/managed`. A namespace
 of that name without the label is refused, the server runs no task in a namespace it did not
-make. On every run the server puts in it, replacing what was there:
+make. When a run starts the server puts in it, replacing what was there:
 
 - a RoleBinding of `runRole` to itself, its only rights in the namespace;
 - a `NetworkPolicy` that lets each pod with an open network accept connections from the pods of
@@ -200,6 +200,10 @@ make. On every run the server puts in it, replacing what was there:
 - a `NetworkPolicy` that lets nothing into an egress proxy, so a proxy takes connections only
   from the task its own policy names, and from nobody once that policy is gone;
 - `quota` and `defaultResources`; removing one from the config removes it from the namespace.
+
+The server does that again for each run, but not within 5 minutes of the last time for the
+same namespace: a namespace that was deleted and made anew, or a server that restarted, gets
+it at the next run.
 
 Policies add up, so none of them widens a pod with a limited [network](#network) (labelled
 `hammerkit.dev/network: limited`): its own policy alone decides what it reaches, DNS left out, and
@@ -215,7 +219,8 @@ What a run makes there carries the label `hammerkit.dev/run` and is deleted when
 whether it succeeded or not, and the end of the run waits until its pods and claims are gone:
 an idle caller costs nothing on the cluster but the [claims it keeps](#kept-claims) for a while.
 What a run left because the server stopped before its end is deleted when the caller's next run
-starts.
+starts: the first run of the caller after the server started, or after a run whose objects could
+not all be deleted.
 
 The runs of one caller execute side by side in their namespace, up to
 [`runs.limits.running`](/docs/remote-compute/runs#limits-and-restarts), as the runs of
@@ -405,6 +410,20 @@ server pushes; the Jobs of a run on the sandbox mount the files only. The quota 
 is a `ResourceQuota` on their storage class, when they have one of their own. The pod runs as
 root with only the capabilities to own and change files (the `baseline` Pod Security level
 allows it, `restricted` does not).
+
+A task of a run on a sandbox that mounts all of its files and nothing else runs in the sandbox's runner, a pod
+`hammerkit-runner-<key>` that stays and takes each command over `pods/exec` (see
+[sandboxes](/docs/remote-compute/sandboxes#on-kubernetes)). The pod of the files owns it, so
+it goes with that pod after `sandboxes.idle`, and so does its `NetworkPolicy`, which outlives
+the runner while the pod of the files stays. The runner carries no `hammerkit.dev/run` label:
+the end of a run leaves it, and removing what a stopped server left skips it. It counts
+against the quota like a task's pod, so a namespace with sandboxes needs room for one runner
+per active sandbox besides the runs. It has the security context, resources and placement of
+the task's Job, but no token and no service links, and an init container of
+`busybox:1.37.0-musl` (pinned by digest) that copies the busybox the runner cleans up with:
+a cluster that pulls only from a registry of its own needs that image there too. When the
+runner can not be used (the cluster refuses it, it does not start, or another task of the run is
+in it) the task runs as a Job.
 
 ### What the server may do
 

@@ -154,8 +154,16 @@ describe('kubernetes backend', () => {
         }),
     }
     const selectors: string[] = []
+    let failing = ''
     ;(executor as any).instance = {
-      batchApi: { deleteCollectionNamespacedJob: async (r: any) => selectors.push(r.labelSelector) },
+      batchApi: {
+        deleteCollectionNamespacedJob: async (r: any) => {
+          selectors.push(r.labelSelector)
+          if (r.labelSelector === failing) {
+            throw new Error('the cluster is away')
+          }
+        },
+      },
       appsApi: { deleteCollectionNamespacedDeployment: async () => undefined },
       coreApi: {
         deleteCollectionNamespacedPod: async () => undefined,
@@ -174,10 +182,12 @@ describe('kubernetes backend', () => {
     const context: RunContext = { emit: () => undefined, signal: new AbortController().signal }
     let finish = () => undefined as void
     const finished = new Promise<void>((resolve) => (finish = resolve))
+    const prepared: string[] = []
     // the runs execute until the end of the test
     ;(executor as any).host = {
       execute: async (one: Run) => {
         await placement.prepare(one, context)
+        prepared.push(one.id)
         await finished
       },
     }
@@ -189,15 +199,25 @@ describe('kubernetes backend', () => {
     gates[0]()
     await vi.waitFor(() => expect(steps).toHaveLength(2))
     gates[1]()
-    await vi.waitFor(() => expect(selectors).toHaveLength(2))
+    await vi.waitFor(() => expect(prepared).toHaveLength(2))
     finish()
     await Promise.all(executing)
-    // what a stopped server left goes, not what the other run makes
+    // what a stopped server left goes, not what the other run makes; once, as long as
+    // every run of this server removed what it made
     const both = runs.map((one) => getRunLabelValue(one.id))
-    expect(selectors).toEqual([
-      `hammerkit.dev/run,hammerkit.dev/run notin (${both.join(',')})`,
-      `hammerkit.dev/run,hammerkit.dev/run notin (${[both[1], both[0]].join(',')})`,
-    ])
+    expect(selectors).toEqual([`hammerkit.dev/run,hammerkit.dev/run notin (${both.join(',')})`])
+
+    // a release that failed leaves something, which the next run removes
+    selectors.length = 0
+    failing = `hammerkit.dev/run=${both[0]}`
+    await placement.release(runs[0], context)
+    ;(executor as any).host.execute = (one: Run) => placement.prepare(one, context)
+    const third = { ...runs[0], id: 'run_3' }
+    const preparing = executor.execute(third, context)
+    await vi.waitFor(() => expect(gates).toHaveLength(3))
+    gates[2]()
+    await preparing
+    expect(selectors).toEqual([failing, `hammerkit.dev/run,hammerkit.dev/run notin (${getRunLabelValue('run_3')})`])
   })
 
   it('does not start a run cancelled while it waits for the namespace', async () => {
@@ -420,6 +440,38 @@ describe('kubernetes backend', () => {
       ])
     })
 
+    it('is set up again only after a while, or when it was made anew', async () => {
+      let uid = 'ns-1'
+      const { calls, instance } = cluster({ 'hammerkit.dev/managed': 'true' })
+      ;(instance.coreApi as any).readNamespace = async () => ({
+        metadata: { name: namespace, uid, labels: { 'hammerkit.dev/managed': 'true' } },
+      })
+      const config = serverConfigSchema.parse({
+        issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+        backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit' },
+      }) as any
+      const namespaces = new CallerNamespaces(instance as any, config.backend)
+      const applied = () => calls.filter((call) => call.startsWith('create ')).length
+      await namespaces.prepare(namespace)
+      const once = applied()
+      expect(once).toBeGreaterThan(0)
+      // the next runs of the caller find it as the server left it
+      await namespaces.prepare(namespace)
+      expect(applied()).toBe(once)
+      // deleted and made again, by somebody else
+      uid = 'ns-2'
+      await namespaces.prepare(namespace)
+      expect(applied()).toBe(2 * once)
+      // and after a while, whatever changed in it
+      vi.useFakeTimers({ now: Date.now() + 6 * 60_000, toFake: ['Date'] })
+      try {
+        await namespaces.prepare(namespace)
+      } finally {
+        vi.useRealTimers()
+      }
+      expect(applied()).toBe(3 * once)
+    })
+
     it('gives the claims of tasks the size of the backend, at most its maximum', async () => {
       const { instance } = cluster(null)
       const prepared = await executor({ volumeSize: '5Gi', maxVolumeSize: '50Gi' }, instance).prepare(
@@ -547,7 +599,15 @@ describe('kubernetes backend', () => {
         subPath: 'files',
         label: 'sbx',
         pod: { name: 'files', uid: 'pod-1' },
+        // its shell runs in the sandbox's runner
+        runner: true,
       })
+      const off = await executor({ sandboxes: { runner: false } }, cluster(null).instance).prepare(
+        { id: 'run_1', owner, source } as Run,
+        context,
+        { root: '/runs/run_1', claim }
+      )
+      expect(off.kubernetes.server.workspace.runner).toBeUndefined()
     })
 
     it('refuses a namespace of the same name that hammerkit did not make', async () => {

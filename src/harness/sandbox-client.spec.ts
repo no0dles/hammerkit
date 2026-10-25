@@ -310,6 +310,17 @@ describe('sandbox client', () => {
     })
   })
 
+  itExceptWindows("stops a command after its own timeout, below the shell task's longer one", async () => {
+    await withSandboxServer('harness-client-timeout', async ({ client }) => {
+      const started = Date.now()
+      const ran = await client.exec('sleep 30', '', { timeoutSeconds: 1 })
+      expect(Date.now() - started).toBeLessThan(15_000)
+      expect(ran.run.options).toEqual({ args: [expect.any(String)], maxTimeout: '1s' })
+      expect(ran.exitCode).toBeNull()
+      expect(ran.result?.error).toBe('timed out after 1s')
+    })
+  })
+
   itExceptWindows('refuses a command of a shell that sees none of the files of the sandbox', async () => {
     await withSandboxServer('harness-client-blind-shell', async ({ client }) => {
       // a shell that sees none of the files says so instead of running on an empty directory
