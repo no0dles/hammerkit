@@ -181,6 +181,7 @@ describe('setting up the claim of a task', () => {
     expect(writes).toEqual(
       expect.arrayContaining([
         'debug ensure volume hammerkit-install',
+        'debug start upload container',
         'debug create pod install-install-upload',
         'info clear what an earlier run left in /dev/hammerkit/install',
         `info upload ${join(root, 'package.json')}`,

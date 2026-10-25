@@ -202,7 +202,8 @@ function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, body: unknown): T
 /**
  * Who the commit of a push is by: the caller, as their token names them (`name` and
  * `email`, unless the issuer says the address is not verified), else by their subject at the
- * host of their issuer. Without a name, the local part of the address names them, then the subject. Never what the request says, so a commit can not claim to be
+ * host of their issuer. Without a name, the local part of the address names them, then the
+ * subject. Never what the request says, so a commit can not claim to be
  * somebody else's.
  */
 export function author(principal: Principal): { name: string; email: string } {
