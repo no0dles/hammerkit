@@ -405,6 +405,7 @@ runs:
   network: { allow: [registry.npmjs.org] } # open by default
   secretNetwork: none # open by default, what a task that reads a secret reaches
   args: declared # any by default, which tasks take arguments
+  checksKeep: 30d # default, how long a check is found
 ```
 
 | Key             | What it does                                                                                                                                                                                                                                                                                                                    |
@@ -419,6 +420,7 @@ runs:
 | `network`       | The most any task or service of a run reaches besides the services it needs: `open` (the default), `none` or `{ allow: [hosts] }`, as the [`network`](/docs/task/network) of a task. See [Network](#network).                                                                                                                   |
 | `secretNetwork` | The most a task or service that reads a secret, or a variable of the server other than `PATH`, `HOME` and `CI`, reaches: `open` (the default), `none` or `{ allow: [hosts] }`, within `network`. See [Tasks that read secrets](#tasks-that-read-secrets).                                                                     |
 | `args`          | Which tasks take [arguments](#arguments): `any` (the default) but those with `args: false`, or `declared`, only those with `args: true`.                                                                                                                                                                                          |
+| `checksKeep`    | How long a [check](/docs/remote-compute/checks) that a run passed is found by `remote verify`. `30d` by default.                                                                                                                                                                                                                  |
 
 ## Network
 

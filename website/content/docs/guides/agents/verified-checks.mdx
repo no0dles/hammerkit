@@ -1,0 +1,219 @@
+---
+title: 'Checks that ran before CI'
+description: 'Run tests and builds on the server before you push, and let a CI job only verify that they passed for the files of its commit, in seconds and without waiting.'
+---
+
+<Callout type="warn">
+
+Experimental. The commands and settings can still change between releases. GitLab CI has
+not been tested against a real GitLab yet.
+
+</Callout>
+
+[CI through the server](/docs/guides/agents/github-actions) moves the work of a CI job to the
+server, but the job still waits for it: a runner that does nothing for the minutes the tests
+take. A check task, such as `test` or `e2e`, does not have to run in CI at all when it already
+passed on the server for the same files:
+
+1. **Before the push**, an agent runs the task as a _check_ on its sandbox, or a person runs it
+   on the server for the branch they pushed. The server notes the task, the
+   [check key](/docs/remote-compute/checks#check-keys) of the files it read, and that it passed.
+2. **The CI job** runs [`hammerkit remote verify test e2e`](/docs/cli/remote#verifying-checks)
+   in its checkout. It computes the same keys over the checked-out files, asks the server, and
+   passes when the server has a passed check for each. Anything else fails at once: the job
+   never waits for a run and never starts one.
+
+A check counts for every commit with the same files, whoever ran it and where: a commit that
+only changes a README, an amended message or the squash commit on `main` is still verified. A
+change to a file a task reads is not.
+
+Deploys stay as in [CI through the server](/docs/guides/agents/github-actions): a deploy is
+something to do, not something to have done.
+
+This guide adds checks to a server set up with the [Kubernetes guide](/docs/guides/agents/kubernetes)
+and the CI guide. Each `server.yaml` block goes into the config of that guide's ConfigMap.
+
+## 1. Tasks that can be checked
+
+A check is only as complete as the `src` of its task: the key covers the files `src` names,
+of the task and of the tasks it depends on, and nothing else. A test that reads a fixture
+`src` leaves out would still be verified after the fixture changed. Name every folder the
+task reads:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  install:
+    image: node:24-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    cmds: [npm ci]
+  test:
+    image: node:24-alpine
+    deps: [install]
+    src: [src, test, tsconfig.json]
+    cmds: [npm test]
+```
+
+What the key covers, besides the files:
+
+- The task's definition: commands, image, variables, mounts and the definitions of its
+  dependencies. A check of another version of the build file does not count when it changed
+  the task, so `cmds: [true]` published on the side does not pass for the real `test`.
+- Not what dependencies generate (`node_modules` above): they are made again from their own
+  `src`, which is in the key.
+- Not `.git`, and not the run's arguments: a run with arguments is never a check.
+
+A task without `src`, or whose `src` matches no file, here or in a dependency, can not be
+verified. `remote verify` says so and fails: `e2e: can not be verified, it, or a task it
+depends on, declares no src that matches a file`.
+
+The CI runner and the server have to compute the same key. They do for tasks with an image.
+A task whose variables read the variables of the process (`$HOME`, `$CI`) can get another key
+in the CI job than on the server: `verify` then finds nothing and fails, it never passes by
+mistake. Keep check tasks to fixed values.
+
+## 2. Let the CI job read checks
+
+The CI job only needs to read what passed. `checks: read` allows that for the repositories of
+`repos`, and nothing else: no runs, no build files.
+
+```yaml title="server.yaml"
+entitlements:
+  # every job of the repository, pull requests too: read its checks
+  - claims:
+      iss: https://token.actions.githubusercontent.com
+      match: { repository_id: '123456789' }
+    repos: [github.com/acme/shop]
+    checks: read
+```
+
+`builds: run` or more also lets a caller read the checks of its `repos`, so the entitlements
+of the CI guide already do. Who may run checks needs `repos` for the repository as well: a
+check counts like a run from the repository.
+
+```yaml title="server.yaml"
+entitlements:
+  # the agent of the Kubernetes guide: sandboxes, runs, and checks of its repositories
+  - subject: { iss: https://accounts.google.com, sub: '<id of the agent>' }
+    repos: [github.com/acme/shop]
+    builds: run
+    sandboxes: [{ repo: github.com/acme/shop, branches: { main: pull, 'agent/**': push } }]
+```
+
+How long a check is found after it passed is `runs.checksKeep`, 30 days by default.
+
+## 3. Check before the push
+
+**An agent** on a sandbox calls its `check` tool with the task, `test`, after it is done
+with its changes and before it calls `push`. All three [clients](/docs/remote-compute/agents)
+have it. The tool answers whether the check passed:
+
+```
+check test passed (run run_Qx3k9ZpL2mW7vN4a): CI can verify it for a push of these files
+```
+
+The check does not run in the sandbox's directory but on a copy of the files a push would
+commit: what `.gitignore` leaves out is not there. In its sandbox an agent can write any
+ignored file, such as a `node_modules/.bin/vitest` that exits 0, and no key would notice it.
+In the copy the dependencies are made from their `src`, or taken from the cache of the
+repository's [ref runs](/docs/remote-compute/runs#source-files).
+
+The pushed commit then has exactly the files the check ran on. An edit after the check
+changes the key of every task that reads the file, so check again before pushing it.
+
+**A person** pushes their branch and starts the tasks on the server for it, without waiting:
+
+```bash
+git push
+hammerkit remote run test e2e --detach
+```
+
+```
+run_Qx3k9ZpL2mW7vN4a on build: test, e2e from feature-x at 4be1a07c...
+follow it with: hammerkit remote show run_Qx3k9ZpL2mW7vN4a
+```
+
+A run from a branch, without arguments, is a check: what it passes counts. Open the pull
+request once it passed, or re-run its CI job.
+
+## 4. The CI job
+
+```yaml title=".github/workflows/checks.yaml"
+name: checks
+on:
+  pull_request:
+  push: { branches: [main] }
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HAMMERKIT_TOKEN_COMMAND: >-
+        curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+        "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://hammerkit.example.com" | jq -r .value
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ github.event.pull_request.head.sha || github.sha }}' }
+      - run: npm install -g hammerkit@1.28.0
+      - run: |
+          hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://token.actions.githubusercontent.com
+          hammerkit remote use hammerkit
+      - run: hammerkit remote verify test e2e --repo github.com/acme/shop
+```
+
+The checkout is of the pull request's head, the commit that was pushed, not the merge commit
+GitHub makes. Both usually have the same files for `test`, but the head is what was checked.
+`--repo` names the repository as the server knows it; left out, it is the `origin` of the
+checkout.
+
+A job that passes prints what passed, and when:
+
+```
+test: passed 2026-10-25T09:14:03.120Z in 1m 12s, run_Qx3k9ZpL2mW7vN4a by agent-x, from a check of sandbox sbx_4vJ0mT2cX9qLw1aB, fetched at 4be1a07c1a2b
+e2e: passed 2026-10-25T09:15:40.002Z from the cache, run_8Lw2… by 1180…, from feature-x at 9e1f20aa31c4
+```
+
+A job that does not, fails in the seconds it took to hash the files:
+
+```
+test: no run on hammerkit passed it for these files
+not verified: test; run on the server: hammerkit remote run test
+```
+
+Re-run the job after the check passed. The deploy job of the CI guide stays: it runs on
+`main` after the checks.
+
+### GitLab CI
+
+```yaml title=".gitlab-ci.yml"
+checks:
+  image: node:24-alpine
+  id_tokens:
+    HAMMERKIT_TOKEN: { aud: https://hammerkit.example.com }
+  script:
+    - npm install -g hammerkit@1.28.0
+    - hammerkit remote add hammerkit https://hammerkit.example.com --issuer https://gitlab.com
+    - hammerkit remote use hammerkit
+    - hammerkit remote verify test e2e --repo gitlab.com/acme/shop
+```
+
+With an entitlement for GitLab's tokens, see [GitLab CI](/docs/remote-compute/authentication#gitlab-ci):
+
+```yaml title="server.yaml"
+entitlements:
+  - claims: { iss: https://gitlab.com, match: { project_id: '4711' } }
+    repos: [gitlab.com/acme/shop]
+    checks: read
+```
+
+## What a check can not tell
+
+- **Files `src` leaves out.** See [step 1](#1-tasks-that-can-be-checked).
+- **Who wrote the code.** A check says the tasks passed for these files, not that anybody
+  reviewed them. Branch protection and reviews still decide what is merged.
+- **Flaky tests.** A test that passed once for the files counts, as it would in the cache.
+- **A yanked version.** A check that passed with a version of the build file that was
+  [yanked](/docs/remote-compute/build-files) since does not count any more.

@@ -16,8 +16,8 @@ there, as published tasks in their containers. hammerkit connects agents to it t
 | Client                                          | What it gets                                                                                                                                                      |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`hammerkit remote mcp`](#hammerkit-remote-mcp) | MCP tools for any client that speaks MCP: Claude Code, Claude Desktop, Cursor, a custom agent.                                                                    |
-| [pi](#pi)                                       | pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`, working on the sandbox, and `push`.                                                            |
-| [opencode](#opencode)                           | opencode's own `read`, `write`, `edit`, `patch`, `shell`, `grep` and `glob` (`apply_patch`, `bash` and `list` on opencode 1), working on the sandbox, and `push`. |
+| [pi](#pi)                                       | pi's own `read`, `write`, `edit`, `bash`, `ls`, `find` and `grep`, working on the sandbox, and `check` and `push`.                                                |
+| [opencode](#opencode)                           | opencode's own `read`, `write`, `edit`, `patch`, `shell`, `grep` and `glob` (`apply_patch`, `bash` and `list` on opencode 1), working on the sandbox, and `check` and `push`. |
 
 pi and opencode keep the tools their models are tuned for, with the same names, parameters
 and output: only where they read, write and run moves. The MCP tools take the shapes models
@@ -84,7 +84,7 @@ Give the agent's identity an [entitlement](/docs/remote-compute/entitlements) wi
 repositories and branches under `sandboxes`, `builds: run`, and no account that holds
 production secrets. `[{ repo: github.com/corp/*, branches: { main: pull, "agent/**": push } }]`
 lets it start from `main` and push to `agent/**` with the [`push`](#taking-the-work-out) tool;
-with only `pull` it hands back patches.
+with only `pull` it hands back patches. `repos: [github.com/corp/*]` lets it [check](#checking-before-the-push) its work.
 
 ## Settings
 
@@ -129,6 +129,7 @@ Paths are relative to the root of the sandbox. The tools:
 | `run_task`    | `task`, `args`                                                                                                       | Runs another published task, such as `test`, and answers its [result](/docs/remote-compute/runs#results-and-waiting): status, exit code, why it was not taken from the cache, its last lines. |
 | `run_logs`    | `run`, `task`, `tail`, `from`, `limit`, `grep`, `ignore_case`, `context`                                             | Reads more of the [log of a run](/docs/remote-compute/runs#logs).                                                                                                                             |
 | `changes`     | `format`: `summary`, `diff` or `patch`                                                                               | What changed since the sandbox was fetched.                                                                                                                                                   |
+| `check`       | `task`                                                                                                               | Runs a task as a check on the files a push would commit, see [checking before the push](#checking-before-the-push).                                                                           |
 | `push`        | `branch`, `message`                                                                                                  | Commits the changes and pushes them to a branch, see [taking the work out](#taking-the-work-out).                                                                                             |
 
 Reads and searches are marked `readOnlyHint`, the edits `destructiveHint`, `push`
@@ -189,6 +190,7 @@ keeps the variables it was started with: run `opencode service stop` after chang
 | `glob`     | `glob`        | `pattern`, `path`, and on opencode 2 `limit`                                           |
 | `grep`     | `grep`        | `pattern`, `path`, `include`, and on opencode 2 `literal`, `caseSensitive` and `limit` |
 |            | `list`        | `path`, `ignore`                                                                       |
+| `check`    | `check`       | `task`, see [Checking before the push](#checking-before-the-push)                      |
 | `push`     | `push`        | `branch`, `message`, see [Taking the work out](#taking-the-work-out)                   |
 
 The tools answer in opencode's words, and opencode still picks the patch tool for GPT models
@@ -218,6 +220,24 @@ Tools the plugin does not replace still work on the machine opencode runs on, su
 `webfetch` and `skill`. Turn off the ones that touch local files and that your opencode
 version still has, for example `"tools": { "multiedit": false }` in the `opencode.json` of
 opencode 1.
+
+## Checking before the push
+
+Every client has a `check` tool with a `task`, such as `test`. It runs the task as a
+[check](/docs/remote-compute/checks#checks-of-a-sandbox): on a copy of the files a push of the
+sandbox would commit, not on the sandbox, whose ignored files the agent can write. When it
+passes, a CI job that runs [`remote verify`](/docs/cli/remote#verifying-checks) for the pushed
+commit passes without running the task, see
+[Checks that ran before CI](/docs/guides/agents/verified-checks). The tool answers whether it
+passed, and the last lines of a failure:
+
+```
+check test passed (run run_Qx3k9ZpL2mW7vN4a): CI can verify it for a push of these files
+```
+
+The tool tells the model to check right before `push` and to push without changing files in
+between. A check needs `repos` for the sandbox's repository in the agent's entitlement, as a
+run from a ref does.
 
 ## Taking the work out
 

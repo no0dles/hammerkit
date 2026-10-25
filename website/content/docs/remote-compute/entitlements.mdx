@@ -30,9 +30,10 @@ entitlements:
 | `accounts` | The [service accounts](/docs/remote-compute/accounts) the caller may `use` or `request`, see [Account levels](#account-levels). |
 | `repos` | The repositories the caller may name in a run from a git ref, see [Repositories](#repositories). |
 | `builds` | What the caller may do with build files: `run`, `propose` or `publish`, see [Build file levels](#build-file-levels). |
+| `checks` | `read`: the caller may look up the [checks](/docs/remote-compute/checks) of the repositories of `repos`, and nothing else, for a CI job that only verifies. A `builds` level allows it too. |
 | `sandboxes` | The repositories the caller may keep [sandboxes](/docs/remote-compute/sandboxes) of, one `repo` (`host/path` pattern) per entry with a `pull` or `push` type per branch pattern (`branches`). A list of its own: `repos` is for runs from a ref. |
 
-An entry names accounts, a `builds` level, `sandboxes` or more of them.
+An entry names accounts, a `builds` level, `checks`, `sandboxes` or more of them. `checks` needs `repos`.
 
 ## Who
 
@@ -97,6 +98,7 @@ server, they are not even shown which build files exist.
   ],
   "repos": ["github.com/corp/payments"],
   "builds": "run",
+  "checks": "read",
   "sandboxes": []
 }
 ```

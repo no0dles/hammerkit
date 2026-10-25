@@ -24,6 +24,7 @@ hammerkit remote login build
 hammerkit remote accounts build
 hammerkit remote publish build
 hammerkit remote run test --server build
+hammerkit remote verify test --server build
 hammerkit remote approvals build
 hammerkit remote approve run_Qx3k9ZpL2mW7vN4a build
 hammerkit remote list
@@ -31,7 +32,7 @@ hammerkit remote use build
 hammerkit remote remove build
 ```
 
-Except for `publish` and `run`, the commands only touch your host config and talk to the
+Except for `publish`, `run` and `verify`, the commands only touch your host config and talk to the
 server, so they work with or without a build file in the working directory.
 
 ## Commands
@@ -47,6 +48,7 @@ server, so they work with or without a build file in the working directory.
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
 | `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). |
 | `remote run <tasks...>` | Run tasks of a published build file on a server from a git ref, print their output and exit as they did, see [Running tasks](#running-tasks). |
+| `remote verify <tasks...>` | Check that the server already passed tasks for the files checked out here, without running them, see [Verifying checks](#verifying-checks). |
 | `remote versions [server]` | List the published versions, newest first, with who published them, where they come from and whether they were yanked. `--filter key=value` (repeatable) keeps the ones with that [annotation](/docs/remote-compute/build-files#annotations). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
 | `remote show <run or hash> [server]` | Show a run that waits for your approval, or a proposed or published version, in full: per task the commands, image, secrets and accounts, and every file of a version, see [Approving runs](#approving-runs) and [Proposing](#proposing-a-version). |
@@ -213,6 +215,7 @@ What it runs, when you leave the options out, is what is checked out where you a
 | `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
 | `--server <name>` | The server. | The default of `remote use`. |
 | `--env`, `--cache`, `--timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
+| `--detach` | Submit the run and exit, without following it: it prints the run and `follow it with: hammerkit remote show <id>`. For a [check](#verifying-checks) that CI verifies later. | Follow the run to its end. |
 
 What follows `--` goes to the one task named, as the
 [arguments](/docs/remote-compute/runs#arguments) of a run. The server refuses them for a
@@ -231,6 +234,34 @@ up to ten seconds for the server to take the cancel before it ends. The token is
 [Signing in](#signing-in), or `HAMMERKIT_TOKEN_COMMAND` / `HAMMERKIT_TOKEN`, which is how a CI
 job signs in with its own identity, see
 [CI through a server](/docs/guides/agents/github-actions).
+
+## Verifying checks
+
+`remote verify` tells whether the server already passed tasks for the files checked out here,
+so a CI job does not have to run them:
+
+```
+$ hammerkit remote verify test e2e --server build
+test: passed 2026-10-25T09:14:03.120Z in 1m 12s, run_Qx3k9ZpL2mW7vN4a by agent-x, from a check of sandbox sbx_4vJ0mT2cX9qLw1aB, fetched at 4be1a07c1a2b
+e2e: no run on build passed it for these files
+not verified: e2e; run on the server: hammerkit remote run e2e
+```
+
+It computes the [check key](/docs/remote-compute/checks#check-keys) of each task over the files
+here, runs nothing, and asks the server for a run that passed it: a run from a ref without
+arguments, or a check of a sandbox. It exits `0` when there is one for every task, and `1` at
+once otherwise, also for a task that has no key (no `src` that matches a file). It never waits
+for a run and never starts one. The guide is
+[Checks that ran before CI](/docs/guides/agents/verified-checks).
+
+| Option | What it is | Left out |
+| --- | --- | --- |
+| `--repo <host/path>` | The repository, as the server knows it. | The `origin` of the checkout. |
+| `--env <name>` | The environment of the build file, as for `run`. | None. |
+| `--server <name>` | The server. | The default of `remote use`. |
+
+The caller needs `checks: read` or a `builds` level, with `repos` that cover the repository,
+see [Entitlements](/docs/remote-compute/entitlements).
 
 ## Approving runs
 
