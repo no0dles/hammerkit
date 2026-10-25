@@ -124,12 +124,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata: { name: hammerkit, namespace: $NAME }
 ---
-# may create the namespaces of callers and bind $NAME-runs in them
+# may create the namespaces of callers and bind $NAME-runs in them, and delete those of
+# service runs
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: $NAME-server }
 rules:
-  - { apiGroups: [''], resources: [namespaces], verbs: [get, list, create] }
+  - { apiGroups: [''], resources: [namespaces], verbs: [get, list, create, delete] }
   - { apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, create, update] }
   - { apiGroups: [rbac.authorization.k8s.io], resources: [clusterroles], verbs: [bind], resourceNames: [$NAME-runs] }
 ---
@@ -170,6 +171,25 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata: { name: $NAME-managed-namespaces }
 spec: { policyName: $NAME-managed-namespaces, validationActions: [Deny] }
+---
+# the server deletes only the namespaces of its service runs
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: $NAME-service-run-namespaces }
+spec:
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [''], apiVersions: ['*'], operations: [DELETE], resources: [namespaces] }
+  matchConditions:
+    - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:$NAME:hammerkit'" }
+  validations:
+    - expression: "oldObject.metadata.?labels['hammerkit.dev/service-run'].hasValue()"
+    - expression: "oldObject.metadata.name.matches('^$NAME-[0-9a-f]{16}$')"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: $NAME-service-run-namespaces }
+spec: { policyName: $NAME-service-run-namespaces, validationActions: [Deny] }
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -417,8 +437,9 @@ hammerkit remote add $NAME https://$DOMAIN --issuer https://accounts.google.com 
   pool's audience. Google's STS exchanges it for a short-lived access token, which reads the
   App's key. Nothing else is granted to it. See [A GitHub App](/docs/remote-compute/sources#a-github-app) for
   the token command.
-- **The two ClusterRoles and the admission policy.** The server creates a namespace per
-  caller and binds `$NAME-runs` there, and nowhere else. See
+- **The two ClusterRoles and the admission policies.** The server creates a namespace per
+  caller and binds `$NAME-runs` there, and nowhere else. It deletes only the namespaces of
+  [service runs](/docs/remote-compute/service-runs), which it makes per run. See
   [What the server may do](/docs/remote-compute/backend#what-the-server-may-do).
 - **`deniedEgress`.** A task with an open network can not reach the metadata server or your
   cluster's other workloads: the private ranges are denied by default, GKE's service range has
@@ -466,7 +487,7 @@ kubectl get ns -l hammerkit.dev/managed -o name | grep -E "^namespace/$NAME-[0-9
 kubectl delete ns $NAME
 kubectl delete clusterrole $NAME-server $NAME-runs
 kubectl delete clusterrolebinding $NAME-server
-kubectl delete validatingadmissionpolicybinding,validatingadmissionpolicy $NAME-managed-namespaces
+kubectl delete validatingadmissionpolicybinding,validatingadmissionpolicy $NAME-managed-namespaces $NAME-service-run-namespaces
 gcloud iam workload-identity-pools delete $NAME --location global --project $PROJECT --quiet
 gcloud secrets delete $NAME-github-app-key --project $PROJECT --quiet
 gcloud compute addresses delete $NAME --global --project $PROJECT --quiet   # if you reserved one for HTTPS
