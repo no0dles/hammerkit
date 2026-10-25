@@ -113,10 +113,11 @@ describe('utils/tar', () => {
       process.removeListener('uncaughtException', onError)
     })
 
-    async function packEmpty(cwd: string, file: string): Promise<string> {
+    async function packEmpty(cwd: string, file: string, gzip = false): Promise<string> {
       const target = mkdtempSync(join(root, 'empty-'))
-      await pipeline(Readable.from(packArchive({ cwd }, [file])), extract({ cwd: target }))
-      // the second end comes in a later fs callback
+      await pipeline(Readable.from(packArchive({ cwd, gzip }, [file])), extract({ cwd: target }))
+      // the second end is thrown in the stat callback, outside the pipeline; wait a little so
+      // a slower platform can't miss it
       await new Promise((resolve) => setTimeout(resolve, 50))
       return target
     }
@@ -127,9 +128,12 @@ describe('utils/tar', () => {
       writeFileSync(join(root, 'store', 'empty.js'), '')
       linkSync(join(root, 'store', 'empty.js'), join(root, 'project', 'node_modules', 'empty.js'))
 
-      for (let i = 0; i < 5; i++) {
-        const target = await packEmpty(join(root, 'project'), 'node_modules')
-        expect(readFileSync(join(target, 'node_modules', 'empty.js'), 'utf8')).toBe('')
+      // with gzip, the second end is a zlib stream error instead
+      for (const gzip of [false, true]) {
+        for (let i = 0; i < 5; i++) {
+          const target = await packEmpty(join(root, 'project'), 'node_modules', gzip)
+          expect(readFileSync(join(target, 'node_modules', 'empty.js'), 'utf8')).toBe('')
+        }
       }
       expect(errors).toEqual([])
     })
