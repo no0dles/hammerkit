@@ -4,9 +4,17 @@ import { homedir } from 'os'
 import { dirname, isAbsolute, join } from 'path'
 import { pathToFileURL } from 'url'
 import { Environment } from '../executer/environment'
-import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
+import {
+  connectSandbox,
+  connectServer,
+  DEFAULT_SHELL_TASK,
+  getHarnessEnvironment,
+  HarnessOptions,
+  harnessOptionsFromEnv,
+} from './connect'
 import { capOutput, formatTree, toColonNumbers } from './format'
-import { oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
+import { listPublishedTasks, oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
+import { createTaskTools, readLogHint, readTaskListing, TaskListing, taskToolArgs, taskToolSchema } from './task-tools'
 
 // What opencode passes a tool (`ToolContext` of `@opencode-ai/plugin`), the parts used here.
 export interface OpencodeToolContext {
@@ -51,30 +59,68 @@ interface GrepArgs {
 /**
  * The tools of opencode on a hammerkit sandbox: `read`, `write`, `edit`, `apply_patch`,
  * `bash`, `grep`, `glob` and `list` with the parameters of opencode's own, which a plugin replaces
- * by registering tools of the same name, and `push`, which takes the work out as a branch. opencode resolves paths against its directory,
- * which stands for the root of the sandbox. `schema` is the zod of opencode
+ * by registering tools of the same name, `run_task` and `run_logs` for the tasks of the build
+ * file, and `push`, which takes the work out as a branch. opencode resolves paths against its
+ * directory, which stands for the root of the sandbox. `schema` is the zod of opencode
  * (`tool.schema` of `@opencode-ai/plugin`), so it reads the parameters as its own.
  */
 export function hammerkitOpencodePlugin(schema: any, settings: OpencodePluginOptions = {}): OpencodePlugin {
-  return async (input) => ({ tool: createOpencodeTools(schema, lazySandbox(input.directory, settings)) })
+  return async (input) => {
+    const harness = connectHarness(input.directory, settings)
+    const tasks = await harness.tasks()
+    return { tool: createOpencodeTools(schema, harness.client, { tasks, shell: harness.shell }) }
+  }
 }
 
-// the sandbox, connected on the first call of a tool and again after a failed connect
-function lazySandbox(directory: string, settings: OpencodePluginOptions): () => Promise<SandboxClient> {
+interface Harness {
+  // the sandbox, connected on the first call of a tool and again after a failed connect
+  client: () => Promise<SandboxClient>
+  // the tasks of the published version, for the description of run_task
+  tasks: () => Promise<TaskListing>
+  // the shell task, '' for none
+  shell: string
+}
+
+function connectHarness(directory: string, settings: OpencodePluginOptions): Harness {
   const environment = settings.environment ?? getHarnessEnvironment(directory)
   const options = settings.options ?? harnessOptionsFromEnv(environment.processEnvs)
   let connecting: Promise<SandboxClient> | undefined
-  return () => {
+  const client = () => {
     if (!connecting) {
       connecting = settings.client ? settings.client() : connectSandbox(environment, options)
       connecting.catch(() => (connecting = undefined))
     }
     return connecting
   }
+  return {
+    client,
+    // the version is read without a sandbox, which the first call of a tool takes
+    tasks: () =>
+      readTaskListing(async () => {
+        if (settings.client) {
+          return (await client()).tasks()
+        }
+        const server = await connectServer(environment, options)
+        return listPublishedTasks(server.connection, server.build)
+      }),
+    shell: options.shell ?? DEFAULT_SHELL_TASK,
+  }
 }
 
 // the names of the tools of the plugin, which stand in for opencode's own
-export const OPENCODE_TOOLS = ['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob', 'push', 'list']
+export const OPENCODE_TOOLS = [
+  'read',
+  'write',
+  'edit',
+  'apply_patch',
+  'bash',
+  'grep',
+  'glob',
+  'run_task',
+  'run_logs',
+  'push',
+  'list',
+]
 
 /**
  * The plugin as the file `harness/opencode.ts` exports it: it takes the zod of opencode from
@@ -189,7 +235,18 @@ export interface OpencodeV2Plugin {
 }
 
 // the names of the tools of the plugin on opencode 2, which stand in for its own
-export const OPENCODE_V2_TOOLS = ['read', 'write', 'edit', 'patch', 'shell', 'glob', 'grep', 'push']
+export const OPENCODE_V2_TOOLS = [
+  'read',
+  'write',
+  'edit',
+  'patch',
+  'shell',
+  'glob',
+  'grep',
+  'run_task',
+  'run_logs',
+  'push',
+]
 
 // the tools of opencode 2 that work on this machine and have no stand-in on a sandbox
 export const OPENCODE_V2_LOCAL_TOOLS = [
@@ -200,25 +257,31 @@ export const OPENCODE_V2_LOCAL_TOOLS = [
 
 /**
  * The plugin for opencode 2: the tools of {@link createOpencodeV2Tools} in place of opencode's own,
- * and none of the worktree tools, which would make worktrees of this machine. opencode 2 takes a
- * plugin as an object with an id and a setup, it needs no package of opencode.
+ * and none of the worktree tools, which would make worktrees of this machine, nor its shell
+ * when there is no shell task. opencode 2 takes a plugin as an object with an id and a setup, it
+ * needs no package of opencode.
  */
 export function hammerkitOpencodeV2Plugin(settings: OpencodePluginOptions = {}): OpencodeV2Plugin {
   return {
     id: 'hammerkit',
     async setup(context) {
       const directory = context.location.directory
-      const tools = createOpencodeV2Tools(lazySandbox(directory, settings), directory)
+      const harness = connectHarness(directory, settings)
+      const tasks = await harness.tasks()
+      const tools = createOpencodeV2Tools(harness.client, directory, { tasks, shell: harness.shell })
       await context.tool.transform((editor) => {
         for (const tool of tools) {
           editor.add(tool)
         }
-        for (const name of OPENCODE_V2_LOCAL_TOOLS) {
+        for (const name of [...OPENCODE_V2_LOCAL_TOOLS, ...(harness.shell ? [] : ['shell'])]) {
           editor.remove(name)
         }
       })
       // opencode describes the tool named shell anew for each request, as the shell of this machine
-      const shell = tools.find((tool) => tool.name === 'shell')!
+      const shell = tools.find((tool) => tool.name === 'shell')
+      if (!shell) {
+        return
+      }
       for (const name of ['context', 'compaction', 'generate'] as const) {
         await context.session.hook(name, (request) => {
           if (request.tools.shell) {
@@ -241,13 +304,26 @@ export function hammerkitOpencodeEntry(
   return { ...hammerkitOpencodeV2Plugin(settings), server: loadHammerkitOpencodePlugin(load, settings) }
 }
 
+// what the tools of the plugin are made with besides the sandbox
+export interface OpencodeToolOptions {
+  // the tasks the description of run_task lists
+  tasks?: TaskListing
+  // the shell task, '' for none: then there is no shell tool on opencode 2, and bash refuses on opencode 1
+  shell?: string
+}
+
 /**
  * The tools of opencode 2 on a hammerkit sandbox, with the inputs of opencode's own: the tools of
  * opencode 1 under their new names (`patch`, `shell`), paths as `path`, relative to `directory`
  * or absolute below it. opencode 2 has no `list`, `read` lists a directory.
  */
-export function createOpencodeV2Tools(client: () => Promise<SandboxClient>, directory: string): OpencodeV2Tool[] {
-  const tools = opencodeTools(client)
+export function createOpencodeV2Tools(
+  client: () => Promise<SandboxClient>,
+  directory: string,
+  options: OpencodeToolOptions = {}
+): OpencodeV2Tool[] {
+  const tools = opencodeTools(client, options)
+  const shell = options.shell ?? DEFAULT_SHELL_TASK
   const tool = (
     name: string,
     of: string,
@@ -265,6 +341,7 @@ export function createOpencodeV2Tools(client: () => Promise<SandboxClient>, dire
     },
   })
   const same = (input: unknown) => input
+  const taskTools = Object.fromEntries(createTaskTools().map((task) => [task.name, task]))
   return [
     tool(
       'read',
@@ -311,19 +388,23 @@ export function createOpencodeV2Tools(client: () => Promise<SandboxClient>, dire
       same,
       'edit'
     ),
-    tool(
-      'shell',
-      'bash',
-      object(
-        {
-          command: text('The command to execute'),
-          workdir: text('The directory to run the command in, relative to the project. Use this instead of cd.'),
-          timeout: count('Timeout in milliseconds, 0 for the default of the shell task'),
-        },
-        ['command']
-      ),
-      ({ timeout, ...rest }) => ({ ...rest, timeout: timeout || undefined })
-    ),
+    ...(shell
+      ? [
+          tool(
+            'shell',
+            'bash',
+            object(
+              {
+                command: text('The command to execute'),
+                workdir: text('The directory to run the command in, relative to the project. Use this instead of cd.'),
+                timeout: count('Timeout in milliseconds, 0 for the default of the shell task'),
+              },
+              ['command']
+            ),
+            ({ timeout, ...rest }) => ({ ...rest, timeout: timeout || undefined })
+          ),
+        ]
+      : []),
     tool(
       'glob',
       'glob',
@@ -353,6 +434,9 @@ export function createOpencodeV2Tools(client: () => Promise<SandboxClient>, dire
       ),
       same
     ),
+    ...['run_task', 'run_logs'].map((name) =>
+      tool(name, name, { ...taskToolSchema(taskTools[name]), additionalProperties: false }, same)
+    ),
     tool(
       'push',
       'push',
@@ -378,9 +462,16 @@ const object = (properties: { [name: string]: unknown }, required: string[]) => 
   additionalProperties: false,
 })
 
-export function createOpencodeTools(z: any, client: () => Promise<SandboxClient>): { [name: string]: OpencodeTool } {
+export function createOpencodeTools(
+  z: any,
+  client: () => Promise<SandboxClient>,
+  options: OpencodeToolOptions = {}
+): { [name: string]: OpencodeTool } {
   return Object.fromEntries(
-    Object.entries(opencodeTools(client)).map(([name, { args, ...tool }]) => [name, { ...tool, args: args(z) }])
+    Object.entries(opencodeTools(client, options)).map(([name, { args, ...tool }]) => [
+      name,
+      { ...tool, args: args(z) },
+    ])
   )
 }
 
@@ -389,7 +480,26 @@ interface OpencodeToolBody extends Omit<OpencodeTool, 'args'> {
   args(z: any): { [name: string]: unknown }
 }
 
-function opencodeTools(client: () => Promise<SandboxClient>): { [name: string]: OpencodeToolBody } {
+function opencodeTools(
+  client: () => Promise<SandboxClient>,
+  options: OpencodeToolOptions = {}
+): { [name: string]: OpencodeToolBody } {
+  const shell = options.shell ?? DEFAULT_SHELL_TASK
+  const tasks = Object.fromEntries(
+    createTaskTools(options.tasks, shell || undefined).map((task): [string, OpencodeToolBody] => [
+      task.name,
+      {
+        description: task.description,
+        args: (z) => taskToolArgs(task, z),
+        async execute(args: { task?: string; run?: string }, context) {
+          const output = await task.call(await client(), args, context.abort)
+          return { title: task.name === 'run_task' ? `run ${args.task}` : `log of ${args.run}`, output }
+        },
+      },
+    ])
+  )
+  // without a shell task bash still stands in for opencode's, which would run on this machine
+  const noShell = 'There is no shell on this hammerkit sandbox: run the tasks of the build file with run_task.'
   const where = (context: OpencodeToolContext, path: string | undefined) =>
     toSandboxPath(context.directory, path ?? context.directory)
 
@@ -504,37 +614,45 @@ function opencodeTools(client: () => Promise<SandboxClient>): { [name: string]: 
       },
     },
 
-    bash: {
-      description:
-        'Run a shell command on the hammerkit sandbox, as the shell task of the published build file, in its ' +
-        'container. Commands run one at a time and nothing is kept between them but the files. They start in ' +
-        'the root of the sandbox, where the paths of this machine do not exist: give them relative paths.',
-      args: (z) => ({
-        command: z.string().describe('The command to execute'),
-        timeout: z.number().int().min(1).optional().describe('Optional timeout in milliseconds'),
-        workdir: z
-          .string()
-          .optional()
-          .describe(
-            "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands."
-          ),
-      }),
-      async execute(args: { command: string; timeout?: number; workdir?: string }, context) {
-        const sandbox = await client()
-        const ran = await sandbox.exec(args.command, where(context, args.workdir), {
-          signal: context.abort,
-          timeoutSeconds: args.timeout ? args.timeout / 1000 : undefined,
-        })
-        const lines = [capOutput(ran.output, 'narrow the command down, for example with grep, head or tail')]
-        if (ran.exitCode === null) {
-          lines.push(`hammerkit: ${ran.result?.error ?? ran.run.error ?? `the run ended ${ran.run.state}`}`)
-        } else if (ran.exitCode !== 0) {
-          lines.push(`Exit code: ${ran.exitCode}`)
+    bash: shell
+      ? {
+          description:
+            'Run a shell command on the hammerkit sandbox, as the shell task of the published build file, in its ' +
+            'container. Commands run one at a time and nothing is kept between them but the files. They start in ' +
+            'the root of the sandbox, where the paths of this machine do not exist: give them relative paths.',
+          args: (z) => ({
+            command: z.string().describe('The command to execute'),
+            timeout: z.number().int().min(1).optional().describe('Optional timeout in milliseconds'),
+            workdir: z
+              .string()
+              .optional()
+              .describe(
+                "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands."
+              ),
+          }),
+          async execute(args: { command: string; timeout?: number; workdir?: string }, context) {
+            const sandbox = await client()
+            const ran = await sandbox.exec(args.command, where(context, args.workdir), {
+              signal: context.abort,
+              timeoutSeconds: args.timeout ? args.timeout / 1000 : undefined,
+            })
+            const lines = [capOutput(ran.output, readLogHint(ran.run.id, shell))]
+            if (ran.exitCode === null) {
+              lines.push(`hammerkit: ${ran.result?.error ?? ran.run.error ?? `the run ended ${ran.run.state}`}`)
+            } else if (ran.exitCode !== 0) {
+              lines.push(`Exit code: ${ran.exitCode}`)
+            }
+            context.metadata?.({ metadata: { exit: ran.exitCode, run: ran.run.id } })
+            return lines.filter((line) => line.length > 0).join('\n\n') || '(no output)'
+          },
         }
-        context.metadata?.({ metadata: { exit: ran.exitCode, run: ran.run.id } })
-        return lines.filter((line) => line.length > 0).join('\n\n') || '(no output)'
-      },
-    },
+      : {
+          description: noShell,
+          args: (z) => ({ command: z.string().describe('The command to execute') }),
+          async execute() {
+            throw new Error(noShell)
+          },
+        },
 
     grep: {
       description:
@@ -602,6 +720,8 @@ function opencodeTools(client: () => Promise<SandboxClient>): { [name: string]: 
         return lines.join('\n')
       },
     },
+
+    ...tasks,
 
     push: {
       description:

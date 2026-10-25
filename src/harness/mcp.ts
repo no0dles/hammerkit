@@ -2,7 +2,7 @@ import { createInterface } from 'readline'
 import { Readable, Writable } from 'stream'
 import { capOutput, formatSearch, formatTree } from './format'
 import { oneAtATime, SandboxClient } from './sandbox-client'
-import type { TaskRun } from './sandbox-client'
+import { createTaskTools, readLogHint, TaskListing, TaskTool, taskToolSchema } from './task-tools'
 
 // the newest first; a client asking for an older one gets it
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
@@ -45,43 +45,53 @@ function sandboxPath(path: string | undefined): string {
   return (path ?? '').replace(/\\/g, '/').replace(/^\/+/, '')
 }
 
-function readLog(run: string, task: string): string {
-  return `read more of the log with run_logs { "run": "${run}", "task": "${task}" }`
-}
-
-function describeRun(task: string, ran: TaskRun): string {
-  const result = ran.result
-  const lines = [`run ${ran.run.id}: ${ran.run.state}`]
-  if (result) {
-    lines.push(
-      `task ${task}: ${result.status}` +
-        (result.exitCode !== undefined ? `, exit code ${result.exitCode}` : '') +
-        (result.durationMs !== undefined ? `, ${result.durationMs} ms` : '') +
-        (result.cache?.hit ? ', from the cache' : '')
-    )
-    if (result.error) {
-      lines.push(`error: ${result.error}`)
-    }
-    if (result.cache?.causes?.length) {
-      lines.push(`ran because: ${result.cache.causes.join('; ')}`)
-    }
-  } else if (ran.run.error) {
-    lines.push(`error: ${ran.run.error}`)
-  }
-  if (result && result.lastLog.length > 0) {
-    lines.push('last lines:', ...result.lastLog)
-  }
-  lines.push(readLog(ran.run.id, task))
-  return lines.join('\n')
-}
-
 /**
  * The tools of `hammerkit remote mcp`, for chat clients and agents without file and shell tools of
  * their own. They take the shapes models are trained on: numbered reads with offset and
  * limit, exact-string replace, `apply_patch` or a git diff, ripgrep's parameters, a shell
- * command. Paths are relative to the root of the sandbox.
+ * command. Paths are relative to the root of the sandbox. `tasks` are the tasks the description
+ * of `run_task` lists; without `shell` there is no `bash`.
  */
-export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] {
+export function createMcpTools(
+  client: () => Promise<SandboxClient>,
+  options: { tasks?: TaskListing; shell?: string | false } = {}
+): McpTool[] {
+  const [runTask, runLogs] = createTaskTools(options.tasks, options.shell || undefined).map(
+    (tool): McpTool => fromTaskTool(tool, client)
+  )
+  const bash: McpTool = {
+    name: 'bash',
+    description:
+      'Run a shell command on the sandbox and answer its output and exit code. It runs as the shell task of ' +
+      'the published build file, in its container and with its network; commands run one at a time, and ' +
+      'only the files are kept between them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: text('The command'),
+        workdir: text('The directory to run it in, relative to the root of the sandbox'),
+        timeout: count('Stop the command after this many seconds', 1),
+      },
+      required: ['command'],
+    },
+    annotations: { title: 'Run a command' },
+    async call(args, signal) {
+      const sandbox = await client()
+      const ran = await sandbox.exec(args.command, sandboxPath(args.workdir), {
+        signal,
+        timeoutSeconds: args.timeout,
+      })
+      const output = capOutput(ran.output, readLogHint(ran.run.id, sandbox.build.shell))
+      const lines = output ? [output, ''] : []
+      if (ran.exitCode === null) {
+        lines.push(`hammerkit: ${ran.result?.error ?? ran.run.error ?? `the run ended ${ran.run.state}`}`)
+      } else {
+        lines.push(`exit code ${ran.exitCode}`)
+      }
+      return lines.join('\n')
+    },
+  }
+
   return inOrder([
     {
       name: 'read',
@@ -214,104 +224,9 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
         return formatTree(await (await client()).tree({ path, glob: args.pattern, limit: 500 }))
       },
     },
-    {
-      name: 'bash',
-      description:
-        'Run a shell command on the sandbox and answer its output and exit code. It runs as the shell task of ' +
-        'the published build file, in its container and with its network; commands run one at a time, and ' +
-        'only the files are kept between them.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          command: text('The command'),
-          workdir: text('The directory to run it in, relative to the root of the sandbox'),
-          timeout: count('Stop the command after this many seconds', 1),
-        },
-        required: ['command'],
-      },
-      annotations: { title: 'Run a command' },
-      async call(args, signal) {
-        const sandbox = await client()
-        const ran = await sandbox.exec(args.command, sandboxPath(args.workdir), {
-          signal,
-          timeoutSeconds: args.timeout,
-        })
-        const output = capOutput(ran.output, readLog(ran.run.id, sandbox.build.shell))
-        const lines = output ? [output, ''] : []
-        if (ran.exitCode === null) {
-          lines.push(`hammerkit: ${ran.result?.error ?? ran.run.error ?? `the run ended ${ran.run.state}`}`)
-        } else {
-          lines.push(`exit code ${ran.exitCode}`)
-        }
-        return lines.join('\n')
-      },
-    },
-    {
-      name: 'run_task',
-      description:
-        'Run a task of the published build file on the sandbox, such as test or build, and answer how it went: ' +
-        'its status, exit code, why it was not taken from the cache, and its last lines. args are appended to ' +
-        'its last command, for example a test file.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          task: text('The name of the task'),
-          args: { type: 'array', items: { type: 'string' }, description: 'Arguments for its last command' },
-        },
-        required: ['task'],
-      },
-      annotations: { title: 'Run a task' },
-      async call(args, signal) {
-        const ran = await (await client()).runTask(args.task, { args: args.args, signal })
-        return describeRun(args.task, ran)
-      },
-    },
-    {
-      name: 'run_logs',
-      description:
-        'Read the log of a run as numbered lines: one task, the last lines (tail), a range (from, limit) or ' +
-        'the lines that contain a text (grep, a fixed string) with lines of context around them.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          run: text('The id of the run'),
-          task: text('Only the lines of this task'),
-          tail: count('The last lines, or with grep the last matches', 1, 1000),
-          from: count('The first line to read', 1),
-          limit: count('How many lines to read', 1, 1000),
-          grep: text('Only lines that contain this text'),
-          ignore_case: flag('Ignore case in grep'),
-          context: count('Lines before and after each match', 0, 20),
-        },
-        required: ['run'],
-      },
-      annotations: { title: 'Read the log of a run', ...READ_ONLY },
-      async call(args) {
-        const page = await (
-          await client()
-        ).logs(args.run, {
-          task: args.task,
-          tail: args.tail,
-          from: args.from,
-          limit: args.limit,
-          grep: args.grep,
-          i: args.ignore_case,
-          context: args.context,
-        })
-        const lines = page.lines.map(
-          (line) => `${line.line}${line.match === false ? '-' : ':'} ${args.task ? '' : `[${line.task}] `}${line.text}`
-        )
-        lines.push(
-          '',
-          `(${page.total} lines${
-            args.grep ? ` searched, ${page.lines.filter((line) => line.match !== false).length} match here` : ''
-          }${page.next ? `, read on with from ${page.next}` : ''}${
-            page.truncated ? ', the server cut the log off at its limit' : ''
-          })`
-        )
-        return lines.join('\n')
-      },
-    },
+    ...(options.shell === false ? [] : [bash]),
+    runTask,
+    { ...runLogs, annotations: { ...runLogs.annotations, ...READ_ONLY } },
     {
       name: 'changes',
       description:
@@ -363,6 +278,19 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
       },
     },
   ])
+}
+
+// a tool shared with the other harnesses, as an MCP tool
+function fromTaskTool(tool: TaskTool, client: () => Promise<SandboxClient>): McpTool {
+  return {
+    name: tool.name,
+    description: tool.description,
+    inputSchema: taskToolSchema(tool),
+    annotations: { title: tool.title },
+    async call(args, signal) {
+      return tool.call(await client(), args, signal)
+    },
+  }
 }
 
 // the calls of a client go to the sandbox one at a time, in the order the client sent them

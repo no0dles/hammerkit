@@ -202,6 +202,43 @@ describe('definitions api', () => {
     })
   })
 
+  it('says what each task of a version is for and whether a run of it may pass arguments', async () => {
+    const tasks = {
+      files: {
+        '.hammerkit.yaml': [
+          'tasks:',
+          '  test:',
+          '    description: run the unit tests',
+          '    cmds: [npm ci, npm test]',
+          '  lint:',
+          '    args: false',
+          '    cmds: [npm run lint]',
+          '',
+        ].join('\n'),
+      },
+    }
+    await withApi('definitions-api-arguments', async (api) => {
+      const { hash } = await (await api.call('POST', '/v1/definitions', 'alice', tasks)).json()
+      const version = await (await api.call('GET', `/v1/definitions/${hash}`, 'bob')).json()
+      expect(version.plan.test).toMatchObject({ description: 'run the unit tests', command: 'npm test' })
+      expect(version.plan.lint.description).toBeUndefined()
+      expect(version.arguments).toEqual({
+        test: null,
+        lint: 'lint takes no arguments (args: false)',
+      })
+    })
+    // a server that takes arguments only for tasks that say so
+    await withApi(
+      'definitions-api-arguments-declared',
+      async (api) => {
+        const { hash } = await (await api.call('POST', '/v1/definitions', 'alice', tasks)).json()
+        const version = await (await api.call('GET', `/v1/definitions/${hash}`, 'bob')).json()
+        expect(version.arguments.test).toMatch(/takes them only for tasks that say args: true/)
+      },
+      HOST_RUNS_YAML.replace(' } }', ' }, args: declared }')
+    )
+  })
+
   it('keeps what the publisher says about where a version comes from, outside of its hash', async () => {
     await withApi('definitions-api-annotations', async (api) => {
       const from = { path: 'web/.hammerkit.yaml', repo: 'github.com/corp/web', machine: 'ci-7', user: 'runner' }

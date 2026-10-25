@@ -27,7 +27,7 @@ hammerkit remote mcp --server corp --sandbox sbx_4vJ0mT2cX9qLw1aB --build sha256
 | `--sandbox <id>`               | A sandbox of yours on it, `HAMMERKIT_SANDBOX`.                                                                                                                                               |
 | `--repo <repo>`, `--ref <ref>` | Instead: a sandbox of this repository at this branch, `HAMMERKIT_REPO` and `HAMMERKIT_REF`. One of yours without changes is checked out at the branch again, otherwise a new one is created. |
 | `--build <hash>`               | The hash of the published version of the build file whose tasks run on the sandbox, as `remote publish` printed it, `HAMMERKIT_BUILD`.                                                       |
-| `--shell <task>`               | Its task whose last command is a shell, `sh` by default, `HAMMERKIT_SHELL`.                                                                                                                  |
+| `--shell <task>`               | Its task whose last command is a shell, `sh` by default, `HAMMERKIT_SHELL`. `--shell ''` leaves out `bash`.                                                                                  |
 
 Standard output carries the protocol only; what `remote mcp` has to say goes to standard
 error, warnings about the build file in the working directory too. It stops when the client

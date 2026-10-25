@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { annotationsSchema, bundleSchema, HASH_PATTERN, MAX_BUNDLE_BYTES } from '../remote/bundle'
 import { DefinitionError, DefinitionStore, DefinitionVersion } from './definitions'
 import { readJson, send } from './http'
+import { describeArguments } from './run-plan'
 import { Principal, quote } from './oauth'
 import { canUse, getGrant, mayPropose, mayPublish, maySeeDefinitions, mayYank } from './policy'
 import { ProposalError, ProposalRegistry } from './proposals'
@@ -20,7 +21,8 @@ const MAX_PUBLISH_BYTES = MAX_BUNDLE_BYTES * 2
  *                                        `annotations`, which are not part of the hash
  *   GET  /v1/definitions                 the versions, newest first; `?<key>=<value>`
  *                                        keeps the ones with those annotations
- *   GET  /v1/definitions/<hash>          one version
+ *   GET  /v1/definitions/<hash>          one version, with `arguments`: per task null when
+ *                                        a run of it may pass arguments, else why not
  *   GET  /v1/definitions/<hash>/files    its files
  *   POST /v1/definitions/<hash>/yank     pull it back (body: optional {reason})
  *   POST /v1/definitions/<hash>/unyank   let it go on
@@ -89,7 +91,7 @@ export async function handleDefinitions(
     const bundle = await store.files(found)
     bundle ? send(res, 200, bundle) : send(res, 404, { error: 'not found' })
   } else {
-    send(res, 200, found)
+    send(res, 200, found.plan ? { ...found, arguments: describeArguments(found.plan, config.runs) } : found)
   }
   return true
 }

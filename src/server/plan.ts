@@ -43,6 +43,8 @@ export interface DefinitionInputs {
 // for. Values of secrets are never in it, only where they come from.
 export interface TaskPlan {
   kind: 'task' | 'service'
+  // what the build file says it is for; left out when it says nothing
+  description?: string
   runtime: 'docker' | 'local'
   image?: string
   cmds: string[]
@@ -414,6 +416,7 @@ function toPlan(root: string, item: Item): TaskPlan {
   const isTask = data.type === 'local-task' || data.type === 'container-task'
   return {
     kind: isTask ? 'task' : 'service',
+    ...(data.description ? { description: data.description } : {}),
     runtime: data.type === 'local-task' ? 'local' : 'docker',
     ...(isContainerWorkTask(data) || isContainerWorkService(data) ? { image: data.image } : {}),
     cmds: 'cmds' in data ? data.cmds.map((cmd) => cmd.cmd) : 'cmd' in data && data.cmd ? [data.cmd.cmd] : [],
