@@ -30,13 +30,12 @@ export function resolveEffective(
 // whose `src` entries all match no file (a typo, a moved path). Services are not
 // affected.
 export function isOwnProvable(item: WorkItem<WorkTask | WorkService>, unmatched: WorkSource[]): boolean {
-  const declared = item.data.src.filter((src) => !src.inherited).length
-  if (declared === 0 && isAggregateTask(item.data)) {
+  if (isAggregateTask(item.data)) {
     // it runs nothing and reads nothing: what its dependencies prove is all there is
     return true
   }
   // unmatched ⊆ declared, so this is also false when nothing is declared
-  return unmatched.length < declared
+  return unmatched.length < item.data.src.filter((src) => !src.inherited).length
 }
 
 interface EffectiveStateKey {

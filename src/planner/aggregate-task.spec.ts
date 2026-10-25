@@ -20,11 +20,14 @@ const tasks = {
   // not an aggregate: it runs something, or reads something
   local: { deps: ['build'], cmds: ['echo'] },
   secret: { deps: ['build'], secrets: [{ from: 'env:TOKEN', env: 'TOKEN' }] },
+  needs: { deps: ['build'], needs: ['db'] },
+  reads: { deps: ['build'], src: ['src'] },
+  watch: { deps: ['build'], continuous: true },
 }
 
 const project = {
   '.git/HEAD': 'ref: refs/heads/main\n',
-  '.hammerkit.yaml': { tasks },
+  '.hammerkit.yaml': { services: { db: { image: 'postgres:16' } }, tasks },
   'package.json': '{}\n',
   'src/a.ts': 'a\n',
   'test/a.spec.ts': 'spec\n',
@@ -44,6 +47,9 @@ describe('aggregate tasks', () => {
       expect(isAggregateTask(cli.task('ci:check').data)).toBe(true)
       expect(isAggregateTask(cli.task('local').data)).toBe(false)
       expect(isAggregateTask(cli.task('secret').data)).toBe(false)
+      expect(isAggregateTask(cli.task('needs').data)).toBe(false)
+      expect(isAggregateTask(cli.task('reads').data)).toBe(false)
+      expect(isAggregateTask(cli.task('watch').data)).toBe(false)
       expect(isAggregateTask(cli.task('build').data)).toBe(false)
     })
   })
@@ -87,6 +93,40 @@ describe('aggregate tasks', () => {
     }).setup(async (cwd, environment) => {
       const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
       expect(() => applyNetworkCeiling((cli as any).workTree, { type: 'none' })).not.toThrow()
+    })
+  })
+
+  it('runs in no pod on a server cluster, where a local task runs in the tool image', async () => {
+    await createTestCase('aggregate-cluster', project).setup(async (cwd, environment) => {
+      environment.processEnvs = { ...environment.processEnvs, TOKEN: 'x' }
+      environment.hosted = {
+        catalog: { providers: {}, accounts: {}, explicitAccounts: true },
+        kubernetes: {
+          type: 'kubernetes',
+          namespace: 'hammerkit-run',
+          httpRoutes: [],
+          networkPolicyEnforced: true,
+          server: {
+            run: 'run_1',
+            namespace: 'hammerkit',
+            pools: [
+              {
+                name: 'tools',
+                platform: { os: 'linux', arch: 'amd64' },
+                nodeSelector: {},
+                tolerations: [],
+                toolImage: 'tools:1',
+              },
+            ],
+            providers: {},
+            accounts: {},
+          },
+        },
+      }
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
+      expect(cli.task('build:all').data).toMatchObject({ type: 'local-task', aggregate: true })
+      expect(cli.task('local').data).toMatchObject({ type: 'container-task', image: 'tools:1' })
+      expect(await cli.task('build:all').runtime.currentStateKey(environment)).toBeNull()
     })
   })
 

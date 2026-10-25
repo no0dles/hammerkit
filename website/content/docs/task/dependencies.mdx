@@ -58,7 +58,8 @@ the whole dependency graph as in earlier versions.
 ## Aggregate tasks
 
 A task with `deps` and nothing else to do groups other tasks under one name: no
-`image`, no `cmds`, no `generates`, no `secrets` and no `needs`.
+`image`, no `cmds`, no `src`, no `generates`, no `secrets`, no `needs` and not
+`continuous`.
 
 ```yaml title=".hammerkit.yaml"
 tasks:
@@ -73,7 +74,8 @@ tasks:
       - npm test
 ```
 
-An aggregate runs nothing, so it needs no runtime and no image:
+An aggregate runs nothing, so it needs no runtime and no image, and writes nothing to
+its directory:
 
 - a task that depends on it gets what its dependencies generate (`node_modules`,
   `dist`), as if it depended on them directly;
@@ -84,7 +86,7 @@ An aggregate runs nothing, so it needs no runtime and no image:
 - a [server](/docs/remote-compute/backend#runtimes) runs it whatever `runtimes` allows, and
   `--network` does not need to limit it.
 
-A task with `deps` and its own `cmds` but no `image` is a local task as before.
+A task with `deps` and its own `cmds` or `src` but no `image` is a local task as before.
 
 Referenced and included tasks are addressed with the `prefix:task` syntax in
 `deps`, for example `deps: [npm:install]`. See

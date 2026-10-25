@@ -142,6 +142,8 @@ function parseTask(
     const aggregate =
       task.deps.length > 0 &&
       task.needs.length === 0 &&
+      baseWorkNode.src.length === 0 &&
+      !baseWorkNode.continuous &&
       baseWorkNode.cmds.length === 0 &&
       baseWorkNode.generates.length === 0 &&
       baseWorkNode.secrets.length === 0

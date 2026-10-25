@@ -1,10 +1,11 @@
 import { WorkTree } from '../work-tree'
 import { WorkRuntime } from '../../runtime/runtime'
 import { WorkService } from '../work-service'
-import { WorkTask } from '../work-task'
 import { dockerServiceRuntime, dockerTaskRuntime } from '../work-runtime-docker'
 import { kubernetesForwardRuntime, kubernetesServiceRuntime, kubernetesTaskRuntime } from '../work-runtime-kubernetes'
 import { getLocalWorkRuntime } from '../work-runtime-local'
+import { aggregateWorkRuntime } from '../work-runtime-aggregate'
+import { isAggregateTask, WorkTask } from '../work-task'
 import { TaskState } from '../../executer/scheduler/task-state'
 import { ServiceState } from '../../executer/scheduler/service-state'
 import {
@@ -30,7 +31,9 @@ export function getWorkServiceRuntime(workTree: WorkTree, service: WorkItem<Work
   }
 }
 export function getWorkTaskRuntime(workTree: WorkTree, task: WorkItem<WorkTask>): WorkRuntime<TaskState> {
-  if (isLocalWorkTaskItem(task)) {
+  if (isAggregateTask(task.data)) {
+    return aggregateWorkRuntime()
+  } else if (isLocalWorkTaskItem(task)) {
     return getLocalWorkRuntime(task)
   } else if (isContainerWorkTaskItem(task)) {
     if (workTree.environment.type === 'kubernetes') {

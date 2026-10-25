@@ -87,8 +87,8 @@ export const isContainerWorkTask = (val: WorkTask | WorkService): val is Contain
 export const isWorkTask = (val: WorkTask | WorkService): val is WorkTask =>
   val.type === 'container-task' || val.type === 'local-task'
 
-// A task that only groups its dependencies: `deps`, and no `image`, `cmds`, `generates`,
-// `secrets` or `needs`. It needs no runtime, hands on what its dependencies generate to what
+// A task that only groups its dependencies: `deps`, and no `image`, `cmds`, `src`,
+// `generates`, `secrets`, `needs` or `continuous`. It needs no runtime, hands on what its dependencies generate to what
 // depends on it, and is up to date (or verified) when all its dependencies are.
 export const isAggregateTask = (val: WorkTask | WorkService): boolean =>
   val.type === 'local-task' && val.aggregate === true
