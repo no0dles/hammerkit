@@ -111,11 +111,16 @@ describe('check key', () => {
       '.hammerkit.yaml': {
         services: {
           a: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['b'] },
-          b: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['a'] },
+          // with a dependency, the loop comes back after the first await
+          b: { image: 'alpine:3.19', cmd: 'sleep 300', deps: ['prep'], needs: ['a'] },
         },
-        tasks: { t: { image: 'alpine:3.19', needs: ['a'], src: ['t.txt'], cmds: ['cat t.txt'] } },
+        tasks: {
+          prep: { image: 'alpine:3.19', src: ['p.txt'], cmds: ['cat p.txt'] },
+          t: { image: 'alpine:3.19', needs: ['a'], src: ['t.txt'], cmds: ['cat t.txt'] },
+        },
       },
       't.txt': 'hello\n',
+      'p.txt': 'p\n',
     }
     expect(await keyIn('check-key-needs-loop', files, 't')).toBeNull()
   })

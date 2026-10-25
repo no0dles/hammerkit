@@ -25,21 +25,23 @@ import { getWorkTaskCacheDescription } from './work-task-cache-description'
 export async function getCheckKey(
   item: WorkItem<WorkTask>,
   environment: Environment,
-  memo: Map<string, Promise<string | null>> = new Map()
+  memo: Map<string, Promise<string | null>> = new Map(),
+  path: ReadonlySet<string> = new Set()
 ): Promise<string | null> {
-  return memoized(memo, `task\0${item.id()}`, () => computeCheckKey(item, environment, memo))
+  return memoized(memo, path, `task\0${item.id()}`, (inner) => computeCheckKey(item, environment, memo, inner))
 }
 
 async function computeCheckKey(
   item: WorkItem<WorkTask>,
   environment: Environment,
-  memo: Map<string, Promise<string | null>>
+  memo: Map<string, Promise<string | null>>,
+  path: ReadonlySet<string>
 ): Promise<string | null> {
   const { stats, unmatched } = await getWorkItemCheckoutStats(item, environment)
   if (!isOwnProvable(item, unmatched)) {
     return null
   }
-  const inputs = await getInputKeys(item, environment, memo)
+  const inputs = await getInputKeys(item, environment, memo, path)
   if (inputs === null) {
     return null
   }
@@ -51,10 +53,11 @@ async function computeCheckKey(
 function getNeedKey(
   item: WorkItem<WorkService>,
   environment: Environment,
-  memo: Map<string, Promise<string | null>>
+  memo: Map<string, Promise<string | null>>,
+  path: ReadonlySet<string>
 ): Promise<string | null> {
-  return memoized(memo, `need\0${item.name}`, async () => {
-    const inputs = await getInputKeys(item, environment, memo)
+  return memoized(memo, path, `need\0${item.name}`, async (inner) => {
+    const inputs = await getInputKeys(item, environment, memo, inner)
     if (inputs === null) {
       return null
     }
@@ -65,11 +68,12 @@ function getNeedKey(
 async function getInputKeys(
   item: WorkItem<WorkTask | WorkService>,
   environment: Environment,
-  memo: Map<string, Promise<string | null>>
+  memo: Map<string, Promise<string | null>>,
+  path: ReadonlySet<string>
 ): Promise<{ deps: string[]; needs: string[] } | null> {
   const deps: string[] = []
   for (const dep of item.deps) {
-    const key = await getCheckKey(dep, environment, memo)
+    const key = await getCheckKey(dep, environment, memo, path)
     if (key === null) {
       return null
     }
@@ -77,7 +81,7 @@ async function getInputKeys(
   }
   const needs: string[] = []
   for (const need of item.needs) {
-    const key = await getNeedKey(need.service, environment, memo)
+    const key = await getNeedKey(need.service, environment, memo, path)
     if (key === null) {
       return null
     }
@@ -99,18 +103,24 @@ function hash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
 
+// `path` holds the keys being computed on the way here: one coming back is a loop (services
+// that need each other), which can not be proven and fails to plan anyway. Waiting on its
+// pending promise would never end. The keys are computed one after another, so every pending
+// promise in the memo is on the path.
 function memoized(
   memo: Map<string, Promise<string | null>>,
+  path: ReadonlySet<string>,
   key: string,
-  compute: () => Promise<string | null>
+  compute: (path: ReadonlySet<string>) => Promise<string | null>
 ): Promise<string | null> {
+  if (path.has(key)) {
+    return Promise.resolve(null)
+  }
   const known = memo.get(key)
   if (known) {
     return known
   }
-  // a loop (services that need each other) can not be proven, and fails to plan anyway
-  memo.set(key, Promise.resolve(null))
-  const computed = compute()
+  const computed = compute(new Set([...path, key]))
   memo.set(key, computed)
   return computed
 }

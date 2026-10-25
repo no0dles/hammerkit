@@ -372,11 +372,15 @@ describe('cache invalidation', () => {
         '.hammerkit.yaml': {
           services: {
             a: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['b'] },
-            b: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['a'] },
+            b: { image: 'alpine:3.19', cmd: 'sleep 300', deps: ['prep'], needs: ['a'] },
           },
-          tasks: { t: { image: 'alpine:3.19', needs: ['a'], src: ['t.txt'], cmds: ['cat t.txt'] } },
+          tasks: {
+            prep: { image: 'alpine:3.19', src: ['p.txt'], cmds: ['cat p.txt'] },
+            t: { image: 'alpine:3.19', needs: ['a'], src: ['t.txt'], cmds: ['cat t.txt'] },
+          },
         },
         't.txt': 'hello\n',
+        'p.txt': 'p\n',
       }).setup(async (cwd, environment) => {
         const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 't' })
         expect(cli.task('t').id()).toMatch(/^[0-9a-f]+$/)

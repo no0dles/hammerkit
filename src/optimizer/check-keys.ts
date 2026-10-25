@@ -32,7 +32,10 @@ export async function getCheckKeys(entry: string, environment: Environment, scop
       const key = await getCheckKey(task, keyed, memo)
       keys[task.name] = key
         ? { key }
-        : { key: null, reason: 'it, or a task it depends on, declares no src that matches a file' }
+        : {
+            key: null,
+            reason: 'it, or a task it or a service it needs depends on, declares no src that matches a file',
+          }
     } catch (e) {
       // a secret whose value is part of the key (`cache: true`) is not known here
       keys[task.name] = { key: null, reason: getErrorMessage(e) }
