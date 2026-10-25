@@ -85,7 +85,9 @@ describe('refuseEndpoints', () => {
 
   it('keeps a service that reads a secret off an endpoint unless secrets may go anywhere', () => {
     const web = plan({ secrets: [{ from: 'gcp:key', account: 'dev', target: 'env:KEY' }] as any })
-    expect(refuseEndpoints({ endpoints: [{ service: 'web', port: 80 }] }, { web }, false)).toMatch(/web reads the secret env:KEY/)
+    expect(refuseEndpoints({ endpoints: [{ service: 'web', port: 80 }] }, { web }, false)).toMatch(
+      /web reads the secret env:KEY/
+    )
     expect(refuseEndpoints({ endpoints: [{ service: 'web', port: 80 }] }, { web }, true)).toBeNull()
   })
 })

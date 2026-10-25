@@ -75,7 +75,20 @@ function lazySandbox(directory: string, settings: OpencodePluginOptions): () => 
 }
 
 // the names of the tools of the plugin, which stand in for opencode's own
-export const OPENCODE_TOOLS = ['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob', 'push', 'list']
+export const OPENCODE_TOOLS = [
+  'read',
+  'write',
+  'edit',
+  'apply_patch',
+  'bash',
+  'grep',
+  'glob',
+  'push',
+  'list',
+  'services_up',
+  'endpoint_get',
+  'services_stop',
+]
 
 /**
  * The plugin as the file `harness/opencode.ts` exports it: it takes the zod of opencode from
@@ -190,7 +203,19 @@ export interface OpencodeV2Plugin {
 }
 
 // the names of the tools of the plugin on opencode 2, which stand in for its own
-export const OPENCODE_V2_TOOLS = ['read', 'write', 'edit', 'patch', 'shell', 'glob', 'grep', 'push']
+export const OPENCODE_V2_TOOLS = [
+  'read',
+  'write',
+  'edit',
+  'patch',
+  'shell',
+  'glob',
+  'grep',
+  'push',
+  'services_up',
+  'endpoint_get',
+  'services_stop',
+]
 
 // the tools of opencode 2 that work on this machine and have no stand-in on a sandbox
 export const OPENCODE_V2_LOCAL_TOOLS = [

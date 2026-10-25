@@ -93,6 +93,11 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'Kubernetes admission policy that confines the RoleBindings of the server, not a hammerkit build file',
   },
   {
+    file: join('remote-compute', 'service-runs.mdx'),
+    snippet: 'secretName: hammerkit-tls',
+    reason: 'Kubernetes Ingress that sends the hosts of endpoints to the server, not a hammerkit build file',
+  },
+  {
     file: join('installation.mdx'),
     snippet: 'DOCKER_TLS_CERTDIR',
     reason: 'GitLab CI (.gitlab-ci.yml) example, not a hammerkit build file',
