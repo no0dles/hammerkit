@@ -84,17 +84,18 @@ tasks:
       - echo "seen:$(ls -A src/up | tr '\\n' ',')"
   fetch:
     image: node:24-alpine
-    src: [src]
+    mounts: [.]
     network:
       allow: [registry.npmjs.org]
     cmds:
       - echo "left-pad:$(npm view left-pad version)"
       # around the proxy, to an address outside of the allow list: the policy of the runner
       - wget -Y off -q -T 5 -O /dev/null http://1.1.1.1 > /dev/null 2>&1 && echo direct=escaped || echo direct=refused
-  # shells of the sandbox: their commands run in its runner, one pod for all of them
+  # shells of the sandbox (the whole of its files): their commands run in its runner, one pod
+  # for all of them
   leave:
     image: alpine:3.19
-    src: [src]
+    mounts: [.]
     cmds:
       - echo "host=$(hostname)"
       - sleep 300 > /dev/null 2>&1 &
@@ -103,7 +104,7 @@ tasks:
       - echo left > /dev/shm/mark && echo left > /tmp/mark && echo kept > /root/kept
   look:
     image: alpine:3.19
-    src: [src]
+    mounts: [.]
     cmds:
       - echo "host=$(hostname)"
       - echo "sleeping=$(ps -o args | grep -c '[s]leep 300')"
@@ -114,14 +115,20 @@ tasks:
       - test -e /dev/shm/cancelled || echo cancel-cleaned
   fail:
     image: alpine:3.19
-    src: [src]
+    mounts: [.]
     cmds:
       - echo before-the-exit && exit 7
   slow:
     image: alpine:3.19
-    src: [src]
+    mounts: [.]
     cmds:
       - echo cancelled > /dev/shm/cancelled && echo slow-started && sleep 300
+  # a part of the files only: the folders around the mount would be the runner's own, so a Job
+  part:
+    image: alpine:3.19
+    src: [src]
+    cmds:
+      - echo "host=$(hostname)"
 `
 
 describe('sandboxes on a kubernetes backend', () => {
@@ -405,6 +412,9 @@ describe('sandboxes on a kubernetes backend', () => {
       expect(looked.text).toContain('tmp-empty')
       expect(looked.text).toContain('files=1')
       expect(looked.text).toContain('root=kept')
+      const part = await execute('run_sbx_part', 'part')
+      expect(part.error, part.text).toBeUndefined()
+      expect(part.text).toMatch(/host=(?!hammerkit-runner-)\S+/)
       // a command's exit code is the task's
       const failed = await execute('run_sbx_fail', 'fail')
       expect(failed.error?.message).toBe('fail failed')

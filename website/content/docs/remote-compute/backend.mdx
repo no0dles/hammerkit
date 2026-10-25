@@ -411,7 +411,7 @@ is a `ResourceQuota` on their storage class, when they have one of their own. Th
 root with only the capabilities to own and change files (the `baseline` Pod Security level
 allows it, `restricted` does not).
 
-A task of a run on a sandbox that mounts only its files runs in the sandbox's runner, a pod
+A task of a run on a sandbox that mounts all of its files and nothing else runs in the sandbox's runner, a pod
 `hammerkit-runner-<key>` that stays and takes each command over `pods/exec` (see
 [sandboxes](/docs/remote-compute/sandboxes#on-kubernetes)). The pod of the files owns it, so
 it goes with that pod after `sandboxes.idle`, and so does its `NetworkPolicy`, which outlives

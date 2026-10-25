@@ -113,6 +113,12 @@ describe('the runner of a sandbox', () => {
     expect(canUseRunner(shell({ secrets: [{ env: 'TOKEN' }] }), env, persistence())).toBe(false)
     // not on the sandbox's files, a server without runners, a run that holds no pod of the files
     expect(canUseRunner(shell(), env, persistence({ workspace: [] }))).toBe(false)
+    // a part of the files only (`src: [src]`): the folders around the mount would be the
+    // runner's own, and what a command left there the next runs' files
+    const part = persistence().mounts[0]
+    const parts = [{ ...part, mount: { ...part.mount, mountPath: '/runs/run_1/src', subPath: 'files/src' } }]
+    expect(canUseRunner(shell(), env, persistence({ mounts: parts }))).toBe(false)
+    expect(canUseRunner(shell(), env, persistence({ mounts: [...parts, part] }))).toBe(true)
     const off = environment()
     delete off.server!.workspace!.runner
     expect(canUseRunner(shell(), off, persistence())).toBe(false)
@@ -540,7 +546,7 @@ describe('the runner of a sandbox', () => {
       expect(calls.filter((call) => call.startsWith('create'))).toHaveLength(tried)
     })
 
-    it('replaces a runner a command before changed, and runs the task as a Job', async () => {
+    it('removes a runner a command before changed, and fails the task rather than running it again', async () => {
       const { instance, calls, pods } = cluster((command) =>
         command[3] === CLEAN_UP
           ? { status: { status: 'Success' } }
@@ -552,9 +558,10 @@ describe('the runner of a sandbox', () => {
       )
       const task = shell({ image: 'node:16-alpine' })
       const name = getRunnerName(getRunnerKey(task, environment(), persistence()))
-      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
-        { type: 'unavailable' }
-      )
+      // a command can say what the wrapper says too, after it ran: no second run as a Job
+      await expect(
+        executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)
+      ).rejects.toThrow('a command changed the runner of the sandbox, it was removed: run the task again')
       expect(calls).toContain(`delete ${name}`)
       expect(pods.has(name)).toBe(false)
       // the line of the wrapper is not the command's output

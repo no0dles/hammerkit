@@ -523,9 +523,10 @@ above are the same.
   files' claim itself where their sources are, read and write, so what a task writes is in
   the sandbox afterwards, as on a host. A source outside of the sandbox goes into the task's
   own claim as before. A source or mount that goes through a link is refused, as on a host.
-* **Commands.** A task of a run on a sandbox that only mounts the sandbox's files (no
-  volumes, needed services, secrets or `generates`), such as the shell task of an
-  [agent](/docs/remote-compute/agents), runs in the sandbox's runner: one pod next to the pod
+* **Commands.** A task of a run on a sandbox that mounts the whole of the sandbox's files
+  (`mounts: [.]` or `src: [.]`) and nothing else (no volumes, needed services, secrets or
+  `generates`), such as the shell task of an [agent](/docs/remote-compute/agents), runs in
+  the sandbox's runner: one pod next to the pod
   of the files that stays while that pod does and takes each command over `pods/exec`. A
   command then starts in about a second, where a Job takes several seconds to get a pod. Before
   and after each command, and when a command is cancelled, runs out of time or loses its
@@ -534,8 +535,10 @@ above are the same.
   `/.hammerkit-sandbox`, and each command first links the directory of its run (where a Job
   would have the files) there, so paths are the same as in a Job, and the runner the same from
   one run to the next. Before each command the runner checks that its mounts are still the
-  mounts it was made with; when a command before moved one, the runner goes and the task runs
-  as a Job. What does that is a static busybox
+  mounts it was made with; when a command before moved one, the runner goes and the task
+  fails, so run it again to get a new runner. A task that mounts a part of the files only
+  (`src: [src]`) runs as a Job: the folders around its mount would be the runner's own, and
+  what a command left there would be in the next runs. What does that is a static busybox
   (`busybox:1.37.0-musl`, pinned by digest, which an init container copies in) on a mount
   the runner can only read, so a command can not replace it, not even as root. Files a
   command writes elsewhere outside the sandbox, such as the home directory or `/usr/local/bin`,
@@ -590,7 +593,7 @@ backend:
 | `size` | What each of the two claims of a sandbox requests: the most its files, and its git data, can take. No more than `sandboxes.limits.bytes`. |
 | `storageClass` | The storage class of sandboxes' claims. When it is one of their own, each caller's namespace gets a `ResourceQuota` on that class (`requests.storage` of twice `sandboxes.limits.bytes` and `persistentvolumeclaims` of twice `sandboxes.limits.count`, two claims a sandbox), so the cluster holds the limits too. It can not be the class of tasks' claims, whose claims would count against it. |
 | `idle` | How long the pod of a sandbox's files stays after the last request. Its runner and egress proxies go with it. |
-| `runner` | Whether a task that only mounts the sandbox's files runs in the sandbox's [runner](#on-kubernetes) instead of a Job of its own. |
+| `runner` | Whether a task that mounts the whole of the sandbox's files, and nothing else, runs in the sandbox's [runner](#on-kubernetes) instead of a Job of its own. |
 | `resources` | The requests and limits of the pod of a sandbox's files, which runs git and ripgrep over all of them. |
 
 The server keeps the record of each sandbox in its storage directory as on a host, and the

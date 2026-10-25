@@ -32,8 +32,9 @@ import { getSandboxAffinity, KubernetesPersistence, SANDBOX_LABEL } from './volu
  * scheduled and to start; an exec into a running pod a fraction of one.
  *
  * - Only a task shaped like an agent's shell gets it: a container task that mounts the
- *   sandbox and nothing else (no claims of its own or of its dependencies, so no
- *   `generates`), with no `needs` and no secrets. Any other task runs as a Job.
+ *   whole sandbox (`mounts: [.]`) and nothing else (no claims of its own or of its
+ *   dependencies, so no `generates`), with no `needs` and no secrets. Any other task runs
+ *   as a Job.
  * - The pod is the task's container as its Job would have it: its image, variables,
  *   resources, the sandbox's claim, the security context, the nodes of the pool and the
  *   node of the pod of the sandbox's files. It is named after all of that (getRunnerKey),
@@ -112,7 +113,7 @@ export function getCleanUp(directories: string[]): string {
 }
 
 // What the wrapper says on stderr, with RUNNER_CHANGED_EXIT, when a command before changed
-// the runner: the command did not run, and the runner goes
+// the runner: the command did not run, the runner goes and the task fails
 export const RUNNER_CHANGED_EXIT = 125
 const RUNNER_CHANGED_MARK = `hammerkit-runner-changed-${randomBytes(8).toString('hex')}`
 
@@ -174,6 +175,9 @@ export function canUseRunner(
     persistence.workspace.length > 0 &&
     persistence.volumes.length === 0 &&
     persistence.mounts.every((mount) => mount.workspace) &&
+    // the whole of the files at the root, so the runner has no writable directory of its own
+    // around the mounts that a command could leave files in for the next runs
+    persistence.mounts.some((mount) => relative(workspace.root, mount.mount.mountPath) === '') &&
     task.needs.length === 0 &&
     task.data.secrets.length === 0 &&
     task.data.generates.length === 0
@@ -396,7 +400,7 @@ export async function executeInRunner(
         cleanUp,
         mounts.map((mount) => mount.mountPath)
       )
-      for (const [index, cmd] of task.data.cmds.entries()) {
+      for (const cmd of task.data.cmds) {
         task.status.write('debug', `execute ${cmd.cmd} in the runner of the sandbox`)
         const exitCode = await execInRunner(
           instance,
@@ -413,22 +417,15 @@ export async function executeInRunner(
           return { type: 'canceled' }
         }
         if (exitCode === 'changed') {
-          // a fresh pod for the next command; this one runs as a Job, unless one of its
-          // commands ran already
+          // a fresh pod for the next task; this one fails rather than running again as a Job,
+          // since a command can say so itself after it ran
           await removeSandboxRunners(
             instance,
             kubernetes.namespace,
             workspace.label,
             (pod) => pod.metadata?.name !== name
           )
-          if (index > 0) {
-            throw new Error('a command changed the runner of the sandbox, it was removed: run the task again')
-          }
-          task.status.write(
-            'warn',
-            'a command before changed the runner of the sandbox, it goes and the task runs as a Job'
-          )
-          return { type: 'unavailable' }
+          throw new Error('a command changed the runner of the sandbox, it was removed: run the task again')
         }
         if (exitCode !== 0) {
           return { type: 'crash', exitCode }
