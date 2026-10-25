@@ -58,7 +58,9 @@ What the key covers, besides the files:
 
 - The task's definition: commands, image, variables, mounts and the definitions of its
   dependencies. A check of another version of the build file does not count when it changed
-  the task, so `cmds: [true]` published on the side does not pass for the real `test`.
+  the task, so `cmds: [true]` published on the side does not pass for the real `test`. It
+  also means a check runs with the version of the build file the commit holds: when a change
+  touches a check task, publish the new version first and check with it.
 - Not what dependencies generate (`node_modules` above): they are made again from their own
   `src`, which is in the key.
 - Not `.git`, and not the run's arguments: a run with arguments is never a check.
