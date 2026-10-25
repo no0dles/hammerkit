@@ -151,10 +151,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-      - name: Set up hammerkit and the shared cache
-        uses: ./.github/actions/hammerkit
-        with:
-          tasks: test:${{ matrix.suite }}
       # hammerkit reads the credentials `docker login` stores when it pulls an image.
       # Without the secret (forks, or not set up) the login is skipped and pulls
       # stay anonymous, as before.
@@ -195,6 +191,13 @@ jobs:
           printf '%s' "$OP_OTHER_TOKEN" > "$RUNNER_TEMP/op-other.token"
           echo "OP_TEST_TOKEN_FILE=$RUNNER_TEMP/op-reader.token" >> "$GITHUB_ENV"
           echo "OP_OTHER_TOKEN_FILE=$RUNNER_TEMP/op-other.token" >> "$GITHUB_ENV"
+      # After the steps above: the paths of the key and token files they write are
+      # variables of test:docker:containers, so they are part of its cache key, and a
+      # pull without them looks for an entry no run pushed.
+      - name: Set up hammerkit and the shared cache
+        uses: ./.github/actions/hammerkit
+        with:
+          tasks: test:${{ matrix.suite }}
       # The suite is a hammerkit task: when this tree was already tested green, the
       # pull above restored its result, and the cluster and registry below are not
       # worth starting. Without a reachable cache this is always a miss, so the job
