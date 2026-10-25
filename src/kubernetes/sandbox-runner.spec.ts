@@ -16,7 +16,7 @@ import {
 } from './sandbox-runner'
 
 const CLEAN_UP = getCleanUp(['/tmp', '/dev/shm'])
-const WRAPPER = getWrapper(CLEAN_UP)
+const WRAPPER = getWrapper(CLEAN_UP, ['/.hammerkit-sandbox/src'])
 import { ensureKubernetesItemNetwork } from './network-policy'
 import { KubernetesPersistence } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -244,6 +244,21 @@ describe('the runner of a sandbox', () => {
     expect(getCleanUp(['/dev/shm'])).not.toContain('/tmp')
   })
 
+  it('checks that each mount is still the mount it was made as before the command', () => {
+    const wrapper = getWrapper(CLEAN_UP, ['/.hammerkit-sandbox/src', "/.hammerkit-sandbox/it's here"])
+    const lines = wrapper.split('\n')
+    const command = lines.indexOf('"$@"')
+    const check = lines.findIndex((line) => line.includes('/proc/self/mountinfo'))
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(command)
+    expect(wrapper).toContain(
+      "[ \"$(/.hammerkit/busybox realpath '/.hammerkit-sandbox/src')\" = '/.hammerkit-sandbox/src' ] && /.hammerkit/busybox grep -q '^[^ ]* [^ ]* [^ ]* [^ ]* /\\.hammerkit-sandbox/src ' /proc/self/mountinfo || changed \"$1\""
+    )
+    // a space as mountinfo writes it, a quote kept within the shell's quotes
+    expect(wrapper).toContain("/\\.hammerkit-sandbox/it'\\''s\\\\040here ")
+    expect(wrapper).toContain('case "$(pwd -P)" in')
+  })
+
   it('cleans up with the busybox of the tools only, before and after the command', () => {
     expect(CLEAN_UP).toContain('kill -KILL -1')
     expect(CLEAN_UP).toContain('/.hammerkit/busybox rm -rf /tmp/* /tmp/.[!.]* /tmp/..?* /dev/shm/*')
@@ -270,7 +285,7 @@ describe('the runner of a sandbox', () => {
   describe('a command', () => {
     // A cluster with the pod of the files, where a created runner runs at once and an exec
     // answers what `answer` says for its command
-    function cluster(answer: (command: string[]) => { out?: string; status: any; hang?: boolean }) {
+    function cluster(answer: (command: string[]) => { out?: string; err?: string; status: any; hang?: boolean }) {
       const pods = new Map<string, any>([[files.name, { metadata: { ...files }, status: { phase: 'Running' } }]])
       const calls: string[] = []
       const notFound = () => Promise.reject(Object.assign(new Error('not found'), { code: 404 }))
@@ -318,7 +333,7 @@ describe('the runner of a sandbox', () => {
             container: string,
             command: string[],
             stdout: Writable | null,
-            _stderr: Writable | null,
+            stderr: Writable | null,
             _stdin: unknown,
             _tty: boolean,
             done: (status: any) => void
@@ -334,6 +349,9 @@ describe('the runner of a sandbox', () => {
             setImmediate(() => {
               if (result.out) {
                 stdout?.write(result.out)
+              }
+              if (result.err) {
+                stderr?.write(result.err)
               }
               if (result.hang) {
                 hanging.add(socket)
@@ -520,6 +538,38 @@ describe('the runner of a sandbox', () => {
         { type: 'unavailable' }
       )
       expect(calls.filter((call) => call.startsWith('create'))).toHaveLength(tried)
+    })
+
+    it('replaces a runner a command before changed, and runs the task as a Job', async () => {
+      const { instance, calls, pods } = cluster((command) =>
+        command[3] === CLEAN_UP
+          ? { status: { status: 'Success' } }
+          : {
+              // what the wrapper says when a mount is not what it was made as
+              err: `${command[5]}\n`,
+              status: { status: 'Failure', details: { causes: [{ reason: 'ExitCode', message: '125' }] } },
+            }
+      )
+      const task = shell({ image: 'node:16-alpine' })
+      const name = getRunnerName(getRunnerKey(task, environment(), persistence()))
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'unavailable' }
+      )
+      expect(calls).toContain(`delete ${name}`)
+      expect(pods.has(name)).toBe(false)
+      // the line of the wrapper is not the command's output
+      expect(task.lines).toEqual([])
+    })
+
+    it('answers an exit code 125 of the command itself as its own', async () => {
+      const { instance } = cluster(() => ({
+        err: 'hammerkit-runner-changed-0000\n',
+        status: { status: 'Failure', details: { causes: [{ reason: 'ExitCode', message: '125' }] } },
+      }))
+      const task = shell({ image: 'node:16-alpine' })
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'crash', exitCode: 125 }
+      )
     })
 
     it('leaves the runner starting when its command stops meanwhile, for the next command', async () => {

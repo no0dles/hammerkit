@@ -1,4 +1,4 @@
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { posix, relative, sep } from 'path'
 import { StringDecoder } from 'string_decoder'
 import { Writable } from 'stream'
@@ -111,20 +111,47 @@ export function getCleanUp(directories: string[]): string {
   ].join('\n')
 }
 
-// Runs `"$@"` in the directory `$2`, alone in the container: what an earlier command left
-// is cleaned up before, what this one left after. The directory of the run `$1` is a link
-// to the sandbox's files first. Its exit code is the command's.
-export function getWrapper(cleanUp: string): string {
+// What the wrapper says on stderr, with RUNNER_CHANGED_EXIT, when a command before changed
+// the runner: the command did not run, and the runner goes
+export const RUNNER_CHANGED_EXIT = 125
+const RUNNER_CHANGED_MARK = `hammerkit-runner-changed-${randomBytes(8).toString('hex')}`
+
+// Runs `"$@"` in the directory `$3`, alone in the container: what an earlier command left
+// is cleaned up before, what this one left after. The directory of the run `$2` is a link
+// to the sandbox's files first. Before the command runs, each of `mountPaths` must still be
+// the mount it was made as (the kernel's mountinfo, which no command writes): a command
+// before could have moved a folder a mount is in and put files of its own in its place.
+// When not, it says `$1` and exits RUNNER_CHANGED_EXIT. Else its exit code is the command's.
+export function getWrapper(cleanUp: string, mountPaths: string[]): string {
+  const sandbox = shellQuote(RUNNER_SANDBOX_PATH)
   return [
     cleanUp,
-    `${BUSYBOX} mkdir -p "$(${BUSYBOX} dirname "$1")" && ${BUSYBOX} ln -sfn ${RUNNER_SANDBOX_PATH} "$1" || exit 126`,
-    'cd "$2" || exit 126',
-    'shift 2',
+    `changed() { echo "$1" >&2; exit ${RUNNER_CHANGED_EXIT}; }`,
+    `${BUSYBOX} mkdir -p "$(${BUSYBOX} dirname "$2")" && ${BUSYBOX} ln -sfn ${sandbox} "$2" || changed "$1"`,
+    ...mountPaths.map((path) => {
+      const quoted = shellQuote(path)
+      const field = shellQuote(`^[^ ]* [^ ]* [^ ]* [^ ]* ${toMountInfoPattern(path)} `)
+      return `[ "$(${BUSYBOX} realpath ${quoted})" = ${quoted} ] && ${BUSYBOX} grep -q ${field} /proc/self/mountinfo || changed "$1"`
+    }),
+    'cd "$3" || exit 126',
+    `case "$(pwd -P)" in ${sandbox}|${sandbox}/*) ;; *) changed "$1" ;; esac`,
+    'shift 3',
     '"$@"',
     'code=$?',
     cleanUp,
     'exit $code',
   ].join('\n')
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+// A mount point as /proc/self/mountinfo writes it (space, tab, newline and backslash as
+// octal escapes), as a basic regular expression
+function toMountInfoPattern(path: string): string {
+  const escaped = path.replace(/[\\ \t\n]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`)
+  return escaped.replace(/[.[\]*^$\\]/g, (c) => `\\${c}`)
 }
 
 // the sandboxes whose runner a task of this process uses: one command at a time each, the
@@ -363,8 +390,13 @@ export async function executeInRunner(
       } else {
         task.status.write('debug', `runs in the runner ${name} of the sandbox`)
       }
-      const cleanUp = getCleanUp(getScratchDirectories(getRunnerMounts(workspace, persistence)))
-      for (const cmd of task.data.cmds) {
+      const mounts = getRunnerMounts(workspace, persistence)
+      const cleanUp = getCleanUp(getScratchDirectories(mounts))
+      const wrapper = getWrapper(
+        cleanUp,
+        mounts.map((mount) => mount.mountPath)
+      )
+      for (const [index, cmd] of task.data.cmds.entries()) {
         task.status.write('debug', `execute ${cmd.cmd} in the runner of the sandbox`)
         const exitCode = await execInRunner(
           instance,
@@ -373,12 +405,30 @@ export async function executeInRunner(
           workspace.root,
           cmd.cwd,
           [task.data.shell, '-c', cmd.cmd],
-          cleanUp,
+          { wrapper, cleanUp },
           task,
           abort
         )
         if (abort.aborted) {
           return { type: 'canceled' }
+        }
+        if (exitCode === 'changed') {
+          // a fresh pod for the next command; this one runs as a Job, unless one of its
+          // commands ran already
+          await removeSandboxRunners(
+            instance,
+            kubernetes.namespace,
+            workspace.label,
+            (pod) => pod.metadata?.name !== name
+          )
+          if (index > 0) {
+            throw new Error('a command changed the runner of the sandbox, it was removed: run the task again')
+          }
+          task.status.write(
+            'warn',
+            'a command before changed the runner of the sandbox, it goes and the task runs as a Job'
+          )
+          return { type: 'unavailable' }
         }
         if (exitCode !== 0) {
           return { type: 'crash', exitCode }
@@ -598,11 +648,13 @@ async function execInRunner(
   root: string,
   cwd: string,
   command: string[],
-  cleanUp: string,
+  scripts: { wrapper: string; cleanUp: string },
   task: WorkItem<ContainerWorkTask>,
   abort: AbortSignal
-): Promise<number> {
+): Promise<number | 'changed'> {
+  const { cleanUp } = scripts
   const output = { bytes: 0, cut: false }
+  let changed = false
   const lines = (stream: 'stdout' | 'stderr') => {
     let rest = ''
     // a character split between two chunks stays whole
@@ -614,6 +666,10 @@ async function execInRunner(
           const parts = (rest + decoder.write(chunk)).split(/\r?\n/)
           rest = parts.pop() ?? ''
           for (const line of parts) {
+            if (stream === 'stderr' && line === RUNNER_CHANGED_MARK) {
+              changed = true
+              continue
+            }
             task.status.console(stream, line)
           }
         } else if (!output.cut) {
@@ -639,7 +695,7 @@ async function execInRunner(
     namespace,
     pod,
     RUNNER_CONTAINER,
-    [BUSYBOX, 'sh', '-c', getWrapper(cleanUp), 'hammerkit', root, cwd, ...command],
+    [BUSYBOX, 'sh', '-c', scripts.wrapper, 'hammerkit', RUNNER_CHANGED_MARK, root, cwd, ...command],
     stdout,
     stderr,
     null,
@@ -701,7 +757,7 @@ async function execInRunner(
       }`
     )
   }
-  return exitCode
+  return exitCode === RUNNER_CHANGED_EXIT && changed ? 'changed' : exitCode
 }
 
 async function killInRunner(

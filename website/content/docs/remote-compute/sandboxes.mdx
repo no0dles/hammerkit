@@ -533,7 +533,9 @@ above are the same.
   so nothing a command started is left to the next one. The runner has the sandbox's files at
   `/.hammerkit-sandbox`, and each command first links the directory of its run (where a Job
   would have the files) there, so paths are the same as in a Job, and the runner the same from
-  one run to the next. What does that is a static busybox
+  one run to the next. Before each command the runner checks that its mounts are still the
+  mounts it was made with; when a command before moved one, the runner goes and the task runs
+  as a Job. What does that is a static busybox
   (`busybox:1.37.0-musl`, pinned by digest, which an init container copies in) on a mount
   the runner can only read, so a command can not replace it, not even as root. Files a
   command writes elsewhere outside the sandbox, such as the home directory or `/usr/local/bin`,
