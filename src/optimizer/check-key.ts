@@ -108,6 +108,8 @@ function memoized(
   if (known) {
     return known
   }
+  // a loop (services that need each other) can not be proven, and fails to plan anyway
+  memo.set(key, Promise.resolve(null))
   const computed = compute()
   memo.set(key, computed)
   return computed

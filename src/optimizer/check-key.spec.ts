@@ -105,6 +105,21 @@ describe('check key', () => {
     expect(await keyIn('check-key-needs-unprovable', unprovable, 'e2e')).toBeNull()
   })
 
+  it('is none, and comes back, for services that need each other', async () => {
+    const files = {
+      '.git/HEAD': 'ref: refs/heads/main\n',
+      '.hammerkit.yaml': {
+        services: {
+          a: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['b'] },
+          b: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['a'] },
+        },
+        tasks: { t: { image: 'alpine:3.19', needs: ['a'], src: ['t.txt'], cmds: ['cat t.txt'] } },
+      },
+      't.txt': 'hello\n',
+    }
+    expect(await keyIn('check-key-needs-loop', files, 't')).toBeNull()
+  })
+
   it('is none for a task that can not be proven up to date', async () => {
     expect(await keyIn('check-key-no-src', project(), 'lint')).toBeNull()
     const unmatched = project()

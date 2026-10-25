@@ -75,12 +75,21 @@ export function getWorkTaskCacheDescription(item: WorkItem<WorkTask>): WorkTaskC
   }
 }
 
-function getNeedsIdentities(item: WorkItem<WorkTask | WorkService>): string[] {
+// `visiting` holds the services on the way here: services that need each other in a loop
+// fail to plan (checkForLoop), the identity only has to come back to say so
+function getNeedsIdentities(
+  item: WorkItem<WorkTask | WorkService>,
+  visiting: Set<WorkItem<WorkService>> = new Set()
+): string[] {
   return (
     item.needs
       // an init task needs the service it initializes, whose identity holds the init's id
       .filter((need) => !isInitOf(item, need.service))
-      .map((need) => `${need.name}=${getWorkServiceCacheIdentity(need.service)}`)
+      .map((need) =>
+        visiting.has(need.service)
+          ? `${need.name}=loop`
+          : `${need.name}=${getWorkServiceCacheIdentity(need.service, visiting)}`
+      )
       .sort()
   )
 }
@@ -93,7 +102,10 @@ function isInitOf(item: WorkItem<WorkTask | WorkService>, service: WorkItem<Work
 // the tasks it depends on and of its init task, and the services it needs in turn. The source
 // of those tasks and of the service is in the state key (computeStateKey), like a dependency's.
 // Not the service id, which leaves out what a service runs (getWorkServiceId).
-export function getWorkServiceCacheIdentity(item: WorkItem<WorkService>): string {
+export function getWorkServiceCacheIdentity(
+  item: WorkItem<WorkService>,
+  visiting: Set<WorkItem<WorkService>> = new Set()
+): string {
   const service = item.data
   const definition = isContainerWorkService(service)
     ? {
@@ -115,7 +127,7 @@ export function getWorkServiceCacheIdentity(item: WorkItem<WorkService>): string
         ...definition,
         ports: service.ports.map((port) => `${port.hostPort ?? ''}:${port.containerPort}`).sort(),
         deps: item.deps.map((dep) => dep.id()).sort(),
-        needs: getNeedsIdentities(item),
+        needs: getNeedsIdentities(item, new Set([...visiting, item])),
       })
     )
     .digest('hex')

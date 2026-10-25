@@ -118,14 +118,14 @@ export async function computeStateKey(
   for (const need of item.needs) {
     const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
     depKeys.push(`${need.name}=${effective.stateKey}`)
-    provable = provable && effective.provable
   }
 
   return { stateKey: combineStateKeys(ownKey, depKeys), stats, resolved, provable, unmatched }
 }
 
 // A needed service's sources folded with the state keys of its dependencies and needs. It
-// is provable when they are: a service without `src` of its own is a definition, not a guess.
+// does not make the task that needs it unprovable: a dependency without `src` (resetting the
+// service's data, say) is skipped with the service when the task is a cache hit.
 async function resolveNeedStateKey(
   service: WorkItemState<WorkService, any>,
   defaultCacheMethod: CacheMethod,
@@ -137,23 +137,21 @@ async function resolveNeedStateKey(
   if (existing !== undefined) {
     return existing
   }
+  // services that need each other in a loop fail to plan (checkForLoop): this only has to end
+  memo.set(memoKey, { stateKey: 'loop', provable: true })
   const resolved = resolveEffective(service, defaultCacheMethod)
   const { stats } = await getWorkItemCacheStats(service, environment)
   const keys: string[] = []
-  let provable = true
   for (const dep of service.deps) {
-    const effective = await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo)
-    keys.push(effective.stateKey)
-    provable = provable && effective.provable
+    keys.push((await resolveEffectiveStateKey(dep, defaultCacheMethod, environment, memo)).stateKey)
   }
   for (const need of service.needs) {
     const effective = await resolveNeedStateKey(need.service, defaultCacheMethod, environment, memo)
     keys.push(`${need.name}=${effective.stateKey}`)
-    provable = provable && effective.provable
   }
   const effective = {
     stateKey: combineStateKeys(getStateKey(stats, concreteMethod(resolved, defaultCacheMethod)), keys),
-    provable,
+    provable: true,
   }
   memo.set(memoKey, effective)
   return effective

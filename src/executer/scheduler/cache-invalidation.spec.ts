@@ -348,5 +348,40 @@ describe('cache invalidation', () => {
       const base = await keys('invalidation-needs-base2', 'node:24-alpine', 'ok\n')
       expect((await keys('invalidation-needs-image', 'node:20-alpine', 'ok\n')).id).not.toBe(base.id)
     })
+
+    it('keeps a task provable when a dependency of the service it needs has no src', async () => {
+      await createTestCase('invalidation-needs-reset', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          services: { db: { image: 'alpine:3.19', cmd: 'sleep 300', deps: ['reset'] } },
+          tasks: {
+            reset: { cmds: ['echo reset'] },
+            t: { image: 'alpine:3.19', needs: ['db'], src: ['t.txt'], cmds: ['cat t.txt'] },
+          },
+        },
+        't.txt': 'hello\n',
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 't' })
+        expect((await checkCacheState(cli.task('t'), 'checksum', environment)).provable).toBe(true)
+      })
+    })
+
+    it('comes back for services that need each other, which fail to plan', async () => {
+      await createTestCase('invalidation-needs-loop', {
+        '.git/HEAD': 'ref: refs/heads/main\n',
+        '.hammerkit.yaml': {
+          services: {
+            a: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['b'] },
+            b: { image: 'alpine:3.19', cmd: 'sleep 300', needs: ['a'] },
+          },
+          tasks: { t: { image: 'alpine:3.19', needs: ['a'], src: ['t.txt'], cmds: ['cat t.txt'] } },
+        },
+        't.txt': 'hello\n',
+      }).setup(async (cwd, environment) => {
+        const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 't' })
+        expect(cli.task('t').id()).toMatch(/^[0-9a-f]+$/)
+        expect(await stateKey(cwd, environment, 't')).toMatch(/^[0-9a-z]+$/)
+      })
+    })
   })
 })

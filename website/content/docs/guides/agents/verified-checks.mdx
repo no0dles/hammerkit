@@ -69,8 +69,9 @@ What the key covers, besides the files:
   unless they are committed. They are made again from their own `src`, which is in the key.
 - Not `.git`, and not the run's arguments: a run with arguments is never a check.
 
-A task without `src`, or whose `src` matches no file, here or in a dependency, can not be
-verified. `remote verify` says so and fails: `e2e: can not be verified, it, or a task it
+A task without `src`, or whose `src` matches no file, here, in a dependency or in a task a
+needed service depends on, can not be verified. The cache is less strict there: a task that
+resets the data of a service needs no `src` for the task needing the service to be cached. `remote verify` says so and fails: `e2e: can not be verified, it, or a task it
 depends on, declares no src that matches a file`.
 
 The CI runner and the server have to compute the same key. They do for tasks with an image.
