@@ -33,7 +33,9 @@ decides with its config whether they may.
    see [Sources](/docs/remote-compute/sources), from files the caller uploads, or from a
    [sandbox](/docs/remote-compute/sandboxes): a checkout of the caller's that stays on the server.
 6. **Where it runs.** [Runs](/docs/remote-compute/runs) are queued, limited per caller and
-   executed in a process of their own on the [backend](/docs/remote-compute/backend).
+   executed in a process of their own on the [backend](/docs/remote-compute/backend). A
+   [service run](/docs/remote-compute/service-runs) keeps services up for a while instead,
+   with their ports at addresses of their own behind the server's sign-in.
 
 ## Starting a server
 
@@ -197,6 +199,7 @@ backend:
 | `sources` | The repositories a run may get its code from, and the credential the server reads and pushes them with, see [Sources](/docs/remote-compute/sources). |
 | `runs` | Concurrency, limits per caller, durations, the environment and the network ceiling of runs, see [Runs](/docs/remote-compute/runs#config). |
 | `sandboxes` | The runtimes, network and limits of sandboxes, see [Sandboxes](/docs/remote-compute/sandboxes#config). |
+| `endpoints` | The domain, certificate and sign-in of the endpoints of service runs, see [Service runs](/docs/remote-compute/service-runs#server-config). |
 | `runtimes` | What tasks may run on, see [Backend](/docs/remote-compute/backend#runtimes). |
 | `backend` | Where tasks run and what the machine offers, see [Backend](/docs/remote-compute/backend). |
 | `storage` | Where the server keeps what must survive a restart: the published build files, the uploaded source files, the sandboxes (`sandboxes/`), the task cache and the records of the runs (`records/`). Runs work in `runs/` below it while they run. |

@@ -130,6 +130,7 @@ Paths are relative to the root of the sandbox. The tools:
 | `run_logs`    | `run`, `task`, `tail`, `from`, `limit`, `grep`, `ignore_case`, `context`                                             | Reads more of the [log of a run](/docs/remote-compute/runs#logs).                                                                                                                             |
 | `changes`     | `format`: `summary`, `diff` or `patch`                                                                               | What changed since the sandbox was fetched.                                                                                                                                                   |
 | `push`        | `branch`, `message`                                                                                                  | Commits the changes and pushes them to a branch, see [taking the work out](#taking-the-work-out).                                                                                             |
+| `services_up`, `endpoint_get`, `services_stop` | see [Service runs](#service-runs) | Start services for a person to look at, read a page of one, take them down. |
 
 Reads and searches are marked `readOnlyHint`, the edits `destructiveHint`, `push`
 `openWorldHint`; `bash` and `run_task` keep the defaults, since a command can do anything
@@ -228,7 +229,23 @@ as `agent/**`; any other branch is refused with what the agent may push to. The 
 the pushed commit afterwards, so the next push carries only new work. Without a branch to push
 to, the MCP tool `changes` with `format: patch` gives a patch to apply with `git am`.
 
+## Service runs
+
+Every client has three tools for [service runs](/docs/remote-compute/service-runs), to bring
+the app up for a person to check the change, or to try it out itself:
+
+| Tool | Parameters | What it does |
+| --- | --- | --- |
+| `services_up` | `services`, `endpoints` (`service:port`, such as `web:8080`), `ttl`, `name`, `branch` | Starts the services of the published build file with the files of the sandbox, or of a pushed `branch` of its repository, and answers once they are up: the address of each endpoint and until when they stay. The same `name` again replaces the run and keeps its addresses. |
+| `endpoint_get` | `run`, `path`, `service` | A `GET` of a path of an endpoint of the run, signed in as the agent: its status and the first 20000 characters of the body. Only at the addresses the server gave the run, so the token goes nowhere else. |
+| `services_stop` | `run` | Takes the services down. |
+
+The agent's identity needs an `endpoints` level `publish` for the repository to name
+endpoints, and the people who look need `open`, see
+[Who opens an endpoint](/docs/remote-compute/service-runs#who-opens-an-endpoint). On a
+Kubernetes backend a service run starts from a branch only: `push` first, then
+`services_up` with that `branch`.
+
 ## What is not covered yet
 
-- A service on the sandbox, such as a dev server to send requests to.
 - Commands that read input, and long-running background commands.

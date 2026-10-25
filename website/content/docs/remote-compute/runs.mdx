@@ -384,6 +384,10 @@ the run was running, submit it again`.
 
 A graceful stop (SIGTERM) leaves the waiting runs waiting, and cancels the queued and running ones.
 
+A [service run](/docs/remote-compute/service-runs) that is up gives its place back: it counts
+against `runs.up` instead, and it is not kept over a restart either, since its services stop
+with the server.
+
 Changes to `runs` need a restart; only the entitlements are read again on `SIGHUP`, see
 [Changing entitlements](/docs/remote-compute/entitlements#changing-entitlements).
 
@@ -405,6 +409,7 @@ runs:
   network: { allow: [registry.npmjs.org] } # open by default
   secretNetwork: none # open by default, what a task that reads a secret reaches
   args: declared # any by default, which tasks take arguments
+  up: { ttl: 8h, maxTtl: 72h } # the defaults, see Service runs
 ```
 
 | Key             | What it does                                                                                                                                                                                                                                                                                                                    |
@@ -419,6 +424,7 @@ runs:
 | `network`       | The most any task or service of a run reaches besides the services it needs: `open` (the default), `none` or `{ allow: [hosts] }`, as the [`network`](/docs/task/network) of a task. See [Network](#network).                                                                                                                   |
 | `secretNetwork` | The most a task or service that reads a secret, or a variable of the server other than `PATH`, `HOME` and `CI`, reaches: `open` (the default), `none` or `{ allow: [hosts] }`, within `network`. See [Tasks that read secrets](#tasks-that-read-secrets).                                                                     |
 | `args`          | Which tasks take [arguments](#arguments): `any` (the default) but those with `args: false`, or `declared`, only those with `args: true`.                                                                                                                                                                                          |
+| `up`            | The time and limits of [service runs](/docs/remote-compute/service-runs#server-config).                                                                                                                                                                                                                                         |
 
 ## Network
 
