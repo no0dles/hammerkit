@@ -221,14 +221,21 @@ The runs of one caller execute side by side in their namespace, up to
 [`runs.limits.running`](/docs/remote-compute/runs#limits-and-restarts), as the runs of
 different callers do. Several agents of one identity, each on a sandbox of its own, do not wait
 for each other. On a server the Jobs, Deployments, Services, Secrets and claims of a task are
-named after its cache id and the run (the first 8 digits of its `hammerkit.dev/run` label),
-and found by both labels, so two runs of the same task have their own objects and the end of
-one never removes what the other uses. Two runs that share [kept claims](#kept-claims), of the
-same repository or the same sandbox, execute one after the other: the second waits in the
+named after its cache id (its first 32 characters) and the run (the first 8 digits of its
+`hammerkit.dev/run` label), and found by both labels, so two runs of the same task have their
+own objects and the end of one never removes what the other uses. Kept claims are named after
+the source they are kept for instead. Two runs that share [kept claims](#kept-claims) execute
+one after the other: runs of the same repository, of the same sandbox, or the uploads of one
+caller (a source of type `upload`), whose kept claims are the caller's. The second waits in the
 queue, without counting against `runs.maxDuration`. With `keepVolumes: false` nothing is shared
-and even those run side by side. The runs of a caller share the quota of the namespace: a pod
-that does not fit the nodes waits for one, and a pod over the quota is not created until the
-quota has room. The task waits in both cases, until `runs.maxDuration`.
+and even those run side by side.
+
+The runs of a caller share the quota of the namespace, so size it for `runs.limits.running`
+runs of one caller at once. A pod that does not fit the nodes waits for one, and a pod over the
+quota is not created until the quota has room: the task waits in both cases, until
+`runs.maxDuration`. A claim over the quota (`persistentvolumeclaims`, `requests.storage`) does
+not wait. The server first removes released kept claims of the caller to make room, and when
+that is not enough the task fails with `exceeded quota`.
 
 What changes objects of the whole namespace happens for one run at a time: making the namespace
 and its policies and quota at the start of a run, removing what a stopped server left (the

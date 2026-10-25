@@ -2,6 +2,7 @@ import { ensureKubernetesServiceExists } from './ensure-kubernetes-service-exist
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { WorkService } from '../planner/work-service'
+import { getRunLabelValue } from './job-placement'
 
 const env = {
   type: 'kubernetes',
@@ -64,6 +65,15 @@ describe('ensureKubernetesServiceExists', () => {
       clusterIP: 'None',
       selector: { 'hammerkit.dev/id': 'abc123' },
     })
+  })
+
+  it('selects only the pods of its own run on a server, whose runs share the namespace', async () => {
+    const { instance, created } = cluster(null)
+    const onServer = { ...env, server: { run: 'run_1' } } as WorkKubernetesEnvironment
+    await ensureKubernetesServiceExists(instance, onServer, service([{ containerPort: 5432 }]))
+    const run = getRunLabelValue('run_1')
+    expect(created[0].metadata.name).toBe(`db-abc123-${run.substring(0, 8)}`)
+    expect(created[0].spec.selector).toEqual({ 'hammerkit.dev/id': 'abc123', 'hammerkit.dev/run': run })
   })
 
   it('recreates the Service when its ports came or went, since its clusterIP is fixed', async () => {
