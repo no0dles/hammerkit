@@ -85,6 +85,37 @@ tasks:
   # HAMMERKIT_FULL_INTEGRATION makes its missing CLUSTER_NAME fail instead of pass.
   test:docker:
     description: the integration suite without the specs that need a Kubernetes cluster
+    # side by side: the unit specs mostly use the CPU, the others mostly wait for
+    # the daemon
+    deps: [test:docker:unit, test:docker:containers]
+
+  # The unit specs touch no daemon, so they run side by side, in unit mode as on
+  # Windows. Two at a time, to leave the runner's other cores to the containers.
+  test:docker:unit:
+    description: the unit specs, with a coverage report of their own
+    deps: [install]
+    src:
+      - src
+      - examples
+      - tsconfig.json
+      - vitest.config.ts
+    generates:
+      # restored on a cache hit, so the coverage upload still has its report
+      - coverage/docker-unit
+    envs:
+      CI: ${CI:-}
+      GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
+      VERBOSE: ${VERBOSE:-}
+      HOME: ${HOME:-}
+      HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+    cmds:
+      - >-
+        node_modules/.bin/vitest run --maxWorkers=2 --minWorkers=1
+        --coverage.reportsDirectory=coverage/docker-unit --coverage.reporter=lcovonly
+
+  # The specs that use Docker run one file at a time, since they share one daemon.
+  test:docker:containers:
+    description: the specs that need at most Docker
     deps: [install]
     src:
       - src
@@ -93,8 +124,7 @@ tasks:
       - tsconfig.json
       - vitest.config.ts
     generates:
-      # restored on a cache hit, so the coverage upload still has its reports
-      - coverage/docker-unit
+      # restored on a cache hit, so the coverage upload still has its report
       - coverage/docker
     envs:
       CI: ${CI:-}
@@ -113,10 +143,6 @@ tasks:
       OP_TEST_TOKEN_FILE: ${OP_TEST_TOKEN_FILE:-}
       OP_OTHER_TOKEN_FILE: ${OP_OTHER_TOKEN_FILE:-}
     cmds:
-      # The unit specs touch no daemon, so they run side by side (unit mode, as on
-      # Windows); the specs that use Docker then run one file at a time, since they
-      # share one daemon. Each run writes a report of its own.
-      - node_modules/.bin/vitest run --coverage.reportsDirectory=coverage/docker-unit --coverage.reporter=lcovonly
       - >-
         node_modules/.bin/vitest run --mode integration --no-file-parallelism
         --coverage.reportsDirectory=coverage/docker

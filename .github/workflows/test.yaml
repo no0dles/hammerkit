@@ -244,9 +244,10 @@ jobs:
       - name: Install ripgrep
         if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      # Inside the task, the docker suite runs its unit specs side by side and then
-      # the specs that use Docker one file at a time (they share one daemon); the
-      # kubernetes suite runs two spec files at a time on the single-node cluster.
+      # Inside the task, the docker suite runs its unit specs (two files at a time)
+      # next to the specs that use Docker (one file at a time, they share one
+      # daemon); the kubernetes suite runs two spec files at a time on the
+      # single-node cluster.
       # HAMMERKIT_TEST_RUN_ID is not passed on: hammerkit hands a task only the
       # variables it declares, and a per-run value would defeat the cache.
       - name: Run integration tests

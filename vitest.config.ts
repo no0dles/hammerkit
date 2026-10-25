@@ -10,8 +10,8 @@ import { defineConfig } from 'vitest/config'
 // `mode` branch, which keeps CI's split unit/integration jobs intact. Integration
 // mode is a superset of unit mode. In CI the ubuntu jobs run the whole suite in three
 // parts (see test:docker and test:kubernetes in .hammerkit.yaml): the unit specs in
-// unit mode, then the docker and the cluster specs in integration mode; Codacy gets
-// the three lcov reports. The windows job's unit-mode run is not uploaded.
+// unit mode, the docker and the cluster specs in integration mode; Codacy gets the
+// three lcov reports. The windows job's unit-mode run is not uploaded.
 export default defineConfig(({ mode }) => {
   const integration = mode === 'integration'
   return {
