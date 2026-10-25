@@ -142,6 +142,9 @@ function matchesTaskWorkScope(task: WorkItem<WorkTask>, scope: WorkScope): boole
   if (isContextTaskFilter(scope)) {
     return task.name === scope.taskName
   }
+  if (scope.serviceNames) {
+    return false
+  }
 
   return appliesToLabels(task.data.labels, scope)
 }
@@ -149,6 +152,9 @@ function matchesTaskWorkScope(task: WorkItem<WorkTask>, scope: WorkScope): boole
 function matchesServiceWorkScope(service: WorkService, scope: WorkScope): boolean {
   if (isContextTaskFilter(scope)) {
     return false
+  }
+  if (scope.serviceNames) {
+    return scope.serviceNames.includes(service.name)
   }
 
   return appliesToLabels(service.labels, scope)

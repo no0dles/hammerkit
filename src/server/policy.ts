@@ -1,4 +1,14 @@
-import { Account, AccountLevel, BuildsLevel, Entitlement, SandboxBranchType, SandboxGrant, Who } from './server-config'
+import {
+  Account,
+  AccountLevel,
+  BuildsLevel,
+  EndpointGrant,
+  EndpointLevel,
+  Entitlement,
+  SandboxBranchType,
+  SandboxGrant,
+  Who,
+} from './server-config'
 import { Principal } from './oauth'
 import { matchesAnyRepo, matchesRef, matchesRepo } from './repo'
 
@@ -14,6 +24,9 @@ export interface Grant {
   // pattern: the entries of the `sandboxes` of their entitlements, one per repository
   // pattern with the higher type of a branch pattern two of them name; none for no sandboxes
   sandboxes: SandboxGrant[]
+  // the repositories (patterns) whose service runs' endpoints the caller may open or
+  // publish, one entry per pattern with the higher level
+  endpoints: EndpointGrant[]
   // the entitlements that matched, for the log
   matched: number[]
 }
@@ -73,6 +86,7 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const accounts: Grant['accounts'] = {}
   const repos: string[] = []
   const sandboxes: SandboxGrant[] = []
+  const endpoints: EndpointGrant[] = []
   let builds: BuildsLevel | null = null
 
   entitlements.forEach((entitlement, index) => {
@@ -106,8 +120,28 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
         known.branches[pattern] = higherType(known.branches[pattern], type)
       }
     }
+    for (const endpoint of entitlement.endpoints ?? []) {
+      const known = endpoints.find((entry) => entry.repo === endpoint.repo)
+      if (!known) {
+        endpoints.push({ ...endpoint })
+      } else if (endpoint.level === 'publish') {
+        known.level = 'publish'
+      }
+    }
   })
-  return { accounts, repos, builds, sandboxes, matched }
+  return { accounts, repos, builds, sandboxes, endpoints, matched }
+}
+
+// What the caller may do with the endpoints of service runs of a repository: the higher
+// level of the entries whose `repo` covers it, null for nothing.
+export function endpointLevel(grant: Grant, repo: string): EndpointLevel | null {
+  let found: EndpointLevel | null = null
+  for (const endpoint of grant.endpoints) {
+    if (matchesRepo(endpoint.repo, repo) && found !== 'publish') {
+      found = endpoint.level
+    }
+  }
+  return found
 }
 
 export type SubmittedSource =

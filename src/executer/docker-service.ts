@@ -22,11 +22,13 @@ import {
   ContainerNetworkOptions,
   DockerItemNetwork,
   getNetworkHostConfig,
+  getPortBinding,
   prepareItemNetwork,
 } from '../docker/item-network'
 import { ContainerSecrets, prepareContainerSecrets, removeContainerSecrets } from './container-secrets'
 import { WorkItem } from '../planner/work-item'
-import { ServiceState } from './scheduler/service-state'
+import { PublishedPort, ServiceState } from './scheduler/service-state'
+import { WorkPort } from '../planner/work-port'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { ExecuteOptions } from '../runtime/runtime'
 import { getWorkInstanceId } from '../planner/work-instance-id'
@@ -35,6 +37,28 @@ import { DockerResources, resolveDockerResources } from './docker-resources'
 import { getProxylessEnvironment } from '../network/egress-proxy'
 
 const HEALTHCHECK_INTERVAL_MS = 1000
+
+// Where docker published the ports of a container (or of its relay), for those that asked
+// for a free one.
+export async function readPublishedPorts(container: Container, ports: WorkPort[]): Promise<PublishedPort[]> {
+  const wanted = ports.filter((port) => port.hostPort === 0)
+  if (wanted.length === 0) {
+    return []
+  }
+  const bound = (await container.inspect()).NetworkSettings.Ports ?? {}
+  return wanted.flatMap((port) => {
+    const binding = bound[`${port.containerPort}/tcp`]?.find((candidate) => candidate.HostPort)
+    return binding
+      ? [
+          {
+            containerPort: port.containerPort,
+            host: port.hostIp ?? (binding.HostIp && binding.HostIp !== '0.0.0.0' ? binding.HostIp : '127.0.0.1'),
+            port: Number(binding.HostPort),
+          },
+        ]
+      : []
+  })
+}
 
 export function buildServiceCreateOptions(
   item: WorkItem<ContainerWorkService>,
@@ -81,12 +105,11 @@ export function buildServiceCreateOptions(
       // published by its relay.
       PortBindings:
         options.publishPorts && !network.relayPorts
-          ? item.data.ports
-              .filter((p) => !!p.hostPort)
-              .reduce<{ [key: string]: { HostPort: string }[] }>((map, port) => {
-                map[`${port.containerPort}/tcp`] = [{ HostPort: `${port.hostPort}` }]
-                return map
-              }, {})
+          ? Object.fromEntries(
+              item.data.ports
+                .filter((p) => p.hostPort !== null)
+                .map((port) => [`${port.containerPort}/tcp`, [getPortBinding(port)]])
+            )
           : {},
       ...resources,
     },
@@ -125,12 +148,13 @@ export async function dockerService(
     container = await docker.createContainer(
       buildServiceCreateOptions(item, options, network.options, secrets, resources)
     )
-    await network.connect(container)
+    const relay = await network.connect(container)
 
     const stream = await container.attach({ stream: true, stdout: true, stderr: true })
     logStream(item.status, stream)
 
     await container.start()
+    const published = options.publishPorts ? await readPublishedPorts(relay ?? container, item.data.ports) : []
 
     if (!item.data.healthcheck || !options.waitForReady) {
       options.state.set({
@@ -138,6 +162,7 @@ export async function dockerService(
         dns: { containerId: container.id },
         stateKey: options.stateKey,
         remote: null,
+        ...(published.length > 0 ? { published } : {}),
       })
     } else {
       const healthcheck = item.data.healthcheck
@@ -171,6 +196,7 @@ export async function dockerService(
           dns: { containerId: container.id },
           stateKey: options.stateKey,
           remote: null,
+          ...(published.length > 0 ? { published } : {}),
         })
       }
     }

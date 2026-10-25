@@ -15,6 +15,7 @@ import {
 import { capOutput, formatTree, toColonNumbers } from './format'
 import { listPublishedTasks, oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
 import { createTaskTools, readLogHint, readTaskListing, TaskListing, taskToolArgs, taskToolSchema } from './task-tools'
+import { SERVICE_TOOLS, serviceToolArgs, serviceToolSchema } from './service-tools'
 
 // What opencode passes a tool (`ToolContext` of `@opencode-ai/plugin`), the parts used here.
 export interface OpencodeToolContext {
@@ -120,6 +121,9 @@ export const OPENCODE_TOOLS = [
   'run_logs',
   'push',
   'list',
+  'services_up',
+  'endpoint_get',
+  'services_stop',
 ]
 
 /**
@@ -246,6 +250,9 @@ export const OPENCODE_V2_TOOLS = [
   'run_task',
   'run_logs',
   'push',
+  'services_up',
+  'endpoint_get',
+  'services_stop',
 ]
 
 // the tools of opencode 2 that work on this machine and have no stand-in on a sandbox
@@ -449,6 +456,9 @@ export function createOpencodeV2Tools(
       ),
       same
     ),
+    ...SERVICE_TOOLS.map((service) =>
+      tool(service.name, service.name, { ...serviceToolSchema(service), additionalProperties: false }, same)
+    ),
   ]
 }
 
@@ -471,6 +481,22 @@ export function createOpencodeTools(
     Object.entries(opencodeTools(client, options)).map(([name, { args, ...tool }]) => [
       name,
       { ...tool, args: args(z) },
+    ])
+  )
+}
+
+// services_up, endpoint_get and services_stop, with their parameters for the zod of opencode 1
+function opencodeServiceTools(client: () => Promise<SandboxClient>): { [name: string]: OpencodeToolBody } {
+  return Object.fromEntries(
+    SERVICE_TOOLS.map((tool) => [
+      tool.name,
+      {
+        description: tool.description,
+        args: (z: any) => serviceToolArgs(tool, z),
+        async execute(args: unknown, context: OpencodeToolContext) {
+          return { title: tool.title, output: await tool.call(await client(), args, context.abort) }
+        },
+      },
     ])
   )
 }
@@ -770,6 +796,8 @@ function opencodeTools(
         return lines.join('\n')
       },
     },
+
+    ...opencodeServiceTools(client),
   })
 }
 

@@ -7,7 +7,7 @@ import { ServerConfig } from './server-config'
 /**
  * Who the caller is and what they may do:
  *
- *   GET /v1/me         identity, accounts with their level, repositories, the builds level and the sandbox grants
+ *   GET /v1/me         identity, accounts with their level, repositories, the builds level the sandbox and endpoint grants
  *   GET /v1/accounts   the accounts the caller has a level on, with what the operator says about them
  */
 export async function handleAccounts(
@@ -42,6 +42,7 @@ export async function handleAccounts(
       repos: grant.repos,
       builds: grant.builds,
       sandboxes: grant.sandboxes,
+      endpoints: grant.endpoints,
     })
     return true
   }

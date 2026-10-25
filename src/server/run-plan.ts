@@ -10,10 +10,18 @@ function labels(values: string[] | undefined): LabelValues | undefined {
   return values && values.length > 0 ? parseLabelArguments(values) : undefined
 }
 
-// The tasks in the order they were named, one scope each; by labels when none is.
+// The tasks in the order they were named, one scope each; by labels when none is. A
+// service run is one scope of its services.
 // The arguments, if any, go to the one task named (the request allows no more). That
 // task runs uncached unless the request names a `cache` method, as `run --cache` does.
-export function getRunScopes(tasks: string[], options: RunOptions): { name: string; scope: WorkScope }[] {
+export function getRunScopes(
+  tasks: string[],
+  options: RunOptions,
+  services: string[] = []
+): { name: string; scope: WorkScope }[] {
+  if (services.length > 0) {
+    return [{ name: services.join(', '), scope: { serviceNames: services, environmentName: options.env ?? null } }]
+  }
   const args =
     options.args && options.args.length > 0
       ? { values: options.args, services: false, cache: options.cache !== undefined }
@@ -49,12 +57,12 @@ export interface PlannedRun {
  */
 export async function planRun(
   bundle: Bundle,
-  run: { tasks: string[]; options: RunOptions },
+  run: { tasks: string[]; options: RunOptions; up?: { services: string[] }; services?: string[] },
   environment: Environment,
   policy: PlanPolicy
 ): Promise<PlannedRun> {
   const plan: PlannedRun['plan'] = {}
-  for (const { scope } of getRunScopes(run.tasks, run.options)) {
+  for (const { scope } of getRunScopes(run.tasks, run.options, run.up?.services ?? run.services)) {
     Object.assign(plan, (await planBundle(bundle, environment, { scope, policy })).plan)
   }
   return {

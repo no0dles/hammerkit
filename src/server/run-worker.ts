@@ -21,7 +21,9 @@ import { networkSchema } from '../schema/network-schema'
 import { limitNetwork, parseWorkNetwork, WorkNetwork } from '../planner/work-network'
 import { getRunScopes } from './run-plan'
 import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
-import type { RunEventData, TaskStatus } from './runs'
+import type { EndpointTarget, RunEventData, TaskStatus } from './runs'
+import { WorkTree } from '../planner/work-tree'
+import { getResourceName } from '../kubernetes/resources'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
@@ -65,6 +67,15 @@ export const workerInputSchema = z
       .string()
       .regex(/^[a-z]+-[0-9a-f]{24}$/)
       .optional(),
+    // a service run: the services it keeps up instead of tasks, and the ports the server
+    // reaches as endpoints
+    up: z
+      .object({
+        services: z.array(z.string()).min(1),
+        endpoints: z.array(z.object({ service: z.string(), port: z.number().int() }).strict()),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
 
@@ -78,7 +89,75 @@ export function getRunNetwork(input: Pick<WorkerInput, 'network' | 'sandboxNetwo
 }
 
 // What the process says, one JSON object per line on its standard output.
-export type WorkerMessage = { kind: 'event'; event: RunEventData } | { kind: 'result'; ok: boolean; error?: string }
+export type WorkerMessage =
+  | { kind: 'event'; event: RunEventData }
+  // the services of a service run are ready
+  | { kind: 'up'; targets: EndpointTarget[] }
+  | { kind: 'result'; ok: boolean; error?: string }
+
+/**
+ * The ports of the services of a service run as the server publishes them: on a host the
+ * ports of endpoints go to a free port of the loopback interface, where only the server
+ * reaches them, and no other port goes to the host, whatever the build file says (`up`
+ * would publish them on every interface, where two runs collide). On a cluster nothing is
+ * published, the server reaches the Service of each.
+ */
+export function publishEndpoints(
+  workTree: WorkTree,
+  endpoints: { service: string; port: number }[],
+  cluster: boolean
+): void {
+  for (const service of Object.values(workTree.services)) {
+    if (!('ports' in service.data)) {
+      continue
+    }
+    service.data.ports = service.data.ports.map((port) =>
+      !cluster &&
+      endpoints.some((endpoint) => endpoint.service === service.name && endpoint.port === port.containerPort)
+        ? { containerPort: port.containerPort, hostPort: 0, hostIp: '127.0.0.1' }
+        : { containerPort: port.containerPort, hostPort: null }
+    )
+  }
+}
+
+// Where the server reaches each endpoint, once every service the run keeps up is ready;
+// null until then.
+export function getEndpointTargets(
+  workTree: WorkTree,
+  up: NonNullable<WorkerInput['up']>,
+  kubernetes: WorkKubernetesEnvironment | undefined
+): EndpointTarget[] | null {
+  const services = Object.values(workTree.services).filter((service) => up.services.includes(service.name))
+  if (services.length < up.services.length || services.some((service) => service.state.current.type !== 'running')) {
+    return null
+  }
+  const targets: EndpointTarget[] = []
+  for (const endpoint of up.endpoints) {
+    const service = services.find((candidate) => candidate.name === endpoint.service)
+    const state = service?.state.current
+    if (!service || state?.type !== 'running') {
+      return null
+    }
+    if (kubernetes) {
+      targets.push({
+        service: endpoint.service,
+        port: endpoint.port,
+        address: { host: `${getResourceName(service, kubernetes)}.${kubernetes.namespace}.svc`, port: endpoint.port },
+      })
+      continue
+    }
+    const published = state.published?.find((candidate) => candidate.containerPort === endpoint.port)
+    if (!published) {
+      throw new Error(`${endpoint.service} is up, but its port ${endpoint.port} was not published`)
+    }
+    targets.push({
+      service: endpoint.service,
+      port: endpoint.port,
+      address: { host: published.host, port: published.port },
+    })
+  }
+  return targets
+}
 
 /**
  * Executes the tasks of a run with the engine of `hammerkit run`. The caller says which
@@ -92,7 +171,9 @@ export async function runTasks(
   abortCtrl: AbortController,
   // whether the run was stopped from outside; the engine aborts too when a task fails
   cancelled: () => boolean,
-  emit: (event: RunEventData) => void
+  emit: (event: RunEventData) => void,
+  // a service run: its services are ready, at these addresses
+  up?: (targets: EndpointTarget[]) => void
 ): Promise<void> {
   const secrets = createSecretRegistry()
   const status = statusConsole(emptyWritable(), secrets)
@@ -145,7 +226,7 @@ export async function runTasks(
       explain: true,
     }
 
-    for (const { name, scope } of getRunScopes(input.tasks, options)) {
+    for (const { name, scope } of getRunScopes(input.tasks, options, input.up?.services)) {
       const { ctx, scope: parsed } = await createParseContext(input.entry, environment, {
         directory: input.directory,
       })
@@ -154,17 +235,46 @@ export async function runTasks(
       if (input.volumeScope && !input.kubernetes) {
         scopeServiceVolumes(workTree, input.volumeScope)
       }
+      if (input.up) {
+        publishEndpoints(workTree, input.up.endpoints, !!input.kubernetes)
+      }
       const cli = getCli(workTree, environment)
-      if (cli.tasks().length === 0) {
+      if (cli.tasks().length === 0 && (!input.up || cli.services().length === 0)) {
         throw new Error(`no tasks found for ${name}`)
       }
-      const execution = cli.exec({ ...execOptions, workers: cli.defaultWorkers() })
+      const execution = input.up
+        ? cli.up({ ...execOptions, workers: cli.defaultWorkers(), daemon: false, wait: 'ready' })
+        : cli.exec({ ...execOptions, workers: cli.defaultWorkers() })
       const seen = new Map<string, Seen>()
-      const report = () => reportTasks(emit, execution.state.current, seen, (text) => secrets.redact(text))
+      let ready = false
+      const report = () => {
+        reportTasks(emit, execution.state.current, seen, (text) => secrets.redact(text))
+        if (input.up && up && !ready) {
+          const targets = getEndpointTargets(execution.state.current, input.up, input.kubernetes)
+          if (targets) {
+            ready = true
+            up(targets)
+          }
+        }
+      }
       const watch = execution.state.on('run-events', report)
       try {
         const result = await execution.start()
         report()
+        // on a cluster the services stay in their Deployments once they are ready, until
+        // the namespace of the run goes
+        if (input.up && input.kubernetes && ready && result.success && !abortCtrl.signal.aborted) {
+          await new Promise<void>((resolve) =>
+            abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
+          )
+          return
+        }
+        if (input.up && ready) {
+          if (!abortCtrl.signal.aborted) {
+            throw new Error('the services stopped on their own')
+          }
+          return
+        }
         if (!result.success) {
           throw new Error(cancelled() ? 'the run was cancelled' : `${name} failed`)
         }
@@ -241,9 +351,16 @@ function reportTasks(
 // The run is the first line of the standard input. The server keeps it open and writes
 // `cancel` on it to stop the run: that works the same on every platform, where a signal
 // on Windows ends the process without letting it stop its tasks.
-function readInput(stdin: NodeJS.ReadableStream, cancel: () => void): { input: Promise<string>; close: () => void } {
+// `onEnd` is told when the input ends before the run does: the server is gone.
+export function readInput(
+  stdin: NodeJS.ReadableStream,
+  cancel: () => void
+): { input: Promise<string>; close: () => void; onEnd: (listener: () => void) => void } {
   const lines = createInterface({ input: stdin, crlfDelay: Infinity })
   let first: string | undefined
+  let closing = false
+  let ended = false
+  let onEnd: (() => void) | undefined
   const input = new Promise<string>((resolve) => {
     lines.on('line', (line) => {
       if (first === undefined) {
@@ -253,9 +370,27 @@ function readInput(stdin: NodeJS.ReadableStream, cancel: () => void): { input: P
         cancel()
       }
     })
-    lines.on('close', () => resolve(first ?? ''))
+    lines.on('close', () => {
+      resolve(first ?? '')
+      if (!closing) {
+        ended = true
+        onEnd?.()
+      }
+    })
   })
-  return { input, close: () => lines.close() }
+  return {
+    input,
+    close: () => {
+      closing = true
+      lines.close()
+    },
+    onEnd: (listener) => {
+      onEnd = listener
+      if (ended) {
+        listener()
+      }
+    },
+  }
 }
 
 /**
@@ -289,6 +424,11 @@ export async function workerMain(
     say({ kind: 'result', ok: false, error: `the run could not be read: ${e instanceof Error ? e.message : e}` })
     return
   }
+  if (input.up) {
+    // services stay until they are stopped: without the server that would stop them, at
+    // their ttl or on a cancel, nothing would
+    reader.onEnd(stop)
+  }
   try {
     await runTasks(
       input,
@@ -296,7 +436,8 @@ export async function workerMain(
       processEnvs,
       abortCtrl,
       () => cancelled,
-      (event) => say({ kind: 'event', event })
+      (event) => say({ kind: 'event', event }),
+      (targets) => say({ kind: 'up', targets })
     )
     say({ kind: 'result', ok: true })
   } catch (e) {

@@ -14,7 +14,7 @@ function toApprovalView(run: Run) {
   return {
     id: run.id,
     state: run.state,
-    requestedBy: run.owner,
+    requestedBy: { iss: run.owner.iss, sub: run.owner.sub },
     createdAt: run.createdAt,
     definition: run.definition,
     tasks: run.tasks,

@@ -36,6 +36,9 @@ describe('opencode tools on a sandbox', () => {
         'run_logs',
         'push',
         'list',
+        'services_up',
+        'endpoint_get',
+        'services_stop',
       ])
       expect(OPENCODE_TOOLS).toEqual(Object.keys(tools))
       // opencode builds a zod object of the args, as it does for its own

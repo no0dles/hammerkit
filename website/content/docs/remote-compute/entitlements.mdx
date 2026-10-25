@@ -31,8 +31,9 @@ entitlements:
 | `repos` | The repositories the caller may name in a run from a git ref, see [Repositories](#repositories). |
 | `builds` | What the caller may do with build files: `run`, `propose` or `publish`, see [Build file levels](#build-file-levels). |
 | `sandboxes` | The repositories the caller may keep [sandboxes](/docs/remote-compute/sandboxes) of, one `repo` (`host/path` pattern) per entry with a `pull` or `push` type per branch pattern (`branches`). A list of its own: `repos` is for runs from a ref. |
+| `endpoints` | The repositories whose [service runs](/docs/remote-compute/service-runs) the caller may open the endpoints of (`open`), or also publish endpoints in their own (`publish`), one `repo` pattern and `level` per entry, see [Who opens an endpoint](/docs/remote-compute/service-runs#who-opens-an-endpoint). |
 
-An entry names accounts, a `builds` level, `sandboxes` or more of them.
+An entry names accounts, a `builds` level, `sandboxes`, `endpoints` or more of them.
 
 ## Who
 
@@ -97,7 +98,8 @@ server, they are not even shown which build files exist.
   ],
   "repos": ["github.com/corp/payments"],
   "builds": "run",
-  "sandboxes": []
+  "sandboxes": [],
+  "endpoints": []
 }
 ```
 

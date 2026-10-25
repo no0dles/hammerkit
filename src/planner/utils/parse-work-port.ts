@@ -6,7 +6,10 @@ export function parseWorkPort(port: string): WorkPort {
     const port = parsePort(parts[0], false)
     return { containerPort: port, hostPort: port }
   } else if (parts.length === 2) {
-    return { containerPort: parsePort(parts[1], false), hostPort: parsePort(parts[0], true) }
+    // `0:80` is not published, as an empty host port: 0 (a free port) is for the endpoints
+    // of a server only
+    const hostPort = parsePort(parts[0], true)
+    return { containerPort: parsePort(parts[1], false), hostPort: hostPort === 0 ? null : hostPort }
   } else {
     throw new Error(`invalid port ${port}`)
   }

@@ -429,7 +429,9 @@ in it) the task runs as a Job.
 
 Across the cluster the server makes namespaces and binds `runRole` in the ones it made. With
 [sandboxes](#sandboxes) it also lists namespaces when it starts, to find the claims of sandboxes
-in the ones it made. It needs
+in the ones it made. With [service runs](/docs/remote-compute/service-runs#on-kubernetes) it
+deletes the namespace of each at its end, and lists them to remove the ones a stopped server
+left. It needs
 no rights on Secrets or pods outside of them: those come from `runRole`, which it binds in each
 caller's namespace (Kubernetes lets it bind that role only, by `bind`). In its own namespace it
 reads the Secrets of the accounts and makes tokens of their ServiceAccounts, by name. The
@@ -440,7 +442,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: hammerkit-server }
 rules:
-  - { apiGroups: [''], resources: [namespaces], verbs: [get, list, create] }   # list: with sandboxes
+  - { apiGroups: [''], resources: [namespaces], verbs: [get, list, create, delete] }   # list: with sandboxes or service runs, delete: service runs
   - { apiGroups: [rbac.authorization.k8s.io], resources: [rolebindings], verbs: [get, create, update] }
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [clusterroles]
@@ -476,7 +478,8 @@ Bind `hammerkit-server` with a ClusterRoleBinding and `hammerkit-accounts` with 
 the server's ServiceAccount; do not bind `hammerkit-runs` yourself. Making RoleBindings across the
 cluster still lets the server bind `hammerkit-runs` in a namespace it did not make. To rule that
 out, admit its RoleBindings only in the namespaces of its own callers, its `namespacePrefix`
-and 16 hex digits, and not in those of another server on the cluster:
+and 16 hex digits, and not in those of another server on the cluster. The second policy keeps
+the deletes of namespaces to those of its service runs:
 
 ```yaml title="admission.yaml"
 apiVersion: admissionregistration.k8s.io/v1
@@ -496,7 +499,30 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata: { name: hammerkit-managed-namespaces }
 spec: { policyName: hammerkit-managed-namespaces, validationActions: [Deny] }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: hammerkit-service-run-namespaces }
+spec:
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [''], apiVersions: ['*'], operations: [DELETE], resources: [namespaces] }
+  matchConditions:
+    - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:hammerkit:hammerkit'" }
+  validations:
+    - expression: "oldObject.metadata.?labels['hammerkit.dev/service-run'].hasValue()"
+    - expression: "oldObject.metadata.name.matches('^hammerkit-[0-9a-f]{16}$')"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: hammerkit-service-run-namespaces }
+spec: { policyName: hammerkit-service-run-namespaces, validationActions: [Deny] }
 ```
+
+Upgrading a server for [service runs](/docs/remote-compute/service-runs): add `delete` on
+namespaces to `hammerkit-server` and the second policy. Without them a service run still
+ends, but its namespace stays: the server removes what runs in it, and says in its log and
+in the run's what its ClusterRole needs.
 
 Not yet: Windows nodes, holding a pod with an open network back until the policy of its namespace holds, a cache in a registry or a bucket, a limited network for a task
 that reads a provider's secret, and failing a task early whose pod can not start (an image that

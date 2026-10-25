@@ -47,6 +47,9 @@ server, so they work with or without a build file in the working directory.
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
 | `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). |
 | `remote run <tasks...>` | Run tasks of a published build file on a server from a git ref, print their output and exit as they did, see [Running tasks](#running-tasks). |
+| `remote up <services...>` | Start services of a published build file on a server from a git ref and keep them up, with `--endpoint service:port` at addresses of their own, see [Service runs](#service-runs). |
+| `remote extend <run> <ttl> [server]` | Keep a service run up for this long from now. |
+| `remote stop <run> [server]` | Stop a run; a service run takes its services and endpoints down. |
 | `remote versions [server]` | List the published versions, newest first, with who published them, where they come from and whether they were yanked. `--filter key=value` (repeatable) keeps the ones with that [annotation](/docs/remote-compute/build-files#annotations). |
 | `remote approvals [server]` | List the runs that wait for your approval. |
 | `remote show <run or hash> [server]` | Show a run that waits for your approval, or a proposed or published version, in full: per task the commands, image, secrets and accounts, and every file of a version, see [Approving runs](#approving-runs) and [Proposing](#proposing-a-version). |
@@ -231,6 +234,32 @@ up to ten seconds for the server to take the cancel before it ends. The token is
 [Signing in](#signing-in), or `HAMMERKIT_TOKEN_COMMAND` / `HAMMERKIT_TOKEN`, which is how a CI
 job signs in with its own identity, see
 [CI through a server](/docs/guides/agents/github-actions).
+
+## Service runs
+
+`remote up` starts a [service run](/docs/remote-compute/service-runs): services of a published
+version from a branch or tag, kept up until their time ends, and follows it until they are
+up. Then it prints the address of each endpoint and exits; the services stay.
+
+```
+$ hammerkit remote up web --endpoint web:8080 --ttl 3d --sleep-ttl 30m
+run_Vd1rX9pQ2mT7wN4a on build: web from feature/login at 4be1a07c...
+[hammerkit] checked out github.com/corp/shop at 4be1a07c...
+run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m without a request
+  web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com/
+```
+
+| Option | What it is | Left out |
+| --- | --- | --- |
+| `--endpoint <service:port>` | A port of a service to publish, the container port it declares. More than once for more. | No endpoints. |
+| `--ttl <duration>` | How long the run lasts once its services are ready, asleep or not; then they are removed. | The server's `runs.up.ttl`. |
+| `--sleep-ttl <duration>` | How long the services stay up without a request, then they [sleep](/docs/remote-compute/service-runs#sleeping) until the next request wakes them. | The server's `runs.up.sleepTtl`, or never. |
+| `--name <name>` | Lower case letters, digits and `-`. A later run of yours with this name replaces this one and keeps its addresses. | The branch. |
+| `--build`, `--repo`, `--ref`, `--commit`, `--server`, `--env` | As for [`remote run`](#running-tasks). | As there. |
+
+It exits with `1` when the run failed before it was up. Ctrl-C while it starts cancels it.
+`remote extend <run> 8h` keeps it for that long from now (never shorter than it was),
+`remote stop <run>` takes it down, asleep or not.
 
 ## Approving runs
 

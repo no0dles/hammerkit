@@ -39,7 +39,7 @@ const entitlements: Entitlement[] = [
 describe('getGrant', () => {
   it('denies by default', () => {
     const grant = getGrant(entitlements, { iss: IDP, sub: 'bob', groups: [], claims: {} })
-    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, sandboxes: [], matched: [] })
+    expect(grant).toEqual({ accounts: {}, repos: [], builds: null, sandboxes: [], endpoints: [], matched: [] })
     expect(getGrant([], alice).accounts).toEqual({})
   })
 
@@ -145,6 +145,7 @@ describe('decideRun', () => {
     repos: ['github.com/corp/*'],
     builds,
     sandboxes: sandboxes ? [{ repo: 'github.com/corp/*', branches: { main: 'pull' } }] : [],
+    endpoints: [],
     matched: [0],
   })
   const base = (over: Partial<RunDecisionInput>): RunDecisionInput => ({
@@ -273,6 +274,7 @@ describe('decideSandbox', () => {
     repos: ['github.com/corp/*'],
     builds: 'run',
     sandboxes: [{ repo: 'github.com/corp/*', branches: { main: 'pull', 'agent/**': 'push' } }],
+    endpoints: [],
     matched: [0],
     ...over,
   })
@@ -364,6 +366,7 @@ describe('sandboxBranchType', () => {
     repos: [],
     builds: null,
     sandboxes,
+    endpoints: [],
     matched: [0],
   })
 
@@ -389,6 +392,7 @@ describe('sandboxPushBranches', () => {
     repos: [],
     builds: null,
     sandboxes,
+    endpoints: [],
     matched: [0],
   })
 

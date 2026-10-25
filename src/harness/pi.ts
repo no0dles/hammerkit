@@ -2,6 +2,7 @@ import { basename, extname, join } from 'path'
 import { Environment } from '../executer/environment'
 import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
 import { formatSearch } from './format'
+import { SERVICE_TOOLS, serviceToolSchema } from './service-tools'
 import { oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
 
 // The parts of pi (`@earendil-works/pi-coding-agent`) this extension uses, as pi declares
@@ -269,6 +270,19 @@ export function hammerkitPiExtension(library: PiLibrary, settings: PiExtensionOp
         return { content: [{ type: 'text', text: `pushed ${pushed.commit} to ${pushed.branch}` }], details: pushed }
       },
     })
+    for (const tool of SERVICE_TOOLS) {
+      register({
+        name: tool.name,
+        label: tool.name,
+        description: tool.description,
+        promptSnippet: tool.title,
+        parameters: serviceToolSchema(tool),
+        execute: async (_id: string, params: unknown, signal?: AbortSignal) => {
+          const text = await tool.call(await client(), params, signal ?? new AbortController().signal)
+          return { content: [{ type: 'text', text }], details: undefined }
+        },
+      })
+    }
 
     pi.on('session_start', async (_event, ctx) => {
       try {

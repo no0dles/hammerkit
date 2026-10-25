@@ -37,6 +37,20 @@ export function getCallerNamespace(prefix: string, owner: { iss: string; sub: st
   return `${prefix}${createHash('sha256').update(`${owner.iss}\0${owner.sub}`).digest('hex').slice(0, 16)}`
 }
 
+/**
+ * The namespace of a service run: one of its own, as the services stay up for hours while
+ * the caller's other runs go on in theirs (one at a time, each removing what the one
+ * before left).
+ */
+export function getServiceRunNamespace(prefix: string, run: string, wakes = 0): string {
+  // a woken run starts in a namespace of its own, the one it slept in may still be removed
+  const name = wakes > 0 ? `up\0${run}\0${wakes}` : `up\0${run}`
+  return `${prefix}${createHash('sha256').update(name).digest('hex').slice(0, 16)}`
+}
+
+// the label of the namespace of a service run: the run label value of its run
+export const SERVICE_RUN_LABEL = 'hammerkit.dev/service-run'
+
 // Whether a namespace is one getCallerNamespace makes with this prefix: a server named `hk`
 // passes over the namespaces of a server named `hk-test` on the same cluster.
 export function isCallerNamespace(prefix: string, name: string): boolean {
@@ -162,6 +176,71 @@ export function getNamespacePolicies(
 }
 
 /**
+ * What lets the server into the namespace of a service run, to the ports of its endpoints:
+ * policies add up, so this one opens the pods to the server's namespace besides what the
+ * others let in, limited ones too.
+ */
+// The server reaches the ports of the endpoints, from its own namespace, and no other port:
+// what else the run starts (a database) stays for the pods of the run.
+export function getServerIngressPolicy(
+  namespace: string,
+  server: string,
+  ports: number[]
+): V1NetworkPolicy & KubernetesObjectHeader {
+  return {
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: {
+      name: 'hammerkit-server-ingress',
+      namespace,
+      annotations: { 'hammerkit.dev/version': getVersion() },
+      labels: { [MANAGED_LABEL]: 'true' },
+    },
+    spec: {
+      podSelector: {},
+      policyTypes: ['Ingress'],
+      ingress:
+        ports.length > 0
+          ? [
+              {
+                _from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': server } } }],
+                ports: [...new Set(ports)].map((port) => ({ protocol: 'TCP', port })),
+              },
+            ]
+          : [],
+    },
+  }
+}
+
+// The namespace of a service run goes with all it holds; waits up to `timeout` for it.
+export async function removeServiceRunNamespace(
+  instance: KubernetesInstance,
+  namespace: string,
+  timeout: number
+): Promise<void> {
+  try {
+    await instance.coreApi.deleteNamespace({ name: namespace, propagationPolicy: 'Background' })
+  } catch (e) {
+    if (statusCodeOf(e) === 404) {
+      return
+    }
+    throw e
+  }
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    try {
+      await instance.coreApi.readNamespace({ name: namespace })
+    } catch (e) {
+      if (statusCodeOf(e) === 404) {
+        return
+      }
+      throw e
+    }
+    await sleep(1000)
+  }
+}
+
+/**
  * The server's rights in a caller's namespace: the operator's ClusterRole, bound there
  * only, so the server needs no rights on Secrets or pods anywhere else.
  */
@@ -216,6 +295,9 @@ export class KubernetesExecutor implements RunExecutor {
   // the namespaces where no run of this process left anything: what a run makes goes at its
   // end, unless its release failed
   private readonly tidy = new Set<string>()
+  // the namespaces of the service runs that execute, and whether those of earlier ones went
+  private readonly serviceRuns = new Set<string>()
+  private serviceRunsSwept = false
   private readonly log?: (line: string) => void
 
   constructor(
@@ -247,6 +329,13 @@ export class KubernetesExecutor implements RunExecutor {
   }
 
   async execute(run: Run, context: RunContext): Promise<void> {
+    if (run.up) {
+      if (run.source.type === 'sandbox') {
+        throw new Error('on a cluster a service run starts from a branch, push the sandbox and start it from there')
+      }
+      // in a namespace of its own, apart from the caller's runs and their claims
+      return this.host.execute(run, context)
+    }
     const namespace = getCallerNamespace(this.config.backend.namespacePrefix, run.owner)
     const label = getRunLabelValue(run.id)
     let runs = this.active.get(namespace)
@@ -265,11 +354,16 @@ export class KubernetesExecutor implements RunExecutor {
     }
   }
 
+  private namespaceOf(run: Run): string {
+    const prefix = this.config.backend.namespacePrefix
+    return run.up ? getServiceRunNamespace(prefix, run.id, run.wakes) : getCallerNamespace(prefix, run.owner)
+  }
+
   // The runs of a scope share its kept claims, which one of them may change at a time:
   // what a task finds in one is what the last run left there. Without kept claims, runs
   // share no object and nothing is held.
   exclusive(run: Run): string | undefined {
-    if (this.keep === 0) {
+    if (this.keep === 0 || run.up) {
       return undefined
     }
     return `${getCallerNamespace(this.config.backend.namespacePrefix, run.owner)}/${getVolumeScope(run)}`
@@ -306,10 +400,25 @@ export class KubernetesExecutor implements RunExecutor {
   }
 
   private placement(): RunPlacement {
-    const backend = this.config.backend
     return {
       prepare: async (run: Run, context: RunContext, work?: { root: string; claim?: SandboxClaim }) => {
-        const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
+        const namespace = this.namespaceOf(run)
+        if (run.up) {
+          if (context.signal.aborted) {
+            throw new Error('the run was cancelled')
+          }
+          this.serviceRuns.add(namespace)
+          this.sweepServiceRuns()
+          // reached by the server at the Services of its endpoints
+          await this.namespaces.prepare(namespace, {
+            serviceRun: getRunLabelValue(run.id),
+            server: this.namespace,
+            ports: (run.up.endpoints ?? []).map((endpoint) => endpoint.port),
+            quota: this.config.runs.up.quota,
+          })
+          context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
+          return { kubernetes: this.environmentOf(run, namespace), env: this.access.env }
+        }
         const label = getRunLabelValue(run.id)
         await this.enqueue(namespace, async () => {
           if (context.signal.aborted) {
@@ -342,36 +451,38 @@ export class KubernetesExecutor implements RunExecutor {
         })
         this.sweepLeftClaims()
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
-        const kubernetes: WorkKubernetesEnvironment = {
-          type: 'kubernetes',
-          namespace,
-          kubeConfig: this.access.kubeConfig,
-          context: this.access.context,
-          httpRoutes: [],
-          storageClass: backend.storageClass,
-          volumeSize: backend.volumeSize,
-          maxVolumeSize: getMaxVolumeSize(backend),
-          networkPolicyEnforced: backend.networkPolicy === 'enforced',
-          server: {
-            run: run.id,
-            namespace: this.namespace,
-            pools: backend.pools,
-            providers: backend.providers,
-            accounts: Object.fromEntries(
-              Object.entries(this.config.accounts).flatMap(([name, account]) =>
-                account.kubernetes ? [[name, account.kubernetes]] : []
-              )
-            ),
-            ...(work?.claim
-              ? { workspace: getWorkspace(work.root, work.claim, namespace, backend.sandboxes.runner) }
-              : {}),
-            ...(this.keep > 0 ? { volumeScope: getVolumeScope(run) } : {}),
-          },
-        }
-        return { kubernetes, env: this.access.env }
+        return { kubernetes: this.environmentOf(run, namespace, work), env: this.access.env }
       },
       release: async (run: Run, context: RunContext) => {
-        const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
+        const namespace = this.namespaceOf(run)
+        if (run.up) {
+          try {
+            await removeServiceRunNamespace(this.instance, namespace, RELEASE_TIMEOUT)
+          } catch (e) {
+            // at least nothing of it runs on: its objects are the server's to remove (runRole)
+            const forbidden = statusCodeOf(e) === 403
+            const text = forbidden
+              ? `the server may not delete the namespace ${namespace}, its ClusterRole needs delete on namespaces (see the backend docs); removing what runs in it`
+              : `the namespace ${namespace} could not be removed: ${getErrorMessage(e)}`
+            this.log?.(text)
+            context.emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text })
+            try {
+              await removeRunObjects(this.instance, namespace, RUN_LABEL, RELEASE_TIMEOUT)
+            } catch (inner) {
+              context.emit({
+                type: 'log',
+                task: 'hammerkit',
+                stream: 'stderr',
+                text: `what the run made in ${namespace} could not be removed: ${getErrorMessage(inner)}`,
+              })
+            }
+            // the next look removes the namespace
+            this.serviceRunsSwept = false
+          } finally {
+            this.serviceRuns.delete(namespace)
+          }
+          return
+        }
         try {
           const selector = `${RUN_LABEL}=${getRunLabelValue(run.id)}`
           await removeRunObjects(this.instance, namespace, selector, RELEASE_TIMEOUT)
@@ -401,6 +512,69 @@ export class KubernetesExecutor implements RunExecutor {
         }
       },
     }
+  }
+
+  // The cluster as the process of a run sees it: the namespace its tasks and services go in.
+  private environmentOf(
+    run: Run,
+    namespace: string,
+    work?: { root: string; claim?: SandboxClaim }
+  ): WorkKubernetesEnvironment {
+    const backend = this.config.backend
+    return {
+      type: 'kubernetes',
+      namespace,
+      kubeConfig: this.access.kubeConfig,
+      context: this.access.context,
+      httpRoutes: [],
+      storageClass: backend.storageClass,
+      volumeSize: backend.volumeSize,
+      maxVolumeSize: getMaxVolumeSize(backend),
+      networkPolicyEnforced: backend.networkPolicy === 'enforced',
+      server: {
+        run: run.id,
+        namespace: this.namespace,
+        pools: backend.pools,
+        providers: backend.providers,
+        accounts: Object.fromEntries(
+          Object.entries(this.config.accounts).flatMap(([name, account]) =>
+            account.kubernetes ? [[name, account.kubernetes]] : []
+          )
+        ),
+        ...(work?.claim ? { workspace: getWorkspace(work.root, work.claim, namespace, backend.sandboxes.runner) } : {}),
+        // the claims of a service run go with its namespace
+        ...(this.keep > 0 && !run.up ? { volumeScope: getVolumeScope(run) } : {}),
+      },
+    }
+  }
+
+  // Once, on the first service run: the namespaces of service runs the server left when it
+  // stopped, whose services went with it
+  // Once when the server starts, and on the next service run after a namespace could not be
+  // removed: the namespaces of service runs that none of the server's runs is in, whose
+  // services went with the process of a server that stopped
+  sweepServiceRuns(): void {
+    if (this.serviceRunsSwept) {
+      return
+    }
+    this.serviceRunsSwept = true
+    Promise.resolve()
+      .then(() => this.instance.coreApi.listNamespace({ labelSelector: `${MANAGED_LABEL}=true,${SERVICE_RUN_LABEL}` }))
+      .then(async (namespaces) => {
+        for (const namespace of namespaces.items) {
+          const name = namespace.metadata?.name
+          if (
+            name &&
+            isCallerNamespace(this.config.backend.namespacePrefix, name) &&
+            !this.serviceRuns.has(name) &&
+            !namespace.metadata?.deletionTimestamp
+          ) {
+            this.log?.(`removing the namespace ${name} of a service run from before the server started`)
+            await removeServiceRunNamespace(this.instance, name, 0)
+          }
+        }
+      })
+      .catch((e) => this.log?.(`the namespaces of service runs could not be removed: ${getErrorMessage(e)}`))
   }
 
   // The kept claims of a namespace that expired go at the soonest expiry the server knows
@@ -445,7 +619,7 @@ export class KubernetesExecutor implements RunExecutor {
     }
     this.swept = true
     Promise.resolve()
-      .then(() => this.instance.coreApi.listNamespace({ labelSelector: `${MANAGED_LABEL}=true` }))
+      .then(() => this.instance.coreApi.listNamespace({ labelSelector: `${MANAGED_LABEL}=true,!${SERVICE_RUN_LABEL}` }))
       .then((namespaces) => {
         for (const namespace of namespaces.items) {
           const name = namespace.metadata?.name
@@ -498,7 +672,12 @@ export class CallerNamespaces {
   // a namespace it did not set up in the last `NAMESPACE_SETUP_REUSE_MS` (it reads the
   // config once, at its start), so the namespace follows the config; a namespace made anew
   // since (deleted and made again) is set up again at once.
-  async prepare(namespace: string): Promise<void> {
+  async prepare(
+    namespace: string,
+    // a service run's own namespace: its label, the namespace of the server that reaches its
+    // endpoints, and its quota
+    serviceRun?: { serviceRun: string; server: string; ports: number[]; quota?: Record<string, string> }
+  ): Promise<void> {
     const backend = this.backend
     let existing
     try {
@@ -532,6 +711,7 @@ export class CallerNamespaces {
               labels: {
                 [MANAGED_LABEL]: 'true',
                 'hammerkit.dev/caller': namespace,
+                ...(serviceRun ? { [SERVICE_RUN_LABEL]: serviceRun.serviceRun } : {}),
                 // no privileged pods, host paths or host network, whatever a build asks
                 'pod-security.kubernetes.io/enforce': 'baseline',
               },
@@ -548,7 +728,10 @@ export class CallerNamespaces {
     const [first, ...policies] = getNamespacePolicies(namespace, backend.deniedEgress, backend.allowedEgress)
     // the API server may refuse what the binding allows for a moment after it was made
     await untilAllowed(() => replace(this.instance, first))
-    for (const policy of policies) {
+    for (const policy of [
+      ...policies,
+      ...(serviceRun ? [getServerIngressPolicy(namespace, serviceRun.server, serviceRun.ports)] : []),
+    ]) {
       await replace(this.instance, policy)
     }
     const metadata = {
@@ -561,7 +744,7 @@ export class CallerNamespaces {
       apiVersion: 'v1',
       kind: 'ResourceQuota',
       metadata,
-      spec: { hard: backend.quota },
+      spec: { hard: serviceRun?.quota ?? backend.quota },
     }
     const defaults = backend.defaultResources
     const limits: V1LimitRange & KubernetesObjectHeader = {
@@ -579,7 +762,7 @@ export class CallerNamespaces {
       },
     }
     for (const [object, wanted] of [
-      [quota, !!backend.quota],
+      [quota, !!(serviceRun?.quota ?? backend.quota)],
       [limits, !!defaults],
     ] as const) {
       if (wanted) {

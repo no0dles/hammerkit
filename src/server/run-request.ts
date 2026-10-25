@@ -6,6 +6,13 @@ import { SANDBOX_ID_PATTERN } from './runs'
 
 const name = z.string().min(1).max(200)
 
+// The name of a service run, one DNS label: the hosts of its endpoints carry it, and a run of
+// the same caller with the same name replaces it
+export const SERVICE_RUN_NAME_PATTERN = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/
+
+// endpoints one service run may publish
+export const MAX_ENDPOINTS = 5
+
 // what one run may pass after `--`
 export const MAX_ARGS = 100
 export const MAX_ARGS_BYTES = 16 * 1024
@@ -97,12 +104,64 @@ export const runRequestSchema = z
         .strict(),
     ]),
     options: runOptionsSchema.default({}),
+    // a service run: these services of the build file, started as `hammerkit up` starts
+    // them and kept up until `ttl` ends or the run is cancelled, instead of tasks
+    services: z.array(name).max(20).default([]),
+    // how long the services stay once they are ready, whether they sleep in between or not;
+    // `runs.up.ttl` when left out. At its end they are removed.
+    ttl: duration.optional(),
+    // how long the services stay up without a request to one of the endpoints, then they
+    // sleep until the next request wakes them; `runs.up.sleepTtl` when left out
+    sleepTtl: duration.optional(),
+    // a second service run of the caller with the same name replaces the first; the branch
+    // of the source when left out
+    name: z
+      .string()
+      .regex(SERVICE_RUN_NAME_PATTERN, 'expected lower case letters, digits and -, at most 40, as a DNS label')
+      .optional(),
+    // ports of the run's services published at hosts of their own, behind the server's sign-in
+    endpoints: z
+      .array(z.object({ service: name, port: z.number().int().min(1).max(65535) }).strict())
+      .max(MAX_ENDPOINTS)
+      .default([]),
   })
   .strict()
-  .refine((request) => request.tasks.length > 0 || (request.options.filter ?? []).length > 0, {
-    message: 'name at least one task, or filter by labels',
-    path: ['tasks'],
+  .refine(
+    (request) => request.services.length > 0 || request.tasks.length > 0 || (request.options.filter ?? []).length > 0,
+    {
+      message: 'name at least one task, or filter by labels',
+      path: ['tasks'],
+    }
+  )
+  .refine((request) => request.services.length === 0 || request.tasks.length === 0, {
+    message: 'a run names tasks or services, not both',
+    path: ['services'],
   })
+  .refine(
+    (request) =>
+      request.services.length === 0 ||
+      ((request.options.filter ?? []).length === 0 && (request.options.exclude ?? []).length === 0),
+    { message: 'a service run names its services, labels do not select them', path: ['options', 'filter'] }
+  )
+  .refine((request) => request.services.length === 0 || (request.options.args ?? []).length === 0, {
+    message: 'a service run takes no arguments',
+    path: ['options', 'args'],
+  })
+  .refine(
+    (request) =>
+      request.services.length > 0 ||
+      (request.ttl === undefined &&
+        request.sleepTtl === undefined &&
+        request.name === undefined &&
+        request.endpoints.length === 0),
+    { message: 'ttl, sleepTtl, name and endpoints are for a run of services', path: ['services'] }
+  )
+  .refine(
+    (request) =>
+      new Set(request.endpoints.map((endpoint) => `${endpoint.service}:${endpoint.port}`)).size ===
+      request.endpoints.length,
+    { message: 'an endpoint is named twice', path: ['endpoints'] }
+  )
   .refine((request) => (request.options.args ?? []).length === 0 || request.tasks.length === 1, {
     message: 'arguments go to one task, name exactly one in tasks',
     path: ['options', 'args'],

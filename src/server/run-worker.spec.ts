@@ -5,7 +5,7 @@ import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
-import { getRunNetwork, WorkerMessage, taskCauses, workerMain } from './run-worker'
+import { getRunNetwork, readInput, WorkerMessage, taskCauses, workerMain } from './run-worker'
 import { limitNetwork, parseWorkNetwork } from '../planner/work-network'
 import { NetworkSchema } from '../schema/network-schema'
 import { hostEnvs } from '../testing/host-env'
@@ -370,5 +370,32 @@ describe('hammerkit server-run', () => {
         spy.mockRestore()
       }
     })
+  })
+})
+
+describe('the input of the process of a run', () => {
+  it('says when it ends before the run, as when the server is gone, and not when the run closes it', async () => {
+    const gone = new PassThrough()
+    const cancel = vi.fn()
+    const reader = readInput(gone, cancel)
+    gone.write('{"run":1}\n')
+    expect(await reader.input).toBe('{"run":1}')
+    const ended = vi.fn()
+    reader.onEnd(ended)
+    gone.end()
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(ended).toHaveBeenCalledTimes(1)
+    expect(cancel).not.toHaveBeenCalled()
+
+    const done = new PassThrough()
+    const own = readInput(done, cancel)
+    done.write('{"run":2}\ncancel\n')
+    await own.input
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(cancel).toHaveBeenCalledTimes(1)
+    const later = vi.fn()
+    own.onEnd(later)
+    own.close()
+    expect(later).not.toHaveBeenCalled()
   })
 })

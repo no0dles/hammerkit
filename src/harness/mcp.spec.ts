@@ -195,6 +195,9 @@ describe('mcp tools on a sandbox', () => {
         'run_logs',
         'changes',
         'push',
+        'services_up',
+        'endpoint_get',
+        'services_stop',
       ])
       expect(listed.find((tool: McpTool) => tool.name === 'read').annotations).toMatchObject({
         readOnlyHint: true,
