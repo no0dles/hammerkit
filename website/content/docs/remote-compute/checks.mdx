@@ -86,7 +86,11 @@ another key than the commit has.
 The build file is read as a server reads it (no `.env`, no placement on a cluster, any secret
 provider and account). A task has no key when it, a task it depends on, or a task a service
 it needs depends on, declares no `src` that matches a file, or when it reads a secret with
-`cache: true`, whose value is part of its cache key.
+`cache: true`, whose value is part of its cache key. An
+[aggregate](/docs/task/dependencies#aggregate-tasks) (`deps` and nothing to run) needs no
+`src` of its own: it has a key when all its dependencies have one. Like any task, it counts
+as verified only for a run that ran it: a run of the aggregate itself, which costs nothing
+more when its dependencies already passed.
 
 ## Lookup
 

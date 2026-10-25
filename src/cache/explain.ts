@@ -1,7 +1,7 @@
 import { Environment } from '../executer/environment'
 import { CacheMethod } from '../parser/cache-method'
 import { WorkItemState } from '../planner/work-item'
-import { WorkTask } from '../planner/work-task'
+import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
 import { TaskState } from '../executer/scheduler/task-state'
 import { computeStateKey, resolveEffective } from '../executer/scheduler/state-key'
@@ -234,6 +234,23 @@ export async function explainTask(
       }
     }
     const explanation: TaskExplanation = { taskId: item.id(), taskName: item.name, status: 'uncacheable', causes }
+    memo.set(item.id(), explanation)
+    visiting.delete(item.id())
+    return explanation
+  }
+
+  // Mirrors executeWorkTask: an aggregate is never looked up itself, and is reported
+  // cached when all its dependencies were. What changed is in its dependencies.
+  if (isAggregateTask(item.data)) {
+    const causes: ExplainCause[] = []
+    for (const dep of item.deps) {
+      const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting)
+      if (depExplanation.status !== 'hit') {
+        causes.push({ kind: 'dependency-changed', identifier: dep.name })
+      }
+    }
+    const status = causes.length === 0 ? 'hit' : 'miss'
+    const explanation: TaskExplanation = { taskId: item.id(), taskName: item.name, status, causes }
     memo.set(item.id(), explanation)
     visiting.delete(item.id())
     return explanation

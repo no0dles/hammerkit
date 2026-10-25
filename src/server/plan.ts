@@ -12,7 +12,7 @@ import { getWorkContext } from '../schema/work-scope-parser'
 import { WorkScope } from '../executer/work-scope'
 import { WorkTree } from '../planner/work-tree'
 import { WorkSecret } from '../planner/work-secret'
-import { isContainerWorkTask, isWorkTask } from '../planner/work-task'
+import { isAggregateTask, isContainerWorkTask, isWorkTask } from '../planner/work-task'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
 import { isVolumeName } from '../planner/utils/hosted-volumes'
 import { getHomeReference } from '../planner/utils/normalize-path'
@@ -47,7 +47,8 @@ export interface TaskPlan {
   kind: 'task' | 'service'
   // what the build file says it is for; left out when it says nothing
   description?: string
-  runtime: 'docker' | 'local'
+  // none: an aggregate, which only groups its dependencies and runs nothing
+  runtime: 'docker' | 'local' | 'none'
   image?: string
   cmds: string[]
   // where arguments land: the last command of a task, the `cmd` of a service;
@@ -302,7 +303,8 @@ function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): st
 function findItemPolicyProblems(item: Item, policy: PlanPolicy, root: string): string[] {
   const problems: string[] = []
   const runtime = item.data.type === 'local-task' ? 'local' : 'docker'
-  if (policy.runtimes && !policy.runtimes.includes(runtime)) {
+  // an aggregate runs nothing, on no runtime
+  if (policy.runtimes && !isAggregateTask(item.data) && !policy.runtimes.includes(runtime)) {
     problems.push(
       `${item.name}: runs on the ${runtime} runtime, which this server does not allow (runtimes: ${policy.runtimes.join(
         ', '
@@ -339,7 +341,8 @@ function findItemPolicyProblems(item: Item, policy: PlanPolicy, root: string): s
       reason: ` to what reads ${reads.join(', ')}`,
     })
   }
-  for (const { ceiling, setting, reason } of ceilings) {
+  // an aggregate reaches nothing: it runs no command
+  for (const { ceiling, setting, reason } of isAggregateTask(data) ? [] : ceilings) {
     // on a cluster a local task is a pod of a pool's tool image, limited like any other
     if (data.type === 'local-task' && policy.backend !== 'kubernetes') {
       problems.push(
@@ -433,7 +436,7 @@ function toPlan(root: string, item: Item): TaskPlan {
       : []
   const ports = 'ports' in data ? data.ports.map((port) => `${port.hostPort ?? ''}:${port.containerPort}`) : []
   const flags: TaskPlan['flags'] = []
-  if (data.type === 'local-task') {
+  if (data.type === 'local-task' && !isAggregateTask(data)) {
     flags.push('local-task')
   }
   if ('ports' in data && data.ports.some((port) => port.hostPort !== null)) {
@@ -446,7 +449,7 @@ function toPlan(root: string, item: Item): TaskPlan {
   return {
     kind: isTask ? 'task' : 'service',
     ...(data.description ? { description: data.description } : {}),
-    runtime: data.type === 'local-task' ? 'local' : 'docker',
+    runtime: isAggregateTask(data) ? 'none' : data.type === 'local-task' ? 'local' : 'docker',
     ...(isContainerWorkTask(data) || isContainerWorkService(data) ? { image: data.image } : {}),
     cmds: 'cmds' in data ? data.cmds.map((cmd) => cmd.cmd) : 'cmd' in data && data.cmd ? [data.cmd.cmd] : [],
     command: getArgumentsTarget(data)?.cmd ?? null,

@@ -1,7 +1,7 @@
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
 import { isWorkTaskItem, WorkItemState } from '../../planner/work-item'
-import { WorkTask } from '../../planner/work-task'
+import { isAggregateTask, WorkTask } from '../../planner/work-task'
 import { WorkService } from '../../planner/work-service'
 import { ResolvedCache } from '../../cache/resolve-cache'
 import { getCacheDirectory } from '../../optimizer/get-cache-directory'
@@ -59,6 +59,13 @@ export async function checkCacheState(
 
   if (isWorkTaskItem(item) && !provable) {
     item.status.write('debug', `${item.name} always runs, it or one of its dependencies has no src files`)
+    return { cached: false, stateKey, resolved, provable }
+  }
+
+  // An aggregate runs nothing, so running it costs nothing, and it is never a hit itself:
+  // asked for, it still has its dependencies checked and their outputs restored. Its key
+  // counts for what depends on it, and it is reported cached when they all were.
+  if (isWorkTaskItem(item) && isAggregateTask(item.data)) {
     return { cached: false, stateKey, resolved, provable }
   }
 

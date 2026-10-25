@@ -83,7 +83,9 @@ checkout — on a laptop, a CI runner or an agent sandbox. That is what lets a
 A task **without `src`** of its own can't be proven up to date, so it runs every
 time — and so does every task that depends on it. Its dependencies' `src` doesn't
 count: it says nothing about the files the task's own commands read. Declare
-`src` on everything you want cached.
+`src` on everything you want cached. An
+[aggregate task](/docs/task/dependencies#aggregate-tasks) is the exception: it runs no
+command, so it is up to date when all its dependencies are.
 The same applies when every `src` entry of a task matches no file (a typo, a
 moved directory). Each `src` entry that matches no file is reported as a warning.
 

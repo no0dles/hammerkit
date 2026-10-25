@@ -35,7 +35,8 @@ docker daemon of the server's environment, so name `DOCKER_HOST` in
 [`runs.env.allow`](/docs/remote-compute/runs#config) when it is not the default.
 
 On a cluster `local` means a task without an image runs in the `toolImage` of a pool, see
-[Pools](#pools).
+[Pools](#pools). An [aggregate task](/docs/task/dependencies#aggregate-tasks), which only
+groups its dependencies, runs on no runtime: it is never refused for `runtimes`.
 
 ## One server is one trust level
 

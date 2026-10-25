@@ -1,5 +1,5 @@
 import { getSecretName, parseWorkSecrets } from '../work-secret'
-import { BaseWorkTask, ContainerWorkTask, LocalWorkTask, WorkEnvOrigin, WorkTask } from '../work-task'
+import { BaseWorkTask, ContainerWorkTask, isAggregateTask, LocalWorkTask, WorkEnvOrigin, WorkTask } from '../work-task'
 import { parseWorkGenerate } from './parse-work-generate'
 import { templateValue } from './template-value'
 import { parseWorkMounts } from './parse-work-mounts'
@@ -36,11 +36,13 @@ export function appendWorkTask(
   const parsed = parseTask(cwd, referenceTask, environment, context)
   // on a server's cluster a local task runs in a tool image like a container task
   const server = workTree.environment.type === 'kubernetes' ? workTree.environment.server : undefined
-  const task = !server
-    ? parsed
-    : parsed.type === 'local-task'
-      ? runInToolImage(parsed, server, (referenceTask.schema as BuildFileLocalTaskSchema).platform)
-      : placeOnPool(parsed, server)
+  // an aggregate runs nothing, so it needs no pod either
+  const task =
+    !server || isAggregateTask(parsed)
+      ? parsed
+      : parsed.type === 'local-task'
+        ? runInToolImage(parsed, server, (referenceTask.schema as BuildFileLocalTaskSchema).platform)
+        : placeOnPool(parsed, server)
   if (!workTree.tasks[task.name]) {
     const workItem: WorkItem<WorkTask> = {
       // A dependency cycle is rejected before anything runs (checkForLoop), but
@@ -137,9 +139,18 @@ function parseTask(
           `hammerkit can't limit the network of a local task`
       )
     }
+    const aggregate =
+      task.deps.length > 0 &&
+      task.needs.length === 0 &&
+      baseWorkNode.src.length === 0 &&
+      !baseWorkNode.continuous &&
+      baseWorkNode.cmds.length === 0 &&
+      baseWorkNode.generates.length === 0 &&
+      baseWorkNode.secrets.length === 0
     return <LocalWorkTask>{
       ...baseWorkNode,
       type: 'local-task',
+      ...(aggregate ? { aggregate } : {}),
     }
   }
 }
