@@ -91,6 +91,39 @@ export async function runCheck(client: SandboxClient, task: string, signal?: Abo
   return lines.join('\n')
 }
 
+// A task of a published version, as the clients list them for the model.
+export interface PublishedTask {
+  name: string
+  // what the build file says it is for
+  description?: string
+  // where its arguments land, its last command; null when it has none
+  command?: string | null
+  // null when a run of it may pass arguments, else why not; left out when the server does not say
+  args?: string | null
+}
+
+/**
+ * The tasks of a published version, without its services, as `GET /v1/definitions/<hash>`
+ * answers them.
+ */
+export async function listPublishedTasks(connection: ServerConnection, hash: string): Promise<PublishedTask[]> {
+  const version: {
+    tasks: string[]
+    plan?: { [name: string]: { kind: string; description?: string; command?: string | null } }
+    arguments?: { [task: string]: string | null }
+  } = await json(await call(connection, 'GET', `/v1/definitions/${hash}`))
+  return version.tasks.map((name) => {
+    const plan = version.plan?.[name]
+    const args = version.arguments?.[name]
+    return {
+      name,
+      ...(plan?.description ? { description: plan.description } : {}),
+      ...(plan && plan.command !== undefined ? { command: plan.command } : {}),
+      ...(args !== undefined ? { args } : {}),
+    }
+  })
+}
+
 export interface RunTaskOptions {
   args?: string[]
   // how long the task may run, the server stops it then, also when the task sets a longer timeout
@@ -134,6 +167,11 @@ export class SandboxClient {
 
   get id(): string {
     return this.sandbox.id
+  }
+
+  // the tasks of the published version that run on the sandbox
+  tasks(): Promise<PublishedTask[]> {
+    return listPublishedTasks(this.connection, this.build.hash)
   }
 
   static async create(connection: ServerConnection, repo: string, ref: string): Promise<SandboxView> {
@@ -268,6 +306,9 @@ export class SandboxClient {
    * its argument. `cwd` is a directory of the sandbox, `''` for its root.
    */
   async exec(command: string, cwd: string, options: Omit<RunTaskOptions, 'args'> = {}): Promise<TaskRun> {
+    if (!this.build.shell) {
+      throw new SandboxClientError('there is no shell on this sandbox (HAMMERKIT_SHELL is empty), run a task instead')
+    }
     // on its own line: `cd dir && a; b` would run b in the root when dir is missing
     const script = cwd && cwd !== '.' ? `cd -- ${quotePosix(cwd)} || exit 1\n${command}` : command
     // a shell task in a container without `mounts: [.]` runs in an empty directory: the

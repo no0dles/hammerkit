@@ -3,7 +3,7 @@ import { Command } from 'commander'
 import { PassThrough } from 'stream'
 import { addServer } from '../remote/host-config'
 import { itExceptWindows, SANDBOX_REPO, withSandboxServer } from '../testing/sandbox-server'
-import { connectSandbox } from './connect'
+import { connectSandbox, harnessOptionsFromEnv } from './connect'
 import { createMcpTools, McpTool, serveMcp } from './mcp'
 import { SandboxClient } from './sandbox-client'
 import { registerMcpCommand } from './mcp-command'
@@ -312,12 +312,54 @@ describe('mcp tools on a sandbox', () => {
       })
       const init = await client.request('initialize', { protocolVersion: '2025-06-18' })
       expect(init.result.instructions).toContain(`hammerkit sandbox ${sandbox.id}`)
+      const listed = (await client.request('tools/list')).result.tools
+      // the model knows the tasks it can run, but the shell, which bash runs
+      const runTask = listed.find((tool: McpTool) => tool.name === 'run_task')
+      expect(runTask.description).toContain('- test: run the tests (takes args)')
+      expect(runTask.description).not.toContain('- sh:')
       expect((await client.call('read', { path: 'input.txt' })).text).toBe(
         '     1\tfrom-main\n\n(end of file, 1 lines)'
       )
       await client.close()
       expect(errors.join('')).toContain(`hammerkit remote mcp: sandbox ${sandbox.id} of github.com/corp/payments`)
     })
+  })
+
+  // blank as the plugins read HAMMERKIT_SHELL
+  itExceptWindows('leaves out bash for a blank shell and runs the tasks of the build file', async () => {
+    await withSandboxServer(
+      'harness-mcp-no-shell',
+      async ({ client: sandbox, url, environment, connection, build }) => {
+        await addServer(environment, 'corp', url, { issuer: 'https://idp.example.com' })
+        environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_TOKEN: await connection.token() }
+        const program = new Command().exitOverride()
+        const remote = program.command('remote')
+        const args = ['remote', 'mcp', '--server', 'corp', '--sandbox', sandbox.id, '--build', build, '--shell', ' ']
+        const client = connect(async (input, output) => {
+          environment.stdout = output
+          environment.stderr = new PassThrough()
+          registerMcpCommand(remote, environment, input)
+          await program.parseAsync(args, { from: 'user' })
+        })
+        const init = await client.request('initialize', { protocolVersion: '2025-06-18' })
+        expect(init.result.instructions).toContain(`run_task runs the tasks of the published build file ${build}`)
+        expect(init.result.instructions).not.toContain('bash')
+        const listed = (await client.request('tools/list')).result.tools
+        expect(listed.map((tool: McpTool) => tool.name)).not.toContain('bash')
+        expect(listed.find((tool: McpTool) => tool.name === 'run_task').description).toContain(
+          '- sh: runs `sh -c` (takes args)'
+        )
+        const ran = await client.call('run_task', { task: 'test', args: ['--grep', 'login'] })
+        expect(ran.text).toContain('last lines:\ntesting --grep login\n')
+        await client.close()
+      }
+    )
+  })
+
+  it('reads an empty HAMMERKIT_SHELL as no shell and an unset one as the default', () => {
+    expect(harnessOptionsFromEnv({ HAMMERKIT_SHELL: '' }).shell).toBe('')
+    expect(harnessOptionsFromEnv({ HAMMERKIT_SHELL: ' bash ' }).shell).toBe('bash')
+    expect(harnessOptionsFromEnv({}).shell).toBeUndefined()
   })
 
   it('takes an unchanged sandbox of the repository and ref before it creates one', async () => {

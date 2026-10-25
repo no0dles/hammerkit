@@ -108,6 +108,39 @@ export function refuseArguments(
   return null
 }
 
+/**
+ * For each task of a version, whether a run of it alone may pass arguments: null when it may,
+ * else why not, as {@link refuseArguments} answers a run. The plan is the one of the whole
+ * version: a task's run is the task with its dependencies and services.
+ */
+export function describeArguments(
+  plan: PlannedRun['plan'],
+  policy: Pick<PlanPolicy, 'args'> = {}
+): { [task: string]: string | null } {
+  const described: { [task: string]: string | null } = {}
+  for (const [name, entry] of Object.entries(plan)) {
+    if (entry.kind !== 'task') {
+      continue
+    }
+    const run: PlannedRun['plan'] = {}
+    const visit = (item: string) => {
+      if (run[item] || !plan[item]) {
+        return
+      }
+      run[item] = plan[item]
+      for (const next of [...plan[item].deps, ...plan[item].needs]) {
+        visit(next)
+      }
+    }
+    visit(name)
+    described[name] =
+      entry.command === null
+        ? `${name} has no command to take arguments`
+        : refuseArguments({ tasks: [name], options: { args: ['-'] } }, run, policy)
+  }
+  return described
+}
+
 // What build files are read with on a server: the environment of its runs and the
 // policy a build file has to meet.
 export interface PlanContext {

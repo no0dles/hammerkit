@@ -6,6 +6,7 @@ import {
   createOpencodeTools,
   createOpencodeV2Tools,
   hammerkitOpencodeEntry,
+  hammerkitOpencodeV2Plugin,
   loadHammerkitOpencodePlugin,
   OPENCODE_TOOLS,
   OPENCODE_V2_LOCAL_TOOLS,
@@ -31,8 +32,10 @@ describe('opencode tools on a sandbox', () => {
         'bash',
         'grep',
         'glob',
-        'push',
+        'run_task',
+        'run_logs',
         'check',
+        'push',
         'list',
       ])
       expect(OPENCODE_TOOLS).toEqual(Object.keys(tools))
@@ -135,6 +138,79 @@ describe('opencode tools on a sandbox', () => {
         tools.bash.execute({ command: 'cat src/app.ts' }, context()),
       ])
       expect(again).toContain('answer = 43')
+
+      // run_task takes its turn too: a write sent before it lands before the task starts, one
+      // sent after it waits for the task to end instead of being refused by the held sandbox
+      const done: string[] = []
+      const track = <T>(name: string, call: Promise<T>) =>
+        call.then((value) => {
+          done.push(name)
+          return value
+        })
+      const turn = (content: string) => ({ filePath: join(directory, 'turn.txt'), content })
+      const [, ran, written] = await Promise.all([
+        track('write', tools.write.execute(turn('first\n'), context())),
+        track('run_task', tools.run_task.execute({ task: 'sh', args: ['sleep 1; cat turn.txt'] }, context())),
+        track('write again', tools.write.execute(turn('second\n'), context())),
+      ])
+      expect(done).toEqual(['write', 'run_task', 'write again'])
+      expect((ran as { output: string }).output).toContain('last lines:\nfirst\n')
+      expect(written).toBe('Wrote file successfully.')
+      expect((await client.readRaw('turn.txt')).toString()).toBe('second\n')
+    })
+  })
+
+  itExceptWindows('runs the tasks of the build file without a shell, and reads their logs', async () => {
+    await withSandboxServer('harness-opencode-tasks', async ({ client, repository }) => {
+      const tools = createOpencodeTools(z, async () => client, { tasks: await client.tasks(), shell: '' })
+      expect(Object.keys(tools)).toEqual(OPENCODE_TOOLS)
+      // opencode's own bash would run on this machine, the plugin's stands in and refuses
+      await expect(tools.bash.execute({ command: 'ls' }, context())).rejects.toThrow(/There is no shell/)
+      expect(tools.bash.description).toMatch(/run the tasks of the build file with run_task/)
+      // the model knows what it can run
+      expect(tools.run_task.description.split('\n\n')[1]).toBe(
+        [
+          'The tasks of the published build file:',
+          `- elsewhere: runs \`sh -c 'cd "$(mktemp -d)" && exec sh -c "$1"' sh\` (takes args)`,
+          "- fail: runs `sh -c 'echo broken >&2; exit 3'` (takes no args)",
+          '- long: print 300 lines (takes args)',
+          '- sh: runs `sh -c` (takes args)',
+          '- test: run the tests (takes args)',
+        ].join('\n')
+      )
+      expect(z.object(tools.run_task.args as z.ZodRawShape).safeParse({ task: 'test', args: ['x'] }).success).toBe(true)
+
+      await tools.write.execute({ filePath: join(directory, 'notes.md'), content: 'agent\n' }, context())
+      const tested = await tools.run_task.execute({ task: 'test', args: ['--grep', 'login'] }, context())
+      expect(tested).toEqual({ title: 'run test', output: expect.stringMatching(/^run run_[\w-]+: succeeded\n/) })
+      const output = (tested as { output: string }).output
+      expect(output).toMatch(/\ntask test: succeeded, \d+ ms\n/)
+      expect(output).toContain('last lines:\ntesting --grep login\n')
+      expect(output).toMatch(/read more of the log with run_logs \{ "run": "run_[\w-]+", "task": "test" \}$/)
+
+      await expect(tools.run_task.execute({ task: 'fail', args: ['x'] }, context())).rejects.toThrow(
+        /fail takes no arguments/
+      )
+
+      // a long log: the result ends with the last lines, run_logs reads the rest
+      const long = (await tools.run_task.execute({ task: 'long' }, context())) as { output: string }
+      expect(long.output).toContain('\n281\n')
+      expect(long.output).not.toContain('\n280\n')
+      const run = /^run (run_[\w-]+)/.exec(long.output)?.[1]
+      expect(await tools.run_logs.execute({ run, task: 'long', from: 100, limit: 3 }, context())).toEqual({
+        title: `log of ${run}`,
+        output: '100: 100\n101: 101\n102: 102\n\n(300 lines, read on with from 103)',
+      })
+      const grep = (await tools.run_logs.execute({ run, task: 'long', grep: '250', context: 1 }, context())) as {
+        output: string
+      }
+      expect(grep.output).toBe('249- 249\n250: 250\n251- 251\n\n(300 lines searched, 1 match here)')
+
+      const pushed = await tools.push.execute({ branch: 'agent/tasks', message: 'Agent work' }, context())
+      expect(pushed).toMatchObject({ title: 'pushed to agent/tasks' })
+      expect(execFileSync('git', ['-C', repository, 'show', 'agent/tasks:notes.md'], { encoding: 'utf8' })).toBe(
+        'agent\n'
+      )
     })
   })
 
@@ -277,9 +353,48 @@ describe('opencode 2 tools on a sandbox', () => {
       expect(request.tools.read.description).toBe('r')
       // it connects on the first call
       await expect(added[0].execute({ path: 'a' }, v2())).rejects.toThrow(/name a server/)
+      // a plugin that can not list the tasks still loads, and says why they are missing
+      expect(added.find((tool) => tool.name === 'run_task')!.description).toMatch(
+        /The tasks of the build file could not be listed \(name a server/
+      )
 
       const hooks = await plugin.server({ directory })
       expect(Object.keys(hooks.tool)).toEqual(OPENCODE_TOOLS)
+    })
+  })
+
+  itExceptWindows('leaves out the shell without a shell task, and runs the tasks of the build file', async () => {
+    await withSandboxServer('harness-opencode2-tasks', async ({ client, build }) => {
+      const plugin = hammerkitOpencodeV2Plugin({ client: async () => client, options: { build, shell: '' } })
+      const added: OpencodeV2Tool[] = []
+      const removed: string[] = []
+      const hooked: string[] = []
+      await plugin.setup({
+        location: { directory },
+        tool: {
+          async transform(edit) {
+            edit({ add: (tool) => added.push(tool), remove: (id) => removed.push(id) })
+          },
+        },
+        session: {
+          async hook(name) {
+            hooked.push(name)
+          },
+        },
+      })
+      expect(added.map((tool) => tool.name)).toEqual(OPENCODE_V2_TOOLS.filter((name) => name !== 'shell'))
+      // opencode's own shell would run on this machine
+      expect(removed).toEqual([...OPENCODE_V2_LOCAL_TOOLS, 'shell'])
+      expect(hooked).toEqual([])
+      const tools = Object.fromEntries(added.map((tool) => [tool.name, tool]))
+      expect(tools.run_task.description).toContain('- test: run the tests (takes args)')
+      expect(tools.run_task.input).toMatchObject({ required: ['task'], additionalProperties: false })
+      const ran = await tools.run_task.execute({ task: 'test', args: ['a.spec.ts'] }, v2())
+      expect(ran.content).toContain('last lines:\ntesting a.spec.ts\n')
+      const run = /^run (run_[\w-]+)/.exec(ran.content)?.[1]
+      expect((await tools.run_logs.execute({ run, task: 'test', tail: 1 }, v2())).content).toBe(
+        '1: testing a.spec.ts\n\n(1 lines)'
+      )
     })
   })
 })

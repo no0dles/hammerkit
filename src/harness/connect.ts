@@ -14,7 +14,8 @@ export const DEFAULT_SHELL_TASK = 'sh'
 /**
  * Where a harness works: a registered server, one of the caller's sandboxes on it (or a
  * repository and ref to create one from), and the published version of the build file whose
- * tasks run on it, by its hash, with the task that is the shell.
+ * tasks run on it, by its hash, with the task that is the shell: `''` for none, the clients
+ * then leave their shell tool out and run named tasks only.
  */
 export interface HarnessOptions {
   server?: string
@@ -34,15 +35,24 @@ export function harnessOptionsFromEnv(env: { [key: string]: string | undefined }
     repo: value('HAMMERKIT_REPO'),
     ref: value('HAMMERKIT_REF'),
     build: value('HAMMERKIT_BUILD'),
-    shell: value('HAMMERKIT_SHELL'),
+    // set but empty is no shell, unset the default one
+    shell: env.HAMMERKIT_SHELL !== undefined ? env.HAMMERKIT_SHELL.trim() : undefined,
   }
 }
 
-export async function connectSandbox(
+// whether the clients offer a shell tool
+export function hasShell(options: HarnessOptions): boolean {
+  return options.shell !== ''
+}
+
+/**
+ * The registered server a harness works on and the published version it runs, checked:
+ * what the clients need to list the tasks of the version before they take a sandbox.
+ */
+export async function connectServer(
   environment: Environment,
-  options: HarnessOptions,
-  log: (line: string) => void = () => undefined
-): Promise<SandboxClient> {
+  options: HarnessOptions
+): Promise<{ name: string; connection: ServerConnection; build: string }> {
   const config = await readHostConfig(environment)
   const name = options.server ?? config.run.on
   if (!name || !hasServer(config.servers, name)) {
@@ -64,7 +74,15 @@ export async function connectSandbox(
     )
   }
   const server = config.servers[name]
-  const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, name, server) }
+  return { name, connection: { url: server.url, ...getTokenSource(environment, name, server) }, build: options.build }
+}
+
+export async function connectSandbox(
+  environment: Environment,
+  options: HarnessOptions,
+  log: (line: string) => void = () => undefined
+): Promise<SandboxClient> {
+  const { name, connection, build } = await connectServer(environment, options)
   let sandbox
   if (options.sandbox) {
     sandbox = await SandboxClient.get(connection, options.sandbox)
@@ -84,7 +102,7 @@ export async function connectSandbox(
       'name a sandbox (HAMMERKIT_SANDBOX or --sandbox), or a repository and ref to create one from (HAMMERKIT_REPO and HAMMERKIT_REF, or --repo and --ref)'
     )
   }
-  return new SandboxClient(connection, sandbox, { hash: options.build, shell: options.shell ?? DEFAULT_SHELL_TASK })
+  return new SandboxClient(connection, sandbox, { hash: build, shell: options.shell ?? DEFAULT_SHELL_TASK })
 }
 
 // A client that starts with a repository and ref takes a sandbox of the caller's of the same

@@ -342,3 +342,19 @@ describe('sandbox client', () => {
     })
   })
 })
+
+describe('a sandbox without a shell', () => {
+  it('refuses a command before it asks the server', async () => {
+    const connection = {
+      url: 'http://127.0.0.1:9',
+      token: async () => {
+        throw new Error('no call expected')
+      },
+    }
+    const view = { id: 'sbx_1', repo: SANDBOX_REPO, ref: 'main', commit: 'c', bytes: 0, busy: false, run: null }
+    const client = new SandboxClient(connection, view, { hash: 'sha256:1', shell: '' })
+    await expect(client.exec('ls', '')).rejects.toThrow(
+      'there is no shell on this sandbox (HAMMERKIT_SHELL is empty), run a task instead'
+    )
+  })
+})

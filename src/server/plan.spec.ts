@@ -4,7 +4,7 @@ import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
 import { DefinitionError, planBundle } from './plan'
 import { getSecretCatalog, serverConfigSchema } from './server-config'
-import { planRun, refuseArguments } from './run-plan'
+import { describeArguments, planRun, refuseArguments } from './run-plan'
 
 const config = serverConfigSchema.parse({
   issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
@@ -186,6 +186,47 @@ tasks:
     expect(refuseArguments({ tasks: ['test'], options: {} }, planned.plan, { args: 'declared' })).toBeNull()
     // a plan stored with args: false (published before planning refused it) is refused as well
     expect(refuseArguments(run('install'), planned.plan)).toEqual('install takes no arguments (args: false)')
+  })
+
+  it('says for each task of a version whether a run of it alone takes arguments', async () => {
+    const yaml = `
+services:
+  db:
+    image: postgres:16
+    envs: { PASSWORD: $SERVER_ONLY }
+tasks:
+  lint:
+    image: node:22
+    cmds: [npx eslint]
+  build:
+    image: node:22
+    deps: [lint]
+    cmds: [npm run build]
+  e2e:
+    image: node:22
+    deps: [build]
+    needs: [db]
+    cmds: [npx playwright test]
+  install:
+    image: node:22
+    args: false
+    cmds: [npm ci]
+`
+    const planned = await planBundle(bundle(yaml), hosted, { policy: { envs: ['PATH', 'SERVER_ONLY'] } })
+    expect(describeArguments(planned.plan)).toEqual({
+      lint: null,
+      build: null,
+      install: 'install takes no arguments (args: false)',
+      // what its service holds could be printed by an argument, but only in its own run
+      e2e: 'e2e takes no arguments on a server: db in its run reads $SERVER_ONLY of the server, and an argument could make e2e print what db hands on',
+    })
+    expect(describeArguments(planned.plan, { args: 'declared' }).lint).toMatch(/runs.args: declared/)
+    // the secrets of other tasks of the version do not count
+    expect(describeArguments((await planBundle(bundle(build), hosted, { policy })).plan)).toEqual({
+      build: null,
+      deploy: expect.stringMatching(/^deploy reads the secret KUBE_TOKEN/),
+      test: expect.stringMatching(/^test reads the secret DB/),
+    })
   })
 
   it('refuses arguments for a run in which an item reads a secret or a variable of the server', async () => {
