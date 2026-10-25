@@ -68,8 +68,10 @@ What follows from running a command as a task:
   of that identity (2 by default); a server for more agents raises it.
 - The timeout an agent gives a command is sent as the run's
   [`maxTimeout`](/docs/task#capping-every-task): the command stops after the shorter of it and
-  the shell task's own `timeout`, with `timed out after <duration>`. A `timeout` on the shell
-  task bounds the commands that come without one, such as a test that never ends.
+  the shell task's own `timeout`, with `timed out after <duration>`. Each task of the run gets
+  at most this long, so a dependency of the shell task counts on its own. On Kubernetes the
+  first command of a sandbox also waits for its pod to start within that time. A `timeout` on
+  the shell task bounds the commands that come without one, such as a test that never ends.
 - A command starts in the root of the sandbox. The paths of the agent's machine do not exist
   there, which the clients tell the model.
 - What it printed comes from the [log of the run](/docs/remote-compute/runs#logs). A long

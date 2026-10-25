@@ -178,8 +178,8 @@ hammerkit run --max-timeout 2m
 On a server it is the run option `maxTimeout`, also `remote run --max-timeout`. The
 [agent clients](/docs/remote-compute/agents) send the timeout an agent gives a command
 this way, so a shell task with `timeout: 10m` stops a command after the 30 seconds the
-agent asked for. Only the time a task runs counts, not the time the run waits in the
-queue.
+agent asked for. The time counts from when a task starts, its container or pod start
+included, not while the run waits in the queue or for the task's dependencies.
 
 ## Resources
 A heavy build step can take every core and all the memory of the machine it runs
