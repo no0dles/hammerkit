@@ -141,7 +141,7 @@ export class TokenVerifier {
           ? [groups]
           : [],
       claims,
-      ...(typeof payload.email_verified === 'boolean' ? { emailVerified: payload.email_verified } : {}),
+      ...emailVerified(payload.email_verified),
     }
   }
 
@@ -269,4 +269,16 @@ function isSecureUrl(value: string): boolean {
   } catch {
     return false
   }
+}
+
+// Some issuers send `email_verified` as the string "true" or "false": either says it as
+// much as the boolean does, anything else says nothing
+function emailVerified(value: unknown): { emailVerified?: boolean } {
+  if (value === true || value === 'true') {
+    return { emailVerified: true }
+  }
+  if (value === false || value === 'false') {
+    return { emailVerified: false }
+  }
+  return {}
 }
