@@ -59,9 +59,9 @@ What follows from running a command as a task:
   host each command gets a fresh container. On
   [Kubernetes](/docs/remote-compute/sandboxes#on-kubernetes) the commands of a sandbox run in
   one container that stays, so a command starts in about a second instead of waiting for a pod:
-  before and after each command every process in it is killed and `/tmp` is emptied, but what a
-  command writes elsewhere outside the sandbox, such as the home directory, can still be there
-  for the next one. The clients run a command in a directory with `cd <dir> || exit 1` on a
+  before and after each command every process in it is killed and `/tmp` and `/dev/shm` are
+  emptied, but what a command writes elsewhere outside the sandbox, such as the home directory,
+  can still be there for the next one. The clients run a command in a directory with `cd <dir> || exit 1` on a
   line before it.
 - The command reads no input and gets none of the agent's variables.
 - While a command runs, the sandbox is held: an edit in the meantime is `409`. Agents send

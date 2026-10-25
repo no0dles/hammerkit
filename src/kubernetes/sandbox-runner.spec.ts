@@ -3,11 +3,14 @@ import { Writable } from 'stream'
 import {
   buildRunnerPod,
   canUseRunner,
+  CLEAN_UP,
   executeInRunner,
   getExecExitCode,
   getRunnerKey,
   getRunnerName,
   removeSandboxRunners,
+  RUNNER_TOOLS_IMAGE,
+  WRAPPER,
 } from './sandbox-runner'
 import { ensureKubernetesItemNetwork } from './network-policy'
 import { KubernetesPersistence } from './volumes'
@@ -168,12 +171,22 @@ describe('the runner of a sandbox', () => {
       restartPolicy: 'Never',
       nodeSelector: { 'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'amd64' },
       hostAliases: [{ ip: '10.0.0.9', hostnames: ['hammerkit-proxy'] }],
-      initContainers: [{ name: 'hammerkit-network', image: 'gate' }],
+      initContainers: [
+        { name: 'hammerkit-network', image: 'gate' },
+        {
+          name: 'hammerkit-runner-tools',
+          image: RUNNER_TOOLS_IMAGE,
+          command: ['/bin/busybox', 'cp', '/bin/busybox', '/.hammerkit/busybox'],
+          securityContext: { runAsNonRoot: true, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } },
+        },
+      ],
       affinity: { podAffinity: expect.anything() },
     })
     const [container] = pod.spec!.containers
     expect(container).toMatchObject({
       image: 'node:24-alpine',
+      // nothing of the image: a command may replace its sh and sleep
+      command: ['/.hammerkit/busybox', 'sh', '-c', expect.stringContaining('/.hammerkit/busybox sleep')],
       workingDir: '/build',
       env: [
         { name: 'CI', value: 'true' },
@@ -184,11 +197,23 @@ describe('the runner of a sandbox', () => {
     expect(container.volumeMounts).toEqual([
       { name: 'hammerkit-sandbox', mountPath: '/build', subPath: 'files' },
       { name: 'hammerkit-runner-tmp', mountPath: '/tmp' },
+      { name: 'hammerkit-runner-tools', mountPath: '/.hammerkit', readOnly: true },
     ])
     expect(pod.spec!.volumes).toEqual([
       { name: 'hammerkit-sandbox', persistentVolumeClaim: { claimName: 'hammerkit-sandbox-abc' } },
       { name: 'hammerkit-runner-tmp', emptyDir: {} },
+      { name: 'hammerkit-runner-tools', emptyDir: {} },
     ])
+  })
+
+  it('cleans up with the busybox of the tools only, before and after the command', () => {
+    expect(CLEAN_UP).toContain('kill -KILL -1')
+    expect(CLEAN_UP).toContain('/.hammerkit/busybox rm -rf /tmp/* /tmp/.[!.]* /tmp/..?* /dev/shm/*')
+    // the shell's own kill and the busybox's rm, nothing a command could replace on the PATH
+    expect(CLEAN_UP.split('\n').every((line) => !/(^|; )(rm|sleep|sh) /.test(line))).toBe(true)
+    const lines = WRAPPER.split('\n')
+    expect(lines.indexOf('"$@"')).toBeGreaterThan(lines.indexOf(CLEAN_UP.split('\n')[2]))
+    expect(lines.lastIndexOf(CLEAN_UP.split('\n')[2])).toBeGreaterThan(lines.indexOf('"$@"'))
   })
 
   it('reads the exit code of a command from the status of its exec', () => {
@@ -260,7 +285,11 @@ describe('the runner of a sandbox', () => {
             _tty: boolean,
             done: (status: any) => void
           ) => {
-            calls.push(`exec ${pod} ${container} ${command.slice(-3).join(' ')}`)
+            calls.push(
+              command[3] === CLEAN_UP
+                ? `exec ${pod} ${container} clean up`
+                : `exec ${pod} ${container} ${command.slice(-3).join(' ')}`
+            )
             const socket = Object.assign(new EventEmitter(), { close: () => socket.emit('close') })
             sockets.push(socket)
             const result = answer(command)
@@ -275,7 +304,7 @@ describe('the runner of a sandbox', () => {
               done(result.status)
               stdout?.end()
               socket.emit('close')
-              if (command.join(' ') === 'sh -c kill -KILL -1' && result.status?.status === 'Success') {
+              if (command[3] === CLEAN_UP && result.status?.status === 'Success') {
                 endHanging()
               }
             })
@@ -356,9 +385,7 @@ describe('the runner of a sandbox', () => {
 
     it('kills what a cancelled command runs', async () => {
       const { instance, calls } = cluster((command) =>
-        command.includes('kill -KILL -1') && command.length === 3
-          ? { status: { status: 'Success' } }
-          : { status: undefined, hang: true }
+        command[3] === CLEAN_UP ? { status: { status: 'Success' } } : { status: undefined, hang: true }
       )
       const abort = new AbortController()
       const running = executeInRunner(instance, shell(), environment(), persistence(), abort.signal)
@@ -367,13 +394,27 @@ describe('the runner of a sandbox', () => {
       expect(await running).toEqual({ type: 'canceled' })
       expect(calls.filter((call) => call.startsWith('exec'))).toEqual([
         expect.stringContaining('npm test'),
-        expect.stringContaining('kill -KILL -1'),
+        expect.stringContaining('clean up'),
       ])
-    }, 20000)
+    })
+
+    it('kills what a command runs when its connection breaks, before the run lets go of the sandbox', async () => {
+      const { instance, calls, sockets } = cluster((command) =>
+        command[3] === CLEAN_UP ? { status: { status: 'Success' } } : { status: undefined, hang: true }
+      )
+      const running = executeInRunner(instance, shell(), environment(), persistence(), new AbortController().signal)
+      await vi.waitFor(() => expect(calls.some((call) => call.includes('npm test'))).toBe(true))
+      sockets[0].emit('error', new Error('connection reset'))
+      await expect(running).rejects.toThrow('connection reset')
+      expect(calls.filter((call) => call.startsWith('exec'))).toEqual([
+        expect.stringContaining('npm test'),
+        expect.stringContaining('clean up'),
+      ])
+    })
 
     it('deletes the runner when what a cancelled command runs could not be killed', async () => {
       const { instance, calls, pods } = cluster((command) =>
-        command.length === 3
+        command[3] === CLEAN_UP
           ? { status: { status: 'Failure', message: 'container not found' } }
           : { status: undefined, hang: true }
       )
@@ -386,7 +427,7 @@ describe('the runner of a sandbox', () => {
       expect(await running).toEqual({ type: 'canceled' })
       expect(calls).toContain(`delete ${name}`)
       expect(pods.has(name)).toBe(false)
-    }, 20000)
+    })
 
     it('leaves a task to its Jobs when the runner is taken or the pod of the files went', async () => {
       const { instance, pods } = cluster((command) =>
@@ -428,13 +469,37 @@ describe('the runner of a sandbox', () => {
         })
         return spec
       }
-      expect(
-        await executeInRunner(instance, shell(), environment(), persistence(), new AbortController().signal)
-      ).toEqual({
-        type: 'unavailable',
-      })
+      // an image without sh, say
+      const task = shell({ image: 'distroless' })
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'unavailable' }
+      )
       expect(calls.some((call) => call.startsWith('exec'))).toBe(false)
       expect(pods.size).toBe(1)
+      // and is not tried again while the pod of the files stays
+      const tried = calls.filter((call) => call.startsWith('create')).length
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'unavailable' }
+      )
+      expect(calls.filter((call) => call.startsWith('create'))).toHaveLength(tried)
+    })
+
+    it('leaves a task to its Jobs when the cluster refuses the runner, and tries again next time', async () => {
+      const { instance, calls } = cluster(() => ({ status: { status: 'Success' } }))
+      const create = instance.objectApi.create
+      instance.objectApi.create = async () => {
+        throw Object.assign(new Error('pods "x" is forbidden: exceeded quota'), { code: 403 })
+      }
+      const task = shell({ image: 'node:22-alpine' })
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'unavailable' }
+      )
+      expect(task.status.write).toHaveBeenCalledWith('debug', expect.stringContaining('exceeded quota'))
+      instance.objectApi.create = create
+      expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
+        { type: 'done' }
+      )
+      expect(calls.some((call) => call.startsWith('exec'))).toBe(true)
     })
   })
 

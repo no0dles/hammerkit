@@ -272,7 +272,8 @@ export function kubernetesTaskRuntime(
             options.state.set({ stateKey: options.stateKey, type: 'crash', exitCode: result.exitCode })
             return
           }
-          if (result.type === 'canceled') {
+          // stopped while the runner started: no Job for it either
+          if (result.type === 'canceled' || options.abort.aborted) {
             options.state.set({ stateKey: options.stateKey, type: 'canceled' })
             return
           }

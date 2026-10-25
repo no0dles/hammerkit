@@ -419,8 +419,11 @@ the runner while the pod of the files stays. The runner carries no `hammerkit.de
 the end of a run leaves it, and removing what a stopped server left skips it. It counts
 against the quota like a task's pod, so a namespace with sandboxes needs room for one runner
 per active sandbox besides the runs. It has the security context, resources and placement of
-the task's Job, but no token and no service links. When it can not be used (it does not start,
-or another task of the run is in it) the task runs as a Job.
+the task's Job, but no token and no service links, and an init container of
+`busybox:1.37.0-musl` (pinned by digest) that copies the busybox the runner cleans up with:
+a cluster that pulls only from a registry of its own needs that image there too. When the
+runner can not be used (the cluster refuses it, it does not start, or another task of the run is
+in it) the task runs as a Job.
 
 ### What the server may do
 

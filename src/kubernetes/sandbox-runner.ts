@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { StringDecoder } from 'string_decoder'
 import { Writable } from 'stream'
 import { finished } from 'stream/promises'
 import { V1EnvVar, V1OwnerReference, V1Pod, V1Status } from '@kubernetes/client-node'
@@ -37,8 +38,10 @@ import { getSandboxAffinity, KubernetesPersistence, SANDBOX_LABEL } from './volu
  *   node of the pod of the sandbox's files. It is named after all of that (getRunnerKey),
  *   so a change starts a new one and the one before goes. Its first process only waits.
  * - Every command runs in a wrapper that first and last kills every other process of the
- *   container and empties /tmp: the container is reused, what a command started is not.
- *   A command cancelled or out of time is killed the same way, or the pod is deleted.
+ *   container and empties /tmp and /dev/shm: the container is reused, what a command
+ *   started is not. A command cancelled, out of time or whose connection broke is killed
+ *   the same way, or the pod is deleted. The first process and the wrapper run a static
+ *   busybox from a read-only mount, so a command can not replace what cleans up after it.
  * - Under a limited network it has a NetworkPolicy of its own and, under `allow`, the
  *   sandbox's egress proxy, both keyed like the pod. They carry no run, and go with the
  *   pod of the sandbox's files, which owns them and the runner: the runner stays while
@@ -48,6 +51,14 @@ import { getSandboxAffinity, KubernetesPersistence, SANDBOX_LABEL } from './volu
 export const RUNNER_LABEL = 'hammerkit.dev/runner'
 const RUNNER_CONTAINER = 'runner'
 const TMP_VOLUME = 'hammerkit-runner-tmp'
+const TOOLS_VOLUME = 'hammerkit-runner-tools'
+const TOOLS_PATH = '/.hammerkit'
+const BUSYBOX = `${TOOLS_PATH}/busybox`
+// Pinned, static (it runs in any image), and copied into the runner by an init container.
+// To bump it, take the index digest of the tag (`docker buildx imagetools inspect
+// busybox:<version>-musl`).
+export const RUNNER_TOOLS_IMAGE =
+  'busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092'
 const RUNNER_START_MS = 5 * 60 * 1000
 const RUNNER_POLL_MS = 250
 const KILL_TIMEOUT_MS = 10000
@@ -55,25 +66,28 @@ const KILL_TIMEOUT_MS = 10000
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 
 // Waits without a process of its own to signal: a command's `kill -KILL -1` ends the
-// sleep, not the loop
-const IDLE_COMMAND = ['sh', '-c', 'trap "exit 0" TERM; while :; do sleep 3600 & wait $!; done']
+// sleep, not the loop (the first process of the container is spared), which reaps what
+// the commands left
+export const IDLE_COMMAND = [BUSYBOX, 'sh', '-c', `trap "exit 0" TERM; while :; do ${BUSYBOX} sleep 3600 & wait; done`]
+
+// Kills every process of the container but the first and the shell itself (`kill` is the
+// shell's own), again while one forked meanwhile, then empties /tmp and /dev/shm
+export const CLEAN_UP = [
+  'i=0',
+  'while kill -KILL -1 2>/dev/null && [ $i -lt 10 ]; do i=$((i+1)); done',
+  `${BUSYBOX} rm -rf /tmp/* /tmp/.[!.]* /tmp/..?* /dev/shm/* /dev/shm/.[!.]* /dev/shm/..?* 2>/dev/null`,
+].join('\n')
 
 // Runs `"$@"` in the directory `$1`, alone in the container: what an earlier command left
-// running is killed before, what this one started after. Its exit code is the command's.
-const WRAPPER = [
-  'kill -KILL -1 2>/dev/null',
-  'cd "$1" || exit 126',
-  'shift',
-  '"$@"',
-  'code=$?',
-  'kill -KILL -1 2>/dev/null',
-  'rm -rf /tmp/* /tmp/.[!.]* /tmp/..?* 2>/dev/null',
-  'exit $code',
-].join('\n')
+// is cleaned up before, what this one left after. Its exit code is the command's.
+export const WRAPPER = [CLEAN_UP, 'cd "$1" || exit 126', 'shift', '"$@"', 'code=$?', CLEAN_UP, 'exit $code'].join('\n')
 
 // the sandboxes whose runner a task of this process uses: one command at a time each, the
 // other tasks of the run run as Jobs meanwhile
 const inUse = new Set<string>()
+// runners whose container ended as it started (an image without `sh`, say): their tasks
+// run as Jobs while the pod of the sandbox's files, part of the key, stays
+const failed = new Set<string>()
 
 // Whether the task's commands may run in the sandbox's runner
 export function canUseRunner(
@@ -162,7 +176,23 @@ export function buildRunnerPod(options: {
       ...(placement.tolerations.length > 0 ? { tolerations: placement.tolerations } : {}),
       affinity: getSandboxAffinity(workspace.label),
       hostAliases: network.hostAliases,
-      ...(network.initContainers.length > 0 ? { initContainers: network.initContainers } : {}),
+      initContainers: [
+        ...network.initContainers,
+        {
+          name: 'hammerkit-runner-tools',
+          image: RUNNER_TOOLS_IMAGE,
+          command: ['/bin/busybox', 'cp', '/bin/busybox', BUSYBOX],
+          volumeMounts: [{ name: TOOLS_VOLUME, mountPath: TOOLS_PATH }],
+          securityContext: {
+            runAsNonRoot: true,
+            runAsUser: 65534,
+            allowPrivilegeEscalation: false,
+            readOnlyRootFilesystem: true,
+            capabilities: { drop: ['ALL'] },
+          },
+          resources: { limits: { memory: '16Mi' } },
+        },
+      ],
       containers: [
         {
           name: RUNNER_CONTAINER,
@@ -170,12 +200,17 @@ export function buildRunnerPod(options: {
           command: IDLE_COMMAND,
           workingDir: task.data.cmds[0]?.cwd,
           env: [...Object.entries(envs).map<V1EnvVar>(([name, value]) => ({ name, value })), ...network.env],
-          volumeMounts: [...persistence.mounts.map((m) => m.mount), { name: TMP_VOLUME, mountPath: '/tmp' }],
+          volumeMounts: [
+            ...persistence.mounts.map((m) => m.mount),
+            { name: TMP_VOLUME, mountPath: '/tmp' },
+            // not even root in the container writes it: it has no capability to remount
+            { name: TOOLS_VOLUME, mountPath: TOOLS_PATH, readOnly: true },
+          ],
           ...getKubernetesResources(task.data.resources),
           ...getContainerSecurity(kubernetes),
         },
       ],
-      volumes: [...persistence.workspace, { name: TMP_VOLUME, emptyDir: {} }],
+      volumes: [...persistence.workspace, { name: TMP_VOLUME, emptyDir: {} }, { name: TOOLS_VOLUME, emptyDir: {} }],
     },
   }
 }
@@ -220,6 +255,9 @@ export async function executeInRunner(
     }
     const key = getRunnerKey(task, kubernetes, persistence)
     const name = getRunnerName(key)
+    if (failed.has(key)) {
+      return { type: 'unavailable' }
+    }
     // its policy and proxy select it by the key, and stay for the next runs
     const item: WorkItem<ContainerWorkTask> = { ...task, id: () => key }
     let runner = await getRunner(instance, kubernetes.namespace, name, filesPod.uid)
@@ -240,15 +278,22 @@ export async function executeInRunner(
           workspace.label,
           (pod) => pod.metadata?.name === name
         )
-        runner = await startRunner(
+        const started = await startRunner(
           instance,
           buildRunnerPod({ task, kubernetes, persistence, key, network, owner: filesPod }),
           abort
         )
-        if (!runner) {
-          task.status.write('debug', 'the runner of the sandbox did not start, the task runs as a Job')
+        if (!('pod' in started)) {
+          if (started.reason === 'ended') {
+            failed.add(key)
+          }
+          task.status.write(
+            'debug',
+            `the runner of the sandbox did not start (${started.message}), the task runs as a Job`
+          )
           return { type: 'unavailable' }
         }
+        runner = started.pod
         if (Object.keys(getNetworkLabels(kubernetes, task)).length > 0) {
           // the policy stays until the runner ended too
           await setPolicyOwners(
@@ -358,25 +403,32 @@ async function deletePod(instance: KubernetesInstance, namespace: string, name: 
   throw new Error(`the runner ${name} is still there`)
 }
 
-// Starts the runner and answers it once it runs, undefined when it does not
+// Starts the runner and answers it once it runs, or why it does not: the cluster refused
+// it (a full quota, say, which a Job waits for), its container ended, or it took too long
 async function startRunner(
   instance: KubernetesInstance,
   spec: V1Pod & KubernetesObjectHeader,
   abort: AbortSignal
-): Promise<V1Pod | undefined> {
+): Promise<{ pod: V1Pod } | { reason: 'refused' | 'ended' | 'stopped'; message: string }> {
   const { name, namespace } = spec.metadata
-  await instance.objectApi.create(spec)
+  try {
+    await instance.objectApi.create(spec)
+  } catch (e) {
+    return { reason: 'refused', message: getErrorMessage(e) }
+  }
   const deadline = Date.now() + RUNNER_START_MS
   for (;;) {
     const pod = await instance.coreApi.readNamespacedPod({ name, namespace })
     const status = pod.status?.containerStatuses?.find((s) => s.name === RUNNER_CONTAINER)
     if (pod.status?.phase === 'Running' && status?.state?.running) {
-      return pod
+      return { pod }
     }
     const ended = pod.status?.phase === 'Failed' || pod.status?.phase === 'Succeeded' || !!status?.state?.terminated
     if (ended || abort.aborted || Date.now() > deadline) {
       await deletePod(instance, namespace, name).catch(() => undefined)
-      return undefined
+      return ended
+        ? { reason: 'ended', message: `its container ended with ${status?.state?.terminated?.exitCode ?? 'no code'}` }
+        : { reason: 'stopped', message: abort.aborted ? 'the task was stopped' : 'it took too long' }
     }
     await sleep(RUNNER_POLL_MS)
   }
@@ -450,11 +502,13 @@ async function execInRunner(
   const output = { bytes: 0, cut: false }
   const lines = (stream: 'stdout' | 'stderr') => {
     let rest = ''
+    // a character split between two chunks stays whole
+    const decoder = new StringDecoder('utf8')
     const writable = new Writable({
       write(chunk: Buffer, _encoding, callback) {
         if (output.bytes < MAX_OUTPUT_BYTES) {
           output.bytes += chunk.length
-          const parts = (rest + chunk.toString('utf8')).split(/\r?\n/)
+          const parts = (rest + decoder.write(chunk)).split(/\r?\n/)
           rest = parts.pop() ?? ''
           for (const line of parts) {
             task.status.console(stream, line)
@@ -466,6 +520,7 @@ async function execInRunner(
         callback()
       },
       final(callback) {
+        rest += decoder.end()
         if (rest.length > 0) {
           task.status.console(stream, rest)
         }
@@ -481,7 +536,7 @@ async function execInRunner(
     namespace,
     pod,
     RUNNER_CONTAINER,
-    ['sh', '-c', WRAPPER, 'hammerkit', cwd, ...command],
+    [BUSYBOX, 'sh', '-c', WRAPPER, 'hammerkit', cwd, ...command],
     stdout,
     stderr,
     null,
@@ -513,8 +568,16 @@ async function execInRunner(
   } else {
     abort.addEventListener('abort', aborted, { once: true })
   }
+  let broken: unknown
   try {
-    await closed
+    await closed.catch((e) => {
+      broken = e
+    })
+    if (!abort.aborted && getExecExitCode(status) === undefined) {
+      // the connection broke while the command may still run: it ends here as on a cancel,
+      // before the run lets go of the sandbox
+      await kill()
+    }
   } finally {
     abort.removeEventListener('abort', aborted)
     for (const stream of [stdout, stderr]) {
@@ -531,7 +594,7 @@ async function execInRunner(
   if (exitCode === undefined) {
     throw new Error(
       `the command in the runner of the sandbox ended without an exit code: ${
-        status?.message ?? 'the connection closed'
+        status?.message ?? (broken ? getErrorMessage(broken) : 'the connection closed')
       }`
     )
   }
@@ -544,7 +607,7 @@ async function killInRunner(instance: KubernetesInstance, namespace: string, pod
     namespace,
     pod,
     RUNNER_CONTAINER,
-    ['sh', '-c', 'kill -KILL -1'],
+    [BUSYBOX, 'sh', '-c', CLEAN_UP],
     null,
     null,
     null,
@@ -560,7 +623,7 @@ async function killInRunner(instance: KubernetesInstance, namespace: string, pod
     }),
     sleep(KILL_TIMEOUT_MS).then(() => Promise.reject(new Error('the kill did not answer'))),
   ])
-  // kill -1 answers 1 when nothing was left to kill
+  // what it answers does not matter, that it answered does
   if (getExecExitCode(status) === undefined) {
     throw new Error(status?.message ?? 'the kill did not end')
   }

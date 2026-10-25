@@ -528,11 +528,19 @@ above are the same.
   [agent](/docs/remote-compute/agents), runs in the sandbox's runner: one pod next to the pod
   of the files that stays while that pod does and takes each command over `pods/exec`. A
   command then starts in about a second, where a Job takes several seconds to get a pod. Before
-  and after each command every process in the runner is killed and `/tmp` is emptied, so
-  nothing a command started is left to the next one. The runner has the image, variables,
+  and after each command, and when a command is cancelled, runs out of time or loses its
+  connection, every process in the runner is killed and `/tmp` and `/dev/shm` are emptied,
+  so nothing a command started is left to the next one. What does that is a static busybox
+  (`busybox:1.37.0-musl`, pinned by digest, which an init container copies in) on a mount
+  the runner can only read, so a command can not replace it, not even as root. Files a
+  command writes elsewhere outside the sandbox, such as the home directory or `/usr/local/bin`,
+  stay for the next commands while the runner does: the cleanup is for processes, not a
+  fresh filesystem. The runner has the image, variables,
   resources, mounts and network of the task: a task that differs in any of them gets a new
   runner, and the old one goes. A second task of the same run, while the first is in the
-  runner, runs as a Job. With `backend.sandboxes.runner: false` every task is a Job.
+  runner, runs as a Job, and so does a task whose runner the cluster refuses (a full quota) or
+  whose runner does not start (an image without `sh`). With `backend.sandboxes.runner: false`
+  every task is a Job.
 * **Network.** Runs on sandboxes get `sandboxes.network`, `none` by default, which is a
   `NetworkPolicy` on their pods. So with an entitlement that grants `sandboxes` and a
   `sandboxes.network` other than `open`, the config needs `backend.networkPolicy: enforced`.

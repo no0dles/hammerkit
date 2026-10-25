@@ -61,10 +61,13 @@ function cluster(): { config: KubeConfig; core: CoreV1Api; batch: BatchV1Api; ap
 
 const BUILD_FILE = `
 tasks:
+  # a claim of its own (generates) keeps it out of the runner: it runs as a Job
   build:
     image: alpine:3.19
     src: [src]
+    generates: [dist]
     cmds:
+      - echo "host=$(hostname)"
       - cat src/app.ts
       - echo generated-in-the-job > src/generated.txt
   plant:
@@ -86,6 +89,8 @@ tasks:
       allow: [registry.npmjs.org]
     cmds:
       - echo "left-pad:$(npm view left-pad version)"
+      # around the proxy, to an address outside of the allow list: the policy of the runner
+      - wget -Y off -q -T 5 -O /dev/null http://1.1.1.1 > /dev/null 2>&1 && echo direct=escaped || echo direct=refused
   # shells of the sandbox: their commands run in its runner, one pod for all of them
   leave:
     image: alpine:3.19
@@ -311,6 +316,7 @@ describe('sandboxes on a kubernetes backend', () => {
       const fetched = await execute('run_sbx_fetch_1', 'fetch')
       expect(fetched.error, fetched.text).toBeUndefined()
       expect(fetched.text).toMatch(/left-pad:\d+\.\d+\.\d+/)
+      expect(fetched.text).toContain('direct=refused')
       const fetchProxies = await proxies()
       expect(Object.values(fetchProxies)).toEqual([{ uid: expect.any(String), owner: podBefore }])
 
@@ -321,6 +327,7 @@ describe('sandboxes on a kubernetes backend', () => {
       expect(podBefore).toBeDefined()
       expect(await filesPod()).toBe(podBefore)
       // the Job read the edit and wrote into the claim
+      expect(text).toMatch(/host=(?!hammerkit-runner-)\S+/)
       expect(text).toContain('export const answer = 42')
       expect(events).toContainEqual(expect.objectContaining({ type: 'task', task: 'build', state: 'succeeded' }))
       const files = registry.files(alice, sandbox.id)
