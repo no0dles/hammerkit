@@ -61,6 +61,17 @@ describe('TokenVerifier', () => {
     expect(principal.groups).toEqual(['release'])
   })
 
+  it('reads whether the address is verified, also when the issuer sends it as a string', async () => {
+    const verified = async (value: unknown) =>
+      (await verifier().verify(signToken(key, claims({ email_verified: value })))).emailVerified
+    expect(await verified(true)).toBe(true)
+    expect(await verified('true')).toBe(true)
+    expect(await verified(false)).toBe(false)
+    expect(await verified('false')).toBe(false)
+    expect(await verified('no')).toBeUndefined()
+    expect(await verified(undefined)).toBeUndefined()
+  })
+
   it('rejects a token signed by another key', async () => {
     const forged = createTestKey('RS256', 'k1')
     await expect(verifier().verify(signToken(forged, claims()))).rejects.toThrow('signature does not match')

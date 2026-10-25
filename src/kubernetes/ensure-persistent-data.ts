@@ -5,7 +5,7 @@ import { KubernetesPersistence, KubernetesPersistenceSource } from './volumes'
 import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
-import { create } from 'tar'
+import { packArchive } from '../utils/tar'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getItemLabels, getResourceName } from './resources'
 import { awaitRunningState } from './await-running-state'
@@ -126,19 +126,19 @@ export async function getPodForPersistence(
     },
   }
 
-  service.status.console('stdout', `create pod ${name}`)
+  service.status.write('debug', `create pod ${name}`)
   await removeStalePod(instance, env.namespace, name)
   const pod = await apply(instance, podSpec)
 
   if (pod.status?.phase !== 'Running') {
-    service.status.console('stdout', `await running state ${name}`)
+    service.status.write('debug', `await running state ${name}`)
     await awaitRunningState(instance, env, name, 'Running')
   }
 
   try {
     await fn(name)
   } finally {
-    service.status.console('stdout', `delete pod ${name}`)
+    service.status.write('debug', `delete pod ${name}`)
     await instance.coreApi.deleteNamespacedPod({ name, namespace: env.namespace })
   }
 }
@@ -152,7 +152,7 @@ export async function clearClaim(
   pod: string
 ): Promise<void> {
   const targetPath = `/dev/hammerkit/${work.id()}`
-  work.status.console('stdout', `clear what an earlier run left in ${targetPath}`)
+  work.status.write('info', `clear what an earlier run left in ${targetPath}`)
   let failure: string | null = null
   const res = await instance.exec.exec(
     env.namespace,
@@ -182,7 +182,7 @@ export async function clearClaim(
 export function packSource(source: Pick<KubernetesPersistenceSource, 'localPath' | 'subPath' | 'matcher'>): Readable {
   const fileItem = basename(source.localPath)
   return Readable.from(
-    create(
+    packArchive(
       {
         cwd: dirname(source.localPath),
         filter(path: string): boolean {
@@ -234,7 +234,7 @@ export async function ensurePersistentData(
     return
   }
 
-  service.status.console('stdout', 'start upload container')
+  service.status.write('debug', 'start upload container')
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
     if (options.reset) {
       await clearClaim(instance, env, service, name)
@@ -247,7 +247,7 @@ export async function ensurePersistentData(
 
       const data = packSource(source)
 
-      service.status.console('stdout', `upload ${source.localPath}`)
+      service.status.write('info', `upload ${source.localPath}`)
       const targetPath = `/dev/hammerkit/${service.id()}`
       const res = await instance.exec.exec(
         env.namespace,

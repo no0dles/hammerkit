@@ -202,7 +202,8 @@ function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, body: unknown): T
 /**
  * Who the commit of a push is by: the caller, as their token names them (`name` and
  * `email`, unless the issuer says the address is not verified), else by their subject at the
- * host of their issuer. Never what the request says, so a commit can not claim to be
+ * host of their issuer. Without a name, the local part of the address names them, then the
+ * subject. Never what the request says, so a commit can not claim to be
  * somebody else's.
  */
 export function author(principal: Principal): { name: string; email: string } {
@@ -211,11 +212,17 @@ export function author(principal: Principal): { name: string; email: string } {
       .replace(/[<>\0\r\n]/g, '')
       .trim()
       .slice(0, 200)
-  const name = clean(principal.claims.name) || clean(principal.claims.preferred_username) || clean(principal.sub)
   // an address the issuer says it did not verify is whatever the caller typed in
   const claimed = principal.emailVerified === false ? '' : clean(principal.claims.email)
-  if (/^[^\s@]+@[^\s@]+$/.test(claimed)) {
-    return { name, email: claimed }
+  const email = /^[^\s@]+@[^\s@]+$/.test(claimed) ? claimed : ''
+  // a Google service account's token has an address but no name: its local part reads better than the number in sub
+  const name =
+    clean(principal.claims.name) ||
+    clean(principal.claims.preferred_username) ||
+    email.slice(0, email.indexOf('@')) ||
+    clean(principal.sub)
+  if (email) {
+    return { name, email }
   }
   let host = 'hammerkit'
   try {

@@ -78,7 +78,7 @@ export async function ensureKubernetesPersistentVolumeClaimExists(
       },
     },
   }
-  service.status.console('stdout', `ensure volume ${volume.name}`)
+  service.status.write('debug', `ensure volume ${volume.name}`)
   // Don't block on the PVC reaching "Bound". Storage classes with
   // volumeBindingMode WaitForFirstConsumer (docker-desktop's "standard",
   // k3d/k3s local-path, most cloud defaults) keep the claim Pending until a pod

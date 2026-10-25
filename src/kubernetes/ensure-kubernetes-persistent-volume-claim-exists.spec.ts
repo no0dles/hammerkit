@@ -13,7 +13,7 @@ const env = {
   networkPolicyEnforced: false,
 } as WorkKubernetesEnvironment
 const volume = { name: 'hammerkit-install', persistentVolumeClaim: { claimName: 'hammerkit-install' } }
-const install = { id: () => 'install', name: 'install', status: { console: () => undefined } } as any
+const install = { id: () => 'install', name: 'install', status: { write: () => undefined } } as any
 
 // a cluster with at most one claim, which can or can not grow
 function cluster(existing: string | null, options: { grows: boolean } = { grows: true }) {
