@@ -116,7 +116,7 @@ tasks:
       # The unit specs touch no daemon, so they run side by side (unit mode, as on
       # Windows); the specs that use Docker then run one file at a time, since they
       # share one daemon. Each run writes a report of its own.
-      - node_modules/.bin/vitest run --coverage.reportsDirectory=coverage/docker-unit
+      - node_modules/.bin/vitest run --coverage.reportsDirectory=coverage/docker-unit --coverage.reporter=lcovonly
       - >-
         node_modules/.bin/vitest run --mode integration --no-file-parallelism
         --coverage.reportsDirectory=coverage/docker

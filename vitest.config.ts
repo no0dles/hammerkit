@@ -8,9 +8,10 @@ import { defineConfig } from 'vitest/config'
 // These used to be two files. The only real differences are include/exclude, the
 // timeout, and the forks pool + pre-run cleanup — small enough to express as a
 // `mode` branch, which keeps CI's split unit/integration jobs intact. Integration
-// mode is a superset of unit mode: its single coverage/lcov.info is the only report
-// uploaded to Codacy, so it must run everything to report a complete figure. The
-// unit-mode run (windows job) is platform coverage only and is not uploaded.
+// mode is a superset of unit mode. In CI the ubuntu jobs run the whole suite in three
+// parts (see test:docker and test:kubernetes in .hammerkit.yaml): the unit specs in
+// unit mode, then the docker and the cluster specs in integration mode; Codacy gets
+// the three lcov reports. The windows job's unit-mode run is not uploaded.
 export default defineConfig(({ mode }) => {
   const integration = mode === 'integration'
   return {
@@ -56,10 +57,9 @@ export default defineConfig(({ mode }) => {
         // and src/index.ts (the bin entry just wires runProgram(process.argv)).
         exclude: ['src/testing/**', 'src/index.ts', '**/*.spec.ts', '**/*.d.ts'],
         reporter: integration ? ['lcov'] : ['json', 'html', 'lcov'],
-        // Integration mode runs the full suite, so its lcov is the single, complete
-        // report uploaded to Codacy (see the ubuntu job in test.yaml). The unit-mode
-        // run (windows job) writes here too but is platform coverage only — not
-        // uploaded — so the shared name never clobbers across the separate runners.
+        // CI passes a directory per part of the suite (coverage/docker-unit,
+        // coverage/docker, coverage/kubernetes), whose lcov reports go to Codacy;
+        // the windows job writes here and is not uploaded.
         reportsDirectory: 'coverage',
       },
     },

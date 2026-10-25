@@ -20,7 +20,7 @@ jobs:
         # is the separator-sensitive platform we most need to cover. ubuntu and
         # macOS instead run the integration suite (the integration jobs below),
         # which is a superset of the unit suite plus the full container/k8s path;
-        # the ubuntu run is the single coverage report uploaded to Codacy.
+        # the ubuntu runs are the coverage reports uploaded to Codacy.
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -274,9 +274,10 @@ jobs:
   # The single coverage source for Codacy, and the one check that stands for the
   # integration suite (the name is unchanged from when it was a single job, so a
   # required check keeps working). It runs on every push, PRs included, so coverage
-  # shows up on PRs. Integration mode is a superset of the unit suite (see
-  # vitest.config.ts): the docker suite carries the fast unit and error-path specs,
-  # the kubernetes suite the cluster path, and Codacy gets all three reports in one upload.
+  # shows up on PRs. Together the two suites run every spec: the docker suite runs
+  # the unit specs (in unit mode, a report of their own) and the specs that need at
+  # most Docker, the kubernetes suite the cluster path. Codacy gets all three reports
+  # in one upload.
   integration-result:
     name: integration (ubuntu-latest)
     needs: linux-integration
