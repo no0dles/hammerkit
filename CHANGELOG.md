@@ -1,3 +1,17 @@
+# [1.27.0-next.12](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.11...v1.27.0-next.12) (2026-10-25)
+
+
+### Bug Fixes
+
+* cover the gzip archive in the empty linked file specs ([0ecd29f](https://github.com/no0dles/hammerkit/commit/0ecd29f6df85f6f1a0a03d8b624ef48b6bd10551))
+* keep node-tar from ending an archive twice on an empty linked file ([1a062d6](https://github.com/no0dles/hammerkit/commit/1a062d660caa2b28e696fd47b067d6650fed5e5e)), closes [#117](https://github.com/no0dles/hammerkit/issues/117)
+* set no deadline for a timeout longer than a timer can wait ([c23b693](https://github.com/no0dles/hammerkit/commit/c23b6933892a4465247e5bc97c55bacf29988719))
+
+
+### Features
+
+* cap every task of a run with --max-timeout ([ac4a6c1](https://github.com/no0dles/hammerkit/commit/ac4a6c193a6567a935a3b72df33fae2083e3811e))
+
 # [1.27.0-next.11](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.10...v1.27.0-next.11) (2026-10-25)
 
 
