@@ -244,8 +244,9 @@ jobs:
       - name: Install ripgrep
         if: matrix.suite == 'docker' && steps.plan.outputs.hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-      # Serialize (inside the task): one single-node kind cluster on a 4-vCPU
-      # runner, so running suites one at a time avoids scheduling/volume races.
+      # Inside the task, the docker suite runs its unit specs side by side and then
+      # the specs that use Docker one file at a time (they share one daemon); the
+      # kubernetes suite runs two spec files at a time on the single-node cluster.
       # HAMMERKIT_TEST_RUN_ID is not passed on: hammerkit hands a task only the
       # variables it declares, and a per-run value would defeat the cache.
       - name: Run integration tests
@@ -255,11 +256,12 @@ jobs:
         with:
           tasks: test:${{ matrix.suite }}
       # The coverage job below merges the reports of both suites.
-      - name: Keep the coverage report
+      # docker has two reports (docker-unit and docker), kubernetes one
+      - name: Keep the coverage reports
         uses: actions/upload-artifact@v5
         with:
           name: coverage-${{ matrix.suite }}
-          path: coverage/${{ matrix.suite }}/lcov.info
+          path: coverage/*/lcov.info
       - name: Archive logs on failure
         if: failure()
         uses: actions/upload-artifact@v5
@@ -274,7 +276,7 @@ jobs:
   # required check keeps working). It runs on every push, PRs included, so coverage
   # shows up on PRs. Integration mode is a superset of the unit suite (see
   # vitest.config.ts): the docker suite carries the fast unit and error-path specs,
-  # the kubernetes suite the cluster path, and Codacy gets both reports in one upload.
+  # the kubernetes suite the cluster path, and Codacy gets all three reports in one upload.
   integration-result:
     name: integration (ubuntu-latest)
     needs: linux-integration
@@ -290,9 +292,11 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           pattern: coverage-*
+          path: coverage
+          merge-multiple: true
       - name: Upload coverage
         continue-on-error: true
         uses: codacy/codacy-coverage-reporter-action@master
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          coverage-reports: coverage-docker/lcov.info,coverage-kubernetes/lcov.info
+          coverage-reports: coverage/docker-unit/lcov.info,coverage/docker/lcov.info,coverage/kubernetes/lcov.info

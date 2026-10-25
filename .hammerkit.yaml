@@ -93,7 +93,8 @@ tasks:
       - tsconfig.json
       - vitest.config.ts
     generates:
-      # restored on a cache hit, so the coverage upload still has its report
+      # restored on a cache hit, so the coverage upload still has its reports
+      - coverage/docker-unit
       - coverage/docker
     envs:
       CI: ${CI:-}
@@ -112,9 +113,14 @@ tasks:
       OP_TEST_TOKEN_FILE: ${OP_TEST_TOKEN_FILE:-}
       OP_OTHER_TOKEN_FILE: ${OP_OTHER_TOKEN_FILE:-}
     cmds:
+      # The unit specs touch no daemon, so they run side by side (unit mode, as on
+      # Windows); the specs that use Docker then run one file at a time, since they
+      # share one daemon. Each run writes a report of its own.
+      - node_modules/.bin/vitest run --coverage.reportsDirectory=coverage/docker-unit
       - >-
         node_modules/.bin/vitest run --mode integration --no-file-parallelism
         --coverage.reportsDirectory=coverage/docker
+        src/testing/integration src/docker/package.spec.ts src/program.spec.ts
         --exclude 'src/testing/integration/kubernetes*'
         --exclude 'src/testing/integration/k8s-*'
         --exclude src/testing/integration/environment.spec.ts
@@ -144,8 +150,10 @@ tasks:
       # kubernetes-sandboxes.spec.ts: the image of this tree the cluster has loaded
       HAMMERKIT_SANDBOX_IMAGE: ${HAMMERKIT_SANDBOX_IMAGE:-}
     cmds:
+      # Two spec files at a time (the forks limit of vitest.config.ts): they mostly
+      # wait for pods, and each works in namespaces of its own.
       - >-
-        node_modules/.bin/vitest run --mode integration --no-file-parallelism
+        node_modules/.bin/vitest run --mode integration
         --coverage.reportsDirectory=coverage/kubernetes
         src/testing/integration/kubernetes src/testing/integration/k8s-
         src/testing/integration/environment.spec.ts
