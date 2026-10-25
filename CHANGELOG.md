@@ -1,3 +1,20 @@
+# [1.27.0-next.17](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.16...v1.27.0-next.17) (2026-10-25)
+
+
+### Bug Fixes
+
+* end at services that need each other, and keep a service's reset task out of provability ([2034a33](https://github.com/no0dles/hammerkit/commit/2034a33de5c24698569ca6e98d0c3d41d127eef9))
+* end the check key at services that need each other, also past an await ([e0e7c87](https://github.com/no0dles/hammerkit/commit/e0e7c875cf65438f36d8cc42d76f81da209e2caf))
+* harden verified checks after review ([c5b0b7f](https://github.com/no0dles/hammerkit/commit/c5b0b7fab03ec1d813989ff3a82fe172a82b9d22))
+* keep state keys short enough for a Kubernetes label ([6b6f67b](https://github.com/no0dles/hammerkit/commit/6b6f67bf90312250bda9af82042b4d127b609ed1)), closes [#119](https://github.com/no0dles/hammerkit/issues/119) [#121](https://github.com/no0dles/hammerkit/issues/121)
+* key a task's cache by the services it needs, and hash with sha256 ([31990c3](https://github.com/no0dles/hammerkit/commit/31990c39d0908ed3e253c15ff748e4b6361a12b5))
+
+
+### Features
+
+* let agents check a sandbox and CI verify the result without running it ([d2043fc](https://github.com/no0dles/hammerkit/commit/d2043fc10f91258e2736748c93e79db65b0dc74e))
+* record the tasks check runs pass, by the cache key of their files ([5ad0d9d](https://github.com/no0dles/hammerkit/commit/5ad0d9d52c26892f3ce11d0e9d0097bff8e2ad83))
+
 # [1.27.0-next.16](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.15...v1.27.0-next.16) (2026-10-25)
 
 
