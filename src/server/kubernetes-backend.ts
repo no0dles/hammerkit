@@ -187,21 +187,24 @@ export function getRunRoleBinding(
  * process of the server as on a host (see HostExecutor); what changes is where its
  * container tasks and services go: into the caller's namespace, on the nodes of the
  * operator's pools, with the secrets of providers read in the Job itself. The runs
- * of one caller execute one after the other, since the objects of a task are named
- * by its cache id in the caller's namespace; different callers run side by side.
- * When a run ends, everything made for it is removed, but for the claims of its tasks
- * the server keeps (`backend.keepVolumes`), which go once they expired.
+ * of a caller execute side by side in their namespace, up to `runs.limits.running`:
+ * the objects of a run are named and found by its run label (getItemKey), so two runs
+ * of the same task have their own. What two runs share are the claims the server keeps
+ * (`backend.keepVolumes`) of a scope (getVolumeScope): the runs of one scope go one at
+ * a time (exclusive). When a run ends, everything made for it is removed, but for the
+ * kept claims, which go once they expired.
  */
 export class KubernetesExecutor implements RunExecutor {
-  // the registry keeps a caller's next run in its queue, not running and timed here
-  readonly runningPerCaller = 1
   private readonly host: HostExecutor
   private readonly instance: KubernetesInstance
   private readonly access: ReturnType<typeof getClusterAccess>
   private readonly namespace: string
   private readonly namespaces: CallerNamespaces
-  // the run that executes, or the last one waiting, per caller namespace
+  // per caller namespace, what changes objects of the whole namespace: its setup, the
+  // removal of what a stopped server left, the sweeps of kept claims. The last one waiting.
   private readonly queues = new Map<string, Promise<void>>()
+  // per caller namespace, the runs that execute in it: by run label, their volume scope
+  private readonly active = new Map<string, Map<string, string>>()
   // how long the claims of tasks stay after a run, 0 for not at all
   private readonly keep: number
   // per caller namespace, when its kept claims are next looked at
@@ -238,18 +241,49 @@ export class KubernetesExecutor implements RunExecutor {
     this.host = new HostExecutor({ ...options, placement: this.placement() })
   }
 
-  execute(run: Run, context: RunContext): Promise<void> {
+  async execute(run: Run, context: RunContext): Promise<void> {
     const namespace = getCallerNamespace(this.config.backend.namespacePrefix, run.owner)
-    return this.enqueue(namespace, () => {
-      if (context.signal.aborted) {
-        throw new Error('the run was cancelled')
+    const label = getRunLabelValue(run.id)
+    let runs = this.active.get(namespace)
+    if (!runs) {
+      runs = new Map()
+      this.active.set(namespace, runs)
+    }
+    runs.set(label, getVolumeScope(run))
+    try {
+      await this.host.execute(run, context)
+    } finally {
+      runs.delete(label)
+      if (runs.size === 0 && this.active.get(namespace) === runs) {
+        this.active.delete(namespace)
       }
-      return this.host.execute(run, context)
-    })
+    }
   }
 
-  // What happens in a caller's namespace happens one at a time: their runs, and the
-  // removal of the claims their runs kept
+  // The runs of a scope share its kept claims, which one of them may change at a time:
+  // what a task finds in one is what the last run left there. Without kept claims, runs
+  // share no object and nothing is held.
+  exclusive(run: Run): string | undefined {
+    if (this.keep === 0) {
+      return undefined
+    }
+    return `${getCallerNamespace(this.config.backend.namespacePrefix, run.owner)}/${getVolumeScope(run)}`
+  }
+
+  // The scopes of the runs that execute in the namespace, but `except`'s: their kept claims
+  // are theirs to mount and stay. A server that keeps none mounts none.
+  private scopesInUse(namespace: string, except?: string): Set<string> {
+    if (this.keep === 0) {
+      return new Set()
+    }
+    return new Set(
+      [...(this.active.get(namespace) ?? new Map<string, string>()).entries()]
+        .filter(([label]) => label !== except)
+        .map(([, scope]) => scope)
+    )
+  }
+
+  // What changes objects of a whole namespace happens one at a time, not what its runs do
   private enqueue(namespace: string, fn: () => Promise<void>): Promise<void> {
     const previous = this.queues.get(namespace) ?? Promise.resolve()
     const execution = previous.then(fn)
@@ -271,24 +305,33 @@ export class KubernetesExecutor implements RunExecutor {
     return {
       prepare: async (run: Run, context: RunContext, work?: { root: string; claim?: SandboxClaim }) => {
         const namespace = getCallerNamespace(backend.namespacePrefix, run.owner)
-        await this.namespaces.prepare(namespace)
-        // what an earlier run left when the server stopped before its end; the runs
-        // of a caller execute one at a time, so no other run is in the namespace
-        await removeRunObjects(
-          this.instance,
-          namespace,
-          `${RUN_LABEL},${RUN_LABEL}!=${getRunLabelValue(run.id)}`,
-          RELEASE_TIMEOUT
-        )
-        // the claims earlier runs kept that expired; the others this run may mount
-        const { next } = await sweepKeptClaims(this.instance, namespace, {
-          now: new Date(),
-          keep: this.keep > 0,
-          timeout: RELEASE_TIMEOUT,
+        const label = getRunLabelValue(run.id)
+        await this.enqueue(namespace, async () => {
+          if (context.signal.aborted) {
+            throw new Error('the run was cancelled')
+          }
+          await this.namespaces.prepare(namespace)
+          // what an earlier run left when the server stopped before its end: the objects of
+          // a run that does not execute. One that starts after this waits for it here
+          // before it makes any.
+          const running = [...new Set([label, ...(this.active.get(namespace)?.keys() ?? [])])]
+          await removeRunObjects(
+            this.instance,
+            namespace,
+            `${RUN_LABEL},${RUN_LABEL} notin (${running.join(',')})`,
+            RELEASE_TIMEOUT
+          )
+          // the claims earlier runs kept that expired; the others this run may mount
+          const { next } = await sweepKeptClaims(this.instance, namespace, {
+            now: new Date(),
+            keep: this.keep > 0,
+            timeout: RELEASE_TIMEOUT,
+            inUse: this.scopesInUse(namespace, label),
+          })
+          if (next) {
+            this.sweepLater(namespace, Math.max(0, next.getTime() - Date.now()))
+          }
         })
-        if (next) {
-          this.sweepLater(namespace, Math.max(0, next.getTime() - Date.now()))
-        }
         this.sweepLeftClaims()
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
         const kubernetes: WorkKubernetesEnvironment = {
@@ -348,8 +391,8 @@ export class KubernetesExecutor implements RunExecutor {
     }
   }
 
-  // The kept claims of a namespace that expired go once no run of the caller is in it: at
-  // the soonest expiry the server knows of
+  // The kept claims of a namespace that expired go at the soonest expiry the server knows
+  // of, but those of a scope a run of the caller executes in
   private sweepLater(namespace: string, delay: number): void {
     const at = Date.now() + delay + 1000
     const pending = this.sweeps.get(namespace)
@@ -372,6 +415,7 @@ export class KubernetesExecutor implements RunExecutor {
       now: new Date(),
       keep: this.keep > 0,
       timeout: RELEASE_TIMEOUT,
+      inUse: this.scopesInUse(namespace),
     })
     if (removed.length > 0) {
       this.log?.(`removed ${removed.length} kept claims in ${namespace}`)

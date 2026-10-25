@@ -7,7 +7,7 @@ import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
 import { packArchive } from '../utils/tar'
 import { KubernetesInstance } from './kubernetes-instance'
-import { getResourceName } from './resources'
+import { getItemLabels, getResourceName } from './resources'
 import { awaitRunningState } from './await-running-state'
 import { sleep } from '../utils/sleep'
 import { getVersion } from '../version'
@@ -16,7 +16,7 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
 import { Readable } from 'stream'
-import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
+import { getContainerSecurity, getPodPlacement } from './job-placement'
 import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
 
 // A previous run that crashed between creating an upload/download pod and its
@@ -91,17 +91,14 @@ export async function getPodForPersistence(
     )
   }
 
-  const name = getResourceName(service, type === 'write' ? '-upload' : '-download')
+  const name = getResourceName(service, env, type === 'write' ? '-upload' : '-download')
   const podSpec: V1Pod & KubernetesObjectHeader = {
     kind: 'Pod',
     apiVersion: 'v1',
     metadata: {
       namespace: env.namespace,
       name,
-      labels: {
-        'hammerkit.dev/id': service.id(),
-        ...getRunLabels(env),
-      },
+      labels: getItemLabels(service, env),
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },

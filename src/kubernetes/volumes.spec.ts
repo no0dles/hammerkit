@@ -11,7 +11,7 @@ function makeWorkItem<T extends WorkTask | WorkService>(id: string, data: T): Wo
 describe('getVolumeName', () => {
   it('prefixes the item id with hammerkit-', () => {
     const item = makeWorkItem('w1', { type: 'container-task' } as unknown as WorkTask)
-    expect(getVolumeName(item)).toBe('hammerkit-w1')
+    expect(getVolumeName(item, {})).toBe('hammerkit-w1')
   })
 })
 
@@ -43,12 +43,12 @@ describe('getKubernetesPersistence for a container task', () => {
       ],
     } as unknown as ContainerWorkTask)
 
-    const persistence = await getKubernetesPersistence(work)
+    const persistence = await getKubernetesPersistence(work, {})
 
     // each claim is of the size its own work states, the generator's for what it made
     expect(persistence.sizes).toEqual({ 'hammerkit-task-1': null, 'hammerkit-gen-1': null })
     ;(generator.data as ContainerWorkTask).volumeSize = '5Gi'
-    expect((await getKubernetesPersistence(work)).sizes).toEqual({
+    expect((await getKubernetesPersistence(work, {})).sizes).toEqual({
       'hammerkit-task-1': null,
       'hammerkit-gen-1': '5Gi',
     })
@@ -148,7 +148,7 @@ describe('getKubernetesPersistence for a container task', () => {
       generates: [],
     } as unknown as ContainerWorkTask)
 
-    const persistence = await getKubernetesPersistence(work)
+    const persistence = await getKubernetesPersistence(work, {})
 
     expect(persistence.mounts.map((m) => m.mount.mountPath)).toEqual(['/repo/mine'])
   })
@@ -180,7 +180,7 @@ describe('getKubernetesPersistence for a container task', () => {
       ],
     } as unknown as ContainerWorkTask)
 
-    const persistence = await getKubernetesPersistence(work)
+    const persistence = await getKubernetesPersistence(work, {})
 
     expect(persistence.volumes).toHaveLength(1)
     expect(persistence.mounts.map((m) => m.mount.name)).toEqual(['hammerkit-gen-1', 'hammerkit-gen-1'])
@@ -218,7 +218,7 @@ describe('getKubernetesPersistence for a container task', () => {
     const subPaths = (persistence: KubernetesPersistence) =>
       Object.fromEntries(persistence.mounts.map((m) => [m.mount.mountPath, m.mount.subPath]))
 
-    const own = subPaths(await getKubernetesPersistence(install))
+    const own = subPaths(await getKubernetesPersistence(install, {}))
     // the least deep keeps the name it had, the others are named apart
     expect(own['/repo/package.json']).toBe('package.json')
     expect(own['/repo/node_modules']).toBe('node_modules')
@@ -228,7 +228,7 @@ describe('getKubernetesPersistence for a container task', () => {
     expect(new Set(Object.values(own)).size).toBe(5)
 
     // the same folders for the same project in another directory, with its paths in another order
-    const moved = subPaths(await getKubernetesPersistence(installAt('/srv/run-2/source', true)))
+    const moved = subPaths(await getKubernetesPersistence(installAt('/srv/run-2/source', true), {}))
     expect(moved).toEqual(
       Object.fromEntries(Object.entries(own).map(([path, sub]) => [`/srv/run-2/source${path.slice(5)}`, sub]))
     )
@@ -245,7 +245,7 @@ describe('getKubernetesPersistence for a container task', () => {
         generate('/repo/node_modules', install),
       ],
     } as unknown as ContainerWorkTask)
-    const consumer = await getKubernetesPersistence(build)
+    const consumer = await getKubernetesPersistence(build, {})
     expect(consumer.mounts.every((m) => m.mount.name === 'hammerkit-install')).toBe(true)
     expect(subPaths(consumer)).toEqual({
       '/repo/api/node_modules': own['/repo/api/node_modules'],
@@ -254,7 +254,7 @@ describe('getKubernetesPersistence for a container task', () => {
     })
 
     // a source goes where its mount reads it
-    const sources = (await getKubernetesPersistence(install)).sources
+    const sources = (await getKubernetesPersistence(install, {})).sources
     expect(sources.map((source) => source.subPath)).toEqual([own['/repo/api/package.json'], own['/repo/package.json']])
     // and an output is restored there
     expect(getRestoreTarget(install, '/repo/api/node_modules')).toBe(
@@ -292,7 +292,7 @@ describe('getKubernetesPersistence for a container service', () => {
       ],
     } as unknown as ContainerWorkService)
 
-    const persistence = await getKubernetesPersistence(work)
+    const persistence = await getKubernetesPersistence(work, {})
 
     expect(persistence.volumes).toEqual([
       {
@@ -340,7 +340,7 @@ describe('getKubernetesPersistence for a container service', () => {
       volumes: [],
     } as unknown as ContainerWorkService)
 
-    const persistence = await getKubernetesPersistence(work)
+    const persistence = await getKubernetesPersistence(work, {})
 
     expect(persistence.mounts).toEqual([
       {
@@ -362,8 +362,8 @@ describe('appendVolume', () => {
     const sourceWork = makeWorkItem('w1', {} as WorkTask)
     const persistence = { volumes: [], sizes: {}, kept: [], workspace: [], sources: [], mounts: [], initCommands: [] }
 
-    appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)
-    appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false)
+    appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false, {})
+    appendVolume(sourceWork, persistence, '/data/cache', '/local/cache', false, false, {})
 
     expect(persistence.volumes).toHaveLength(1)
     expect(persistence.volumes[0]).toEqual({

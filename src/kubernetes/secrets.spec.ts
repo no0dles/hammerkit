@@ -11,11 +11,11 @@ function secret(target: WorkSecret['target']): WorkSecret {
 // Job or Deployment.
 describe('getKubernetesSecretRefs', () => {
   it('adds nothing without secrets', () => {
-    expect(getKubernetesSecretRefs(item, [])).toEqual({ env: [], mounts: [], volumes: [] })
+    expect(getKubernetesSecretRefs(item, {}, [])).toEqual({ env: [], mounts: [], volumes: [] })
   })
 
   it('references env targets by key and needs no volume for them', () => {
-    expect(getKubernetesSecretRefs(item, [secret({ type: 'env', name: 'API_TOKEN' })])).toEqual({
+    expect(getKubernetesSecretRefs(item, {}, [secret({ type: 'env', name: 'API_TOKEN' })])).toEqual({
       env: [{ name: 'API_TOKEN', valueFrom: { secretKeyRef: { name: 'build-abc-secrets', key: 'secret-0' } } }],
       mounts: [],
       volumes: [],
@@ -23,7 +23,7 @@ describe('getKubernetesSecretRefs', () => {
   })
 
   it('mounts file targets read-only from one secret volume', () => {
-    const refs = getKubernetesSecretRefs(item, [
+    const refs = getKubernetesSecretRefs(item, {}, [
       secret({ type: 'env', name: 'API_TOKEN' }),
       secret({ type: 'file', path: '/run/secrets/key' }),
     ])

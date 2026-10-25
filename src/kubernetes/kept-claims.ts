@@ -8,6 +8,7 @@ import { KubernetesInstance } from './kubernetes-instance'
 import { statusCodeOf } from './apply'
 import { sleep } from '../utils/sleep'
 import { getRunLabelValue } from './job-placement'
+import { getItemKey } from './resources'
 
 // On a server with `backend.keepVolumes`, the claim of a task stays after the run, so the
 // next run of the same source finds the outputs in it and mounts them without restoring
@@ -24,14 +25,18 @@ export const STATE_ANNOTATION = 'hammerkit.dev/state'
 export const EXPIRES_ANNOTATION = 'hammerkit.dev/expires'
 
 // The claim of a work item: a task's on a server that keeps them carries the scope, so a
-// run of another source never mounts it. 63 characters at most, a pod's volume name.
+// run of another source never mounts it, and the runs of one scope go one at a time
+// (KubernetesExecutor.exclusive). Any other claim on a server is the run's own, as the
+// runs of a caller share their namespace. 63 characters at most, a pod's volume name.
 export function getClaimName(
   work: WorkItem<WorkService | WorkTask>,
-  kubernetes?: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
 ) {
-  const scope = kubernetes?.server?.volumeScope
-  const name = 'hammerkit-' + work.id()
-  return scope && isTask(work) ? `${name}-${createHash('sha256').update(scope).digest('hex').slice(0, 12)}` : name
+  const scope = kubernetes.server?.volumeScope
+  if (scope && isTask(work)) {
+    return `hammerkit-${work.id()}-${createHash('sha256').update(scope).digest('hex').slice(0, 12)}`
+  }
+  return 'hammerkit-' + getItemKey(work, kubernetes)
 }
 
 // whether the claim of the work item stays after the run
@@ -206,18 +211,21 @@ export async function expireKeptClaims(
   }
 }
 
-// While no run of the caller is in the namespace: the kept claims that expired, and those
-// a run left without an expiry because the server stopped before its end (all of them
-// when the server keeps none any more). The names of those removed, and when the next of
-// the others expires.
+// The kept claims that expired, and those a run left without an expiry because the server
+// stopped before its end (all of them when the server keeps none any more), but those of
+// the scopes `inUse`: a run of the scope executes and mounts them, or may in a moment.
+// The names of those removed, and when the next of the others expires.
 export async function sweepKeptClaims(
   instance: KubernetesInstance,
   namespace: string,
-  options: { now: Date; keep: boolean; timeout: number }
+  options: { now: Date; keep: boolean; timeout: number; inUse?: Set<string> }
 ): Promise<{ removed: string[]; next: Date | null }> {
   const expired: V1PersistentVolumeClaim[] = []
   let next: number | null = null
   for (const claim of await listKeptClaims(instance, namespace)) {
+    if (options.inUse?.has(claim.metadata?.labels?.[VOLUME_SCOPE_LABEL] ?? '')) {
+      continue
+    }
     const expires = Date.parse(claim.metadata?.annotations?.[EXPIRES_ANNOTATION] ?? '')
     if (!options.keep || !(expires > options.now.getTime())) {
       expired.push(claim)
@@ -231,7 +239,9 @@ export async function sweepKeptClaims(
 
 // When a run needs room under the quota of its namespace: the kept claims it does not use
 // go, those of the other sources and those of its own a task of this run did not take (one
-// renamed or changed since). The names of those removed.
+// renamed or changed since). Of another scope, only one its last run released, which has an
+// expiry: one without is mounted by a run of the caller that executes now (or was left by
+// a server that stopped, which the next sweep removes). The names of those removed.
 export async function evictKeptClaims(
   instance: KubernetesInstance,
   kubernetes: WorkKubernetesEnvironment,
@@ -246,5 +256,10 @@ export async function evictKeptClaims(
     kubernetes.namespace,
     `${VOLUME_SCOPE_LABEL},${KEPT_BY_LABEL}!=${getRunLabelValue(server.run)}`
   )
-  return removeClaims(instance, kubernetes.namespace, unused, timeout)
+  const released = unused.filter(
+    (claim) =>
+      claim.metadata?.labels?.[VOLUME_SCOPE_LABEL] === server.volumeScope ||
+      !!claim.metadata?.annotations?.[EXPIRES_ANNOTATION]
+  )
+  return removeClaims(instance, kubernetes.namespace, released, timeout)
 }

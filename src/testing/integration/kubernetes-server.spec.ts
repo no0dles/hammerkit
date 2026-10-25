@@ -436,7 +436,15 @@ describe('kubernetes backend of a server', () => {
   async function execute(
     id: string,
     hash: string,
-    options: { owner?: typeof alice; tasks?: string[]; accounts?: string[]; signal?: AbortSignal } = {}
+    options: {
+      owner?: typeof alice
+      tasks?: string[]
+      accounts?: string[]
+      signal?: AbortSignal
+      // a branch of its own and its commit, in place of main
+      branch?: { ref: string; commit: string }
+      onEvent?: (event: RunEventData) => void
+    } = {}
   ) {
     const run: Run = {
       id,
@@ -446,12 +454,18 @@ describe('kubernetes backend of a server', () => {
       definition: hash,
       tasks: options.tasks ?? ['check'],
       accounts: options.accounts ?? ['ci'],
-      source: { type: 'ref', repo: REPO, ref: 'main', commit },
+      source: { type: 'ref', repo: REPO, ref: 'main', commit, ...options.branch },
       options: {},
     }
     const events: RunEventData[] = []
     const error = await executor
-      .execute(run, { emit: (e) => events.push(e), signal: options.signal ?? new AbortController().signal })
+      .execute(run, {
+        emit: (e) => {
+          events.push(e)
+          options.onEvent?.(e)
+        },
+        signal: options.signal ?? new AbortController().signal,
+      })
       .then(
         () => undefined,
         (e: Error) => e
@@ -694,6 +708,130 @@ tasks:
       expect(await left('run_k8s_cancel')).toEqual([])
       expect(Date.now() - cancelled).toBeLessThan(30_000)
     })
+  )
+
+  it(
+    'runs two runs of one caller side by side, each with a service of its own that stays limited after the other ended',
+    requiresKubernetes(async () => {
+      // the same task and service, in two runs of alice at once: two sandboxes of a
+      // repository running the same command. How long the task holds comes from the
+      // checkout, a branch of the repository each, which leaves the ids of the task and the
+      // service as they are.
+      const repository = join(root, 'repository')
+      const checkout = (hold: number) => {
+        const ref = `hold-${hold}`
+        git(repository, 'checkout', '--quiet', '-b', ref, 'main')
+        writeFileSync(join(repository, 'hold.txt'), `${hold}`)
+        git(repository, 'add', '.')
+        git(repository, 'commit', '--quiet', '-m', `hold ${hold}`)
+        const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim()
+        git(repository, 'checkout', '--quiet', 'main')
+        return { ref, commit }
+      }
+      const short = checkout(35)
+      const long = checkout(90)
+      const hash = await publish(`
+services:
+  db:
+    image: busybox:1.36
+    shell: sh
+    network: none
+    # serves the address of its pod (its hostname is the service's), and notes when it
+    # reached the address a limited pod must not reach
+    cmd: >-
+      mkdir -p /www && hostname -i > /www/index.html &&
+      (while true; do wget -q -T 2 -O /dev/null http://${reachable}:8080/ && date +%s > /www/leak.txt; sleep 1; done &) &&
+      httpd -f -p 8080 -h /www
+    ports: [8080]
+    healthcheck:
+      cmd: wget -q -O /dev/null http://127.0.0.1:8080/
+tasks:
+  use:
+    image: alpine:3.19
+    src: [hold.txt]
+    needs: [db]
+    network: none
+    cmds:
+      # one command, so one pod: by the end the other run may have ended
+      - >-
+        for i in $(seq 10); do echo "served-by=$(wget -q -T 5 -O - http://db:8080/)"; done;
+        start=$(date +%s); sleep $(cat hold.txt);
+        last=$(wget -q -T 5 -O - http://db:8080/leak.txt || echo 0);
+        echo "last-leak=$last start=$start"; test "$last" -lt "$start" && echo contained-ok
+`)
+      const [first, second] = ['run_k8s_side_1', 'run_k8s_side_2']
+      const key = (run: string) => getRunLabelValue(run).substring(0, 8)
+      const at: { [event: string]: number } = {}
+      const note = (run: string) => (event: RunEventData) => {
+        if (event.type === 'task' && event.task === 'use') {
+          at[`${run} ${event.state}`] ??= Date.now()
+        }
+      }
+      const one = execute(first, hash, { tasks: ['use'], accounts: [], branch: short, onEvent: note(first) })
+      await until(async () => !!at[`${first} running`], 180_000, 'use of the first run did not start')
+      let secondEnded = false
+      const two = execute(second, hash, { tasks: ['use'], accounts: [], branch: long, onEvent: note(second) }).then(
+        (result) => {
+          secondEnded = true
+          return result
+        }
+      )
+      await until(async () => !!at[`${second} running`], 180_000, 'use of the second run did not start')
+
+      // both execute now, each with its own Deployment, Service and limits of db
+      const { apps, core, networking } = cluster()
+      const objects = async (run: string) => {
+        const selector = { namespace: callerNamespace, labelSelector: `hammerkit.dev/run=${getRunLabelValue(run)}` }
+        const names = (items: { metadata?: { name?: string } }[]) => items.map((item) => item.metadata?.name ?? '')
+        return {
+          deployments: names((await apps.listNamespacedDeployment(selector)).items),
+          services: names((await core.listNamespacedService(selector)).items),
+          policies: names((await networking.listNamespacedNetworkPolicy(selector)).items),
+          pods: (await core.listNamespacedPod(selector)).items,
+        }
+      }
+      const db = async (run: string) =>
+        (await objects(run)).pods.find(
+          (pod) => pod.metadata?.name?.startsWith('db-') && !pod.metadata.deletionTimestamp
+        )
+      const [own, others] = [await db(first), await db(second)]
+      const id = own?.metadata?.labels?.['hammerkit.dev/id']
+      expect(id).toBeDefined()
+      expect(others?.metadata?.labels?.['hammerkit.dev/id']).toBe(id)
+      const address = { [first]: own?.status?.podIP, [second]: others?.status?.podIP }
+      expect(address[first]).not.toBe(address[second])
+      for (const run of [first, second]) {
+        const made = await objects(run)
+        expect(made.deployments).toEqual([`db-${id?.substring(0, 32)}-${key(run)}`])
+        expect(made.services).toEqual([`db-${id?.substring(0, 32)}-${key(run)}`])
+        expect(made.policies).toContain(`hammerkit-network-${id?.substring(0, 32)}-${key(run)}`)
+      }
+
+      const ended = await one
+      expect(ended.error, ended.all).toBeUndefined()
+      expect(ended.text).toContain('contained-ok')
+      expect(await left(first)).toEqual([])
+      // the second still runs, its service still limited by its own policy
+      expect(secondEnded).toBe(false)
+      expect((await objects(second)).policies).toContain(`hammerkit-network-${id?.substring(0, 32)}-${key(second)}`)
+
+      const other = await two
+      expect(other.error, other.all).toBeUndefined()
+      // its db never reached the address while the first run went away
+      expect(other.text).toContain('contained-ok')
+      expect(await left(second)).toEqual([])
+      // they overlapped, and each task reached its own run's db, every time
+      expect(at[`${second} running`]).toBeLessThan(at[`${first} succeeded`])
+      for (const [run, result] of [
+        [first, ended],
+        [second, other],
+      ] as const) {
+        const served = [...result.text.matchAll(/served-by=(\S*)/g)].map((match) => match[1])
+        expect(served).toHaveLength(10)
+        expect(served, `${run} reached the db of its own run`).toEqual(Array(10).fill(address[run]))
+      }
+    }),
+    600_000
   )
 
   it(

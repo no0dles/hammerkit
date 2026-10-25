@@ -22,7 +22,7 @@ import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait, stopJob } from '../kubernetes/await-running-state'
 import { getKubernetesPersistence, getVolumeName, getWorkspacePodSpec } from '../kubernetes/volumes'
-import { getResourceName } from '../kubernetes/resources'
+import { getItemLabels, getItemSelector, getResourceName } from '../kubernetes/resources'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
 import { getErrorMessage } from '../log'
@@ -65,7 +65,7 @@ async function listJobNames(
 ): Promise<string[]> {
   const jobs = await instance.batchApi.listNamespacedJob({
     namespace: kubernetes.namespace,
-    labelSelector: `hammerkit.dev/id=${task.id()}`,
+    labelSelector: getItemSelector(task, kubernetes),
   })
   return jobs.items.flatMap((job) => (job.metadata?.name ? [job.metadata.name] : []))
 }
@@ -275,7 +275,7 @@ export function kubernetesTaskRuntime(
       }
       const server = kubernetes.server
       const { delivered, inJob } = splitJobSecrets(task.data.secrets, server)
-      const secrets = getKubernetesSecretRefs(task, delivered)
+      const secrets = getKubernetesSecretRefs(task, kubernetes, delivered)
       const admitted = environment.hosted?.accounts
       let secretHosts: string[]
       try {
@@ -303,7 +303,7 @@ export function kubernetesTaskRuntime(
           : {}),
       }
       const labels = {
-        'hammerkit.dev/id': task.id(),
+        ...getItemLabels(task, kubernetes),
         'hammerkit.dev/state': options.stateKey,
         ...workspace.labels,
         [RUN_LABEL]: scope.run,
@@ -332,7 +332,7 @@ export function kubernetesTaskRuntime(
         return
       }
       try {
-        const podName = getResourceName(task, '-job')
+        const podName = getResourceName(task, kubernetes, '-job')
         let i = 0
         for (const cmd of task.data.cmds) {
           const container = `cmd-${++i}`
@@ -464,7 +464,7 @@ export function kubernetesTaskRuntime(
     async stop(): Promise<void> {
       const jobs = await instance.batchApi.listNamespacedJob({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${task.id()}`,
+        labelSelector: getItemSelector(task, kubernetes),
       })
       for (const job of jobs.items) {
         if (job.metadata?.name) {
@@ -474,7 +474,7 @@ export function kubernetesTaskRuntime(
 
       const deployments = await instance.appsApi.listNamespacedDeployment({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${task.id()}`,
+        labelSelector: getItemSelector(task, kubernetes),
       })
       for (const deploy of deployments.items) {
         if (deploy.metadata?.name) {
@@ -487,7 +487,7 @@ export function kubernetesTaskRuntime(
 
       const pods = await instance.coreApi.listNamespacedPod({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${task.id()}`,
+        labelSelector: getItemSelector(task, kubernetes),
       })
       for (const pod of pods.items) {
         if (pod.metadata?.name) {
@@ -510,7 +510,7 @@ export function kubernetesTaskRuntime(
       }
       const jobs = await instance.batchApi.listNamespacedJob({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${task.id()}`,
+        labelSelector: getItemSelector(task, kubernetes),
       })
       const completedStates = jobs.items
         .filter((j) => j.status?.succeeded && j.metadata?.labels?.['hammerkit.dev/state'])
@@ -549,7 +549,7 @@ export function kubernetesServiceRuntime(
     async initialize(state: State<ServiceState>): Promise<void> {
       const deployments = await instance.appsApi.listNamespacedDeployment({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${service.id()}`,
+        labelSelector: getItemSelector(service, kubernetes),
       })
       const deployment = deployments.items[0]
       if (!deployment?.metadata?.name) {
@@ -576,7 +576,7 @@ export function kubernetesServiceRuntime(
     async stop(): Promise<void> {
       const deployments = await instance.appsApi.listNamespacedDeployment({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${service.id()}`,
+        labelSelector: getItemSelector(service, kubernetes),
       })
       for (const deployment of deployments.items) {
         if (deployment.metadata?.name) {
@@ -596,18 +596,22 @@ export function kubernetesServiceRuntime(
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence)
       await ensureKubernetesSecret(instance, kubernetes, service, service.data.secrets, environment)
-      const network = await ensureKubernetesItemNetwork(instance, kubernetes, service, { followLog: false, run: null })
+      // on a server, the run's: its runs share the namespace, and the service goes with the run
+      const network = await ensureKubernetesItemNetwork(instance, kubernetes, service, {
+        followLog: false,
+        run: kubernetes.server ? getRunLabelValue(kubernetes.server.run) : null,
+      })
       await ensureKubernetesDeploymentExists(
         instance,
         kubernetes,
         service,
         persistence,
-        getKubernetesSecretRefs(service, service.data.secrets),
+        getKubernetesSecretRefs(service, kubernetes, service.data.secrets),
         options.stateKey,
         network
       )
 
-      const name = getResourceName(service)
+      const name = getResourceName(service, kubernetes)
       options.state.set({
         type: 'running',
         dns: { containerId: name },
@@ -640,7 +644,7 @@ export function kubernetesServiceRuntime(
 
       const services = await instance.coreApi.listNamespacedService({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${service.id()}`,
+        labelSelector: getItemSelector(service, kubernetes),
       })
       for (const service of services.items) {
         if (service.metadata?.name) {
@@ -658,7 +662,7 @@ export function kubernetesServiceRuntime(
     async currentStateKey(): Promise<string | null> {
       const deployments = await instance.appsApi.listNamespacedDeployment({
         namespace: kubernetes.namespace,
-        labelSelector: `hammerkit.dev/id=${service.id()}`,
+        labelSelector: getItemSelector(service, kubernetes),
       })
       const deployment = deployments.items[0]
       return deployment?.metadata?.labels?.['hammerkit.dev/state'] ?? null

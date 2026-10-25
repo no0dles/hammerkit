@@ -4,9 +4,8 @@ import { WorkService } from '../planner/work-service'
 import { V1Service } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
-import { getResourceName } from './resources'
+import { getItemLabels, getResourceName } from './resources'
 import { getVersion } from '../version'
-import { getRunLabels } from './job-placement'
 
 // A service without ports gets a headless Service: a ClusterIP one needs a port,
 // and its tasks reach every port of the pod, as on docker.
@@ -15,7 +14,7 @@ export async function ensureKubernetesServiceExists(
   env: WorkKubernetesEnvironment,
   service: WorkItem<WorkService>
 ) {
-  const name = getResourceName(service)
+  const name = getResourceName(service, env)
   const headless = service.data.ports.length === 0
 
   const svc: V1Service & KubernetesObjectHeader = {
@@ -27,17 +26,13 @@ export async function ensureKubernetesServiceExists(
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
-      labels: {
-        'hammerkit.dev/id': service.id(),
-        ...getRunLabels(env),
-      },
+      labels: getItemLabels(service, env),
     },
     spec: {
       type: 'ClusterIP',
       ...(headless ? { clusterIP: 'None' } : {}),
-      selector: {
-        'hammerkit.dev/id': service.id(),
-      },
+      // the pods of the service of this run, on a server where runs share the namespace
+      selector: getItemLabels(service, env),
       ...(headless
         ? {}
         : {
