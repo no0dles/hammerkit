@@ -207,6 +207,7 @@ export class EndpointGateway {
       return refuse(401, 'Unauthorized')
     }
     if (!this.mayOpen(principal, found.run)) {
+      this.options.log(`deny endpoint ${label} iss=${principal.iss} sub=${principal.sub}`)
       return refuse(403, 'Forbidden')
     }
     const target = found.target

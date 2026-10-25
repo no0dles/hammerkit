@@ -327,5 +327,10 @@ describe('EndpointGateway', () => {
     const echoed = await upgrade(`hammerkit-authorization: Bearer ${token('alice')}\r\n`)
     expect(echoed).toMatch(/^HTTP\/1.1 101/)
     expect(echoed).toContain('ping')
+    // a browser's WebSocket carries the cookie of the sign-in
+    issuer.sent.sub = 'reviewer'
+    const { callback } = await signIn()
+    const { cookie } = await takeCookie(callback.headers.location as string)
+    expect(await upgrade(`cookie: ${cookie}\r\norigin: http://${host}.${DOMAIN}\r\n`)).toMatch(/^HTTP\/1.1 101/)
   })
 })
