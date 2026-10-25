@@ -4,6 +4,7 @@ import {
   buildRunnerPod,
   canUseRunner,
   getCleanUp,
+  getRunnerMounts,
   getScratchDirectories,
   getWrapper,
   executeInRunner,
@@ -74,7 +75,7 @@ function shell(patch: object = {}): any {
       image: 'node:24-alpine',
       shell: 'sh',
       envs: { variables: { CI: 'true' }, replacements: [] },
-      cmds: [{ cmd: 'npm test', cwd: '/build' }],
+      cmds: [{ cmd: 'npm test', cwd: '/runs/run_1' }],
       secrets: [],
       generates: [],
       network: { type: 'allow', hosts: ['registry.npmjs.org'] },
@@ -90,8 +91,8 @@ const persistence = (patch: Partial<KubernetesPersistence> = {}): KubernetesPers
   workspace: [{ name: 'hammerkit-sandbox', persistentVolumeClaim: { claimName: 'hammerkit-sandbox-abc' } }],
   mounts: [
     {
-      mount: { name: 'hammerkit-sandbox', mountPath: '/build', subPath: 'files' },
-      cwd: '/build',
+      mount: { name: 'hammerkit-sandbox', mountPath: '/runs/run_1', subPath: 'files' },
+      cwd: '/runs/run_1',
       uploadPath: '',
       workspace: true,
     },
@@ -143,6 +144,20 @@ describe('the runner of a sandbox', () => {
     const otherPod = environment()
     otherPod.server!.workspace!.pod = { ...files, uid: 'files-2' }
     expect(getRunnerKey(shell(), otherPod, persistence())).not.toBe(key)
+    // the next run has the sandbox in a directory of its own: the same runner
+    const nextRun = environment()
+    nextRun.server!.workspace!.root = '/runs/run_2'
+    const nextMounts = persistence({
+      mounts: [
+        {
+          mount: { name: 'hammerkit-sandbox', mountPath: '/runs/run_2', subPath: 'files' },
+          cwd: '/runs/run_2',
+          uploadPath: '',
+          workspace: true,
+        },
+      ],
+    })
+    expect(getRunnerKey(shell({ cmds: [{ cmd: 'npm test', cwd: '/runs/run_2' }] }), nextRun, nextMounts)).toBe(key)
   })
 
   it('is the pod of the task as its Job would have it, owned by the pod of the files', () => {
@@ -191,7 +206,8 @@ describe('the runner of a sandbox', () => {
       image: 'node:24-alpine',
       // nothing of the image: a command may replace its sh and sleep
       command: ['/.hammerkit/busybox', 'sh', '-c', expect.stringContaining('/.hammerkit/busybox sleep')],
-      workingDir: '/build',
+      // the run's directory links there
+      workingDir: '/.hammerkit-sandbox',
       env: [
         { name: 'CI', value: 'true' },
         { name: 'HTTP_PROXY', value: 'http://hammerkit-proxy:3128' },
@@ -199,7 +215,7 @@ describe('the runner of a sandbox', () => {
       securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['NET_RAW'] } },
     })
     expect(container.volumeMounts).toEqual([
-      { name: 'hammerkit-sandbox', mountPath: '/build', subPath: 'files' },
+      { name: 'hammerkit-sandbox', mountPath: '/.hammerkit-sandbox', subPath: 'files' },
       { name: 'hammerkit-runner-tmp', mountPath: '/tmp' },
       { name: 'hammerkit-runner-tools', mountPath: '/.hammerkit', readOnly: true },
     ])
@@ -211,17 +227,19 @@ describe('the runner of a sandbox', () => {
   })
 
   it('leaves a scratch directory alone that holds a mount of the task, or is in one', () => {
-    const at = (mountPath: string) => ({
-      mount: { name: 'hammerkit-sandbox', mountPath },
-      cwd: mountPath,
-      uploadPath: '',
-    })
-    expect(getScratchDirectories({ mounts: [at('/build')] })).toEqual(['/tmp', '/dev/shm'])
-    // a server that keeps its runs below /tmp: the files of the sandbox are there
-    expect(getScratchDirectories({ mounts: [at('/tmp/hammerkit-1/run/sandbox/src')] })).toEqual(['/dev/shm'])
-    expect(getScratchDirectories({ mounts: [at('/tmp')] })).toEqual(['/dev/shm'])
-    expect(getScratchDirectories({ mounts: [at('/dev')] })).toEqual(['/tmp'])
-    expect(getScratchDirectories({ mounts: [at('/tmpfiles')] })).toEqual(['/tmp', '/dev/shm'])
+    const at = (mountPath: string) => ({ name: 'hammerkit-sandbox', mountPath })
+    expect(getScratchDirectories([at('/build')])).toEqual(['/tmp', '/dev/shm'])
+    expect(getScratchDirectories([at('/tmp/hammerkit-1/run/sandbox/src')])).toEqual(['/dev/shm'])
+    expect(getScratchDirectories([at('/tmp')])).toEqual(['/dev/shm'])
+    expect(getScratchDirectories([at('/dev')])).toEqual(['/tmp'])
+    expect(getScratchDirectories([at('/tmpfiles')])).toEqual(['/tmp', '/dev/shm'])
+    // the runner has the files at a path of its own, not where the server keeps its runs
+    expect(
+      getRunnerMounts(
+        { root: '/tmp/hammerkit-1/run/sandbox' },
+        { mounts: [{ mount: at('/tmp/hammerkit-1/run/sandbox/src'), cwd: '', uploadPath: '' }] }
+      )
+    ).toEqual([at('/.hammerkit-sandbox/src')])
     expect(getCleanUp([])).not.toContain('rm')
     expect(getCleanUp(['/dev/shm'])).not.toContain('/tmp')
   })
@@ -390,8 +408,8 @@ describe('the runner of a sandbox', () => {
       }))
       const task = shell({
         cmds: [
-          { cmd: 'false', cwd: '/build' },
-          { cmd: 'echo never', cwd: '/build' },
+          { cmd: 'false', cwd: '/runs/run_1' },
+          { cmd: 'echo never', cwd: '/runs/run_1' },
         ],
       })
       expect(await executeInRunner(instance, task, environment(), persistence(), new AbortController().signal)).toEqual(
@@ -458,7 +476,7 @@ describe('the runner of a sandbox', () => {
       // another task of the run is in it
       const busy = executeInRunner(
         instance,
-        shell({ cmds: [{ cmd: 'slow', cwd: '/build' }] }),
+        shell({ cmds: [{ cmd: 'slow', cwd: '/runs/run_1' }] }),
         env,
         persistence(),
         abort.signal

@@ -98,8 +98,8 @@ tasks:
     cmds:
       - echo "host=$(hostname)"
       - sleep 300 > /dev/null 2>&1 &
-      # the files of the sandbox are below /tmp when the server's root (a temporary
-      # directory) is: the runner then leaves /tmp alone and empties /dev/shm only
+      # the server's root is a temporary directory, so the run's directory of the sandbox is
+      # below /tmp too: in the runner a link to the files, which the cleanup of /tmp leaves
       - echo left > /dev/shm/mark && echo left > /tmp/mark && echo kept > /root/kept
   look:
     image: alpine:3.19
@@ -108,7 +108,8 @@ tasks:
       - echo "host=$(hostname)"
       - echo "sleeping=$(ps -o args | grep -c '[s]leep 300')"
       - test -e /dev/shm/mark || echo shm-empty
-      - test -e /tmp/mark && echo tmp-kept || echo tmp-empty
+      - test -e /tmp/mark || echo tmp-empty
+      - echo "files=$(cat src/app.ts | grep -c answer)"
       - echo "root=$(cat /root/kept)"
       - test -e /dev/shm/cancelled || echo cancel-cleaned
   fail:
@@ -401,7 +402,8 @@ describe('sandboxes on a kubernetes backend', () => {
       expect([...hosts(left.text), ...hosts(looked.text)]).toEqual(Array(2).fill(runner?.metadata?.name))
       expect(looked.text).toContain('sleeping=0')
       expect(looked.text).toContain('shm-empty')
-      expect(looked.text).toContain(root.startsWith('/tmp/') ? 'tmp-kept' : 'tmp-empty')
+      expect(looked.text).toContain('tmp-empty')
+      expect(looked.text).toContain('files=1')
       expect(looked.text).toContain('root=kept')
       // a command's exit code is the task's
       const failed = await execute('run_sbx_fail', 'fail')

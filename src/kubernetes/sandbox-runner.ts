@@ -1,8 +1,9 @@
 import { createHash } from 'crypto'
+import { posix, relative, sep } from 'path'
 import { StringDecoder } from 'string_decoder'
 import { Writable } from 'stream'
 import { finished } from 'stream/promises'
-import { V1EnvVar, V1OwnerReference, V1Pod, V1Status } from '@kubernetes/client-node'
+import { V1EnvVar, V1OwnerReference, V1Pod, V1Status, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkTask } from '../planner/work-task'
@@ -72,13 +73,30 @@ const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 export const IDLE_COMMAND = [BUSYBOX, 'sh', '-c', `trap "exit 0" TERM; while :; do ${BUSYBOX} sleep 3600 & wait; done`]
 
 const SCRATCH_DIRECTORIES = ['/tmp', '/dev/shm']
+// Where the runner mounts the sandbox's files. A run has them in a directory of its own (the
+// server's directory of the run), which every command links here first: the pod and its key
+// stay the same from one run to the next.
+export const RUNNER_SANDBOX_PATH = '/.hammerkit-sandbox'
+
+// The mounts of the task, from the directory of the run to the runner's
+export function getRunnerMounts(
+  workspace: Pick<WorkKubernetesWorkspace, 'root'>,
+  persistence: Pick<KubernetesPersistence, 'mounts'>
+): V1VolumeMount[] {
+  return persistence.mounts.map(({ mount }) => ({ ...mount, mountPath: toRunnerPath(workspace, mount.mountPath) }))
+}
+
+function toRunnerPath(workspace: Pick<WorkKubernetesWorkspace, 'root'>, path: string): string {
+  const rel = relative(workspace.root, path)
+  return rel === '' ? RUNNER_SANDBOX_PATH : posix.join(RUNNER_SANDBOX_PATH, ...rel.split(sep))
+}
 
 // The scratch directories the runner empties: not one that holds a mount of the task, or is
 // in one, such as the sandbox's files when the server keeps its runs below /tmp
-export function getScratchDirectories(persistence: Pick<KubernetesPersistence, 'mounts'>): string[] {
+export function getScratchDirectories(mounts: Pick<V1VolumeMount, 'mountPath'>[]): string[] {
   const within = (path: string, directory: string) => path === directory || path.startsWith(`${directory}/`)
   return SCRATCH_DIRECTORIES.filter((directory) =>
-    persistence.mounts.every(({ mount }) => !within(mount.mountPath, directory) && !within(directory, mount.mountPath))
+    mounts.every((mount) => !within(mount.mountPath, directory) && !within(directory, mount.mountPath))
   )
 }
 
@@ -93,10 +111,20 @@ export function getCleanUp(directories: string[]): string {
   ].join('\n')
 }
 
-// Runs `"$@"` in the directory `$1`, alone in the container: what an earlier command left
-// is cleaned up before, what this one left after. Its exit code is the command's.
+// Runs `"$@"` in the directory `$2`, alone in the container: what an earlier command left
+// is cleaned up before, what this one left after. The directory of the run `$1` is a link
+// to the sandbox's files first. Its exit code is the command's.
 export function getWrapper(cleanUp: string): string {
-  return [cleanUp, 'cd "$1" || exit 126', 'shift', '"$@"', 'code=$?', cleanUp, 'exit $code'].join('\n')
+  return [
+    cleanUp,
+    `${BUSYBOX} mkdir -p "$(${BUSYBOX} dirname "$1")" && ${BUSYBOX} ln -sfn ${RUNNER_SANDBOX_PATH} "$1" || exit 126`,
+    'cd "$2" || exit 126',
+    'shift 2',
+    '"$@"',
+    'code=$?',
+    cleanUp,
+    'exit $code',
+  ].join('\n')
 }
 
 // the sandboxes whose runner a task of this process uses: one command at a time each, the
@@ -118,6 +146,7 @@ export function canUseRunner(
     !!workspace.pod &&
     persistence.workspace.length > 0 &&
     persistence.volumes.length === 0 &&
+    persistence.mounts.every((mount) => mount.workspace) &&
     task.needs.length === 0 &&
     task.data.secrets.length === 0 &&
     task.data.generates.length === 0
@@ -141,7 +170,7 @@ export function getRunnerKey(
         envs: getEnvironmentVariables(task.data.envs),
         resources: getKubernetesResources(task.data.resources),
         network: getEffectiveNetwork(task.data),
-        mounts: persistence.mounts.map((m) => m.mount),
+        mounts: getRunnerMounts(workspace, persistence),
         placement: getPodPlacement(server, task.data.pool),
         security: getContainerSecurity(kubernetes),
         version: getVersion(),
@@ -215,10 +244,10 @@ export function buildRunnerPod(options: {
           name: RUNNER_CONTAINER,
           image: task.data.image,
           command: IDLE_COMMAND,
-          workingDir: task.data.cmds[0]?.cwd,
+          workingDir: RUNNER_SANDBOX_PATH,
           env: [...Object.entries(envs).map<V1EnvVar>(([name, value]) => ({ name, value })), ...network.env],
           volumeMounts: [
-            ...persistence.mounts.map((m) => m.mount),
+            ...getRunnerMounts(workspace, persistence),
             { name: TMP_VOLUME, mountPath: '/tmp' },
             // not even root in the container writes it: it has no capability to remount
             { name: TOOLS_VOLUME, mountPath: TOOLS_PATH, readOnly: true },
@@ -327,13 +356,14 @@ export async function executeInRunner(
       } else {
         task.status.write('debug', `runs in the runner ${name} of the sandbox`)
       }
-      const cleanUp = getCleanUp(getScratchDirectories(persistence))
+      const cleanUp = getCleanUp(getScratchDirectories(getRunnerMounts(workspace, persistence)))
       for (const cmd of task.data.cmds) {
         task.status.write('debug', `execute ${cmd.cmd} in the runner of the sandbox`)
         const exitCode = await execInRunner(
           instance,
           kubernetes.namespace,
           name,
+          workspace.root,
           cmd.cwd,
           [task.data.shell, '-c', cmd.cmd],
           cleanUp,
@@ -531,6 +561,8 @@ async function execInRunner(
   instance: KubernetesInstance,
   namespace: string,
   pod: string,
+  // the directory of the run's sandbox, and the command's in it
+  root: string,
   cwd: string,
   command: string[],
   cleanUp: string,
@@ -574,7 +606,7 @@ async function execInRunner(
     namespace,
     pod,
     RUNNER_CONTAINER,
-    [BUSYBOX, 'sh', '-c', getWrapper(cleanUp), 'hammerkit', cwd, ...command],
+    [BUSYBOX, 'sh', '-c', getWrapper(cleanUp), 'hammerkit', root, cwd, ...command],
     stdout,
     stderr,
     null,
