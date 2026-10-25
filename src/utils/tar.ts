@@ -16,14 +16,14 @@ export function packArchive(
   return create({ ...options, jobs: 1, linkCache: new ExactLinkCache() }, files)
 }
 
+// node-tar's key of a link cache, `dev:ino`
+type LinkCacheKey = `${number}:${number}`
+
 // node-tar packs a file with more than one link as a link to the first file it packed with
 // the same `dev:ino`. On Windows a file id has 64 bits, and Node gives it as a number, so
 // ids above 2^53 are rounded and files of two link groups can get the same one. Packed as
 // a link, a file would be restored with the other file's content. This cache leaves out the
 // ids that may be rounded, so those files are packed in full.
-// node-tar's key of a link cache, `dev:ino`
-type LinkCacheKey = `${number}:${number}`
-
 class ExactLinkCache extends Map<LinkCacheKey, string> {
   get(key: LinkCacheKey): string | undefined {
     return isExact(key) ? super.get(key) : undefined
