@@ -743,6 +743,12 @@ export async function getProgram(
       )
       .addOption(
         new Option(
+          '--max-timeout <duration>',
+          'fail any task after this long, also one with a longer timeout of its own (e.g. 2m)'
+        ).argParser(parseDuration)
+      )
+      .addOption(
+        new Option(
           '--network <level>',
           'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
         ).argParser(parseNetworkArgument)
@@ -764,6 +770,7 @@ export async function getProgram(
             wait: options.wait,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            maxTimeout: options.maxTimeout ?? null,
             network: options.network ?? null,
           })
 
@@ -855,6 +862,12 @@ export async function getProgram(
       )
       .addOption(
         new Option(
+          '--max-timeout <duration>',
+          'fail any task after this long, also one with a longer timeout of its own (e.g. 2m)'
+        ).argParser(parseDuration)
+      )
+      .addOption(
+        new Option(
           '--network <level>',
           'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
         ).argParser(parseNetworkArgument)
@@ -898,6 +911,7 @@ export async function getProgram(
             explain: options.explain,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            maxTimeout: options.maxTimeout ?? null,
             network: options.network ?? null,
             skipDeps: options.skipDeps !== false,
           })

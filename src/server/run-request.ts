@@ -45,6 +45,8 @@ export const runOptionsSchema = z
     cacheReadOnly: z.boolean().optional(),
     // as --timeout
     timeout: duration.optional(),
+    // as --max-timeout: caps every task, also one with a longer timeout of its own
+    maxTimeout: duration.optional(),
     // as --no-skip-deps when false
     skipDeps: z.boolean().optional(),
     // as the text after `--`: appended to the last command of the one task the run

@@ -57,7 +57,10 @@ there yet; a run is a `POST /v1/runs`.
   branches) are the only ones allowed, anything else is `403`.
 - `options` are the settings of `hammerkit run` that make sense on a server, all
   optional: `env`, `filter` and `exclude` (labels), `cache` (`checksum`, `modify-date` or `none`),
-  `cacheReadOnly`, `timeout` (for example `30m`) and `skipDeps`. How many tasks run in
+  `cacheReadOnly`, `timeout` (for example `30m`, for tasks without a timeout of their own),
+  `maxTimeout` (for every task, also one with a longer timeout of its own, see
+  [Capping every task](/docs/task#capping-every-task)) and `skipDeps`. A run as a whole is still
+  stopped after the server's `runs.maxDuration`. How many tasks run in
   parallel and how much of the machine they use stay with the server, and `watch` and
   the log mode are for terminals only, so they are not accepted.
 - `options.args` are [arguments](/docs/task/arguments), what `hammerkit run <task> -- ...`

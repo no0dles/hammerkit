@@ -63,7 +63,7 @@ export interface ChangedFile {
 
 export interface RunTaskOptions {
   args?: string[]
-  // how long the task may run, the server stops it then
+  // how long the task may run, the server stops it then, also when the task sets a longer timeout
   timeoutSeconds?: number
   signal?: AbortSignal
   // every line the task prints, as it comes
@@ -215,7 +215,8 @@ export class SandboxClient {
       runOptions.args = options.args
     }
     if (options.timeoutSeconds) {
-      runOptions.timeout = `${Math.max(1, Math.ceil(options.timeoutSeconds))}s`
+      // a cap: it also shortens a shell task that sets a longer timeout of its own
+      runOptions.maxTimeout = `${Math.max(1, Math.ceil(options.timeoutSeconds))}s`
     }
     const submitted = await submitRun(this.connection, {
       definition: this.build.hash,

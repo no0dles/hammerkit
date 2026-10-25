@@ -219,6 +219,7 @@ export async function runTasks(
       cacheDefault: options.cache ?? 'checksum',
       cacheReadOnly: options.cacheReadOnly ?? false,
       timeout: options.timeout ? parseDuration(options.timeout) : null,
+      maxTimeout: options.maxTimeout ? parseDuration(options.maxTimeout) : null,
       skipDeps: options.skipDeps !== false,
       network: getRunNetwork(input),
       // why a task was not taken from the cache goes into its result
