@@ -14,7 +14,8 @@ import { getWorkTaskCacheDescription } from './work-task-cache-description'
  * share the sha1 of another would pass for it.
  *
  * Like the state key it leaves out what dependencies generate and is computed before
- * anything runs, so two checkouts of the same files give the same key wherever they are.
+ * anything runs, so two checkouts of the same files give the same key wherever they are;
+ * unlike it, it also leaves out `.git`, which is no file of a commit.
  * Null for a task that can not be proven up to date (no `src` of its own, or none that
  * matches a file, here or in a dependency): its result says nothing about any files.
  */
@@ -49,7 +50,10 @@ async function computeCheckKey(
     }
     deps.push(key)
   }
+  // a commit never holds `.git`: what a checkout keeps there differs between a CI job's clone,
+  // the server's fetch and a sandbox's copy, which has none
   const files = Object.keys(stats.files)
+    .filter((path) => !path.split('/').includes('.git'))
     .sort()
     .map((path) => [path, stats.files[path].checksum])
   return createHash('sha256')

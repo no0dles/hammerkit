@@ -95,6 +95,7 @@ describe('pi extension', () => {
         'find',
         'grep',
         'push',
+        'check',
       ])
       expect(made.read).toMatchObject({ cwd: root, operations: { readFile: expect.any(Function) } })
       expect(made.bash.operations).toMatchObject({ exec: expect.any(Function) })

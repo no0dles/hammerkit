@@ -371,7 +371,8 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     let bytes = 0
     const extract = extractTar({
       cwd: into,
-      filter: (_path, entry) => 'type' in entry && ['File', 'OldFile', 'Directory', 'SymbolicLink'].includes(entry.type),
+      filter: (_path, entry) =>
+        'type' in entry && ['File', 'OldFile', 'Directory', 'SymbolicLink'].includes(entry.type),
     })
     const counted = new PassThrough()
     counted.on('data', (chunk: Buffer) => {
@@ -387,9 +388,7 @@ export class KubernetesSandboxStorage implements SandboxStorage {
     })
     extracted.catch(() => undefined)
     counted.pipe(extract)
-    const answer = await this.exclusive(key.id, () =>
-      this.call(key, { op: 'archive', id: key.id, tree }, signal, true)
-    )
+    const answer = await this.exclusive(key.id, () => this.call(key, { op: 'archive', id: key.id, tree }, signal, true))
     if ('stream' in answer) {
       await finished(answer.stream.pipe(counted))
     } else {

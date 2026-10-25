@@ -445,9 +445,7 @@ async function submitRun(
         run.source.type
       }${run.source.type === 'sandbox' ? ` sandbox=${run.source.id}${run.source.check ? ' check' : ''}` : ''} tasks=${
         run.tasks.length
-      }${
-        approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''
-      }`
+      }${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
     )
     send(res, 202, toRunResponse(run))
   } catch (e) {

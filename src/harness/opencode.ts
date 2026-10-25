@@ -6,7 +6,7 @@ import { pathToFileURL } from 'url'
 import { Environment } from '../executer/environment'
 import { connectSandbox, getHarnessEnvironment, HarnessOptions, harnessOptionsFromEnv } from './connect'
 import { capOutput, formatTree, toColonNumbers } from './format'
-import { oneAtATime, SandboxClient, toSandboxPath } from './sandbox-client'
+import { CHECK_DESCRIPTION, oneAtATime, runCheck, SandboxClient, toSandboxPath } from './sandbox-client'
 
 // What opencode passes a tool (`ToolContext` of `@opencode-ai/plugin`), the parts used here.
 export interface OpencodeToolContext {
@@ -74,7 +74,7 @@ function lazySandbox(directory: string, settings: OpencodePluginOptions): () => 
 }
 
 // the names of the tools of the plugin, which stand in for opencode's own
-export const OPENCODE_TOOLS = ['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob', 'push', 'list']
+export const OPENCODE_TOOLS = ['read', 'write', 'edit', 'apply_patch', 'bash', 'grep', 'glob', 'push', 'check', 'list']
 
 /**
  * The plugin as the file `harness/opencode.ts` exports it: it takes the zod of opencode from
@@ -189,7 +189,7 @@ export interface OpencodeV2Plugin {
 }
 
 // the names of the tools of the plugin on opencode 2, which stand in for its own
-export const OPENCODE_V2_TOOLS = ['read', 'write', 'edit', 'patch', 'shell', 'glob', 'grep', 'push']
+export const OPENCODE_V2_TOOLS = ['read', 'write', 'edit', 'patch', 'shell', 'glob', 'grep', 'push', 'check']
 
 // the tools of opencode 2 that work on this machine and have no stand-in on a sandbox
 export const OPENCODE_V2_LOCAL_TOOLS = [
@@ -365,6 +365,7 @@ export function createOpencodeV2Tools(client: () => Promise<SandboxClient>, dire
       ),
       same
     ),
+    tool('check', 'check', object({ task: text('The name of the task') }, ['task']), same),
   ]
 }
 
@@ -614,6 +615,15 @@ function opencodeTools(client: () => Promise<SandboxClient>): { [name: string]: 
       async execute(args: { branch: string; message: string }) {
         const pushed = await (await client()).push(args.branch, args.message)
         return { title: `pushed to ${pushed.branch}`, output: `pushed ${pushed.commit} to ${pushed.branch}` }
+      },
+    },
+
+    check: {
+      description: CHECK_DESCRIPTION,
+      args: (z) => ({ task: z.string().describe('The name of the task') }),
+      async execute(args: { task: string }, context) {
+        const output = await runCheck(await client(), args.task, context?.abort)
+        return { title: `check ${args.task}`, output }
       },
     },
 

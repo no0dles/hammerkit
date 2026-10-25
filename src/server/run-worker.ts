@@ -23,7 +23,7 @@ import { getRunScopes } from './run-plan'
 import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { RunEventData, TaskStatus } from './runs'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { getCheckKey } from '../optimizer/check-key'
+import { getCheckKeys } from '../optimizer/check-keys'
 
 // one log line of a task is cut here, the registry caps how many events a run keeps
 const MAX_LOG_TEXT = 8 * 1024
@@ -162,9 +162,9 @@ export async function runTasks(
       }
       if (input.check) {
         // the files as they are before any task of the scope wrote to them
-        const memo = new Map<string, Promise<string | null>>()
-        for (const task of iterateWorkTasks(workTree)) {
-          emit({ type: 'key', task: task.name, key: await getCheckKey(task, environment, memo) })
+        const keys = await getCheckKeys(input.entry, environment, scope)
+        for (const [task, { key }] of Object.entries(keys)) {
+          emit({ type: 'key', task, key })
         }
       }
       const execution = cli.exec({ ...execOptions, workers: cli.defaultWorkers() })

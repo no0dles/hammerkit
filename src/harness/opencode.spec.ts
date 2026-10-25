@@ -32,6 +32,7 @@ describe('opencode tools on a sandbox', () => {
         'grep',
         'glob',
         'push',
+        'check',
         'list',
       ])
       expect(OPENCODE_TOOLS).toEqual(Object.keys(tools))

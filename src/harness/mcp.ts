@@ -1,7 +1,7 @@
 import { createInterface } from 'readline'
 import { Readable, Writable } from 'stream'
 import { capOutput, formatSearch, formatTree } from './format'
-import { oneAtATime, SandboxClient } from './sandbox-client'
+import { CHECK_DESCRIPTION, oneAtATime, runCheck, SandboxClient } from './sandbox-client'
 import type { TaskRun } from './sandbox-client'
 
 // the newest first; a client asking for an older one gets it
@@ -264,6 +264,19 @@ export function createMcpTools(client: () => Promise<SandboxClient>): McpTool[] 
       async call(args, signal) {
         const ran = await (await client()).runTask(args.task, { args: args.args, signal })
         return describeRun(args.task, ran)
+      },
+    },
+    {
+      name: 'check',
+      description: CHECK_DESCRIPTION,
+      inputSchema: {
+        type: 'object',
+        properties: { task: text('The name of the task') },
+        required: ['task'],
+      },
+      annotations: { title: 'Run a check' },
+      async call(args, signal) {
+        return runCheck(await client(), args.task, signal)
       },
     },
     {

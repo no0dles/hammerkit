@@ -8,7 +8,7 @@ import { createInterface } from 'readline'
 import { isWithin } from '../includes/resolve-git-source'
 import { SecretCatalog } from '../secrets/secret-catalog'
 import { DefinitionStore } from './definitions'
-import { checkoutRef } from './git-checkout'
+import { checkoutRef, git } from './git-checkout'
 import { RepoAccess } from './repo-access'
 import { Run, RunContext, RunExecutor } from './runs'
 import { PlanContext, planRun, refuseArguments } from './run-plan'
@@ -204,6 +204,9 @@ export class HostExecutor implements RunExecutor {
             }`
           )
         }
+        // a repository of its own, as a checkout of the commit is: the root of the project,
+        // which the paths of the tasks' keys are relative to, is the one of git
+        await git(['init', '--quiet', cwd], {}, abortCtrl.signal, `the check of sandbox ${source.id}`, 'init')
         context.emit({
           type: 'log',
           task: 'hammerkit',

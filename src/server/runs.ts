@@ -761,7 +761,9 @@ export class RunRegistry {
     try {
       this.options.onFinished?.(this.copy(entry.run), { ...entry.keys })
     } catch (e) {
-      this.options.log?.(`run ${entry.run.id} ended, but what it passed was not kept: ${e instanceof Error ? e.message : e}`)
+      this.options.log?.(
+        `run ${entry.run.id} ended, but what it passed was not kept: ${e instanceof Error ? e.message : e}`
+      )
     }
     this.evict()
   }

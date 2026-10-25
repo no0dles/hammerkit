@@ -11,6 +11,8 @@ import { showBundle } from './bundle-text'
 import { followRun, ServerConnection, submitRun } from '../harness/sandbox-client'
 import type { Run } from '../server/runs'
 import { dirname } from 'path'
+import { getCheckKeys } from '../optimizer/check-keys'
+import { formatDuration } from '../utils/units'
 
 export interface WorkCommandContext {
   environment: Environment
@@ -114,6 +116,40 @@ export interface PlanView {
 }
 
 const RUN_ID = /^run_[A-Za-z0-9_-]{16}$/
+
+// a task `POST /v1/checks/lookup` answers
+interface LookedUpCheck {
+  task: string
+  key: string
+  passed: {
+    task: string
+    status: 'succeeded' | 'cached'
+    run: string
+    by: { iss: string; sub: string }
+    source:
+      | { type: 'ref'; ref: string; commit: string }
+      | { type: 'sandbox'; sandbox: string; commit: string; tree: string }
+    definition: string
+    finishedAt: string
+    durationMs?: number
+  } | null
+  reason?: string
+}
+
+// how a check passed, one line
+function describePassed(passed: NonNullable<LookedUpCheck['passed']>): string {
+  const from =
+    passed.source.type === 'ref'
+      ? `${passed.source.ref} at ${passed.source.commit.slice(0, 12)}`
+      : `a check of sandbox ${passed.source.sandbox}, fetched at ${passed.source.commit.slice(0, 12)}`
+  return `passed ${passed.finishedAt}${
+    passed.status === 'cached'
+      ? ' from the cache'
+      : passed.durationMs !== undefined
+        ? ` in ${formatDuration(passed.durationMs)}`
+        : ''
+  }, ${passed.run} by ${passed.by.sub}, from ${from}`
+}
 
 // what the publisher said about where a version comes from, one line
 // What a publisher said about where a version comes from: the server takes it as said,
@@ -300,6 +336,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .addOption(new Option('--env <name>', 'the environment of the build file, as --env of run'))
     .addOption(new Option('--cache <method>', 'as --cache of run').choices(['checksum', 'modify-date', 'none']))
     .addOption(new Option('--timeout <duration>', 'stop the run after this long, such as 30m'))
+    .addOption(
+      new Option('--detach', 'submit the run and exit, without following it: for a check that CI verifies later')
+    )
     .action(
       guarded('Remote run was not successful', async (tasks: string[], options) => {
         const named: string | undefined = options.build ?? environment.processEnvs.HAMMERKIT_BUILD
@@ -349,6 +388,10 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             ref
           )}${at}\n`
         )
+        if (options.detach) {
+          environment.stdout.write(`follow it with: hammerkit remote show ${printable(submitted.id)}\n`)
+          return
+        }
         const prefixed = tasks.length > 1
         const followed = await followRun(connection, submitted, {
           signal: environment.abortCtrl.signal,
@@ -379,6 +422,70 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           .find((result) => result?.status === 'failed')
         const exitCode = failed?.exitCode && failed.exitCode > 0 ? failed.exitCode : 1
         fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, exitCode)
+      })
+    )
+
+  remote
+    .command('verify <tasks...>')
+    .description(
+      'check that the server already passed tasks for the files checked out here, without running them; ' +
+        'exits 1 at once for any it did not'
+    )
+    .addOption(new Option('--server <name>', 'the server to ask; the default of remote use when left out'))
+    .addOption(
+      new Option(
+        '--repo <host/path>',
+        'the repository, such as github.com/corp/payments; origin of the checkout here when left out'
+      )
+    )
+    .addOption(new Option('--env <name>', 'the environment of the build file, as --env of run'))
+    .action(
+      guarded('Remote verify was not successful', async (tasks: string[], options) => {
+        const repo: string | undefined = options.repo ?? (await readCheckout(dirname(buildFile))).repo
+        if (!repo) {
+          throw new Error('name the repository with --repo, the checkout here has no origin it can be told by')
+        }
+        const keys: { task: string; key: string }[] = []
+        const unkeyed: string[] = []
+        for (const task of tasks) {
+          const found = (
+            await getCheckKeys(buildFile, environment, { taskName: task, environmentName: options.env ?? null })
+          )[task]
+          if (!found) {
+            throw new Error(`the build file has no task ${printable(task)}`)
+          }
+          if (found.key === null) {
+            unkeyed.push(`${printable(task)}: can not be verified, ${printable(found.reason)}`)
+          } else {
+            keys.push({ task, key: found.key })
+          }
+        }
+        const { name: serverName, server, token } = await connect(options.server)
+        const answer =
+          keys.length > 0
+            ? await callServer<{ checks: LookedUpCheck[] }>(server, token, 'POST', '/v1/checks/lookup', { repo, keys })
+            : { body: { checks: [] as LookedUpCheck[] } }
+        const missing: string[] = []
+        for (const check of answer.body.checks) {
+          if (check.passed) {
+            environment.stdout.write(`${printable(check.task)}: ${printable(describePassed(check.passed))}\n`)
+          } else {
+            missing.push(check.task)
+            environment.stdout.write(
+              `${printable(check.task)}: no run on ${serverName} passed it for these files${
+                check.reason ? `, ${printable(check.reason)}` : ''
+              }\n`
+            )
+          }
+        }
+        for (const line of unkeyed) {
+          environment.stdout.write(`${line}\n`)
+        }
+        if (missing.length > 0 || unkeyed.length > 0) {
+          const run =
+            missing.length > 0 ? `; run on the server: hammerkit remote run ${missing.map(printable).join(' ')}` : ''
+          fail(`not verified: ${[...missing, ...unkeyed.map((line) => line.split(':')[0])].join(', ')}${run}`, 1)
+        }
       })
     )
 

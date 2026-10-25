@@ -69,6 +69,9 @@ describe('check key', () => {
       await environment.file.createDirectory(join(cwd, 'node_modules/.bin'))
       await environment.file.writeFile(join(cwd, 'node_modules/.bin/vitest'), 'exit 0\n')
       await environment.file.writeFile(join(cwd, 'README.md'), 'docs\n')
+      // what a clone keeps of git, below a src too
+      await environment.file.createDirectory(join(cwd, 'test/.git'))
+      await environment.file.writeFile(join(cwd, 'test/.git/HEAD'), 'ref: refs/heads/other\n')
     })
     expect(after).toBe(base)
   })
