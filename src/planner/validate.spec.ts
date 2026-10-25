@@ -292,6 +292,15 @@ describe('validate (generator)', () => {
     expect(result.filter((entry) => entry.message === message).map((entry) => entry.item.name)).toEqual(['db', 'serve'])
   })
 
+  it('suggests no ~ form for a $PWD that runs on into a name', async () => {
+    const mount = { localPath: '/home/me/cache', mount: '$PWDcache:/data' } as any
+    const tree = workTree({ tasks: [taskItem('serve', { type: 'container-task', mounts: [mount] } as any)] })
+    const [warning] = (await collect(validate(tree, fakeEnv([mount.localPath])))).filter((entry) =>
+      entry.message.startsWith('mount $PWD')
+    )
+    expect(warning.message).toContain('Write ~/… for the home directory')
+  })
+
   it('warns when a kubernetes service kubeconfig is missing', async () => {
     const tree = workTree({
       services: [

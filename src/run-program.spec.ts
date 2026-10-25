@@ -42,4 +42,17 @@ describe('run-program', () => {
       expect(stderr.read()).not.toContain('No tasks found')
     })
   })
+
+  it('prints the error of a command that says it itself once', async () => {
+    const testCase = createTestCase('run-program-said', { '.hammerkit.yaml': 'tasks:\n  a:\n    cmds: [echo a]\n' })
+    await testCase.setup(async (cwd, environment) => {
+      const stderr = memoryStream()
+      environment.stderr = stderr.stream
+      environment.processEnvs = { PATH: process.env.PATH }
+      await expect(runProgram(environment, ['hammerkit', 'github-app-token', 'corp/repo'], true)).rejects.toThrow(
+        'GITHUB_APP_ID is not set'
+      )
+      expect(stderr.read()).toBe('github-app-token: GITHUB_APP_ID is not set\n')
+    })
+  })
 })

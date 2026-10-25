@@ -194,8 +194,10 @@ function getPwdMountWarning(mount: WorkMount): string | null {
   if (getHomeReference(source) !== '$PWD') {
     return null
   }
+  const rest = source.substring('$PWD'.length)
+  const home = rest === '' || rest.startsWith('/') || rest.startsWith('\\') ? `~${rest}` : '~/…'
   return (
     `mount ${source} is ${mount.localPath}: $PWD in a mount is the home directory, not the project. ` +
-    `Write ~${source.substring('$PWD'.length)} for the home directory, or a relative path for the project`
+    `Write ${home} for the home directory, or a relative path for the project`
   )
 }
