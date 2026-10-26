@@ -149,6 +149,7 @@ export async function parseReferences(
   environment: Environment
 ): Promise<ReferencedContext> {
   const declaredCaches: { [name: string]: BuildFileCacheSchema } = {}
+  const unpublished: { [name: string]: string } = {}
   const reference: ReferencedContext = {
     files: {},
     tasks: {},
@@ -158,7 +159,7 @@ export async function parseReferences(
     caches: {},
     secrets: emptySecretCatalog(),
     projectRoot: await findProjectRoot(mainScope.cwd, environment),
-    unpublished: {},
+    unpublished,
   }
   // a server leaves out what is not published: it doesn't run, and isn't checked against
   // its policy. Locally everything is there.
@@ -168,11 +169,11 @@ export async function parseReferences(
       return false
     }
     if (!publishedFiles.has(file)) {
-      reference.unpublished![name] = `its build file is included with publish: false`
+      unpublished[name] = 'its build file is included with publish: false'
     } else if (schema.publish === false) {
-      reference.unpublished![name] = 'publish: false'
+      unpublished[name] = 'publish: false'
     }
-    return name in reference.unpublished!
+    return name in unpublished
   }
 
   for (const file of Object.values(ctx.files)) {
