@@ -174,6 +174,48 @@ describe('provider secrets', () => {
       )
     })
 
+    describe('in the host config', () => {
+      const hostConfig = (name: string, config: unknown) => {
+        const file = join(scratch, `${name}.yaml`)
+        writeFileSync(file, JSON.stringify(config))
+        return { ...hostEnvs, HAMMERKIT_CONFIG: file }
+      }
+
+      it('reads providers and accounts of this machine, so the build file only names its secrets', async () => {
+        const { cli } = await plan(
+          'provider-host-config',
+          { tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } } },
+          {},
+          hostConfig('host', { secretProviders: { fake: provider() }, secretAccounts: accounts })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', ref: 'a', account: 'test' })
+      })
+
+      it('takes an account of the host config for a provider of the build file', async () => {
+        const { cli } = await plan(
+          'provider-host-config-account',
+          {
+            secretProviders: { fake: provider() },
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('account', { secretAccounts: accounts })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', account: 'test' })
+      })
+
+      it('rejects a provider declared in the host config and in a build file', async () => {
+        await expect(
+          plan(
+            'provider-host-config-twice',
+            { secretProviders: { fake: provider() }, tasks: { build: { cmds: ['true'] } } },
+            {},
+            hostConfig('twice', { secretProviders: { fake: provider() } })
+          )
+        ).rejects.toThrow(/secret provider fake is declared in .*\.hammerkit\.yaml and in .*twice\.yaml/)
+      })
+    })
+
     it('shares providers and accounts from an included file, with its inputs applied', async () => {
       const { cli } = await plan(
         'provider-shared-include',

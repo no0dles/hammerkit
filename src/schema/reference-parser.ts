@@ -12,7 +12,13 @@ import { BuildFileContainerTaskSchema } from './build-file-container-task-schema
 import { BuildFileCacheSchema } from './cache-schema'
 import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
 import { findProjectRoot } from '../planner/project-root'
-import { collectSecretCatalog, emptySecretCatalog, SecretCatalog } from '../secrets/secret-catalog'
+import {
+  collectSecretCatalog,
+  emptySecretCatalog,
+  HostSecretDeclarations,
+  SecretCatalog,
+} from '../secrets/secret-catalog'
+import { getHostConfigPath, readHostConfig } from '../remote/host-config'
 
 export interface ReferencedContext {
   files: { [key: string]: ReferencedFileContext }
@@ -24,6 +30,8 @@ export interface ReferencedContext {
   secrets: SecretCatalog
   // anchor for machine-independent cache identity, see findProjectRoot
   projectRoot: string
+  // on a server: the tasks and services left out of what is published, and why
+  unpublished?: { [name: string]: string }
 }
 
 export interface ReferencedFileContext {
@@ -82,6 +90,55 @@ export interface ReferenceEnvironment {
   schema: BuildFileEnvironmentSchema
 }
 
+// The providers and accounts of the host config, see HostSecretDeclarations
+async function readHostSecrets(environment: Environment): Promise<HostSecretDeclarations> {
+  const config = await readHostConfig(environment)
+  return {
+    fileName: getHostConfigPath(environment),
+    secretProviders: config.secretProviders,
+    secretAccounts: config.secretAccounts,
+  }
+}
+
+// What a task or service names that a server left out (`publish: false`)
+class UnpublishedError extends Error {
+  constructor(
+    readonly name: string,
+    readonly reason: string
+  ) {
+    super(`${name} is not published (${reason})`)
+  }
+}
+
+// The task or service `user` names another one by, which a server left out: the error says
+// which published one still needs it, as an error elsewhere is left as it is
+function findPublished<T>(user: string, verb: string, find: () => T): T {
+  try {
+    return find()
+  } catch (e) {
+    if (e instanceof UnpublishedError) {
+      throw new Error(`${user} ${verb} ${e.name}, which is not published (${e.reason})`)
+    }
+    throw e
+  }
+}
+
+// The build files a server publishes: the entry file and what it includes or references,
+// except through an include with `publish: false`. The key of each is in ctx.files.
+function getPublishedFiles(mainScope: ParseScope): Set<ParseScope> {
+  const published = new Set<ParseScope>([mainScope])
+  const queue = [mainScope]
+  for (let scope = queue.shift(); scope; scope = queue.shift()) {
+    for (const reference of Object.values(scope.references)) {
+      if (reference.publish && !published.has(reference.scope)) {
+        published.add(reference.scope)
+        queue.push(reference.scope)
+      }
+    }
+  }
+  return published
+}
+
 function combinePath(namePrefix: string, name: string): string {
   return namePrefix.length > 0 ? `${namePrefix}:${name}` : name
 }
@@ -101,6 +158,21 @@ export async function parseReferences(
     caches: {},
     secrets: emptySecretCatalog(),
     projectRoot: await findProjectRoot(mainScope.cwd, environment),
+    unpublished: {},
+  }
+  // a server leaves out what is not published: it doesn't run, and isn't checked against
+  // its policy. Locally everything is there.
+  const publishedFiles = environment.hosted ? getPublishedFiles(mainScope) : null
+  const isLeftOut = (file: ParseScope, name: string, schema: { publish?: boolean }) => {
+    if (!publishedFiles) {
+      return false
+    }
+    if (!publishedFiles.has(file)) {
+      reference.unpublished![name] = `its build file is included with publish: false`
+    } else if (schema.publish === false) {
+      reference.unpublished![name] = 'publish: false'
+    }
+    return name in reference.unpublished!
   }
 
   for (const file of Object.values(ctx.files)) {
@@ -121,6 +193,9 @@ export async function parseReferences(
         const taskEnvs = mergeEnvironmentVariables(task.envs, buildFileEnvs)
 
         const relativeName = combinePath(file.namePrefix, taskName)
+        if (isLeftOut(file, relativeName, task)) {
+          continue
+        }
         reference.tasks[relativeName] = {
           type: 'task',
           schema: task,
@@ -155,6 +230,9 @@ export async function parseReferences(
     if (file.schema.services) {
       for (const [serviceName, service] of Object.entries(file.schema.services)) {
         const relativeName = combinePath(file.namePrefix, serviceName)
+        if (isLeftOut(file, relativeName, service)) {
+          continue
+        }
         const serviceEnvs = mergeEnvironmentVariables(
           isBuildFileKubernetesServiceSchema(service) ? {} : service.envs,
           buildFileEnvs
@@ -190,7 +268,7 @@ export async function parseReferences(
   reference.caches = withBuiltinCaches(declaredCaches)
   reference.secrets = environment.hosted
     ? { ...environment.hosted.catalog, explicitAccounts: true }
-    : collectSecretCatalog(Object.values(ctx.files), environment, reference)
+    : collectSecretCatalog(Object.values(ctx.files), environment, reference, await readHostSecrets(environment))
 
   return reference
 }
@@ -216,7 +294,8 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     return
   }
 
-  const extend = findTask(reference, task.scope, task.schema.extend, null).task
+  const name = task.schema.extend
+  const extend = findPublished(task.relativeName, 'extends', () => findTask(reference, task.scope, name, null)).task
   applySchemaExtension(reference, extend)
 
   task.schema.shell = task.schema.shell ?? extend.schema.shell
@@ -290,7 +369,9 @@ function resolveDeps(
   schema: BuildFileTaskSchema | BuildFileServiceSchema
 ) {
   for (const depName of schema.deps || []) {
-    const depTask = findTask(reference, scope, depName, null)
+    const depTask = findPublished(taskOrService.relativeName, 'depends on', () =>
+      findTask(reference, scope, depName, null)
+    )
     taskOrService.deps.push({
       task: depTask.task,
       type: depTask.type,
@@ -304,7 +385,10 @@ function resolveInit(reference: ReferencedContext, service: ReferenceService) {
   if (isBuildFileKubernetesServiceSchema(service.schema) || !service.schema.init) {
     return
   }
-  const initTask = findTask(reference, service.scope, service.schema.init, null)
+  const init = service.schema.init
+  const initTask = findPublished(service.relativeName, 'runs as init', () =>
+    findTask(reference, service.scope, init, null)
+  )
   service.init = {
     task: initTask.task,
     type: initTask.type,
@@ -329,12 +413,14 @@ function resolveNeeds(
         // the host name it is reached by: a service of an include, `services:postgres`, as
         // `services-postgres`, since Docker and DNS take no colon
         relativeName: needName.replace(/:/g, '-'),
-        service: findService(reference, scope, needName),
+        service: findPublished(taskOrService.relativeName, 'needs', () => findService(reference, scope, needName)),
       })
     } else {
       taskOrService.needs.push({
         relativeName: needName.name,
-        service: findService(reference, scope, needName.service),
+        service: findPublished(taskOrService.relativeName, 'needs', () =>
+          findService(reference, scope, needName.service)
+        ),
       })
     }
   }
@@ -373,6 +459,9 @@ function resolveTask(
 ): { task: ReferenceTask; type: ReferenceLinkType } {
   const fullName = combinePath(scope.namePrefix, name)
   const buildFileTask = ctx.tasks[fullName]
+  if (!buildFileTask && ctx.unpublished?.[fullName]) {
+    throw new UnpublishedError(fullName, ctx.unpublished[fullName])
+  }
   if (!buildFileTask) {
     throw new Error('unable to find ' + fullName)
   }
@@ -397,6 +486,9 @@ export function findService(ctx: ReferencedContext, scope: ParseScope, name: str
 function resolveService(ctx: ReferencedContext, scope: ParseScope, name: string): ReferenceService {
   const fullName = combinePath(scope.namePrefix, name)
   const service = ctx.services[fullName]
+  if (!service && ctx.unpublished?.[fullName]) {
+    throw new UnpublishedError(fullName, ctx.unpublished[fullName])
+  }
   if (!service) {
     throw new Error('unable to find ' + fullName)
   }

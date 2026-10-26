@@ -46,7 +46,7 @@ server, so they work with or without a build file in the working directory.
 | `remote login <name>` | Sign in to the server with your identity provider. |
 | `remote logout <name>` | Forget the sign-in. |
 | `remote accounts [name]` | Show who you are on the server and which service accounts you may use. Without a name, the default server. |
-| `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). |
+| `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). `--dry-run` only checks it against the server's policy. |
 | `remote run <tasks...>` | Run tasks of a published build file on a server from a git ref, print their output and exit as they did, see [Running tasks](#running-tasks). |
 | `remote up <services...>` | Start services of a published build file on a server from a git ref and keep them up, with `--endpoint service:port` at addresses of their own, see [Service runs](#service-runs). |
 | `remote extend <run> <ttl> [server]` | Keep a service run up for this long from now. |
@@ -89,6 +89,9 @@ naming a server URL could redirect your source code and OAuth tokens, so the
 decision of where to send work stays on the machine.
 
 </Callout>
+
+The same file can hold the `secretProviders` and `secretAccounts` this machine reads
+secrets with, see [On this machine only](/docs/task/secret-providers#on-this-machine-only).
 
 ## URLs
 
@@ -140,6 +143,19 @@ You need `builds: publish` on the server, see
 [entitlements](/docs/remote-compute/entitlements). A build file that reads secrets as an
 account you do not `use` is proposed instead, see below. Without a server name the default
 server is used, and `--file <path>` publishes another build file.
+
+`--dry-run` publishes nothing: the server checks the bundle against its policy and says
+what publishing it would do. Any `builds` level may check, `run` too:
+
+```
+$ hammerkit remote publish build --dry-run
+checked with the policy of build: sha256:9f2c61d0... (3 files), nothing was published
+tasks and services: build, deploy, more:lint
+publishing it would propose it, it names accounts you do not use: op-payments-prod
+```
+
+Tasks and services marked `publish: false` are left out, see
+[Only part of a build file](/docs/remote-compute/build-files#only-part-of-a-build-file).
 
 ### Proposing a version
 

@@ -28,5 +28,6 @@ export interface ParseScope {
   remote?: ResolvedGitSource
   // what the including file passed with `with`
   inputs?: NonNullable<BuildFileSchema['envs']>
-  references: { [key: string]: { type: 'include' | 'reference'; scope: ParseScope } }
+  // `publish`: false when the including file says `publish: false`, see getUnpublished
+  references: { [key: string]: { type: 'include' | 'reference'; scope: ParseScope; publish: boolean } }
 }

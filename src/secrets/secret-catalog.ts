@@ -4,6 +4,10 @@ import { buildEnvironmentVariables } from '../environment/replace-env-variables'
 import { ReferencedContext } from '../schema/reference-parser'
 import { ParseScope } from '../schema/parse-context'
 import { parseDuration } from '../utils/units'
+import {
+  BuildFileSecretAccountSchema,
+  BuildFileSecretProviderSchema,
+} from '../schema/build-file-secret-provider-schema'
 
 const DEFAULT_TIMEOUT = '30s'
 
@@ -42,34 +46,64 @@ export function emptySecretCatalog(): SecretCatalog {
 
 const FULL_COMMIT = /^[0-9a-f]{40}$/i
 
+// Providers and accounts of this machine, from the host config: a build file that
+// only names the secrets it reads is published as it is, and each machine says how
+// it reads them.
+export interface HostSecretDeclarations {
+  fileName: string
+  secretProviders?: { [name: string]: BuildFileSecretProviderSchema }
+  secretAccounts?: { [name: string]: BuildFileSecretAccountSchema }
+}
+
 // Providers and accounts are global names, like caches, collected from every
-// loaded build file. A name declared twice is an error rather than a silent
-// override: which definition runs with a service account's credential must not
-// depend on include order.
+// loaded build file and the host config. A name declared twice is an error rather
+// than a silent override: which definition runs with a service account's credential
+// must not depend on include order.
 export function collectSecretCatalog(
   files: ParseScope[],
   environment: Environment,
-  context: ReferencedContext
+  context: ReferencedContext,
+  host?: HostSecretDeclarations
 ): SecretCatalog {
   const catalog = emptySecretCatalog()
+  const sources: {
+    fileName: string
+    providers: [string, BuildFileSecretProviderSchema][]
+    accounts: [string, BuildFileSecretAccountSchema][]
+    file: ParseScope | null
+  }[] = files.map((file) => ({
+    fileName: file.fileName,
+    providers: Object.entries(file.schema.secretProviders ?? {}),
+    accounts: Object.entries(file.schema.secretAccounts ?? {}),
+    file,
+  }))
+  if (host) {
+    sources.push({
+      fileName: host.fileName,
+      providers: Object.entries(host.secretProviders ?? {}),
+      accounts: Object.entries(host.secretAccounts ?? {}),
+      file: null,
+    })
+  }
 
-  for (const file of files) {
-    const providers = Object.entries(file.schema.secretProviders ?? {})
-    const accounts = Object.entries(file.schema.secretAccounts ?? {})
+  for (const { fileName, providers, accounts, file } of sources) {
     if (providers.length === 0 && accounts.length === 0) {
       continue
     }
-    requirePinnedSource(file)
-
-    const envs = buildEnvironmentVariables(
-      mergeEnvironmentVariables(file.schema.envs, null),
-      environment,
-      context
-    ).variables
+    // the host config has no envs of its own: `${NAME}` is read from the process
+    let envs: { [key: string]: string } = {}
+    if (file) {
+      requirePinnedSource(file)
+      envs = buildEnvironmentVariables(
+        mergeEnvironmentVariables(file.schema.envs, null),
+        environment,
+        context
+      ).variables
+    }
     for (const [name, provider] of providers) {
       if (catalog.providers[name]) {
         throw new Error(
-          `secret provider ${name} is declared in ${catalog.providers[name].declaredIn} and in ${file.fileName}`
+          `secret provider ${name} is declared in ${catalog.providers[name].declaredIn} and in ${fileName}`
         )
       }
       catalog.providers[name] = {
@@ -78,20 +112,18 @@ export function collectSecretCatalog(
         command: provider.command.map((part) => applyEnvs(part, envs)),
         env: provider.env ?? {},
         timeoutMs: parseDuration(provider.timeout ?? DEFAULT_TIMEOUT),
-        declaredIn: file.fileName,
+        declaredIn: fileName,
       }
     }
     for (const [name, account] of accounts) {
       if (catalog.accounts[name]) {
-        throw new Error(
-          `secret account ${name} is declared in ${catalog.accounts[name].declaredIn} and in ${file.fileName}`
-        )
+        throw new Error(`secret account ${name} is declared in ${catalog.accounts[name].declaredIn} and in ${fileName}`)
       }
       catalog.accounts[name] = {
         name,
         default: account.default ?? false,
         providers: account.providers,
-        declaredIn: file.fileName,
+        declaredIn: fileName,
       }
     }
   }

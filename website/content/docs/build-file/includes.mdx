@@ -52,6 +52,18 @@ includes:
 The build file of project `b` uses the same include for the npm install task.
 An additional [reference](/docs/build-file/references) to `a` and a [task dependency](/docs/task/dependencies) on `a:build` ensure that project `a` is built before project `b` is compiled.
 
+An include can also be an object with a `path`, which takes `publish`:
+
+```yaml
+includes:
+  npm: { path: ../../build.npm.yaml }
+  dev: { path: ./dev.yaml, publish: false }
+```
+
+`publish: false` keeps what the included file declares on your machine: a
+[server](/docs/remote-compute/build-files#only-part-of-a-build-file) leaves it out of the
+version it publishes. A git include takes `publish` too.
+
 ## Include from a git repository
 
 Instead of a path, an include (or a [reference](/docs/build-file/references)) can name a

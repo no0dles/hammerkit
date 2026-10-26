@@ -15,7 +15,7 @@ the dedicated pages.
 | `tasks` | map of name→task | The [tasks](/docs/task) in this file. |
 | `services` | map of name→service | The [services](/docs/service) in this file. |
 | `references` | map of prefix→path | [Reference](/docs/build-file/references) other build files (keep their own directory). |
-| `includes` | map of prefix→path | [Include](/docs/build-file/includes) other build files (use this file's directory). |
+| `includes` | map of prefix→path \| `{path, publish}` \| git source | [Include](/docs/build-file/includes) other build files (use this file's directory). `publish: false` leaves the file out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). |
 | `environments` | map of name→environment | [Run targets](/docs/task/kubernetes) (Kubernetes or remote Docker). |
 | `caches` | map of name→cache | Named [cache](/docs/build-file/caches) declarations (method + backend). |
 | `labels` | map of string→string/number | [Labels](/docs/labels) applied to every task/service in the file. |
@@ -47,6 +47,7 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `args` | boolean | Whether the last command takes [arguments](/docs/task/arguments#which-tasks-take-arguments) after `--`: `false` refuses them, `true` says it is meant to, which a server with `runs.args: declared` requires. |
 | `volumeSize` | size (`5Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the sources, mounts and outputs of a container task (the environment's `volumeSize` when left out, else `1Gi`). Ignored elsewhere, not part of the cache key. |
 | `runner` | string | Name of the [server](/docs/cli/remote) the task has to run on (experimental, see [runner](/docs/task#runner)). |
+| `publish` | boolean | `false`: a server leaves the task out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). Locally it changes nothing. |
 
 **Container task** adds:
 
@@ -91,6 +92,7 @@ service** (it has a `selector`).
 | `labels` | map of string→string/number | Labels for filtering. |
 | `description` | string | Description shown by `ls`. |
 | `continuous` | boolean | Long-running service (the usual case). |
+| `publish` | boolean | `false`: a server leaves the service out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). |
 
 **Kubernetes service** (forwards an existing cluster resource — see
 [Kubernetes service](/docs/service/kubernetes)):

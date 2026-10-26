@@ -296,6 +296,9 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "publish": {
+                    "type": "boolean"
+                  },
                   "image": {
                     "type": "string"
                   },
@@ -378,6 +381,9 @@
                   },
                   "runner": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
+                  },
+                  "publish": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/publish"
                   },
                   "platform": {
                     "type": "object",
@@ -520,6 +526,9 @@
                   },
                   "args": {
                     "type": "boolean"
+                  },
+                  "publish": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -576,6 +585,9 @@
                         "number"
                       ]
                     }
+                  },
+                  "publish": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -598,6 +610,24 @@
               {
                 "type": "object",
                 "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Build file or directory, relative to this file"
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "description": "false: a server leaves out what this file declares"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
                   "git": {
                     "type": "string",
                     "minLength": 1,
@@ -615,6 +645,10 @@
                   "with": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
                     "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "description": "false: a server leaves out what this file declares"
                   }
                 },
                 "required": [

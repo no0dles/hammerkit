@@ -45,6 +45,8 @@ export const buildFileContainerServiceSchema = object({
   network: networkSchema.optional(),
   // whether its `cmd` takes the arguments after `--` of `up`: false refuses them
   args: boolean().optional(),
+  // false: a server leaves it out of a published version
+  publish: boolean().optional(),
 })
   .strict()
   .describe('container service')

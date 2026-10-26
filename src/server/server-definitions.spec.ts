@@ -171,6 +171,88 @@ describe('definitions api', () => {
     })
   })
 
+  it('checks a bundle against the policy for anybody with a builds level, and stores nothing', async () => {
+    await withApi(
+      'definitions-api-plan',
+      async (api) => {
+        const yaml = (network: string) =>
+          `tasks:\n  install:\n    image: node:22\n    network: ${network}\n    cmds: [npm ci]\n`
+        // bob may only run: he checks what the account that publishes would publish
+        const refused = await api.call('POST', '/v1/definitions/plan', 'bob', {
+          files: { '.hammerkit.yaml': yaml('open') },
+        })
+        expect(refused.status).toBe(400)
+        expect((await refused.json()).error).toBe(
+          'the build file does not load: install: asks for network open, more than this server allows (runs.network: allow registry.npmjs.org)'
+        )
+        const files = { '.hammerkit.yaml': yaml('{ allow: [registry.npmjs.org] }') }
+        const bob = await api.call('POST', '/v1/definitions/plan', 'bob', { files })
+        expect(bob.status).toBe(200)
+        expect(await bob.json()).toMatchObject({
+          hash: hashBundle({ entry: '.hammerkit.yaml', files }),
+          tasks: ['install'],
+          plan: { install: { runtime: 'docker', network: { allow: ['registry.npmjs.org'] } } },
+          outcome: null,
+        })
+        expect(await (await api.call('POST', '/v1/definitions/plan', 'alice', { files })).json()).toMatchObject({
+          outcome: 'published',
+        })
+        // nothing was published
+        expect((await (await api.call('GET', '/v1/definitions', 'alice')).json()).definitions).toEqual([])
+        expect((await api.call('POST', '/v1/definitions/plan', 'nobody', { files })).status).toBe(403)
+        expect((await api.call('GET', '/v1/definitions/plan', 'alice')).status).toBe(405)
+
+        await api.call('POST', '/v1/definitions', 'alice', { files })
+        expect(await (await api.call('POST', '/v1/definitions/plan', 'bob', { files })).json()).toMatchObject({
+          outcome: 'already published',
+        })
+      },
+      `${HOST_ENV_YAML.replace(' } }', ' }, network: { allow: [registry.npmjs.org] } }')}runtimes: [docker]\n`
+    )
+  })
+
+  it('leaves out what is not published, and refuses a published task that needs it', async () => {
+    await withApi(
+      'definitions-api-unpublished',
+      async (api) => {
+        const files = {
+          '.hammerkit.yaml': [
+            'includes:',
+            '  infra: { path: ./infra.yaml, publish: false }',
+            'services:',
+            '  db: { image: postgres:16, publish: false }',
+            'tasks:',
+            '  build: { image: node:22, cmds: [npm run build] }',
+            '  watch: { cmds: [npm run watch], publish: false }',
+            '',
+          ].join('\n'),
+          'infra.yaml':
+            'tasks:\n  docker:\n    image: docker:27\n    mounts: [/var/run/docker.sock]\n    cmds: [docker ps]\n',
+        }
+        const published = await api.call('POST', '/v1/definitions', 'alice', { files })
+        expect(published.status).toBe(201)
+        expect(await published.json()).toMatchObject({ tasks: ['build'], services: [] })
+
+        const needs = {
+          ...files,
+          '.hammerkit.yaml': files['.hammerkit.yaml'] + '  test: { image: node:22, needs: [db], cmds: [npm test] }\n',
+        }
+        const refused = await api.call('POST', '/v1/definitions', 'alice', { files: needs })
+        expect((await refused.json()).error).toBe(
+          'the build file does not load: test needs db, which is not published (publish: false)'
+        )
+        const deps = {
+          ...files,
+          '.hammerkit.yaml': files['.hammerkit.yaml'] + '  ci: { deps: [build, infra:docker] }\n',
+        }
+        expect((await (await api.call('POST', '/v1/definitions', 'alice', { files: deps })).json()).error).toBe(
+          'the build file does not load: ci depends on infra:docker, which is not published (its build file is included with publish: false)'
+        )
+      },
+      `${HOST_ENV_YAML}runtimes: [docker]\n`
+    )
+  })
+
   it('lists versions, newest first, and reads one by its hash', async () => {
     await withApi('definitions-api-read', async (api) => {
       const one = await (await api.call('POST', '/v1/definitions', 'alice', bundle)).json()

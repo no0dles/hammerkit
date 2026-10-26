@@ -38,6 +38,34 @@ interface PublishedVersion {
   expiresAt?: string
 }
 
+// what publishing a bundle would do, as `POST /v1/definitions/plan` answers it
+interface PlannedVersion {
+  hash: string
+  tasks: string[]
+  services: string[]
+  // null: the caller may not publish or propose (builds: run)
+  outcome: 'published' | 'proposed' | 'already published' | null
+  // the accounts it names that the caller does not use, which make it a proposal
+  missing?: string[]
+}
+
+function describeOutcome(planned: PlannedVersion): string {
+  switch (planned.outcome) {
+    case 'published':
+      return 'publishing it would publish it'
+    case 'already published':
+      return 'it is published already'
+    case 'proposed':
+      return planned.missing?.length
+        ? `publishing it would propose it, it names accounts you do not use: ${planned.missing
+            .map(printable)
+            .join(', ')}`
+        : 'publishing it would propose it, somebody who may publish approves it'
+    default:
+      return 'the server accepts it, publishing it needs builds: propose or publish'
+  }
+}
+
 // one version in the list of a server
 interface VersionView {
   hash: string
@@ -297,9 +325,36 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         'say more about where it comes from, or leave one out with key=; path, repo, commit, machine and user are filled in'
       ).argParser(collectOption)
     )
+    .addOption(
+      new Option(
+        '--dry-run',
+        "check it against the server's policy and say what publishing would do, without publishing; builds: run is enough"
+      )
+    )
     .action(
       guarded('Remote publish was not successful', async (name: string | undefined, options) => {
         const bundle = await collectBundle(buildFile, environment)
+        if (options.dryRun) {
+          const { name: serverName, server, token } = await connect(name)
+          const answer = await callServer<PlannedVersion>(server, token, 'POST', '/v1/definitions/plan', bundle).catch(
+            (e) => {
+              throw e instanceof ServerError && e.status === 404
+                ? new Error(`${serverName} can't check a build file without publishing it, it needs hammerkit 1.27`)
+                : e
+            }
+          )
+          const planned = answer.body
+          const files = Object.keys(bundle.files).length
+          environment.stdout.write(
+            `checked with the policy of ${serverName}: ${printable(planned.hash)} (${files} ${
+              files === 1 ? 'file' : 'files'
+            }), nothing was published\n`
+          )
+          const names = [...(planned.tasks ?? []), ...(planned.services ?? [])]
+          environment.stdout.write(`tasks and services: ${names.map(printable).join(', ') || 'none'}\n`)
+          environment.stdout.write(`${describeOutcome(planned)}\n`)
+          return
+        }
         const annotations = applyAnnotations(
           await collectAnnotations(buildFile, Object.keys(bundle.files)),
           options.annotation ?? []

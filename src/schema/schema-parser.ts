@@ -5,7 +5,7 @@ import { BuildFileDirectory, ParseContext, ParseScope } from './parse-context'
 import { dirname, join, relative } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
 import { ParseError } from './parse-error'
-import { BuildFileGitSourceSchema, BuildFileIncludeSchema, isGitSource } from './build-file-include-schema'
+import { BuildFileGitSourceSchema, BuildFileIncludeSchema, isGitSource, isPublished } from './build-file-include-schema'
 import { BuildFileSchema } from './build-file-schema'
 import { isWithin, refreshGitSource, ResolvedGitSource, resolveGitSource } from '../includes/resolve-git-source'
 
@@ -77,7 +77,11 @@ export async function appendBuildFile(
         if (scope.references[referenceName]) {
           throw new Error(referenceName + ' already exists')
         }
-        scope.references[referenceName] = { type: 'reference', scope: referenceScope }
+        scope.references[referenceName] = {
+          type: 'reference',
+          scope: referenceScope,
+          publish: isPublished(scope.schema.references[referenceName]),
+        }
       }
     }
 
@@ -102,7 +106,11 @@ export async function appendBuildFile(
         if (scope.references[includeName]) {
           throw new Error(includeName + ' already exists')
         }
-        scope.references[includeName] = { type: 'include', scope: includeScope }
+        scope.references[includeName] = {
+          type: 'include',
+          scope: includeScope,
+          publish: isPublished(scope.schema.includes[includeName]),
+        }
       }
     }
 
@@ -146,9 +154,10 @@ async function locateInclude(
     return { fileName: await getBuildFilename(path, environment), remote, inputs: include.with }
   }
 
-  const path = join(base, include)
+  const local = typeof include === 'string' ? include : include.path
+  const path = join(base, local)
   if (scope.remote && !isWithin(scope.remote.root, path)) {
-    throw new Error(`${include} in ${scope.fileName} points outside ${scope.remote.git}`)
+    throw new Error(`${local} in ${scope.fileName} points outside ${scope.remote.git}`)
   }
   return { fileName: await getBuildFilename(path, environment), remote: scope.remote }
 }
