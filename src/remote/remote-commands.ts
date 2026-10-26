@@ -12,7 +12,7 @@ import {
   removeServer,
   setDefaultLocation,
 } from './host-config'
-import { deviceLogin } from './device-login'
+import { deviceLogin, NoSignInError } from './device-login'
 import { removeToken, saveToken } from './credentials'
 import { getTokenSource } from './token-source'
 import { callServer, getMe, printable } from './server-client'
@@ -50,6 +50,13 @@ export function registerRemoteCommands(
     .addOption(new Option('--client-id <id>', 'OAuth client to sign in with (pinned; default: what the server offers)'))
     .addOption(new Option('--audience <audience>', 'audience of the token (pinned; default: what the server offers)'))
     .addOption(new Option('--scope <scope>', 'scopes to request (pinned; default: what the server offers)'))
+    .addOption(
+      new Option(
+        '--token-command <command>',
+        'a command that prints the token for this server, instead of remote login (e.g. of a service account)'
+      )
+    )
+    .addOption(new Option('--no-token-command', 'remove the token command, sign in with remote login again'))
     .addOption(new Option('--force', 'point an already registered name at a different server').default(false))
     .action(
       guarded('Remote add was not successful', async (name: string, url: string, options) => {
@@ -58,9 +65,13 @@ export function registerRemoteCommands(
           clientId: options.clientId,
           audience: options.audience,
           scope: options.scope,
+          tokenCommand: options.tokenCommand,
           force: options.force,
         })
         environment.stdout.write(`added ${name}: ${server.url} (issuer ${server.issuer})\n`)
+        if (server.tokenCommand) {
+          environment.stdout.write(`tokens for ${name} come from: ${server.tokenCommand}\n`)
+        }
       })
     )
 
@@ -78,7 +89,8 @@ export function registerRemoteCommands(
         for (const name of names) {
           const server = config.servers[name]
           const marker = config.run.on === name ? colors.green(' (default)') : ''
-          environment.stdout.write(`${colors.bold(name)}${marker}  ${server.url}  issuer ${server.issuer}\n`)
+          const token = server.tokenCommand ? `  token from: ${server.tokenCommand}` : ''
+          environment.stdout.write(`${colors.bold(name)}${marker}  ${server.url}  issuer ${server.issuer}${token}\n`)
         }
         if (config.run.on === 'auto' || config.run.on === 'local') {
           environment.stdout.write(`default location: ${config.run.on}\n`)
@@ -128,10 +140,29 @@ export function registerRemoteCommands(
     .action(
       guarded('Remote login was not successful', async (name: string) => {
         const { server } = await getServer(name)
-        const { pinned, ...result } = await deviceLogin(server, {
-          prompt: (message) => environment.stdout.write(`${message}\n`),
-          signal: environment.abortCtrl.signal,
-        })
+        if (server.tokenCommand) {
+          // a sign-in would never be used: the command's token goes first
+          throw new Error(
+            `${name} takes its tokens from its token command (${server.tokenCommand}), it needs no sign-in; ` +
+              `to sign in instead, remove it with: hammerkit remote add ${name} ${server.url} --issuer ${server.issuer} --no-token-command`
+          )
+        }
+        let login
+        try {
+          login = await deviceLogin(server, {
+            prompt: (message) => environment.stdout.write(`${message}\n`),
+            signal: environment.abortCtrl.signal,
+          })
+        } catch (e) {
+          if (e instanceof NoSignInError) {
+            throw new Error(
+              `${e.message}: register a command that prints one, such as the token of a service account, with: ` +
+                `hammerkit remote add ${name} ${server.url} --issuer ${server.issuer} --token-command '<command>'`
+            )
+          }
+          throw e
+        }
+        const { pinned, ...result } = login
         await pinLogin(environment, name, pinned)
         await saveToken(environment, name, { url: server.url, issuer: server.issuer, ...result })
         try {

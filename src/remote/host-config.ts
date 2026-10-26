@@ -20,6 +20,8 @@ const checked = (what: string) => (value: string, ctx: z.RefinementCtx) => {
 // `clientId`, `audience` and `scope` are what a login asks the identity provider
 // for. They are pinned the first time a login happens (or given to `remote add`),
 // so a server can't change them later, see device-login.ts.
+// `tokenCommand` prints the token for this server instead of a login, see token-source.ts.
+// It is only ever read from the host config: a build file can't name one.
 export const hostServerSchema = z
   .object({
     url: z.string().superRefine(checked('url')),
@@ -27,6 +29,7 @@ export const hostServerSchema = z
     clientId: z.string().min(1).optional(),
     audience: z.string().min(1).optional(),
     scope: z.string().min(1).optional(),
+    tokenCommand: z.string().trim().min(1).optional(),
   })
   .strict()
 
@@ -121,6 +124,8 @@ export interface AddServerOptions {
   clientId?: string
   audience?: string
   scope?: string
+  // a command that prints the token; left out keeps the one registered, false removes it
+  tokenCommand?: string | false
   force?: boolean
 }
 
@@ -142,15 +147,34 @@ export async function addServer(
       server[key] = options[key]
     }
   }
+  if (typeof options.tokenCommand === 'string' && !options.tokenCommand.trim()) {
+    throw new Error('the token command must not be empty, use --no-token-command to remove it')
+  }
   const config = await readHostConfig(environment)
   const existing = hasServer(config.servers, name) ? config.servers[name] : undefined
-  const changed = (a: HostServer, b: HostServer) =>
-    a.url !== b.url || a.issuer !== b.issuer || PINNED.some((key) => a[key] !== b[key])
+  const sameServer = (a: HostServer, b: HostServer) => a.url === b.url && a.issuer === b.issuer
+  // Adding the same server again keeps what was pinned (by a login, too) unless it is given,
+  // so a later `remote add ... --token-command` needs no --force.
+  if (existing && sameServer(existing, server)) {
+    for (const key of PINNED) {
+      if (!server[key] && existing[key]) {
+        server[key] = existing[key]
+      }
+    }
+  }
+  const changed = (a: HostServer, b: HostServer) => !sameServer(a, b) || PINNED.some((key) => a[key] !== b[key])
   if (existing && changed(existing, server) && !options.force) {
     throw new Error(
       `server "${name}" is already registered as ${existing.url} (issuer ${existing.issuer}); ` +
         `use --force to point it somewhere else`
     )
+  }
+  // The command decides which identity's token goes to the server: changing it does not
+  // redirect anything, but a name pointed at another server does not keep the old one.
+  if (typeof options.tokenCommand === 'string') {
+    server.tokenCommand = options.tokenCommand.trim()
+  } else if (options.tokenCommand === undefined && existing?.tokenCommand && sameServer(existing, server)) {
+    server.tokenCommand = existing.tokenCommand
   }
   config.servers[name] = server
   await writeHostConfig(environment, config)
