@@ -123,6 +123,82 @@ describe('createParseContext', () => {
     expect(Object.keys(ctx.files)).toHaveLength(2) // root + sub (sub cached on second visit)
   })
 
+  describe('local includes with inputs', () => {
+    const npm =
+      'envs:\n  NODE_VERSION: 22\n  MODE: fast\ntasks:\n  install:\n    image: node:$NODE_VERSION\n    cmds: [npm ci]\n'
+
+    it('replaces the declared envs of a local include and keeps the other defaults', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: 24\n')
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['npm'].type).toBe('include')
+      expect(scope.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: 24, MODE: 'fast' })
+      expect(scope.references['npm'].scope.cwd).toBe(scratch)
+    })
+
+    it('names the unknown input of a local include', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSON: 24\n')
+
+      await expect(createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))).rejects.toThrow(
+        /unknown input NODE_VERSON for npm .*available inputs: NODE_VERSION, MODE/
+      )
+    })
+
+    it('passes the including file’s envs on with ${NAME}, through a chain of includes', async () => {
+      mkdirSync(join(scratch, 'web'))
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeFileSync(
+        join(scratch, 'web', 'build.yaml'),
+        'envs:\n  NODE_VERSION: 20\nincludes:\n  npm:\n    path: ../npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION:-18}\n      MODE: ${MODE:-slow}-${NODE_VERSION}\n'
+      )
+      writeBuildFile(
+        'envs:\n  NODE_VERSION: 24\nincludes:\n  web:\n    path: web/build.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION}\n'
+      )
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      const web = scope.references['web'].scope
+      expect(web.schema.envs).toEqual({ NODE_VERSION: '24' })
+      // MODE is not an env of web/build.yaml: left for the included file to resolve
+      expect(web.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: '24', MODE: '${MODE:-slow}-24' })
+    })
+
+    it('keeps a reference of the including file a reference', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile(
+        'envs:\n  NODE_VERSION: $NODE_VERSION\nincludes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION}\n'
+      )
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['npm'].scope.schema.envs?.NODE_VERSION).toBe('${NODE_VERSION}')
+    })
+
+    it('takes a local reference with inputs too', async () => {
+      mkdirSync(join(scratch, 'sub'))
+      writeFileSync(join(scratch, 'sub', '.hammerkit.yaml'), npm)
+      writeBuildFile('references:\n  lib:\n    path: sub\n    with:\n      MODE: slow\n')
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['lib'].type).toBe('reference')
+      expect(scope.references['lib'].scope.schema.envs).toEqual({ NODE_VERSION: 22, MODE: 'slow' })
+      expect(scope.references['lib'].scope.cwd).toBe(join(scratch, 'sub'))
+    })
+
+    it('rejects an unknown key on a local include', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile('includes:\n  npm:\n    path: npm.yaml\n    ref: main\n')
+
+      await expect(
+        createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+      ).rejects.toBeInstanceOf(ParseError)
+    })
+  })
+
   describe('git sources', () => {
     let repo: GitRepo
     let home: ReturnType<typeof isolateHammerkitHome>

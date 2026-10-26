@@ -79,6 +79,14 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     }
   }
 
+  if (!isContextTaskFilter(scope) && scope.names) {
+    const known = new Set([...tasks.map((task) => task.name), ...services.map((service) => service.data.name)])
+    const unknown = scope.names.filter((name) => !known.has(name))
+    if (unknown.length > 0) {
+      throw new Error(`no task or service named ${unknown.join(', ')}, see hammerkit ls`)
+    }
+  }
+
   if (scope.args) {
     applyArguments(
       { tasks: selectedTasks, services: scope.args.services ? selectedServices : [] },
@@ -145,6 +153,9 @@ function matchesTaskWorkScope(task: WorkItem<WorkTask>, scope: WorkScope): boole
   if (scope.serviceNames) {
     return false
   }
+  if (scope.names) {
+    return scope.names.includes(task.name)
+  }
 
   return appliesToLabels(task.data.labels, scope)
 }
@@ -155,6 +166,9 @@ function matchesServiceWorkScope(service: WorkService, scope: WorkScope): boolea
   }
   if (scope.serviceNames) {
     return scope.serviceNames.includes(service.name)
+  }
+  if (scope.names) {
+    return scope.names.includes(service.name)
   }
 
   return appliesToLabels(service.labels, scope)

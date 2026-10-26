@@ -10,8 +10,8 @@ services such as a database running across several task runs during development.
 hammerkit up
 ```
 
-This starts every service in the build file (or the ones matching the
-`--filter`/`--exclude` labels) and waits until you stop it. Use `--daemon` to
+This starts every service in the build file (or the [named ones](#start-by-name),
+or the ones matching the `--filter`/`--exclude` labels) and waits until you stop it. Use `--daemon` to
 start the services in the background and return immediately.
 
 ```bash
@@ -30,16 +30,33 @@ does not run its [init](/docs/service/container#init) again.
 
 Stop services started this way with [`hammerkit down`](/docs/cli/down).
 
+## Start by name
+
+Name the services to start only those, with the services they need:
+
+```bash
+hammerkit up postgres redis
+hammerkit up --daemon infra:postgres
+```
+
+A service of an [include](/docs/build-file/includes) or a
+[reference](/docs/build-file/references) goes by its full name, as
+[`hammerkit ls`](/docs/cli/ls) lists it. A task name starts the task, its
+dependencies and the services it needs: `hammerkit up dev:serve` keeps a dev server
+and its database running. A name that is no task or service is an error, and names
+can't be combined with `--filter`/`--exclude`.
+
 ## Pass arguments
 
 Arguments after `--` are appended to the `cmd` of the one service (or task) `up`
 starts:
 
 ```bash
+hammerkit up api -- --inspect
 hammerkit up --filter app=api -- --inspect
 ```
 
-A filter that selects several services or tasks takes no arguments. See
+Names or a filter that select several services or tasks take no arguments. See
 [arguments](/docs/task/arguments#services).
 
 <Callout type="info">
@@ -53,7 +70,10 @@ example a Kubernetes cluster declared under `environments:`. See
 ## Options
 
 ```
-Usage: hammerkit up [options] [-- args...]
+Usage: hammerkit up [options] [names...] [-- args...]
+
+Arguments:
+  names                       tasks and services to start, all when none is named
 
 Options:
   -f, --filter <labels...>    filter task and services with labels

@@ -58,6 +58,7 @@ A developer wants to start services inside a Kubernetes cluster configured under
 - **FR-004**: System MUST support label-based inclusion filtering via `-f / --filter <key=value>` to start only matching services.
 - **FR-005**: System MUST support label-based exclusion filtering via `-e / --exclude <key=value>` to skip matching services.
 - **FR-006**: System MUST support an `--env <name>` option to start services in a configured named environment.
+- **FR-008**: System MUST start only the named tasks and services, with their deps and the services they need, when `hammerkit up <names...>` is run; a name that is no task or service is an error, and names can't be combined with `--filter`/`--exclude`.
 - **FR-007**: System MUST support `-c / --concurrency <number>`, `-w / --watch`, `--cache <method>`, and `-l / --log <mode>` options (consistent with the `run` command option surface).
 
 ### Key Entities

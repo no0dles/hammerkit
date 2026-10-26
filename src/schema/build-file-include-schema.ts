@@ -22,12 +22,20 @@ export const buildFileGitSourceSchema = object({
   with: envsSchema.optional(),
 }).strict()
 
-// A string is a local path; an object is a git source (ADR-0004).
-export const buildFileIncludeSchema = union([string(), buildFileGitSourceSchema])
+// A local path with values for the inputs of the file it names, like `with` of a git
+// source. A value may pass on an `envs` value of the including file as `${NAME}`.
+export const buildFileLocalSourceSchema = object({
+  path: string().min(1).describe('Build file or directory, relative to the including file'),
+  with: envsSchema.optional(),
+}).strict()
+
+// A string is a local path; an object is a local path with inputs, or a git source (ADR-0004).
+export const buildFileIncludeSchema = union([string(), buildFileLocalSourceSchema, buildFileGitSourceSchema])
 
 export type BuildFileGitSourceSchema = z.infer<typeof buildFileGitSourceSchema>
+export type BuildFileLocalSourceSchema = z.infer<typeof buildFileLocalSourceSchema>
 export type BuildFileIncludeSchema = z.infer<typeof buildFileIncludeSchema>
 
 export function isGitSource(include: BuildFileIncludeSchema): include is BuildFileGitSourceSchema {
-  return typeof include !== 'string'
+  return typeof include !== 'string' && 'git' in include
 }

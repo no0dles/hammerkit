@@ -20,6 +20,8 @@ export interface WorkLabelScope {
   excludeLabels?: LabelValues
   // the services to start by name, no task: what a service run on a server names
   serviceNames?: string[]
+  // the tasks and services `up` and `down` name, instead of the labels
+  names?: string[]
   environmentName?: string | null
   args?: WorkArguments
 }

@@ -138,6 +138,29 @@ describe('prepareMounts', () => {
     expect(readFileSync(localPath, 'utf8')).toBe('content')
   })
 
+  it('leaves a directory it cannot create to docker, which creates the source of a bind itself', async () => {
+    const environment = environmentMock(tmpDir)
+    const blocker = join(tmpDir, 'blocker')
+    writeFileSync(blocker, '')
+    // a path below a file, as a path of another file system can be from inside a container
+    const localPath = join(blocker, 'cache')
+    const item = makeItem({ type: 'container-task', image: 'img', user: null, mounts: [{ localPath }], generates: [] })
+    await prepareMounts(item, environment)
+    expect(existsSync(localPath)).toBe(false)
+    expect(item.status.write).toHaveBeenCalledWith('debug', expect.stringContaining(`left creating ${localPath}`))
+  })
+
+  it('names a mounted file it cannot create, which docker would make a directory', async () => {
+    const environment = environmentMock(tmpDir)
+    const blocker = join(tmpDir, 'blocker-file')
+    writeFileSync(blocker, '')
+    const localPath = join(blocker, 'config.json')
+    const item = makeItem({ type: 'container-task', image: 'img', user: null, mounts: [{ localPath }], generates: [] })
+    await expect(prepareMounts(item, environment)).rejects.toThrow(
+      `mount ${localPath} does not exist and can't be created`
+    )
+  })
+
   it('writes an empty file for a missing task file generate', async () => {
     const environment = environmentMock(tmpDir)
     const path = join(tmpDir, 'out.txt')

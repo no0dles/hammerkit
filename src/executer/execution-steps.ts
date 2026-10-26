@@ -9,6 +9,7 @@ import { ContainerWorkTask, isContainerWorkTask } from '../planner/work-task'
 import { ContainerWorkService, isContainerWorkService } from '../planner/work-service'
 import { getContainerBinds } from './get-container-binds'
 import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
+import { getErrorMessage } from '../log'
 
 // The files a server run works on: its checkout, or a sandbox. Somebody else wrote them.
 export function hostedRoot(environment: Environment): string | undefined {
@@ -82,9 +83,20 @@ export async function prepareMounts(
     }
 
     if (extname(mount.localPath)) {
-      await environment.file.writeFile(mount.localPath, '')
+      try {
+        await environment.file.writeFile(mount.localPath, '')
+      } catch (e) {
+        // Docker would make a directory there
+        throw new Error(`mount ${mount.localPath} does not exist and can't be created (${getErrorMessage(e)})`)
+      }
     } else {
-      await environment.file.createDirectory(mount.localPath)
+      try {
+        await environment.file.createDirectory(mount.localPath)
+      } catch (e) {
+        // hammerkit may run in a container whose file system is not the one of the Docker
+        // host: Docker creates the missing directory of a bind on its own
+        item.status.write('debug', `left creating ${mount.localPath} to docker: ${getErrorMessage(e)}`)
+      }
     }
   }
   if (isContainerWorkTask(item.data)) {

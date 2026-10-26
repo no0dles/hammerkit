@@ -143,14 +143,41 @@ async function locateInclude(
     if (!isWithin(remote.root, path)) {
       throw new Error(`${include.path} in ${include.git} points outside the repository`)
     }
-    return { fileName: await getBuildFilename(path, environment), remote, inputs: include.with }
+    return { fileName: await getBuildFilename(path, environment), remote, inputs: passEnvs(include.with, scope) }
   }
 
-  const path = join(base, include)
+  const localPath = typeof include === 'string' ? include : include.path
+  const path = join(base, localPath)
   if (scope.remote && !isWithin(scope.remote.root, path)) {
-    throw new Error(`${include} in ${scope.fileName} points outside ${scope.remote.git}`)
+    throw new Error(`${localPath} in ${scope.fileName} points outside ${scope.remote.git}`)
   }
-  return { fileName: await getBuildFilename(path, environment), remote: scope.remote }
+  const inputs = typeof include === 'string' ? undefined : passEnvs(include.with, scope)
+  return { fileName: await getBuildFilename(path, environment), remote: scope.remote, inputs }
+}
+
+// `${NAME}` (or `${NAME:-default}`) in a `with` value is the including file's `envs` value
+// of that name, so one file holds a value such as NODE_VERSION for all it includes. A
+// reference there (`$NAME`) stays one; a name the file does not declare is left to the
+// included file, which reads it from the environment.
+function passEnvs(inputs: BuildFileEnvs | undefined, scope: ParseScope): BuildFileEnvs | undefined {
+  if (!inputs) {
+    return undefined
+  }
+  const envs = scope.schema.envs ?? {}
+  const result: BuildFileEnvs = {}
+  for (const [key, value] of Object.entries(inputs)) {
+    result[key] =
+      typeof value === 'string'
+        ? value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g, (match, name: string) =>
+            name in envs ? asInterpolation(`${envs[name]}`) : match
+          )
+        : value
+  }
+  return result
+}
+
+function asInterpolation(value: string): string {
+  return /^\$[A-Za-z_][A-Za-z0-9_]*$/.test(value) ? `\${${value.substring(1)}}` : value
 }
 
 // `includes pull` fetches each source once, however often the build files name it.

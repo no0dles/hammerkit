@@ -84,5 +84,65 @@ describe('work-scope-parser', () => {
         }
       )
     })
+
+    describe('names (up and down)', () => {
+      const buildFile = {
+        services: {
+          postgres: { image: 'postgres:16', ports: ['5432'] },
+          redis: { image: 'redis:7', ports: ['6379'] },
+          mail: { image: 'mailhog/mailhog', ports: ['8025'] },
+        },
+        tasks: {
+          install: { cmds: ['npm ci'] },
+          serve: { cmds: ['npm start'], deps: ['install'], needs: ['postgres', 'redis'] },
+          lint: { cmds: ['eslint'] },
+        },
+      }
+      const names = (cli: Cli) => ({
+        tasks: cli
+          .tasks()
+          .map((t) => t.item.name)
+          .sort(),
+        services: cli
+          .services()
+          .map((s) => s.item.name)
+          .sort(),
+      })
+
+      it('selects a service by its name, and no task', async () => {
+        await withCli(buildFile, { names: ['mail'] }, (cli) => {
+          expect(names(cli)).toEqual({ tasks: [], services: ['mail'] })
+        })
+      })
+
+      it('selects a task by its name, with its deps and the services it needs', async () => {
+        await withCli(buildFile, { names: ['serve'] }, (cli) => {
+          expect(names(cli)).toEqual({ tasks: ['install', 'serve'], services: ['postgres', 'redis'] })
+        })
+      })
+
+      it('selects several names, tasks and services together', async () => {
+        await withCli(buildFile, { names: ['lint', 'mail', 'postgres'] }, (cli) => {
+          expect(names(cli)).toEqual({ tasks: ['lint'], services: ['mail', 'postgres'] })
+        })
+      })
+
+      it('selects a service of an include by its full name', async () => {
+        const testCase = createTestCase('work-scope-parser-include', {
+          '.hammerkit.yaml': { includes: { infra: 'infra.yaml' } },
+          'infra.yaml': { services: { postgres: { image: 'postgres:16', ports: ['5432'] } } },
+        })
+        await testCase.setup(async (cwd, environment) => {
+          const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { names: ['infra:postgres'] })
+          expect(names(cli)).toEqual({ tasks: [], services: ['infra:postgres'] })
+        })
+      })
+
+      it('refuses a name that is no task or service', async () => {
+        await expect(withCli(buildFile, { names: ['mail', 'postgress'] }, () => undefined)).rejects.toThrow(
+          'no task or service named postgress, see hammerkit ls'
+        )
+      })
+    })
   })
 })
