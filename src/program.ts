@@ -812,7 +812,7 @@ export async function getProgram(
       .addOption(new Option('--env <name>', 'environment'))
       .action(async (names: string[], options) => {
         try {
-          const scope = parseWorkNameScope(names, options)
+          const scope = { ...parseWorkNameScope(names, options), stop: true }
           const cli = await createCli(fileName, environment, scope)
           const result = await cli.runDown()
 

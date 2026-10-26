@@ -138,11 +138,13 @@ includes:
       NODE_VERSION: ${NODE_VERSION}
 ```
 
-`${NAME}` (or `${NAME:-default}`) in a `with` value is the including file's own `envs`
-value of that name, so the Node version lives in one place and every include builds with
-it. A file that is included passes it on to its own includes the same way. A name the
-including file does not declare stays as it is, and the included file reads it from the
-environment as above. A plain string path stays a local include
+`${NAME}` (or `${NAME:-default}`) in a `with` value reads as it does in an `envs` value of
+the including file: the environment's (or a `.env` file's) `NAME` if it is set, else the
+including file's own `envs` value. So the Node version lives in one place, every include
+builds with it, and CI can still set it. A file that is included passes it on to its own
+includes the same way. A name the including file does not declare stays as it is, and the
+included file reads it from the environment as above. A value the including file builds
+from other variables (`${BASE}-alpine`) is passed on as it is written. A plain string path stays a local include
 without inputs, exactly as before.
 
 ### Caching and offline use

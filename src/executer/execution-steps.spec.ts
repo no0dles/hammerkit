@@ -147,7 +147,16 @@ describe('prepareMounts', () => {
     const item = makeItem({ type: 'container-task', image: 'img', user: null, mounts: [{ localPath }], generates: [] })
     await prepareMounts(item, environment)
     expect(existsSync(localPath)).toBe(false)
-    expect(item.status.write).toHaveBeenCalledWith('debug', expect.stringContaining(`left creating ${localPath}`))
+    expect(item.status.write).toHaveBeenCalledWith('warn', expect.stringContaining(`can't create ${localPath}`))
+  })
+
+  it('keeps failing on a server when it cannot create a mount directory', async () => {
+    const environment = { ...environmentMock(tmpDir), hosted: {} } as any
+    const blocker = join(tmpDir, 'blocker-hosted')
+    writeFileSync(blocker, '')
+    const localPath = join(blocker, 'cache')
+    const item = makeItem({ type: 'container-task', image: 'img', user: null, mounts: [{ localPath }], generates: [] })
+    await expect(prepareMounts(item, environment)).rejects.toThrow()
   })
 
   it('names a mounted file it cannot create, which docker would make a directory', async () => {

@@ -22,6 +22,8 @@ export interface WorkLabelScope {
   serviceNames?: string[]
   // the tasks and services `up` and `down` name, instead of the labels
   names?: string[]
+  // `down`: a named service stops alone, the services it needs may serve others
+  stop?: boolean
   environmentName?: string | null
   args?: WorkArguments
 }

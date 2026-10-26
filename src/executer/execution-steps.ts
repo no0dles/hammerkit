@@ -93,9 +93,16 @@ export async function prepareMounts(
       try {
         await environment.file.createDirectory(mount.localPath)
       } catch (e) {
+        // on a server a root-owned directory in the run's files could break its cleanup
+        if (environment.hosted) {
+          throw e
+        }
         // hammerkit may run in a container whose file system is not the one of the Docker
         // host: Docker creates the missing directory of a bind on its own
-        item.status.write('debug', `left creating ${mount.localPath} to docker: ${getErrorMessage(e)}`)
+        item.status.write(
+          'warn',
+          `can't create ${mount.localPath} (${getErrorMessage(e)}), Docker creates it on its host as root`
+        )
       }
     }
   }

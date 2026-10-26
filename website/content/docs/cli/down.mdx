@@ -17,7 +17,9 @@ hammerkit down dev:serve
 ```
 
 Names are the ones [`hammerkit ls`](/docs/cli/ls) lists, as for
-[`up`](/docs/cli/up#start-by-name). Only the services matching the
+[`up`](/docs/cli/up#start-by-name). A named service stops alone: the services it
+needs keep running, since other services may use them too. A named task stops the
+services it and its dependencies need. Only the services matching the
 `--filter`/`--exclude` labels are stopped when those options are given. `down`
 never runs a task, also not one it names.
 

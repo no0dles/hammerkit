@@ -3,6 +3,7 @@ import { tmpdir } from 'os'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { environmentMock } from '../executer/environment-mock'
 import { createParseContext } from './schema-parser'
+import { createCli } from '../program'
 import { ParseError } from './parse-error'
 import { createGitRepo, GitRepo, isolateHammerkitHome } from '../testing/git-repo'
 
@@ -161,9 +162,48 @@ describe('createParseContext', () => {
       const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
 
       const web = scope.references['web'].scope
-      expect(web.schema.envs).toEqual({ NODE_VERSION: '24' })
+      expect(web.schema.envs).toEqual({ NODE_VERSION: '${NODE_VERSION:-24}' })
       // MODE is not an env of web/build.yaml: left for the included file to resolve
-      expect(web.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: '24', MODE: '${MODE:-slow}-24' })
+      expect(web.references['npm'].scope.schema.envs).toEqual({
+        NODE_VERSION: '${NODE_VERSION:-24}',
+        MODE: '${MODE:-slow}-${NODE_VERSION:-24}',
+      })
+    })
+
+    it('lets the environment set a passed value, as it does in the including file', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile(
+        // `${NODE_VERSION}` in an envs value of the including file: the environment, else 24
+        'envs:\n  NODE_VERSION: 24\n  ROOT_NODE: ${NODE_VERSION}\ntasks:\n  root:\n    image: node:${ROOT_NODE}\n    cmds: [node -v]\n' +
+          'includes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION:-22}\n'
+      )
+      const images = async (processEnvs: { [key: string]: string }) => {
+        const environment = environmentMock(scratch)
+        environment.processEnvs = { ...environment.processEnvs, ...processEnvs }
+        const cli = await createCli(join(scratch, '.hammerkit.yaml'), environment, {})
+        return cli.tasks().map((task) => [task.item.name, (task.item.data as { image?: string }).image])
+      }
+
+      expect(await images({ NODE_VERSION: '26' })).toEqual([
+        ['root', 'node:26'],
+        ['npm:install', 'node:26'],
+      ])
+      const unset = await images({})
+      expect(unset).toEqual([
+        ['root', 'node:24'],
+        ['npm:install', 'node:24'],
+      ])
+    })
+
+    it('keeps the default of a with value when the including file passes a reference', async () => {
+      writeFileSync(join(scratch, 'npm.yaml'), npm)
+      writeBuildFile(
+        'envs:\n  NODE_VERSION: $NODE_VERSION\nincludes:\n  npm:\n    path: npm.yaml\n    with:\n      NODE_VERSION: ${NODE_VERSION:-18}\n'
+      )
+
+      const { scope } = await createParseContext(join(scratch, '.hammerkit.yaml'), environmentMock(scratch))
+
+      expect(scope.references['npm'].scope.schema.envs?.NODE_VERSION).toBe('${NODE_VERSION:-18}')
     })
 
     it('keeps a reference of the including file a reference', async () => {
@@ -294,6 +334,18 @@ describe('createParseContext', () => {
         const { scope } = await createParseContext(root(), environmentMock(scratch))
 
         expect(scope.references['npm'].scope.schema.envs).toEqual({ NODE_VERSION: 24, MODE: 'fast' })
+      })
+
+      it('passes the including file’s envs on to a git include too', async () => {
+        repo.commit({ 'build.yaml': entry })
+        writeFileSync(
+          root(),
+          `envs:\n  NODE_VERSION: 24\nincludes:\n  npm:\n    git: ${repo.url}\n    with:\n      NODE_VERSION: \${NODE_VERSION}\n`
+        )
+
+        const { scope } = await createParseContext(root(), environmentMock(scratch))
+
+        expect(scope.references['npm'].scope.schema.envs?.NODE_VERSION).toBe('${NODE_VERSION:-24}')
       })
 
       it('names the unknown input and lists the declared ones', async () => {

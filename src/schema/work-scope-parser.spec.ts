@@ -138,6 +138,56 @@ describe('work-scope-parser', () => {
         })
       })
 
+      describe('down', () => {
+        const shared = {
+          services: {
+            postgres: { image: 'postgres:16', ports: ['5432'] },
+            api: { image: 'node:24', cmd: 'node api.js', ports: ['3000'], needs: ['postgres'] },
+            web: { image: 'node:24', ports: ['8080'], needs: ['postgres'] },
+          },
+          tasks: {
+            install: { cmds: ['npm ci'], needs: ['postgres'] },
+            serve: { cmds: ['npm start'], deps: ['install'], needs: ['api'] },
+          },
+        }
+
+        it('stops a named service alone, the services it needs may serve others', async () => {
+          await withCli(shared, { names: ['api'], stop: true }, (cli) => {
+            expect(names(cli).services).toEqual(['api'])
+          })
+        })
+
+        it('stops the services a named task and its deps need, not what those services need', async () => {
+          await withCli(shared, { names: ['serve'], stop: true }, (cli) => {
+            expect(names(cli).services).toEqual(['api', 'postgres'])
+          })
+          await withCli(
+            { ...shared, tasks: { serve: { cmds: ['npm start'], needs: ['api'] } } },
+            { names: ['serve'], stop: true },
+            (cli) => {
+              expect(names(cli).services).toEqual(['api'])
+            }
+          )
+        })
+
+        it('up starts a named service with the services it needs', async () => {
+          await withCli(shared, { names: ['api'] }, (cli) => {
+            expect(names(cli).services).toEqual(['api', 'postgres'])
+          })
+        })
+
+        it('hands the arguments after -- to the named service only', async () => {
+          await withCli(shared, { names: ['api'], args: { values: ['--inspect'], services: true } }, (cli) => {
+            const command = (name: string) => {
+              const data = cli.service(name).data
+              return data.type === 'container-service' ? data.cmd?.cmd ?? null : null
+            }
+            expect(command('api')).toContain('--inspect')
+            expect(command('postgres') ?? '').not.toContain('--inspect')
+          })
+        })
+      })
+
       it('refuses a name that is no task or service', async () => {
         await expect(withCli(buildFile, { names: ['mail', 'postgress'] }, () => undefined)).rejects.toThrow(
           'no task or service named postgress, see hammerkit ls'

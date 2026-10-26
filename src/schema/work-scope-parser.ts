@@ -62,20 +62,21 @@ export function getWorkContext(context: ReferencedContext, scope: WorkScope, env
     appendWorkService(workTree, service, environment, context)
   )
 
+  const apply: ApplyOptions = { servicesAlone: !isContextTaskFilter(scope) && !!scope.names && !!scope.stop }
   const selectedTasks: WorkTask[] = []
   const selectedServices: WorkService[] = []
   for (const item of tasks) {
     if (matchesTaskWorkScope(item, scope)) {
       requested.push(item.name)
       selectedTasks.push(item.data)
-      applyTask(filteredWorkTree, item)
+      applyTask(filteredWorkTree, item, apply)
     }
   }
 
   for (const item of services) {
     if (matchesServiceWorkScope(item.data, scope)) {
       selectedServices.push(item.data)
-      applyService(filteredWorkTree, item)
+      applyService(filteredWorkTree, item, apply)
     }
   }
 
@@ -117,32 +118,41 @@ function keepRequirersInScope(workTree: WorkTree) {
   }
 }
 
-function applyTask(workTree: WorkTree, item: WorkItemState<WorkTask, TaskState>) {
+// `down` by name stops what it names and what the named tasks need, and keeps a
+// service the named service needs running: others may still use it
+interface ApplyOptions {
+  servicesAlone: boolean
+}
+
+function applyTask(workTree: WorkTree, item: WorkItemState<WorkTask, TaskState>, options: ApplyOptions) {
   if (workTree.tasks[item.name]) {
     return
   }
   workTree.tasks[item.name] = item
-  applyNeedsAndDeps(workTree, item)
+  applyNeedsAndDeps(workTree, item, options)
 }
-function applyService(workTree: WorkTree, need: WorkItemState<WorkService, ServiceState>) {
+function applyService(workTree: WorkTree, need: WorkItemState<WorkService, ServiceState>, options: ApplyOptions) {
   const item = getPlannedService(need)
   if (workTree.services[item.name]) {
     return
   }
   workTree.services[item.name] = item
-  applyNeedsAndDeps(workTree, item)
+  if (options.servicesAlone) {
+    return
+  }
+  applyNeedsAndDeps(workTree, item, options)
   // a service in the run brings its init task, which runs once it is healthy
   if (item.data.type === 'container-service' && item.data.init) {
-    applyTask(workTree, item.data.init.task)
+    applyTask(workTree, item.data.init.task, options)
   }
 }
 
-function applyNeedsAndDeps(workTree: WorkTree, item: WorkItem<WorkTask | WorkService>) {
+function applyNeedsAndDeps(workTree: WorkTree, item: WorkItem<WorkTask | WorkService>, options: ApplyOptions) {
   for (const dep of item.deps) {
-    applyTask(workTree, dep)
+    applyTask(workTree, dep, options)
   }
   for (const need of item.needs) {
-    applyService(workTree, need.service)
+    applyService(workTree, need.service, options)
   }
 }
 

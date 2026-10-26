@@ -155,10 +155,10 @@ async function locateInclude(
   return { fileName: await getBuildFilename(path, environment), remote: scope.remote, inputs }
 }
 
-// `${NAME}` (or `${NAME:-default}`) in a `with` value is the including file's `envs` value
-// of that name, so one file holds a value such as NODE_VERSION for all it includes. A
-// reference there (`$NAME`) stays one; a name the file does not declare is left to the
-// included file, which reads it from the environment.
+// `${NAME}` (or `${NAME:-default}`) in a `with` value reads as it does in the including
+// file: the environment or a `.env` file first, then that file's own `envs` value. So one
+// file holds a value such as NODE_VERSION for all it includes, and CI can still set it. A
+// name the file does not declare is left to the included file, which reads it the same way.
 function passEnvs(inputs: BuildFileEnvs | undefined, scope: ParseScope): BuildFileEnvs | undefined {
   if (!inputs) {
     return undefined
@@ -168,16 +168,27 @@ function passEnvs(inputs: BuildFileEnvs | undefined, scope: ParseScope): BuildFi
   for (const [key, value] of Object.entries(inputs)) {
     result[key] =
       typeof value === 'string'
-        ? value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g, (match, name: string) =>
-            name in envs ? asInterpolation(`${envs[name]}`) : match
+        ? value.replace(
+            /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+            (match, name: string, fallback: string | undefined) =>
+              name in envs ? passEnv(name, `${envs[name]}`, fallback) : match
           )
         : value
   }
   return result
 }
 
-function asInterpolation(value: string): string {
-  return /^\$[A-Za-z_][A-Za-z0-9_]*$/.test(value) ? `\${${value.substring(1)}}` : value
+// The including file's value as an interpolation the included file resolves in the same
+// order. A value built from other variables is passed on as it is written.
+function passEnv(name: string, value: string, fallback: string | undefined): string {
+  const reference = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value)
+  if (reference) {
+    return fallback === undefined ? `\${${reference[1]}}` : `\${${reference[1]}:-${fallback}}`
+  }
+  if (value.includes('$') || value.includes('}')) {
+    return value
+  }
+  return `\${${name}:-${value}}`
 }
 
 // `includes pull` fetches each source once, however often the build files name it.
