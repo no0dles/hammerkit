@@ -193,9 +193,11 @@ function candidates(command: string, path: string | undefined): string[] {
   return bases.flatMap((base) => extensions.map((extension) => base + extension))
 }
 
-function statOf(path: string): { dev: number; ino: number } | null {
+// bigint: a Windows file id has more digits than a number keeps, and two files whose ids
+// round to the same number would be the same file
+function statOf(path: string): { dev: bigint; ino: bigint } | null {
   try {
-    const stat = statSync(path)
+    const stat = statSync(path, { bigint: true })
     return stat.isFile() ? stat : null
   } catch {
     return null
