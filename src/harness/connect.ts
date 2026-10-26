@@ -2,7 +2,7 @@ import { Environment } from '../executer/environment'
 import { getFileContext } from '../file/get-file-context'
 import { consoleContext } from '../log'
 import { statusConsole } from '../planner/work-item-status'
-import { hasServer, readHostConfig } from '../remote/host-config'
+import { getRegisteredServer, hasServer, readHostConfig } from '../remote/host-config'
 import { createSecretRegistry } from '../utils/redact'
 import { emptyWritable } from '../utils/empty-writable'
 import { getTokenSource } from '../remote/token-source'
@@ -73,7 +73,7 @@ export async function connectServer(
       `${options.build} is not the hash of a published version (sha256:...), name it as hammerkit remote publish printed it (HAMMERKIT_BUILD or --build)`
     )
   }
-  const server = config.servers[name]
+  const server = getRegisteredServer(config, name)
   return { name, connection: { url: server.url, ...getTokenSource(environment, name, server) }, build: options.build }
 }
 

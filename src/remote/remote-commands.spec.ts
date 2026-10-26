@@ -1,6 +1,8 @@
 import { join } from 'path'
 import { HOST_RUNS_YAML } from '../testing/host-env'
 import { readFileSync, writeFileSync } from 'fs'
+import { parse, stringify } from 'yaml'
+import { z } from 'zod'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
@@ -86,33 +88,73 @@ describe('remote commands', () => {
     await withConfig('remote-commands-token-command', async (run, configFile) => {
       const add = ['remote', 'add', 'a', 'https://a.corp', '--issuer', 'https://idp.corp']
       const command = 'gcloud auth print-identity-token --audiences=hammerkit'
+      const stored = () => parse(readFileSync(configFile, 'utf8'))
       expect(await run(...add, '--client-id', 'cli', '--token-command', ` ${command} `)).toContain(
         `tokens for a come from: ${command}`
       )
-      expect(readFileSync(configFile, 'utf8')).toContain(`tokenCommand: ${command}`)
+      expect(stored().tokenCommands).toEqual({ a: { url: 'https://a.corp', issuer: 'https://idp.corp', command } })
       expect(await run('remote', 'list')).toContain(`token from: ${command}`)
 
       // adding it again without the command, or without a pin, keeps both
       await run(...add)
-      expect(readFileSync(configFile, 'utf8')).toContain(`tokenCommand: ${command}`)
-      expect(readFileSync(configFile, 'utf8')).toContain('clientId: cli')
+      expect(stored().tokenCommands.a.command).toBe(command)
+      expect(stored().servers.a.clientId).toBe('cli')
 
       // a new command is no new server, it needs no --force
       await run(...add, '--token-command', 'other-token')
-      expect(readFileSync(configFile, 'utf8')).toContain('tokenCommand: other-token')
+      expect(stored().tokenCommands.a.command).toBe('other-token')
 
       await run(...add, '--no-token-command')
-      expect(readFileSync(configFile, 'utf8')).not.toContain('tokenCommand')
+      expect(stored().tokenCommands).toBeUndefined()
       expect(await run('remote', 'list')).not.toContain('token from')
 
-      // a name pointed at another server does not keep the command
+      // a name pointed at another server does not keep the command, a removed one neither
       await run(...add, '--token-command', 'other-token')
       await run('remote', 'add', 'a', 'https://b.corp', '--issuer', 'https://idp.corp', '--force')
-      expect(readFileSync(configFile, 'utf8')).not.toContain('tokenCommand')
+      expect(stored().tokenCommands).toBeUndefined()
+      await run('remote', 'add', 'a', 'https://b.corp', '--issuer', 'https://idp.corp', '--token-command', 'x')
+      await run('remote', 'remove', 'a')
+      expect(stored().tokenCommands).toBeUndefined()
 
       await expect(run(...add, '--force', '--token-command', '  ')).rejects.toThrow(
         'the token command must not be empty'
       )
+    })
+  })
+
+  it('writes a host config that hammerkit 1.26 still reads', async () => {
+    await withConfig('remote-commands-token-command-1-26', async (run, configFile) => {
+      await run('remote', 'add', 'a', 'https://a.corp', '--issuer', 'https://idp.corp', '--token-command', 'tok')
+      // the host config schema of 1.26.0: servers refuse unknown keys, the top level keeps them
+      const server126 = z
+        .object({
+          url: z.string(),
+          issuer: z.string(),
+          clientId: z.string().optional(),
+          audience: z.string().optional(),
+          scope: z.string().optional(),
+        })
+        .strict()
+      const config126 = z
+        .object({
+          servers: z.record(server126).default({}),
+          run: z.object({ on: z.string().optional() }).passthrough().default({}),
+        })
+        .passthrough()
+      const read = config126.parse(parse(readFileSync(configFile, 'utf8')))
+      expect(read.servers.a).toEqual({ url: 'https://a.corp', issuer: 'https://idp.corp' })
+    })
+  })
+
+  it('does not use a token command left behind for another server', async () => {
+    await withConfig('remote-commands-token-command-stale', async (run, configFile) => {
+      await run('remote', 'add', 'a', 'https://a.corp', '--issuer', 'https://idp.corp', '--token-command', 'tok')
+      // as an older hammerkit points the name elsewhere: it keeps tokenCommands as they are
+      const config = parse(readFileSync(configFile, 'utf8'))
+      config.servers.a.url = 'https://elsewhere.example'
+      writeFileSync(configFile, stringify(config))
+      expect(await run('remote', 'list')).not.toContain('token from')
+      await expect(run('remote', 'accounts', 'a')).rejects.toThrow('not signed in to a')
     })
   })
 
@@ -139,7 +181,8 @@ describe('remote login, accounts and logout', () => {
         issuer: string
         credentials: string
         environment: Environment
-        // a token command that prints a token of the subject
+        // a token of the subject, and a token command that prints one
+        token: (sub: string) => string
         tokenCommand: (sub: string) => string
       }
     ) => Promise<void>,
@@ -179,18 +222,14 @@ entitlements:
         environment.processEnvs = { ...environment.processEnvs, HAMMERKIT_CREDENTIALS: credentials }
         const server = await startServer(await readServerConfig(environment, serverFile), environment)
         try {
+          const token = (sub: string) =>
+            signToken(key, { iss: idp.url, sub, aud: 'hammerkit', exp: Math.floor(Date.now() / 1000) + 3600 })
           const tokenCommand = (sub: string) => {
             const script = join(environment.cwd, `token-${sub}.js`)
-            const token = signToken(key, {
-              iss: idp.url,
-              sub,
-              aud: 'hammerkit',
-              exp: Math.floor(Date.now() / 1000) + 3600,
-            })
-            writeFileSync(script, `process.stdout.write(${JSON.stringify(token + '\n')})`)
+            writeFileSync(script, `process.stdout.write(${JSON.stringify(token(sub) + '\n')})`)
             return `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`
           }
-          await fn(run, { url: server.url, issuer: idp.url, credentials, environment, tokenCommand })
+          await fn(run, { url: server.url, issuer: idp.url, credentials, environment, token, tokenCommand })
         } finally {
           await server.close()
         }
@@ -251,20 +290,31 @@ entitlements:
   })
 
   it('takes the token of a server from its token command, after the variables', async () => {
-    await withServerAndIdp('remote-token-command', async (run, { url, issuer, environment, tokenCommand }) => {
+    await withServerAndIdp('remote-token-command', async (run, { url, issuer, environment, token, tokenCommand }) => {
+      // the command comes before a sign-in
+      await run('remote', 'add', 'build', url, '--issuer', issuer)
+      await run('remote', 'login', 'build')
       await run('remote', 'add', 'build', url, '--issuer', issuer, '--token-command', tokenCommand('ci'))
       expect(await run('remote', 'accounts', 'build')).toContain(`build: ci (${issuer})`)
 
-      // the variables still win, for a job that brings its own token
+      // the variables still win, for a job that brings its own token, and say so
       const env = environment.processEnvs
-      environment.processEnvs = { ...env, HAMMERKIT_TOKEN_COMMAND: tokenCommand('alice') }
-      expect(await run('remote', 'accounts', 'build')).toContain('build: alice')
+      const variables = [{ HAMMERKIT_TOKEN_COMMAND: tokenCommand('alice') }, { HAMMERKIT_TOKEN: token('alice') }]
+      for (const variable of variables) {
+        const err = memoryStream()
+        environment.stderr = err.stream
+        environment.processEnvs = { ...env, ...variable }
+        expect(await run('remote', 'accounts', 'build')).toContain('build: alice')
+        expect(err.read()).toContain(`${Object.keys(variable)[0]} is set, so the token command of build is not used`)
+      }
       environment.processEnvs = env
 
       // a sign-in would never be used
       await expect(run('remote', 'login', 'build')).rejects.toThrow(
         `build takes its tokens from its token command (${tokenCommand('ci')}), it needs no sign-in`
       )
+      await run('remote', 'add', 'build', url, '--issuer', issuer, '--no-token-command')
+      expect(await run('remote', 'accounts', 'build')).toContain('build: alice')
     })
   })
 
@@ -273,7 +323,9 @@ entitlements:
       const script = join(environment.cwd, 'fails.js')
       writeFileSync(
         script,
-        `process.stdout.write('eyJ.leaked'); process.stderr.write('ERROR: permission denied\\n'); process.exit(3)`
+        `process.stdout.write('eyJ.leaked'); for (let i = 1; i <= 30; i++) process.stderr.write('line ' + i + '\\n'); ` +
+          `process.stderr.write('\\x1b[2Jclear ' + 'x'.repeat(400) + '\\n'); ` +
+          `process.stderr.write('ERROR: permission denied\\n'); process.exit(3)`
       )
       const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`
       await run('remote', 'add', 'build', url, '--issuer', issuer, '--token-command', command)
@@ -282,8 +334,13 @@ entitlements:
       const failure = run('remote', 'accounts', 'build')
       await expect(failure).rejects.toThrow('the token command of build printed no token, it exited with 3')
       await expect(failure).rejects.not.toThrow('eyJ.leaked')
-      expect(err.read()).toContain('the token command of build: ERROR: permission denied')
+      const lines = err.read().trim().split('\n')
+      expect(lines[lines.length - 1]).toBe('the token command of build: ERROR: permission denied')
       expect(err.read()).not.toContain('eyJ.leaked')
+      // the last 20 lines, each cut and without control characters
+      expect(lines).toHaveLength(20)
+      expect(lines[0]).toBe('the token command of build: line 13')
+      expect(lines[18]).toBe(`the token command of build: ?[2Jclear ${'x'.repeat(290)}`)
     })
   })
 

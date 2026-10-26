@@ -1,7 +1,7 @@
 import { exec } from 'child_process'
 import { Environment } from '../executer/environment'
 import { getAccessToken } from './credentials'
-import { HostServer } from './host-config'
+import { RegisteredServer } from './host-config'
 
 export interface TokenSource {
   token: () => Promise<string>
@@ -72,7 +72,7 @@ function commandSource(environment: Environment, command: string, what: string):
  *   identity, such as a workload identity or a service account of the identity provider. It
  *   runs again when the server no longer accepts the token.
  * - `HAMMERKIT_TOKEN`: such a token, as the agent's platform hands it over.
- * - the `tokenCommand` of the server in the host config (`remote add --token-command`): the
+ * - the token command of the server in the host config (`remote add --token-command`): the
  *   same as `HAMMERKIT_TOKEN_COMMAND`, for one server, so each server can have the service
  *   account and audience it accepts. It only ever comes from the host config, never from a
  *   build file: whoever writes it decides what runs on this machine.
@@ -83,14 +83,22 @@ function commandSource(environment: Environment, command: string, what: string):
 export function getTokenSource(
   environment: Environment,
   name: string,
-  server: Pick<HostServer, 'url' | 'issuer' | 'tokenCommand'>
+  server: Pick<RegisteredServer, 'url' | 'issuer' | 'tokenCommand'>
 ): TokenSource {
+  // a variable holds for every server: say so when it takes the place of the one registered
+  const overrides = (variable: string) => {
+    if (server.tokenCommand) {
+      environment.stderr.write(`${variable} is set, so the token command of ${name} is not used\n`)
+    }
+  }
   const command = environment.processEnvs.HAMMERKIT_TOKEN_COMMAND
   if (command) {
+    overrides('HAMMERKIT_TOKEN_COMMAND')
     return commandSource(environment, command, 'HAMMERKIT_TOKEN_COMMAND')
   }
   const fixed = environment.processEnvs.HAMMERKIT_TOKEN?.trim()
   if (fixed) {
+    overrides('HAMMERKIT_TOKEN')
     return {
       token: async () => {
         if (!isToken(fixed)) {

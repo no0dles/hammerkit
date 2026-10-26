@@ -6,9 +6,10 @@ import {
   addServer,
   pinLogin,
   getHostConfigPath,
+  getRegisteredServer,
   hasServer,
-  HostServer,
   readHostConfig,
+  RegisteredServer,
   removeServer,
   setDefaultLocation,
 } from './host-config'
@@ -87,7 +88,7 @@ export function registerRemoteCommands(
           return
         }
         for (const name of names) {
-          const server = config.servers[name]
+          const server = getRegisteredServer(config, name)
           const marker = config.run.on === name ? colors.green(' (default)') : ''
           const token = server.tokenCommand ? `  token from: ${server.tokenCommand}` : ''
           environment.stdout.write(`${colors.bold(name)}${marker}  ${server.url}  issuer ${server.issuer}${token}\n`)
@@ -121,7 +122,7 @@ export function registerRemoteCommands(
       })
     )
 
-  const getServer = async (name: string | undefined): Promise<{ name: string; server: HostServer }> => {
+  const getServer = async (name: string | undefined): Promise<{ name: string; server: RegisteredServer }> => {
     const config = await readHostConfig(environment)
     const chosen = name ?? config.run.on
     if (!chosen || !hasServer(config.servers, chosen)) {
@@ -131,7 +132,7 @@ export function registerRemoteCommands(
           : 'name a server, or set one as the default with: hammerkit remote use <name>'
       )
     }
-    return { name: chosen, server: config.servers[chosen] }
+    return { name: chosen, server: getRegisteredServer(config, chosen) }
   }
 
   remote

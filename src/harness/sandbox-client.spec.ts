@@ -228,6 +228,37 @@ describe('tokens', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('runs the token command of a server again when the token is renewed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hammerkit-token-'))
+    try {
+      // prints tok-1, tok-2, ... one more on every run
+      const script = join(dir, 'token.js')
+      const counter = join(dir, 'count')
+      writeFileSync(
+        script,
+        `const fs = require('fs'); const n = (fs.existsSync(${JSON.stringify(counter)}) ? ` +
+          `Number(fs.readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0) + 1; ` +
+          `fs.writeFileSync(${JSON.stringify(counter)}, String(n)); process.stdout.write('tok-' + n)`
+      )
+      const environment = getHarnessEnvironment()
+      const env = { ...environment.processEnvs }
+      delete env.HAMMERKIT_TOKEN_COMMAND
+      delete env.HAMMERKIT_TOKEN
+      environment.processEnvs = env
+      const source = getTokenSource(environment, 'corp', {
+        url: 'http://127.0.0.1:1',
+        issuer: 'https://idp.example.com',
+        tokenCommand: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+      })
+      expect(await source.token()).toBe('tok-1')
+      expect(await source.token()).toBe('tok-1')
+      await source.renew?.()
+      expect(await source.token()).toBe('tok-2')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('sandbox client', () => {
