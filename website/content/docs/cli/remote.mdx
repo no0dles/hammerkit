@@ -39,7 +39,7 @@ server, so they work with or without a build file in the working directory.
 
 | Command | What it does |
 | --- | --- |
-| `remote add <name> <url> --issuer <url>` | Register a server. `--issuer` is the OAuth issuer the server accepts tokens from, written exactly as the `iss` of its tokens (some providers end it with a slash). `--client-id`, `--audience` and `--scope` pin what a login asks for, see [Signing in](#signing-in). |
+| `remote add <name> <url> --issuer <url>` | Register a server. `--issuer` is the OAuth issuer the server accepts tokens from, written exactly as the `iss` of its tokens (some providers end it with a slash). `--client-id`, `--audience` and `--scope` pin what a login asks for, see [Signing in](#signing-in). `--token-command <command>` takes the token for this server from a command instead of a login, see [A token command per server](#a-token-command-per-server); `--no-token-command` removes it. |
 | `remote list` | Show the registered servers and which one is the default. |
 | `remote use <location>` | Set the default location: `local`, `auto` or a registered name. |
 | `remote remove <name>` | Forget a server. If it was the default, runs are local again. |
@@ -62,9 +62,11 @@ server, so they work with or without a build file in the working directory.
 | `remote reject <run or hash> [server]` | End a run, or drop a proposed version. `--reason <text>` is shown to who asked for it. |
 | `remote mcp` | Serve a sandbox on a server as MCP tools over stdio for a coding agent, see [remote mcp](/docs/cli/remote-mcp). |
 
-Re-running `remote add` with the same values changes nothing. To point an existing
-name at a different server pass `--force`, so a typo can't silently redirect your
-runs.
+Re-running `remote add` with the same values changes nothing. What you leave out keeps
+what was registered: the pinned client, audience and scope, and the token command. To
+point an existing name at a different server pass `--force`, so a typo can't silently
+redirect your runs. A name pointed at another server starts without the old token
+command. To drop a pin, remove the server and add it again.
 
 `local` and `auto` are reserved and can't be used as server names.
 
@@ -78,9 +80,22 @@ servers:
   build:
     url: https://build.example.com
     issuer: https://login.example.com
+  ci:
+    url: https://ci.example.com
+    issuer: https://accounts.google.com
+tokenCommands:
+  ci:
+    url: https://ci.example.com
+    issuer: https://accounts.google.com
+    command: gcloud auth print-identity-token --audiences=hammerkit --impersonate-service-account=hammerkit-ci@my-project.iam.gserviceaccount.com
 run:
   on: build
 ```
+
+`tokenCommands` are written by [`remote add --token-command`](#a-token-command-per-server).
+Each is bound to the URL and issuer it was registered for, like a sign-in, and is not used
+once the name points elsewhere. They sit beside `servers` so that hammerkit before 1.27,
+which refuses unknown keys of a server, still reads the file.
 
 <Callout type="info">
 
@@ -398,3 +413,41 @@ publish:
 ```
 
 The token goes only to the server the name is registered for.
+
+### A token command per server
+
+The variables hold for every server. When servers want tokens of different service
+accounts or audiences, or you don't want to export a variable in every shell, register the
+command with the server:
+
+```bash
+hammerkit remote add ci https://ci.example.com --issuer https://accounts.google.com \
+  --token-command 'gcloud auth print-identity-token --audiences=hammerkit --impersonate-service-account=hammerkit-ci@my-project.iam.gserviceaccount.com'
+hammerkit remote publish ci
+```
+
+Every `remote` command and [`remote mcp`](/docs/cli/remote-mcp) that talks to `ci` then runs
+it for a token, and runs it again when the server stops accepting the token. It runs with
+your environment and identity, through the shell, and has a minute to print the token alone
+on stdout. When it fails, hammerkit says how it ended and shows what it printed on stderr;
+what it printed on stdout is never shown, as it can hold more than the token. The order is:
+
+| Source                            | Used for                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `HAMMERKIT_TOKEN_COMMAND`         | Every server, so a CI job or an agent can bring its own identity.        |
+| `HAMMERKIT_TOKEN`                 | Every server.                                                            |
+| `remote add --token-command`      | The one server it is registered with.                                    |
+| `remote login`                    | The one server it signed in to.                                          |
+
+A server with a token command needs no `remote login`, and `remote login` says so. A server
+that offers no sign-in for its issuer (an issuer without a `clientId` in the server's config)
+can only be reached with a token from elsewhere, and `remote login` points you to
+`--token-command`.
+
+The command lives in your host config only, like the server's URL: a build file can't name
+one, since whoever writes it decides what runs on your machine. For the same reason keep the
+host config writable by you only: whoever may edit it, an agent too, can make hammerkit run
+any command, also in the [agent plugins](/docs/remote-compute/agents). `remote add` and
+`remote list` print the command, so don't put a secret in it; point it at a script that
+holds one instead. Make it print a token of a service account, see
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts), not of yourself.
