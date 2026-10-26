@@ -231,6 +231,19 @@ describe('provider secrets', () => {
         })
       })
 
+      it('takes a provider of the host config for an account of the build file', async () => {
+        const { cli } = await plan(
+          'provider-host-config-provider',
+          {
+            secretAccounts: accounts,
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('provider', { secretProviders: { fake: provider() } })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', account: 'test' })
+      })
+
       it('does not stop a project that reads no secrets from loading', async () => {
         const envs = hostConfig('other-project', {
           secretProviders: { op: { command: ['op', 'read', '{{ref}}'] } },

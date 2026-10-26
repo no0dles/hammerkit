@@ -28,8 +28,8 @@ names that. The server reads the bundle the way a run would, in a directory of i
 only the bundle's files exist, so one that does not load is refused when it is
 published and not when somebody wants to run it (`400`). A bundle may not include
 anything outside of itself. Includes from git have to be pinned to a commit and
-come from an `https://` or `ssh://` address, because the version below can only
-vouch for what is in the bundle.
+come from an `https://` or `ssh://` address, and so do the git includes of the files
+they include, because the version below can only vouch for what is in the bundle.
 
 ## Versions
 
@@ -228,8 +228,8 @@ hammerkit remote publish --dry-run
 
 The server reads the bundle with its policy as a publish would, and says what publishing
 it would do: publish it, [propose](#proposing-a-version) it (and which accounts make it a
-proposal), or that it is published already. A bundle the server would refuse prints every
-problem. Nothing is stored. Any `builds` level may check, `run` too, so a developer can
+proposal), or that it is published already. A bundle the server would refuse prints why:
+every problem with its policy, or the first git include it may not fetch. Nothing is stored. Any `builds` level may check, `run` too, so a developer can
 check a build file before the account that publishes it does. As for a proposal, a caller
 who may not publish can't make the server fetch a git include: a build file that includes
 from git (and publishes that include) is checked by somebody with `builds: publish`. A

@@ -74,7 +74,7 @@ export async function appendBuildFile(
         scope.references[name] = { type, publish, scope: notFetched(cwd, [...namePrefix, name], include) }
         continue
       }
-      if (isGitSource(include) && !scope.remote) {
+      if (isGitSource(include)) {
         ctx.checkGitSource?.(include, scope, block, name)
       }
       const target = await locateInclude(

@@ -507,7 +507,15 @@ export async function planBundle(
       const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected, {
         // a hash alone can only name what is inside the bundle, see checkGitSource
         checkGitSource: (source, from, block, name) =>
-          checkGitSource(relative(directory, from.fileName), `${block}.${name}`, source, options.noRemote),
+          checkGitSource(
+            // a file of a git include is named by its repository
+            from.remote
+              ? `${from.remote.git} ${relative(from.remote.root, from.fileName).split(sep).join('/')}`
+              : relative(directory, from.fileName),
+            `${block}.${name}`,
+            source,
+            options.noRemote
+          ),
       })
       if (options.policy) {
         const problems = findHostProblems(publishedBundleFiles(bundle, directory, scope))
