@@ -7,7 +7,9 @@ import { FileContext } from '../file/file-context'
 import { getFileContext } from '../file/get-file-context'
 import { isWithin } from '../includes/resolve-git-source'
 import { createParseContext } from '../schema/schema-parser'
-import { parseReferences } from '../schema/reference-parser'
+import { getPublishedFiles, parseReferences } from '../schema/reference-parser'
+import { ParseScope } from '../schema/parse-context'
+import { BuildFileGitSourceSchema } from '../schema/build-file-include-schema'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { WorkScope } from '../executer/work-scope'
 import { WorkTree } from '../planner/work-tree'
@@ -130,8 +132,9 @@ export interface PlanOptions {
   scope?: WorkScope
   // set on a server
   policy?: PlanPolicy
-  // refuse git includes: reading them would make the machine fetch from the network
-  noRemote?: boolean
+  // refuse git includes: reading them would make the machine fetch from the network,
+  // before a proposal is approved, or for a caller who only checks a build file
+  noRemote?: 'proposal' | 'check'
 }
 
 // 40 (sha-1) or 64 (sha-256) hex digits
@@ -140,52 +143,43 @@ const COMMIT_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/i
 // A hash alone can only name what is inside the bundle, so everything a build
 // file pulls in from elsewhere has to be pinned: a git include needs a commit
 // and a remote that is not a path on the server.
-function findLooseIncludes(bundle: Bundle, noRemote = false): string[] {
-  const problems: string[] = []
-  for (const [path, content] of Object.entries(bundle.files)) {
-    if (!/\.ya?ml$/i.test(path)) {
-      continue
-    }
-    let document: any
-    try {
-      document = parse(content)
-    } catch {
-      continue // a file that isn't valid yaml is reported when the bundle is parsed
-    }
-    for (const block of ['includes', 'references']) {
-      for (const [name, include] of Object.entries(document?.[block] ?? {})) {
-        const source = include as { git?: unknown; ref?: unknown }
-        if (!source || typeof source !== 'object' || source.git === undefined) {
-          continue
-        }
-        if (noRemote) {
-          problems.push(
-            `${path}: ${block}.${name}: a proposal may not include from git, the server would fetch it before anybody approved it`
-          )
-          continue
-        }
-        if (typeof source.git !== 'string' || !/^(https:\/\/|ssh:\/\/|git@[\w.-]+:)/.test(source.git)) {
-          problems.push(`${path}: ${block}.${name}: git has to be an https:// or ssh:// address`)
-        }
-        if (typeof source.ref !== 'string' || !COMMIT_PATTERN.test(source.ref)) {
-          problems.push(`${path}: ${block}.${name}: pin ref to a commit, a branch or tag can move`)
-        }
-      }
-    }
+function checkGitSource(
+  path: string,
+  where: string,
+  source: BuildFileGitSourceSchema,
+  noRemote: PlanOptions['noRemote']
+): void {
+  if (noRemote === 'proposal') {
+    throw new DefinitionError(
+      `${path}: ${where}: a proposal may not include from git, the server would fetch it before anybody approved it`
+    )
   }
-  return problems
+  if (noRemote === 'check') {
+    throw new DefinitionError(
+      `${path}: ${where}: checking a build file that includes from git needs builds: publish, the server would fetch it`
+    )
+  }
+  const problems: string[] = []
+  if (!/^(https:\/\/|ssh:\/\/|git@[\w.-]+:)/.test(source.git)) {
+    problems.push(`${path}: ${where}: git has to be an https:// or ssh:// address`)
+  }
+  if (typeof source.ref !== 'string' || !COMMIT_PATTERN.test(source.ref)) {
+    problems.push(`${path}: ${where}: pin ref to a commit, a branch or tag can move`)
+  }
+  if (problems.length > 0) {
+    throw new DefinitionError(problems.join('\n'))
+  }
 }
 
 // What a build file may not name on a server: the places it would run or store things
 // are the operator's. The docker host, a Kubernetes cluster and a remote cache are
 // credentials of the machine, not of the build file, and a project file that could carry
 // them could send runs, or the cache, anywhere.
-function findHostProblems(bundle: Bundle): string[] {
+// A file a server leaves out (`publish: false`) is not checked, and neither is a service
+// with `publish: false`: what is left out is never run there.
+function findHostProblems(files: { [path: string]: string }): string[] {
   const problems: string[] = []
-  for (const [path, content] of Object.entries(bundle.files)) {
-    if (!/\.ya?ml$/i.test(path)) {
-      continue
-    }
+  for (const [path, content] of Object.entries(files)) {
     let document: any
     try {
       document = parse(content)
@@ -209,6 +203,7 @@ function findHostProblems(bundle: Bundle): string[] {
       if (
         service &&
         typeof service === 'object' &&
+        service.publish !== false &&
         ('selector' in service || 'kubeconfig' in service || 'context' in service)
       ) {
         problems.push(`${path}: services.${name}: Kubernetes services are not supported on a server`)
@@ -216,6 +211,18 @@ function findHostProblems(bundle: Bundle): string[] {
     }
   }
   return problems
+}
+
+// The files of the bundle a server publishes, see getPublishedFiles
+function publishedBundleFiles(bundle: Bundle, directory: string, entry: ParseScope): { [path: string]: string } {
+  const files: { [path: string]: string } = {}
+  for (const scope of getPublishedFiles(entry)) {
+    const path = relative(directory, scope.fileName).split(sep).join('/')
+    if (!scope.remote && path in bundle.files) {
+      files[path] = bundle.files[path]
+    }
+  }
+  return files
 }
 
 // What a build file may read while it is inspected: its own files. The rest of
@@ -485,10 +492,6 @@ export async function planBundle(
   environment: Environment,
   options: PlanOptions = {}
 ): Promise<InspectedBundle> {
-  const problems = [...findLooseIncludes(bundle, options.noRemote), ...(options.policy ? findHostProblems(bundle) : [])]
-  if (problems.length > 0) {
-    throw new DefinitionError(problems.join('\n'))
-  }
   const directory = await mkdtemp(join(tmpdir(), 'hammerkit-definition-'))
   try {
     for (const [path, content] of Object.entries(bundle.files)) {
@@ -501,7 +504,17 @@ export async function planBundle(
       file: confined(getFileContext(directory), directory),
     }
     try {
-      const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected)
+      const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected, {
+        // a hash alone can only name what is inside the bundle, see checkGitSource
+        checkGitSource: (source, from, block, name) =>
+          checkGitSource(relative(directory, from.fileName), `${block}.${name}`, source, options.noRemote),
+      })
+      if (options.policy) {
+        const problems = findHostProblems(publishedBundleFiles(bundle, directory, scope))
+        if (problems.length > 0) {
+          throw new DefinitionError(problems.join('\n'))
+        }
+      }
       const context = await parseReferences(ctx, scope, inspected)
       const workTree = getWorkContext(context, options.scope ?? { environmentName: null }, inspected)
       const items = itemsOf(workTree)

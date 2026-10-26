@@ -125,7 +125,7 @@ function findPublished<T>(user: string, verb: string, find: () => T): T {
 
 // The build files a server publishes: the entry file and what it includes or references,
 // except through an include with `publish: false`. The key of each is in ctx.files.
-function getPublishedFiles(mainScope: ParseScope): Set<ParseScope> {
+export function getPublishedFiles(mainScope: ParseScope): Set<ParseScope> {
   const published = new Set<ParseScope>([mainScope])
   const queue = [mainScope]
   for (let scope = queue.shift(); scope; scope = queue.shift()) {
@@ -177,7 +177,10 @@ export async function parseReferences(
   }
 
   for (const file of Object.values(ctx.files)) {
-    if (environment.hosted && (file.schema.secretProviders || file.schema.secretAccounts)) {
+    // what a server leaves out of a file it doesn't publish: its tasks and services (see
+    // isLeftOut), and where it would run or store things, which only a local run reads
+    const published = !publishedFiles || publishedFiles.has(file)
+    if (published && environment.hosted && (file.schema.secretProviders || file.schema.secretAccounts)) {
       throw new Error(
         `${file.fileName} declares secret providers or accounts, which a server defines in its own config`
       )
@@ -211,7 +214,7 @@ export async function parseReferences(
       }
     }
 
-    if (file.schema.environments) {
+    if (file.schema.environments && published) {
       for (const [envName, env] of Object.entries(file.schema.environments)) {
         reference.environments[envName] = {
           type: 'environment',
@@ -222,7 +225,7 @@ export async function parseReferences(
       }
     }
 
-    if (file.schema.caches) {
+    if (file.schema.caches && published) {
       for (const [cacheName, cache] of Object.entries(file.schema.caches)) {
         declaredCaches[cacheName] = cache
       }
@@ -438,6 +441,7 @@ export function findTask(
   name: string,
   type: ReferenceLinkType | null
 ): { task: ReferenceTask; type: ReferenceLinkType } {
+  refuseNotFetched(scope, name)
   const ref = splitName(name)
   if (ref.prefix) {
     if (scope.references[ref.prefix]) {
@@ -450,6 +454,13 @@ export function findTask(
   }
 
   throw new Error('unable to find ' + name) // TODO improve
+}
+
+// A name in a git source a server did not fetch, since it is left out
+function refuseNotFetched(scope: ParseScope, name: string) {
+  if (scope.notFetched) {
+    throw new UnpublishedError(combinePath(scope.namePrefix, name), 'its build file is included with publish: false')
+  }
 }
 
 function resolveTask(
@@ -470,6 +481,7 @@ function resolveTask(
 }
 
 export function findService(ctx: ReferencedContext, scope: ParseScope, name: string): ReferenceService {
+  refuseNotFetched(scope, name)
   const ref = splitName(name)
   if (ref.prefix) {
     if (scope.references[ref.prefix]) {

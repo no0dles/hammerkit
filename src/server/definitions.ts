@@ -3,7 +3,7 @@ import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { Environment } from '../executer/environment'
 import { Annotations, Bundle, hashBundle, HASH_PATTERN } from '../remote/bundle'
-import { DefinitionInputs, DefinitionError, PlanPolicy, planBundle, TaskPlan } from './plan'
+import { DefinitionInputs, DefinitionError, PlanOptions, PlanPolicy, planBundle, TaskPlan } from './plan'
 
 export interface DefinitionVersion {
   // sha256:<hex> of the bundle, see hashBundle: the only name a version has
@@ -145,7 +145,7 @@ export class DefinitionStore {
     bundle: Bundle,
     publisher: { iss: string; sub: string },
     // a proposal is read before anybody trusts it: it may not make the server fetch
-    options: { noRemote?: boolean; annotations?: Annotations } = {}
+    options: { noRemote?: PlanOptions['noRemote']; annotations?: Annotations } = {}
   ): Promise<{ version: DefinitionVersion; existing?: DefinitionVersion }> {
     const hash = hashBundle(bundle)
     const existing = this.find(hash)

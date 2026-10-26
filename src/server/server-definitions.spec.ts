@@ -206,6 +206,27 @@ describe('definitions api', () => {
         expect(await (await api.call('POST', '/v1/definitions/plan', 'bob', { files })).json()).toMatchObject({
           outcome: 'already published',
         })
+        const hash = hashBundle({ entry: '.hammerkit.yaml', files })
+        await api.call('POST', `/v1/definitions/${hash}/yank`, 'alice', {})
+        expect(await (await api.call('POST', '/v1/definitions/plan', 'bob', { files })).json()).toMatchObject({
+          outcome: 'already published',
+          yanked: true,
+        })
+
+        // bob can't make the server fetch from git by checking a build file
+        const git = {
+          '.hammerkit.yaml': `includes:\n  lib:\n    git: https://example.invalid/lib.git\n    ref: ${'a'.repeat(
+            40
+          )}\n${files['.hammerkit.yaml']}`,
+        }
+        const fetching = await api.call('POST', '/v1/definitions/plan', 'bob', { files: git })
+        expect(fetching.status).toBe(400)
+        expect((await fetching.json()).error).toBe(
+          'the build file does not load: .hammerkit.yaml: includes.lib: checking a build file that includes from git needs builds: publish, the server would fetch it'
+        )
+        // alice may: the server tries to fetch it
+        const fetched = await (await api.call('POST', '/v1/definitions/plan', 'alice', { files: git })).json()
+        expect(fetched.error).not.toContain('needs builds: publish')
       },
       `${HOST_ENV_YAML.replace(' } }', ' }, network: { allow: [registry.npmjs.org] } }')}runtimes: [docker]\n`
     )

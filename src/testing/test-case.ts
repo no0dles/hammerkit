@@ -1,5 +1,6 @@
 import { TestSuiteOptions } from './test-suite'
 import { dirname, join } from 'path'
+import { tmpdir } from 'os'
 import { getFileContext } from '../file/get-file-context'
 import { Environment } from '../executer/environment'
 import { consoleContext } from '../log'
@@ -10,6 +11,10 @@ import { stringify as yamlSerialize } from 'yaml'
 import { runProgram } from '../run-program'
 import { Cli } from '../cli'
 import { emptyStream, memoryStream } from './test-streams'
+
+// A host config that is not there: a test does not read the one of the machine it runs on
+// (its secret providers, its servers), unless it sets HAMMERKIT_CONFIG itself.
+export const NO_HOST_CONFIG = join(tmpdir(), 'hammerkit-tests-without-host-config', 'config.yaml')
 
 export function getTestRunId(name: string): string {
   const base = process.env.HAMMERKIT_TEST_RUN_ID ?? `local-${process.pid}`
@@ -40,7 +45,7 @@ export function createTestCase(name: string, files: { [key: string]: any }) {
         await file.createDirectory(path)
 
         const environment: Environment = {
-          processEnvs: { ...process.env, HAMMERKIT_TEST_RUN_ID: runId },
+          processEnvs: { ...process.env, HAMMERKIT_CONFIG: NO_HOST_CONFIG, HAMMERKIT_TEST_RUN_ID: runId },
           abortCtrl: new AbortController(),
           cwd: path,
           file,

@@ -56,9 +56,11 @@ export interface HostSecretDeclarations {
 }
 
 // Providers and accounts are global names, like caches, collected from every
-// loaded build file and the host config. A name declared twice is an error rather
-// than a silent override: which definition runs with a service account's credential
-// must not depend on include order.
+// loaded build file. A name declared twice is an error rather than a silent override:
+// which definition runs with a service account's credential must not depend on include
+// order. The host config then replaces what the build files declare, name by name (and
+// its default account replaces theirs): the machine that runs a task says how it reads
+// secrets, and a build file that still declares them loads as it is.
 export function collectSecretCatalog(
   files: ParseScope[],
   environment: Environment,
@@ -66,65 +68,33 @@ export function collectSecretCatalog(
   host?: HostSecretDeclarations
 ): SecretCatalog {
   const catalog = emptySecretCatalog()
-  const sources: {
-    fileName: string
-    providers: [string, BuildFileSecretProviderSchema][]
-    accounts: [string, BuildFileSecretAccountSchema][]
-    file: ParseScope | null
-  }[] = files.map((file) => ({
-    fileName: file.fileName,
-    providers: Object.entries(file.schema.secretProviders ?? {}),
-    accounts: Object.entries(file.schema.secretAccounts ?? {}),
-    file,
-  }))
-  if (host) {
-    sources.push({
-      fileName: host.fileName,
-      providers: Object.entries(host.secretProviders ?? {}),
-      accounts: Object.entries(host.secretAccounts ?? {}),
-      file: null,
-    })
-  }
-
-  for (const { fileName, providers, accounts, file } of sources) {
+  for (const file of files) {
+    const providers = Object.entries(file.schema.secretProviders ?? {})
+    const accounts = Object.entries(file.schema.secretAccounts ?? {})
     if (providers.length === 0 && accounts.length === 0) {
       continue
     }
-    // the host config has no envs of its own: `${NAME}` is read from the process
-    let envs: { [key: string]: string } = {}
-    if (file) {
-      requirePinnedSource(file)
-      envs = buildEnvironmentVariables(
-        mergeEnvironmentVariables(file.schema.envs, null),
-        environment,
-        context
-      ).variables
-    }
+    requirePinnedSource(file)
+    const envs = buildEnvironmentVariables(
+      mergeEnvironmentVariables(file.schema.envs, null),
+      environment,
+      context
+    ).variables
     for (const [name, provider] of providers) {
       if (catalog.providers[name]) {
         throw new Error(
-          `secret provider ${name} is declared in ${catalog.providers[name].declaredIn} and in ${fileName}`
+          `secret provider ${name} is declared in ${catalog.providers[name].declaredIn} and in ${file.fileName}`
         )
       }
-      catalog.providers[name] = {
-        name,
-        type: 'command',
-        command: provider.command.map((part) => applyEnvs(part, envs)),
-        env: provider.env ?? {},
-        timeoutMs: parseDuration(provider.timeout ?? DEFAULT_TIMEOUT),
-        declaredIn: fileName,
-      }
+      catalog.providers[name] = toProvider(name, provider, envs, file.fileName)
     }
     for (const [name, account] of accounts) {
       if (catalog.accounts[name]) {
-        throw new Error(`secret account ${name} is declared in ${catalog.accounts[name].declaredIn} and in ${fileName}`)
+        throw new Error(
+          `secret account ${name} is declared in ${catalog.accounts[name].declaredIn} and in ${file.fileName}`
+        )
       }
-      catalog.accounts[name] = {
-        name,
-        default: account.default ?? false,
-        providers: account.providers,
-        declaredIn: fileName,
-      }
+      catalog.accounts[name] = toAccount(name, account, file.fileName)
     }
   }
 
@@ -134,14 +104,58 @@ export function collectSecretCatalog(
   }
   for (const account of Object.values(catalog.accounts)) {
     for (const provider of Object.keys(account.providers)) {
-      if (!catalog.providers[provider]) {
+      if (!catalog.providers[provider] && !host?.secretProviders?.[provider]) {
         throw new Error(
           `secret account ${account.name} (${account.declaredIn}) names provider ${provider}, which is not declared`
         )
       }
     }
   }
+
+  if (host) {
+    // the host config has no envs of its own: `${NAME}` is read from the process
+    for (const [name, provider] of Object.entries(host.secretProviders ?? {})) {
+      catalog.providers[name] = toProvider(name, provider, {}, host.fileName)
+    }
+    const accounts = Object.entries(host.secretAccounts ?? {})
+    const hostDefaults = accounts.filter(([, account]) => account.default)
+    if (hostDefaults.length > 1) {
+      throw new Error(
+        `more than one default secret account: ${hostDefaults.map(([name]) => name).join(', ')} (${host.fileName})`
+      )
+    }
+    if (hostDefaults.length > 0) {
+      for (const account of Object.values(catalog.accounts)) {
+        account.default = false
+      }
+    }
+    // a provider an account of the host names is only checked when a secret uses it:
+    // a project that doesn't declare it, and reads no secret, loads anyway
+    for (const [name, account] of accounts) {
+      catalog.accounts[name] = toAccount(name, account, host.fileName)
+    }
+  }
   return catalog
+}
+
+function toProvider(
+  name: string,
+  provider: BuildFileSecretProviderSchema,
+  envs: { [key: string]: string },
+  declaredIn: string
+): SecretProviderDefinition {
+  return {
+    name,
+    type: 'command',
+    command: provider.command.map((part) => applyEnvs(part, envs)),
+    env: provider.env ?? {},
+    timeoutMs: parseDuration(provider.timeout ?? DEFAULT_TIMEOUT),
+    declaredIn,
+  }
+}
+
+function toAccount(name: string, account: BuildFileSecretAccountSchema, declaredIn: string): SecretAccountDefinition {
+  return { name, default: account.default ?? false, providers: account.providers, declaredIn }
 }
 
 // A tag or branch can be moved, and a moved file runs with the credentials of a

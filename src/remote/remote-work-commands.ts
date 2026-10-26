@@ -47,6 +47,7 @@ interface PlannedVersion {
   outcome: 'published' | 'proposed' | 'already published' | null
   // the accounts it names that the caller does not use, which make it a proposal
   missing?: string[]
+  yanked?: boolean
 }
 
 function describeOutcome(planned: PlannedVersion): string {
@@ -54,7 +55,7 @@ function describeOutcome(planned: PlannedVersion): string {
     case 'published':
       return 'publishing it would publish it'
     case 'already published':
-      return 'it is published already'
+      return planned.yanked ? 'it is published already, and yanked' : 'it is published already'
     case 'proposed':
       return planned.missing?.length
         ? `publishing it would propose it, it names accounts you do not use: ${planned.missing

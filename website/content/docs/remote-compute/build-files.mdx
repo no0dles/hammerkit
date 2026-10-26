@@ -207,9 +207,18 @@ tasks:
     publish: false
 ```
 
+A file left out is not checked for what the list above refuses of a published one: its
+`environments` (a local docker host or kind cluster), `caches`, Kubernetes services and
+`secretProviders` stay on your machine. Neither is a Kubernetes service with
+`publish: false`. A git include with `publish: false` is not fetched by the server, so its
+`ref` may be a branch.
+
 Locally `publish` changes nothing. A published task or service that depends on, needs,
 extends or runs as `init` one that is left out is refused, naming both:
 `test needs db, which is not published (publish: false)`.
+
+`publish: false` belongs to the include, not to the file: a file that another published
+file includes too is published through that one, under that one's name.
 
 ## Checking before publishing
 
@@ -222,7 +231,9 @@ it would do: publish it, [propose](#proposing-a-version) it (and which accounts 
 proposal), or that it is published already. A bundle the server would refuse prints every
 problem. Nothing is stored. Any `builds` level may check, `run` too, so a developer can
 check a build file before the account that publishes it does. As for a proposal, a caller
-who may not publish can't make the server fetch a git include.
+who may not publish can't make the server fetch a git include: a build file that includes
+from git (and publishes that include) is checked by somebody with `builds: publish`. A
+version that is published already is not checked again, the answer says when it is yanked.
 
 ```
 POST /v1/definitions/plan
@@ -231,7 +242,8 @@ POST /v1/definitions/plan
 takes the bundle as `POST /v1/definitions` does and answers its `hash`, `tasks`,
 `services`, `plan`, `accounts` and `outcome`: `published`, `proposed`, `already
 published`, or `null` for who may only run (`missing` lists the accounts the caller does
-not use).
+not use, `yanked` is set for a yanked version).
+
 ## Proposing a version
 
 Who defines the work decides what runs, so a new version of a build file can wait for

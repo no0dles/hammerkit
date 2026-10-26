@@ -192,7 +192,9 @@ async function plan(
   }
   try {
     // like a proposal: a caller who may not publish does not make the server fetch
-    const { version, existing } = await store.prepare(parsed.data, principal, { noRemote: !mayPublish(grant) })
+    const { version, existing } = await store.prepare(parsed.data, principal, {
+      noRemote: mayPublish(grant) ? undefined : 'check',
+    })
     const missing = (version.accounts ?? []).filter((account) => !canUse(grant, account))
     const outcome = existing
       ? 'already published'
@@ -209,6 +211,8 @@ async function plan(
       plan: version.plan,
       accounts: version.accounts,
       outcome,
+      // a yanked version is not checked again: it is the one that was published
+      ...(existing?.yanked ? { yanked: true } : {}),
       ...(missing.length > 0 ? { missing } : {}),
     })
   } catch (e) {
@@ -255,7 +259,7 @@ async function publish(
     // a version can't run before it is approved, but it has to load, as it would
     // have when published, so the approver is not asked about a broken one
     const { version, existing } = await store.prepare(parsed.data, principal, {
-      noRemote: !mayPublish(grant),
+      noRemote: mayPublish(grant) ? undefined : 'proposal',
       annotations,
     })
     if (existing) {

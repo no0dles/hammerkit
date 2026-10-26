@@ -1,4 +1,6 @@
 import { tmpdir } from 'os'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { Environment } from '../executer/environment'
 import { Bundle } from '../remote/bundle'
@@ -467,6 +469,101 @@ tasks:
     )
   })
 
+  it('leaves out what is not published before it checks where it would run', async () => {
+    // a dev-only file: a local docker host, a remote cache, its own secrets and a tool from git
+    const dev = [
+      'environments:',
+      '  local: { docker: { host: "unix:///var/run/docker.sock" } }',
+      'caches:',
+      '  shared: { method: checksum, backend: { type: s3, bucket: b } }',
+      'secretProviders:',
+      '  op: { command: [op, read, "{{ref}}"] }',
+      'includes:',
+      '  tools: { git: https://example.invalid/tools.git, ref: main }',
+      'tasks:',
+      '  seed:',
+      '    cmds: [echo seed]',
+    ].join('\n')
+    const yaml = [
+      'includes:',
+      '  dev: { path: ./dev.yaml, publish: false }',
+      // a server does not fetch it, so its ref may move
+      '  lint: { git: https://example.invalid/lint.git, ref: main, publish: false }',
+      'services:',
+      '  db:',
+      '    context: kind-dev',
+      '    selector: { type: deployment, name: postgres }',
+      '    ports: [5432]',
+      '    publish: false',
+      'tasks:',
+      '  build:',
+      '    cmds: [echo build]',
+    ].join('\n')
+    const planned = await planBundle(bundle(yaml, { 'dev.yaml': dev }), hosted, { policy })
+    expect(planned.tasks).toEqual(['build'])
+    expect(planned.services).toEqual([])
+
+    // what is published can't reach into them
+    const reach = (task: string) => `${yaml}\n  ci:\n    deps: [${task}]\n    cmds: [echo ci]\n`
+    await expect(planBundle(bundle(reach('lint:check'), { 'dev.yaml': dev }), hosted, { policy })).rejects.toThrow(
+      'ci depends on lint:check, which is not published (its build file is included with publish: false)'
+    )
+    await expect(planBundle(bundle(reach('dev:tools:x'), { 'dev.yaml': dev }), hosted, { policy })).rejects.toThrow(
+      'ci depends on dev:tools:x, which is not published (its build file is included with publish: false)'
+    )
+
+    // a reference too, and what extends or runs as init
+    const refs = (task: string) =>
+      bundle(`references:\n  sub: { path: ./sub, publish: false }\n${task}`, {
+        'sub/.hammerkit.yaml': 'tasks:\n  base:\n    cmds: [echo base]\n',
+      })
+    await expect(planBundle(refs('tasks:\n  a:\n    cmds: [echo a]\n'), hosted, { policy })).resolves.toMatchObject({
+      tasks: ['a'],
+    })
+    await expect(planBundle(refs('tasks:\n  a:\n    extend: sub:base\n'), hosted, { policy })).rejects.toThrow(
+      'a extends sub:base, which is not published (its build file is included with publish: false)'
+    )
+    await expect(
+      planBundle(refs('services:\n  db:\n    image: postgres:16\n    init: sub:base\n'), hosted, { policy })
+    ).rejects.toThrow('db runs as init sub:base, which is not published')
+
+    // the same, published, is refused as before
+    const publishDev = yaml.replace('publish: false }', 'publish: true }')
+    await expect(planBundle(bundle(publishDev, { 'dev.yaml': dev }), hosted, { policy })).rejects.toThrow(
+      'dev.yaml: includes.tools: pin ref to a commit'
+    )
+    const withoutTools = dev.replace(/includes:\n.*\n/, '')
+    await expect(planBundle(bundle(publishDev, { 'dev.yaml': withoutTools }), hosted, { policy })).rejects.toThrow(
+      /dev.yaml: environments pick a docker host/
+    )
+    await expect(
+      planBundle(bundle(yaml.replace(/\n {4}publish: false/, ''), { 'dev.yaml': dev }), hosted, { policy })
+    ).rejects.toThrow('services.db: Kubernetes services are not supported on a server')
+    await expect(
+      planBundle(bundle(yaml.replace('ref: main, publish: false', 'ref: main'), { 'dev.yaml': dev }), hosted, {
+        policy,
+      })
+    ).rejects.toThrow('includes.lint: pin ref to a commit')
+  })
+
+  it('does not read the host config of the machine it runs on', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-plan-host-'))
+    try {
+      const config = join(directory, 'config.yaml')
+      writeFileSync(config, 'secretProviders:\n  op: { command: [op, read, "{{ref}}"] }\n')
+      const withConfig = { ...hosted, processEnvs: { ...hosted.processEnvs, HAMMERKIT_CONFIG: config } }
+      await expect(
+        planBundle(
+          bundle('tasks:\n  a:\n    secrets:\n      - { from: "op:x", account: ci, env: X }\n    cmds: [echo]\n'),
+          withConfig,
+          { policy }
+        )
+      ).rejects.toThrow('unknown secret provider op, declared: gsm')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('refuses secret providers and accounts of the build file, they are the operator’s', async () => {
     const yaml = `
 secretProviders:
@@ -538,7 +635,7 @@ tasks:
       /caches.shared/
     )
     await refuse(
-      'services:\n  api:\n    kubeconfig: /home/x/.kube/config\n    selector: { app: api }\n    ports: [80]\ntasks:\n  a:\n    cmds: [echo]\n',
+      'services:\n  api:\n    kubeconfig: /home/x/.kube/config\n    selector: { type: deployment, name: api }\n    ports: [80]\ntasks:\n  a:\n    cmds: [echo]\n',
       /services.api: Kubernetes services are not supported on a server/
     )
     await refuse(
