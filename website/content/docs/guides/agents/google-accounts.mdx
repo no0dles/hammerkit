@@ -82,7 +82,8 @@ gcloud auth print-identity-token --audiences=hammerkit \
   --impersonate-service-account=hammerkit-agent@$PROJECT.iam.gserviceaccount.com
 ```
 
-This is the command the tutorials put in `HAMMERKIT_TOKEN_COMMAND`. It prints a long string
+This is the command the tutorials put in `HAMMERKIT_TOKEN_COMMAND`, or that you register with a
+server with [`remote add --token-command`](/docs/cli/remote#a-token-command-per-server). It prints a long string
 starting with `eyJ`, a token that is valid for an hour, and a warning on stderr that it
 impersonates the account, which is expected. `--audiences=hammerkit` has to match
 the `audience` of `issuers` in the server's config.

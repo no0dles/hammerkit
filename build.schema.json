@@ -613,7 +613,11 @@
                   "path": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Build file or directory, relative to this file"
+                    "description": "Build file or directory, relative to the including file"
+                  },
+                  "with": {
+                    "$ref": "#/definitions/hammerkit/properties/envs",
+                    "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
                   },
                   "publish": {
                     "type": "boolean",

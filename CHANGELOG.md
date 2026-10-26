@@ -1,3 +1,27 @@
+# [1.27.0-next.21](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.20...v1.27.0-next.21) (2026-10-26)
+
+
+### Bug Fixes
+
+* review round 1 of up/down by name and include inputs ([d8a7316](https://github.com/no0dles/hammerkit/commit/d8a7316f3e53b1fdf282b1a0150b91e9118f0d7d))
+
+
+### Features
+
+* up and down by name, inputs for local includes ([aa0e7fe](https://github.com/no0dles/hammerkit/commit/aa0e7fe2dbe486bcc20a300ccd40bc18af3752e8))
+
+# [1.27.0-next.20](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.19...v1.27.0-next.20) (2026-10-26)
+
+
+### Bug Fixes
+
+* **remote:** keep token commands where hammerkit 1.26 can read them ([e7eccf2](https://github.com/no0dles/hammerkit/commit/e7eccf2553135c7a4f6c5f22a747f0a531da11bd))
+
+
+### Features
+
+* **remote:** a token command per server with remote add --token-command ([4a95878](https://github.com/no0dles/hammerkit/commit/4a95878f3c7765bb6a9a123335f369e1ed2e022b))
+
 # [1.27.0-next.19](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.18...v1.27.0-next.19) (2026-10-25)
 
 

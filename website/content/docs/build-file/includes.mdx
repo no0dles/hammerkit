@@ -52,7 +52,8 @@ includes:
 The build file of project `b` uses the same include for the npm install task.
 An additional [reference](/docs/build-file/references) to `a` and a [task dependency](/docs/task/dependencies) on `a:build` ensure that project `a` is built before project `b` is compiled.
 
-An include can also be an object with a `path`, which takes `publish`:
+An include can also be an object with a `path`, which takes `publish` (and
+[`with`](#inputs-of-a-local-include)):
 
 ```yaml
 includes:
@@ -88,7 +89,7 @@ tasks:
 | `git` | Repository URL or path. Required. |
 | `ref` | Branch, tag or commit SHA. The repository's `HEAD` when left out. |
 | `path` | Build file, or a directory holding one, inside the repository. The repository root when left out. |
-| `with` | Values for the inputs of the included file, see below. |
+| `with` | Values for the inputs of the included file, see [inputs](#inputs). |
 
 A plain string stays a local path, exactly as before. Prefer `includes` for shared task
 definitions: they run in your directory, while a git `reference` runs inside the cached
@@ -126,10 +127,38 @@ includes:
 ```
 
 A name the included file does not declare is an error that lists the declared inputs, so a
-typo cannot silently do nothing. Values are strings or numbers. As for any build file, an
-environment variable of the same name (or one from a `.env` file) wins over `with`, which
-lets CI override an input from outside. The same file included under two names with
-different inputs gives two independent sets of tasks.
+typo cannot silently do nothing. Values are strings or numbers. A value is used as it is
+written; to let CI set an input from outside, write `NODE_VERSION: ${NODE_VERSION:-22}`,
+which is the environment's (or a `.env` file's) `NODE_VERSION`, else `22`. The same file
+included under two names with different inputs gives two independent sets of tasks.
+
+### Inputs of a local include
+
+A local include (or reference) takes inputs too: write it as an object with a `path`.
+
+```yaml title=".hammerkit.yaml"
+envs:
+  NODE_VERSION: 24
+
+includes:
+  npm:
+    path: build.npm.yaml
+    with:
+      NODE_VERSION: ${NODE_VERSION}
+  web:
+    path: web/build.yaml
+    with:
+      NODE_VERSION: ${NODE_VERSION}
+```
+
+`${NAME}` (or `${NAME:-default}`) in a `with` value reads as it does in an `envs` value of
+the including file: the environment's (or a `.env` file's) `NAME` if it is set, else the
+including file's own `envs` value. So the Node version lives in one place, every include
+builds with it, and CI can still set it. A file that is included passes it on to its own
+includes the same way. A name the including file does not declare stays as it is, and the
+included file reads it from the environment as above. A value the including file builds
+from other variables (`${BASE}-alpine`) is passed on as it is written. A plain string path stays a local include
+without inputs, exactly as before.
 
 ### Caching and offline use
 

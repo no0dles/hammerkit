@@ -23,15 +23,20 @@ export const buildFileGitSourceSchema = object({
   publish: boolean().optional().describe('false: a server leaves out what this file declares'),
 }).strict()
 
+// A local path, with values for the inputs of the file it names like `with` of a git
+// source (a value may pass on an `envs` value of the including file as `${NAME}`), and
+// whether a server publishes what it declares.
 export const buildFileLocalSourceSchema = object({
-  path: string().min(1).describe('Build file or directory, relative to this file'),
+  path: string().min(1).describe('Build file or directory, relative to the including file'),
+  with: envsSchema.optional(),
   publish: boolean().optional().describe('false: a server leaves out what this file declares'),
 }).strict()
 
-// A string or `path` is a local path; `git` is a git source (ADR-0004).
+// A string is a local path; an object is a local path with options, or a git source (ADR-0004).
 export const buildFileIncludeSchema = union([string(), buildFileLocalSourceSchema, buildFileGitSourceSchema])
 
 export type BuildFileGitSourceSchema = z.infer<typeof buildFileGitSourceSchema>
+export type BuildFileLocalSourceSchema = z.infer<typeof buildFileLocalSourceSchema>
 export type BuildFileIncludeSchema = z.infer<typeof buildFileIncludeSchema>
 
 export function isGitSource(include: BuildFileIncludeSchema): include is BuildFileGitSourceSchema {

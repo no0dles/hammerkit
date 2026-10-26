@@ -2,7 +2,7 @@ import { Command, Option } from 'commander'
 import colors from 'colors'
 import { Environment } from '../executer/environment'
 import { getTokenSource } from './token-source'
-import { HostServer } from './host-config'
+import { HostServer, RegisteredServer } from './host-config'
 import { collectBundle } from './collect-bundle'
 import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
@@ -19,7 +19,7 @@ export interface WorkCommandContext {
   environment: Environment
   // the build file of the working directory, or the one `--file` named
   buildFile: string
-  getServer: (name: string | undefined) => Promise<{ name: string; server: HostServer }>
+  getServer: (name: string | undefined) => Promise<{ name: string; server: RegisteredServer }>
   guarded: (failure: string, fn: (...args: any[]) => Promise<void>) => (...args: any[]) => Promise<void>
   // what follows `--` on the command line
   passthrough: string[]

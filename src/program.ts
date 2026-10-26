@@ -125,6 +125,19 @@ function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
   }
 }
 
+// `up` and `down` select by name or by label, not both: a name outside the labels would
+// silently select nothing
+function parseWorkNameScope(names: string[], options: unknown): WorkLabelScope {
+  const scope = parseWorkLabelScope(options)
+  if (names.length === 0) {
+    return scope
+  }
+  if (scope.filterLabels || scope.excludeLabels) {
+    throw new Error('name tasks and services or select them with --filter/--exclude, not both')
+  }
+  return { ...scope, names }
+}
+
 function parseWorkLabelScope(options: unknown): WorkLabelScope {
   const scope: WorkLabelScope = {
     environmentName: null,
@@ -698,9 +711,11 @@ export async function getProgram(
       })
 
     program
-      .command('up')
-      .description("start services(s), with the arguments after -- appended to the selected service's cmd")
-      .usage('[options] [-- args...]')
+      .command('up [names...]')
+      .description(
+        "start services(s), all or the named tasks and services, with the arguments after -- appended to the selected service's cmd"
+      )
+      .usage('[options] [names...] [-- args...]')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(
@@ -753,10 +768,10 @@ export async function getProgram(
           'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
         ).argParser(parseNetworkArgument)
       )
-      .action(async (options, command: commaner.Command) => {
+      .action(async (names: string[], options, command: commaner.Command) => {
         try {
           const scope = {
-            ...parseWorkLabelScope(options),
+            ...parseWorkNameScope(names, options),
             args: { values: passthrough, services: true, cache: keepsCache(command) },
           }
           const cli = await createCli(fileName, environment, scope)
@@ -790,14 +805,14 @@ export async function getProgram(
       })
 
     program
-      .command('down')
-      .description('stop services(s)')
+      .command('down [names...]')
+      .description('stop services(s), all or the named services and the services the named tasks need')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(new Option('--env <name>', 'environment'))
-      .action(async (options) => {
+      .action(async (names: string[], options) => {
         try {
-          const scope = parseWorkLabelScope(options)
+          const scope = { ...parseWorkNameScope(names, options), stop: true }
           const cli = await createCli(fileName, environment, scope)
           const result = await cli.runDown()
 

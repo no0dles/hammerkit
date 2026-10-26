@@ -6,11 +6,15 @@ describe('publish: false', () => {
   it('changes nothing locally, and an include can be an object with a path', async () => {
     await createTestCase('publish-false-local', {
       '.hammerkit.yaml': {
-        includes: { infra: { path: './infra.yaml', publish: false }, lib: { path: './lib.yaml' } },
+        // `with` and `publish` together, as both are options of a local include
+        includes: {
+          infra: { path: './infra.yaml', with: { MODE: 'local' }, publish: false },
+          lib: { path: './lib.yaml' },
+        },
         services: { db: { image: 'postgres:16', publish: false } },
         tasks: { watch: { cmds: ['echo watch'], needs: ['db'], deps: ['infra:up', 'lib:build'], publish: false } },
       },
-      'infra.yaml': { tasks: { up: { cmds: ['echo up'] } } },
+      'infra.yaml': { envs: { MODE: 'dev' }, tasks: { up: { cmds: ['echo up'] } } },
       'lib.yaml': { tasks: { build: { cmds: ['echo build'] } } },
     }).setup(async (cwd, environment) => {
       const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, {})
