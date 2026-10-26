@@ -93,6 +93,12 @@ it. Write `~/` for the home directory, or a relative path for the project.
 On a [server](/docs/remote-compute), a host path outside the published files is
 refused, and a home-directory path is named as such in the error.
 
+A host path that does not exist yet is created before the container starts: an empty
+file when its name has an extension (`config.json`), else a directory. When hammerkit
+can't create a directory, for example because it runs in a container of its own whose
+file system is not the Docker host's, Docker creates it on its host instead. A missing
+file it can't create is an error, since Docker would put a directory there.
+
 ### Working directory
 
 A container task runs with its working directory set to the build file's directory

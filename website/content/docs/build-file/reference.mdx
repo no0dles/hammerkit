@@ -14,8 +14,8 @@ the dedicated pages.
 | `envs` | map of string→string/number | Build-file-wide [environment variables](/docs/build-file/environment-variables). |
 | `tasks` | map of name→task | The [tasks](/docs/task) in this file. |
 | `services` | map of name→service | The [services](/docs/service) in this file. |
-| `references` | map of prefix→path | [Reference](/docs/build-file/references) other build files (keep their own directory). |
-| `includes` | map of prefix→path | [Include](/docs/build-file/includes) other build files (use this file's directory). |
+| `references` | map of prefix→path, `{path, with}` or git source | [Reference](/docs/build-file/references) other build files (keep their own directory). |
+| `includes` | map of prefix→path, `{path, with}` or git source | [Include](/docs/build-file/includes) other build files (use this file's directory), with [inputs](/docs/build-file/includes#inputs-of-a-local-include). |
 | `environments` | map of name→environment | [Run targets](/docs/task/kubernetes) (Kubernetes or remote Docker). |
 | `caches` | map of name→cache | Named [cache](/docs/build-file/caches) declarations (method + backend). |
 | `labels` | map of string→string/number | [Labels](/docs/labels) applied to every task/service in the file. |

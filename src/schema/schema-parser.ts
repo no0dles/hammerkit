@@ -143,14 +143,52 @@ async function locateInclude(
     if (!isWithin(remote.root, path)) {
       throw new Error(`${include.path} in ${include.git} points outside the repository`)
     }
-    return { fileName: await getBuildFilename(path, environment), remote, inputs: include.with }
+    return { fileName: await getBuildFilename(path, environment), remote, inputs: passEnvs(include.with, scope) }
   }
 
-  const path = join(base, include)
+  const localPath = typeof include === 'string' ? include : include.path
+  const path = join(base, localPath)
   if (scope.remote && !isWithin(scope.remote.root, path)) {
-    throw new Error(`${include} in ${scope.fileName} points outside ${scope.remote.git}`)
+    throw new Error(`${localPath} in ${scope.fileName} points outside ${scope.remote.git}`)
   }
-  return { fileName: await getBuildFilename(path, environment), remote: scope.remote }
+  const inputs = typeof include === 'string' ? undefined : passEnvs(include.with, scope)
+  return { fileName: await getBuildFilename(path, environment), remote: scope.remote, inputs }
+}
+
+// `${NAME}` (or `${NAME:-default}`) in a `with` value reads as it does in the including
+// file: the environment or a `.env` file first, then that file's own `envs` value. So one
+// file holds a value such as NODE_VERSION for all it includes, and CI can still set it. A
+// name the file does not declare is left to the included file, which reads it the same way.
+function passEnvs(inputs: BuildFileEnvs | undefined, scope: ParseScope): BuildFileEnvs | undefined {
+  if (!inputs) {
+    return undefined
+  }
+  const envs = scope.schema.envs ?? {}
+  const result: BuildFileEnvs = {}
+  for (const [key, value] of Object.entries(inputs)) {
+    result[key] =
+      typeof value === 'string'
+        ? value.replace(
+            /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+            (match, name: string, fallback: string | undefined) =>
+              name in envs ? passEnv(name, `${envs[name]}`, fallback) : match
+          )
+        : value
+  }
+  return result
+}
+
+// The including file's value as an interpolation the included file resolves in the same
+// order. A value built from other variables is passed on as it is written.
+function passEnv(name: string, value: string, fallback: string | undefined): string {
+  const reference = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value)
+  if (reference) {
+    return fallback === undefined ? `\${${reference[1]}}` : `\${${reference[1]}:-${fallback}}`
+  }
+  if (value.includes('$') || value.includes('}')) {
+    return value
+  }
+  return `\${${name}:-${value}}`
 }
 
 // `includes pull` fetches each source once, however often the build files name it.

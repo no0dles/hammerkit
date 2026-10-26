@@ -1,3 +1,4 @@
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { consoleContext } from './log'
 import { runProgram } from './run-program'
@@ -70,6 +71,46 @@ describe('program commands (fast)', () => {
       },
     })
     await expect(t.shell([HK, 'validate'])).rejects.toThrow('Detected errors')
+  })
+
+  it('down stops services and never runs a task it selects', async () => {
+    const t = createTestCase('cmd-down-no-tasks', {
+      '.hammerkit.yaml': { tasks: { mark: { cmds: ["node -e \"require('fs').writeFileSync('marker', '')\""] } } },
+    })
+    await t.setup(async (cwd, env) => {
+      await runProgram(env, [HK, 'down'], true)
+      await runProgram(env, [HK, 'down', 'mark'], true)
+      expect(existsSync(join(cwd, 'marker'))).toBe(false)
+    })
+  })
+
+  it('up and down refuse a name that is no task or service', async () => {
+    const t = createTestCase('cmd-up-unknown-name', {
+      '.hammerkit.yaml': { services: { postgres: { image: 'postgres:16', ports: ['5432'] } } },
+    })
+    await t.setup(async (cwd, env) => {
+      const out = memoryStream()
+      env.stdout = out.stream
+      env.console = consoleContext(out.stream)
+      await expect(runProgram(env, [HK, 'up', 'postgress'], true)).rejects.toThrow('Up was not successful')
+      await expect(runProgram(env, [HK, 'down', 'postgress'], true)).rejects.toThrow('Shutdown was not successful')
+      expect(out.read()).toContain('no task or service named postgress, see hammerkit ls')
+    })
+  })
+
+  it('up refuses names together with labels', async () => {
+    const t = createTestCase('cmd-up-names-labels', {
+      '.hammerkit.yaml': { services: { postgres: { image: 'postgres:16', ports: ['5432'] } } },
+    })
+    await t.setup(async (cwd, env) => {
+      const out = memoryStream()
+      env.stdout = out.stream
+      env.console = consoleContext(out.stream)
+      await expect(runProgram(env, [HK, 'up', 'postgres', '-f', 'app=api'], true)).rejects.toThrow(
+        'Up was not successful'
+      )
+      expect(out.read()).toContain('name tasks and services or select them with --filter/--exclude, not both')
+    })
   })
 
   it('clean --cache clears the backend cache (no container ops)', async () => {
