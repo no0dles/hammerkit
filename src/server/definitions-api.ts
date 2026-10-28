@@ -24,6 +24,9 @@ const MAX_PUBLISH_BYTES = MAX_BUNDLE_BYTES * 2
  *   GET  /v1/definitions/<hash>          one version, with `arguments`: per task null when
  *                                        a run of it may pass arguments, else why not
  *   GET  /v1/definitions/<hash>/files    its files
+ *   POST /v1/definitions/plan            what publishing a bundle would do: plans it with this
+ *                                        server's policy and stores nothing. For anybody with
+ *                                        a `builds` level, `run` too
  *   POST /v1/definitions/<hash>/yank     pull it back (body: optional {reason})
  *   POST /v1/definitions/<hash>/unyank   let it go on
  */
@@ -37,6 +40,14 @@ export async function handleDefinitions(
   res: ServerResponse,
   url: URL
 ): Promise<boolean> {
+  if (url.pathname === '/v1/definitions/plan') {
+    if (req.method !== 'POST') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+    } else {
+      await plan(config, store, log, principal, req, res)
+    }
+    return true
+  }
   const match = /^\/v1\/definitions(?:\/([^/]+)(\/files|\/yank|\/unyank)?)?$/.exec(url.pathname)
   if (!match) {
     return false
@@ -157,6 +168,62 @@ async function yank(
   send(res, 200, changed)
 }
 
+// Answers what POST /v1/definitions would: the version with its plan, and whether the
+// caller would publish or propose it. A developer checks a build file against the policy
+// before the account that publishes does. Nothing is stored, nothing is logged but the call.
+async function plan(
+  config: ServerConfig,
+  store: DefinitionStore,
+  log: (line: string) => void,
+  principal: Principal,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  const grant = getGrant(config.entitlements, principal)
+  if (grant.builds === null) {
+    send(res, 403, { error: 'you may not check build files, it needs builds: run, propose or publish' })
+    return
+  }
+  const parsed = bundleSchema.safeParse(await readJson(req, MAX_PUBLISH_BYTES))
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    send(res, 400, { error: `${issue.path.join('.') || 'request'}: ${issue.message}` })
+    return
+  }
+  try {
+    // like a proposal: a caller who may not publish does not make the server fetch
+    const { version, existing } = await store.prepare(parsed.data, principal, {
+      noRemote: mayPublish(grant) ? undefined : 'check',
+    })
+    const missing = (version.accounts ?? []).filter((account) => !canUse(grant, account))
+    const outcome = existing
+      ? 'already published'
+      : mayPublish(grant) && missing.length === 0
+        ? 'published'
+        : mayPublish(grant) || mayPropose(grant)
+          ? 'proposed'
+          : null
+    log(`plan ${version.hash} iss=${principal.iss} sub=${principal.sub} tasks=${version.tasks.length}`)
+    send(res, 200, {
+      hash: version.hash,
+      tasks: version.tasks,
+      services: version.services,
+      plan: version.plan,
+      accounts: version.accounts,
+      outcome,
+      // a yanked version is not checked again: it is the one that was published
+      ...(existing?.yanked ? { yanked: true } : {}),
+      ...(missing.length > 0 ? { missing } : {}),
+    })
+  } catch (e) {
+    if (e instanceof DefinitionError) {
+      send(res, 400, { error: `the build file does not load: ${e.message}` })
+      return
+    }
+    throw e
+  }
+}
+
 async function publish(
   config: ServerConfig,
   store: DefinitionStore,
@@ -192,7 +259,7 @@ async function publish(
     // a version can't run before it is approved, but it has to load, as it would
     // have when published, so the approver is not asked about a broken one
     const { version, existing } = await store.prepare(parsed.data, principal, {
-      noRemote: !mayPublish(grant),
+      noRemote: mayPublish(grant) ? undefined : 'proposal',
       annotations,
     })
     if (existing) {

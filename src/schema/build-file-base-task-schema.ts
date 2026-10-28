@@ -49,4 +49,7 @@ export const buildFileBaseTaskSchema = object({
   // Name of the server (see `hammerkit remote`) the task has to run on; defaults
   // to the build file's `runner`. Never a local fallback when it is unknown.
   runner: runnerSchema.optional(),
+  // false: a server leaves it out of a published version, for a task only this machine
+  // runs (a dev watcher, a task that mounts the docker socket)
+  publish: boolean().optional(),
 })

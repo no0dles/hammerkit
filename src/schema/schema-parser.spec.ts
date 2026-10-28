@@ -269,6 +269,20 @@ describe('createParseContext', () => {
       expect(include.scope.remote?.git).toBe(repo.url)
     })
 
+    it('lets a server check every git source before it is fetched, the ones of fetched files too', async () => {
+      repo.commit({
+        'outer/build.yaml': `includes:\n  inner:\n    git: ${repo.url}\n    ref: main\n    path: inner\n`,
+        'inner/build.yaml': task('lint'),
+      })
+      writeFileSync(root(), `includes:\n  outer:\n    git: ${repo.url}\n    ref: main\n    path: outer\n`)
+      const checked: string[] = []
+      await createParseContext(root(), environmentMock(scratch), {
+        checkGitSource: (source, from, block, name) =>
+          checked.push(`${from.remote ? 'remote' : 'bundle'} ${block}.${name} ${source.path}`),
+      })
+      expect(checked).toEqual(['bundle includes.outer outer', 'remote includes.inner inner'])
+    })
+
     it('references a build file from a git repository, running in its checkout', async () => {
       repo.commit({ '.hammerkit.yaml': task('lib') })
       writeFileSync(root(), `references:\n  lib:\n    git: ${repo.url}\n`)

@@ -1,4 +1,4 @@
-import { array, number, object, string, union, z } from 'zod'
+import { array, boolean, number, object, string, union, z } from 'zod'
 import { buildFileKubernetesServiceSelectorSchema } from './build-file-kubernetes-service-selector-schema'
 import { labelsSchema } from './labels-schema'
 
@@ -11,6 +11,8 @@ export const buildFileKubernetesServiceSchema = object({
   selector: buildFileKubernetesServiceSelectorSchema,
   labels: labelsSchema.optional(),
   ports: array(union([string(), number()])),
+  // false: a server leaves it out of a published version
+  publish: boolean().optional(),
 }).strict()
 
 export type BuildFileKubernetesServiceSchema = z.infer<typeof buildFileKubernetesServiceSchema>

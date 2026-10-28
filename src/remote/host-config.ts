@@ -3,6 +3,10 @@ import { z } from 'zod'
 import { parse, stringify } from 'yaml'
 import { Environment } from '../executer/environment'
 import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
+import {
+  buildFileSecretAccountsSchema,
+  buildFileSecretProvidersSchema,
+} from '../schema/build-file-secret-provider-schema'
 
 // Names with a meaning of their own in `run.on` / `--on`
 export const RESERVED_SERVER_NAMES = ['local', 'auto']
@@ -46,6 +50,10 @@ export const hostConfigSchema = z
     servers: z.record(hostServerSchema).default({}),
     tokenCommands: z.record(tokenCommandSchema).optional(),
     run: z.object({ on: z.string().optional() }).passthrough().default({}),
+    // how this machine reads secrets, beside what the build files declare (see
+    // collectSecretCatalog); a server reads only its own config
+    secretProviders: buildFileSecretProvidersSchema.optional(),
+    secretAccounts: buildFileSecretAccountsSchema.optional(),
   })
   .passthrough()
 

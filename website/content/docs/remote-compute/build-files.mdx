@@ -28,8 +28,8 @@ names that. The server reads the bundle the way a run would, in a directory of i
 only the bundle's files exist, so one that does not load is refused when it is
 published and not when somebody wants to run it (`400`). A bundle may not include
 anything outside of itself. Includes from git have to be pinned to a commit and
-come from an `https://` or `ssh://` address, because the version below can only
-vouch for what is in the bundle.
+come from an `https://` or `ssh://` address, and so do the git includes of the files
+they include, because the version below can only vouch for what is in the bundle.
 
 ## Versions
 
@@ -51,6 +51,7 @@ Whoever reviews a version reads all of it, its [plan](#plan-and-accounts) and it
 | `GET /v1/definitions` | Every version, newest first, with who published (and approved) it and when, its [annotations](#annotations), the tasks and services it has, the `accounts` it uses and whether it was yanked. `?repo=github.com/corp/payments&machine=ci-7` keeps the versions with those annotations. |
 | `GET /v1/definitions/<hash>` | One version, with its `plan` and what each task works on (`inputs`). |
 | `GET /v1/definitions/<hash>/files` | The files of one version, to see what would run. |
+| `POST /v1/definitions/plan` | What publishing the bundle would do, without storing anything. See [Checking before publishing](#checking-before-publishing). |
 | `POST /v1/definitions/<hash>/yank` | Pull a version back, see [Yanking](#yanking-a-version). The body is optional: `{ "reason": "..." }`. |
 | `POST /v1/definitions/<hash>/unyank` | Let a yanked version go on. Needs `builds: publish`. |
 
@@ -168,7 +169,8 @@ task) when it
   which docker would mount from the host,
 * has a task on a runtime that `runtimes` does not allow,
 * has a task or service whose `network` reaches more than [`runs.network`](/docs/remote-compute/runs#network) allows,
-* declares `secretProviders` or `secretAccounts`, reads a `file:` secret, reads an `env:`
+* declares `secretProviders` or `secretAccounts` (keep them in your
+  [host config](/docs/task/secret-providers#on-this-machine-only)), reads a `file:` secret, reads an `env:`
   secret the server does not list in `runs.env.allow`, or reads a secret as the account
   that reads repositories (see [Accounts](/docs/remote-compute/accounts) and [Sources](/docs/remote-compute/sources)).
 * on a [Kubernetes backend](/docs/remote-compute/backend#secrets-in-the-job), reads a provider
@@ -181,6 +183,67 @@ checkout fails, since docker and the copy into a cluster would follow the link o
 
 Without this a task with no secrets would still reach what the operator's machine can: a
 published file would be enough to send a run, or the cache, to a host of its choosing.
+
+## Only part of a build file
+
+One build file usually holds tasks for the server and tasks only your machine runs: a
+watcher, a task that mounts the docker socket, a service for local development. Mark
+those `publish: false`, and the server leaves them out of the version: they are not in
+its tasks, not in its plan, and not checked against the rules above.
+
+```yaml title=".hammerkit.yaml"
+includes:
+  infra: { path: ./infra.yaml, publish: false } # everything of the file
+services:
+  db:
+    image: postgres:16
+    publish: false
+tasks:
+  build:
+    image: node:22-alpine
+    cmds: [npm run build]
+  watch:
+    cmds: [npm run watch]
+    publish: false
+```
+
+A file left out is not checked for what the list above refuses of a published one: its
+`environments` (a local docker host or kind cluster), `caches`, Kubernetes services and
+`secretProviders` stay on your machine. Neither is a Kubernetes service with
+`publish: false`. A git include with `publish: false` is not fetched by the server, so its
+`ref` may be a branch.
+
+Locally `publish` changes nothing. A published task or service that depends on, needs,
+extends or runs as `init` one that is left out is refused, naming both:
+`test needs db, which is not published (publish: false)`.
+
+`publish: false` belongs to the include, not to the file: a file that another published
+file includes too is published through that one, under that one's name.
+
+## Checking before publishing
+
+```shell
+hammerkit remote publish --dry-run
+```
+
+The server reads the bundle with its policy as a publish would, and says what publishing
+it would do: publish it, [propose](#proposing-a-version) it (and which accounts make it a
+proposal), or that it is published already. A bundle the server would refuse prints why:
+every problem with its policy, or the first git include it may not fetch. Nothing is stored. Any `builds` level may check, `run` too, so a developer can
+check a build file before the account that publishes it does. As for a proposal, a caller
+who may not publish can't make the server fetch a git include: a build file that includes
+from git (and publishes that include) is checked by somebody with `builds: publish`. A
+version that is published already is not checked again, the answer says when it is yanked.
+
+```
+POST /v1/definitions/plan
+```
+
+takes the bundle as `POST /v1/definitions` does and answers its `hash`, `tasks`,
+`services`, `plan`, `accounts` and `outcome`: `published`, `proposed`, `already
+published`, or `null` for who may only run (`missing` lists the accounts the caller does
+not use, `yanked` is set for a yanked version).
+
 ## Proposing a version
 
 Who defines the work decides what runs, so a new version of a build file can wait for

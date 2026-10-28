@@ -236,6 +236,27 @@ describe('remote publish', () => {
     })
   })
 
+  it('checks the build file with --dry-run and publishes nothing, also for who may only run', async () => {
+    await withHarness('remote-publish-dry-run', async (h) => {
+      h.as('alice')
+      await h.run('remote', 'login', 'build')
+      const out = await h.run('remote', 'publish', 'build', '--dry-run')
+      expect(out).toMatch(/checked with the policy of build: sha256:[0-9a-f]{64} \(2 files\), nothing was published/)
+      expect(out).toContain('tasks and services: build, deploy, more:lint, smoke')
+      expect(out).toContain('the server accepts it, publishing it needs builds: propose or publish')
+      expect((await h.call('bob', 'GET', '/v1/definitions')).body.definitions).toEqual([])
+
+      h.as('dana')
+      await h.run('remote', 'login', 'build')
+      expect(await h.run('remote', 'publish', 'build', '--dry-run')).toContain(
+        'publishing it would propose it, it names accounts you do not use: op-payments-prod'
+      )
+      h.as('bob')
+      await h.run('remote', 'login', 'build')
+      expect(await h.run('remote', 'publish', 'build', '--dry-run')).toContain('publishing it would publish it')
+    })
+  })
+
   it('proposes a build file that names an account the publisher does not use', async () => {
     await withHarness('remote-publish-account', async (h) => {
       h.as('dana')
