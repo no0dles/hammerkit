@@ -1,3 +1,17 @@
+# [1.27.0-next.22](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.21...v1.27.0-next.22) (2026-10-28)
+
+
+### Bug Fixes
+
+* check the git includes of fetched files on a server too ([33059c8](https://github.com/no0dles/hammerkit/commit/33059c84f2942afd4513800ba63869894eb7c661)), closes [#129](https://github.com/no0dles/hammerkit/issues/129)
+* compare Windows file ids of a provider command as bigints ([306ba49](https://github.com/no0dles/hammerkit/commit/306ba499863060c5bd23ef41c43546f8d8a53d73)), closes [#129](https://github.com/no0dles/hammerkit/issues/129)
+* leave out unpublished files in a server's checks, host config secrets win ([646108f](https://github.com/no0dles/hammerkit/commit/646108faaca5128a835634830790e97ec6ab47d2))
+
+
+### Features
+
+* one build file for local runs and a server ([4f2c9eb](https://github.com/no0dles/hammerkit/commit/4f2c9eb4d5e648db41ebc2a1e65c557ad7caf69d))
+
 # [1.27.0-next.21](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.20...v1.27.0-next.21) (2026-10-26)
 
 
