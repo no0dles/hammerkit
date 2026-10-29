@@ -44,7 +44,12 @@ import {
   removeJobCredentials,
   splitJobSecrets,
 } from '../kubernetes/job-secrets'
-import { getContainerSecurity, getPodPlacement, getRunLabelValue } from '../kubernetes/job-placement'
+import {
+  getContainerSecurity,
+  getPodPlacement,
+  getPodRuntimeClass,
+  getRunLabelValue,
+} from '../kubernetes/job-placement'
 import {
   ensureKubernetesItemNetwork,
   getNetworkLabels,
@@ -225,7 +230,7 @@ export function getTaskJobContainers(options: {
         name: options.container,
         volumeMounts: [...options.mounts, ...secrets.mounts, ...secretSpec.mounts],
         ...getKubernetesResources(task.data.resources),
-        ...getContainerSecurity(kubernetes),
+        ...getContainerSecurity(kubernetes, task.data.capAdd),
       },
     ],
   }
@@ -407,6 +412,7 @@ export function kubernetesTaskRuntime(
                     ...secretSpec.volumes,
                   ],
                   ...(workspace.affinity ? { affinity: workspace.affinity } : {}),
+                  ...getPodRuntimeClass({ name: task.name, capAdd: task.data.capAdd }, kubernetes),
                   hostAliases: network.hostAliases,
                   restartPolicy: 'Never',
                   // on a server the pod is the build's: no token of the namespace, and the

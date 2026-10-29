@@ -1,8 +1,10 @@
 import { WorkKubernetesServer } from '../planner/work-environment'
 import { LocalWorkTask } from '../planner/work-task'
 import {
+  getContainerSecurity,
   getLocalTaskPool,
   getPodPlacement,
+  getPodRuntimeClass,
   getRunLabels,
   getRunLabelValue,
   placeOnPool,
@@ -63,6 +65,7 @@ describe('job placement', () => {
       user: null,
       mounts: [],
       volumeSize: null,
+      capAdd: [],
       pool: 'arm',
       arch: 'arm64',
     })
@@ -107,5 +110,43 @@ describe('job placement', () => {
       }
     }
     expect(getRunLabelValue('run_AAAAAAAAAAAAAAA-')).not.toBe(getRunLabelValue('run_AAAAAAAAAAAAAAA_'))
+  })
+
+  it('adds the capabilities of a task to what a container of a run may do', () => {
+    expect(getContainerSecurity({ server })).toEqual({
+      securityContext: {
+        allowPrivilegeEscalation: false,
+        capabilities: { drop: ['NET_RAW'] },
+        seccompProfile: { type: 'RuntimeDefault' },
+      },
+    })
+    expect(getContainerSecurity({ server }, ['SYS_ADMIN'])).toEqual({
+      securityContext: {
+        allowPrivilegeEscalation: false,
+        capabilities: { drop: ['NET_RAW'], add: ['SYS_ADMIN'] },
+        seccompProfile: { type: 'RuntimeDefault' },
+      },
+    })
+    // a task that asks for raw sockets keeps them
+    expect(getContainerSecurity({ server }, ['NET_RAW']).securityContext?.capabilities).toEqual({ add: ['NET_RAW'] })
+    // the build file's own cluster: the capabilities, nothing else changes
+    expect(getContainerSecurity({})).toEqual({})
+    expect(getContainerSecurity({}, ['SYS_ADMIN'])).toEqual({
+      securityContext: { capabilities: { add: ['SYS_ADMIN'] } },
+    })
+  })
+
+  it('runs the pod of a task that adds capabilities in the sandbox the server names', () => {
+    const sandboxed = { ...server, capabilities: { runtimeClass: 'gvisor' } }
+    expect(getPodRuntimeClass({ name: 'image', capAdd: ['SYS_ADMIN'] }, { server: sandboxed })).toEqual({
+      runtimeClassName: 'gvisor',
+    })
+    // the others stay on the node's runtime
+    expect(getPodRuntimeClass({ name: 'test', capAdd: [] }, { server: sandboxed })).toEqual({})
+    expect(getPodRuntimeClass({ name: 'image', capAdd: ['SYS_ADMIN'] }, {})).toEqual({})
+    // never on the node's kernel, whatever the plan let through
+    expect(() => getPodRuntimeClass({ name: 'image', capAdd: ['SYS_ADMIN'] }, { server })).toThrow(
+      'image: adds the capabilities SYS_ADMIN, which this server grants in no sandboxed runtime'
+    )
   })
 })

@@ -64,8 +64,33 @@ export function buildCreateOptions(
       ...getNetworkHostConfig(network),
       AutoRemove: true,
       ...resources,
+      ...getCapabilityHostConfig(item, environment),
     },
   }
+}
+
+/**
+ * The capabilities a task adds (`capAdd`). On a server they are only granted in the
+ * sandboxed runtime of `backend.capabilities`, never by the kernel of the docker host.
+ */
+export function getCapabilityHostConfig(
+  item: Pick<WorkItem<ContainerWorkTask>, 'name' | 'data'>,
+  environment: Pick<Environment, 'hosted'>
+): { CapAdd?: string[]; Runtime?: string } {
+  const capAdd = item.data.capAdd
+  if (capAdd.length === 0) {
+    return {}
+  }
+  if (!environment.hosted) {
+    return { CapAdd: capAdd }
+  }
+  const runtime = environment.hosted.capabilityRuntime
+  if (!runtime) {
+    throw new Error(
+      `${item.name}: adds the capabilities ${capAdd.join(', ')}, which this server grants in no sandboxed runtime`
+    )
+  }
+  return { CapAdd: capAdd, Runtime: runtime }
 }
 
 export async function dockerTask(

@@ -6,6 +6,7 @@ import { getErrorMessage } from '../log'
 import { parseDuration, parseSize } from '../utils/units'
 import { getVersion } from '../version'
 import { getAllowListError, isAllowEntry, networkSchema } from '../schema/network-schema'
+import { LINUX_CAPABILITIES } from '../schema/capabilities-schema'
 import {
   buildFileSecretAccountSchema,
   buildFileSecretProvidersSchema,
@@ -139,12 +140,25 @@ export const accountSchema = z
 
 export type Account = z.infer<typeof accountSchema>
 
+// The capabilities (`capAdd`) a task of a run may add, and the sandboxed runtime its
+// container then runs in, so they hold in the sandbox's own kernel and never in the host's
+const capabilitiesAllowSchema = z
+  .array(z.enum(LINUX_CAPABILITIES))
+  .min(1)
+  .refine((names) => new Set(names).size === names.length, 'a capability is listed twice')
+
 // The tasks of runs execute on this machine, with its docker daemon and local tools.
 const hostBackendSchema = z
   .object({
     type: z.literal('host'),
     // what this machine offers; detected when left out
     platform: serverPlatformSchema.optional(),
+    // `runtime` is a runtime of the docker daemon (`runtimes` in its daemon.json), such as
+    // runsc of gVisor
+    capabilities: z
+      .object({ allow: capabilitiesAllowSchema, runtime: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/) })
+      .strict()
+      .optional(),
   })
   .strict()
 
@@ -322,6 +336,9 @@ const kubernetesBackendSchema = z
     // build file's environment does: hammerkit can't tell from the API, and without it a
     // task with a limited network fails rather than runs open
     networkPolicy: z.literal('enforced').optional(),
+    // `runtimeClass` is a RuntimeClass of a sandbox, such as gvisor; the pods of tasks that
+    // add capabilities run in it
+    capabilities: z.object({ allow: capabilitiesAllowSchema, runtimeClass: kubernetesNameSchema }).strict().optional(),
   })
   .strict()
 
@@ -617,6 +634,9 @@ export const serverConfigSchema = z
           .object({ allow: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_()]*$/)).default([]) })
           .strict()
           .default({}),
+        // the capabilities of `backend.capabilities.allow` a task of a run on a sandbox may
+        // add: none by default, a sandbox holds code nobody reviewed
+        capabilities: z.array(z.enum(LINUX_CAPABILITIES)).default([]),
         // what one caller may keep; a sandbox over it can't be created
         limits: z
           .object({
@@ -750,6 +770,16 @@ export const serverConfigSchema = z
             message: `the account ${account} reads the sources, no entitlement may name it`,
           })
         }
+      }
+    })
+    const allowed: string[] = config.backend.capabilities?.allow ?? []
+    config.sandboxes.capabilities.forEach((capability, index) => {
+      if (!allowed.includes(capability)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sandboxes', 'capabilities', index],
+          message: `the capability ${capability} is not in backend.capabilities.allow, no run may add it`,
+        })
       }
     })
     const sandboxNetwork = parseWorkNetwork(config.sandboxes.network)

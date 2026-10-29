@@ -544,6 +544,7 @@ export class KubernetesExecutor implements RunExecutor {
         ...(work?.claim ? { workspace: getWorkspace(work.root, work.claim, namespace, backend.sandboxes.runner) } : {}),
         // the claims of a service run go with its namespace
         ...(this.keep > 0 && !run.up ? { volumeScope: getVolumeScope(run) } : {}),
+        ...(backend.capabilities ? { capabilities: { runtimeClass: backend.capabilities.runtimeClass } } : {}),
       },
     }
   }
@@ -639,6 +640,53 @@ export class KubernetesExecutor implements RunExecutor {
 // What may mount a claim a run kept: the runs of the same repository, as they share the
 // cache, and on a sandbox the runs of that sandbox only, whose claim is on the same node or
 // zone as the kept ones. The owner is the namespace's.
+const ENFORCE_LABEL = 'pod-security.kubernetes.io/enforce'
+const AUDIT_LABEL = 'pod-security.kubernetes.io/audit'
+
+/**
+ * The Pod Security level of a caller's namespace: `baseline`, no privileged pods, host
+ * paths or host network, whatever a build asks. `baseline` also refuses the capabilities
+ * of `backend.capabilities`, sandboxed or not: with them the namespace enforces
+ * `privileged` and audits `baseline`, and the operator's admission policy (see the docs on
+ * capabilities) refuses what `baseline` would to a pod outside the sandbox's RuntimeClass.
+ */
+export function getPodSecurityLabels(backend: Pick<KubernetesBackend, 'capabilities'>): {
+  [label: string]: string | null
+} {
+  return backend.capabilities
+    ? { [ENFORCE_LABEL]: 'privileged', [AUDIT_LABEL]: 'baseline' }
+    : { [ENFORCE_LABEL]: 'baseline', [AUDIT_LABEL]: null }
+}
+
+// the labels a namespace is made with: a null one is left out
+function getNewPodSecurityLabels(backend: Pick<KubernetesBackend, 'capabilities'>): { [label: string]: string } {
+  return Object.fromEntries(
+    Object.entries(getPodSecurityLabels(backend)).filter((entry): entry is [string, string] => entry[1] !== null)
+  )
+}
+
+/**
+ * Whether the server changes the level of a namespace it made, which takes `patch` on
+ * namespaces: to `privileged` with `backend.capabilities`, back to `baseline` without. A
+ * server without capabilities that never had them leaves the namespace as it is, as it
+ * did before (and needs no such right).
+ */
+export function needsPodSecurityPatch(
+  labels: { [label: string]: string } | undefined,
+  backend: Pick<KubernetesBackend, 'capabilities'>
+): boolean {
+  return backend.capabilities
+    ? !hasPodSecurityLabels(labels, backend)
+    : labels?.[ENFORCE_LABEL] === 'privileged' || labels?.[AUDIT_LABEL] !== undefined
+}
+
+export function hasPodSecurityLabels(
+  labels: { [label: string]: string } | undefined,
+  backend: Pick<KubernetesBackend, 'capabilities'>
+): boolean {
+  return Object.entries(getPodSecurityLabels(backend)).every(([label, value]) => (labels?.[label] ?? null) === value)
+}
+
 export function getVolumeScope(run: Run): string {
   if (run.source.type === 'sandbox' && !run.source.check) {
     return `sandbox-${createHash('sha256').update(run.source.id).digest('hex').slice(0, 24)}`
@@ -712,8 +760,7 @@ export class CallerNamespaces {
                 [MANAGED_LABEL]: 'true',
                 'hammerkit.dev/caller': namespace,
                 ...(serviceRun ? { [SERVICE_RUN_LABEL]: serviceRun.serviceRun } : {}),
-                // no privileged pods, host paths or host network, whatever a build asks
-                'pod-security.kubernetes.io/enforce': 'baseline',
+                ...getNewPodSecurityLabels(backend),
               },
             },
           },
@@ -723,6 +770,22 @@ export class CallerNamespaces {
           throw createError
         }
       }
+    } else if (needsPodSecurityPatch(existing.metadata?.labels, backend)) {
+      // the level follows the config, as the policies do: made before `backend.capabilities`,
+      // or after it was removed
+      await this.instance.objectApi.patch(
+        {
+          apiVersion: 'v1',
+          kind: 'Namespace',
+          // a merge patch removes a label that is null
+          metadata: { name: namespace, labels: getPodSecurityLabels(backend) as { [label: string]: string } },
+        },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'application/merge-patch+json'
+      )
     }
     await replace(this.instance, getRunRoleBinding(namespace, backend.runRole, await this.whoAmI()))
     const [first, ...policies] = getNamespacePolicies(namespace, backend.deniedEgress, backend.allowedEgress)

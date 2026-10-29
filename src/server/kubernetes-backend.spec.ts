@@ -7,7 +7,10 @@ import {
   getClusterAccess,
   getServiceRunNamespace,
   getNamespacePolicies,
+  getPodSecurityLabels,
   getVolumeScope,
+  hasPodSecurityLabels,
+  needsPodSecurityPatch,
   isCallerNamespace,
   KubernetesExecutor,
 } from './kubernetes-backend'
@@ -45,6 +48,69 @@ describe('kubernetes backend', () => {
     expect(getCallerNamespace('hammerkit-', { iss: 'https://idp.corp', sub: 'bob' })).not.toBe(alice)
     expect(getCallerNamespace('hammerkit-', { iss: 'https://other', sub: 'alice' })).not.toBe(alice)
     expect(getCallerNamespace('agents-', { iss: 'https://idp.corp', sub: 'alice' })).toMatch(/^agents-/)
+  })
+
+  it('enforces baseline in a caller’s namespace, privileged only for the capabilities of a sandbox', () => {
+    const plain = backend()
+    expect(getPodSecurityLabels(plain)).toEqual({
+      'pod-security.kubernetes.io/enforce': 'baseline',
+      'pod-security.kubernetes.io/audit': null,
+    })
+    // what a server of an earlier version made is as it should be
+    expect(hasPodSecurityLabels({ 'pod-security.kubernetes.io/enforce': 'baseline' }, plain)).toBe(true)
+    const sandboxed = backend({ capabilities: { allow: ['SYS_ADMIN'], runtimeClass: 'gvisor' } })
+    expect(getPodSecurityLabels(sandboxed)).toEqual({
+      'pod-security.kubernetes.io/enforce': 'privileged',
+      'pod-security.kubernetes.io/audit': 'baseline',
+    })
+    // the level follows the config both ways
+    expect(hasPodSecurityLabels({ 'pod-security.kubernetes.io/enforce': 'baseline' }, sandboxed)).toBe(false)
+    expect(needsPodSecurityPatch({ 'pod-security.kubernetes.io/enforce': 'baseline' }, sandboxed)).toBe(true)
+    expect(
+      needsPodSecurityPatch(
+        { 'pod-security.kubernetes.io/enforce': 'privileged', 'pod-security.kubernetes.io/audit': 'baseline' },
+        plain
+      )
+    ).toBe(true)
+    // a server that never had capabilities changes nothing, and needs no right to
+    expect(needsPodSecurityPatch({ 'pod-security.kubernetes.io/enforce': 'baseline' }, plain)).toBe(false)
+    expect(needsPodSecurityPatch({}, plain)).toBe(false)
+    expect(
+      hasPodSecurityLabels(
+        { 'pod-security.kubernetes.io/enforce': 'privileged', 'pod-security.kubernetes.io/audit': 'baseline' },
+        plain
+      )
+    ).toBe(false)
+  })
+
+  it('takes capabilities only with the RuntimeClass of a sandbox, and sandboxes only those', () => {
+    const parse = (config: object) =>
+      serverConfigSchema.safeParse({ issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }], ...config })
+    const issues = (config: object) => {
+      const parsed = parse(config)
+      return parsed.success ? [] : parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+    }
+    expect(issues({ backend: { type: 'kubernetes', capabilities: { allow: ['SYS_ADMIN'] } } })).toEqual([
+      'backend.capabilities.runtimeClass: Required',
+    ])
+    expect(issues({ backend: { type: 'host', capabilities: { allow: ['SYS_ADMIN'] } } })).toEqual([
+      'backend.capabilities.runtime: Required',
+    ])
+    expect(issues({ backend: { type: 'host', capabilities: { allow: ['SYS_ADMIN'], runtime: 'runsc' } } })).toEqual([])
+    expect(issues({ backend: { type: 'host', capabilities: { allow: [], runtime: 'runsc' } } })).toEqual([
+      'backend.capabilities.allow: Array must contain at least 1 element(s)',
+    ])
+    expect(
+      issues({
+        backend: { type: 'kubernetes', capabilities: { allow: ['SYS_ADMIN'], runtimeClass: 'gvisor' } },
+        sandboxes: { capabilities: ['SYS_ADMIN', 'NET_ADMIN'] },
+      })
+    ).toEqual([
+      'sandboxes.capabilities.1: the capability NET_ADMIN is not in backend.capabilities.allow, no run may add it',
+    ])
+    expect(issues({ sandboxes: { capabilities: ['SYS_ADMIN'] } })).toEqual([
+      'sandboxes.capabilities.0: the capability SYS_ADMIN is not in backend.capabilities.allow, no run may add it',
+    ])
   })
 
   it('knows its callers’ namespaces apart from those of a server whose prefix starts the same', () => {
@@ -471,6 +537,43 @@ describe('kubernetes backend', () => {
         vi.useRealTimers()
       }
       expect(applied()).toBe(3 * once)
+    })
+
+    it('changes the Pod Security level of a namespace it made when the capabilities of the config do', async () => {
+      const { instance } = cluster({
+        'hammerkit.dev/managed': 'true',
+        'pod-security.kubernetes.io/enforce': 'baseline',
+      })
+      const patched: any[] = []
+      ;(instance.objectApi as any).patch = async (spec: any, ...rest: any[]) => {
+        patched.push({ labels: spec.metadata.labels, type: rest[4] })
+        return spec
+      }
+      const config = (backend: object) =>
+        serverConfigSchema.parse({
+          issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
+          backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit', ...backend },
+        }) as any
+      await new CallerNamespaces(instance as any, config({}).backend).prepare(namespace)
+      expect(patched).toEqual([])
+      const sandboxed = config({ capabilities: { allow: ['SYS_ADMIN'], runtimeClass: 'gvisor' } })
+      await new CallerNamespaces(instance as any, sandboxed.backend).prepare(namespace)
+      expect(patched).toEqual([
+        {
+          labels: {
+            'pod-security.kubernetes.io/enforce': 'privileged',
+            'pod-security.kubernetes.io/audit': 'baseline',
+          },
+          type: 'application/merge-patch+json',
+        },
+      ])
+      // a namespace it makes has the level at once
+      const fresh = cluster(null)
+      await new CallerNamespaces(fresh.instance as any, sandboxed.backend).prepare(namespace)
+      expect(JSON.parse(fresh.calls[0].slice('create Namespace '.length))).toMatchObject({
+        'pod-security.kubernetes.io/enforce': 'privileged',
+        'pod-security.kubernetes.io/audit': 'baseline',
+      })
     })
 
     it('gives the claims of tasks the size of the backend, at most its maximum', async () => {

@@ -44,6 +44,7 @@ describe('getWorkTaskCacheDescription', () => {
         { mount: 'a:a', containerPath: '/work/app/ma' },
       ] as any,
       volumeSize: null,
+      capAdd: [],
     }
     const d = getWorkTaskCacheDescription({ data: task, deps: [], needs: [] } as any)
     expect(d.platform).toBe('node:alpine')
@@ -65,6 +66,7 @@ describe('getWorkTaskCacheDescription', () => {
       user: null,
       mounts: [],
       volumeSize: null,
+      capAdd: [],
       generates: [
         { path: '/work/app/node_modules', inherited: null },
         { path: '/work/app/api/node_modules', inherited: null },

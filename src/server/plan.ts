@@ -105,6 +105,11 @@ export interface PlanPolicy {
   // which tasks take arguments (`runs.args`): `any` but those with `args: false` when
   // left out, `declared` only those with `args: true`
   args?: 'any' | 'declared'
+  // the capabilities a task may add (`capAdd`); any when left out, which only a run on
+  // this machine is
+  capabilities?: string[]
+  // where the operator lists them, for the message; `backend.capabilities.allow` when left out
+  capabilitiesFrom?: string
   // on a cluster, the secret providers whose endpoints the egress proxy of a limited task
   // lets its init containers reach (`backend.providers.<name>.allow`): a task reading
   // their secrets may have a limited network
@@ -319,6 +324,20 @@ function findItemPolicyProblems(item: Item, policy: PlanPolicy, root: string): s
     )
   }
   const data = item.data
+  // a capability holds in the sandboxed runtime the operator named for it, so only those
+  // the operator allows are added
+  const refused = policy.capabilities
+    ? ('capAdd' in data ? data.capAdd : []).filter((capability) => !policy.capabilities?.includes(capability))
+    : []
+  if (refused.length > 0) {
+    const from = policy.capabilitiesFrom ?? 'backend.capabilities.allow'
+    problems.push(
+      `${item.name}: adds the ${refused.length > 1 ? 'capabilities' : 'capability'} ${refused.join(', ')}, ` +
+        (policy.capabilities && policy.capabilities.length > 0
+          ? `which this server does not allow (${from}: ${policy.capabilities.join(', ')})`
+          : `and this server allows none (${from})`)
+    )
+  }
   // what a task reads and writes is the bundle's: `src: ../..` would have the server
   // copy its own files (its credentials, other callers' caches) into the task
   for (const source of 'src' in data ? data.src : []) {
