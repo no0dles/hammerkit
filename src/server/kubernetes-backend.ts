@@ -689,8 +689,10 @@ export function getCapabilitiesProblem(
     return undefined
   }
   return (
-    `the namespace ${namespace} was made before backend.capabilities and enforces Pod Security ` +
-    `${enforce ?? 'none'}, which refuses them: kubectl label namespace ${namespace} ` +
+    `the namespace ${namespace} was made before backend.capabilities and enforces ` +
+    `${
+      enforce ? `Pod Security ${enforce}` : 'no Pod Security level of its own'
+    }, not privileged: kubectl label namespace ${namespace} ` +
     `${ENFORCE_LABEL}=privileged ${AUDIT_LABEL}=baseline --overwrite`
   )
 }
