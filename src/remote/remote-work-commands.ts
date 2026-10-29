@@ -142,6 +142,7 @@ export interface PlanView {
   mounts: string[]
   ports: string[]
   generates: string[]
+  capAdd?: string[]
   flags: string[]
 }
 
@@ -284,6 +285,7 @@ export function describePlan(plan: Record<string, PlanView>): string[] {
     ...(entry.mounts.length > 0 ? [`    mounts: ${entry.mounts.map(printable).join(', ')}`] : []),
     ...(entry.ports.length > 0 ? [`    ports: ${entry.ports.map(printable).join(', ')}`] : []),
     ...(entry.generates.length > 0 ? [`    generates: ${entry.generates.map(printable).join(', ')}`] : []),
+    ...(entry.capAdd?.length ? [`    capAdd: ${entry.capAdd.map(printable).join(', ')}`] : []),
   ])
 }
 

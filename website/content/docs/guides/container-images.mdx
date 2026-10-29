@@ -75,20 +75,28 @@ The rest of this guide calls it `gvisor`. Use the name your cluster has.
 
 Three changes, in this order, so no pod can add a capability outside the sandbox at any point.
 
-**The admission policy.** A namespace of a caller enforces the Pod Security level `baseline`,
+**The admission policies.** A namespace of a caller enforces the Pod Security level `baseline`,
 which refuses `SYS_ADMIN` even in a sandbox: it does not know about RuntimeClasses. With
-capabilities, the server lowers its namespaces to `privileged`, and an admission policy of
-yours refuses what `baseline` refused, and any capability beyond it outside the RuntimeClass.
-Copy the policy from [Capabilities](/docs/remote-compute/backend#capabilities) into
-`admission.yaml`, with your RuntimeClass in place of `gvisor`, and apply it:
+capabilities, the server makes the namespaces of callers enforce `privileged`, and an admission
+policy of yours refuses what `baseline` refuses, and any capability beyond it outside the
+RuntimeClass. A second one keeps the namespaces the server makes to its own. Copy both from
+[Capabilities](/docs/remote-compute/backend#capabilities) into `admission.yaml`, with your
+RuntimeClass in place of `gvisor`, `$NAME` in place of `hammerkit` in the server's
+ServiceAccount (`system:serviceaccount:$NAME:hammerkit`) and `^$NAME-` in place of `^hammerkit-`,
+and apply it. They need Kubernetes 1.30 or later:
 
 ```bash
 kubectl apply -f admission.yaml
 ```
 
-**The server's rights.** The server changes the level of the namespaces it already made. Add
-`patch` to the verbs on `namespaces` in the ClusterRole `$NAME-server` of the Kubernetes guide
-and apply it again.
+**The namespaces the server made.** The server never changes the level of a namespace it made
+before (it has no right to), so set it on those of its prefix:
+
+```bash
+kubectl get namespace -l hammerkit.dev/managed=true -o name | grep "^namespace/$NAME-" | \
+  xargs -r -I{} kubectl label {} pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/audit=baseline --overwrite
+```
 
 **The config.** In `server.yaml` (the ConfigMap `hammerkit-config`), under `backend`:
 
@@ -108,7 +116,9 @@ kubectl -n $NAME rollout restart deploy/hammerkit
 
 Only the pods of tasks that add a capability run in gVisor; every other task runs as before.
 Runs on [sandboxes](/docs/remote-compute/sandboxes) add none, unless you list them under
-`sandboxes.capabilities`.
+`sandboxes.capabilities`. On GKE Standard and AKS only the sandbox's node pool has the runtime:
+the pods of these tasks go to the nodes of the first [pool](/docs/remote-compute/backend#pools),
+so its labels have to match that node pool, or a pod stays `Pending`.
 
 ## 3. An account that may push
 
@@ -309,8 +319,9 @@ backend:
 ```
 
 There is no admission policy to apply and no ServiceAccount: the account's provider `env`
-points at credentials of the machine, as in [Accounts](/docs/remote-compute/accounts), and
-those should still be a federated identity or a key of a service account that may only push.
+points at credentials of the machine, as in [Accounts](/docs/remote-compute/accounts). Make
+them a federated identity that may only push, such as workload identity federation from the
+machine's own identity, with a short-lived token: not a key.
 The build file is the same.
 
 ## When it fails
@@ -319,7 +330,8 @@ The build file is the same.
 | --- | --- |
 | `image: adds the capability SYS_ADMIN, and this server allows none (backend.capabilities.allow)` at publish | The server has no `backend.capabilities`, or wasn't restarted. |
 | `... which this server does not allow (backend.capabilities.allow: ...)` | The task adds a capability the operator didn't list. Ask whether the build needs it: BuildKit needs `SYS_ADMIN` only. |
-| The Job's pod is refused with `violates PodSecurity "baseline"` | The namespace still enforces `baseline`: the server needs `patch` on namespaces, see step 2. |
+| `image: adds the capabilities SYS_ADMIN, but the namespace ... was made before backend.capabilities` | The caller's namespace still enforces `baseline`: run the `kubectl label` of the error, or the one of step 2 for all of them. |
+| The task's pod stays `Pending` | No node of the first pool has the RuntimeClass's runtime, see step 2. |
 | The pod is refused by `hammerkit-capabilities` | The admission policy names another RuntimeClass than `backend.capabilities.runtimeClass`. |
 | `mount: permission denied` | The task doesn't have `capAdd: [SYS_ADMIN]`, or runs on a laptop with AppArmor (Ubuntu), see [Capabilities](/docs/task/container#capabilities). |
 | `failed to mount` or `invalid argument` from BuildKit's snapshotter | No tmpfs at `/var/lib/buildkit`, or the mount was in another entry of `cmds`. |

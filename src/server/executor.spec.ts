@@ -347,6 +347,18 @@ describe('HostExecutor', () => {
     })
   })
 
+  it('hands the docker runtime of capabilities to the process of the run', async () => {
+    const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
+    const telling = new HostExecutor({
+      ...options,
+      worker: tellingWorker('capabilityRuntime'),
+      capabilityRuntime: 'runsc',
+    })
+    const events: RunEventData[] = []
+    await telling.execute(run(hash), { emit: (e) => events.push(e), signal: new AbortController().signal })
+    expect(events).toContainEqual({ type: 'log', task: 't', stream: 'stdout', text: '"runsc"' })
+  })
+
   it('fails the run when a task fails, with the task and its output', async () => {
     const hash = await publish({
       '.hammerkit.yaml': 'tasks:\n  build:\n    cmds:\n      - echo broken >&2\n      - exit 3\n',

@@ -151,5 +151,8 @@ export function getPodRuntimeClass(
       `${task.name}: adds the capabilities ${task.capAdd.join(', ')}, which this server grants in no sandboxed runtime`
     )
   }
+  if (sandbox.unavailable) {
+    throw new Error(`${task.name}: adds the capabilities ${task.capAdd.join(', ')}, but ${sandbox.unavailable}`)
+  }
   return { runtimeClassName: sandbox.runtimeClass }
 }

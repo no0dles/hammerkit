@@ -3,7 +3,14 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { isIPv4 } from 'net'
-import { RbacV1Subject, V1LimitRange, V1NetworkPolicy, V1ResourceQuota, V1RoleBinding } from '@kubernetes/client-node'
+import {
+  RbacV1Subject,
+  V1LimitRange,
+  V1Namespace,
+  V1NetworkPolicy,
+  V1ResourceQuota,
+  V1RoleBinding,
+} from '@kubernetes/client-node'
 import { KubernetesObjectHeader, replace, statusCodeOf } from '../kubernetes/apply'
 import { getRunLabelValue, RUN_LABEL } from '../kubernetes/job-placement'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
@@ -420,11 +427,12 @@ export class KubernetesExecutor implements RunExecutor {
           return { kubernetes: this.environmentOf(run, namespace), env: this.access.env }
         }
         const label = getRunLabelValue(run.id)
+        let capabilitiesProblem: string | undefined
         await this.enqueue(namespace, async () => {
           if (context.signal.aborted) {
             throw new Error('the run was cancelled')
           }
-          await this.namespaces.prepare(namespace)
+          capabilitiesProblem = await this.namespaces.prepare(namespace)
           // what an earlier run left when the server stopped before its end, or when its
           // release failed: the objects of a run that does not execute. One that starts
           // after this waits for it here before it makes any.
@@ -451,7 +459,10 @@ export class KubernetesExecutor implements RunExecutor {
         })
         this.sweepLeftClaims()
         context.emit({ type: 'log', task: 'hammerkit', stream: 'stdout', text: `runs in the namespace ${namespace}` })
-        return { kubernetes: this.environmentOf(run, namespace, work), env: this.access.env }
+        return {
+          kubernetes: this.environmentOf(run, namespace, work, capabilitiesProblem),
+          env: this.access.env,
+        }
       },
       release: async (run: Run, context: RunContext) => {
         const namespace = this.namespaceOf(run)
@@ -518,7 +529,8 @@ export class KubernetesExecutor implements RunExecutor {
   private environmentOf(
     run: Run,
     namespace: string,
-    work?: { root: string; claim?: SandboxClaim }
+    work?: { root: string; claim?: SandboxClaim },
+    capabilitiesProblem?: string
   ): WorkKubernetesEnvironment {
     const backend = this.config.backend
     return {
@@ -544,7 +556,14 @@ export class KubernetesExecutor implements RunExecutor {
         ...(work?.claim ? { workspace: getWorkspace(work.root, work.claim, namespace, backend.sandboxes.runner) } : {}),
         // the claims of a service run go with its namespace
         ...(this.keep > 0 && !run.up ? { volumeScope: getVolumeScope(run) } : {}),
-        ...(backend.capabilities ? { capabilities: { runtimeClass: backend.capabilities.runtimeClass } } : {}),
+        ...(backend.capabilities
+          ? {
+              capabilities: {
+                runtimeClass: backend.capabilities.runtimeClass,
+                ...(capabilitiesProblem ? { unavailable: capabilitiesProblem } : {}),
+              },
+            }
+          : {}),
       },
     }
   }
@@ -637,56 +656,68 @@ export class KubernetesExecutor implements RunExecutor {
   }
 }
 
-// What may mount a claim a run kept: the runs of the same repository, as they share the
-// cache, and on a sandbox the runs of that sandbox only, whose claim is on the same node or
-// zone as the kept ones. The owner is the namespace's.
 const ENFORCE_LABEL = 'pod-security.kubernetes.io/enforce'
 const AUDIT_LABEL = 'pod-security.kubernetes.io/audit'
 
 /**
- * The Pod Security level of a caller's namespace: `baseline`, no privileged pods, host
- * paths or host network, whatever a build asks. `baseline` also refuses the capabilities
- * of `backend.capabilities`, sandboxed or not: with them the namespace enforces
- * `privileged` and audits `baseline`, and the operator's admission policy (see the docs on
- * capabilities) refuses what `baseline` would to a pod outside the sandbox's RuntimeClass.
+ * The Pod Security level a caller's namespace is made with: `baseline`, no privileged pods,
+ * host paths or host network, whatever a build asks. `baseline` also refuses the capabilities
+ * of `backend.capabilities`, sandboxed or not: with them the namespace enforces `privileged`
+ * and audits `baseline`, and the operator's admission policy (see the docs on capabilities)
+ * refuses what `baseline` would to a pod outside the sandbox's RuntimeClass.
  */
 export function getPodSecurityLabels(backend: Pick<KubernetesBackend, 'capabilities'>): {
-  [label: string]: string | null
+  [label: string]: string
 } {
   return backend.capabilities
     ? { [ENFORCE_LABEL]: 'privileged', [AUDIT_LABEL]: 'baseline' }
-    : { [ENFORCE_LABEL]: 'baseline', [AUDIT_LABEL]: null }
+    : { [ENFORCE_LABEL]: 'baseline' }
 }
 
-// the labels a namespace is made with: a null one is left out
-function getNewPodSecurityLabels(backend: Pick<KubernetesBackend, 'capabilities'>): { [label: string]: string } {
-  return Object.fromEntries(
-    Object.entries(getPodSecurityLabels(backend)).filter((entry): entry is [string, string] => entry[1] !== null)
+/**
+ * The server never changes the level of a namespace it made (that would take `patch` on every
+ * namespace of the cluster): one made before `backend.capabilities` is relabelled by the
+ * operator. Until then its tasks that add capabilities fail with this, the others run.
+ */
+export function getCapabilitiesProblem(
+  namespace: string,
+  labels: { [label: string]: string } | undefined,
+  backend: Pick<KubernetesBackend, 'capabilities'>
+): string | undefined {
+  const enforce = labels?.[ENFORCE_LABEL]
+  if (!backend.capabilities || enforce === 'privileged') {
+    return undefined
+  }
+  return (
+    `the namespace ${namespace} was made before backend.capabilities and enforces Pod Security ` +
+    `${enforce ?? 'none'}, which refuses them: kubectl label namespace ${namespace} ` +
+    `${ENFORCE_LABEL}=privileged ${AUDIT_LABEL}=baseline --overwrite`
   )
 }
 
 /**
- * Whether the server changes the level of a namespace it made, which takes `patch` on
- * namespaces: to `privileged` with `backend.capabilities`, back to `baseline` without. A
- * server without capabilities that never had them leaves the namespace as it is, as it
- * did before (and needs no such right).
+ * A namespace made while the server had `backend.capabilities` admits privileged pods but for
+ * the operator's admission policy. Without capabilities the server runs nothing in it until the
+ * operator sets it back.
  */
-export function needsPodSecurityPatch(
+export function getPrivilegedNamespaceProblem(
+  namespace: string,
   labels: { [label: string]: string } | undefined,
   backend: Pick<KubernetesBackend, 'capabilities'>
-): boolean {
-  return backend.capabilities
-    ? !hasPodSecurityLabels(labels, backend)
-    : labels?.[ENFORCE_LABEL] === 'privileged' || labels?.[AUDIT_LABEL] !== undefined
+): string | undefined {
+  if (backend.capabilities || labels?.[ENFORCE_LABEL] !== 'privileged') {
+    return undefined
+  }
+  return (
+    `the namespace ${namespace} enforces Pod Security privileged, made while the server had ` +
+    `backend.capabilities, and the server runs nothing in it without them: kubectl label namespace ` +
+    `${namespace} ${ENFORCE_LABEL}=baseline ${AUDIT_LABEL}- --overwrite`
+  )
 }
 
-export function hasPodSecurityLabels(
-  labels: { [label: string]: string } | undefined,
-  backend: Pick<KubernetesBackend, 'capabilities'>
-): boolean {
-  return Object.entries(getPodSecurityLabels(backend)).every(([label, value]) => (labels?.[label] ?? null) === value)
-}
-
+// What may mount a claim a run kept: the runs of the same repository, as they share the
+// cache, and on a sandbox the runs of that sandbox only, whose claim is on the same node or
+// zone as the kept ones. The owner is the namespace's.
 export function getVolumeScope(run: Run): string {
   if (run.source.type === 'sandbox' && !run.source.check) {
     return `sandbox-${createHash('sha256').update(run.source.id).digest('hex').slice(0, 24)}`
@@ -719,15 +750,16 @@ export class CallerNamespaces {
   // are admitted under a quota on compute. All of it is replaced when the server sets up
   // a namespace it did not set up in the last `NAMESPACE_SETUP_REUSE_MS` (it reads the
   // config once, at its start), so the namespace follows the config; a namespace made anew
-  // since (deleted and made again) is set up again at once.
+  // since (deleted and made again) is set up again at once. Returns what keeps the tasks that
+  // add capabilities from running in it (getCapabilitiesProblem), if anything.
   async prepare(
     namespace: string,
     // a service run's own namespace: its label, the namespace of the server that reaches its
     // endpoints, and its quota
     serviceRun?: { serviceRun: string; server: string; ports: number[]; quota?: Record<string, string> }
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const backend = this.backend
-    let existing
+    let existing: V1Namespace | undefined
     try {
       existing = await this.instance.coreApi.readNamespace({ name: namespace })
     } catch (e) {
@@ -738,6 +770,13 @@ export class CallerNamespaces {
     if (existing && existing.metadata?.labels?.[MANAGED_LABEL] !== 'true') {
       throw new Error(`the namespace ${namespace} was not made by hammerkit, the server does not run tasks in it`)
     }
+    const privileged = getPrivilegedNamespaceProblem(namespace, existing?.metadata?.labels, backend)
+    if (privileged) {
+      throw new Error(privileged)
+    }
+    // one made by another run of this server at the same time has the labels of its config
+    const problem = () =>
+      getCapabilitiesProblem(namespace, existing?.metadata?.labels ?? getPodSecurityLabels(backend), backend)
     const started = Date.now()
     const applied = this.applied.get(namespace)
     if (
@@ -747,7 +786,7 @@ export class CallerNamespaces {
       applied.uid === existing.metadata?.uid &&
       started - applied.at < NAMESPACE_SETUP_REUSE_MS
     ) {
-      return
+      return problem()
     }
     this.applied.delete(namespace)
     if (!existing) {
@@ -760,7 +799,7 @@ export class CallerNamespaces {
                 [MANAGED_LABEL]: 'true',
                 'hammerkit.dev/caller': namespace,
                 ...(serviceRun ? { [SERVICE_RUN_LABEL]: serviceRun.serviceRun } : {}),
-                ...getNewPodSecurityLabels(backend),
+                ...getPodSecurityLabels(backend),
               },
             },
           },
@@ -770,22 +809,6 @@ export class CallerNamespaces {
           throw createError
         }
       }
-    } else if (needsPodSecurityPatch(existing.metadata?.labels, backend)) {
-      // the level follows the config, as the policies do: made before `backend.capabilities`,
-      // or after it was removed
-      await this.instance.objectApi.patch(
-        {
-          apiVersion: 'v1',
-          kind: 'Namespace',
-          // a merge patch removes a label that is null
-          metadata: { name: namespace, labels: getPodSecurityLabels(backend) as { [label: string]: string } },
-        },
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'application/merge-patch+json'
-      )
     }
     await replace(this.instance, getRunRoleBinding(namespace, backend.runRole, await this.whoAmI()))
     const [first, ...policies] = getNamespacePolicies(namespace, backend.deniedEgress, backend.allowedEgress)
@@ -843,6 +866,7 @@ export class CallerNamespaces {
     if (uid) {
       this.applied.set(namespace, { uid, at: started })
     }
+    return problem()
   }
 
   private whoAmI(): Promise<RbacV1Subject> {

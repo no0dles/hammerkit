@@ -9,8 +9,8 @@ import {
   getNamespacePolicies,
   getPodSecurityLabels,
   getVolumeScope,
-  hasPodSecurityLabels,
-  needsPodSecurityPatch,
+  getCapabilitiesProblem,
+  getPrivilegedNamespaceProblem,
   isCallerNamespace,
   KubernetesExecutor,
 } from './kubernetes-backend'
@@ -52,35 +52,34 @@ describe('kubernetes backend', () => {
 
   it('enforces baseline in a caller’s namespace, privileged only for the capabilities of a sandbox', () => {
     const plain = backend()
-    expect(getPodSecurityLabels(plain)).toEqual({
-      'pod-security.kubernetes.io/enforce': 'baseline',
-      'pod-security.kubernetes.io/audit': null,
-    })
-    // what a server of an earlier version made is as it should be
-    expect(hasPodSecurityLabels({ 'pod-security.kubernetes.io/enforce': 'baseline' }, plain)).toBe(true)
+    expect(getPodSecurityLabels(plain)).toEqual({ 'pod-security.kubernetes.io/enforce': 'baseline' })
     const sandboxed = backend({ capabilities: { allow: ['SYS_ADMIN'], runtimeClass: 'gvisor' } })
     expect(getPodSecurityLabels(sandboxed)).toEqual({
       'pod-security.kubernetes.io/enforce': 'privileged',
       'pod-security.kubernetes.io/audit': 'baseline',
     })
-    // the level follows the config both ways
-    expect(hasPodSecurityLabels({ 'pod-security.kubernetes.io/enforce': 'baseline' }, sandboxed)).toBe(false)
-    expect(needsPodSecurityPatch({ 'pod-security.kubernetes.io/enforce': 'baseline' }, sandboxed)).toBe(true)
-    expect(
-      needsPodSecurityPatch(
-        { 'pod-security.kubernetes.io/enforce': 'privileged', 'pod-security.kubernetes.io/audit': 'baseline' },
-        plain
+    const ns = 'hammerkit-0123456789abcdef'
+    // what a server of an earlier version made, and what an operator or the platform labelled
+    for (const labels of <({ [label: string]: string } | undefined)[]>[
+      undefined,
+      { 'pod-security.kubernetes.io/enforce': 'baseline' },
+      { 'pod-security.kubernetes.io/enforce': 'baseline', 'pod-security.kubernetes.io/audit': 'restricted' },
+      { 'pod-security.kubernetes.io/enforce': 'restricted' },
+    ]) {
+      expect(getPrivilegedNamespaceProblem(ns, labels, plain)).toBeUndefined()
+      expect(getCapabilitiesProblem(ns, labels, plain)).toBeUndefined()
+      // made before the capabilities: the operator relabels it, the server can't
+      expect(getCapabilitiesProblem(ns, labels, sandboxed)).toContain(
+        `kubectl label namespace ${ns} pod-security.kubernetes.io/enforce=privileged`
       )
-    ).toBe(true)
-    // a server that never had capabilities changes nothing, and needs no right to
-    expect(needsPodSecurityPatch({ 'pod-security.kubernetes.io/enforce': 'baseline' }, plain)).toBe(false)
-    expect(needsPodSecurityPatch({}, plain)).toBe(false)
-    expect(
-      hasPodSecurityLabels(
-        { 'pod-security.kubernetes.io/enforce': 'privileged', 'pod-security.kubernetes.io/audit': 'baseline' },
-        plain
-      )
-    ).toBe(false)
+    }
+    const privileged = { 'pod-security.kubernetes.io/enforce': 'privileged' }
+    expect(getCapabilitiesProblem(ns, privileged, sandboxed)).toBeUndefined()
+    expect(getPrivilegedNamespaceProblem(ns, privileged, sandboxed)).toBeUndefined()
+    // made with the capabilities, which the config no longer has
+    expect(getPrivilegedNamespaceProblem(ns, privileged, plain)).toContain(
+      `kubectl label namespace ${ns} pod-security.kubernetes.io/enforce=baseline`
+    )
   })
 
   it('takes capabilities only with the RuntimeClass of a sandbox, and sandboxes only those', () => {
@@ -539,37 +538,41 @@ describe('kubernetes backend', () => {
       expect(applied()).toBe(3 * once)
     })
 
-    it('changes the Pod Security level of a namespace it made when the capabilities of the config do', async () => {
-      const { instance } = cluster({
-        'hammerkit.dev/managed': 'true',
-        'pod-security.kubernetes.io/enforce': 'baseline',
-      })
-      const patched: any[] = []
-      ;(instance.objectApi as any).patch = async (spec: any, ...rest: any[]) => {
-        patched.push({ labels: spec.metadata.labels, type: rest[4] })
-        return spec
-      }
+    it('never changes the Pod Security level of a namespace, and says what the operator relabels', async () => {
       const config = (backend: object) =>
         serverConfigSchema.parse({
           issuers: [{ issuer: 'https://idp.corp', audience: 'hammerkit' }],
           backend: { type: 'kubernetes', kubeconfig: join(root, 'config'), namespace: 'hammerkit', ...backend },
         }) as any
-      await new CallerNamespaces(instance as any, config({}).backend).prepare(namespace)
-      expect(patched).toEqual([])
       const sandboxed = config({ capabilities: { allow: ['SYS_ADMIN'], runtimeClass: 'gvisor' } })
-      await new CallerNamespaces(instance as any, sandboxed.backend).prepare(namespace)
-      expect(patched).toEqual([
-        {
-          labels: {
-            'pod-security.kubernetes.io/enforce': 'privileged',
-            'pod-security.kubernetes.io/audit': 'baseline',
-          },
-          type: 'application/merge-patch+json',
-        },
-      ])
+      const patched: any[] = []
+      const made = (labels: object | null) => {
+        const { calls, instance } = cluster(labels && { 'hammerkit.dev/managed': 'true', ...labels })
+        ;(instance.objectApi as any).patch = async (spec: any) => {
+          patched.push(spec)
+          return spec
+        }
+        return { calls, instance: instance as any }
+      }
+      // made before the capabilities: the run goes on, its tasks that add them fail
+      const old = made({ 'pod-security.kubernetes.io/enforce': 'baseline' })
+      expect(await new CallerNamespaces(old.instance, config({}).backend).prepare(namespace)).toBeUndefined()
+      expect(await new CallerNamespaces(old.instance, sandboxed.backend).prepare(namespace)).toContain(
+        `kubectl label namespace ${namespace} pod-security.kubernetes.io/enforce=privileged`
+      )
+      // made with them: nothing runs in it once the config has none
+      const privileged = made({ 'pod-security.kubernetes.io/enforce': 'privileged' })
+      expect(await new CallerNamespaces(privileged.instance, sandboxed.backend).prepare(namespace)).toBeUndefined()
+      await expect(new CallerNamespaces(privileged.instance, config({}).backend).prepare(namespace)).rejects.toThrow(
+        `the namespace ${namespace} enforces Pod Security privileged`
+      )
+      expect(privileged.calls.filter((call) => call.startsWith('create '))).toHaveLength(
+        old.calls.filter((call) => call.startsWith('create ')).length / 2
+      )
+      expect(patched).toEqual([])
       // a namespace it makes has the level at once
-      const fresh = cluster(null)
-      await new CallerNamespaces(fresh.instance as any, sandboxed.backend).prepare(namespace)
+      const fresh = made(null)
+      expect(await new CallerNamespaces(fresh.instance, sandboxed.backend).prepare(namespace)).toBeUndefined()
       expect(JSON.parse(fresh.calls[0].slice('create Namespace '.length))).toMatchObject({
         'pod-security.kubernetes.io/enforce': 'privileged',
         'pod-security.kubernetes.io/audit': 'baseline',

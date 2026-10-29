@@ -72,8 +72,10 @@ export interface TaskPlan {
   mounts: string[]
   ports: string[]
   generates: string[]
+  // the Linux capabilities a container task adds; left out when it adds none
+  capAdd?: string[]
   // what a reviewer looks at first
-  flags: ('local-task' | 'host-port' | 'remote-include')[]
+  flags: ('local-task' | 'host-port' | 'remote-include' | 'capabilities')[]
 }
 
 export interface InspectedBundle {
@@ -471,6 +473,10 @@ function toPlan(root: string, item: Item): TaskPlan {
   if (data.scope.remote) {
     flags.push('remote-include')
   }
+  const capAdd = isContainerWorkTask(data) ? data.capAdd : []
+  if (capAdd.length > 0) {
+    flags.push('capabilities')
+  }
   const isTask = data.type === 'local-task' || data.type === 'container-task'
   return {
     kind: isTask ? 'task' : 'service',
@@ -489,6 +495,7 @@ function toPlan(root: string, item: Item): TaskPlan {
     mounts,
     ports,
     generates: 'generates' in data ? data.generates.map((generate) => generate.path) : [],
+    ...(capAdd.length > 0 ? { capAdd: [...capAdd] } : {}),
     flags,
   }
 }

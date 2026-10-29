@@ -640,9 +640,11 @@ tasks:
     await expect(
       planBundle(bundle(both), hosted, { policy: { ...policy, capabilities: ['SYS_ADMIN'] } })
     ).rejects.toThrow('build: adds the capability NET_ADMIN, which this server does not allow')
-    await expect(
-      planBundle(bundle(both), hosted, { policy: { ...policy, capabilities: ['SYS_ADMIN', 'NET_ADMIN'] } })
-    ).resolves.toMatchObject({ tasks: ['build'] })
+    const planned = await planBundle(bundle(both), hosted, {
+      policy: { ...policy, capabilities: ['SYS_ADMIN', 'NET_ADMIN'] },
+    })
+    // what a reviewer of the version looks at first
+    expect(planned.plan.build).toMatchObject({ capAdd: ['SYS_ADMIN', 'NET_ADMIN'], flags: ['capabilities'] })
   })
 
   it('refuses what points a build file at the host, a cluster or a remote cache', async () => {
