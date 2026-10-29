@@ -133,6 +133,97 @@ container does not share a node with the server's token. The server still holds 
 right to mint the tokens of every account (see [Secrets in the Job](#secrets-in-the-job)), so
 the advice stands: one server, and one set of accounts, per trust level.
 
+## Capabilities
+
+A container task can add Linux capabilities (`capAdd`, see
+[Capabilities](/docs/task/container#capabilities)), such as `SYS_ADMIN` for a daemonless image
+build. A capability is root's power over the kernel the container runs on, which the runs of
+other callers share, so a server adds one only where its operator allows it, and then only in a
+sandbox with a kernel of its own:
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  capabilities:
+    allow: [SYS_ADMIN]       # what a build file may add
+    runtimeClass: gvisor     # the sandbox the pods of those tasks run in
+sandboxes:
+  capabilities: [SYS_ADMIN]  # runs on sandboxes add none unless named here
+```
+
+```yaml title="server.yaml"
+backend:
+  type: host
+  capabilities:
+    allow: [SYS_ADMIN]
+    runtime: runsc           # a runtime of the docker daemon: gVisor's
+```
+
+| Key | What it does |
+| --- | --- |
+| `backend.capabilities.allow` | The capabilities a task may add. A build file with a task that adds another is refused when it is published or proposed (`400`); without `capabilities` the server allows none. |
+| `backend.capabilities.runtimeClass` | `kubernetes` only. The RuntimeClass the pods of tasks that add capabilities run in. |
+| `backend.capabilities.runtime` | `host` only. The docker runtime the containers of those tasks run in, as named in the daemon's `daemon.json`. |
+| `sandboxes.capabilities` | What a run on a [sandbox](/docs/remote-compute/sandboxes) may add, out of `allow`. None by default: a sandbox holds code nobody reviewed. |
+
+Only the containers of tasks that add capabilities run in the sandbox, the others run as before,
+and such a task never runs in the [runner of a sandbox](#sandboxes). The sandbox has to be one:
+hammerkit can't tell whether a RuntimeClass or a docker runtime keeps the capability from the
+host, so name only one that does, such as gVisor (runsc, which handles the container's system
+calls in a kernel of its own) or Kata Containers (a virtual machine per pod). gVisor is
+`gvisor` on GKE (GKE Sandbox, on by default on Autopilot) and installed on the nodes elsewhere;
+on a docker host `runsc install` adds it to the daemon. Kata is `kata-vm-isolation` with AKS Pod
+Sandboxing. A task can't ask for `privileged`, on any backend.
+
+Pod Security `baseline` refuses these capabilities in a sandbox too, it does not know about
+RuntimeClasses. With `capabilities` the namespaces of callers enforce `privileged` and audit
+`baseline`, and the server changes the level of the namespaces it made when the config changes,
+which takes `patch` on namespaces in its ClusterRole (see [What the server may do](#what-the-server-may-do)).
+What `baseline` refused, the admission policy below refuses again, to every pod of those
+namespaces, and capabilities beyond `baseline` to every pod outside the sandbox. Apply it before
+you set `capabilities`, with the RuntimeClass you name there:
+
+```yaml title="admission.yaml"
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: hammerkit-capabilities }
+spec:
+  matchConstraints:
+    namespaceSelector: { matchLabels: { hammerkit.dev/managed: 'true' } }
+    resourceRules:
+      - { apiGroups: [''], apiVersions: ['*'], operations: [CREATE, UPDATE], resources: [pods] }
+  variables:
+    - name: containers
+      expression: "object.spec.containers + object.spec.?initContainers.orValue([]) + object.spec.?ephemeralContainers.orValue([])"
+    - name: baseline
+      expression: "['AUDIT_WRITE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'FSETID', 'KILL', 'MKNOD', 'NET_BIND_SERVICE', 'SETFCAP', 'SETGID', 'SETPCAP', 'SETUID', 'SYS_CHROOT']"
+  validations:
+    - expression: "object.spec.?runtimeClassName.orValue('') == 'gvisor' || variables.containers.all(c, c.?securityContext.?capabilities.?add.orValue([]).all(a, a in variables.baseline))"
+      message: capabilities beyond baseline are added in the RuntimeClass gvisor only
+    - expression: "!variables.containers.exists(c, c.?securityContext.?privileged.orValue(false))"
+      message: no privileged containers
+    - expression: "!object.spec.?hostNetwork.orValue(false) && !object.spec.?hostPID.orValue(false) && !object.spec.?hostIPC.orValue(false)"
+      message: no host namespaces
+    - expression: "!object.spec.?volumes.orValue([]).exists(v, has(v.hostPath))"
+      message: no hostPath volumes
+    - expression: "!variables.containers.exists(c, c.?ports.orValue([]).exists(p, p.?hostPort.orValue(0) != 0))"
+      message: no host ports
+    - expression: "!variables.containers.exists(c, c.?securityContext.?procMount.orValue('Default') != 'Default')"
+      message: no unmasked /proc
+    - expression: "object.spec.?securityContext.?seccompProfile.?type.orValue('') != 'Unconfined' && !variables.containers.exists(c, c.?securityContext.?seccompProfile.?type.orValue('') == 'Unconfined')"
+      message: no unconfined seccomp
+    - expression: "object.spec.?securityContext.?appArmorProfile.?type.orValue('') != 'Unconfined' && !variables.containers.exists(c, c.?securityContext.?appArmorProfile.?type.orValue('') == 'Unconfined')"
+      message: no unconfined AppArmor
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: hammerkit-capabilities }
+spec: { policyName: hammerkit-capabilities, validationActions: [Deny] }
+```
+
+[Building container images](/docs/guides/container-images) walks through a build of a
+Dockerfile with BuildKit in gVisor, pushed with a token of a service account.
+
 ## Kubernetes
 
 <Callout type="warn">
@@ -211,7 +302,8 @@ Policies add up, so none of them widens a pod with a limited [network](#network)
 what reaches it. An egress proxy takes connections from its task only.
 
 The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
-no privileged pods, host paths or host network. Every container of a run runs with
+no privileged pods, host paths or host network (with [capabilities](#capabilities), an admission
+policy of the operator in its place). Every container of a run runs with
 `allowPrivilegeEscalation: false` (so `sudo` and other setuid programs do not work), without
 the `NET_RAW` capability (no `ping`) and with the runtime's seccomp profile, and without a token
 of the cluster.
@@ -475,6 +567,9 @@ rules:
   - { apiGroups: [''], resources: [secrets], verbs: [get], resourceNames: [payments-dev-federation] }
   - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create], resourceNames: [payments-dev] }
 ```
+With [capabilities](#capabilities) the server also changes the Pod Security level of the
+namespaces it made: add `patch` to the verbs on namespaces of `hammerkit-server`.
+
 Bind `hammerkit-server` with a ClusterRoleBinding and `hammerkit-accounts` with a RoleBinding to
 the server's ServiceAccount; do not bind `hammerkit-runs` yourself. Making RoleBindings across the
 cluster still lets the server bind `hammerkit-runs` in a namespace it did not make. To rule that

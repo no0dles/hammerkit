@@ -168,6 +168,8 @@ task) when it
 * has a service volume whose name is a path (`/var/run/docker.sock:/var/run/docker.sock`),
   which docker would mount from the host,
 * has a task on a runtime that `runtimes` does not allow,
+* has a task that adds a capability (`capAdd`) that [`backend.capabilities`](/docs/remote-compute/backend#capabilities)
+  does not allow, which is any when the server names no sandbox for them,
 * has a task or service whose `network` reaches more than [`runs.network`](/docs/remote-compute/runs#network) allows,
 * declares `secretProviders` or `secretAccounts` (keep them in your
   [host config](/docs/task/secret-providers#on-this-machine-only)), reads a `file:` secret, reads an `env:`

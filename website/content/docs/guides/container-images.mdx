@@ -1,0 +1,327 @@
+---
+title: "Building container images"
+description: "Build a Dockerfile in a task on a server with BuildKit, in a sandboxed runtime, and push the image with a short-lived token of a service account."
+icon: Container
+---
+This guide builds a Dockerfile in a task that runs on a [hammerkit server](/docs/remote-compute)
+and pushes the image to a registry. It sets up the server once, as its operator, and then
+writes the build file. The example pushes to Google's Artifact Registry from a server on
+Kubernetes; the other registries and backends follow the same steps, the differences are
+named where they come up.
+
+## Why a task can't just run `docker build`
+
+On your laptop a task can mount the docker socket and run `docker build`. On a server that
+would hand the task the daemon of the machine, and with it every container of every caller
+on it, so the server refuses a mount of the socket. Docker in Docker needs a `privileged`
+container, which a server never starts. BuildKit without root needs what the server takes
+from every container: its seccomp profile, `allowPrivilegeEscalation: false` and the masked
+`/proc`.
+
+What works is BuildKit as root with one more capability, `SYS_ADMIN`, so it can mount the
+layers it builds. `SYS_ADMIN` is root's power over the kernel, and the kernel of a node runs
+the tasks of other callers too. So the server adds it only in a **sandboxed runtime**, which
+gives the container a kernel of its own: [gVisor](https://gvisor.dev) handles the container's
+system calls in a kernel it implements itself, [Kata Containers](https://katacontainers.io)
+start a small virtual machine per pod. `SYS_ADMIN` in there reaches the sandbox's kernel, not
+the node's. The task names the capability with
+[`capAdd`](/docs/task/container#capabilities), and the server's operator allows it in
+[`backend.capabilities`](/docs/remote-compute/backend#capabilities).
+
+<Callout type="info">
+
+This guide was tested on GKE Autopilot with gVisor (BuildKit v0.25.1): the build, a `RUN`
+step that downloads packages, and the push.
+
+</Callout>
+
+## What you need
+
+* A hammerkit server on Kubernetes, set up as in
+  [the Kubernetes guide](/docs/guides/agents/kubernetes), and the rights of its operator on
+  the cluster. On a [docker host](#on-a-docker-host) the steps are shorter.
+* A registry to push to. Here, a Docker repository in Artifact Registry, and the right to
+  grant roles on it.
+* The variables of the Kubernetes guide in your shell: `NAME` (the server's name and
+  namespace), `PROJECT`, `POOL` and `AUDIENCE`.
+
+## 1. A sandboxed runtime on the cluster
+
+The cluster needs a RuntimeClass that starts pods in a sandbox. Look for one first:
+
+```bash
+kubectl get runtimeclass
+```
+
+| Cluster | The RuntimeClass |
+| --- | --- |
+| GKE Autopilot | `gvisor`, there on every cluster ([GKE Sandbox](https://cloud.google.com/kubernetes-engine/docs/concepts/sandbox-pods)). Nothing to do. |
+| GKE Standard | `gvisor`, once a node pool has it: `gcloud container node-pools create sandbox --cluster <cluster> --sandbox type=gvisor`. |
+| AKS | `kata-vm-isolation`, with [Pod Sandboxing](https://learn.microsoft.com/azure/aks/use-pod-sandboxing) on a node pool (`--workload-runtime KataVmIsolation`). |
+| EKS and your own nodes | Install gVisor's `runsc` and its containerd shim on the nodes ([gVisor's containerd guide](https://gvisor.dev/docs/user_guide/containerd/quick_start/)), then add a RuntimeClass with `handler: runsc`. |
+
+A RuntimeClass of your own looks like this:
+
+```yaml title="runtimeclass.yaml"
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata: { name: gvisor }
+handler: runsc
+```
+
+The rest of this guide calls it `gvisor`. Use the name your cluster has.
+
+## 2. Let the server add `SYS_ADMIN` there
+
+Three changes, in this order, so no pod can add a capability outside the sandbox at any point.
+
+**The admission policy.** A namespace of a caller enforces the Pod Security level `baseline`,
+which refuses `SYS_ADMIN` even in a sandbox: it does not know about RuntimeClasses. With
+capabilities, the server lowers its namespaces to `privileged`, and an admission policy of
+yours refuses what `baseline` refused, and any capability beyond it outside the RuntimeClass.
+Copy the policy from [Capabilities](/docs/remote-compute/backend#capabilities) into
+`admission.yaml`, with your RuntimeClass in place of `gvisor`, and apply it:
+
+```bash
+kubectl apply -f admission.yaml
+```
+
+**The server's rights.** The server changes the level of the namespaces it already made. Add
+`patch` to the verbs on `namespaces` in the ClusterRole `$NAME-server` of the Kubernetes guide
+and apply it again.
+
+**The config.** In `server.yaml` (the ConfigMap `hammerkit-config`), under `backend`:
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  capabilities:
+    allow: [SYS_ADMIN]
+    runtimeClass: gvisor
+```
+
+Restart the server so it reads the config:
+
+```bash
+kubectl -n $NAME rollout restart deploy/hammerkit
+```
+
+Only the pods of tasks that add a capability run in gVisor; every other task runs as before.
+Runs on [sandboxes](/docs/remote-compute/sandboxes) add none, unless you list them under
+`sandboxes.capabilities`.
+
+## 3. An account that may push
+
+The task pushes with a token of a service account, never with a key or a person's login. The
+server mints the token: a Kubernetes ServiceAccount of its namespace, which Google trusts through
+the identity pool of the Kubernetes guide, and which has the right to push to one repository and
+nothing else.
+
+```bash
+REGION=europe-west4 REPOSITORY=apps
+gcloud artifacts repositories create $REPOSITORY --repository-format docker \
+  --location $REGION --project $PROJECT    # skip this if the repository exists
+
+# the identity that pushes: a ServiceAccount in the server's namespace, writer on the repository
+kubectl -n $NAME create serviceaccount registry-push
+gcloud artifacts repositories add-iam-policy-binding $REPOSITORY --location $REGION \
+  --project $PROJECT --role roles/artifactregistry.writer \
+  --member principal://iam.googleapis.com/$POOL/subject/system:serviceaccount:$NAME:registry-push
+
+# how gcloud signs in as it: the token the server puts in the Job, exchanged at Google's STS
+kubectl -n $NAME create secret generic registry-push-federation --from-literal=gcp.json="$(cat <<EOF
+{ "type": "external_account",
+  "audience": "//iam.googleapis.com/$POOL/providers/cluster",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": { "file": "/var/run/hammerkit/account/token" } }
+EOF
+)"
+
+# the server may read that Secret and ask for tokens of that ServiceAccount, nothing else
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: hammerkit-accounts, namespace: $NAME }
+rules:
+  - { apiGroups: [''], resources: [secrets], verbs: [get], resourceNames: [registry-push-federation] }
+  - { apiGroups: [''], resources: [serviceaccounts/token], verbs: [create], resourceNames: [registry-push] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: hammerkit-accounts, namespace: $NAME }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: hammerkit-accounts }
+subjects: [{ kind: ServiceAccount, name: hammerkit, namespace: $NAME }]
+EOF
+```
+
+A new IAM binding can take a few minutes before it works. Then declare the account in
+`server.yaml`, next to what is there, with your values in place of the examples:
+
+```yaml title="server.yaml"
+secretProviders:
+  gcp-token:
+    command: [gcloud, auth, print-access-token]   # prints a token of an hour
+accounts:
+  registry-push:
+    description: Pushes images to Artifact Registry
+    providers:
+      gcp-token: { env: { CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: /var/run/hammerkit/account/gcp.json } }
+    kubernetes:
+      serviceAccount: registry-push
+      audience: hk                                # AUDIENCE of the Kubernetes guide
+      secret: registry-push-federation
+    source: [ref]                                 # only from code in the repository
+    refs: [main]                                  # and only from main
+backend:
+  type: kubernetes
+  providers:
+    gcp-token:
+      image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+      allow: [sts.googleapis.com]                 # where the command signs in
+entitlements:
+  - subject: { iss: https://accounts.google.com, sub: '112233445566778899' }   # PUBLISHER_ID
+    accounts: { registry-push: use }              # add this to the publisher's entry
+    repos: [github.com/corp/app]
+    builds: publish
+```
+
+`source` and `refs` keep the account to reviewed code, see
+[Restricting the code](/docs/remote-compute/accounts#restricting-the-code): code nobody
+reviewed could push any image under that repository. [Accounts](/docs/remote-compute/accounts)
+and [Secrets in the Job](/docs/remote-compute/backend#secrets-in-the-job) explain each key.
+
+**The network.** A task that reads a secret reaches no more than
+[`runs.secretNetwork`](/docs/remote-compute/runs#tasks-that-read-secrets) allows, and the
+Kubernetes guide sets it to `none`. The build pulls its base image, its `RUN` steps download
+packages and the push goes to the registry, so name those hosts:
+
+```yaml title="server.yaml"
+runs:
+  secretNetwork:
+    allow:
+      - europe-west4-docker.pkg.dev        # the registry you push to
+      - registry-1.docker.io               # Docker Hub, for FROM alpine
+      - auth.docker.io
+      - production.cloudflare.docker.com
+      - dl-cdn.alpinelinux.org             # what RUN apk add downloads
+```
+
+Restart the server again (`kubectl -n $NAME rollout restart deploy/hammerkit`).
+
+## 4. The build file
+
+Next to the Dockerfile, in the repository the server runs from:
+
+```dockerfile title="app/Dockerfile"
+FROM alpine:3.22
+RUN apk add --no-cache curl
+CMD ["curl", "--version"]
+```
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  image:
+    description: build app/Dockerfile and push it
+    image: moby/buildkit:v0.25.1
+    capAdd: [SYS_ADMIN]
+    src: [app]
+    envs:
+      IMAGE: europe-west4-docker.pkg.dev/my-project/apps/hello:latest
+    secrets:
+      - { from: 'gcp-token:registry', account: registry-push, env: REGISTRY_TOKEN }
+    network:
+      allow:
+        - europe-west4-docker.pkg.dev
+        - registry-1.docker.io
+        - auth.docker.io
+        - production.cloudflare.docker.com
+        - dl-cdn.alpinelinux.org
+    cmds:
+      - |
+        set -e
+        mount -t tmpfs -o size=4g tmpfs /var/lib/buildkit
+        mkdir -p /tmp/docker && export DOCKER_CONFIG=/tmp/docker
+        AUTH=$(printf 'oauth2accesstoken:%s' "$REGISTRY_TOKEN" | base64 | tr -d '\n')
+        printf '{"auths":{"%s":{"auth":"%s"}}}' "${IMAGE%%/*}" "$AUTH" > $DOCKER_CONFIG/config.json
+        buildctl-daemonless.sh build --frontend dockerfile.v0 \
+          --local context=app --local dockerfile=app \
+          --opt build-arg:HTTP_PROXY=$HTTP_PROXY --opt build-arg:HTTPS_PROXY=$HTTPS_PROXY \
+          --opt build-arg:NO_PROXY=$NO_PROXY \
+          --output type=image,name=$IMAGE,push=true
+```
+
+Line by line:
+
+* `capAdd: [SYS_ADMIN]` is what makes the server run the task in gVisor. The task runs as the
+  image's user, root, because a capability holds for root only.
+* `mount -t tmpfs ... /var/lib/buildkit` gives BuildKit a file system in memory for its layers.
+  In gVisor, BuildKit's overlay mounts need one: on the container's own file system they fail.
+  `size` caps it; the memory counts against the task's.
+* The build and the mount are **one** command. On Kubernetes each entry of `cmds` runs in a
+  Job of its own, so a mount of the first entry would be gone in the second.
+* `config.json` is how BuildKit finds the registry's credentials. Artifact Registry takes an
+  access token as the password of the user `oauth2accesstoken`. The token lasts an hour and
+  reaches only what `registry-push` may do.
+* The task's network is an allow list, so hammerkit starts an egress proxy for it and sets
+  `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`. BuildKit pulls and pushes through it. The
+  `RUN` steps of the Dockerfile don't see the task's variables, so the `build-arg`s hand them
+  on; without them `apk add` finds no route.
+
+Pushing to another registry changes only `config.json` and the hosts: Amazon ECR takes the
+user `AWS` and the password of `aws ecr get-login-password`, Azure Container Registry the user
+`00000000-0000-0000-0000-000000000000` and the token of `az acr login --expose-token`, each
+printed by a [secret provider](/docs/task/secret-providers) as the account of that cloud.
+
+## 5. Publish and run
+
+Commit both files to `main`, then publish the build file and run the task, as the publisher of
+the Kubernetes guide:
+
+```bash
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit --impersonate-service-account=$PUBLISHER"
+hammerkit remote publish $NAME
+hammerkit remote run image --server $NAME --repo github.com/$REPO --ref main
+```
+
+The log shows BuildKit's steps, the `RUN apk add` and at the end the push:
+
+```
+[image] #9 pushing layers ... done
+[image] #9 pushing manifest for europe-west4-docker.pkg.dev/my-project/apps/hello:latest ... done
+```
+
+The task has no `generates`, so a run whose `app` folder didn't change skips it: the image of
+those sources is in the registry already. Set `cache: none` on the task to push on every run.
+
+## On a docker host
+
+A server with `backend: { type: host }` runs tasks with its docker daemon. Install gVisor on
+that machine ([gVisor's Docker guide](https://gvisor.dev/docs/user_guide/install/)) and add it to
+the daemon with `sudo runsc install && sudo systemctl restart docker`. Then:
+
+```yaml title="server.yaml"
+backend:
+  type: host
+  capabilities:
+    allow: [SYS_ADMIN]
+    runtime: runsc
+```
+
+There is no admission policy to apply and no ServiceAccount: the account's provider `env`
+points at credentials of the machine, as in [Accounts](/docs/remote-compute/accounts), and
+those should still be a federated identity or a key of a service account that may only push.
+The build file is the same.
+
+## When it fails
+
+| What you see | What it means |
+| --- | --- |
+| `image: adds the capability SYS_ADMIN, and this server allows none (backend.capabilities.allow)` at publish | The server has no `backend.capabilities`, or wasn't restarted. |
+| `... which this server does not allow (backend.capabilities.allow: ...)` | The task adds a capability the operator didn't list. Ask whether the build needs it: BuildKit needs `SYS_ADMIN` only. |
+| The Job's pod is refused with `violates PodSecurity "baseline"` | The namespace still enforces `baseline`: the server needs `patch` on namespaces, see step 2. |
+| The pod is refused by `hammerkit-capabilities` | The admission policy names another RuntimeClass than `backend.capabilities.runtimeClass`. |
+| `mount: permission denied` | The task doesn't have `capAdd: [SYS_ADMIN]`, or runs on a laptop with AppArmor (Ubuntu), see [Capabilities](/docs/task/container#capabilities). |
+| `failed to mount` or `invalid argument` from BuildKit's snapshotter | No tmpfs at `/var/lib/buildkit`, or the mount was in another entry of `cmds`. |
+| `401` or `403` when pushing | The IAM binding is new (give it a few minutes), names another repository, or another ServiceAccount than `registry-push`. |
+| `RUN` steps can't download | The `build-arg`s for the proxy are missing, or a host isn't in the task's `network` and `runs.secretNetwork`. |
