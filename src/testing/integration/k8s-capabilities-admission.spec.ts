@@ -205,21 +205,29 @@ describe('capabilities admission policy (kubernetes)', () => {
           spec: { containers: [{ name: 'c', image: 'busybox:1.36', command: ['sleep', '600'] }] },
         },
       })
-      const debugged = await core.readNamespacedPod({ name: 'debugged', namespace })
-      const ephemeral = await admitted(
-        core.replaceNamespacedPodEphemeralcontainers({
-          name: 'debugged',
-          namespace,
-          dryRun: 'All',
-          body: {
-            ...debugged,
-            spec: {
-              ...debugged.spec!,
-              ephemeralContainers: [{ name: 'debug', image: 'busybox:1.36', securityContext: { privileged: true } }],
+      // the kubelet updates the pod while it starts: read it again on a conflict
+      const addEphemeral = async () => {
+        const debugged = await core.readNamespacedPod({ name: 'debugged', namespace })
+        return admitted(
+          core.replaceNamespacedPodEphemeralcontainers({
+            name: 'debugged',
+            namespace,
+            dryRun: 'All',
+            body: {
+              ...debugged,
+              spec: {
+                ...debugged.spec!,
+                ephemeralContainers: [{ name: 'debug', image: 'busybox:1.36', securityContext: { privileged: true } }],
+              },
             },
-          },
-        })
-      )
+          })
+        )
+      }
+      let ephemeral = await addEphemeral()
+      for (let attempt = 0; attempt < 10 && ephemeral.includes('HTTP-Code: 409'); attempt++) {
+        await sleep(1000)
+        ephemeral = await addEphemeral()
+      }
       expect(
         Object.fromEntries(Object.entries({ ...pods, ephemeral }).map(([name, result]) => [name, outcome(result)]))
       ).toEqual({
