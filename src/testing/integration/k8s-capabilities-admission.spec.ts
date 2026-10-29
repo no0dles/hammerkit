@@ -65,6 +65,14 @@ function documentedPolicies(server: string): KubernetesObject[] {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// what a policy of the test denied a request with, else the whole error
+function outcome(result: string): string {
+  if (result === 'admitted') {
+    return result
+  }
+  return /denied request: ([^"\\]+)/.exec(result)?.[1] ?? result.slice(0, 400)
+}
+
 // 'admitted', or why not
 async function admitted(request: Promise<unknown>): Promise<string> {
   try {
@@ -153,53 +161,41 @@ describe('capabilities admission policy (kubernetes)', () => {
         await sleep(1000)
       }
 
-      const refusedBy = (message: string) => expect.stringContaining(message)
-      expect(await pod('plain', {})).toBe('admitted')
-      expect(
-        await pod('sandboxed', {
+      // every case at once, so one run shows each that does not hold
+      const container = (extra: object) => ({ containers: [{ name: 'c', image: 'busybox:1.36', ...extra }] })
+      const pods = {
+        plain: await pod('plain', {}),
+        sandboxed: await pod('sandboxed', { runtimeClassName: runtimeClass, ...container(sysAdmin) }),
+        runc: await pod('runc', container(sysAdmin)),
+        init: await pod('init', { initContainers: [{ name: 'i', image: 'busybox:1.36', ...sysAdmin }] }),
+        privileged: await pod('privileged', {
           runtimeClassName: runtimeClass,
-          containers: [{ name: 'c', image: 'busybox:1.36', ...sysAdmin }],
-        })
-      ).toBe('admitted')
-      expect(await pod('runc', { containers: [{ name: 'c', image: 'busybox:1.36', ...sysAdmin }] })).toEqual(
-        refusedBy('capabilities beyond baseline are added in the RuntimeClass')
-      )
-      expect(await pod('init', { initContainers: [{ name: 'i', image: 'busybox:1.36', ...sysAdmin }] })).toEqual(
-        refusedBy('capabilities beyond baseline')
-      )
-      expect(
-        await pod('privileged', {
-          runtimeClassName: runtimeClass,
-          containers: [{ name: 'c', image: 'busybox:1.36', securityContext: { privileged: true } }],
-        })
-      ).toEqual(refusedBy('no privileged containers'))
-      expect(await pod('host-network', { hostNetwork: true })).toEqual(refusedBy('no host namespaces'))
-      expect(await pod('host-path', { volumes: [{ name: 'h', hostPath: { path: '/' } }] })).toEqual(
-        refusedBy('no hostPath volumes')
-      )
-      expect(
-        await pod('host-port', {
-          containers: [{ name: 'c', image: 'busybox:1.36', ports: [{ containerPort: 80, hostPort: 80 }] }],
-        })
-      ).toEqual(refusedBy('no host ports'))
-      expect(await pod('seccomp', { securityContext: { seccompProfile: { type: 'Unconfined' } } })).toEqual(
-        refusedBy('no unconfined seccomp')
-      )
-      expect(await pod('apparmor', {}, { 'container.apparmor.security.beta.kubernetes.io/c': 'unconfined' })).toEqual(
-        refusedBy('no unconfined AppArmor')
-      )
-      expect(
-        await pod('apparmor-default', {}, { 'container.apparmor.security.beta.kubernetes.io/c': 'runtime/default' })
-      ).toBe('admitted')
-      expect(await pod('selinux', { securityContext: { seLinuxOptions: { type: 'spc_t' } } })).toEqual(
-        refusedBy('no SELinux options')
-      )
-      expect(
-        await pod('sysctl', { securityContext: { sysctls: [{ name: 'kernel.msgmax', value: '65536' }] } })
-      ).toEqual(refusedBy('only the safe sysctls'))
-      expect(
-        await pod('safe-sysctl', { securityContext: { sysctls: [{ name: 'net.ipv4.tcp_syncookies', value: '1' }] } })
-      ).toBe('admitted')
+          ...container({ securityContext: { privileged: true } }),
+        }),
+        hostNetwork: await pod('host-network', { hostNetwork: true }),
+        hostPath: await pod('host-path', { volumes: [{ name: 'h', hostPath: { path: '/' } }] }),
+        hostPort: await pod('host-port', container({ ports: [{ containerPort: 80, hostPort: 80 }] })),
+        seccomp: await pod('seccomp', { securityContext: { seccompProfile: { type: 'Unconfined' } } }),
+        containerSeccomp: await pod(
+          'container-seccomp',
+          container({ securityContext: { seccompProfile: { type: 'Unconfined' } } })
+        ),
+        appArmor: await pod('apparmor', {}, { 'container.apparmor.security.beta.kubernetes.io/c': 'unconfined' }),
+        appArmorDefault: await pod(
+          'apparmor-default',
+          {},
+          { 'container.apparmor.security.beta.kubernetes.io/c': 'runtime/default' }
+        ),
+        seLinux: await pod('selinux', { securityContext: { seLinuxOptions: { type: 'spc_t' } } }),
+        containerSeLinux: await pod(
+          'container-selinux',
+          container({ securityContext: { seLinuxOptions: { user: 'root' } } })
+        ),
+        sysctl: await pod('sysctl', { securityContext: { sysctls: [{ name: 'kernel.msgmax', value: '65536' }] } }),
+        safeSysctl: await pod('safe-sysctl', {
+          securityContext: { sysctls: [{ name: 'net.ipv4.tcp_syncookies', value: '1' }] },
+        }),
+      }
 
       // an ephemeral container goes through its own subresource
       await core.createNamespacedPod({
@@ -210,22 +206,41 @@ describe('capabilities admission policy (kubernetes)', () => {
         },
       })
       const debugged = await core.readNamespacedPod({ name: 'debugged', namespace })
-      expect(
-        await admitted(
-          core.replaceNamespacedPodEphemeralcontainers({
-            name: 'debugged',
-            namespace,
-            dryRun: 'All',
-            body: {
-              ...debugged,
-              spec: {
-                ...debugged.spec!,
-                ephemeralContainers: [{ name: 'debug', image: 'busybox:1.36', securityContext: { privileged: true } }],
-              },
+      const ephemeral = await admitted(
+        core.replaceNamespacedPodEphemeralcontainers({
+          name: 'debugged',
+          namespace,
+          dryRun: 'All',
+          body: {
+            ...debugged,
+            spec: {
+              ...debugged.spec!,
+              ephemeralContainers: [{ name: 'debug', image: 'busybox:1.36', securityContext: { privileged: true } }],
             },
-          })
-        )
-      ).toEqual(refusedBy('no privileged containers'))
+          },
+        })
+      )
+      expect(
+        Object.fromEntries(Object.entries({ ...pods, ephemeral }).map(([name, result]) => [name, outcome(result)]))
+      ).toEqual({
+        plain: 'admitted',
+        sandboxed: 'admitted',
+        runc: 'capabilities beyond baseline are added in the RuntimeClass gvisor only',
+        init: 'capabilities beyond baseline are added in the RuntimeClass gvisor only',
+        privileged: 'no privileged containers',
+        hostNetwork: 'no host namespaces',
+        hostPath: 'no hostPath volumes',
+        hostPort: 'no host ports',
+        seccomp: 'no unconfined seccomp',
+        containerSeccomp: 'no unconfined seccomp',
+        appArmor: 'no unconfined AppArmor',
+        appArmorDefault: 'admitted',
+        seLinux: 'no SELinux options beyond the container types',
+        containerSeLinux: 'no SELinux options beyond the container types',
+        sysctl: 'only the safe sysctls',
+        safeSysctl: 'admitted',
+        ephemeral: 'no privileged containers',
+      })
 
       // the server makes the namespaces of its callers only
       const token = await core.createNamespacedServiceAccountToken({
@@ -245,16 +260,18 @@ describe('capabilities admission policy (kubernetes)', () => {
       const makes = (name: string, labels: Record<string, string>) =>
         admitted(server.createNamespace({ dryRun: 'All', body: { metadata: { name, labels } } }))
       const levels = { 'pod-security.kubernetes.io/enforce': 'privileged' }
-      expect(await makes(`${prefix}fedcba9876543210`, { 'hammerkit.dev/managed': 'true', ...levels })).toBe('admitted')
-      expect(await makes(`hk-other-${suffix}`, { 'hammerkit.dev/managed': 'true', ...levels })).toEqual(
-        refusedBy('the server makes the namespaces of its callers only')
-      )
-      expect(await makes(`${prefix}fedcba9876543211`, levels)).toEqual(
-        refusedBy('the namespaces of callers are labelled hammerkit.dev/managed')
-      )
-      expect(await makes(`${prefix}fedcba9876543212`, { 'hammerkit.dev/managed': 'true' })).toEqual(
-        refusedBy('the namespaces of callers enforce Pod Security baseline')
-      )
+      const namespaces = {
+        own: await makes(`${prefix}fedcba9876543210`, { 'hammerkit.dev/managed': 'true', ...levels }),
+        other: await makes(`hk-other-${suffix}`, { 'hammerkit.dev/managed': 'true', ...levels }),
+        unlabelled: await makes(`${prefix}fedcba9876543211`, levels),
+        noLevel: await makes(`${prefix}fedcba9876543212`, { 'hammerkit.dev/managed': 'true' }),
+      }
+      expect(Object.fromEntries(Object.entries(namespaces).map(([name, result]) => [name, outcome(result)]))).toEqual({
+        own: 'admitted',
+        other: 'the server makes the namespaces of its callers only',
+        unlabelled: 'the namespaces of callers are labelled hammerkit.dev/managed',
+        noLevel: 'the namespaces of callers enforce Pod Security baseline, or privileged with capabilities',
+      })
     }),
     300_000
   )

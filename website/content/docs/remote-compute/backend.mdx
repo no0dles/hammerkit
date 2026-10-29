@@ -210,8 +210,6 @@ spec:
         object.spec.containers.filter(c, has(c.securityContext)).map(c, c.securityContext)
         + object.spec.?initContainers.orValue([]).filter(c, has(c.securityContext)).map(c, c.securityContext)
         + object.spec.?ephemeralContainers.orValue([]).filter(c, has(c.securityContext)).map(c, c.securityContext)
-    - name: pod
-      expression: "object.spec.?securityContext"
     - name: baseline
       expression: "['AUDIT_WRITE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'FSETID', 'KILL', 'MKNOD', 'NET_BIND_SERVICE', 'SETFCAP', 'SETGID', 'SETPCAP', 'SETUID', 'SYS_CHROOT']"
     - name: seLinuxTypes
@@ -234,25 +232,25 @@ spec:
     - expression: "variables.contexts.all(s, s.?procMount.orValue('Default') == 'Default')"
       message: no unmasked /proc
     - expression: >-
-        variables.pod.?seccompProfile.?type.orValue('') != 'Unconfined'
+        object.spec.?securityContext.?seccompProfile.?type.orValue('') != 'Unconfined'
         && variables.contexts.all(s, s.?seccompProfile.?type.orValue('') != 'Unconfined')
       message: no unconfined seccomp
     - expression: >-
-        variables.pod.?appArmorProfile.?type.orValue('') != 'Unconfined'
+        object.spec.?securityContext.?appArmorProfile.?type.orValue('') != 'Unconfined'
         && variables.contexts.all(s, s.?appArmorProfile.?type.orValue('') != 'Unconfined')
         && object.metadata.?annotations.orValue({}).all(k, !k.startsWith('container.apparmor.security.beta.kubernetes.io/')
           || object.metadata.annotations[k] == 'runtime/default' || object.metadata.annotations[k].startsWith('localhost/'))
       message: no unconfined AppArmor
     - expression: >-
-        variables.pod.?seLinuxOptions.?type.orValue('') in variables.seLinuxTypes
-        && variables.pod.?seLinuxOptions.?user.orValue('') == '' && variables.pod.?seLinuxOptions.?role.orValue('') == ''
+        object.spec.?securityContext.?seLinuxOptions.?type.orValue('') in variables.seLinuxTypes
+        && object.spec.?securityContext.?seLinuxOptions.?user.orValue('') == '' && object.spec.?securityContext.?seLinuxOptions.?role.orValue('') == ''
         && variables.contexts.all(s, s.?seLinuxOptions.?type.orValue('') in variables.seLinuxTypes
           && s.?seLinuxOptions.?user.orValue('') == '' && s.?seLinuxOptions.?role.orValue('') == '')
       message: no SELinux options beyond the container types
-    - expression: "variables.pod.?sysctls.orValue([]).all(s, s.name in variables.sysctls)"
+    - expression: "object.spec.?securityContext.?sysctls.orValue([]).all(s, s.name in variables.sysctls)"
       message: only the safe sysctls
     - expression: >-
-        !variables.pod.?windowsOptions.?hostProcess.orValue(false)
+        !object.spec.?securityContext.?windowsOptions.?hostProcess.orValue(false)
         && !variables.contexts.exists(s, s.?windowsOptions.?hostProcess.orValue(false))
       message: no Windows host processes
 ---
