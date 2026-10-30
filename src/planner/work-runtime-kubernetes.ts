@@ -44,7 +44,12 @@ import {
   removeJobCredentials,
   splitJobSecrets,
 } from '../kubernetes/job-secrets'
-import { getContainerSecurity, getPodPlacement, getRunLabelValue } from '../kubernetes/job-placement'
+import {
+  getContainerSecurity,
+  getPodPlacement,
+  getPodRuntimeClass,
+  getRunLabelValue,
+} from '../kubernetes/job-placement'
 import {
   ensureKubernetesItemNetwork,
   getNetworkLabels,
@@ -190,7 +195,8 @@ export async function describeFailedJob(
  * The containers of the Job of a command: the network gate first, nothing runs before the
  * item's policy holds, then the init containers that read its secrets, then the command. The
  * proxy's token (`network.secretEnv`) reaches the init containers through `secretSpec` only:
- * the command's container gets the proxy variables of a limited network without it.
+ * the command's container gets the proxy variables of a limited network without it. A task that
+ * adds capabilities gets them in the sandbox's RuntimeClass only.
  */
 export function getTaskJobContainers(options: {
   task: WorkItem<ContainerWorkTask>
@@ -202,7 +208,7 @@ export function getTaskJobContainers(options: {
   secretSpec: JobSecretSpec
   mounts: V1VolumeMount[]
   kubernetes: WorkKubernetesEnvironment
-}): Pick<V1PodSpec, 'initContainers' | 'containers'> {
+}): Pick<V1PodSpec, 'initContainers' | 'containers' | 'runtimeClassName'> {
   const { task, cmd, envs, secrets, network, secretSpec, kubernetes } = options
   // the arguments after `--` keep their `$` as text, Kubernetes expands `$(NAME)`
   const command = secretSpec.command(task.data.shell, getKubernetesCommandText(cmd))
@@ -225,9 +231,10 @@ export function getTaskJobContainers(options: {
         name: options.container,
         volumeMounts: [...options.mounts, ...secrets.mounts, ...secretSpec.mounts],
         ...getKubernetesResources(task.data.resources),
-        ...getContainerSecurity(kubernetes),
+        ...getContainerSecurity(kubernetes, task.data.capAdd),
       },
     ],
+    ...getPodRuntimeClass({ name: task.name, capAdd: task.data.capAdd }, kubernetes),
   }
 }
 

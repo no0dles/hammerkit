@@ -103,6 +103,12 @@ const FOREIGN_BLOCKS: { file: string; snippet: string; reason: string }[] = [
     reason: 'Kubernetes admission policy that confines the RoleBindings of the server, not a hammerkit build file',
   },
   {
+    file: join('guides', 'container-images.mdx'),
+    snippet: 'kind: RuntimeClass',
+    reason:
+      'Kubernetes RuntimeClass of a sandboxed runtime the operator adds to the cluster, not a hammerkit build file',
+  },
+  {
     file: join('remote-compute', 'service-runs.mdx'),
     snippet: 'secretName: hammerkit-tls',
     reason: 'Kubernetes Ingress that sends the hosts of endpoints to the server, not a hammerkit build file',

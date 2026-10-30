@@ -10,6 +10,7 @@ import { WorkItem } from './work-item'
 import { WorkSecret } from './work-secret'
 import { WorkResources } from './work-resources'
 import { WorkNetwork } from './work-network'
+import { LinuxCapability } from '../schema/capabilities-schema'
 
 // `task`: the task's own envs; `input`: a value the including file passed with
 // `with`; `build-file`: the top-level envs of its build file; `extend`: carried
@@ -75,6 +76,8 @@ export interface ContainerWorkTask extends BaseWorkTask {
   mounts: WorkMount[]
   // on Kubernetes, the size of its claim; the environment's when null
   volumeSize: string | null
+  // Linux capabilities added to its container (`capAdd`), such as SYS_ADMIN
+  capAdd: LinuxCapability[]
   // on a server's cluster, the pool of a local task that runs in the pool's tool image
   pool?: string
   // on a server's cluster, the architecture of the nodes it runs on (as process.arch

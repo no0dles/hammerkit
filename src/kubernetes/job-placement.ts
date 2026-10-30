@@ -55,6 +55,7 @@ export function runInToolImage(
     user: null,
     mounts: [],
     volumeSize: null,
+    capAdd: [],
     pool: pool.name,
     arch: getNodeArch(pool),
   }
@@ -109,18 +110,49 @@ export function getRunLabels(kubernetes: Pick<WorkKubernetesEnvironment, 'server
 /**
  * What a container of a run may do on a server, where it shares nodes with the pods of
  * other callers: no privilege escalation (setuid binaries such as sudo), no raw sockets
- * (spoofing on a bridge network) and the runtime's seccomp profile.
+ * (spoofing on a bridge network) and the runtime's seccomp profile. The capabilities a
+ * task adds (`capAdd`) come on top, in the sandbox of getPodRuntimeClass on a server.
  */
-export function getContainerSecurity(kubernetes: Pick<WorkKubernetesEnvironment, 'server'>): {
+export function getContainerSecurity(
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
+  capAdd: readonly string[] = []
+): {
   securityContext?: V1SecurityContext
 } {
-  return kubernetes.server
-    ? {
-        securityContext: {
-          allowPrivilegeEscalation: false,
-          capabilities: { drop: ['NET_RAW'] },
-          seccompProfile: { type: 'RuntimeDefault' },
-        },
-      }
-    : {}
+  const add = capAdd.length > 0 ? { add: [...capAdd] } : {}
+  if (!kubernetes.server) {
+    return capAdd.length > 0 ? { securityContext: { capabilities: add } } : {}
+  }
+  const drop = capAdd.includes('NET_RAW') ? {} : { drop: ['NET_RAW'] }
+  return {
+    securityContext: {
+      allowPrivilegeEscalation: false,
+      capabilities: { ...drop, ...add },
+      seccompProfile: { type: 'RuntimeDefault' },
+    },
+  }
+}
+
+/**
+ * The RuntimeClass of the pod of a task that adds capabilities on a server: the sandbox the
+ * operator named (`backend.capabilities.runtimeClass`), so the capabilities hold in its own
+ * kernel and never in the node's. Elsewhere the cluster is the build file's own.
+ */
+export function getPodRuntimeClass(
+  task: { name: string; capAdd: readonly string[] },
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+): { runtimeClassName?: string } {
+  if (task.capAdd.length === 0 || !kubernetes.server) {
+    return {}
+  }
+  const sandbox = kubernetes.server.capabilities
+  if (!sandbox) {
+    throw new Error(
+      `${task.name}: adds the capabilities ${task.capAdd.join(', ')}, which this server grants in no sandboxed runtime`
+    )
+  }
+  if (sandbox.unavailable) {
+    throw new Error(`${task.name}: adds the capabilities ${task.capAdd.join(', ')}, but ${sandbox.unavailable}`)
+  }
+  return { runtimeClassName: sandbox.runtimeClass }
 }

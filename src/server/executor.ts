@@ -59,6 +59,9 @@ export interface HostExecutorOptions {
   sandboxes?: SandboxRunOptions
   // where container tasks run when not on this machine's docker daemon
   placement?: RunPlacement
+  // on this machine's docker daemon, the runtime a container that adds capabilities runs
+  // in (`backend.capabilities.runtime`)
+  capabilityRuntime?: string
   // the operator's log, which hears of a run directory that could not be removed
   log?: (line: string) => void
   // how long a cancelled run gets to stop before its process is killed
@@ -306,6 +309,7 @@ export class HostExecutor implements RunExecutor {
                 }
               : {}),
             ...(placed ? { kubernetes: placed.kubernetes } : {}),
+            ...(!placed && this.options.capabilityRuntime ? { capabilityRuntime: this.options.capabilityRuntime } : {}),
           },
           cwd,
           { ...this.processEnvironment(home, cache), ...placed?.env },

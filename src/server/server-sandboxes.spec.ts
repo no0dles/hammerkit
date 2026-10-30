@@ -17,6 +17,8 @@ const REPO = 'github.com/corp/payments'
 const policy = `
 runs: { env: { allow: ${JSON.stringify(HOST_ENV_ALLOW)} } }
 runtimes: [docker, local]
+# a run from a ref may add SYS_ADMIN, one on a sandbox none (sandboxes.capabilities)
+backend: { type: host, capabilities: { allow: [SYS_ADMIN], runtime: runsc } }
 sandboxes: { runtimes: [docker, local], network: open, limits: { count: 2, bytes: 1Mi } }
 secretProviders:
   echo: { command: [${JSON.stringify(process.execPath)}, -e, "process.stdout.write(process.argv[1])", "{{ref}}"] }
@@ -76,6 +78,10 @@ const buildFile = [
   '  all:',
   "    src: ['**']",
   '    cmds: [cat input.txt]',
+  '  image:',
+  '    image: alpine:3.22',
+  '    capAdd: [SYS_ADMIN]',
+  '    cmds: [echo image]',
   '',
 ].join('\n')
 
@@ -389,6 +395,23 @@ describe('sandboxes api', () => {
       expect((await refused.json()).error).toMatch(
         /reads env:PATH, which the server does not list in sandboxes.env.allow/
       )
+    })
+  })
+
+  it('lets a run on a sandbox add no capability, unless sandboxes.capabilities lists it', async () => {
+    const accepting: RunExecutor = { execute: async () => undefined }
+    await withApi('sandboxes-api-capabilities', accepting, async (api) => {
+      const sandbox = await (await create(api)).json()
+      const refused = await runOn(api, sandbox.id, ['image'])
+      expect(refused.status).toBe(400)
+      expect((await refused.json()).error).toMatch(
+        /image: adds the capability SYS_ADMIN, and this server allows none \(sandboxes.capabilities\)/
+      )
+      // the same build file from a ref of the repository adds it
+      const fromRef = await api.call('POST', '/v1/runs', {
+        body: { definition: api.hash, tasks: ['image'], source: { type: 'ref', repo: REPO, ref: 'main' } },
+      })
+      expect(fromRef.status).toBe(202)
     })
   })
 

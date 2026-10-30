@@ -147,3 +147,30 @@ example pre-baked, root-owned content) are left untouched. On macOS and Windows 
 Docker Desktop VM handles the uid mapping, so this step is skipped entirely.
 
 </Callout>
+
+### Capabilities
+
+`capAdd` adds Linux capabilities to the task's container, on top of the runtime's default set.
+A daemonless image build, for example, mounts file systems and needs `SYS_ADMIN`:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  image:
+    image: moby/buildkit:v0.25.1
+    capAdd: [SYS_ADMIN]
+    cmds:
+      - buildctl-daemonless.sh build --frontend dockerfile.v0 --local context=. --local dockerfile=.
+```
+
+A capability is named without the `CAP_` prefix, as in `capabilities(7)`: `SYS_ADMIN`,
+`NET_ADMIN`. `ALL` is not one, a task lists what it needs. On Docker they are `--cap-add`, on
+Kubernetes the container's `securityContext.capabilities.add`. A capability holds for root
+only, so a task with `capAdd` runs its commands as the user of its image, not as your
+`uid:gid` (see File permission above): files it writes into the project are that user's.
+Capabilities are not part of the task's cache key.
+
+On a host that uses AppArmor, such as Ubuntu, Docker's default profile still refuses mounts
+whatever the capabilities, so a build that mounts needs a sandboxed runtime there.
+A [server](/docs/remote-compute/backend#capabilities) adds a capability only where its
+operator allows it, and then only in such a sandbox: see
+[Building container images](/docs/guides/container-images).

@@ -782,6 +782,14 @@ describe('describePlan', () => {
           network: { allow: ['registry.npmjs.org'] },
         },
         open: { ...entry, kind: 'service', runtime: 'docker', cmds: [], network: 'open' },
+        image: {
+          ...entry,
+          kind: 'task',
+          runtime: 'docker',
+          cmds: ['buildctl-daemonless.sh build'],
+          capAdd: ['SYS_ADMIN'],
+          flags: ['capabilities'],
+        },
       }).map((line) => line.replace(ANSI, ''))
     ).toEqual([
       '  old  task, docker node:22',
@@ -790,6 +798,9 @@ describe('describePlan', () => {
       '    $ npm ci',
       '    network: {"allow":["registry.npmjs.org"]}',
       '  open  service, docker',
+      '  image  task, docker  [capabilities]',
+      '    $ buildctl-daemonless.sh build',
+      '    capAdd: SYS_ADMIN',
     ])
   })
 })

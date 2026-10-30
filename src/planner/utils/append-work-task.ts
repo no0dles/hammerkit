@@ -119,10 +119,12 @@ function parseTask(
     return <ContainerWorkTask>{
       ...baseWorkNode,
       type: 'container-task',
-      user: getContainerUser(),
+      // a capability holds for root only: a task that adds some runs as its image's user
+      user: task.schema.capAdd?.length ? null : getContainerUser(),
       image: templateValue(task.schema.image, envs),
       mounts: parseWorkMounts(cwd, task.schema, envs),
       volumeSize: task.schema.volumeSize ?? null,
+      capAdd: task.schema.capAdd ?? [],
     }
   } else {
     const fileSecret = baseWorkNode.secrets.find((secret) => secret.target.type === 'file')

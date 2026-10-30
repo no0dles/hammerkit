@@ -1,8 +1,10 @@
 import { V1ContainerStatus } from '@kubernetes/client-node'
-import { describeFailedJob } from './work-runtime-kubernetes'
+import { describeFailedJob, getTaskJobContainers } from './work-runtime-kubernetes'
 import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
-import { WorkKubernetesEnvironment } from './work-environment'
-import { JobSecret } from '../kubernetes/job-secrets'
+import { WorkKubernetesEnvironment, WorkKubernetesServer } from './work-environment'
+import { WorkItem } from './work-item'
+import { ContainerWorkTask } from './work-task'
+import { JobSecret, JobSecretSpec } from '../kubernetes/job-secrets'
 import { WorkSecret } from './work-secret'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 
@@ -73,5 +75,73 @@ describe('describeFailedJob', () => {
       exitCode: 3,
     })
     expect(await describeFailedJob(instance, env, 'build', 'build-job', 'cmd-2', [])).toBeUndefined()
+  })
+})
+
+describe('getTaskJobContainers', () => {
+  const server: WorkKubernetesServer = {
+    run: 'run_1',
+    namespace: 'hammerkit',
+    pools: [],
+    providers: {},
+    accounts: {},
+    capabilities: { runtimeClass: 'gvisor' },
+  }
+  const kubernetes: WorkKubernetesEnvironment = {
+    type: 'kubernetes',
+    namespace: 'hammerkit-0123456789abcdef',
+    httpRoutes: [],
+    networkPolicyEnforced: true,
+    server,
+  }
+  const secretSpec: JobSecretSpec = {
+    initContainers: [],
+    volumes: [],
+    mounts: [],
+    command: (shell, cmd) => ({ command: [shell, '-c'], args: [cmd], env: [] }),
+  }
+  const pod = (capAdd: string[], environment = kubernetes) => {
+    const task = {
+      name: 'image',
+      data: { image: 'moby/buildkit:v0.25.1', shell: 'sh', cmds: [{ cmd: 'true', cwd: '/build' }], capAdd },
+    } as unknown as WorkItem<ContainerWorkTask>
+    return getTaskJobContainers({
+      task,
+      cmd: task.data.cmds[0],
+      container: 'cmd-1',
+      envs: {},
+      secrets: { env: [], mounts: [] },
+      network: { env: [], initContainers: [] },
+      secretSpec,
+      mounts: [],
+      kubernetes: environment,
+    })
+  }
+
+  it('adds the capabilities of a task in the RuntimeClass of the server only', () => {
+    const sandboxed = pod(['SYS_ADMIN'])
+    expect(sandboxed.runtimeClassName).toBe('gvisor')
+    expect(sandboxed.containers[0].securityContext).toEqual({
+      allowPrivilegeEscalation: false,
+      capabilities: { drop: ['NET_RAW'], add: ['SYS_ADMIN'] },
+      seccompProfile: { type: 'RuntimeDefault' },
+    })
+    // a task of the same run that adds none runs as before
+    const plain = pod([])
+    expect(plain.runtimeClassName).toBeUndefined()
+    expect(plain.containers[0].securityContext?.capabilities).toEqual({ drop: ['NET_RAW'] })
+  })
+
+  it('refuses the capabilities where the namespace or the server can not admit them', () => {
+    const unavailable = 'the namespace hammerkit-0123456789abcdef was made before backend.capabilities'
+    expect(() =>
+      pod(['SYS_ADMIN'], {
+        ...kubernetes,
+        server: { ...server, capabilities: { runtimeClass: 'gvisor', unavailable } },
+      })
+    ).toThrow(`image: adds the capabilities SYS_ADMIN, but ${unavailable}`)
+    expect(() => pod(['SYS_ADMIN'], { ...kubernetes, server: { ...server, capabilities: undefined } })).toThrow(
+      'which this server grants in no sandboxed runtime'
+    )
   })
 })

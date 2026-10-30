@@ -619,6 +619,34 @@ tasks:
     ).resolves.toMatchObject({ tasks: ['a', 'b'] })
   })
 
+  it('refuses a capability the server does not allow', async () => {
+    const yaml =
+      'tasks:\n  build:\n    image: moby/buildkit:v0.25.1\n    capAdd: [SYS_ADMIN]\n    cmds: [buildctl-daemonless.sh]\n'
+    // a server always says which, none when its backend has no `capabilities`
+    await expect(planBundle(bundle(yaml), hosted, { policy: { ...policy, capabilities: [] } })).rejects.toThrow(
+      'build: adds the capability SYS_ADMIN, and this server allows none (backend.capabilities.allow)'
+    )
+    await expect(
+      planBundle(bundle(yaml), hosted, { policy: { ...policy, capabilities: ['NET_ADMIN'] } })
+    ).rejects.toThrow(
+      'build: adds the capability SYS_ADMIN, which this server does not allow (backend.capabilities.allow: NET_ADMIN)'
+    )
+    const sandbox = { ...policy, capabilities: [], capabilitiesFrom: 'sandboxes.capabilities' }
+    await expect(planBundle(bundle(yaml), hosted, { policy: sandbox })).rejects.toThrow(
+      'build: adds the capability SYS_ADMIN, and this server allows none (sandboxes.capabilities)'
+    )
+    const both =
+      'tasks:\n  build:\n    image: docker:29-dind\n    capAdd: [SYS_ADMIN, NET_ADMIN]\n    cmds: [dockerd]\n'
+    await expect(
+      planBundle(bundle(both), hosted, { policy: { ...policy, capabilities: ['SYS_ADMIN'] } })
+    ).rejects.toThrow('build: adds the capability NET_ADMIN, which this server does not allow')
+    const planned = await planBundle(bundle(both), hosted, {
+      policy: { ...policy, capabilities: ['SYS_ADMIN', 'NET_ADMIN'] },
+    })
+    // what a reviewer of the version looks at first
+    expect(planned.plan.build).toMatchObject({ capAdd: ['SYS_ADMIN', 'NET_ADMIN'], flags: ['capabilities'] })
+  })
+
   it('refuses what points a build file at the host, a cluster or a remote cache', async () => {
     const refuse = async (yaml: string, message: string | RegExp) =>
       expect(planBundle(bundle(yaml), hosted, { policy })).rejects.toThrow(message)

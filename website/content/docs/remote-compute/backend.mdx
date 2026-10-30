@@ -133,6 +133,171 @@ container does not share a node with the server's token. The server still holds 
 right to mint the tokens of every account (see [Secrets in the Job](#secrets-in-the-job)), so
 the advice stands: one server, and one set of accounts, per trust level.
 
+## Capabilities
+
+A container task can add Linux capabilities (`capAdd`, see
+[Capabilities](/docs/task/container#capabilities)), such as `SYS_ADMIN` for a daemonless image
+build. A capability is root's power over the kernel the container runs on, which the runs of
+other callers share, so a server adds one only where its operator allows it, and then only in a
+sandbox with a kernel of its own:
+
+```yaml title="server.yaml"
+backend:
+  type: kubernetes
+  capabilities:
+    allow: [SYS_ADMIN]       # what a build file may add
+    runtimeClass: gvisor     # the sandbox the pods of those tasks run in
+sandboxes:
+  capabilities: [SYS_ADMIN]  # runs on sandboxes add none unless named here
+```
+
+```yaml title="server.yaml"
+backend:
+  type: host
+  capabilities:
+    allow: [SYS_ADMIN]
+    runtime: runsc           # a runtime of the docker daemon: gVisor's
+```
+
+| Key | What it does |
+| --- | --- |
+| `backend.capabilities.allow` | The capabilities a task may add. A build file with a task that adds another is refused when it is published or proposed (`400`); without `capabilities` the server allows none. |
+| `backend.capabilities.runtimeClass` | `kubernetes` only. The RuntimeClass the pods of tasks that add capabilities run in. |
+| `backend.capabilities.runtime` | `host` only. The docker runtime the containers of those tasks run in, as named in the daemon's `daemon.json`. |
+| `sandboxes.capabilities` | What a run on a [sandbox](/docs/remote-compute/sandboxes) may add, out of `allow`. None by default: a sandbox holds code nobody reviewed. |
+
+Only the containers of tasks that add capabilities run in the sandbox, the others run as before,
+and such a task never runs in the [runner of a sandbox](#sandboxes). The sandbox has to be one:
+hammerkit can't tell whether a RuntimeClass or a docker runtime keeps the capability from the
+host, so name only one that does, such as gVisor (runsc, which handles the container's system
+calls in a kernel of its own) or Kata Containers (a virtual machine per pod). gVisor is
+`gvisor` on GKE (GKE Sandbox, on by default on Autopilot) and installed on the nodes elsewhere;
+on a docker host `runsc install` adds it to the daemon. Kata is `kata-vm-isolation` with AKS Pod
+Sandboxing. A task can't ask for `privileged`, on any backend.
+
+The pod of such a task goes to the nodes of the first [pool](#pools), and on a sandbox to the
+node of the sandbox's files: those nodes need the runtime. Where only a node pool of its own has
+it (GKE Standard, AKS), name that pool's labels in the first pool, or make sure the
+RuntimeClass's `scheduling` sends the pod there. A pod no node can take stays `Pending`, and
+hammerkit doesn't fail it early yet.
+
+Pod Security `baseline` refuses these capabilities in a sandbox too, it does not know about
+RuntimeClasses. With `capabilities` the server makes the namespaces of new callers enforce
+`privileged` and audit `baseline`, and an admission policy of yours refuses in them what
+`baseline` refuses, and capabilities beyond `baseline` to every pod outside the sandbox. The server
+never changes the level of a namespace it made before: that would take `patch` on every namespace
+of the cluster. Until you relabel one, the tasks that add capabilities fail in it and say so, the
+others run. The second policy keeps the namespaces the server makes to its own, so it can't make
+one that enforces `privileged` outside them. Both need Kubernetes 1.30 or later
+(ValidatingAdmissionPolicy). Apply them before you set `capabilities`, with the RuntimeClass you
+name there, the server's ServiceAccount and its `namespacePrefix`:
+
+```yaml title="admission.yaml"
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: hammerkit-capabilities }
+spec:
+  matchConstraints:
+    namespaceSelector: { matchLabels: { hammerkit.dev/managed: 'true' } }
+    resourceRules:
+      - { apiGroups: [''], apiVersions: ['*'], operations: [CREATE, UPDATE], resources: [pods, pods/ephemeralcontainers] }
+  variables:
+    - name: sandboxed
+      expression: "object.spec.?runtimeClassName.orValue('') == 'gvisor'"
+    # the security context of every container, init and ephemeral ones too
+    - name: contexts
+      expression: >-
+        object.spec.containers.filter(c, has(c.securityContext)).map(c, c.securityContext)
+        + object.spec.?initContainers.orValue([]).filter(c, has(c.securityContext)).map(c, c.securityContext)
+        + object.spec.?ephemeralContainers.orValue([]).filter(c, has(c.securityContext)).map(c, c.securityContext)
+    - name: baseline
+      expression: "['AUDIT_WRITE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'FSETID', 'KILL', 'MKNOD', 'NET_BIND_SERVICE', 'SETFCAP', 'SETGID', 'SETPCAP', 'SETUID', 'SYS_CHROOT']"
+    - name: seLinuxTypes
+      expression: "['', 'container_t', 'container_init_t', 'container_kvm_t', 'container_engine_t']"
+    - name: sysctls
+      expression: "['kernel.shm_rmid_forced', 'net.ipv4.ip_local_port_range', 'net.ipv4.ip_unprivileged_port_start', 'net.ipv4.tcp_syncookies', 'net.ipv4.ping_group_range', 'net.ipv4.ip_local_reserved_ports', 'net.ipv4.tcp_keepalive_time', 'net.ipv4.tcp_fin_timeout', 'net.ipv4.tcp_keepalive_intvl', 'net.ipv4.tcp_keepalive_probes', 'net.ipv4.tcp_rmem', 'net.ipv4.tcp_wmem']"
+  validations:
+    - expression: "variables.sandboxed || variables.contexts.all(s, s.?capabilities.?add.orValue([]).all(a, a in variables.baseline))"
+      message: capabilities beyond baseline are added in the RuntimeClass gvisor only
+    - expression: "!variables.contexts.exists(s, s.?privileged.orValue(false))"
+      message: no privileged containers
+    - expression: "!object.spec.?hostNetwork.orValue(false) && !object.spec.?hostPID.orValue(false) && !object.spec.?hostIPC.orValue(false)"
+      message: no host namespaces
+    - expression: "!object.spec.?volumes.orValue([]).exists(v, has(v.hostPath))"
+      message: no hostPath volumes
+    - expression: >-
+        !object.spec.containers.exists(c, c.?ports.orValue([]).exists(p, p.?hostPort.orValue(0) != 0))
+        && !object.spec.?initContainers.orValue([]).exists(c, c.?ports.orValue([]).exists(p, p.?hostPort.orValue(0) != 0))
+      message: no host ports
+    - expression: "variables.contexts.all(s, s.?procMount.orValue('Default') == 'Default')"
+      message: no unmasked /proc
+    - expression: >-
+        object.spec.?securityContext.?seccompProfile.?type.orValue('') != 'Unconfined'
+        && variables.contexts.all(s, s.?seccompProfile.?type.orValue('') != 'Unconfined')
+      message: no unconfined seccomp
+    - expression: >-
+        object.spec.?securityContext.?appArmorProfile.?type.orValue('') != 'Unconfined'
+        && variables.contexts.all(s, s.?appArmorProfile.?type.orValue('') != 'Unconfined')
+        && object.metadata.?annotations.orValue({}).all(k, !k.startsWith('container.apparmor.security.beta.kubernetes.io/')
+          || object.metadata.annotations[k] == 'runtime/default' || object.metadata.annotations[k].startsWith('localhost/'))
+      message: no unconfined AppArmor
+    - expression: >-
+        object.spec.?securityContext.?seLinuxOptions.?type.orValue('') in variables.seLinuxTypes
+        && object.spec.?securityContext.?seLinuxOptions.?user.orValue('') == '' && object.spec.?securityContext.?seLinuxOptions.?role.orValue('') == ''
+        && variables.contexts.all(s, s.?seLinuxOptions.?type.orValue('') in variables.seLinuxTypes
+          && s.?seLinuxOptions.?user.orValue('') == '' && s.?seLinuxOptions.?role.orValue('') == '')
+      message: no SELinux options beyond the container types
+    - expression: "object.spec.?securityContext.?sysctls.orValue([]).all(s, s.name in variables.sysctls)"
+      message: only the safe sysctls
+    - expression: >-
+        !object.spec.?securityContext.?windowsOptions.?hostProcess.orValue(false)
+        && !variables.contexts.exists(s, s.?windowsOptions.?hostProcess.orValue(false))
+      message: no Windows host processes
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: hammerkit-capabilities }
+spec: { policyName: hammerkit-capabilities, validationActions: [Deny] }
+---
+# the server makes the namespaces of its callers only, at the levels it sets
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: hammerkit-namespaces }
+spec:
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [''], apiVersions: ['*'], operations: [CREATE, UPDATE], resources: [namespaces] }
+  matchConditions:
+    - { name: server, expression: "request.userInfo.username == 'system:serviceaccount:hammerkit:hammerkit'" }
+  validations:
+    - expression: "object.metadata.name.matches('^hammerkit-[0-9a-f]{16}$')"
+      message: the server makes the namespaces of its callers only
+    - expression: "object.metadata.?labels['hammerkit.dev/managed'].orValue('') == 'true'"
+      message: the namespaces of callers are labelled hammerkit.dev/managed
+    - expression: "object.metadata.?labels['pod-security.kubernetes.io/enforce'].orValue('') in ['baseline', 'privileged']"
+      message: the namespaces of callers enforce Pod Security baseline, or privileged with capabilities
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: hammerkit-namespaces }
+spec: { policyName: hammerkit-namespaces, validationActions: [Deny] }
+```
+
+Then relabel the namespaces the server made before, those of its prefix:
+
+```bash
+kubectl get namespace -l hammerkit.dev/managed=true -o name | grep '^namespace/hammerkit-' | \
+  xargs -r -I{} kubectl label {} pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/audit=baseline --overwrite
+```
+
+When you remove `capabilities` again, set them back to `enforce=baseline` (and remove `audit`)
+before the server restarts: it runs nothing in a namespace that still enforces `privileged`, and
+its error names the command.
+
+[Building container images](/docs/guides/container-images) walks through a build of a
+Dockerfile with BuildKit in gVisor, pushed with a token of a service account.
+
 ## Kubernetes
 
 <Callout type="warn">
@@ -211,7 +376,8 @@ Policies add up, so none of them widens a pod with a limited [network](#network)
 what reaches it. An egress proxy takes connections from its task only.
 
 The namespace enforces the `baseline` [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/):
-no privileged pods, host paths or host network. Every container of a run runs with
+no privileged pods, host paths or host network (with [capabilities](#capabilities), an admission
+policy of the operator in its place). Every container of a run runs with
 `allowPrivilegeEscalation: false` (so `sudo` and other setuid programs do not work), without
 the `NET_RAW` capability (no `ping`) and with the runtime's seccomp profile, and without a token
 of the cluster.

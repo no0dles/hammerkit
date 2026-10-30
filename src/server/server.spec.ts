@@ -429,6 +429,7 @@ describe('server config policy', () => {
     expect(config.sandboxes).toEqual({
       network: 'none',
       env: { allow: [] },
+      capabilities: [],
       limits: { count: 5, bytes: '20Gi' },
       total: '500Gi',
     })

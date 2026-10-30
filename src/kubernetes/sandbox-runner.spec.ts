@@ -78,6 +78,7 @@ function shell(patch: object = {}): any {
       cmds: [{ cmd: 'npm test', cwd: '/runs/run_1' }],
       secrets: [],
       generates: [],
+      capAdd: [],
       network: { type: 'allow', hosts: ['registry.npmjs.org'] },
       ...patch,
     },
@@ -111,6 +112,8 @@ describe('the runner of a sandbox', () => {
     expect(canUseRunner(shell(), env, persistence({ volumes: [{ name: 'hammerkit-x' }] }))).toBe(false)
     expect(canUseRunner({ ...shell(), needs: [{ name: 'db' }] }, env, persistence())).toBe(false)
     expect(canUseRunner(shell({ secrets: [{ env: 'TOKEN' }] }), env, persistence())).toBe(false)
+    // capabilities hold in the sandboxed runtime of a Job's pod only
+    expect(canUseRunner(shell({ capAdd: ['SYS_ADMIN'] }), env, persistence())).toBe(false)
     // not on the sandbox's files, a server without runners, a run that holds no pod of the files
     expect(canUseRunner(shell(), env, persistence({ workspace: [] }))).toBe(false)
     // a part of the files only (`src: [src]`): the folders around the mount would be the

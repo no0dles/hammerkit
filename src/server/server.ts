@@ -780,6 +780,7 @@ export async function startServer(
       network: parseWorkNetwork(config.runs.network),
       secretNetwork: parseWorkNetwork(config.runs.secretNetwork),
       args: config.runs.args,
+      capabilities: config.backend.capabilities?.allow ?? [],
       proxiedProviders:
         config.backend.type === 'kubernetes'
           ? Object.entries(config.backend.providers)
@@ -830,6 +831,8 @@ export async function startServer(
       envs: config.sandboxes.env.allow,
       envsFrom: 'sandboxes.env.allow',
       runtimes: sandboxRuntimes,
+      capabilities: config.sandboxes.capabilities,
+      capabilitiesFrom: 'sandboxes.capabilities',
     },
   }
   if (sandboxRuntimes.length === 0 && config.entitlements.some((entitlement) => entitlement.sandboxes?.length)) {
@@ -851,6 +854,9 @@ export async function startServer(
     cache: join(storage, 'cache'),
     worker: options.worker,
     sandboxes: { ...sandboxes, network: config.sandboxes.network },
+    ...(config.backend.type === 'host' && config.backend.capabilities
+      ? { capabilityRuntime: config.backend.capabilities.runtime }
+      : {}),
     log,
   }
   const backend = config.backend

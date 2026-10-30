@@ -58,6 +58,9 @@ export const workerInputSchema = z
         (value) => typeof value === 'object' && value !== null && (value as any).type === 'kubernetes'
       )
       .optional(),
+    // on the server's docker host, the runtime a container that adds capabilities runs in
+    // (`backend.capabilities.runtime`)
+    capabilityRuntime: z.string().min(1).optional(),
     // the most any task or service reaches besides its needs, as `--network`: `runs.network`
     network: networkSchema.optional(),
     // for a run on a sandbox, `sandboxes.network`: the run gets the lower of the two
@@ -186,7 +189,12 @@ export async function runTasks(
   // is what is streamed: it is redacted with the secrets of this run
   const environment: Environment = {
     processEnvs,
-    hosted: { catalog: input.catalog, accounts: input.accounts, kubernetes: input.kubernetes },
+    hosted: {
+      catalog: input.catalog,
+      accounts: input.accounts,
+      kubernetes: input.kubernetes,
+      capabilityRuntime: input.capabilityRuntime,
+    },
     abortCtrl,
     cwd: work,
     file: getFileContext(work),

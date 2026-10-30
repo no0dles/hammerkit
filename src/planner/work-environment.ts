@@ -47,6 +47,10 @@ export interface WorkKubernetesServer {
   // the run's source, which a kept claim is named and labelled by, so only a run of the
   // same source mounts it again
   volumeScope?: string
+  // the RuntimeClass of a sandbox (`backend.capabilities.runtimeClass`), which the pod of a
+  // task that adds capabilities runs in; such a task is refused without it, and with
+  // `unavailable`: why the run's namespace can't admit it
+  capabilities?: { runtimeClass: string; unavailable?: string }
 }
 
 // The claim of a sandbox in place of the run's directory `root`: a source or mount below

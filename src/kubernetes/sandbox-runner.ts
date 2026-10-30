@@ -180,7 +180,9 @@ export function canUseRunner(
     persistence.mounts.some((mount) => relative(workspace.root, mount.mount.mountPath) === '') &&
     task.needs.length === 0 &&
     task.data.secrets.length === 0 &&
-    task.data.generates.length === 0
+    task.data.generates.length === 0 &&
+    // its pod would need the sandboxed runtime of a Job
+    task.data.capAdd.length === 0
   )
 }
 

@@ -8,6 +8,7 @@
     "agents",
     "migrate-ci",
     "services-networking",
+    "container-images",
     "monorepo",
     "development-workflow"
   ]
