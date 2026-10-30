@@ -1,3 +1,17 @@
+# [1.27.0-next.23](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.22...v1.27.0-next.23) (2026-10-30)
+
+
+### Bug Fixes
+
+* name a namespace without a Pod Security label as such in the capabilities error ([94fe3d5](https://github.com/no0dles/hammerkit/commit/94fe3d5bca9da35cf87461ae905af160f91d8089))
+* no namespace patch for capabilities, full baseline parity in the admission policy ([cd881a3](https://github.com/no0dles/hammerkit/commit/cd881a3f0c2033d1ec0044493e142e7ba4bfb5f5))
+* read the pod's own security context in place in the admission policy ([7701fb0](https://github.com/no0dles/hammerkit/commit/7701fb043f42dd55b2b20ad4defb99106449ca90))
+
+
+### Features
+
+* capAdd for container tasks, granted on a server only in a sandboxed runtime ([21ad578](https://github.com/no0dles/hammerkit/commit/21ad578c7658784431ea53d5821d06e373a044a0))
+
 # [1.27.0-next.22](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.21...v1.27.0-next.22) (2026-10-28)
 
 
