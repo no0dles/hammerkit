@@ -256,8 +256,10 @@ tasks:
         mkdir -p /tmp/docker && export DOCKER_CONFIG=/tmp/docker
         AUTH=$(printf 'oauth2accesstoken:%s' "$REGISTRY_TOKEN" | base64 | tr -d '\n')
         printf '{"auths":{"%s":{"auth":"%s"}}}' "${IMAGE%%/*}" "$AUTH" > $DOCKER_CONFIG/config.json
+        PROXY_IP=$(getent hosts hammerkit-proxy | awk '{print $1; exit}')
         buildctl-daemonless.sh build --frontend dockerfile.v0 \
           --local context=app --local dockerfile=app \
+          --opt add-hosts=hammerkit-proxy=$PROXY_IP \
           --opt build-arg:HTTP_PROXY=$HTTP_PROXY --opt build-arg:HTTPS_PROXY=$HTTPS_PROXY \
           --opt build-arg:NO_PROXY=$NO_PROXY \
           --output type=image,name=$IMAGE,push=true
@@ -278,7 +280,8 @@ Line by line:
 * The task's network is an allow list, so hammerkit starts an egress proxy for it and sets
   `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`. BuildKit pulls and pushes through it. The
   `RUN` steps of the Dockerfile don't see the task's variables, so the `build-arg`s hand them
-  on; without them `apk add` finds no route.
+  on; without them `apk add` finds no route. They don't see the task's `/etc/hosts` either,
+  BuildKit writes one of its own, so `add-hosts` names the proxy's address in it.
 
 Pushing to another registry changes only `config.json` and the hosts: Amazon ECR takes the
 user `AWS` and the password of `aws ecr get-login-password`, Azure Container Registry the user
@@ -338,4 +341,4 @@ The build file is the same.
 | `mount: permission denied` | The task doesn't have `capAdd: [SYS_ADMIN]`, or runs on a laptop with AppArmor (Ubuntu), see [Capabilities](/docs/task/container#capabilities). |
 | `failed to mount` or `invalid argument` from BuildKit's snapshotter | No tmpfs at `/var/lib/buildkit`, or the mount was in another entry of `cmds`. |
 | `401` or `403` when pushing | The IAM binding is new (give it a few minutes), names another repository, or another ServiceAccount than `registry-push`. |
-| `RUN` steps can't download | The `build-arg`s for the proxy are missing, or a host isn't in the task's `network` and `runs.secretNetwork`. |
+| `RUN` steps can't download (`temporary error` from `apk`) | The `build-arg`s or `add-hosts` for the proxy are missing, or a host isn't in the task's `network` and `runs.secretNetwork`. |
