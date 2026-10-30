@@ -213,7 +213,8 @@ runs:
       - europe-west4-docker.pkg.dev        # the registry you push to
       - registry-1.docker.io               # Docker Hub, for FROM alpine
       - auth.docker.io
-      - production.cloudflare.docker.com
+      - production.cloudflare.docker.com   # Docker Hub's layers, from either CDN
+      - production.cloudfront.docker.com
       - dl-cdn.alpinelinux.org             # what RUN apk add downloads
 ```
 
@@ -246,6 +247,7 @@ tasks:
         - registry-1.docker.io
         - auth.docker.io
         - production.cloudflare.docker.com
+        - production.cloudfront.docker.com
         - dl-cdn.alpinelinux.org
     cmds:
       - |
