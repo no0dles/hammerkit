@@ -1,0 +1,242 @@
+---
+title: "Network"
+description: "Limit what a container task or service reaches: only the services it needs, a list of hosts and ports through an egress proxy, or everything."
+---
+A container task reaches whatever the machine it runs on reaches. That is fine for
+most builds, but not for a step that should not need the network (a test suite), or
+for code you don't fully trust (an install script, an agent's change). `network`
+limits what a task or service reaches besides the services it needs.
+
+```yaml
+tasks:
+  test:
+    image: node:24-alpine
+    network: none                 # nothing at all
+    cmds: [npm test]
+
+  e2e:
+    image: node:24-alpine
+    needs: [postgres]
+    network: none                 # postgres, and nothing else
+    cmds: [npm run e2e]
+
+  install:
+    image: node:24-alpine
+    network:
+      allow: [registry.npmjs.org, '*.githubusercontent.com']
+    cmds: [npm ci]
+
+  migrate:
+    image: node:24-alpine
+    network:
+      allow: ['db.example.com:5432']   # raw TCP to one host and port
+    cmds: [npm run migrate]
+
+  deploy:
+    image: node:24-alpine
+    network: open                 # the default
+    cmds: [npm run deploy]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    healthcheck:
+      cmd: pg_isready -U postgres
+```
+
+| Level | Reaches, besides its `needs` |
+|---|---|
+| `open` (default) | Everything the host reaches, as without `network`. |
+| `none` | Nothing. |
+| `allow: [hosts]` | HTTP and HTTPS to the listed hosts, and raw TCP to a listed host and port, through an egress proxy. |
+
+The services in `needs` are reachable at every level, under the names the task
+needs them by: a task lists a service because it uses it. Under a limit, those
+names must be host names (`db`, `api-v2`), never patterns: the egress proxy passes
+a needed service by exactly its name. `network` works the same
+on [container services](/docs/service/container#network), and the tasks and
+services that need a limited service still reach it.
+
+`network` is not part of the [cache key](/docs/task/caching): it decides whether a
+task can work, not what a successful one produces. Ports a service publishes on the
+host stay published.
+
+A limit holds or the run fails: where hammerkit can't make it hold (an older Docker,
+Windows containers, a cluster that doesn't enforce NetworkPolicy), a task or service
+with a limited network is an error before it starts, never a run without limits.
+
+## Allowed hosts
+
+A host is a name (`registry.npmjs.org`) or `*.` and a domain for every name under
+it (`*.githubusercontent.com` allows `raw.githubusercontent.com`, not
+`githubusercontent.com` itself). Names only, no IP addresses (nor names a resolver
+reads as one, such as `0x7f000001` or `127.1`), and any port of an allowed host is
+allowed through the proxy. A name with a port (`db.example.com:5432`) is a
+[TCP forward](#tcp-forwards).
+
+The proxy resolves an allowed name itself and connects to the address it checked. A
+name a wildcard allows must not resolve to the host, a private network or the
+cluster (loopback, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and the like), so
+a domain whose DNS someone else controls can't point into your network; a name you
+list exactly may. No name may resolve to a link-local address, where cloud metadata
+services live.
+
+Under `allow`, hammerkit starts an egress proxy next to the task and sets
+`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (and their lowercase spellings) for it,
+with the needed services in `NO_PROXY`. Package managers, `curl`, `git` and most
+HTTP clients read these variables; Node's built-in `fetch` only with `NODE_USE_ENV_PROXY=1`
+(Node 22.21 and 24.5 on). The proxy passes requests and `CONNECT` tunnels
+to an allowed host and answers everything else with `403 Forbidden`. Each refused
+host shows up once in the task's log, so a failing install says why:
+
+```
+warn network: refused example.com
+```
+
+The proxy is the only way out. A tool that ignores the proxy variables finds no
+route at all, and it fails closed: when the proxy is gone, nothing gets out. A tool
+that ignores `NO_PROXY` (busybox `wget`, say) still reaches the needed services,
+through the proxy. BusyBox `wget`, the `wget` of Alpine images, also asks the proxy
+for an `https://` URL instead of opening a `CONNECT` tunnel; TLS stays between the
+client and the host, so the proxy doesn't serve that, and the log says so: use
+`curl` or GNU `wget` (`apk add wget`) for an https host. A service's healthcheck
+checks the service itself, so it runs without the proxy variables.
+
+## TCP forwards
+
+Databases, caches and most other clients that don't speak HTTP ignore the proxy
+variables, so they can't use an allowed host. For them, an entry names a host and a
+port:
+
+```yaml
+tasks:
+  migrate:
+    image: node:24-alpine
+    network:
+      allow: ['db.example.com:5432', 'cache.example.com:6379']
+    cmds: [npm run migrate]
+```
+
+The proxy listens on that port and forwards each connection, as raw TCP, to that
+port of that host, and the task reaches the proxy under the host's own name: `psql
+-h db.example.com` connects as it would without a limit, and TLS stays between the
+client and the host. The proxy resolves the name itself and checks every address,
+as for a name listed exactly. Nothing else of that host is reachable without the
+proxy variables; with them, a `CONNECT` to that host and port passes too. A
+connection to another port of that name finds nothing listening and is refused
+right away, so it doesn't show up among the refused hosts in the log.
+
+A forward names one host, never a `*.` pattern, and two hosts can't share a port in
+one allow list, since the proxy listens on it for one of them. Port `3128` is the
+proxy's own, and a forward can't use the name of a service the task needs. A
+database the task runs itself still belongs in its `needs` as a
+[service](/docs/service): those are reached directly, on any port.
+
+On a [server](/docs/remote-compute/backend#kubernetes), a host or forward with a private
+address (`10.x`, `192.168.x` and the like) is reachable only when the operator lists it in
+`allowedEgress`, or in the firewall of a Docker host: the server keeps its runs off the
+networks behind it unless told otherwise.
+
+## A ceiling for the run
+
+`--network` on [`run`](/docs/cli/execute) and [`up`](/docs/cli/up) sets the most any
+task or service of the run reaches, whatever the build file says. It is how a run
+of code you didn't write gets limited without changing the build file:
+
+```bash
+hammerkit run test --network none
+hammerkit run install --network allow:registry.npmjs.org,*.npmjs.com
+hammerkit run migrate --network allow:db.example.com:5432
+```
+
+The levels are ordered `none` < `allow` < `open`, and the ceiling clamps a more open
+setting down to it: under `--network none` every task reaches its needed services
+and nothing else. Under an `allow:` ceiling, an `open` task gets the ceiling's
+hosts, and a task with its own allow list keeps the hosts both lists allow. A host
+without a port allows its forwards (`db.example.com` and `*.example.com` both keep
+`db.example.com:5432`), while a forward only allows itself. A name that one of the
+two lists allows only through a pattern counts as a pattern: under `*.example.com`,
+the task's `db.example.com:5432` must not resolve to a private address. Two forwards
+on one port, one from each list, are an error. A service started by an earlier `up`
+is recreated when the ceiling changes its network.
+
+A [server](/docs/remote-compute/runs#network) sets the same ceiling for all of its runs
+with `runs.network`, and refuses to publish a build file that asks for more. With
+[`runs.secretNetwork`](/docs/remote-compute/runs#tasks-that-read-secrets) it sets a lower one
+for the tasks that read secrets.
+
+## Local tasks
+
+Hammerkit can't limit the network of a local task (one without an `image`), which
+runs on the host. `network` other than `open` on a local task is an error
+when the build file is read, and so is a `--network` ceiling below `open` with a
+local task in the run. Run the task in a container to limit it. On a
+[server with a Kubernetes backend](/docs/remote-compute/backend#network) a local task runs in a
+pod of a tool image, and there it may be limited.
+
+## Docker
+
+Limits need Linux containers on Docker 28 or later. A limited task or service gets
+an internal Docker network of its own, with no route out and no address on the
+host (`com.docker.network.bridge.inhibit_ipv4`), so it doesn't reach the host's own
+services either. The services it needs join that network under the names it needs
+them by. A task with `network: none` that needs no service gets no network at all,
+only the loopback interface.
+
+Under `allow`, the task or service and its proxy share a second internal network
+that nothing else joins, and the proxy listens there only: the services it needs
+can't use its allow list. The host of each TCP forward is an entry in the
+container's `/etc/hosts` that points at the proxy there. The proxy is also on the default bridge, to reach the
+allowed hosts. It is a small Node.js script run in a stock `node:24-alpine`
+container, pinned by digest, so there is no hammerkit image to pull; it runs
+unprivileged, on a read-only root.
+
+A limited service's ports are published by a relay container next to it, which
+passes each connection on to the service; the service itself stays without a route
+out.
+
+The networks, proxy and relay are removed with the task or service: a service
+started with `up --daemon` keeps them until `down`, and [`clean`](/docs/cli/clean)
+removes those of a run that was killed. Their names carry the run, so two runs of
+the same task never share them.
+
+## Kubernetes
+
+On a [Kubernetes environment](/docs/task/kubernetes), a limited task's jobs and a
+limited service's pods get a `NetworkPolicy` that allows egress to the pods of the
+services they need and, under `allow`, to their proxy, which runs as its own
+Deployment and Service, with a port for each TCP forward. Everything else is denied, DNS included: the needed
+services, the proxy and the hosts of TCP forwards are host aliases of the pod. The policy limits ingress too:
+a task takes no connections, a service takes them from the tasks and services that
+need it, and from anywhere when one of the environment's `httpRoutes` points at it.
+The proxy takes connections from its own task's or service's pods only. A service's
+healthcheck probe runs through `env` to empty the proxy variables, so its image
+needs an `env` binary.
+
+A `NetworkPolicy` only takes effect when the cluster's network plugin enforces it
+(Calico, Cilium, and recent versions of kind's kindnet do; some plain setups
+don't), and hammerkit can't tell from the API. So the environment states it:
+
+```yaml
+environments:
+  cluster:
+    kubernetes:
+      context: ci
+      networkPolicy: enforced
+```
+
+Without it, a task or service with a limited network is an error.
+
+Some plugins, kindnet among them, apply a policy a moment after a pod started. So a
+limited pod starts with an init container, `hammerkit-network`, that waits until the
+pod no longer reaches the cluster DNS, which its policy denies; the task's or
+service's own containers start after it. When the policy doesn't take hold within a
+minute, the pod fails rather than run without limits. The init container runs from
+the proxy's image.
+
+A task's policy and proxy belong to its run, so concurrent runs of the same task
+keep their own. They are removed only once the run's pods have ended, so a
+cancelled or timed-out job doesn't keep running without limits while it
+terminates. A task's refused hosts show up in its log; a service outlives the run on
+a cluster, so its refused hosts are in the log of its proxy, the Deployment named
+`hammerkit-proxy-<id>`.

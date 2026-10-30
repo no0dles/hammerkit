@@ -30,8 +30,12 @@ entitlements:
 | `accounts` | The [service accounts](/docs/remote-compute/accounts) the caller may `use` or `request`, see [Account levels](#account-levels). |
 | `repos` | The repositories the caller may name in a run from a git ref, see [Repositories](#repositories). |
 | `builds` | What the caller may do with build files: `run`, `propose` or `publish`, see [Build file levels](#build-file-levels). |
+| `checks` | `read`: the caller may look up the [checks](/docs/remote-compute/checks) of the repositories of `repos`, and nothing else, for a CI job that only verifies. A `builds` level allows it too. Like the other levels it combines with the `repos` of every entitlement that matches the caller. |
+| `sandboxes` | The repositories the caller may keep [sandboxes](/docs/remote-compute/sandboxes) of, one `repo` (`host/path` pattern) per entry with a `pull` or `push` type per branch pattern (`branches`). A list of its own: `repos` is for runs from a ref. |
+| `endpoints` | The repositories whose [service runs](/docs/remote-compute/service-runs) the caller may open the endpoints of (`open`), or also publish endpoints in their own (`publish`), one `repo` pattern and `level` per entry, see [Who opens an endpoint](/docs/remote-compute/service-runs#who-opens-an-endpoint). |
 
-An entry names accounts, a `builds` level or both.
+An entry names accounts, a `builds` level, `checks`, `sandboxes`, `endpoints` or more of them. `checks`
+needs `repos`.
 
 ## Who
 
@@ -66,9 +70,9 @@ level that includes the lower ones:
 | --- | --- |
 | `run` | start runs of published build files. Without a level nothing runs, an account alone does not allow it. |
 | `propose` | also send new versions, which somebody who may publish approves, see [Proposing a version](/docs/remote-compute/build-files#proposing-a-version). |
-| `publish` | also publish new versions of any build file. Who defines the work does not have to be who runs it. |
+| `publish` | also publish build files. Who defines the work does not have to be who runs it. |
 
-Build files are named by whoever publishes them, so the config never lists names.
+A build file has no name, a version is the hash of its files, so the config never lists build files.
 
 ## Repositories
 
@@ -95,13 +99,16 @@ server, they are not even shown which build files exist.
     { "name": "op-payments-prod", "level": "request" }
   ],
   "repos": ["github.com/corp/payments"],
-  "builds": "run"
+  "builds": "run",
+  "checks": "read",
+  "sandboxes": [],
+  "endpoints": []
 }
 ```
 
 `GET /v1/accounts` lists the accounts the caller has a level on, with the operator's
-`description` and the `sources` the account allows (`upload`, `ref`, or both when the
-config does not say):
+`description` and the `sources` the account allows (`upload`, `ref`, `sandbox`, or `upload`
+and `ref` when the config does not say):
 
 ```json
 {
@@ -162,7 +169,7 @@ approvals:
   with their dependencies as `plan` (commands, image, the secrets and the account each
   is read as, mounts, ports and the `flags` to look at first, never a value), the
   accounts, the version, the source and the options. Who uses an account a run needed
-  approved may also read that run (`GET /v1/runs/<id>` and its events) and cancel it;
+  approved may also read that run (`GET /v1/runs/<id>`, its events and its logs) and cancel it;
   `GET /v1/runs` stays the caller's own.
 * What an approval cannot cover is what the code does: pinning commands does not pin the
   code they run, so an account that matters should also be limited to `source: [ref]`
@@ -182,8 +189,11 @@ decision is an event of the run, so the one who asked sees who approved it.
 
 ## Changing entitlements
 
-`kill -HUP <pid>` reads the config file again and takes over its `entitlements`: who may use which account,
-which repositories and which build files changes for the next request, no restart and no run is touched.
+`kill -HUP <pid>` (in a container `docker kill -s HUP <container>`) reads the config file again and takes over
+its `entitlements`: who may use which account, which repositories and which build files changes for the next
+request, the server keeps running and no run is touched.
 Entitlements that name an account or issuer the running server does not have are refused and the old ones
 stay. Everything else (accounts, issuers, providers, sources, limits) is read at start only, the server says
-which keys of the file differ and need a restart. SIGHUP is not available on Windows.
+which keys of the file differ and need a restart. As SIGHUP is also what a closed terminal sends, closing the
+terminal of a server started in it does not stop it: stop it with Ctrl-C or `SIGTERM`. SIGHUP is not available
+on Windows, where closing the console stops the server.

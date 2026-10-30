@@ -54,6 +54,8 @@ tasks:
 | `namespace`  | no       | Namespace the jobs and deployments are created in.                        |
 | `kubeconfig` | no       | Path to a kubeconfig file. Defaults to `$HOME/.kube/config`.              |
 | `httpRoutes` | no       | Gateway API routes that expose services, see [HTTP routes](#http-routes). |
+| `networkPolicy` | no    | `enforced`: the cluster's network plugin enforces NetworkPolicy, which a task or service with a limited [network](/docs/task/network#kubernetes) needs. |
+| `volumeSize` | no       | The size of the [claim](#claims) of a task or service that states no `volumeSize` of its own, `1Gi` when left out. |
 
 <Callout type="info">
 
@@ -68,6 +70,45 @@ once here and select it with `--env`, rather than repeating it on each service.
 | Field  | Required | Description                                       |
 |--------|----------|---------------------------------------------------|
 | `host` | no       | Address of a remote Docker daemon to run against. |
+
+## Claims
+
+On Kubernetes each container task and service gets one `PersistentVolumeClaim`
+(`ReadWriteOnce`, the cluster's default storage class). It holds the files of its `src`
+and `mounts`, uploaded before it starts, and what it `generates`, which the tasks that
+depend on it mount from there. It stays until `hammerkit clean`, so the next run finds the
+outputs it already made. On a server, the claim of a task stays for a while after the run,
+for the next run of the same source, see
+[Kept claims](/docs/remote-compute/backend#kept-claims).
+
+Each path has a folder of its own in the claim, named after its last segment. When two
+paths of a task end alike, such as `node_modules` and `api/node_modules`, the least deep one
+keeps that name and the others' folders also carry a hash of their path in the project.
+Earlier versions put such paths in one folder, so a task with paths that end alike has a new
+id since: the first run after the update runs it again, in a new claim, instead of reusing
+the mixed outputs it made before (kept or cached). A service keeps its claim and its id, so
+a service with two volumes that end alike should have its claim removed once after the
+update (`hammerkit clean`), since the first of them still holds what both wrote.
+
+The claim requests `1Gi`, or the environment's `volumeSize`. A task that writes more
+(an `npm ci`, a build of many images) states its own:
+
+```yaml
+tasks:
+  install:
+    image: node:24-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    volumeSize: 5Gi
+    cmds:
+      - npm ci
+```
+
+A cloud disk is the size it requests, so a task that outgrows it fails with
+`No space left on device`; a local cluster's host path storage is not limited. A larger
+`volumeSize` grows a claim an earlier run made, where its storage class allows volume
+expansion. Where it does not, the run fails and says so: remove the claim with
+`hammerkit clean`. A smaller one leaves a claim as it is, a claim never shrinks.
 
 ## Selecting an environment
 

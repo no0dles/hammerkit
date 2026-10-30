@@ -71,6 +71,17 @@ export function hashSource(manifest: SourceManifest): string {
 }
 
 const DENIED_DIRECTORIES = ['.git', '.ssh', '.aws', '.gnupg', '.kube']
+// the short names Windows gives these directories, `GIT~1` for `.git`
+const DENIED_SHORT_NAMES = /^(git|ssh|aws|gnupg|kube)~\d+$/
+
+// A name as a case-insensitive disk opens it: Windows and macOS open `.SSH` as `.ssh`, and
+// Windows drops trailing dots and spaces (`.git.`) and reads `name:stream` as `name`.
+function canonicalName(name: string): string {
+  return name
+    .replace(/:.*$/, '')
+    .replace(/[. ]+$/, '')
+    .toLowerCase()
+}
 const DENIED_NAMES = [
   /^\.env$/i,
   /^\.env\.(?!example$|sample$|template$|dist$)/i,
@@ -84,12 +95,15 @@ const DENIED_NAMES = [
 // must not be what decides that a key leaves the machine.
 export function deniedSourcePath(path: string): string | null {
   const parts = path.split('/')
-  const directory = parts.slice(0, -1).find((part) => DENIED_DIRECTORIES.includes(part))
+  const directory = parts.slice(0, -1).find((part) => {
+    const name = canonicalName(part)
+    return DENIED_DIRECTORIES.includes(name) || DENIED_SHORT_NAMES.test(name)
+  })
   if (directory !== undefined) {
     return `${directory}/ holds credentials or history`
   }
   const name = parts[parts.length - 1]
-  if (DENIED_NAMES.some((pattern) => pattern.test(name))) {
+  if (DENIED_NAMES.some((pattern) => pattern.test(name) || pattern.test(canonicalName(name)))) {
     return `${name} looks like a credential file`
   }
   return null

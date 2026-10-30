@@ -45,6 +45,7 @@ import {
 } from './cache/cache-inventory'
 import { RetentionPolicy } from './cache/retention'
 import { prefetchSecrets } from './secrets/prefetch-secrets'
+import { applyNetworkCeiling, WorkNetwork } from './planner/work-network'
 
 export type ExecuteKind = 'execute' | 'up' | 'down'
 export interface CliExecOptions {
@@ -63,6 +64,9 @@ export interface CliExecOptions {
   cacheReadOnly: boolean
   // default maximum execution time in ms for tasks without their own timeout
   timeout: number | null
+  // maximum execution time in ms for every task, also those with a longer timeout of
+  // their own: a task runs at most the shorter of the two
+  maxTimeout: number | null
   // Skip dependencies that were not requested when every task needing them is
   // a cache hit (default). Off runs the whole dependency graph.
   skipDeps: boolean
@@ -71,6 +75,9 @@ export interface CliExecOptions {
   wait: 'ready' | 'start'
   // refuse to start a run whose requests can never fit the host (default)
   resourceCheck: boolean
+  // `--network`: the most any task or service of the run reaches besides its
+  // needs, whatever it declares; null for what each declares
+  network: WorkNetwork | null
 }
 
 export interface CliPackageOptions {
@@ -130,6 +137,7 @@ export class Cli {
     return {
       state: processWorkTree,
       start: async () => {
+        applyNetworkCeiling(workTree, type === 'down' ? null : options?.network ?? null)
         if (type !== 'down') {
           await this.prepareSecrets(true)
         }
@@ -166,9 +174,11 @@ export class Cli {
             explain: options?.explain ?? false,
             cacheReadOnly: options?.cacheReadOnly ?? false,
             timeout: options?.timeout ?? null,
+            maxTimeout: options?.maxTimeout ?? null,
             skipDeps: options?.skipDeps ?? true,
             wait: options?.wait ?? 'ready',
             resourceCheck: options?.resourceCheck ?? true,
+            network: options?.network ?? null,
           })
         }
 

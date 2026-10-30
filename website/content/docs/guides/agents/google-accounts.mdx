@@ -1,0 +1,124 @@
+---
+title: 'Service accounts on Google Cloud'
+description: 'Create the Google service accounts an agent and a publisher sign in to a hammerkit server with, and let yourself and your team act as them without a key file.'
+icon: KeyRound
+---
+
+An agent never signs in to the server as you. It signs in as a **service account** of its own,
+and the server's [entitlements](/docs/remote-compute/entitlements) decide what that account
+may do. The guides use two accounts:
+
+| Account               | Signs in to                                         | Entitlement on the server                        |
+| --------------------- | --------------------------------------------------- | ------------------------------------------------ |
+| `hammerkit-agent`     | start sandboxes, run tasks, push `agent/…` branches | `builds: run` and `sandboxes`                    |
+| `hammerkit-publisher` | publish build files (`hammerkit remote publish`)    | `builds: publish` (includes run), no `sandboxes` |
+
+Neither account gets a key file or a role in your project. Instead, you are allowed to
+**impersonate** them: `gcloud` asks Google for a short-lived token of the account on your
+behalf, and that is the token hammerkit sends to the server. This page sets that up.
+
+If you followed [Server on Kubernetes](/docs/guides/agents/kubernetes), its step 1 already
+created both accounts for you, named `$NAME-agent` and `$NAME-publisher`; skip to
+[Let your team act as them](#3-let-your-team-act-as-them)
+to add more people.
+
+## What you need
+
+- A Google Cloud project, and `gcloud` signed in as a user who may create service accounts in
+  it (for example the `Service Account Admin` role).
+
+```bash
+PROJECT=my-project
+ME=$(gcloud config get account)
+```
+
+## 1. Create the accounts
+
+```bash
+gcloud services enable iam.googleapis.com iamcredentials.googleapis.com --project $PROJECT
+gcloud iam service-accounts create hammerkit-agent --project $PROJECT --display-name "hammerkit agent"
+gcloud iam service-accounts create hammerkit-publisher --project $PROJECT --display-name "hammerkit publisher"
+```
+
+`iamcredentials.googleapis.com` is the API that hands out tokens of a service account to
+someone allowed to impersonate it.
+
+## 2. Allow yourself to act as them
+
+Impersonating an account needs the role **Service Account Token Creator** on that account.
+Grant it to yourself, on these two accounts only:
+
+```bash
+for who in agent publisher; do
+  gcloud iam service-accounts add-iam-policy-binding hammerkit-$who@$PROJECT.iam.gserviceaccount.com \
+    --project $PROJECT --role roles/iam.serviceAccountTokenCreator --member user:$ME
+done
+```
+
+The narrower role Service Account OpenID Token Creator is not enough: `gcloud` with
+`--impersonate-service-account` also asks for an access token of the account.
+
+Signed in to `gcloud` as a service account yourself, for example in CI, write
+`--member serviceAccount:…` instead of `user:…`. A new binding can take a minute before it
+works.
+
+## 3. Let your team act as them
+
+Everybody who starts an agent needs the same role on `hammerkit-agent`. Give it to each person,
+or to a Google group:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding hammerkit-agent@$PROJECT.iam.gserviceaccount.com \
+  --project $PROJECT --role roles/iam.serviceAccountTokenCreator --member group:dev-team@example.com
+```
+
+Keep `hammerkit-publisher` to the people or the CI job that publish build files: whoever can
+act as it decides what the agent's commands run in.
+
+## 4. Check that a token comes back
+
+```bash
+gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=hammerkit-agent@$PROJECT.iam.gserviceaccount.com
+```
+
+This is the command the tutorials put in `HAMMERKIT_TOKEN_COMMAND`, or that you register with a
+server with [`remote add --token-command`](/docs/cli/remote#a-token-command-per-server). It prints a long string
+starting with `eyJ`, a token that is valid for an hour, and a warning on stderr that it
+impersonates the account, which is expected. `--audiences=hammerkit` has to match
+the `audience` of `issuers` in the server's config.
+
+A `Permission 'iam.serviceAccounts.getAccessToken' denied` (or `getOpenIdToken`) error means step 2 or 3 is missing for
+your user, or has not taken effect yet.
+
+## 5. Give the server the accounts' ids
+
+The server recognizes an account by its unique id, the `sub` of its tokens, not by its email:
+
+```bash
+gcloud iam service-accounts describe hammerkit-agent@$PROJECT.iam.gserviceaccount.com \
+  --project $PROJECT --format='value(uniqueId)'
+gcloud iam service-accounts describe hammerkit-publisher@$PROJECT.iam.gserviceaccount.com \
+  --project $PROJECT --format='value(uniqueId)'
+```
+
+Each prints a number such as `104857204856125339187`. Whoever runs the server puts them in the
+entitlements of its config, here for the repository `github.com/acme/shop`:
+
+```yaml title="server.yaml"
+issuers:
+  - { issuer: https://accounts.google.com, audience: hammerkit }
+entitlements:
+  - subject: { iss: https://accounts.google.com, sub: '<id of hammerkit-publisher>' }
+    repos: [github.com/acme/shop]
+    builds: publish
+  - subject: { iss: https://accounts.google.com, sub: '<id of hammerkit-agent>' }
+    repos: [github.com/acme/shop]
+    builds: run
+    sandboxes:
+      - repo: github.com/acme/shop
+        branches: { main: pull, 'agent/**': push } # start from main, push to agent/…
+```
+
+Then follow [pi on a sandbox](/docs/guides/agents/pi) or
+[opencode on a sandbox](/docs/guides/agents/opencode).

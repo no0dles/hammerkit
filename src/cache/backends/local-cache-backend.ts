@@ -21,8 +21,16 @@ async function directories(path: string): Promise<string[]> {
   }
 }
 
+// Below the home directory, or below `HAMMERKIT_DIR` when that is set: a server sets
+// it per source trust, so the runs of one repository share their cache and nobody
+// else's run finds it (a run's home directory is its own and goes with it).
+export function getDefaultLocalCachePath(): string {
+  const directory = process.env.HAMMERKIT_DIR
+  return directory ? join(directory, 'remote-cache') : join(homedir(), '.hammerkit', 'remote-cache')
+}
+
 export function createLocalCacheBackend(spec: LocalCacheBackendSpec): CacheBackend {
-  const root = spec.path ?? join(homedir(), '.hammerkit', 'remote-cache')
+  const root = spec.path ?? getDefaultLocalCachePath()
 
   async function readEntry(taskId: string, stateKey: string): Promise<CacheEntry | null> {
     const dir = join(root, taskId, stateKey)

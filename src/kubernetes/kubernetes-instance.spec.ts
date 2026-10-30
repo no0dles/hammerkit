@@ -1,4 +1,4 @@
-import { Exec } from '@kubernetes/client-node'
+import { Exec, Log } from '@kubernetes/client-node'
 import { createKubernetesInstances } from './kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
@@ -19,15 +19,24 @@ vi.mock('@kubernetes/client-node', () => {
     makeApiClient = mocks.makeApiClient
   }
   class Exec {}
+  class Log {}
   class CoreV1Api {}
   class BatchV1Api {}
   class AppsV1Api {}
   class KubernetesObjectApi {}
-  return { KubeConfig, Exec, CoreV1Api, BatchV1Api, AppsV1Api, KubernetesObjectApi }
+  class AuthenticationV1Api {}
+  return { KubeConfig, Exec, Log, CoreV1Api, BatchV1Api, AppsV1Api, KubernetesObjectApi, AuthenticationV1Api }
 })
 
 function makeEnv(overrides: Partial<WorkKubernetesEnvironment> = {}): WorkKubernetesEnvironment {
-  return { type: 'kubernetes', namespace: 'ns', context: 'ctx', httpRoutes: [], ...overrides }
+  return {
+    type: 'kubernetes',
+    namespace: 'ns',
+    context: 'ctx',
+    httpRoutes: [],
+    networkPolicyEnforced: false,
+    ...overrides,
+  }
 }
 
 beforeEach(() => {
@@ -63,7 +72,9 @@ describe('createKubernetesInstances', () => {
     expect(instance.coreApi).toBe('client-for-CoreV1Api')
     expect(instance.batchApi).toBe('client-for-BatchV1Api')
     expect(instance.appsApi).toBe('client-for-AppsV1Api')
+    expect(instance.authApi).toBe('client-for-AuthenticationV1Api')
     expect(instance.exec).toBeInstanceOf(Exec)
+    expect(instance.log).toBeInstanceOf(Log)
   })
 
   it('translates "No active cluster!" into a context-specific error mentioning the kubeConfig file', () => {

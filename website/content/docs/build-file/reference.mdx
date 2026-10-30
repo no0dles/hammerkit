@@ -14,8 +14,8 @@ the dedicated pages.
 | `envs` | map of string→string/number | Build-file-wide [environment variables](/docs/build-file/environment-variables). |
 | `tasks` | map of name→task | The [tasks](/docs/task) in this file. |
 | `services` | map of name→service | The [services](/docs/service) in this file. |
-| `references` | map of prefix→path | [Reference](/docs/build-file/references) other build files (keep their own directory). |
-| `includes` | map of prefix→path | [Include](/docs/build-file/includes) other build files (use this file's directory). |
+| `references` | map of prefix→path, `{path, with, publish}` or git source | [Reference](/docs/build-file/references) other build files (keep their own directory). |
+| `includes` | map of prefix→path, `{path, with, publish}` or git source | [Include](/docs/build-file/includes) other build files (use this file's directory), with [inputs](/docs/build-file/includes#inputs-of-a-local-include). `publish: false` leaves the file out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). |
 | `environments` | map of name→environment | [Run targets](/docs/task/kubernetes) (Kubernetes or remote Docker). |
 | `caches` | map of name→cache | Named [cache](/docs/build-file/caches) declarations (method + backend). |
 | `labels` | map of string→string/number | [Labels](/docs/labels) applied to every task/service in the file. |
@@ -43,7 +43,11 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `timeout` | duration (`30s`, `10m`, `1h30m`) | [Maximum execution time](/docs/task#timeouts); the task fails when exceeded. |
 | `secrets` | array of `{from, env \| path, cache}` | [Credentials](/docs/task/secrets) from `env:NAME` or `file:path`, injected as an env variable or a read-only file; kept out of the cache key and logs. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/task#resources) limits and requests (`2`, `500m`; `512Mi`, `2Gi`); the run is planned by the requests. Not enforced for a local task, not part of the cache key. |
+| `network` | `open` \| `none` \| `{allow: [hosts]}` | What the container [reaches](/docs/task/network) besides the services in `needs` (default `open`); `allow` goes through an egress proxy, and a `host:port` entry forwards raw TCP. An error on a local task, except on a [server's cluster](/docs/remote-compute/backend#network); not part of the cache key. |
+| `args` | boolean | Whether the last command takes [arguments](/docs/task/arguments#which-tasks-take-arguments) after `--`: `false` refuses them, `true` says it is meant to, which a server with `runs.args: declared` requires. |
+| `volumeSize` | size (`5Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the sources, mounts and outputs of a container task (the environment's `volumeSize` when left out, else `1Gi`). Ignored elsewhere, not part of the cache key. |
 | `runner` | string | Name of the [server](/docs/cli/remote) the task has to run on (experimental, see [runner](/docs/task#runner)). |
+| `publish` | boolean | `false`: a server leaves the task out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). Locally it changes nothing. |
 
 **Container task** adds:
 
@@ -77,6 +81,9 @@ service** (it has a `selector`).
 | `envs` | map of string→string/number | Service environment variables. |
 | `secrets` | array of `{from, env \| path}` | [Credentials](/docs/task/secrets) injected as an env variable or a read-only file. |
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/service/container#resources) limits and requests of the container, as for a task. |
+| `network` | `open` \| `none` \| `{allow: [hosts]}` | What the service [reaches](/docs/task/network) besides the services it needs, as for a task; what needs the service always reaches it. |
+| `args` | boolean | `false` refuses [arguments](/docs/task/arguments#services) after `--` of `up` for its `cmd`. |
+| `volumeSize` | size (`20Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the service's sources, mounts and volumes, as for a task. |
 | `volumes` | array of string | `name:containerPath[:ro]` volumes that [persist](/docs/service/container#volumes) across restarts. |
 | `mounts` | array of string | `host:container[:ro]` config mounts. |
 | `deps` | array of string | Tasks that must run before the service starts. |
@@ -85,6 +92,7 @@ service** (it has a `selector`).
 | `labels` | map of string→string/number | Labels for filtering. |
 | `description` | string | Description shown by `ls`. |
 | `continuous` | boolean | Long-running service (the usual case). |
+| `publish` | boolean | `false`: a server leaves the service out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). |
 
 **Kubernetes service** (forwards an existing cluster resource — see
 [Kubernetes service](/docs/service/kubernetes)):
@@ -123,7 +131,7 @@ Each environment is a [run target](/docs/task/kubernetes) — exactly one of:
 
 | Key | Fields | Description |
 |-----|--------|-------------|
-| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]` | Run tasks as jobs and services as deployments on a cluster. |
+| `kubernetes` | `context` (required), `namespace`, `kubeconfig`, `httpRoutes[]`, `networkPolicy` | Run tasks as jobs and services as deployments on a cluster. `networkPolicy: enforced` states that the cluster enforces NetworkPolicy, which [network limits](/docs/task/network#kubernetes) need. |
 | `docker` | `host` | Run against a remote Docker daemon. |
 
 An `httpRoutes` entry has `host`, `service` and `gateway` (all required),

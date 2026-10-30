@@ -1,10 +1,10 @@
 import { Environment } from '../executer/environment'
 import { CacheMethod } from '../parser/cache-method'
 import { WorkItemState } from '../planner/work-item'
-import { WorkTask } from '../planner/work-task'
+import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { WorkTree } from '../planner/work-tree'
 import { TaskState } from '../executer/scheduler/task-state'
-import { computeStateKey } from '../executer/scheduler/state-key'
+import { computeStateKey, resolveEffective } from '../executer/scheduler/state-key'
 import {
   getWorkTaskCacheDescription,
   storedCacheDescription,
@@ -197,6 +197,20 @@ export async function explainTask(
   }
   visiting.add(item.id())
 
+  // Like the scheduler, a task whose cache is off is never looked up, so its
+  // sources aren't hashed for it.
+  if (resolveEffective(item, defaultCacheMethod).method === 'none') {
+    const explanation: TaskExplanation = {
+      taskId: item.id(),
+      taskName: item.name,
+      status: 'uncacheable',
+      causes: [{ kind: 'caching-disabled' }],
+    }
+    memo.set(item.id(), explanation)
+    visiting.delete(item.id())
+    return explanation
+  }
+
   const { stateKey, stats, resolved, provable, unmatched } = await computeStateKey(
     item,
     defaultCacheMethod,
@@ -225,13 +239,18 @@ export async function explainTask(
     return explanation
   }
 
-  if (resolved.method === 'none') {
-    const explanation: TaskExplanation = {
-      taskId: item.id(),
-      taskName: item.name,
-      status: 'uncacheable',
-      causes: [{ kind: 'caching-disabled' }],
+  // Mirrors executeWorkTask: an aggregate is never looked up itself, and is reported
+  // cached when all its dependencies were. What changed is in its dependencies.
+  if (isAggregateTask(item.data)) {
+    const causes: ExplainCause[] = []
+    for (const dep of item.deps) {
+      const depExplanation = await explainTask(dep, defaultCacheMethod, environment, memo, visiting)
+      if (depExplanation.status !== 'hit') {
+        causes.push({ kind: 'dependency-changed', identifier: dep.name })
+      }
     }
+    const status = causes.length === 0 ? 'hit' : 'miss'
+    const explanation: TaskExplanation = { taskId: item.id(), taskName: item.name, status, causes }
     memo.set(item.id(), explanation)
     visiting.delete(item.id())
     return explanation

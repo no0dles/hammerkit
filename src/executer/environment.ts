@@ -1,3 +1,4 @@
+import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { FileContext } from '../file/file-context'
 import { ConsoleContext } from '../console/console-context'
 import { StatusConsole } from '../planner/work-item-status'
@@ -13,6 +14,16 @@ export interface HostedPolicy {
   // the accounts the run may read secrets as; a secret of any other is refused when
   // it is fetched, whatever the plan said
   accounts?: string[]
+  // where container tasks and services run: the cluster of the server's Kubernetes
+  // backend, in place of the build file's environment
+  kubernetes?: WorkKubernetesEnvironment
+  // a local task runs in a container (a pool's tool image on the server's cluster), so
+  // its `network` can be limited; set where the build file is read without `kubernetes`
+  localTasksInContainers?: boolean
+  // on a server's docker host, the runtime (such as runsc, gVisor) a container that adds
+  // capabilities runs in (`backend.capabilities.runtime`); such a container is refused
+  // without one
+  capabilityRuntime?: string
 }
 
 export interface Environment {

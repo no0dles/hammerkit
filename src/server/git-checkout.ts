@@ -50,19 +50,26 @@ export async function checkoutRef(
 
 export class RefError extends Error {}
 
+export class GitOutputTooLarge extends Error {}
+
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 
 /**
  * The commit a branch or tag of a repository points to now: `refs/heads/<ref>`, else
  * `refs/tags/<ref>` (the commit of an annotated tag). A name that is both a branch and
- * a tag is ambiguous. A full commit hash is taken as it is.
+ * a tag is ambiguous. A full commit hash is taken as it is. With `branch`, only a
+ * branch: a sandbox starts from one.
  */
 export async function resolveRef(
   repository: string,
   ref: string,
   env: { [key: string]: string | undefined },
-  signal: AbortSignal
+  signal: AbortSignal,
+  only?: 'branch'
 ): Promise<string> {
+  if (only === 'branch') {
+    return resolveBranch(repository, ref, env, signal)
+  }
   if (!isValidRef(ref)) {
     throw new RefError(`${JSON.stringify(ref.slice(0, 80))} is not a branch, tag or commit`)
   }
@@ -103,11 +110,75 @@ export async function resolveRef(
   return commit
 }
 
-async function git(
+async function resolveBranch(
+  repository: string,
+  branch: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string> {
+  assertBranchName(branch)
+  const commit = await remoteBranch(repository, branch, env, signal)
+  if (!commit) {
+    throw new RefError(`there is no branch ${branch}`)
+  }
+  return commit
+}
+
+// A name a sandbox can start from: a branch, never a tag or a commit, written without `refs/heads/`.
+export function assertBranchName(branch: string): void {
+  if (!isValidRef(branch) || branch.startsWith('refs/')) {
+    throw new RefError(`${JSON.stringify(branch.slice(0, 80))} is not a branch`)
+  }
+  if (COMMIT.test(branch.toLowerCase())) {
+    throw new RefError(`a sandbox starts from a branch, ${branch} is a commit`)
+  }
+}
+
+// A branch git takes as a name of its own: a ref, and no part of it starts or ends with a
+// dot or ends with `.lock` (`git check-ref-format` refuses those).
+export function isValidBranch(branch: string): boolean {
+  return (
+    isValidRef(branch) &&
+    branch
+      .split('/')
+      .every((part) => !part.startsWith('.') && !part.startsWith('-') && !part.endsWith('.') && !part.endsWith('.lock'))
+  )
+}
+
+// The commit a branch of a repository points to now, none when there is no such branch.
+export async function remoteBranch(
+  repository: string,
+  branch: string,
+  env: { [key: string]: string | undefined },
+  signal: AbortSignal
+): Promise<string | undefined> {
+  const output = await git(
+    ['ls-remote', '--heads', '--', repository, `refs/heads/${branch}`],
+    env,
+    signal,
+    `the branches of ${repository}`
+  )
+  for (const line of output.split('\n')) {
+    const [commit, name] = line.split('\t')
+    if (commit && name === `refs/heads/${branch}`) {
+      return commit
+    }
+  }
+  return undefined
+}
+
+// Runs git without a prompt and with the network transports only. Errors say what could
+// not be done (`unable to <action> <what>`) with the last line git printed.
+export async function git(
   args: string[],
   baseEnv: { [key: string]: string | undefined },
   signal: AbortSignal,
-  what: string
+  what: string,
+  action = 'fetch',
+  // what git reads on stdin, the exit codes that answer rather than fail (check-ignore exits
+  // 1 when nothing is ignored), and what git may print (a diff of a sandbox can be larger
+  // than the default)
+  options: { input?: string | Buffer; exitCodes?: number[]; maxBuffer?: number } = {}
 ): Promise<string> {
   const env: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(baseEnv)) {
@@ -118,14 +189,31 @@ async function git(
   env.GIT_TERMINAL_PROMPT = '0'
   env.GIT_ALLOW_PROTOCOL = ALLOWED_PROTOCOLS
   try {
-    return (await execFileAsync('git', args, { env, signal })).stdout
+    // warnings of a large tree must not fail the command
+    const running = execFileAsync('git', args, { env, signal, maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024 })
+    // a git that exits before it read its input fails the command, not the server (EPIPE)
+    running.child.stdin?.on('error', () => undefined)
+    running.child.stdin?.end(options.input)
+    return (await running).stdout
   } catch (e) {
-    const error = e as NodeJS.ErrnoException & { stderr?: string }
+    const error = e as Omit<NodeJS.ErrnoException, 'code'> & {
+      code?: string | number
+      stdout?: string
+      stderr?: string
+    }
+    if (typeof error.code === 'number' && options.exitCodes?.includes(error.code)) {
+      return error.stdout ?? ''
+    }
     if (error.code === 'ABORT_ERR') {
-      throw new Error(`fetching ${what} was cancelled`)
+      throw new Error(`${action === 'fetch' ? 'fetching' : `${action} of`} ${what} was cancelled`)
     }
     if (error.code === 'ENOENT') {
-      throw new Error(`unable to fetch ${what}: git is not installed`)
+      throw new Error(`unable to ${action} ${what}: git is not installed`)
+    }
+    if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      throw new GitOutputTooLarge(
+        `unable to ${action} ${what}: git printed more than ${options.maxBuffer ?? 64 * 1024 * 1024} bytes`
+      )
     }
     const reason =
       (error.stderr ?? '')
@@ -133,6 +221,6 @@ async function git(
         .map((line) => line.trim())
         .filter((line) => line.length > 0)
         .pop() ?? error.message
-    throw new Error(`unable to fetch ${what}: ${reason}`)
+    throw new Error(`unable to ${action} ${what}: ${reason}`)
   }
 }

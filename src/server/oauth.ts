@@ -9,6 +9,8 @@ export interface Principal {
   groups: string[]
   // the claims with a string value, for matching a CI job's repository or ref
   claims: Record<string, string>
+  // `email_verified` of the token, when it says
+  emailVerified?: boolean
 }
 
 // The reason is for the operator's log, never for the caller.
@@ -139,6 +141,7 @@ export class TokenVerifier {
           ? [groups]
           : [],
       claims,
+      ...emailVerified(payload.email_verified),
     }
   }
 
@@ -266,4 +269,16 @@ function isSecureUrl(value: string): boolean {
   } catch {
     return false
   }
+}
+
+// Some issuers send `email_verified` as the string "true" or "false": either says it as
+// much as the boolean does, anything else says nothing
+function emailVerified(value: unknown): { emailVerified?: boolean } {
+  if (value === true || value === 'true') {
+    return { emailVerified: true }
+  }
+  if (value === false || value === 'false') {
+    return { emailVerified: false }
+  }
+  return {}
 }

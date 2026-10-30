@@ -2,7 +2,7 @@
 
 Hammerkit exposes a container runtime option only if it translates to **every** runtime hammerkit targets (Docker and Kubernetes). The initial options are `shmSize` and `securityOpt` (seccomp): `shmSize` maps to Docker `HostConfig.ShmSize` and a Kubernetes in-memory `emptyDir` at `/dev/shm`; `securityOpt` maps to Docker `HostConfig.SecurityOpt` and Kubernetes `securityContext.seccompProfile`.
 
-`ulimits` and `devices` are deliberately **excluded**: Kubernetes has no pod/container-spec equivalent (ulimits are node/kubelet-level; host devices go through Device Plugins). Exposing them would create a Docker-only option that silently no-ops or errors on Kubernetes — violating Platform-Agnostic. Other portable options (`capAdd`/`capDrop`, `privileged`, `sysctls`, `tmpfs`) translate to both but are deferred until a concrete need.
+`ulimits` and `devices` are deliberately **excluded**: Kubernetes has no pod/container-spec equivalent (ulimits are node/kubelet-level; host devices go through Device Plugins). Exposing them would create a Docker-only option that silently no-ops or errors on Kubernetes — violating Platform-Agnostic. Other portable options (`capAdd`/`capDrop`, `privileged`, `sysctls`, `tmpfs`) translate to both but are deferred until a concrete need. `capAdd` has one since: building images with BuildKit needs `SYS_ADMIN`. It is `--cap-add` on Docker and `securityContext.capabilities.add` on Kubernetes, and a server grants it only in a sandboxed runtime its operator names (`backend.capabilities`).
 
 ## Consequences
 

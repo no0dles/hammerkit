@@ -1,5 +1,5 @@
 import { WorkItemState } from '../planner/work-item'
-import { WorkTask } from '../planner/work-task'
+import { isAggregateTask, WorkTask } from '../planner/work-task'
 import { Environment } from './environment'
 import { CliExecOptions } from '../cli'
 import { getDuration } from './states'
@@ -13,7 +13,7 @@ import {
   Dependent,
 } from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
-import { withDeadline } from './deadline'
+import { getTaskTimeout, withDeadline } from './deadline'
 import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
@@ -26,7 +26,8 @@ async function pushToBackend(
   options: CliExecOptions
 ) {
   const { resolved, stateKey, provable } = cacheState
-  if (resolved.method === 'none' || !provable) {
+  // an aggregate has nothing to store, see checkCacheState
+  if (resolved.method === 'none' || !provable || isAggregateTask(work.data)) {
     return
   }
   if (options.cacheReadOnly) {
@@ -43,7 +44,7 @@ async function pushToBackend(
 }
 
 // A task without cmds only groups its dependencies (`ci: { deps: [test, build] }`).
-// Having no src of its own it is never a cache hit, so its dependencies are
+// It is never a cache hit itself (see checkCacheState), so its dependencies are
 // always checked and their outputs restored. When every one of them was a hit,
 // nothing ran: report the group as cached too. Reporting only, the cache
 // decision is untouched.
@@ -127,7 +128,7 @@ export async function executeWorkTask(
           started,
         })
 
-        const timeout = work.data.timeout ?? options.timeout
+        const timeout = getTaskTimeout(work.data.timeout, options)
         const deadline = withDeadline(abort, timeout)
         try {
           await work.runtime.execute(environment, {

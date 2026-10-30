@@ -51,7 +51,7 @@ The `shmSize` and `securityOpt` options apply to services, not just tasks, so a 
 
 1. **Given** a service with `shmSize` or `securityOpt`, **When** it starts (Docker or Kubernetes), **Then** the container/pod reflects it.
 
-> **Deferred / excluded (ADR-0003)**: `capAdd`/`capDrop`, `privileged`, `sysctls`, `tmpfs` are portable to both runtimes but out of initial scope (no concrete need yet). `ulimits` and `devices` are **excluded** — Kubernetes has no pod/container-spec equivalent.
+> **Deferred / excluded (ADR-0003)**: `capDrop`, `privileged`, `sysctls`, `tmpfs` are portable to both runtimes but out of initial scope (no concrete need yet). `capAdd` is in: image builds with BuildKit need `SYS_ADMIN`; a server adds a capability only when `backend.capabilities.allow` lists it, and only in the sandboxed runtime it names (a RuntimeClass on Kubernetes, a docker runtime on a host), see the docs of the backend. `ulimits` and `devices` are **excluded** — Kubernetes has no pod/container-spec equivalent.
 
 ### Edge Cases
 

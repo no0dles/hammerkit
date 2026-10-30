@@ -7,17 +7,25 @@ import { FileContext } from '../file/file-context'
 import { getFileContext } from '../file/get-file-context'
 import { isWithin } from '../includes/resolve-git-source'
 import { createParseContext } from '../schema/schema-parser'
-import { parseReferences } from '../schema/reference-parser'
+import { getPublishedFiles, parseReferences } from '../schema/reference-parser'
+import { ParseScope } from '../schema/parse-context'
+import { BuildFileGitSourceSchema } from '../schema/build-file-include-schema'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { WorkScope } from '../executer/work-scope'
 import { WorkTree } from '../planner/work-tree'
 import { WorkSecret } from '../planner/work-secret'
-import { isContainerWorkTask } from '../planner/work-task'
+import { isAggregateTask, isContainerWorkTask, isWorkTask } from '../planner/work-task'
 import { isContainerWorkService, WorkService } from '../planner/work-service'
+import { isVolumeName } from '../planner/utils/hosted-volumes'
+import { getHomeReference } from '../planner/utils/normalize-path'
+import { WorkMount } from '../planner/work-mount'
 import { WorkTask } from '../planner/work-task'
 import { Bundle } from '../remote/bundle'
 import { getErrorMessage } from '../log'
 import { ParseError } from '../schema/parse-error'
+import { NetworkSchema } from '../schema/network-schema'
+import { getArgumentsTarget } from '../planner/utils/task-arguments'
+import { exceedsNetwork, formatNetwork, isLimitedNetwork, toNetworkSchema, WorkNetwork } from '../planner/work-network'
 
 export class DefinitionError extends Error {}
 
@@ -39,19 +47,35 @@ export interface DefinitionInputs {
 // for. Values of secrets are never in it, only where they come from.
 export interface TaskPlan {
   kind: 'task' | 'service'
-  runtime: 'docker' | 'local'
+  // what the build file says it is for; left out when it says nothing
+  description?: string
+  // none: an aggregate, which only groups its dependencies and runs nothing
+  runtime: 'docker' | 'local' | 'none'
   image?: string
   cmds: string[]
+  // where arguments land: the last command of a task, the `cmd` of a service;
+  // null when there is none. Versions published before this was recorded have none.
+  command?: string | null
+  // what it reaches besides its needs, as the build file declares it (local tasks: open)
+  network?: NetworkSchema
+  // `args` as the build file says it: false refuses arguments, true is required by a
+  // server with `runs.args: declared`; left out when it says nothing
+  args?: boolean
   deps: string[]
   needs: string[]
   // the accounts its secrets are read as
   accounts: string[]
   secrets: { from: string; account: string | null; target: string }[]
+  // the variables of the server its `envs` read (`$NAME`, `${NAME}`); versions
+  // published before this was recorded have none
+  serverEnvs?: string[]
   mounts: string[]
   ports: string[]
   generates: string[]
+  // the Linux capabilities a container task adds; left out when it adds none
+  capAdd?: string[]
   // what a reviewer looks at first
-  flags: ('local-task' | 'host-port' | 'remote-include')[]
+  flags: ('local-task' | 'host-port' | 'remote-include' | 'capabilities')[]
 }
 
 export interface InspectedBundle {
@@ -66,10 +90,47 @@ export interface InspectedBundle {
 export interface PlanPolicy {
   // the variables of the server an `env:NAME` secret may read
   envs: string[]
+  // where the operator lists them, for the message; `runs.env.allow` when left out
+  envsFrom?: string
   // the accounts that only the server uses, such as the one that reads repositories
   reserved?: string[]
   // what tasks may run on; every runtime when left out
   runtimes?: ('docker' | 'local')[]
+  // where tasks run: on a cluster, the secrets of providers are read in the Job of a task
+  backend?: 'host' | 'kubernetes'
+  // the most any task or service may reach besides its needs (`runs.network`);
+  // open when left out
+  network?: WorkNetwork
+  // the most a task or service that reads a secret, or a credential of the server, may
+  // reach besides its needs (`runs.secretNetwork`); open when left out
+  secretNetwork?: WorkNetwork
+  // which tasks take arguments (`runs.args`): `any` but those with `args: false` when
+  // left out, `declared` only those with `args: true`
+  args?: 'any' | 'declared'
+  // the capabilities a task may add (`capAdd`); any when left out, which only a run on
+  // this machine is
+  capabilities?: string[]
+  // where the operator lists them, for the message; `backend.capabilities.allow` when left out
+  capabilitiesFrom?: string
+  // on a cluster, the secret providers whose endpoints the egress proxy of a limited task
+  // lets its init containers reach (`backend.providers.<name>.allow`): a task reading
+  // their secrets may have a limited network
+  proxiedProviders?: string[]
+}
+
+// Variables of a server that hold no credential (FR-008): a task may read these and
+// still take arguments, or reach any network.
+export const PLAIN_SERVER_ENVS = ['PATH', 'HOME', 'CI']
+
+// What an item holds that its command must not hand out: its secrets, and the variables
+// of the server its `envs` read, but the plain ones.
+export function getCredentialReads(item: { secrets: { target: string }[]; serverEnvs?: string[] }): string[] {
+  return [
+    ...item.secrets.map((secret) => `the secret ${secret.target}`),
+    ...(item.serverEnvs ?? [])
+      .filter((env) => !PLAIN_SERVER_ENVS.includes(env.toUpperCase()))
+      .map((env) => `$${env} of the server`),
+  ]
 }
 
 export interface PlanOptions {
@@ -78,8 +139,9 @@ export interface PlanOptions {
   scope?: WorkScope
   // set on a server
   policy?: PlanPolicy
-  // refuse git includes: reading them would make the machine fetch from the network
-  noRemote?: boolean
+  // refuse git includes: reading them would make the machine fetch from the network,
+  // before a proposal is approved, or for a caller who only checks a build file
+  noRemote?: 'proposal' | 'check'
 }
 
 // 40 (sha-1) or 64 (sha-256) hex digits
@@ -88,52 +150,43 @@ const COMMIT_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/i
 // A hash alone can only name what is inside the bundle, so everything a build
 // file pulls in from elsewhere has to be pinned: a git include needs a commit
 // and a remote that is not a path on the server.
-function findLooseIncludes(bundle: Bundle, noRemote = false): string[] {
-  const problems: string[] = []
-  for (const [path, content] of Object.entries(bundle.files)) {
-    if (!/\.ya?ml$/i.test(path)) {
-      continue
-    }
-    let document: any
-    try {
-      document = parse(content)
-    } catch {
-      continue // a file that isn't valid yaml is reported when the bundle is parsed
-    }
-    for (const block of ['includes', 'references']) {
-      for (const [name, include] of Object.entries(document?.[block] ?? {})) {
-        const source = include as { git?: unknown; ref?: unknown }
-        if (!source || typeof source !== 'object' || source.git === undefined) {
-          continue
-        }
-        if (noRemote) {
-          problems.push(
-            `${path}: ${block}.${name}: a proposal may not include from git, the server would fetch it before anybody approved it`
-          )
-          continue
-        }
-        if (typeof source.git !== 'string' || !/^(https:\/\/|ssh:\/\/|git@[\w.-]+:)/.test(source.git)) {
-          problems.push(`${path}: ${block}.${name}: git has to be an https:// or ssh:// address`)
-        }
-        if (typeof source.ref !== 'string' || !COMMIT_PATTERN.test(source.ref)) {
-          problems.push(`${path}: ${block}.${name}: pin ref to a commit, a branch or tag can move`)
-        }
-      }
-    }
+function checkGitSource(
+  path: string,
+  where: string,
+  source: BuildFileGitSourceSchema,
+  noRemote: PlanOptions['noRemote']
+): void {
+  if (noRemote === 'proposal') {
+    throw new DefinitionError(
+      `${path}: ${where}: a proposal may not include from git, the server would fetch it before anybody approved it`
+    )
   }
-  return problems
+  if (noRemote === 'check') {
+    throw new DefinitionError(
+      `${path}: ${where}: checking a build file that includes from git needs builds: publish, the server would fetch it`
+    )
+  }
+  const problems: string[] = []
+  if (!/^(https:\/\/|ssh:\/\/|git@[\w.-]+:)/.test(source.git)) {
+    problems.push(`${path}: ${where}: git has to be an https:// or ssh:// address`)
+  }
+  if (typeof source.ref !== 'string' || !COMMIT_PATTERN.test(source.ref)) {
+    problems.push(`${path}: ${where}: pin ref to a commit, a branch or tag can move`)
+  }
+  if (problems.length > 0) {
+    throw new DefinitionError(problems.join('\n'))
+  }
 }
 
 // What a build file may not name on a server: the places it would run or store things
 // are the operator's. The docker host, a Kubernetes cluster and a remote cache are
 // credentials of the machine, not of the build file, and a project file that could carry
 // them could send runs, or the cache, anywhere.
-function findHostProblems(bundle: Bundle): string[] {
+// A file a server leaves out (`publish: false`) is not checked, and neither is a service
+// with `publish: false`: what is left out is never run there.
+function findHostProblems(files: { [path: string]: string }): string[] {
   const problems: string[] = []
-  for (const [path, content] of Object.entries(bundle.files)) {
-    if (!/\.ya?ml$/i.test(path)) {
-      continue
-    }
+  for (const [path, content] of Object.entries(files)) {
     let document: any
     try {
       document = parse(content)
@@ -157,6 +210,7 @@ function findHostProblems(bundle: Bundle): string[] {
       if (
         service &&
         typeof service === 'object' &&
+        service.publish !== false &&
         ('selector' in service || 'kubeconfig' in service || 'context' in service)
       ) {
         problems.push(`${path}: services.${name}: Kubernetes services are not supported on a server`)
@@ -164,6 +218,18 @@ function findHostProblems(bundle: Bundle): string[] {
     }
   }
   return problems
+}
+
+// The files of the bundle a server publishes, see getPublishedFiles
+function publishedBundleFiles(bundle: Bundle, directory: string, entry: ParseScope): { [path: string]: string } {
+  const files: { [path: string]: string } = {}
+  for (const scope of getPublishedFiles(entry)) {
+    const path = relative(directory, scope.fileName).split(sep).join('/')
+    if (!scope.remote && path in bundle.files) {
+      files[path] = bundle.files[path]
+    }
+  }
+  return files
 }
 
 // What a build file may read while it is inspected: its own files. The rest of
@@ -227,45 +293,160 @@ function describeSecret(secret: WorkSecret): { from: string; account: string | n
 // server has no account, so nothing would stand between the build file and the
 // operator's own credentials.
 function findPolicyProblems(items: Item[], policy: PlanPolicy, root: string): string[] {
-  const problems: string[] = []
+  // the problems of each item, said once for the items of a directory that share one, such
+  // as the tasks of an included file that all mount the docker socket
+  const grouped = new Map<string, { names: string[]; problem: string }>()
   for (const item of items) {
-    const runtime = item.data.type === 'local-task' ? 'local' : 'docker'
-    if (policy.runtimes && !policy.runtimes.includes(runtime)) {
-      problems.push(
-        `${
-          item.name
-        }: runs on the ${runtime} runtime, which this server does not allow (runtimes: ${policy.runtimes.join(', ')})`
-      )
-    }
-    const data = item.data
-    if (isContainerWorkTask(data) || isContainerWorkService(data)) {
-      for (const mount of data.mounts) {
-        // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
-        if (insideBundle(root, data.cwd, mount.localPath).length === 0) {
-          problems.push(`${item.name}: mounts ${mount.localPath}, which is outside of the bundle`)
-        }
-      }
-    }
-    for (const secret of secretsOf(item)) {
-      const source = secret.source
-      if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
-        problems.push(
-          `${item.name}: the secret ${describeSecret(secret).target} is read as ${
-            source.account
-          }, which the server uses to read repositories`
-        )
-      } else if (source.type === 'file') {
-        problems.push(`${item.name}: a secret can not read a file of the server (file:), use a secret provider`)
-      } else if (source.type === 'env' && !policy.envs.includes(source.name)) {
-        problems.push(
-          `${item.name}: the secret ${describeSecret(secret).target} reads env:${
-            source.name
-          }, which the server does not list in runs.env.allow`
-        )
+    const prefix = `${item.name}: `
+    for (const problem of findItemPolicyProblems(item, policy, root)) {
+      const said = problem.startsWith(prefix) ? problem.slice(prefix.length) : problem
+      const key = `${item.data.cwd}\0${said}`
+      const group = grouped.get(key)
+      if (group) {
+        group.names.push(item.name)
+      } else {
+        grouped.set(key, { names: [item.name], problem: said })
       }
     }
   }
+  return [...grouped.values()].map(({ names: [name, ...others], problem }) =>
+    others.length > 0 ? `${name} (also ${others.join(', ')}): ${problem}` : `${name}: ${problem}`
+  )
+}
+
+function findItemPolicyProblems(item: Item, policy: PlanPolicy, root: string): string[] {
+  const problems: string[] = []
+  const runtime = item.data.type === 'local-task' ? 'local' : 'docker'
+  // an aggregate runs nothing, on no runtime
+  if (policy.runtimes && !isAggregateTask(item.data) && !policy.runtimes.includes(runtime)) {
+    problems.push(
+      `${item.name}: runs on the ${runtime} runtime, which this server does not allow (runtimes: ${policy.runtimes.join(
+        ', '
+      )})`
+    )
+  }
+  const data = item.data
+  // a capability holds in the sandboxed runtime the operator named for it, so only those
+  // the operator allows are added
+  const refused = policy.capabilities
+    ? ('capAdd' in data ? data.capAdd : []).filter((capability) => !policy.capabilities?.includes(capability))
+    : []
+  if (refused.length > 0) {
+    const from = policy.capabilitiesFrom ?? 'backend.capabilities.allow'
+    problems.push(
+      `${item.name}: adds the ${refused.length > 1 ? 'capabilities' : 'capability'} ${refused.join(', ')}, ` +
+        (policy.capabilities && policy.capabilities.length > 0
+          ? `which this server does not allow (${from}: ${policy.capabilities.join(', ')})`
+          : `and this server allows none (${from})`)
+    )
+  }
+  // what a task reads and writes is the bundle's: `src: ../..` would have the server
+  // copy its own files (its credentials, other callers' caches) into the task
+  for (const source of 'src' in data ? data.src : []) {
+    if (!source.inherited && insideBundle(root, data.cwd, source.absolutePath).length === 0) {
+      problems.push(`${item.name}: src ${source.source} is outside of the bundle`)
+    }
+  }
+  for (const generate of isWorkTask(data) ? data.generates : []) {
+    if (!generate.inherited && insideBundle(root, data.cwd, generate.path).length === 0) {
+      problems.push(`${item.name}: generates ${generate.path}, which is outside of the bundle`)
+    }
+  }
+  // what holds a credential gets at most `runs.secretNetwork`, so a tool it runs can't
+  // send the credential anywhere else
+  const reads = getCredentialReads({
+    secrets: secretsOf(item).map(describeSecret),
+    serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
+  })
+  const ceilings: { ceiling: WorkNetwork; setting: string; reason: string }[] = []
+  if (policy.network && isLimitedNetwork(policy.network)) {
+    ceilings.push({ ceiling: policy.network, setting: 'runs.network', reason: '' })
+  }
+  if (reads.length > 0 && policy.secretNetwork && isLimitedNetwork(policy.secretNetwork)) {
+    ceilings.push({
+      ceiling: policy.secretNetwork,
+      setting: 'runs.secretNetwork',
+      reason: ` to what reads ${reads.join(', ')}`,
+    })
+  }
+  // an aggregate reaches nothing: it runs no command
+  for (const { ceiling, setting, reason } of isAggregateTask(data) ? [] : ceilings) {
+    // on a cluster a local task is a pod of a pool's tool image, limited like any other
+    if (data.type === 'local-task' && policy.backend !== 'kubernetes') {
+      problems.push(
+        `${item.name}: is a local task, which can't be limited to the network this server allows${reason} ` +
+          `(${setting}: ${formatNetwork(ceiling)})`
+      )
+    } else if ('network' in data && exceedsNetwork(data.network, ceiling)) {
+      problems.push(
+        `${item.name}: asks for network ${formatNetwork(data.network)}, more than this server allows${reason} ` +
+          `(${setting}: ${formatNetwork(ceiling)})`
+      )
+    }
+  }
+  if (isContainerWorkTask(data) || isContainerWorkService(data)) {
+    for (const mount of data.mounts) {
+      // a path of the server is not the build file's to mount: the docker socket, /etc, a home directory
+      if (insideBundle(root, data.cwd, mount.localPath).length === 0) {
+        problems.push(`${item.name}: mounts ${describeMountSource(mount)}, which is outside of the bundle`)
+      }
+    }
+  }
+  for (const volume of isContainerWorkService(data) ? data.volumes : []) {
+    // docker takes anything else for a path of the host, such as the docker socket
+    if (!isVolumeName(volume.name)) {
+      problems.push(`${item.name}: volume ${volume.name} is not a volume name, a path of the server can't be mounted`)
+    }
+  }
+  for (const secret of secretsOf(item)) {
+    const source = secret.source
+    if (policy.backend === 'kubernetes' && source.type === 'provider') {
+      // the server reads no secret of a provider on a cluster: the Job of a task does
+      if (!isWorkTask(item.data)) {
+        problems.push(
+          `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider}, which ` +
+            'this server does for tasks only, a service on its cluster gets no provider secret yet'
+        )
+      } else if (secret.cache) {
+        problems.push(
+          `${item.name}: the secret ${describeSecret(secret).target} has cache: true, its digest would need ` +
+            'the value before the Job of the task reads it, which this server does not support yet'
+        )
+      } else if (isLimitedNetwork(item.data.network) && !policy.proxiedProviders?.includes(source.provider)) {
+        // the init containers that read it share the pod's NetworkPolicy, and reach the
+        // provider only through the egress proxy
+        problems.push(
+          `${item.name}: the secret ${describeSecret(secret).target} is read from ${source.provider} in the ` +
+            `Job of the task, which network ${formatNetwork(item.data.network)} would cut off from it: ` +
+            `this server names no endpoints of ${source.provider} in backend.providers.${source.provider}.allow ` +
+            'for the egress proxy to let through, so the task keeps an open network'
+        )
+      }
+    }
+    if (source.type === 'provider' && policy.reserved?.includes(source.account)) {
+      problems.push(
+        `${item.name}: the secret ${describeSecret(secret).target} is read as ${
+          source.account
+        }, which the server uses to read repositories`
+      )
+    } else if (source.type === 'file') {
+      problems.push(`${item.name}: a secret can not read a file of the server (file:), use a secret provider`)
+    } else if (source.type === 'env' && !policy.envs.includes(source.name)) {
+      problems.push(
+        `${item.name}: the secret ${describeSecret(secret).target} reads env:${
+          source.name
+        }, which the server does not list in ${policy.envsFrom ?? 'runs.env.allow'}`
+      )
+    }
+  }
   return problems
+}
+
+// A mount of the home directory says so: `$PWD` in a mount is the home directory, not the
+// project, which reads like a path of the checkout
+function describeMountSource(mount: WorkMount): string {
+  const home = getHomeReference(mount.mount.split(':')[0])
+  return home ? `${mount.localPath} (${home} is the home directory)` : mount.localPath
 }
 
 function toPlan(root: string, item: Item): TaskPlan {
@@ -283,7 +464,7 @@ function toPlan(root: string, item: Item): TaskPlan {
       : []
   const ports = 'ports' in data ? data.ports.map((port) => `${port.hostPort ?? ''}:${port.containerPort}`) : []
   const flags: TaskPlan['flags'] = []
-  if (data.type === 'local-task') {
+  if (data.type === 'local-task' && !isAggregateTask(data)) {
     flags.push('local-task')
   }
   if ('ports' in data && data.ports.some((port) => port.hostPort !== null)) {
@@ -292,19 +473,29 @@ function toPlan(root: string, item: Item): TaskPlan {
   if (data.scope.remote) {
     flags.push('remote-include')
   }
+  const capAdd = isContainerWorkTask(data) ? data.capAdd : []
+  if (capAdd.length > 0) {
+    flags.push('capabilities')
+  }
   const isTask = data.type === 'local-task' || data.type === 'container-task'
   return {
     kind: isTask ? 'task' : 'service',
-    runtime: data.type === 'local-task' ? 'local' : 'docker',
+    ...(data.description ? { description: data.description } : {}),
+    runtime: isAggregateTask(data) ? 'none' : data.type === 'local-task' ? 'local' : 'docker',
     ...(isContainerWorkTask(data) || isContainerWorkService(data) ? { image: data.image } : {}),
     cmds: 'cmds' in data ? data.cmds.map((cmd) => cmd.cmd) : 'cmd' in data && data.cmd ? [data.cmd.cmd] : [],
+    command: getArgumentsTarget(data)?.cmd ?? null,
+    network: toNetworkSchema('network' in data ? data.network : { type: 'open' }),
+    ...('args' in data && data.args !== null ? { args: data.args } : {}),
     deps: item.deps.map((dep) => dep.name).sort(),
     needs: item.needs.map((need) => need.name).sort(),
     accounts,
     secrets,
+    serverEnvs: 'envs' in data ? data.envs.processNames ?? [] : [],
     mounts,
     ports,
     generates: 'generates' in data ? data.generates.map((generate) => generate.path) : [],
+    ...(capAdd.length > 0 ? { capAdd: [...capAdd] } : {}),
     flags,
   }
 }
@@ -327,10 +518,6 @@ export async function planBundle(
   environment: Environment,
   options: PlanOptions = {}
 ): Promise<InspectedBundle> {
-  const problems = [...findLooseIncludes(bundle, options.noRemote), ...(options.policy ? findHostProblems(bundle) : [])]
-  if (problems.length > 0) {
-    throw new DefinitionError(problems.join('\n'))
-  }
   const directory = await mkdtemp(join(tmpdir(), 'hammerkit-definition-'))
   try {
     for (const [path, content] of Object.entries(bundle.files)) {
@@ -343,7 +530,25 @@ export async function planBundle(
       file: confined(getFileContext(directory), directory),
     }
     try {
-      const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected)
+      const { ctx, scope } = await createParseContext(join(directory, bundle.entry), inspected, {
+        // a hash alone can only name what is inside the bundle, see checkGitSource
+        checkGitSource: (source, from, block, name) =>
+          checkGitSource(
+            // a file of a git include is named by its repository
+            from.remote
+              ? `${from.remote.git} ${relative(from.remote.root, from.fileName).split(sep).join('/')}`
+              : relative(directory, from.fileName),
+            `${block}.${name}`,
+            source,
+            options.noRemote
+          ),
+      })
+      if (options.policy) {
+        const problems = findHostProblems(publishedBundleFiles(bundle, directory, scope))
+        if (problems.length > 0) {
+          throw new DefinitionError(problems.join('\n'))
+        }
+      }
       const context = await parseReferences(ctx, scope, inspected)
       const workTree = getWorkContext(context, options.scope ?? { environmentName: null }, inspected)
       const items = itemsOf(workTree)

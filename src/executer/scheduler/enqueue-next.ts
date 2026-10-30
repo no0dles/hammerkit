@@ -1,14 +1,14 @@
 import { Environment } from '../environment'
 import { CacheMethod } from '../../parser/cache-method'
 import { isWorkTaskItem, WorkItemState } from '../../planner/work-item'
-import { WorkTask } from '../../planner/work-task'
+import { isAggregateTask, WorkTask } from '../../planner/work-task'
 import { WorkService } from '../../planner/work-service'
 import { ResolvedCache } from '../../cache/resolve-cache'
 import { getCacheDirectory } from '../../optimizer/get-cache-directory'
 import { writeCacheMetadata } from '../cache-metadata'
 import { getWorkTaskCacheDescription } from '../../optimizer/work-task-cache-description'
 import { getErrorMessage } from '../../log'
-import { computeStateKey } from './state-key'
+import { computeStateKey, resolveEffective } from './state-key'
 import { getWorkInstanceId } from '../../planner/work-instance-id'
 
 export interface CacheState {
@@ -19,11 +19,27 @@ export interface CacheState {
   provable: boolean
 }
 
+// The key a task whose cache is off runs and records its outputs under. It is
+// no hash, so a later run with its cache on never takes those outputs as its own.
+export const UNCACHED_STATE_KEY = 'uncached'
+
 export async function checkCacheState(
   item: WorkItemState<WorkTask | WorkService, any>,
   defaultCacheMethod: CacheMethod,
-  environment: Environment
+  environment: Environment,
+  // watch mode compares keys to rerun on a change, so it needs one even when
+  // the cache is off
+  options: { watch?: boolean } = {}
 ): Promise<CacheState> {
+  // A task whose cache is off is never looked up, so hashing its sources buys
+  // nothing, and a `**` over a node_modules takes most of a minute (every run
+  // with arguments). Its dependents still hash its sources for their own key.
+  const declared = resolveEffective(item, defaultCacheMethod)
+  if (declared.method === 'none' && isWorkTaskItem(item) && !options.watch) {
+    item.status.write('debug', `${item.name} is skipping cache check, because caching is disabled`)
+    return { cached: false, stateKey: UNCACHED_STATE_KEY, resolved: declared, provable: false }
+  }
+
   const {
     stateKey,
     stats: currentStats,
@@ -46,6 +62,13 @@ export async function checkCacheState(
     return { cached: false, stateKey, resolved, provable }
   }
 
+  // An aggregate runs nothing, so running it costs nothing, and it is never a hit itself:
+  // asked for, it still has its dependencies checked and their outputs restored. Its key
+  // counts for what depends on it, and it is reported cached when they all were.
+  if (isWorkTaskItem(item) && isAggregateTask(item.data)) {
+    return { cached: false, stateKey, resolved, provable }
+  }
+
   if (isWorkTaskItem(item)) {
     const runtimeStateKey = await item.runtime.currentStateKey(environment)
 
@@ -58,7 +81,7 @@ export async function checkCacheState(
       const pulled = await resolved.backend.pull(item.id(), stateKey, cacheDir, environment)
       if (pulled) {
         item.status.write('info', `${item.name} pulled from cache "${resolved.name}" (${resolved.backend.type})`)
-        await item.runtime.restore(environment, cacheDir)
+        await item.runtime.restore(environment, cacheDir, stateKey)
         await writeCacheMetadata(environment, item, currentStats, getWorkTaskCacheDescription(item))
         return { cached: true, stateKey, resolved, provable }
       }

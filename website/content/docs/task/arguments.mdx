@@ -23,7 +23,8 @@ hammerkit run test -- src/login.spec.ts -t "login flow"
 ```
 
 The last command runs as `npx vitest run 'src/login.spec.ts' '-t' 'login flow'`;
-`npm run generate` runs unchanged. The build file declares nothing for this.
+`npm run generate` runs unchanged. The build file declares nothing for this, unless it
+wants to refuse them, see [Which tasks take arguments](#which-tasks-take-arguments).
 
 ## One argument stays one argument
 
@@ -58,6 +59,7 @@ tasks:
   sh:
     image: node:24-alpine
     mounts: [.]
+    args: true
     cmds:
       - sh -c
 ```
@@ -66,10 +68,45 @@ tasks:
 hammerkit run sh -- 'npm test 2>&1 | tail -20'
 ```
 
+## Which tasks take arguments
+
+Every task takes arguments unless it says otherwise. A task whose last command must run
+as written says `args: false`:
+
+```yaml
+tasks:
+  install:
+    image: node:24-alpine
+    src: [package.json, package-lock.json]
+    generates: [node_modules]
+    args: false
+    cmds:
+      - npm ci --ignore-scripts
+```
+
+```bash
+hammerkit run install -- --foreground-scripts
+```
+
+The run fails before anything starts: `task install takes no arguments after -- (args: false)`.
+Without it, `--foreground-scripts` would land after `--ignore-scripts`, and an argument such as
+`-- --ignore-scripts=false` could undo what the command says. The same goes for a service's
+`cmd` with [`up`](#services).
+
+`args: true` says a task is meant to take them, as the shell task above. Locally it changes
+nothing, but a [server](/docs/remote-compute/runs#arguments) with `runs.args: declared` passes
+arguments only to the tasks that say it, so a task nobody wrote for arguments never gets
+them, and nobody has to remember `args: false` on every new task.
+
+A task that [extends](/docs/task/extending) another one takes its `args` unless it sets its
+own. [`ls --json`](/docs/cli/ls#json) shows `args` as the build file says it, `null` when it
+says nothing.
+
 ## Caching and dependencies
 
 A run with arguments is a one-off, so the task skips the
-[cache](/docs/task/caching): it always runs, and stores no cache entry. Its
+[cache](/docs/task/caching): it always runs, stores no cache entry, and doesn't
+read its sources to compute a key. Its
 outputs replace the ones the task wrote before, so the next run without
 arguments isn't a cache hit either: it runs again, or restores its outputs from
 the cache.
@@ -119,4 +156,8 @@ task's. A service without `cmd`, and a Kubernetes service, take no arguments.
   which are hammerkit's own options only before it. [`--set`](/docs/build-file/environment-variables)
   is unchanged and stays the way to fill a `$NAME` the build file references.
 - [`ls --json`](/docs/cli/ls#json) shows each task's last command and each service's
-  `cmd`, so a script or an agent can tell where its arguments land.
+  `cmd`, so a script or an agent can tell where its arguments land. A version published
+  to a server shows it as `command` in its plan.
+- A run on a [server](/docs/remote-compute/runs#arguments) takes them as `options.args`,
+  for one task in a run where nothing reads a secret or a credential of the server, and
+  under `runs.args: declared` only for a task with `args: true`.

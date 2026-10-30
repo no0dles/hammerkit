@@ -1,24 +1,30 @@
+import { getServiceDefinitionHash } from '../planner/service-definition'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
-import { isContainerWorkServiceItem, WorkItem } from '../planner/work-item'
+import { WorkItem } from '../planner/work-item'
 import {
   ContainerWorkService,
   getHealthcheckCommand,
   getServiceCommand,
   getServiceWorkingDir,
 } from '../planner/work-service'
-import { KubernetesPersistence } from './volumes'
+import { getWorkspacePodSpec, KubernetesPersistence } from './volumes'
 import { KubernetesSecretRefs } from './secrets'
-import { V1Deployment, V1HostAlias, V1Probe } from '@kubernetes/client-node'
+import { V1Container, V1Deployment, V1EnvVar, V1HostAlias, V1Probe } from '@kubernetes/client-node'
 import { getServiceHostname } from '../planner/utils/service-hostname'
 import { apply, KubernetesObjectHeader } from './apply'
-import { getServiceIp } from './get-service-ip'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { awaitDeployRunningState } from './await-running-state'
-import { getResourceName } from './resources'
+import { getItemLabels, getItemSelector, getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { getKubernetesResources } from './container-resources'
+import { getContainerSecurity, getPodPlacement } from './job-placement'
+import { getNetworkLabels } from './network-policy'
+import { getProxylessEnvironment } from '../network/egress-proxy'
+
+// what the service was created from, to tell a changed one
+export const DEFINITION_LABEL = 'hammerkit.dev/definition'
 
 export async function ensureKubernetesDeploymentExists(
   instance: KubernetesInstance,
@@ -26,35 +32,27 @@ export async function ensureKubernetesDeploymentExists(
   service: WorkItem<ContainerWorkService>,
   persistence: KubernetesPersistence,
   secrets: KubernetesSecretRefs,
-  stateKey: string
+  stateKey: string,
+  // the needed services by name, and the proxy of a limited network
+  network: { env: V1EnvVar[]; hostAliases: V1HostAlias[]; initContainers: V1Container[] }
 ) {
-  const hostAliases: V1HostAlias[] = []
-  for (const need of service.needs) {
-    if (!isContainerWorkServiceItem(need.service)) {
-      continue
-    }
-    const ip = await getServiceIp(instance, env, need.service)
-    if (!ip) {
-      throw new Error(`unable to get service ip for ${need.name}`)
-    }
-    hostAliases.push({
-      ip,
-      hostnames: [need.name],
-    })
-  }
   const envs = getEnvironmentVariables(service.data.envs)
-  const name = getResourceName(service)
+  const name = getResourceName(service, env)
   const healthcheckCommand = getHealthcheckCommand(service.data)
   const serviceCommand = getServiceCommand(service.data, { kubernetes: true })
   const probe: V1Probe | undefined = healthcheckCommand
     ? {
         exec: {
-          command: healthcheckCommand,
+          // the service itself, not through the proxy (see getProxylessEnvironment)
+          command: withoutProxy(healthcheckCommand, network.env),
         },
         periodSeconds: 5,
         failureThreshold: 3,
       }
     : undefined
+  const server = env.server
+  const placement = server ? getPodPlacement(server, undefined) : null
+  const workspace = getWorkspacePodSpec(env, persistence)
   const deployment: V1Deployment & KubernetesObjectHeader = {
     kind: 'Deployment',
     apiVersion: 'apps/v1',
@@ -65,28 +63,40 @@ export async function ensureKubernetesDeploymentExists(
         'hammerkit.dev/version': getVersion(),
       },
       labels: {
-        'hammerkit.dev/id': service.id(),
+        ...getItemLabels(service, env),
         'hammerkit.dev/state': stateKey,
+        [DEFINITION_LABEL]: getServiceDefinitionHash(service),
       },
     },
     spec: {
       selector: {
-        matchLabels: {
-          'hammerkit.dev/id': service.id(),
-        },
+        matchLabels: getItemLabels(service, env),
       },
       replicas: 1,
       template: {
         metadata: {
           labels: {
-            'hammerkit.dev/id': service.id(),
+            ...getItemLabels(service, env),
             'hammerkit.dev/state': stateKey,
+            ...workspace.labels,
+            ...getNetworkLabels(env, service),
           },
         },
         spec: {
+          ...(workspace.affinity ? { affinity: workspace.affinity } : {}),
           // the pod resolves its own service name, as with Docker's Hostname
           hostname: getServiceHostname(service.name),
-          hostAliases: hostAliases,
+          hostAliases: network.hostAliases,
+          initContainers: network.initContainers,
+          // on a server the pod is the build's: no token of the namespace, and the
+          // nodes of the first pool
+          ...(placement
+            ? {
+                automountServiceAccountToken: false,
+                nodeSelector: placement.nodeSelector,
+                tolerations: placement.tolerations,
+              }
+            : {}),
           containers: [
             {
               name: service.name.replace(/:/, '-'),
@@ -98,6 +108,7 @@ export async function ensureKubernetesDeploymentExists(
                   value: value,
                 })),
                 ...secrets.env,
+                ...network.env,
               ],
               ...getKubernetesCommand(serviceCommand),
               ports: service.data.ports.map((p) => ({
@@ -107,6 +118,7 @@ export async function ensureKubernetesDeploymentExists(
               livenessProbe: probe,
               ...getKubernetesResources(service.data.resources),
               volumeMounts: [...persistence.mounts.map((m) => m.mount), ...secrets.mounts],
+              ...getContainerSecurity(env),
             },
             {
               name: 'debug',
@@ -114,9 +126,10 @@ export async function ensureKubernetesDeploymentExists(
               command: ['sleep'],
               args: ['3600'],
               volumeMounts: persistence.mounts.map((m) => m.mount),
+              ...getContainerSecurity(env),
             },
           ],
-          volumes: [...persistence.volumes, ...secrets.volumes],
+          volumes: [...persistence.volumes, ...persistence.workspace, ...secrets.volumes],
         },
       },
     },
@@ -128,7 +141,7 @@ export async function ensureKubernetesDeploymentExists(
   }
 
   await awaitDeployRunningState(instance, env, name, {
-    podSelector: `hammerkit.dev/id=${service.id()}`,
+    podSelector: getItemSelector(service, env),
     timeout: service.data.healthcheck?.timeout ?? null,
     timeoutMessage: service.data.healthcheck
       ? getHealthcheckTimeoutMessage(service.name, service.data.healthcheck)
@@ -150,4 +163,11 @@ function getKubernetesCommand(command: { entrypoint: string[] | null; cmd: strin
     return { command: [command.cmd[0]], args: command.cmd.slice(1) }
   }
   return {}
+}
+
+// A probe runs with the container's variables, so it empties the proxy ones
+// through `env`, as a Docker healthcheck does with the exec's own variables.
+function withoutProxy(command: string[], env: V1EnvVar[]): string[] {
+  const proxyless = getProxylessEnvironment(Object.fromEntries(env.map((e) => [e.name, e.value ?? ''])))
+  return proxyless ? ['env', ...Object.keys(proxyless).map((key) => `${key}=`), ...command] : command
 }

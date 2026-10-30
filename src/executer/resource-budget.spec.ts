@@ -186,7 +186,7 @@ describe('resource budget', () => {
       })
       const k8s = new ResourceBudget(
         { millicores: 1000, memory: GiB, source: 'test' },
-        { type: 'kubernetes', namespace: 'n', context: 'c', httpRoutes: [] }
+        { type: 'kubernetes', namespace: 'n', context: 'c', httpRoutes: [], networkPolicyEnforced: false }
       )
       expect(k8s.requestsOf(item('job', 4, 8 * GiB))).toEqual({ millicores: 0, memory: 0 })
     })

@@ -25,6 +25,7 @@ import { resolveCache } from '../../cache/resolve-cache'
 import { parseDuration } from '../../utils/units'
 import { getErrorMessage } from '../../log'
 import { parseWorkResources } from '../work-resources'
+import { parseWorkNetwork } from '../work-network'
 
 export function appendWorkService(
   workTree: WorkTree,
@@ -139,6 +140,10 @@ function parseService(
         service.schema.account
       ),
       resources: parseWorkResources(service.schema.resources),
+      volumeSize: service.schema.volumeSize ?? null,
+      network: parseWorkNetwork(service.schema.network),
+      networkCeiling: null,
+      args: service.schema.args ?? null,
     }
   }
 }

@@ -51,7 +51,7 @@ macOS and Windows, x64 and arm64 — and put it on your `PATH`. No Node.js neede
 
 ```bash
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$PWD:$PWD" -w "$PWD" no0dles/hammerkit:1.7.0 --version
+  -v "$PWD:$PWD" -w "$PWD" no0dles/hammerkit --version
 ```
 
 </Tab>
@@ -84,7 +84,7 @@ echo "It's hammer time" > hello.txt
 ### Run it
 
 ```bash
-hammerkit hello
+hammerkit run hello
 ```
 
 ```txt

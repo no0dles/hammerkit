@@ -1,25 +1,27 @@
 import { buildFileSchema } from './build-file-schema'
 import { Environment } from '../executer/environment'
 import { read } from '../parser/read-build-file'
-import { ParseContext, ParseScope } from './parse-context'
-import { dirname, join } from 'path'
+import { BuildFileDirectory, ParseContext, ParseScope } from './parse-context'
+import { dirname, join, relative } from 'path'
 import { getBuildFilename } from '../parser/default-build-file'
 import { ParseError } from './parse-error'
-import { BuildFileGitSourceSchema, BuildFileIncludeSchema, isGitSource } from './build-file-include-schema'
+import { BuildFileGitSourceSchema, BuildFileIncludeSchema, isGitSource, isPublished } from './build-file-include-schema'
 import { BuildFileSchema } from './build-file-schema'
 import { isWithin, refreshGitSource, ResolvedGitSource, resolveGitSource } from '../includes/resolve-git-source'
 
 export async function createParseContext(
   fileName: string,
   environment: Environment,
-  options?: { refresh?: boolean }
+  options?: { refresh?: boolean; directory?: BuildFileDirectory; checkGitSource?: ParseContext['checkGitSource'] }
 ): Promise<{ ctx: ParseContext; scope: ParseScope }> {
   const ctx: ParseContext = {
     files: {},
     refreshed: options?.refresh ? new Map() : undefined,
+    directory: options?.directory,
+    checkGitSource: options?.checkGitSource,
   }
 
-  const scope = await appendBuildFile(dirname(fileName), ctx, environment, fileName, [])
+  const scope = await appendBuildFile(workDirectory(ctx, dirname(fileName)), ctx, environment, fileName, [])
 
   return { ctx, scope }
 }
@@ -31,84 +33,105 @@ export async function appendBuildFile(
   fileName: string,
   namePrefix: string[],
   remote?: ResolvedGitSource,
-  inputs?: BuildFileEnvs
+  inputs?: BuildFileEnvs,
+  // on a server: the file is included with `publish: false`, or below such an include
+  leftOut = false
 ): Promise<ParseScope> {
   const relativeName = namePrefix.join(':')
-  // the same file included with other inputs is another set of tasks
-  const key = inputs ? `${cwd}:${fileName}:${JSON.stringify(inputs)}` : `${cwd}:${fileName}`
+  // the same file included with other inputs is another set of tasks, and on a server a
+  // file left out is another one than the same file published (its git sources differ)
+  const key = `${cwd}:${fileName}${inputs ? `:${JSON.stringify(inputs)}` : ''}${leftOut ? ':left-out' : ''}`
   if (ctx.files[key]) {
     return ctx.files[key]
   }
 
   const input = await read(fileName, environment)
   const result = await buildFileSchema.safeParseAsync(input)
-  if (result.success) {
-    const scope: ParseScope = {
-      fileName,
-      cwd,
-      schema: inputs ? applyInputs(result.data, inputs, namePrefix, fileName) : result.data,
-      namePrefix: relativeName,
-      remote,
-      inputs,
-      references: {},
-    }
-    ctx.files[key] = scope
-
-    if (scope.schema.references) {
-      for (const referenceName of Object.keys(scope.schema.references)) {
-        const target = await locateInclude(
-          ctx,
-          scope,
-          scope.schema.references[referenceName],
-          // a remote file's paths resolve within its repository
-          remote ? dirname(scope.fileName) : scope.cwd,
-          environment
-        )
-        const referenceScope = await appendBuildFile(
-          dirname(target.fileName),
-          ctx,
-          environment,
-          target.fileName,
-          [...namePrefix, referenceName],
-          target.remote,
-          target.inputs
-        )
-        if (scope.references[referenceName]) {
-          throw new Error(referenceName + ' already exists')
-        }
-        scope.references[referenceName] = { type: 'reference', scope: referenceScope }
-      }
-    }
-
-    if (scope.schema.includes) {
-      for (const includeName of Object.keys(scope.schema.includes)) {
-        const target = await locateInclude(
-          ctx,
-          scope,
-          scope.schema.includes[includeName],
-          dirname(scope.fileName),
-          environment
-        )
-        const includeScope = await appendBuildFile(
-          cwd,
-          ctx,
-          environment,
-          target.fileName,
-          [...namePrefix, includeName],
-          target.remote,
-          target.inputs
-        )
-        if (scope.references[includeName]) {
-          throw new Error(includeName + ' already exists')
-        }
-        scope.references[includeName] = { type: 'include', scope: includeScope }
-      }
-    }
-
-    return scope
-  } else {
+  if (!result.success) {
     throw new ParseError(result.error, fileName)
   }
+  const scope: ParseScope = {
+    fileName,
+    cwd,
+    schema: inputs ? applyInputs(result.data, inputs, namePrefix, fileName) : result.data,
+    namePrefix: relativeName,
+    remote,
+    inputs,
+    references: {},
+  }
+  ctx.files[key] = scope
+
+  for (const block of ['references', 'includes'] as const) {
+    for (const [name, include] of Object.entries(scope.schema[block] ?? {})) {
+      if (scope.references[name]) {
+        throw new Error(name + ' already exists')
+      }
+      const publish = isPublished(include)
+      const type = block === 'references' ? 'reference' : 'include'
+      // a server does not fetch what it leaves out: it doesn't run, and isn't checked
+      const leaveOut = !!environment.hosted && (leftOut || !publish)
+      if (isGitSource(include) && leaveOut) {
+        scope.references[name] = { type, publish, scope: notFetched(cwd, [...namePrefix, name], include) }
+        continue
+      }
+      if (isGitSource(include)) {
+        ctx.checkGitSource?.(include, scope, block, name)
+      }
+      const target = await locateInclude(
+        ctx,
+        scope,
+        include,
+        block === 'references'
+          ? // a remote file's paths resolve within its repository
+            remote
+            ? dirname(scope.fileName)
+            : readDirectory(ctx, scope.cwd)
+          : dirname(scope.fileName),
+        environment
+      )
+      const targetScope = await appendBuildFile(
+        // a reference works in its own directory, an include in the one of the including file
+        block === 'references' ? workDirectory(ctx, dirname(target.fileName)) : cwd,
+        ctx,
+        environment,
+        target.fileName,
+        [...namePrefix, name],
+        target.remote,
+        target.inputs,
+        leaveOut
+      )
+      scope.references[name] = { type, scope: targetScope, publish }
+    }
+  }
+
+  return scope
+}
+
+// The scope of a git source a server does not fetch, see ParseScope.notFetched
+function notFetched(cwd: string, namePrefix: string[], include: BuildFileGitSourceSchema): ParseScope {
+  return {
+    fileName: `${include.git}${include.path ? ` ${include.path}` : ''}`,
+    cwd,
+    schema: {},
+    namePrefix: namePrefix.join(':'),
+    references: {},
+    notFetched: true,
+  }
+}
+
+// The directory a build file works in, for the directory it was read from: the same
+// one, unless the files were read from elsewhere (see BuildFileDirectory).
+function workDirectory(ctx: ParseContext, directory: string): string {
+  return ctx.directory ? moveDirectory(directory, ctx.directory.read, ctx.directory.work) : directory
+}
+
+// Where the build file of a directory it works in is read from.
+function readDirectory(ctx: ParseContext, directory: string): string {
+  return ctx.directory ? moveDirectory(directory, ctx.directory.work, ctx.directory.read) : directory
+}
+
+function moveDirectory(directory: string, from: string, to: string): string {
+  return isWithin(from, directory) ? join(to, relative(from, directory)) : directory
 }
 
 // A string is a local path below `base`; an object is a git source, fetched once
@@ -127,14 +150,52 @@ async function locateInclude(
     if (!isWithin(remote.root, path)) {
       throw new Error(`${include.path} in ${include.git} points outside the repository`)
     }
-    return { fileName: await getBuildFilename(path, environment), remote, inputs: include.with }
+    return { fileName: await getBuildFilename(path, environment), remote, inputs: passEnvs(include.with, scope) }
   }
 
-  const path = join(base, include)
+  const localPath = typeof include === 'string' ? include : include.path
+  const path = join(base, localPath)
   if (scope.remote && !isWithin(scope.remote.root, path)) {
-    throw new Error(`${include} in ${scope.fileName} points outside ${scope.remote.git}`)
+    throw new Error(`${localPath} in ${scope.fileName} points outside ${scope.remote.git}`)
   }
-  return { fileName: await getBuildFilename(path, environment), remote: scope.remote }
+  const inputs = typeof include === 'string' ? undefined : passEnvs(include.with, scope)
+  return { fileName: await getBuildFilename(path, environment), remote: scope.remote, inputs }
+}
+
+// `${NAME}` (or `${NAME:-default}`) in a `with` value reads as it does in the including
+// file: the environment or a `.env` file first, then that file's own `envs` value. So one
+// file holds a value such as NODE_VERSION for all it includes, and CI can still set it. A
+// name the file does not declare is left to the included file, which reads it the same way.
+function passEnvs(inputs: BuildFileEnvs | undefined, scope: ParseScope): BuildFileEnvs | undefined {
+  if (!inputs) {
+    return undefined
+  }
+  const envs = scope.schema.envs ?? {}
+  const result: BuildFileEnvs = {}
+  for (const [key, value] of Object.entries(inputs)) {
+    result[key] =
+      typeof value === 'string'
+        ? value.replace(
+            /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+            (match, name: string, fallback: string | undefined) =>
+              name in envs ? passEnv(name, `${envs[name]}`, fallback) : match
+          )
+        : value
+  }
+  return result
+}
+
+// The including file's value as an interpolation the included file resolves in the same
+// order. A value built from other variables is passed on as it is written.
+function passEnv(name: string, value: string, fallback: string | undefined): string {
+  const reference = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value)
+  if (reference) {
+    return fallback === undefined ? `\${${reference[1]}}` : `\${${reference[1]}:-${fallback}}`
+  }
+  if (value.includes('$') || value.includes('}')) {
+    return value
+  }
+  return `\${${name}:-${value}}`
 }
 
 // `includes pull` fetches each source once, however often the build files name it.

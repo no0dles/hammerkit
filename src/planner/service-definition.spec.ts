@@ -19,6 +19,8 @@ function service(name: string, data: Partial<ContainerWorkService>, needs: WorkI
       src: [],
       healthcheck: null,
       secrets: [],
+      network: { type: 'open' },
+      networkCeiling: null,
       ...data,
     },
   } as unknown as WorkItem<ContainerWorkService>

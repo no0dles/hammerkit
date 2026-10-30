@@ -26,11 +26,13 @@ export async function pull(
 
 // A tag is present when an image carries it; an image pinned by digest
 // (`repo:tag@sha256:…`) when an image was pulled with that digest, whatever
-// tag it has now.
+// tag it has now. The containerd image store lists an image pulled by digest
+// under that name in RepoTags rather than in RepoDigests.
 export function isImagePresent(images: ImageInfo[], imageName: string): boolean {
   const { repository, tag, digest } = splitImageName(imageName)
   if (digest) {
-    return images.some((i) => i.RepoDigests?.some((repoDigest) => repoDigest === `${repository}@${digest}`))
+    const name = `${repository}@${digest}`
+    return images.some((i) => i.RepoDigests?.includes(name) || i.RepoTags?.includes(name))
   }
   return images.some((i) => i.RepoTags?.some((repoTag) => repoTag === `${repository}:${tag ?? 'latest'}`))
 }

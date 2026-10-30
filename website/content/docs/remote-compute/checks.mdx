@@ -1,0 +1,140 @@
+---
+title: 'Checks'
+description: 'What the server keeps of the tasks a check run passed, the keys they are found by, and the lookup a CI job verifies with.'
+---
+
+<Callout type="warn">
+
+Experimental. The keys, the API and the settings can still change between releases.
+
+</Callout>
+
+A CI job that only has to know whether a task passed for the files of its commit does not have
+to run it: it asks the server with [`hammerkit remote verify`](/docs/cli/remote#verifying-checks).
+The server answers from what its own runs passed. How to set that up is the guide
+[Checks that ran before CI](/docs/guides/agents/verified-checks).
+
+## Check runs
+
+Only the server writes checks, from runs it executed, for each task that `succeeded` or was
+`cached`. A request names tasks and a source, never a result. The runs whose tasks count:
+
+| Run                                                                                      | Counts                                                |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| From a ref (`source.type: ref`) without [arguments](/docs/remote-compute/runs#arguments) | yes                                                   |
+| On a sandbox with `check: true`, see [below](#checks-of-a-sandbox)                       | yes                                                   |
+| On a sandbox without `check`                                                             | no: ignored files of the sandbox can make a task pass |
+| From uploaded files                                                                      | no                                                    |
+| Any run with arguments                                                                   | no: it ran something other than the task              |
+
+A task without a [check key](#check-keys), and a task that failed, leave nothing. A `cached`
+task counts because the cache found its entry by the same inputs the check key covers.
+
+Checks hold only where tasks are isolated from the server: in containers or on a cluster. A
+[`local`](/docs/remote-compute/runs#config) task runs as the user of the server, and could write
+the server's records itself.
+
+## Checks of a sandbox
+
+```json
+{
+  "definition": "sha256:9f2c...",
+  "tasks": ["test"],
+  "source": { "type": "sandbox", "id": "sbx_Jp0dY8m2kQ1aZt5x", "check": true }
+}
+```
+
+A check of a [sandbox](/docs/remote-compute/sandboxes) runs on a copy of the files a push of
+the sandbox would commit: the files git tracks and those `.gitignore` does not leave out, at
+the run's `tree`. Nothing else of the sandbox is there, so a file the owner wrote where no
+commit holds it can not make the task pass. What the tasks write stays in the copy, which is
+removed when the run is over: the sandbox does not change.
+
+Otherwise it is a run on the sandbox: it holds the sandbox while it runs, its network and
+accounts are those of a run on a sandbox. Its cache is the one of the repository's runs from a
+ref, since it runs on files a commit holds. Two more rules:
+
+- The caller needs `repos` for the sandbox's repository, as for a run from a ref, and a branch of
+  it they may push to (`push` in `sandboxes`): `403` without. A check leaves what it made in the
+  repository's cache, which runs from `main` restore from, and so can a caller who pushes a
+  branch and runs it. A caller who may only pull can not.
+- It takes no arguments: `400`.
+- It takes a cached result only by the files' checksums, never by their dates
+  (`cache: modify-date` is taken as `checksum`).
+
+The agents' [`check` tool](/docs/remote-compute/agents) submits such a run.
+
+## Check keys
+
+A check is found by its key, which both the server and `remote verify` compute from the build
+file and the files of a checkout, before anything ran in it:
+
+- the task's definition, as for its [cache](/docs/task/caching): commands, image, variables,
+  mounts, the definitions of the services it `needs`, and so on,
+- the sha256 of every file its `src` matches, by path, without `.git`,
+- the keys of the tasks it depends on,
+- for each service it needs, the files of the service's `src` and the keys of the tasks the
+  service depends on: an `e2e` that needs `api` gets another key when the source of `api`
+  changes.
+
+So the key of a commit's task is the same wherever the commit is checked out, and a check
+counts for every commit with the same files. It hashes with sha256 throughout, as the cache
+does, so a file made to share the hash of another does not pass for it. Run `remote verify` in
+a fresh checkout: a file a task generated there, where the `src` of a task reads, gives
+another key than the commit has.
+
+The build file is read as a server reads it (no `.env`, no placement on a cluster, any secret
+provider and account). A task has no key when it, a task it depends on, or a task a service
+it needs depends on, declares no `src` that matches a file, or when it reads a secret with
+`cache: true`, whose value is part of its cache key. An
+[aggregate](/docs/task/dependencies#aggregate-tasks) (`deps` and nothing to run) needs no
+`src` of its own: it has a key when all its dependencies have one. Like any task, it counts
+as verified only for a run that ran it: a run of the aggregate itself, which costs nothing
+more when its dependencies already passed.
+
+## Lookup
+
+```
+POST /v1/checks/lookup
+{ "repo": "github.com/corp/payments", "keys": [{ "task": "test", "key": "4f0c…" }] }
+```
+
+Up to 100 keys. The answer has an entry per key, the newest run that passed it, or `null`:
+
+```json
+{
+  "checks": [
+    {
+      "task": "test",
+      "key": "4f0c…",
+      "passed": {
+        "task": "test",
+        "status": "succeeded",
+        "run": "run_Qx3k9ZpL2mW7vN4a",
+        "by": { "iss": "https://accounts.google.com", "sub": "1180…" },
+        "source": { "type": "sandbox", "sandbox": "sbx_4vJ0mT2cX9qLw1aB", "commit": "4be1a07c…", "tree": "a1f3…" },
+        "definition": "sha256:9f2c…",
+        "finishedAt": "2026-10-25T09:14:03.120Z",
+        "durationMs": 72000
+      }
+    }
+  ]
+}
+```
+
+A check that passed with a version of the build file that was [yanked](/docs/remote-compute/build-files)
+since is `null`, with a `reason`. The caller needs `checks: read`, or a `builds` level, and
+`repos` that cover the repository, see [Entitlements](/docs/remote-compute/entitlements): `403`
+otherwise. The answer leaves out the accounts the run used: a CI job's log is often readable by
+more people than the server.
+
+## Config
+
+```yaml title="server.yaml"
+runs:
+  checksKeep: 30d # default
+```
+
+Checks are kept in the server's storage directory (`checks/`), one file per repository and
+key, the newest run's. One older than `runs.checksKeep` is not found any more and is removed
+within six hours.

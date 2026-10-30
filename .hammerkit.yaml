@@ -60,6 +60,7 @@ tasks:
     deps: [install]
     src:
       - src
+      - catalog
       - examples
       - tsconfig.json
       - vitest.config.ts
@@ -85,9 +86,42 @@ tasks:
   # HAMMERKIT_FULL_INTEGRATION makes its missing CLUSTER_NAME fail instead of pass.
   test:docker:
     description: the integration suite without the specs that need a Kubernetes cluster
+    # side by side: the unit specs mostly use the CPU, the others mostly wait for
+    # the daemon
+    deps: [test:docker:unit, test:docker:containers]
+
+  # The unit specs touch no daemon, so they run side by side, in unit mode as on
+  # Windows. Two at a time, to leave the runner's other cores to the containers.
+  test:docker:unit:
+    description: the unit specs, with a coverage report of their own
     deps: [install]
     src:
       - src
+      - catalog
+      - examples
+      - tsconfig.json
+      - vitest.config.ts
+    generates:
+      # restored on a cache hit, so the coverage upload still has its report
+      - coverage/docker-unit
+    envs:
+      CI: ${CI:-}
+      GITHUB_ACTIONS: ${GITHUB_ACTIONS:-}
+      VERBOSE: ${VERBOSE:-}
+      HOME: ${HOME:-}
+      HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+    cmds:
+      - >-
+        node_modules/.bin/vitest run --maxWorkers=2 --minWorkers=1
+        --coverage.reportsDirectory=coverage/docker-unit --coverage.reporter=lcovonly
+
+  # The specs that use Docker run one file at a time, since they share one daemon.
+  test:docker:containers:
+    description: the specs that need at most Docker
+    deps: [install]
+    src:
+      - src
+      - catalog
       - examples
       - scripts
       - tsconfig.json
@@ -115,6 +149,7 @@ tasks:
       - >-
         node_modules/.bin/vitest run --mode integration --no-file-parallelism
         --coverage.reportsDirectory=coverage/docker
+        src/testing/integration src/docker/package.spec.ts src/program.spec.ts
         --exclude 'src/testing/integration/kubernetes*'
         --exclude 'src/testing/integration/k8s-*'
         --exclude src/testing/integration/environment.spec.ts
@@ -128,6 +163,8 @@ tasks:
       - scripts
       - tsconfig.json
       - vitest.config.ts
+      # the image of the pod of a sandbox's files is built from it
+      - Dockerfile
     generates:
       - coverage/kubernetes
     envs:
@@ -139,9 +176,13 @@ tasks:
       CLUSTER_NAME: ${CLUSTER_NAME:-}
       HAMMERKIT_FULL_INTEGRATION: ${HAMMERKIT_FULL_INTEGRATION:-}
       HAMMERKIT_TEST_TIMEOUT: ${HAMMERKIT_TEST_TIMEOUT:-}
+      # kubernetes-sandboxes.spec.ts: the image of this tree the cluster has loaded
+      HAMMERKIT_SANDBOX_IMAGE: ${HAMMERKIT_SANDBOX_IMAGE:-}
     cmds:
+      # Two spec files at a time (the forks limit of vitest.config.ts): they mostly
+      # wait for pods, and each works in namespaces of its own.
       - >-
-        node_modules/.bin/vitest run --mode integration --no-file-parallelism
+        node_modules/.bin/vitest run --mode integration
         --coverage.reportsDirectory=coverage/kubernetes
         src/testing/integration/kubernetes src/testing/integration/k8s-
         src/testing/integration/environment.spec.ts

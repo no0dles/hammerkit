@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
-import { createTestCase } from '../testing/test-case'
+import { createTestCase, NO_HOST_CONFIG } from '../testing/test-case'
 import { createCli } from '../program'
 import { createGitRepo, isolateHammerkitHome } from '../testing/git-repo'
 import { WorkItem } from './work-item'
@@ -26,7 +26,12 @@ const accounts = {
   deploy: { providers: { fake: { env: { FAKE_TOKEN: '${DEPLOY_SA}' } } } },
 }
 
-const hostEnvs = { PATH: process.env.PATH, TEST_SA: 'test-sa', DEPLOY_SA: 'deploy-sa' }
+const hostEnvs = {
+  PATH: process.env.PATH,
+  HAMMERKIT_CONFIG: NO_HOST_CONFIG,
+  TEST_SA: 'test-sa',
+  DEPLOY_SA: 'deploy-sa',
+}
 
 describe('provider secrets', () => {
   let scratch: string
@@ -172,6 +177,120 @@ describe('provider secrets', () => {
       ).rejects.toThrow(
         /secret provider fake is declared in .*(company|\.hammerkit)\.yaml and in .*(company|\.hammerkit)\.yaml/
       )
+    })
+
+    describe('in the host config', () => {
+      const hostConfig = (name: string, config: unknown) => {
+        const file = join(scratch, `${name}.yaml`)
+        writeFileSync(file, JSON.stringify(config))
+        return { ...hostEnvs, HAMMERKIT_CONFIG: file }
+      }
+
+      it('reads providers and accounts of this machine, so the build file only names its secrets', async () => {
+        const { cli } = await plan(
+          'provider-host-config',
+          { tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } } },
+          {},
+          hostConfig('host', { secretProviders: { fake: provider() }, secretAccounts: accounts })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', ref: 'a', account: 'test' })
+      })
+
+      it('takes an account of the host config for a provider of the build file', async () => {
+        const { cli } = await plan(
+          'provider-host-config-account',
+          {
+            secretProviders: { fake: provider() },
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('account', { secretAccounts: accounts })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', account: 'test' })
+      })
+
+      it('replaces what a build file declares under the same name, the machine says how it reads', async () => {
+        const local = { command: [process.execPath, fake, 'value', 'local-{{ref}}'] }
+        const { cli } = await plan(
+          'provider-host-config-wins',
+          {
+            secretProviders: { fake: provider() },
+            secretAccounts: accounts,
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('wins', {
+            secretProviders: { fake: local },
+            secretAccounts: { mine: { default: true, providers: { fake: { env: {} } } } },
+          })
+        )
+        // its provider, and its default account instead of the build file's
+        expect(sourceOf(cli, 'build')).toMatchObject({
+          account: 'mine',
+          binding: { definition: { command: local.command, declaredIn: expect.stringContaining('wins.yaml') } },
+        })
+      })
+
+      it('takes a provider of the host config for an account of the build file', async () => {
+        const { cli } = await plan(
+          'provider-host-config-provider',
+          {
+            secretAccounts: accounts,
+            tasks: { build: { cmds: ['true'], secrets: [{ from: 'fake:a', env: 'A' }] } },
+          },
+          {},
+          hostConfig('provider', { secretProviders: { fake: provider() } })
+        )
+        expect(sourceOf(cli, 'build')).toMatchObject({ provider: 'fake', account: 'test' })
+      })
+
+      it('does not stop a project that reads no secrets from loading', async () => {
+        const envs = hostConfig('other-project', {
+          secretProviders: { op: { command: ['op', 'read', '{{ref}}'] } },
+          secretAccounts: {
+            dev: { default: true, providers: { op: { env: {} } } },
+            // a provider the projects that use this account declare themselves
+            gsm: { providers: { gsm: { env: {} } } },
+          },
+        })
+        const { cli } = await plan(
+          'provider-host-config-unrelated',
+          {
+            secretProviders: { op: provider() },
+            secretAccounts: { ci: { default: true, providers: { op: { env: {} } } } },
+            tasks: { build: { cmds: ['true'] } },
+          },
+          {},
+          envs
+        )
+        expect(cli.task('build')).toBeDefined()
+        // the provider is checked when a secret uses it
+        await expect(
+          plan(
+            'provider-host-config-unknown',
+            { tasks: { build: { cmds: ['true'], secrets: [{ from: 'gsm:a', env: 'A', account: 'gsm' }] } } },
+            {},
+            envs
+          )
+        ).rejects.toThrow('unknown secret provider gsm, declared: op')
+      })
+
+      it('rejects two default accounts in the host config', async () => {
+        await expect(
+          plan(
+            'provider-host-config-defaults',
+            { tasks: { build: { cmds: ['true'] } } },
+            {},
+            hostConfig('defaults', {
+              secretProviders: { fake: provider() },
+              secretAccounts: {
+                a: { default: true, providers: { fake: { env: {} } } },
+                b: { default: true, providers: { fake: { env: {} } } },
+              },
+            })
+          )
+        ).rejects.toThrow(/more than one default secret account: a, b \(.*defaults\.yaml\)/)
+      })
     })
 
     it('shares providers and accounts from an included file, with its inputs applied', async () => {

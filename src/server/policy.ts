@@ -1,6 +1,16 @@
-import { Account, AccountLevel, BuildsLevel, Entitlement, Who } from './server-config'
+import {
+  Account,
+  AccountLevel,
+  BuildsLevel,
+  EndpointGrant,
+  EndpointLevel,
+  Entitlement,
+  SandboxBranchType,
+  SandboxGrant,
+  Who,
+} from './server-config'
 import { Principal } from './oauth'
-import { matchesAnyRepo, matchesRef } from './repo'
+import { matchesAnyRepo, matchesRef, matchesRepo } from './repo'
 
 export interface Grant {
   // the accounts the caller has and how; `use` wins over `request` when two
@@ -10,6 +20,15 @@ export interface Grant {
   repos: string[]
   // what the caller may do with the build files, null for nothing
   builds: BuildsLevel | null
+  // the repositories (patterns) the caller may keep sandboxes of, with a type per branch
+  // pattern: the entries of the `sandboxes` of their entitlements, one per repository
+  // pattern with the higher type of a branch pattern two of them name; none for no sandboxes
+  sandboxes: SandboxGrant[]
+  // the repositories (patterns) whose service runs' endpoints the caller may open or
+  // publish, one entry per pattern with the higher level
+  endpoints: EndpointGrant[]
+  // whether an entitlement gives `checks: read` (a builds level includes it)
+  checks: boolean
   // the entitlements that matched, for the log
   matched: number[]
 }
@@ -37,6 +56,12 @@ function atLeast(grant: Grant, level: BuildsLevel): boolean {
 }
 
 export const mayRun = (grant: Grant): boolean => atLeast(grant, 'run')
+
+// Who may run from a repository's refs may see what passed for its files, and so may who
+// is entitled to just that (a CI job that only verifies).
+export function mayReadChecks(grant: Grant, repo: string): boolean {
+  return (grant.checks || grant.builds !== null) && matchesAnyRepo(grant.repos, repo)
+}
 export const mayPropose = (grant: Grant): boolean => atLeast(grant, 'propose')
 export const mayPublish = (grant: Grant): boolean => atLeast(grant, 'publish')
 
@@ -68,13 +93,17 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
   const matched: number[] = []
   const accounts: Grant['accounts'] = {}
   const repos: string[] = []
+  const sandboxes: SandboxGrant[] = []
+  const endpoints: EndpointGrant[] = []
   let builds: BuildsLevel | null = null
+  let checks = false
 
   entitlements.forEach((entitlement, index) => {
     if (!matches(entitlement, principal)) {
       return
     }
     matched.push(index)
+    checks = checks || entitlement.checks === 'read'
     for (const [account, level] of Object.entries(entitlement.accounts)) {
       if (accounts[account] !== 'use') {
         accounts[account] = level
@@ -91,11 +120,145 @@ export function getGrant(entitlements: Entitlement[], principal: Principal): Gra
     ) {
       builds = entitlement.builds
     }
+    for (const sandbox of entitlement.sandboxes ?? []) {
+      let known = sandboxes.find((entry) => entry.repo === sandbox.repo)
+      if (!known) {
+        known = { repo: sandbox.repo, branches: {} }
+        sandboxes.push(known)
+      }
+      for (const [pattern, type] of Object.entries(sandbox.branches)) {
+        known.branches[pattern] = higherType(known.branches[pattern], type)
+      }
+    }
+    for (const endpoint of entitlement.endpoints ?? []) {
+      const known = endpoints.find((entry) => entry.repo === endpoint.repo)
+      if (!known) {
+        endpoints.push({ ...endpoint })
+      } else if (endpoint.level === 'publish') {
+        known.level = 'publish'
+      }
+    }
   })
-  return { accounts, repos, builds, matched }
+  return { accounts, repos, builds, sandboxes, endpoints, checks, matched }
 }
 
-export type SubmittedSource = { type: 'ref'; repo: string; ref: string } | { type: 'upload' }
+// What the caller may do with the endpoints of service runs of a repository: the higher
+// level of the entries whose `repo` covers it, null for nothing.
+export function endpointLevel(grant: Grant, repo: string): EndpointLevel | null {
+  let found: EndpointLevel | null = null
+  for (const endpoint of grant.endpoints) {
+    if (matchesRepo(endpoint.repo, repo) && found !== 'publish') {
+      found = endpoint.level
+    }
+  }
+  return found
+}
+
+export type SubmittedSource =
+  | { type: 'ref'; repo: string; ref: string }
+  | { type: 'upload' }
+  // a sandbox of the caller's, of this repository, checked out from this branch
+  | { type: 'sandbox'; repo: string; branch: string }
+
+const BRANCH_TYPES: SandboxBranchType[] = ['pull', 'push']
+
+function higherType(a: SandboxBranchType | undefined, b: SandboxBranchType): SandboxBranchType {
+  return a !== undefined && BRANCH_TYPES.indexOf(a) > BRANCH_TYPES.indexOf(b) ? a : b
+}
+
+// What the caller may do with a branch of a repository in a sandbox: the higher type of the
+// branch patterns that match it, in the entries whose `repo` covers the repository. The
+// branches of an entry never count for another repository. Null for nothing.
+export function sandboxBranchType(grant: Grant, repo: string, branch: string): SandboxBranchType | null {
+  let found: SandboxBranchType | null = null
+  for (const sandbox of grant.sandboxes) {
+    if (!matchesRepo(sandbox.repo, repo)) {
+      continue
+    }
+    for (const [pattern, type] of Object.entries(sandbox.branches)) {
+      if (matchesRef([pattern], branch)) {
+        found = higherType(found ?? undefined, type)
+      }
+    }
+  }
+  return found
+}
+
+// The branch patterns the caller may push to from a sandbox of a repository: those of type
+// `push` in the entries of their `sandboxes` that cover the repository. A pattern of one
+// repository never applies to another.
+export function sandboxPushBranches(grant: Grant, repo: string): string[] {
+  const branches = grant.sandboxes
+    .filter((sandbox) => matchesRepo(sandbox.repo, repo))
+    .flatMap((sandbox) => Object.entries(sandbox.branches))
+    .filter(([, type]) => type === 'push')
+    .map(([pattern]) => pattern)
+  return [...new Set(branches)]
+}
+
+// Whether the caller may start a sandbox of a repository from a branch, or fetch a branch
+// into one: a `pull` or `push` type for the branch in an entry of their `sandboxes` that
+// covers the repository, and the server able to read it. The answer is the reason when not.
+export function decideSandbox(
+  grant: Grant,
+  repo: string,
+  branch: string,
+  readable: (repo: string) => boolean
+): { status: 400 | 403; error: string } | null {
+  if (grant.sandboxes.length === 0) {
+    return { status: 403, error: 'you are not entitled to keep sandboxes on this server' }
+  }
+  return checkSandbox(grant, repo, branch, readable, 'keep a sandbox of')
+}
+
+function checkSandbox(
+  grant: Grant,
+  repo: string,
+  branch: string,
+  readable: (repo: string) => boolean,
+  what: string
+): { status: 400 | 403; error: string } | null {
+  const repoProblem = checkRepo(sandboxRepos(grant), repo, readable, what)
+  if (repoProblem) {
+    return repoProblem
+  }
+  if (sandboxBranchType(grant, repo, branch) === null) {
+    const branches = grant.sandboxes
+      .filter((sandbox) => matchesRepo(sandbox.repo, repo))
+      .flatMap((sandbox) => Object.keys(sandbox.branches))
+    return {
+      status: 403,
+      error: `you may not ${what} ${repo} from ${branch}, your branches of it are ${[...new Set(branches)].join(', ')}`,
+    }
+  }
+  return null
+}
+
+export function sandboxRepos(grant: Grant): string[] {
+  return grant.sandboxes.map((sandbox) => sandbox.repo)
+}
+
+// the caller's own list first: what they may not name is not told whether the server can read it
+function checkRepo(
+  repos: string[],
+  repo: string,
+  readable: (repo: string) => boolean,
+  what: string
+): { status: 400 | 403; error: string } | null {
+  if (!matchesAnyRepo(repos, repo)) {
+    return {
+      status: 403,
+      error:
+        repos.length > 0
+          ? `you may not ${what} ${repo}, your repositories are ${repos.join(', ')}`
+          : `you may not ${what} ${repo}, no entitlement of yours lists a repository`,
+    }
+  }
+  if (!readable(repo)) {
+    return { status: 400, error: `this server can not read ${repo}` }
+  }
+  return null
+}
 
 export interface RunDecisionInput {
   grant: Grant
@@ -132,19 +295,16 @@ export function decideRun(input: RunDecisionInput): RunDecision {
       error: 'runs from an upload are not supported by this server yet, use a git ref',
     }
   }
-  // the caller's own list first: what they may not name is not told whether the server can read it
-  if (!matchesAnyRepo(grant.repos, source.repo)) {
-    return {
-      type: 'refuse',
-      status: 403,
-      error:
-        grant.repos.length > 0
-          ? `you may not run from ${source.repo}, your repositories are ${grant.repos.join(', ')}`
-          : `you may not run from ${source.repo}, no entitlement of yours lists a repository`,
-    }
+  if (source.type === 'sandbox' && grant.sandboxes.length === 0) {
+    return { type: 'refuse', status: 403, error: 'you are not entitled to keep sandboxes on this server' }
   }
-  if (!readable(source.repo)) {
-    return { type: 'refuse', status: 400, error: `this server can not read ${source.repo}` }
+  // runs on a sandbox: the repositories and branches in the `sandboxes` of the entitlements
+  const repoProblem =
+    source.type === 'sandbox'
+      ? checkSandbox(grant, source.repo, source.branch, readable, 'run on a sandbox of')
+      : checkRepo(grant.repos, source.repo, readable, 'run from')
+  if (repoProblem) {
+    return { type: 'refuse', ...repoProblem }
   }
   const request: string[] = []
   for (const account of accounts) {
@@ -153,10 +313,12 @@ export function decideRun(input: RunDecisionInput): RunDecision {
       return { type: 'refuse', status: 403, error: `you may not use the account ${account}, it needs use or request` }
     }
     const rules = catalog[account]
-    if (rules?.source && !rules.source.includes(source.type)) {
+    // a sandbox holds changes nobody reviewed: an account takes its runs only when it says so
+    const sources = rules?.source ?? ['ref', 'upload']
+    if (!sources.includes(source.type)) {
       return { type: 'refuse', status: 403, error: `the account ${account} is not used by runs from ${source.type}` }
     }
-    if (rules?.refs) {
+    if (rules?.refs && source.type === 'ref') {
       if (COMMIT.test(source.ref) || !matchesRef(rules.refs, source.ref)) {
         return {
           type: 'refuse',

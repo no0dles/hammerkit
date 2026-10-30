@@ -1,4 +1,4 @@
-import commaner, { Command, CommanderError, Option } from 'commander'
+import commaner, { Command, CommanderError, InvalidArgumentError, Option } from 'commander'
 import { parseSetArguments } from './parse-set-arguments'
 import { join, relative, resolve } from 'path'
 import { Environment } from './executer/environment'
@@ -26,7 +26,9 @@ import { formatDuration, formatSize, parseDuration, parseSize } from './utils/un
 import { hasPolicy, NamedCacheEntry } from './cache/cache-inventory'
 import { registerRemoteCommands } from './remote/remote-commands'
 import { registerServerCommand } from './server/server-command'
-import { registerRunWorkerCommand } from './server/run-worker-command'
+import { registerRunWorkerCommand, registerSandboxPodCommand } from './server/run-worker-command'
+import { registerGithubAppTokenCommand } from './secrets/github-app-token-command'
+import { parseNetworkOption, WorkNetwork } from './planner/work-network'
 import { getArgumentsTarget } from './planner/utils/task-arguments'
 
 export async function createCli(fileName: string, environment: Environment, workScope: WorkScope): Promise<Cli> {
@@ -95,7 +97,8 @@ function printTaskDefinition(environment: Environment, definition: TaskDefinitio
 }
 
 // `ls --json`: what a caller (an agent picking a task) needs to know, with the
-// command that arguments after `--` are appended to (null: it takes none).
+// command that arguments after `--` are appended to (null: it takes none) and
+// `args` as the build file says it (false: it refuses them).
 function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
   return {
     tasks: tasks.map(({ item }) => ({
@@ -107,6 +110,7 @@ function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
       needs: item.needs.map((n) => n.name),
       labels: item.data.labels,
       command: getArgumentsTarget(item.data)?.cmd ?? null,
+      args: item.data.args,
     })),
     services: services.map(({ item }) => ({
       name: item.name,
@@ -116,8 +120,22 @@ function getListJson(tasks: CliTaskItem[], services: CliServiceItem[]) {
       ports: item.data.ports.map((p) => ({ host: p.hostPort, container: p.containerPort })),
       labels: item.data.labels,
       command: getArgumentsTarget(item.data)?.cmd ?? null,
+      args: item.data.type === 'container-service' ? item.data.args : null,
     })),
   }
+}
+
+// `up` and `down` select by name or by label, not both: a name outside the labels would
+// silently select nothing
+function parseWorkNameScope(names: string[], options: unknown): WorkLabelScope {
+  const scope = parseWorkLabelScope(options)
+  if (names.length === 0) {
+    return scope
+  }
+  if (scope.filterLabels || scope.excludeLabels) {
+    throw new Error('name tasks and services or select them with --filter/--exclude, not both')
+  }
+  return { ...scope, names }
 }
 
 function parseWorkLabelScope(options: unknown): WorkLabelScope {
@@ -157,6 +175,8 @@ export async function getProgram(
   const program = new Command()
   registerServerCommand(program, environment)
   registerRunWorkerCommand(program, environment)
+  registerSandboxPodCommand(program, environment)
+  registerGithubAppTokenCommand(program, environment)
 
   // What follows `--` belongs to the one task or service of a run or up, not to
   // hammerkit: a `--set` or `--file` there is an argument like any other.
@@ -165,6 +185,11 @@ export async function getProgram(
   const parsed = parseSetArguments(separator >= 0 ? argv.slice(0, separator) : argv)
   const args = parsed.args
   environment.processEnvs = { ...environment.processEnvs, ...parsed.values }
+  const remote = args.indexOf('remote')
+  if (remote >= 0 && args[remote + 1] === 'mcp') {
+    // `remote mcp` speaks its protocol on stdout: a warning there would break it
+    environment.console = consoleContext(environment.stderr)
+  }
   const fileIndex = args.indexOf('--file')
   const fileName =
     fileIndex >= 0 ? join(environment.cwd, args[fileIndex + 1]) : await getBuildFilename(environment.cwd, environment)
@@ -172,11 +197,15 @@ export async function getProgram(
   if (fileIndex >= 0) {
     args.splice(fileIndex, 2)
   }
-  registerRemoteCommands(program, environment, fileName)
+  registerRemoteCommands(program, environment, fileName, passthrough)
   program.hook('preAction', (_, actionCommand) => {
-    const takesArguments = actionCommand.parent === program && ['run', 'up'].includes(actionCommand.name())
+    const takesArguments =
+      (actionCommand.parent === program && ['run', 'up'].includes(actionCommand.name())) ||
+      (actionCommand.parent?.name() === 'remote' && actionCommand.name() === 'run')
     if (passthrough.length > 0 && !takesArguments) {
-      program.error(`${actionCommand.name()} takes no arguments after --, only run and up do`, { exitCode: 1 })
+      program.error(`${actionCommand.name()} takes no arguments after --, only run, up and remote run do`, {
+        exitCode: 1,
+      })
     }
   })
 
@@ -682,9 +711,11 @@ export async function getProgram(
       })
 
     program
-      .command('up')
-      .description("start services(s), with the arguments after -- appended to the selected service's cmd")
-      .usage('[options] [-- args...]')
+      .command('up [names...]')
+      .description(
+        "start services(s), all or the named tasks and services, with the arguments after -- appended to the selected service's cmd"
+      )
+      .usage('[options] [names...] [-- args...]')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(
@@ -725,10 +756,22 @@ export async function getProgram(
           parseDuration
         )
       )
-      .action(async (options, command: commaner.Command) => {
+      .addOption(
+        new Option(
+          '--max-timeout <duration>',
+          'fail any task after this long, also one with a longer timeout of its own (e.g. 2m)'
+        ).argParser(parseDuration)
+      )
+      .addOption(
+        new Option(
+          '--network <level>',
+          'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
+        ).argParser(parseNetworkArgument)
+      )
+      .action(async (names: string[], options, command: commaner.Command) => {
         try {
           const scope = {
-            ...parseWorkLabelScope(options),
+            ...parseWorkNameScope(names, options),
             args: { values: passthrough, services: true, cache: keepsCache(command) },
           }
           const cli = await createCli(fileName, environment, scope)
@@ -742,6 +785,8 @@ export async function getProgram(
             wait: options.wait,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            maxTimeout: options.maxTimeout ?? null,
+            network: options.network ?? null,
           })
 
           if (!result.success) {
@@ -760,14 +805,14 @@ export async function getProgram(
       })
 
     program
-      .command('down')
-      .description('stop services(s)')
+      .command('down [names...]')
+      .description('stop services(s), all or the named services and the services the named tasks need')
       .addOption(new Option('-f, --filter <labels...>', 'filter task and services with labels'))
       .addOption(new Option('-e, --exclude <labels...>', 'exclude task and services with labels'))
       .addOption(new Option('--env <name>', 'environment'))
-      .action(async (options) => {
+      .action(async (names: string[], options) => {
         try {
-          const scope = parseWorkLabelScope(options)
+          const scope = { ...parseWorkNameScope(names, options), stop: true }
           const cli = await createCli(fileName, environment, scope)
           const result = await cli.runDown()
 
@@ -830,6 +875,18 @@ export async function getProgram(
           parseDuration
         )
       )
+      .addOption(
+        new Option(
+          '--max-timeout <duration>',
+          'fail any task after this long, also one with a longer timeout of its own (e.g. 2m)'
+        ).argParser(parseDuration)
+      )
+      .addOption(
+        new Option(
+          '--network <level>',
+          'the most any task or service reaches besides its needs: none, open or allow:<host>,<host>'
+        ).argParser(parseNetworkArgument)
+      )
       .addOption(new Option('--no-skip-deps', 'run dependencies even when nothing needing them has to run'))
       .action(async (task, options, command: commaner.Command) => {
         try {
@@ -869,6 +926,8 @@ export async function getProgram(
             explain: options.explain,
             cacheReadOnly: isCacheReadOnly(options.cacheReadOnly, environment.processEnvs),
             timeout: options.timeout ?? null,
+            maxTimeout: options.maxTimeout ?? null,
+            network: options.network ?? null,
             skipDeps: options.skipDeps !== false,
           })
 
@@ -937,11 +996,20 @@ tasks:
   program.option('--file', 'set build file', '.hammerkit.yaml')
   program.option('--set <NAME=value>', 'value for $NAME / ${NAME} references, ahead of the shell and .env (repeatable)')
   program.configureOutput({
-    writeOut: (str) => environment.console.info(str),
+    // --version and --help as they are, so `VERSION=$(hammerkit --version)` works
+    writeOut: (str) => environment.stdout.write(str),
     writeErr: (str) => {
       environment.console.error(str)
     },
   })
 
   return { program, args }
+}
+
+function parseNetworkArgument(value: string): WorkNetwork {
+  try {
+    return parseNetworkOption(value)
+  } catch (e) {
+    throw new InvalidArgumentError(getErrorMessage(e))
+  }
 }

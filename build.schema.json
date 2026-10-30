@@ -261,9 +261,43 @@
                     "additionalProperties": false,
                     "description": "cpu and memory requests and limits"
                   },
+                  "network": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "open"
+                      },
+                      {
+                        "type": "string",
+                        "const": "none"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "allow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "allow"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
+                  },
+                  "args": {
+                    "type": "boolean"
+                  },
                   "runner": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "publish": {
+                    "type": "boolean"
                   },
                   "image": {
                     "type": "string"
@@ -273,6 +307,60 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "volumeSize": {
+                    "type": "string",
+                    "description": "size of its claim on Kubernetes, e.g. 10Gi"
+                  },
+                  "capAdd": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "AUDIT_CONTROL",
+                        "AUDIT_READ",
+                        "AUDIT_WRITE",
+                        "BLOCK_SUSPEND",
+                        "BPF",
+                        "CHECKPOINT_RESTORE",
+                        "CHOWN",
+                        "DAC_OVERRIDE",
+                        "DAC_READ_SEARCH",
+                        "FOWNER",
+                        "FSETID",
+                        "IPC_LOCK",
+                        "IPC_OWNER",
+                        "KILL",
+                        "LEASE",
+                        "LINUX_IMMUTABLE",
+                        "MAC_ADMIN",
+                        "MAC_OVERRIDE",
+                        "MKNOD",
+                        "NET_ADMIN",
+                        "NET_BIND_SERVICE",
+                        "NET_BROADCAST",
+                        "NET_RAW",
+                        "PERFMON",
+                        "SETFCAP",
+                        "SETGID",
+                        "SETPCAP",
+                        "SETUID",
+                        "SYS_ADMIN",
+                        "SYS_BOOT",
+                        "SYS_CHROOT",
+                        "SYS_MODULE",
+                        "SYS_NICE",
+                        "SYS_PACCT",
+                        "SYS_PTRACE",
+                        "SYS_RAWIO",
+                        "SYS_RESOURCE",
+                        "SYS_TIME",
+                        "SYS_TTY_CONFIG",
+                        "SYSLOG",
+                        "WAKE_ALARM"
+                      ]
+                    },
+                    "description": "Linux capabilities added to the container, e.g. [SYS_ADMIN]"
                   }
                 },
                 "required": [
@@ -335,8 +423,17 @@
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources"
                   },
+                  "network": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network"
+                  },
+                  "args": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/args"
+                  },
                   "runner": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
+                  },
+                  "publish": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/publish"
                   },
                   "platform": {
                     "type": "object",
@@ -468,6 +565,20 @@
                   "resources": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources",
                     "description": "cpu and memory requests and limits"
+                  },
+                  "volumeSize": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize",
+                    "description": "size of its claim on Kubernetes, e.g. 10Gi"
+                  },
+                  "network": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network",
+                    "description": "network the task or service reaches besides its needs: open (default), none or { allow: [hosts or host:port] }"
+                  },
+                  "args": {
+                    "type": "boolean"
+                  },
+                  "publish": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -524,6 +635,9 @@
                         "number"
                       ]
                     }
+                  },
+                  "publish": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -546,6 +660,28 @@
               {
                 "type": "object",
                 "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Build file or directory, relative to the including file"
+                  },
+                  "with": {
+                    "$ref": "#/definitions/hammerkit/properties/envs",
+                    "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "description": "false: a server leaves out what this file declares"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
                   "git": {
                     "type": "string",
                     "minLength": 1,
@@ -563,6 +699,10 @@
                   "with": {
                     "$ref": "#/definitions/hammerkit/properties/envs",
                     "description": "Environment values for the current build task\nhttps://hammerkit.dev/docs/build-file/environment-variables"
+                  },
+                  "publish": {
+                    "type": "boolean",
+                    "description": "false: a server leaves out what this file declares"
                   }
                 },
                 "required": [
@@ -629,6 +769,15 @@
                           ],
                           "additionalProperties": false
                         }
+                      },
+                      "networkPolicy": {
+                        "type": "string",
+                        "const": "enforced",
+                        "description": "the cluster enforces NetworkPolicy, which limited networks need"
+                      },
+                      "volumeSize": {
+                        "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize",
+                        "description": "size of the claim of each task and service, 1Gi by default"
                       },
                       "ingresses": {
                         "not": {}
@@ -750,7 +899,7 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
                   },
                   "maxSize": {
-                    "type": "string"
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize"
                   },
                   "keepPerTask": {
                     "type": "integer",

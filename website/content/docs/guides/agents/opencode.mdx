@@ -1,0 +1,312 @@
+---
+title: 'opencode on a sandbox'
+description: 'Step by step: set up opencode 2 for an existing project so that it reads, edits and runs everything on a sandbox of a hammerkit server, and hands its work back as a branch.'
+icon: Terminal
+---
+
+<Callout type="warn">
+
+Experimental. The tools and settings can still change between releases.
+
+</Callout>
+
+At the end of this tutorial you start [opencode](https://opencode.ai) on your machine, give it
+a task for your project, and it works on a copy of your repository on a hammerkit server.
+Your own checkout stays untouched: opencode never reads or writes a file of it and never runs
+a command on your machine. When it is done, its work shows up as a branch in your repository,
+ready for a pull request.
+
+This page was run as written with opencode 2.0.30 against the server of
+[Server on Kubernetes](/docs/guides/agents/kubernetes).
+
+## How it fits together
+
+Four pieces work together. You set up the last three in this tutorial.
+
+- **The server** keeps a **sandbox** for the agent: a checkout of your repository at a branch,
+  for example `main`. Every file opencode reads or edits is a file of the sandbox.
+- **Your build file** has a **shell task**. Every command opencode runs, such as `npm test`,
+  is handed to that task as its argument and runs on the server, in the task's image. The
+  build file is **published** to the server once; the server answers with a hash that names
+  exactly that version.
+- **The agent's identity** is a service account, not you. opencode signs in to the server as
+  that account, and the server only lets it start sandboxes from `main` and push to
+  `agent/…` branches.
+- **opencode** runs on your machine and talks to the language model as usual. hammerkit's
+  opencode plugin replaces opencode's tools that read, edit, search and run commands with
+  ones of the same name that work on the sandbox, and adds a `push` tool.
+
+## Before you start
+
+<Steps>
+<Step>
+
+**A hammerkit server for your GitHub repository.** [Server on Kubernetes](/docs/guides/agents/kubernetes)
+sets one up on GKE: the server checks out and pushes to your repository with a GitHub App,
+and accepts Google sign-ins. If someone else runs the server, ask them for its address and
+the issuer of the tokens it accepts, for example `https://accounts.google.com`.
+
+</Step>
+<Step>
+
+**Service accounts for the agent and the publisher**, and the right to act as them.
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts) creates
+`hammerkit-agent` and `hammerkit-publisher`, gives you the role that lets `gcloud` print their
+tokens, and shows the entitlements the server needs for them. The Kubernetes guide does this
+in its step 1; with a server someone else runs, have them add you as in
+[Let your team act as them](/docs/guides/agents/google-accounts#3-let-your-team-act-as-them).
+
+</Step>
+<Step>
+
+**Node.js 24 or later** on your machine, for opencode and the hammerkit CLI.
+
+</Step>
+<Step>
+
+**An API key of a model provider** that opencode supports. The examples use OpenRouter.
+
+</Step>
+</Steps>
+
+The examples below use the repository `github.com/acme/shop`, a server registered as
+`hammerkit`, and Google service accounts. Replace them with yours.
+
+## 1. Install the hammerkit CLI
+
+```bash
+npm install -g hammerkit@1.27.0    # the server's version
+hammerkit --version
+```
+
+<Callout>
+
+The agent clients ship with hammerkit 1.27.0. Until it is released, use the prerelease the
+server runs, for example `1.27.0-next.1` (`npm view hammerkit@next version` prints the newest),
+here and in `"hammerkit"` in `.opencode/package.json` in step 4.
+
+</Callout>
+
+`hammerkit --version` has to print the server's version. hammerkit needs Node.js 24: on an
+older one npm warns `EBADENGINE`, and with a range instead of an exact version it quietly
+installs an old hammerkit without the agent clients.
+
+Use the same version as the server. The CLI registers the server in step 2 and publishes the
+build file in step 3.
+
+## 2. Register the server on your machine
+
+The CLI keeps a list of servers for your user, in its config file. Add the server
+under a short name of your choice, with the issuer of the tokens it accepts:
+
+```bash
+hammerkit remote add hammerkit http://127.0.0.1:8480 --issuer https://accounts.google.com
+```
+
+`hammerkit` is the name you use from now on. The address here is the
+`kubectl port-forward` of the Kubernetes guide, which has to keep running while opencode
+works. Plain `http` is only accepted for `127.0.0.1` and `localhost`; a server on any other
+address needs `https`.
+
+Register it as the same user that starts opencode later: the plugin reads this list.
+
+## 3. Add a shell task to your project and publish it
+
+Open your project's `.hammerkit.yaml`, or create one in the root of the repository, and add a
+task for the agent's commands. For a Node.js project:
+
+```yaml title=".hammerkit.yaml"
+tasks:
+  sh:
+    image: node:22-alpine
+    mounts: [.]
+    args: true
+    cmds: [sh -c]
+    network: { allow: [registry.npmjs.org] }
+```
+
+Line by line:
+
+- `sh` is the task's name. The plugin looks for a task called `sh` unless you set
+  `HAMMERKIT_SHELL`.
+- `image` is the container every command of the agent runs in. Pick one with the tools your
+  project needs: the agent can only run `npm`, `go` or `python` if the image has them.
+- `mounts: [.]` puts the files of the sandbox into the container, writable. Without it, the
+  commands would run in an empty directory.
+- `args: true` says the task takes [arguments](/docs/task/arguments). A server can be set to
+  pass arguments to such tasks only, so mark the shell task even where nothing requires it.
+- `cmds: [sh -c]` is the trick: the agent's command is appended to the last command as one
+  argument, so `npm test` runs as `sh -c 'npm test'`.
+- `network` lists what the commands may reach. The sandbox is a fresh checkout without
+  `node_modules`, so the agent installs dependencies itself and needs the registry. The
+  server can narrow this further, never widen it.
+
+Leave secrets out of this task: a task that reads a secret takes no arguments on a server.
+Your other tasks, such as `test` or `lint`, stay as they are.
+
+If you have Docker, try the task on your machine before you publish it:
+
+```bash
+hammerkit run sh -- 'ls && node --version'
+```
+
+Commit the file and get it onto `main`: the agent's commands run in the published version,
+and its sandbox is a checkout of `main`, so the two should not drift apart.
+Then publish it from the root of your checkout, signed in as the publisher's service account:
+
+```bash
+HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=hammerkit-publisher@my-project.iam.gserviceaccount.com" \
+  hammerkit remote publish hammerkit
+```
+
+```text
+published to hammerkit: sha256:9f2c61d0… (1 file)
+```
+
+If this exact version was published before, it prints `already published to hammerkit:`
+with the same hash instead; that is fine.
+
+`HAMMERKIT_TOKEN_COMMAND` makes this one command sign in as `hammerkit-publisher`: `gcloud`
+prints a token of that service account for you. That only works once you may act as it, see
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts). Write your project
+instead of `my-project`; with the Kubernetes guide, the account is `$PUBLISHER` of its step 1.
+
+Copy the hash, `sha256:` and 64 hex digits: it names this version of the build file, and
+opencode uses it in step 5. The server never takes task definitions from the agent itself, so
+the agent can not change what its commands run in. When you change the build file later,
+publish it again and use the new hash.
+
+## 4. Install opencode and the plugin
+
+opencode loads plugins from the `.opencode/plugins/` directory of the directory it starts in.
+Make a new, empty directory for the agent with that plugin. It stands in for the root of the
+sandbox; nothing else in it is read or changed. Do not use your project's checkout for this.
+
+```bash
+npm install -g @opencode/cli
+mkdir -p shop-agent/.opencode/plugins && cd shop-agent
+cat > .opencode/package.json <<'EOF'
+{ "dependencies": { "hammerkit": "1.27.0" } }
+EOF
+cat > .opencode/plugins/hammerkit.ts <<'EOF'
+export { default } from 'hammerkit/harness/opencode'
+EOF
+npm install --prefix .opencode
+npm ls --prefix .opencode hammerkit
+```
+
+- `.opencode/package.json` makes hammerkit a dependency of opencode's directory. Write the
+  server's exact version, not a range: `^1` would install a hammerkit without the plugin.
+  `npm ls` has to show that version.
+- `.opencode/plugins/hammerkit.ts` is the plugin file: it hands hammerkit's plugin to
+  opencode as is.
+- `npm install --prefix .opencode` installs it. opencode 2.0 does not install the
+  dependencies of plugins itself.
+
+## 5. Tell the plugin where to work
+
+The plugin reads its settings from environment variables. Put them in a file, so every
+session starts the same way:
+
+```bash title="agent.env"
+export HAMMERKIT_SERVER=hammerkit                   # the name from step 2
+export HAMMERKIT_REPO=github.com/acme/shop          # the repository of the sandbox
+export HAMMERKIT_REF=main                           # the branch the sandbox starts from
+export HAMMERKIT_BUILD=sha256:9f2c61d0…             # the hash from step 3
+export HAMMERKIT_TOKEN_COMMAND="gcloud auth print-identity-token --audiences=hammerkit \
+  --impersonate-service-account=hammerkit-agent@my-project.iam.gserviceaccount.com"
+export OPENROUTER_API_KEY=…                         # for the model, not for hammerkit
+```
+
+`HAMMERKIT_TOKEN_COMMAND` is how opencode signs in as the agent: a command that prints a
+short-lived token of the agent's service account. The plugin runs it again whenever the
+server stops accepting the token, so a long session needs no new sign-in. The command above
+works once you may act as `hammerkit-agent` (with the Kubernetes guide, `$AGENT` of its step 1), see
+[Service accounts on Google Cloud](/docs/guides/agents/google-accounts); check it there with
+[a token test](/docs/guides/agents/google-accounts#4-check-that-a-token-comes-back). With
+another identity provider, use any command that prints a token of the agent's account.
+
+## 6. Check that the tools are hammerkit's
+
+<Callout type="warn">
+
+When a plugin does not load, opencode starts without it and says nothing. Its own tools then
+work on your machine instead of the sandbox. Do this check before you give opencode any work.
+
+</Callout>
+
+```bash
+source agent.env
+opencode service stop
+opencode run --standalone -m openrouter/anthropic/claude-haiku-5.5 \
+  'List the files of the project root with the read tool.'
+```
+
+opencode 2.0 runs a background service that keeps the environment it was first started with.
+`opencode service stop` ends it, so the next start sees the variables of `agent.env`; do that
+whenever you change them. `--standalone` runs this one check without the service, and `-m`
+picks the model, so the check does not depend on your opencode's default.
+
+The answer has to list your repository's files. If it lists only `.opencode`, or says a file
+is not found, the plugin did not load: check that `npm install --prefix .opencode` ran and
+that the plugin file has the `export { default }` line.
+
+## 7. Give it work and get it back
+
+Start opencode in the agent's directory and give it a task the way you would in your own
+checkout, telling it where to push:
+
+```bash
+opencode
+```
+
+> The cart total skips the last item. Fix it, run the tests and push the fix to
+> `agent/fix-cart`.
+
+On its first tool call the plugin signs in and takes a sandbox of the agent at `main` that
+has no changes, or creates one. opencode edits the files of the sandbox, runs `npm ci` and
+`npm test` as the shell task on the server, and finally calls `push`. The server commits the
+changes as the agent and pushes them with its own GitHub credentials. Only branches the
+entitlement allows are accepted, here `agent/…`.
+
+The branch now shows up in your repository. Open a pull request from it and review it like
+any other.
+
+A sandbox stays on the server with whatever opencode changed in it, but the next start takes
+a clean one again. Have opencode push before you end a session, or set
+`HAMMERKIT_SANDBOX=<id>` in `agent.env` when you know the id of the sandbox to come back to.
+
+To run one prompt without the terminal interface, for example in CI:
+
+```bash
+BRANCH=agent/fix-cart-$(date +%Y%m%d%H%M%S)    # a new branch for every run
+opencode run --auto -m openrouter/anthropic/claude-haiku-5.5 \
+  "The cart total skips the last item. Fix it, run the tests and push to $BRANCH." < /dev/null
+git -C "$CHECKOUT" ls-remote --exit-code origin "refs/heads/$BRANCH"
+```
+
+`--auto` approves the tool calls opencode would otherwise ask you about. opencode waits for
+input on stdin, so close it when nothing feeds it. It exits with 0 even when its tools failed
+and nothing was pushed, so the last line fails the job when the branch is not there.
+`$CHECKOUT` is a checkout of the repository that may read it, for example the CI job's own;
+a branch name of its own for every run keeps an earlier run's branch from passing the check.
+
+## When it does not work
+
+| What you see                                                                                            | What it means                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| opencode lists only `.opencode`, or files of your machine                                               | The plugin is not loaded, see [step 6](#6-check-that-the-tools-are-hammerkits).                                                                                                       |
+| The old settings are still used after a change of `agent.env`                                           | The background service kept them: run `opencode service stop`.                                                                                                                        |
+| `server hammerkit is not registered`                                                                    | Step 2 was run as another user, or `HAMMERKIT_SERVER` names another server.                                                                                                           |
+| `… is not the hash of a published version`                                                              | `HAMMERKIT_BUILD` holds a name or a shortened hash. Use the full hash that step 3 printed.                                                                                            |
+| `unable to reach http://…: fetch failed: connect ECONNREFUSED …`                                        | Nothing listens at the server's address, for example `kubectl port-forward` has stopped.                                                                                              |
+| `unable to reach https://…: fetch failed: …, this machine does not trust the certificate of the server` | The server's certificate comes from a company or private CA: name that CA's file in `NODE_EXTRA_CA_CERTS`, which takes one file.                                                      |
+| `error: lost connection to pod`, `Unable to connect`, or an empty reply from the server                 | `kubectl port-forward` ended, because the server's pod was replaced or the connection dropped: start it again, or run it in the loop of the Kubernetes guide.                         |
+| `could not read the source credential …`                                                                | The server can not mint its token for the repository; the rest of the message says why. See [the check](/docs/guides/agents/kubernetes#2-deploy-the-server) after the deploy.         |
+| `Permission 'iam.serviceAccounts.getAccessToken' denied`                                                | You may not act as the service account in `HAMMERKIT_TOKEN_COMMAND` yet, see [Service accounts on Google Cloud](/docs/guides/agents/google-accounts#2-allow-yourself-to-act-as-them). |
+| `you are not entitled to keep sandboxes on this server`                                                 | The token is not the agent's, or its entitlement has no `sandboxes`: check the account in `HAMMERKIT_TOKEN_COMMAND`.                                                                  |
+| The shell task needs `mounts: [.]`                                                                      | The shell task does not mount the sandbox: add `mounts: [.]` (step 3), publish again and set the new hash.                                                                            |
+| `npm: not found`, or a download that times out                                                          | The shell task's image lacks the tool, or its `network` does not allow the host. Change the task, publish again and set the new hash.                                                 |
+
+See [Agents](/docs/remote-compute/agents#opencode) for what each tool does on the sandbox.
