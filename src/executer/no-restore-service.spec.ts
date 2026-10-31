@@ -38,7 +38,7 @@ describe('a service depending on a hit that was not restored', () => {
   it('restores the hit before it starts', async () => {
     const environment = environmentMock(tmpdir())
     const order: string[] = []
-    const execute = vi.fn(async (_environment: any, options: any) => {
+    const execute = vi.fn(async (_environment: unknown, options: { state: State<ServiceState>; stateKey: string }) => {
       order.push('execute')
       options.state.set({ type: 'running', dns: { containerId: 'c1' }, stateKey: options.stateKey, remote: null })
     })

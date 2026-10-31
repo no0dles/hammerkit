@@ -151,10 +151,14 @@ describe('local cache backend', () => {
     expect(await backend.has('taskA', 'key1', env)).toBe(true)
     expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeNull()
 
-    await backend.touch!('taskA', 'key1', env)
+    const touch = backend.touch?.bind(backend)
+    if (!touch) {
+      throw new Error('the local backend marks entries as used')
+    }
+    await touch('taskA', 'key1', env)
     expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeGreaterThan(Date.now() - 60_000)
 
-    await backend.touch!('taskA', 'missing', env)
+    await touch('taskA', 'missing', env)
     expect(await env.file.exists(join(root, 'taskA', 'missing'))).toBe(false)
   })
 
