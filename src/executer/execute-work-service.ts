@@ -53,7 +53,7 @@ export async function executeWorkService(
 
     await watchLoop(work, environment, options, async (cacheState, abort, stop) => {
       await awaitCompletedDependencies(work, work.deps, abort)
-      await restoreDeferred(work, transitiveDeps(work.deps))
+      await restoreDeferred(work, transitiveDeps(work.deps), abort)
 
       work.state.set({
         type: 'ready',

@@ -2,6 +2,7 @@ import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { createTestCase } from '../testing/test-case'
 import { runProgram } from '../run-program'
+import { createCli } from '../program'
 import { Environment } from '../executer/environment'
 import { memoryStream } from '../testing/test-streams'
 
@@ -94,6 +95,21 @@ describe('run --no-restore', () => {
       })
       expect(readFileSync(join(cwd, 'runs.log'), 'utf8')).toBe('e2e\n')
       expect(readFileSync(join(cwd, 'report/result.txt'), 'utf8')).toBe('a\nchanged\n')
+    })
+  })
+
+  // a Cli runs its work tree again with the same items: a hit deferred in the
+  // first run must not be restored over what the second run built
+  itExceptWindows('never restores a hit deferred in an earlier run of the same Cli', async () => {
+    const shared = join(tempRoot, 'no-restore-rerun-shared')
+    await seed(shared, 'no-restore-rerun-seed')
+    await createTestCase('no-restore-rerun/checkout', project(shared)).setup(async (cwd, environment) => {
+      const cli = await createCli(join(cwd, '.hammerkit.yaml'), environment, { taskName: 'e2e' })
+      expect((await cli.runExec({ restore: false, skipDeps: false })).success).toBe(true)
+      writeFileSync(join(cwd, 'src/a.ts'), 'b\n')
+      expect((await cli.runExec({ restore: true })).success).toBe(true)
+      expect(readFileSync(join(cwd, 'dist/app.js'), 'utf8')).toBe('b\n')
+      expect(readFileSync(join(cwd, 'report/result.txt'), 'utf8')).toBe('b\nspec\n')
     })
   })
 

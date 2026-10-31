@@ -142,6 +142,22 @@ describe('local cache backend', () => {
     expect(after.size).toBe(entry.size)
   })
 
+  // run --no-restore looks a hit up without pulling it; retention must still see it used
+  it('records an access on touch, without touching an entry that is not there', async () => {
+    const env = environmentMock(scratch)
+    const backend = prunable(createLocalCacheBackend({ type: 'local', path: root }))
+    await pushEntry(backend, 'taskA', 'key1')
+    expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeNull()
+    expect(await backend.has('taskA', 'key1', env)).toBe(true)
+    expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeNull()
+
+    await backend.touch!('taskA', 'key1', env)
+    expect(entryOf(await backend.list(env), 'taskA').lastAccessedAt).toBeGreaterThan(Date.now() - 60_000)
+
+    await backend.touch!('taskA', 'missing', env)
+    expect(await env.file.exists(join(root, 'taskA', 'missing'))).toBe(false)
+  })
+
   it('does not list an entry whose push has not completed', async () => {
     const env = environmentMock(scratch)
     const backend = prunable(createLocalCacheBackend({ type: 'local', path: root }))

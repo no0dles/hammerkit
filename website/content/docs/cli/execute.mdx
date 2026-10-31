@@ -147,7 +147,11 @@ nothing, so it restores nothing either. `--no-restore` has no effect in watch
 mode.
 
 Leave it off when a later step uses the outputs, for example a deploy after
-`build`, or a coverage upload after `test`.
+`build`, or a coverage upload after `test`. A hit leaves the checkout as it is, so
+outputs already on disk may be from an older state.
+
+If an entry is removed from the cache before a task that needs it starts, the run
+fails. Run again without `--no-restore`.
 
 ## Read-only cache
 

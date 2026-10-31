@@ -14,6 +14,8 @@ import { getCacheDirectory } from '../optimizer/get-cache-directory'
 import { getWorkInstanceId } from '../planner/work-instance-id'
 import { getWorkCacheStats, getStateKey } from '../optimizer/get-work-cache-stats'
 import { getWorkTaskCacheDescription } from '../optimizer/work-task-cache-description'
+import { restoreDeferred } from '../executer/deferred-restore'
+import { CacheBackend } from './cache-backend'
 
 describe('checkCacheState auto-pull', () => {
   let remoteDir: string
@@ -153,5 +155,93 @@ describe('checkCacheState auto-pull', () => {
     const cacheState = await checkCacheState(item, 'checksum', env)
     expect(cacheState.cached).toBe(false)
     rmSync(scratch, { recursive: true, force: true })
+  })
+
+  describe('with restore off (run --no-restore)', () => {
+    async function seededBackend(): Promise<{ backend: CacheBackend; stateKey: string }> {
+      const scratch = mkdtempSync(join(tmpdir(), 'hammerkit-seed-'))
+      const env = environmentMock(scratch)
+      const backend = makeBackend()
+      const item = makeWorkItem(scratch, { name: 'remote', method: 'checksum', backend, implicit: false })
+      const stats = await getWorkCacheStats(item.data, env)
+      const stateKey = getStateKey(stats, 'checksum')
+      await writeCacheMetadata(env, item, stats, getWorkTaskCacheDescription(item))
+      await backend.push(item.id(), stateKey, getCacheDirectory(getWorkInstanceId(item)), env)
+      rmSync(scratch, { recursive: true, force: true })
+      return { backend, stateKey }
+    }
+
+    function spied(backend: CacheBackend) {
+      return { ...backend, pull: vi.fn(backend.pull), has: vi.fn(backend.has), touch: vi.fn(backend.touch) }
+    }
+
+    function dependent() {
+      return { name: 'e2e', status: { write: vi.fn() } } as any
+    }
+
+    let scratch: string
+    beforeEach(() => {
+      scratch = mkdtempSync(join(tmpdir(), 'hammerkit-no-restore-'))
+    })
+    afterEach(() => {
+      rmSync(scratch, { recursive: true, force: true })
+    })
+
+    it('reports a hit without pulling, and pulls it once for any number of dependents', async () => {
+      const { backend: real, stateKey } = await seededBackend()
+      const backend = spied(real)
+      const env = environmentMock(scratch)
+      const item = makeWorkItem(scratch, { name: 'remote', method: 'checksum', backend, implicit: false })
+      const restore = vi.spyOn(item.runtime, 'restore')
+
+      const cacheState = await checkCacheState(item, 'checksum', env, { restore: false })
+      expect(cacheState).toMatchObject({ cached: true, stateKey })
+      expect(backend.pull).not.toHaveBeenCalled()
+      expect(backend.touch).toHaveBeenCalledWith(item.id(), stateKey, env)
+
+      const abort = new AbortController().signal
+      await Promise.all([restoreDeferred(dependent(), [item], abort), restoreDeferred(dependent(), [item], abort)])
+      expect(backend.pull).toHaveBeenCalledTimes(1)
+      expect(restore).toHaveBeenCalledTimes(1)
+    })
+
+    it('fails the dependent when the entry is gone by the time it is needed', async () => {
+      const { backend: real } = await seededBackend()
+      const backend = { ...spied(real), pull: vi.fn(async () => false) }
+      const env = environmentMock(scratch)
+      const item = makeWorkItem(scratch, { name: 'remote', method: 'checksum', backend, implicit: false })
+
+      expect((await checkCacheState(item, 'checksum', env, { restore: false })).cached).toBe(true)
+      await expect(restoreDeferred(dependent(), [item], new AbortController().signal)).rejects.toThrow(
+        'demo-task is no longer in cache "remote"'
+      )
+    })
+
+    it('runs the task when the lookup fails', async () => {
+      const backend = {
+        ...makeBackend(),
+        has: vi.fn(async () => {
+          throw new Error('bucket unreachable')
+        }),
+      }
+      const env = environmentMock(scratch)
+      const item = makeWorkItem(scratch, { name: 'remote', method: 'checksum', backend, implicit: false })
+
+      expect((await checkCacheState(item, 'checksum', env, { restore: false })).cached).toBe(false)
+      expect(item.status.write).toHaveBeenCalledWith('warn', expect.stringContaining('bucket unreachable'))
+    })
+
+    it('forgets a deferred hit when the task is checked again', async () => {
+      const { backend: real } = await seededBackend()
+      const backend = spied(real)
+      const env = environmentMock(scratch)
+      const item = makeWorkItem(scratch, { name: 'remote', method: 'checksum', backend, implicit: false })
+
+      expect((await checkCacheState(item, 'checksum', env, { restore: false })).cached).toBe(true)
+      backend.has.mockResolvedValue(false)
+      expect((await checkCacheState(item, 'checksum', env, { restore: false })).cached).toBe(false)
+      await restoreDeferred(dependent(), [item], new AbortController().signal)
+      expect(backend.pull).not.toHaveBeenCalled()
+    })
   })
 })

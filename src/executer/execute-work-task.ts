@@ -119,7 +119,7 @@ export async function executeWorkTask(
       await awaitCompletedDependencies(work, work.deps, abort)
       // an aggregate runs nothing, so it needs no outputs on disk
       if (!isAggregateTask(work.data)) {
-        await restoreDeferred(work, transitiveDeps(work.deps))
+        await restoreDeferred(work, transitiveDeps(work.deps), abort)
       }
       await awaitRunningNeeds(
         work,
