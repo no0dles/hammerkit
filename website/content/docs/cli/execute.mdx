@@ -77,6 +77,8 @@ Options:
   --network <level>           the most any task or service reaches besides its needs: none,
                               open or allow:<host>,<host>
   --no-skip-deps              run dependencies even when nothing needing them has to run
+  --no-restore                only look cache hits up, download their outputs only when a
+                              task that runs needs them
   -h, --help                  display help for command
 ```
 
@@ -126,6 +128,26 @@ Dry run (no commands executed):
 ```
 
 See also [`explain`](/docs/cli/explain) and [`graph`](/docs/cli/graph).
+
+## Checking without restoring
+
+On a cache hit, hammerkit normally downloads the task's entry and restores its
+`generates` into the checkout, so the outputs are there afterwards. A CI check
+often only needs to know the task passed. With `--no-restore`, a hit is only
+looked up in the cache backend, and nothing is downloaded:
+
+```bash
+hammerkit run test --no-restore
+```
+
+Outputs are still restored where a run needs them: when a task that runs (a
+cache miss) or a service that starts depends on a hit, that hit's outputs are
+downloaded before it starts. A task that only groups others (no `cmds`) runs
+nothing, so it restores nothing either. `--no-restore` has no effect in watch
+mode.
+
+Leave it off when a later step uses the outputs, for example a deploy after
+`build`, or a coverage upload after `test`.
 
 ## Read-only cache
 

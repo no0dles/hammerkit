@@ -10,6 +10,7 @@ import { getWorkTaskCacheDescription } from '../../optimizer/work-task-cache-des
 import { getErrorMessage } from '../../log'
 import { computeStateKey, resolveEffective } from './state-key'
 import { getWorkInstanceId } from '../../planner/work-instance-id'
+import { deferRestore } from '../deferred-restore'
 
 export interface CacheState {
   cached: boolean
@@ -29,7 +30,9 @@ export async function checkCacheState(
   environment: Environment,
   // watch mode compares keys to rerun on a change, so it needs one even when
   // the cache is off
-  options: { watch?: boolean } = {}
+  // restore: false only looks a backend hit up, its outputs are downloaded once
+  // something that runs depends on them (`run --no-restore`, see deferred-restore)
+  options: { watch?: boolean; restore?: boolean } = {}
 ): Promise<CacheState> {
   // A task whose cache is off is never looked up, so hashing its sources buys
   // nothing, and a `**` over a node_modules takes most of a minute (every run
@@ -74,6 +77,36 @@ export async function checkCacheState(
 
     if (runtimeStateKey === stateKey) {
       return { cached: true, stateKey, resolved, provable }
+    }
+
+    if (options.restore === false && !options.watch) {
+      try {
+        if (await resolved.backend.has(item.id(), stateKey, environment)) {
+          item.status.write(
+            'info',
+            `${item.name} found in cache "${resolved.name}" (${resolved.backend.type}), not restored`
+          )
+          deferRestore(item, async () => {
+            const cacheDir = getCacheDirectory(getWorkInstanceId(item))
+            const pulled = await resolved.backend.pull(item.id(), stateKey, cacheDir, environment)
+            if (!pulled) {
+              throw new Error(`${item.name} is no longer in cache "${resolved.name}", its outputs can not be restored`)
+            }
+            item.status.write('info', `${item.name} pulled from cache "${resolved.name}" (${resolved.backend.type})`)
+            await item.runtime.restore(environment, cacheDir, stateKey)
+            await writeCacheMetadata(environment, item, currentStats, getWorkTaskCacheDescription(item))
+          })
+          return { cached: true, stateKey, resolved, provable }
+        }
+      } catch (e) {
+        item.status.write(
+          'warn',
+          `${item.name} failed to look up cache "${resolved.name}": ${getErrorMessage(
+            e
+          )} — continuing with local execution`
+        )
+      }
+      return { cached: false, stateKey, resolved, provable }
     }
 
     try {

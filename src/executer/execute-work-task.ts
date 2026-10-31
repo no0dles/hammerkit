@@ -11,6 +11,7 @@ import {
   awaitDependentNeed,
   awaitRunningNeeds,
   Dependent,
+  transitiveDeps,
 } from './await-completed-dependencies'
 import { watchLoop } from './watch-loop'
 import { getTaskTimeout, withDeadline } from './deadline'
@@ -18,6 +19,7 @@ import { CacheState } from './scheduler/enqueue-next'
 import { describeCause, explainTask } from '../cache/explain'
 import { archiveTaskEntry } from './archive-task-entry'
 import { formatDuration } from '../utils/units'
+import { restoreDeferred } from './deferred-restore'
 
 async function pushToBackend(
   work: WorkItemState<WorkTask, TaskState>,
@@ -115,6 +117,10 @@ export async function executeWorkTask(
       }
 
       await awaitCompletedDependencies(work, work.deps, abort)
+      // an aggregate runs nothing, so it needs no outputs on disk
+      if (!isAggregateTask(work.data)) {
+        await restoreDeferred(work, transitiveDeps(work.deps))
+      }
       await awaitRunningNeeds(
         work,
         work.needs.map((n) => n.service),
