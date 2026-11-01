@@ -8,7 +8,7 @@ import { Environment } from '../executer/environment'
 import { LabelValues, mergeLabels } from '../executer/label-values'
 import { mergeEnvironmentVariables } from '../environment/merge-environment-variables'
 import { BuildFileEnvironmentSchema } from './build-file-environment-schema'
-import { BuildFileContainerTaskSchema } from './build-file-container-task-schema'
+import { BuildFileContainerTaskSchema, CONTAINER_TASK_PROPERTIES } from './build-file-container-task-schema'
 import { BuildFileCacheSchema } from './cache-schema'
 import { CacheCatalog, withBuiltinCaches } from '../cache/resolve-cache'
 import { findProjectRoot } from '../planner/project-root'
@@ -323,6 +323,7 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     taskSchema.image = taskSchema.image ?? extend.schema.image
     if (!reset.has('mounts')) taskSchema.mounts = extendArray(taskSchema.mounts, extend.schema.mounts)
   }
+  rejectContainerPropertiesWithoutImage(task)
 
   // deps and needs resolve in the file that declares them, so every base up the
   // chain contributes its own, not only the nearest; what a task resets is not
@@ -337,6 +338,17 @@ function applySchemaExtension(reference: ReferencedContext, task: ReferenceTask)
     resolveDeps(reference, task, depBase.scope, depBase.schema)
   }
   task.extension = 'applied'
+}
+
+function rejectContainerPropertiesWithoutImage(task: ReferenceTask) {
+  if (isBuildFileContainerTaskSchema(task.schema)) {
+    return
+  }
+  const schema = task.schema as Partial<BuildFileContainerTaskSchema>
+  const property = CONTAINER_TASK_PROPERTIES.find((key) => schema[key] !== undefined)
+  if (property) {
+    throw new Error(`task ${task.relativeName} sets ${property}, but neither it nor its base has an image`)
+  }
 }
 
 function extendArray<T>(base: T[] | undefined, extend: T[] | undefined): T[] | undefined {

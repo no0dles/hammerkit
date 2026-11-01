@@ -459,6 +459,91 @@
                 },
                 "additionalProperties": false,
                 "description": "local task"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "deps": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/deps"
+                  },
+                  "needs": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/needs"
+                  },
+                  "description": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/description"
+                  },
+                  "extend": {
+                    "type": "string"
+                  },
+                  "reset": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/reset"
+                  },
+                  "envs": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/envs"
+                  },
+                  "labels": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/labels"
+                  },
+                  "cache": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cache"
+                  },
+                  "cmds": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/cmds"
+                  },
+                  "src": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/src"
+                  },
+                  "generates": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/generates"
+                  },
+                  "shell": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/shell"
+                  },
+                  "continuous": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/continuous"
+                  },
+                  "timeout": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/timeout"
+                  },
+                  "secrets": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/secrets"
+                  },
+                  "account": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/account"
+                  },
+                  "resources": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources"
+                  },
+                  "network": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/network"
+                  },
+                  "args": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/args"
+                  },
+                  "runner": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/runner"
+                  },
+                  "publish": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/publish"
+                  },
+                  "image": {
+                    "type": "string"
+                  },
+                  "mounts": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/mounts"
+                  },
+                  "volumeSize": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize"
+                  },
+                  "capAdd": {
+                    "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/capAdd"
+                  }
+                },
+                "required": [
+                  "extend"
+                ],
+                "additionalProperties": false,
+                "description": "container task taking its image from the task it extends"
               }
             ]
           }

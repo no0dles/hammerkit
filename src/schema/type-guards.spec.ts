@@ -1,5 +1,7 @@
 import { isBuildFileContainerSchema, isBuildFileKubernetesServiceSchema } from './build-file-service-schema'
 import { isBuildFileContainerTaskSchema, isBuildFileLocalTaskSchema } from './build-file-task-schema'
+import { buildFileContainerTaskSchema, CONTAINER_TASK_PROPERTIES } from './build-file-container-task-schema'
+import { buildFileBaseTaskSchema } from './build-file-base-task-schema'
 
 describe('service/task type guards', () => {
   it('isBuildFileContainerSchema discriminates by `image` presence', () => {
@@ -20,5 +22,12 @@ describe('service/task type guards', () => {
   it('isBuildFileLocalTaskSchema returns true iff the task has no image', () => {
     expect(isBuildFileLocalTaskSchema({ cmds: ['x'] } as any)).toBe(true)
     expect(isBuildFileLocalTaskSchema({ image: 'node' } as any)).toBe(false)
+  })
+
+  it('CONTAINER_TASK_PROPERTIES lists every property only a container task has, besides image', () => {
+    const containerOnly = Object.keys(buildFileContainerTaskSchema.shape).filter(
+      (key) => !(key in buildFileBaseTaskSchema.shape) && key !== 'image'
+    )
+    expect([...CONTAINER_TASK_PROPERTIES].sort()).toEqual(containerOnly.sort())
   })
 })

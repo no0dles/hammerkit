@@ -172,7 +172,11 @@ function appendServiceInit(
   if (selfNeed >= 0) {
     task.needs[selfNeed] = { name: task.needs[selfNeed].name, service: view }
   } else {
-    task.needs.push({ name: item.name, service: view })
+    const name = getInitNeedName(service)
+    if (task.needs.some((need) => need.name === name)) {
+      throw new Error(`${task.name} needs two services as ${name}, give one another name with name:`)
+    }
+    task.needs.push({ name, service: view })
   }
   removeRequirer(item, task.name)
   // explicit, so neither the default method nor `--cache` turns it back on
@@ -181,6 +185,19 @@ function appendServiceInit(
     task.data.timeout = getInitTimeout(undefined, environment)
   }
   item.data.init = { task, state }
+}
+
+// The host name the init reaches its service by: the name its task declares the
+// need by, else the service's name in its own build file. Planning the task
+// skips that need (it is the init's), and the full name of a service of an
+// include, `services:db`, is no host name: Docker and DNS take no colon.
+function getInitNeedName(service: ReferenceService): string {
+  const declared = service.init?.task.needs.find((need) => need.service.relativeName === service.relativeName)
+  if (declared) {
+    return declared.relativeName
+  }
+  const prefix = service.scope.namePrefix
+  return prefix.length > 0 ? service.relativeName.slice(prefix.length + 1) : service.relativeName
 }
 
 const initViews = new WeakMap<WorkItem<WorkService>, WorkItemState<WorkService, ServiceState>>()
