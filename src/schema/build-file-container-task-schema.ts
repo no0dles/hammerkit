@@ -17,3 +17,16 @@ export const buildFileContainerTaskSchema = buildFileBaseTaskSchema
   .describe('container task')
 
 export type BuildFileContainerTaskSchema = z.infer<typeof buildFileContainerTaskSchema>
+
+// A task that extends another takes the image of its base, so it may set the
+// container properties without an image of its own; once extended, a task whose
+// base has no image either is refused them (applySchemaExtension).
+export const buildFileExtendingContainerTaskSchema = buildFileContainerTaskSchema
+  .extend({
+    image: string().optional(),
+    extend: string(),
+  })
+  .strict()
+  .describe('container task taking its image from the task it extends')
+
+export const CONTAINER_TASK_PROPERTIES = ['mounts', 'volumeSize', 'capAdd'] as const

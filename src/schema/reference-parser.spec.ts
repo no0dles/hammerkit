@@ -4,6 +4,7 @@ import { join } from 'path'
 import { WorkScope } from '../executer/work-scope'
 import { Cli } from '../cli'
 import { ParseError } from './parse-error'
+import { ContainerWorkTask } from '../planner/work-task'
 
 // Drive the full parse pipeline (schema-parser -> parseReferences -> getWorkContext)
 // over an in-memory build file and assert on the resulting work tree. This exercises
@@ -280,6 +281,32 @@ describe('reference-parser', () => {
         },
         async (_cwd, run) => {
           expect((await run()).task('build').deps.map((d) => d.name)).toEqual(['second'])
+        }
+      )
+    })
+
+    it('sets mounts on a task that takes its image from the base', async () => {
+      await withFiles(
+        {
+          'base.yaml': { tasks: { node: { image: 'node:22', mounts: ['cache:/cache'] } } },
+          '.hammerkit.yaml': {
+            includes: { base: 'base.yaml' },
+            tasks: { build: { extend: 'base:node', mounts: ['.git'], cmds: ['git log'] } },
+          },
+        },
+        async (cwd, run) => {
+          const build = (await run()).task('build').data as ContainerWorkTask
+          expect(build.image).toEqual('node:22')
+          expect(build.mounts.map((mount) => mount.containerPath).sort()).toEqual(['/cache', join(cwd, '.git')].sort())
+        }
+      )
+    })
+
+    it('rejects mounts on a task whose base has no image', async () => {
+      await withFiles(
+        { '.hammerkit.yaml': { tasks: { a: { cmds: ['x'] }, build: { extend: 'a', mounts: ['.git'] } } } },
+        async (_cwd, run) => {
+          await expect(run()).rejects.toThrow('task build sets mounts, but neither it nor its base has an image')
         }
       )
     })
