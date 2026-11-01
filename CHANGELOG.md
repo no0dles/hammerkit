@@ -1,3 +1,15 @@
+# [1.27.0-next.24](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.23...v1.27.0-next.24) (2026-11-01)
+
+
+### Bug Fixes
+
+* no-restore review round 1 ([88bd08b](https://github.com/no0dles/hammerkit/commit/88bd08ba87fcb4153caf5112933a79848ca429d0))
+
+
+### Features
+
+* run --no-restore checks cache hits without downloading them ([6581b6a](https://github.com/no0dles/hammerkit/commit/6581b6a479415f2620a990d6c11cd37c2dd93a29))
+
 # [1.27.0-next.23](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.22...v1.27.0-next.23) (2026-10-30)
 
 
