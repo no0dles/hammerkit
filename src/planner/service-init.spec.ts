@@ -41,7 +41,7 @@ const includedBuildFile = {
   },
 }
 
-async function load(name: string, taskName: string | null, files: { [key: string]: any } = buildFile) {
+async function load(name: string, taskName: string | null, files: { [key: string]: unknown } = buildFile) {
   const services: { [name: string]: WorkItem<ContainerWorkService> } = {}
   const tasks: { [name: string]: WorkItem<WorkTask> } = {}
   await createTestCase(name, files).setup(async (cwd, environment) => {
@@ -55,6 +55,14 @@ async function load(name: string, taskName: string | null, files: { [key: string
     }
   })
   return { services, tasks }
+}
+
+function initOf(service: WorkItem<ContainerWorkService>) {
+  const init = service.data.init
+  if (!init) {
+    throw new Error(`${service.name} has no init`)
+  }
+  return init
 }
 
 describe('service init', () => {
@@ -82,14 +90,14 @@ describe('service init', () => {
 
   it('needs a service of an include by its name in that file', async () => {
     const { services } = await load('service-init-included', null, includedBuildFile)
-    const init = services['services:db'].data.init!
+    const init = initOf(services['services:db'])
     expect(init.task.needs.map((need) => need.name)).toEqual(['db'])
     expect(init.task.needs[0].service.state).toBe(init.state)
   })
 
   it('keeps the name a task of an include declares for its service', async () => {
     const { services } = await load('service-init-included-explicit-need', null, includedBuildFile)
-    const init = services['services:idp'].data.init!
+    const init = initOf(services['services:idp'])
     expect(init.task.needs.map((need) => need.name)).toEqual(['keycloak'])
     expect(init.task.needs[0].service.state).toBe(init.state)
   })
