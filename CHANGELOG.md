@@ -1,3 +1,12 @@
+# [1.27.0-next.25](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.24...v1.27.0-next.25) (2026-11-01)
+
+
+### Bug Fixes
+
+* a task that extends a container task may set mounts without an image ([b8f596d](https://github.com/no0dles/hammerkit/commit/b8f596dd1903dad12d45dee4e5211b2ee11433fa))
+* review round 1 of the include fixes ([e709f3c](https://github.com/no0dles/hammerkit/commit/e709f3cab4fe8dd7baedc7333a4cd0db6035f0fa))
+* the init of a service of an include needs it by a host name ([f10d288](https://github.com/no0dles/hammerkit/commit/f10d2880258b91490b20b5b00d031bf2e6176a56))
+
 # [1.27.0-next.24](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.23...v1.27.0-next.24) (2026-11-01)
 
 
