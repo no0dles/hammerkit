@@ -84,6 +84,12 @@ export function createLocalCacheBackend(spec: LocalCacheBackendSpec): CacheBacke
         return false
       }
     },
+    async touch(taskId, stateKey, environment): Promise<void> {
+      const remoteDir = join(root, taskId, stateKey)
+      if (await environment.file.exists(join(remoteDir, 'stats.json'))) {
+        await writeFile(join(remoteDir, LAST_ACCESS_FILE), `${Date.now()}`)
+      }
+    },
     async push(taskId, stateKey, from, environment): Promise<void> {
       const remoteDir = join(root, taskId, stateKey)
       await environment.file.createDirectory(remoteDir)

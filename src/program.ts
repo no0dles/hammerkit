@@ -888,6 +888,12 @@ export async function getProgram(
         ).argParser(parseNetworkArgument)
       )
       .addOption(new Option('--no-skip-deps', 'run dependencies even when nothing needing them has to run'))
+      .addOption(
+        new Option(
+          '--no-restore',
+          'only look cache hits up, download their outputs only when a task that runs needs them'
+        )
+      )
       .action(async (task, options, command: commaner.Command) => {
         try {
           // For machine-readable JSON, suppress the human progress logger (which
@@ -929,6 +935,7 @@ export async function getProgram(
             maxTimeout: options.maxTimeout ?? null,
             network: options.network ?? null,
             skipDeps: options.skipDeps !== false,
+            restore: options.restore !== false,
           })
 
           // Reporting only: the summary never changes the exit code or behavior.

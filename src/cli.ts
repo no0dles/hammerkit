@@ -70,6 +70,10 @@ export interface CliExecOptions {
   // Skip dependencies that were not requested when every task needing them is
   // a cache hit (default). Off runs the whole dependency graph.
   skipDeps: boolean
+  // Restore the outputs of cache hits (default). Off only looks a hit up in the
+  // backend and downloads its outputs once a task or service that runs needs
+  // them, e.g. a CI check that only wants to know the task passed.
+  restore: boolean
   // `up --daemon` returns once services are healthy (ready) or once their
   // containers started (start); services others need are always awaited
   wait: 'ready' | 'start'
@@ -176,6 +180,7 @@ export class Cli {
             timeout: options?.timeout ?? null,
             maxTimeout: options?.maxTimeout ?? null,
             skipDeps: options?.skipDeps ?? true,
+            restore: options?.restore ?? true,
             wait: options?.wait ?? 'ready',
             resourceCheck: options?.resourceCheck ?? true,
             network: options?.network ?? null,
