@@ -172,7 +172,11 @@ function appendServiceInit(
   if (selfNeed >= 0) {
     task.needs[selfNeed] = { name: task.needs[selfNeed].name, service: view }
   } else {
-    task.needs.push({ name: getInitNeedName(service), service: view })
+    const name = getInitNeedName(service)
+    if (task.needs.some((need) => need.name === name)) {
+      throw new Error(`${task.name} needs two services as ${name}, give one another name with name:`)
+    }
+    task.needs.push({ name, service: view })
   }
   removeRequirer(item, task.name)
   // explicit, so neither the default method nor `--cache` turns it back on

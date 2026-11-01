@@ -94,6 +94,24 @@ describe('service init', () => {
     expect(init.task.needs[0].service.state).toBe(init.state)
   })
 
+  it("refuses an init task that needs another service by its service's name", async () => {
+    const files = {
+      '.git/HEAD': 'ref: refs/heads/main\n',
+      '.hammerkit.yaml': {
+        services: {
+          db: { image: 'postgres:16', init: 'seed' },
+          other: { image: 'postgres:16' },
+        },
+        tasks: {
+          seed: { image: 'postgres:16', needs: [{ name: 'db', service: 'other' }], cmds: ['psql -h db'] },
+        },
+      },
+    }
+    await expect(load('service-init-need-twice', null, files)).rejects.toThrow(
+      'seed needs two services as db, give one another name with name:'
+    )
+  })
+
   it('never comes from the cache and gets the init timeout unless it has its own', async () => {
     const { services } = await load('service-init-cache', null)
     expect(services.db.data.init!.task.data.caching.method).toEqual('none')

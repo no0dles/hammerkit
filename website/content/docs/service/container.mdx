@@ -218,7 +218,9 @@ tasks:
 everything a task has: `deps`, `envs`, [`secrets`](/docs/task/secrets), `mounts`,
 `extend` for one setup shared by several services, or a local task. The task needs
 the service under the service's name without listing it; it may list other
-services it needs as well.
+services it needs as well. A service of an [include](/docs/build-file/includes) is
+reached by its name in its own file (`db`, not `services:db`), or by the `name:` the
+task lists it under (`needs: [{ name: keycloak, service: idp }]`).
 
 * **It runs each time the service starts in a run**, never from the cache. A
   service kept running by `up --daemon` already ran its init and is reused without

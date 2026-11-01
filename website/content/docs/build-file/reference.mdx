@@ -23,8 +23,9 @@ the dedicated pages.
 
 ## Task
 
-A task is either a **container task** (it has an `image`) or a **local task** (no
-`image`). Both share these fields:
+A task is either a **container task** (it has an `image`, its own or the one of the
+task it [extends](/docs/task/extending)) or a **local task** (no `image`). Both share
+these fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -45,7 +46,6 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 | `resources` | `{cpus, memory}` \| `{requests, limits}` | [CPU and memory](/docs/task#resources) limits and requests (`2`, `500m`; `512Mi`, `2Gi`); the run is planned by the requests. Not enforced for a local task, not part of the cache key. |
 | `network` | `open` \| `none` \| `{allow: [hosts]}` | What the container [reaches](/docs/task/network) besides the services in `needs` (default `open`); `allow` goes through an egress proxy, and a `host:port` entry forwards raw TCP. An error on a local task, except on a [server's cluster](/docs/remote-compute/backend#network); not part of the cache key. |
 | `args` | boolean | Whether the last command takes [arguments](/docs/task/arguments#which-tasks-take-arguments) after `--`: `false` refuses them, `true` says it is meant to, which a server with `runs.args: declared` requires. |
-| `volumeSize` | size (`5Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the sources, mounts and outputs of a container task (the environment's `volumeSize` when left out, else `1Gi`). Ignored elsewhere, not part of the cache key. |
 | `runner` | string | Name of the [server](/docs/cli/remote) the task has to run on (experimental, see [runner](/docs/task#runner)). |
 | `publish` | boolean | `false`: a server leaves the task out of a [published version](/docs/remote-compute/build-files#only-part-of-a-build-file). Locally it changes nothing. |
 
@@ -53,8 +53,10 @@ A task is either a **container task** (it has an `image`) or a **local task** (n
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `image` | string (required) | The container image to run in. Its presence is what makes the task containerized. |
+| `image` | string (required, unless the task [extends](/docs/task/extending#container-properties-without-an-image) a container task, whose image it takes) | The container image to run in. Its presence is what makes the task containerized. |
 | `mounts` | array of string | Extra `host[:container][:ro]` [mounts](/docs/task/container#adding-mounts). |
+| `volumeSize` | size (`5Gi`) | On Kubernetes, the size of the [claim](/docs/task/kubernetes#claims) that holds the sources, mounts and outputs of the task (the environment's `volumeSize` when left out, else `1Gi`). Ignored elsewhere, not part of the cache key. |
+| `capAdd` | array of string | Linux [capabilities](/docs/task/container#capabilities) added to the container, such as `SYS_ADMIN`. |
 
 **Local task** adds:
 
