@@ -30,7 +30,7 @@ hammerkit api --watch
 ## Let the tool watch itself
 
 Some tools already do incremental rebuilds faster than a full task restart
-(`tsc -w`, `ng serve`, `vite`, `nodemon`). They run until you stop them, so they are a
+(`ng serve`, `vite`, `nodemon`). They run until you stop them, so they are a
 service marked `continuous: true`: hammerkit starts them once and does **not** restart
 them on file changes with `up --watch`:
 

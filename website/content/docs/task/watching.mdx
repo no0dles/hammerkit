@@ -30,7 +30,7 @@ database running while your api restarts on every edit; the
 ## Tools that watch their files
 
 Some tools watch their files themselves and rebuild incrementally, which is faster than
-hammerkit restarting them: `ng serve`, `vite`, `nodemon`, `tsc -w`. They run until you stop
+hammerkit restarting them: `ng serve`, `vite`, `nodemon`. They run until you stop
 them, so they are a [service](/docs/service/container#continuous) with `continuous: true`,
 not a task. `hammerkit up --watch` starts them once and leaves them running while their
 files change.
