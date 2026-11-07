@@ -460,8 +460,10 @@ export async function submitRun(connection: ServerConnection, request: unknown):
 export interface FollowRunOptions {
   // only the lines of this task; every line of the run when left out, the server's own included
   task?: string
-  // cancels the run on the server
+  // cancels the run on the server, or with `detach` only stops following it
   signal?: AbortSignal
+  // the signal stops following without cancelling the run
+  detach?: boolean
   // every line, as it comes
   onLine?: (line: LogLine) => void
   // the run waits for somebody to approve it, said once
@@ -493,7 +495,9 @@ export async function followRun(
   const cancel = () => {
     cancelling ??= call(connection, 'POST', `${path}/cancel`).catch(() => undefined)
   }
-  options.signal?.addEventListener('abort', cancel, { once: true })
+  if (!options.detach) {
+    options.signal?.addEventListener('abort', cancel, { once: true })
+  }
   const lines: LogLine[] = []
   let from = 1
   let truncated = false
@@ -520,6 +524,9 @@ export async function followRun(
     let run = submitted
     let waitingSaid = false
     for (;;) {
+      if (options.signal?.aborted && options.detach) {
+        break
+      }
       if (options.signal?.aborted) {
         // the process may exit after this, so the cancel has to reach the server first
         cancel()
@@ -539,23 +546,75 @@ export async function followRun(
       run = await json(await call(connection, 'GET', path, { query: { wait: POLL_WAIT } }))
     }
     if (truncated) {
-      // the end of a long log is kept in the results
-      const tasks = options.task !== undefined ? [options.task] : Object.keys(run.results ?? {})
-      for (const task of tasks) {
-        const result = run.results?.[task]
-        if (!result) {
-          continue
-        }
-        const said = options.task !== undefined ? 'the last lines were' : `the last lines of ${task} were`
-        for (const text of [`… the server cut the log off at its limit, ${said}:`, ...result.lastLog]) {
-          add({ line: 0, task, stream: 'stdout', text })
-        }
-      }
+      truncatedEnd(run, options.task).forEach(add)
     }
     return { run, lines, truncated }
   } finally {
     options.signal?.removeEventListener('abort', cancel)
   }
+}
+
+// The end of a log the server cut off at its limit: the last lines of each task, which its
+// results keep.
+function truncatedEnd(run: Run, only?: string): LogLine[] {
+  const lines: LogLine[] = []
+  const tasks = only !== undefined ? [only] : Object.keys(run.results ?? {})
+  for (const task of tasks) {
+    const result = run.results?.[task]
+    if (!result) {
+      continue
+    }
+    const said = only !== undefined ? 'the last lines were' : `the last lines of ${task} were`
+    for (const text of [`… the server cut the log off at its limit, ${said}:`, ...result.lastLog]) {
+      lines.push({ line: 0, task, stream: 'stdout', text })
+    }
+  }
+  return lines
+}
+
+// A run as the server keeps it, or null when it keeps none the caller may see.
+export async function getRun(connection: ServerConnection, id: string): Promise<Run | null> {
+  const response = await call(connection, 'GET', `/v1/runs/${encodeURIComponent(id)}`, { missing: true })
+  return response.status === 404 ? null : json<Run>(response)
+}
+
+/**
+ * Reads the log of a run as it is now, every line or the last `tail` of them, of one task or
+ * of all: also of a run that ended, as long as the server keeps it.
+ */
+export async function readRunLog(
+  connection: ServerConnection,
+  run: Run,
+  query: { task?: string; tail?: number },
+  onLine: (line: LogLine) => void
+): Promise<{ truncated: boolean }> {
+  const path = `/v1/runs/${encodeURIComponent(run.id)}/logs`
+  if (query.tail !== undefined) {
+    const page: LogPage = await json(
+      await call(connection, 'GET', path, { query: { task: query.task, tail: query.tail } })
+    )
+    page.lines.forEach(onLine)
+    return { truncated: page.truncated }
+  }
+  let from = 1
+  let truncated = false
+  for (;;) {
+    const page: LogPage = await json(
+      await call(connection, 'GET', path, { query: { task: query.task, from, limit: 1000 } })
+    )
+    truncated = page.truncated
+    for (const line of page.lines) {
+      onLine(line)
+      from = line.line + 1
+    }
+    if (!page.next) {
+      break
+    }
+  }
+  if (truncated) {
+    truncatedEnd(run, query.task).forEach(onLine)
+  }
+  return { truncated }
 }
 
 export function exitCodeOf(result: TaskResult | undefined): number | null {

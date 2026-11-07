@@ -149,6 +149,7 @@ rules:
   - apiGroups: ['']
     resources: [pods, pods/exec, pods/log, persistentvolumeclaims, secrets, services]
     verbs: [get, list, create, patch, delete, deletecollection]
+  - { apiGroups: [''], resources: [events], verbs: [list] }
   - { apiGroups: [batch], resources: [jobs, jobs/status], verbs: [get, list, create, patch, delete, deletecollection] }
   - { apiGroups: [apps], resources: [deployments], verbs: [get, list, create, patch, delete, deletecollection] }
   - { apiGroups: [networking.k8s.io], resources: [networkpolicies], verbs: [get, list, create, update, patch, delete] }

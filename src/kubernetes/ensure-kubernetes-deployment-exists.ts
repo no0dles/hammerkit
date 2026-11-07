@@ -73,6 +73,9 @@ export async function ensureKubernetesDeploymentExists(
         matchLabels: getItemLabels(service, env),
       },
       replicas: 1,
+      // without a healthcheck a pod is ready as soon as its container runs, also one that
+      // exits a second later: it counts once it ran this long without a restart
+      minReadySeconds: probe ? 0 : MIN_READY_SECONDS,
       template: {
         metadata: {
           labels: {
@@ -99,7 +102,7 @@ export async function ensureKubernetesDeploymentExists(
             : {}),
           containers: [
             {
-              name: service.name.replace(/:/, '-'),
+              name: getServiceContainerName(service),
               image: service.data.image,
               workingDir: getServiceWorkingDir(service.data),
               env: [
@@ -136,7 +139,7 @@ export async function ensureKubernetesDeploymentExists(
   }
   const deploy = await apply(instance, deployment)
 
-  if (deploy.status?.readyReplicas ?? 0 > 0) {
+  if ((deploy.status?.availableReplicas ?? 0) > 0) {
     return
   }
 
@@ -146,7 +149,18 @@ export async function ensureKubernetesDeploymentExists(
     timeoutMessage: service.data.healthcheck
       ? getHealthcheckTimeoutMessage(service.name, service.data.healthcheck)
       : '',
+    container: getServiceContainerName(service),
+    subject: `service ${service.name}`,
+    onWaiting: (text) => service.status.write('warn', `${service.name} ${text}`),
   })
+}
+
+// how long the container of a service without a healthcheck has to run before it counts as up
+export const MIN_READY_SECONDS = 10
+
+// The container of a service's pod that runs its command, beside the `debug` one.
+export function getServiceContainerName(service: WorkItem<ContainerWorkService>): string {
+  return service.name.replace(/:/, '-')
 }
 
 // Kubernetes `command` replaces the image entrypoint and `args` its command.

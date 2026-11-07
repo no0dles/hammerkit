@@ -1,4 +1,4 @@
-import { Command, Option } from 'commander'
+import { Command, InvalidArgumentError, Option } from 'commander'
 import colors from 'colors'
 import { Environment } from '../executer/environment'
 import { getTokenSource } from './token-source'
@@ -8,7 +8,8 @@ import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
 import { callServer, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
-import { followRun, ServerConnection, submitRun } from '../harness/sandbox-client'
+import { FINAL_RUN_STATES, followRun, getRun, readRunLog, ServerConnection, submitRun } from '../harness/sandbox-client'
+import type { LogLine } from '../server/run-logs'
 import { formatDuration } from '../utils/units'
 import type { Run } from '../server/runs'
 import { parseEndpoint } from '../harness/service-tools'
@@ -209,6 +210,36 @@ function printableLine(text: string): string {
 }
 
 const collectOption = (value: string, previous: string[] = []) => [...previous, value]
+
+/**
+ * Why a run that did not succeed ended: its error, then each task that failed with its own
+ * error or exit code, where the error of the run does not say it already.
+ */
+export function describeRunEnd(run: Pick<Run, 'id' | 'state' | 'error' | 'results'>): string[] {
+  const lines = [`${printable(run.id)} ${printable(run.state)}${run.error ? `: ${printableWhole(run.error)}` : ''}`]
+  for (const [task, result] of Object.entries(run.results ?? {})) {
+    if (result.status !== 'failed') {
+      continue
+    }
+    const why = result.error ?? (result.exitCode !== undefined ? `exit code ${result.exitCode}` : undefined)
+    if (why && !run.error?.includes(`${task}: ${why}`)) {
+      lines.push(`  ${printable(task)}: ${printableWhole(why)}`)
+    }
+  }
+  return lines
+}
+
+// What `remote runs` shows of a run, on one line.
+export function describeListedRun(
+  run: Pick<Run, 'id' | 'state' | 'createdAt' | 'tasks' | 'up' | 'error' | 'expiresAt'>
+): string {
+  const what = run.up ? `up ${run.up.services.join(', ')}` : run.tasks.join(', ') || 'by labels'
+  const until =
+    run.up && (run.state === 'up' || run.state === 'asleep') && run.expiresAt ? ` until ${run.expiresAt}` : ''
+  return `${printable(run.id)}  ${printable(run.createdAt)}  ${printable(run.state)}${printable(until)}  ${printable(
+    what
+  )}${run.error ? `: ${printable(run.error)}` : ''}`
+}
 
 // What a person who approves is shown of a run: everything the decision rests on.
 export function describeApproval(run: ApprovalView): string[] {
@@ -462,7 +493,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           )}${at}\n`
         )
         if (options.detach) {
-          environment.stdout.write(`follow it with: hammerkit remote show ${printable(submitted.id)}\n`)
+          environment.stdout.write(`follow it with: hammerkit remote logs ${printable(submitted.id)} --follow\n`)
           return
         }
         const prefixed = tasks.length > 1
@@ -494,7 +525,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           .concat(Object.values(run.results ?? {}))
           .find((result) => result?.status === 'failed')
         const exitCode = failed?.exitCode && failed.exitCode > 0 ? failed.exitCode : 1
-        fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, exitCode)
+        const [said, ...why] = describeRunEnd(run)
+        for (const line of why) {
+          environment.stdout.write(`${line}\n`)
+        }
+        environment.stdout.write(`read its log again with: hammerkit remote logs ${printable(run.id)}\n`)
+        fail(said, exitCode)
       })
     )
 
@@ -587,7 +623,12 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
         })
         const run = followed.run
         if (run.state !== 'up') {
-          fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, 1)
+          const [said, ...why] = describeRunEnd(run)
+          for (const line of why) {
+            environment.stdout.write(`${line}\n`)
+          }
+          environment.stdout.write(`read its log again with: hammerkit remote logs ${printable(run.id)}\n`)
+          fail(said, 1)
         }
         environment.stdout.write(
           `${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}${
@@ -602,6 +643,92 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
             run.id
           )} 8h, stop it with: hammerkit remote stop ${printable(run.id)}\n`
         )
+      })
+    )
+
+  remote
+    .command('runs [server]')
+    .description('list your runs on a server, newest first: their state, and why one failed')
+    .addOption(new Option('--limit <count>', 'show at most this many').default('20'))
+    .action(
+      guarded('Remote runs was not successful', async (name: string | undefined, options) => {
+        const limit = Number(options.limit)
+        if (!Number.isInteger(limit) || limit < 1) {
+          throw new Error('--limit is a number of runs, 1 or more')
+        }
+        const { name: serverName, server, token } = await connect(name)
+        const { runs } = (await callServer<{ runs: Run[] }>(server, token, 'GET', '/v1/runs')).body
+        if (runs.length === 0) {
+          environment.stdout.write(`${serverName}: you have no runs it still keeps\n`)
+          return
+        }
+        for (const run of runs.slice(0, limit)) {
+          environment.stdout.write(`${describeListedRun(run)}\n`)
+        }
+        if (runs.length > limit) {
+          environment.stdout.write(`… and ${runs.length - limit} older, see them with --limit ${runs.length}\n`)
+        }
+      })
+    )
+
+  remote
+    .command('logs <run> [server]')
+    .description(
+      'print the log of a run, also of one that ended: what its tasks and services printed, and what the server and the cluster said'
+    )
+    .addOption(new Option('--task <name>', 'only the lines of this task or service'))
+    .addOption(
+      new Option('--tail <lines>', 'only the last lines, at most 1000').argParser((value) => {
+        if (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 1000) {
+          throw new InvalidArgumentError('a number of lines from 1 to 1000')
+        }
+        return Number(value)
+      })
+    )
+    .addOption(
+      new Option('-f, --follow', 'keep printing what comes until the run ends; ctrl-c stops following, not the run')
+    )
+    .action(
+      guarded('Remote logs was not successful', async (id: string, name: string | undefined, options) => {
+        if (!RUN_ID.test(id)) {
+          throw new Error(`${printable(id)} is not a run id (run_...), list them with: hammerkit remote runs`)
+        }
+        if (options.follow && options.tail !== undefined) {
+          throw new Error('--follow prints the whole log, leave --tail out')
+        }
+        const { name: serverName, server } = await getServer(name)
+        const connection: ServerConnection = { url: server.url, ...getTokenSource(environment, serverName, server) }
+        const found = await getRun(connection, id)
+        if (!found) {
+          throw new Error(
+            `${serverName} keeps no run ${printable(id)} you may see, list them with: hammerkit remote runs`
+          )
+        }
+        let run = found
+        const task: string | undefined = options.task
+        const print = (line: LogLine) =>
+          environment.stdout.write(`${task ? '' : `[${printable(line.task)}] `}${printableLine(line.text)}\n`)
+        if (options.follow) {
+          run = (
+            await followRun(connection, run, {
+              task,
+              signal: environment.abortCtrl.signal,
+              detach: true,
+              onLine: print,
+            })
+          ).run
+        } else {
+          await readRunLog(connection, run, { task, tail: options.tail }, print)
+        }
+        if (run.state === 'succeeded' || run.state === 'up' || run.state === 'asleep') {
+          environment.stdout.write(`${printable(run.id)} ${printable(run.state)}\n`)
+        } else if (FINAL_RUN_STATES.includes(run.state)) {
+          for (const line of describeRunEnd(run)) {
+            environment.stdout.write(`${line}\n`)
+          }
+        } else {
+          environment.stdout.write(`${printable(run.id)} is ${printable(run.state)}, follow it with --follow\n`)
+        }
       })
     )
 
