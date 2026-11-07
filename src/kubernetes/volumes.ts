@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { V1Affinity, V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
-import { WorkItem } from '../planner/work-item'
+import { WorkItem, WorkItemState } from '../planner/work-item'
 import { getClaimName, isKeptClaim } from './kept-claims'
 import { getClaimSubPath } from './claim-layout'
 
@@ -86,8 +86,14 @@ function appendWorkspaceMount(
 
 export async function getKubernetesPersistence(
   work: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
+  // the state the work runs at, on a service run (see getStateFilesDir); what it inherits is
+  // at the state its own work item completed at
+  stateKey?: string
 ): Promise<KubernetesPersistence> {
+  const dirOf = (item: WorkItem<WorkTask | WorkService>) =>
+    kubernetes.server?.serviceRun ? getItemFilesDir(item, item === work ? stateKey : undefined) : undefined
+  const own = dirOf(work)
   const persistence: KubernetesPersistence = {
     volumes: [],
     sizes: {},
@@ -106,7 +112,7 @@ export async function getKubernetesPersistence(
     ) {
       continue
     }
-    appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true, kubernetes)
+    appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true, kubernetes, own)
   }
 
   for (const src of work.data.src) {
@@ -119,7 +125,7 @@ export async function getKubernetesPersistence(
     ) {
       continue
     }
-    appendVolume(work, persistence, src.absolutePath, src.absolutePath, src.isFile, true, kubernetes) // TODO matcher
+    appendVolume(work, persistence, src.absolutePath, src.absolutePath, src.isFile, true, kubernetes, own) // TODO matcher
   }
 
   if (work.data.type === 'container-task') {
@@ -131,7 +137,8 @@ export async function getKubernetesPersistence(
         null,
         false,
         !!generate.inherited,
-        kubernetes
+        kubernetes,
+        dirOf(generate.inherited ?? work)
       )
     }
   } else {
@@ -143,7 +150,9 @@ export async function getKubernetesPersistence(
         null,
         false,
         !!volume.inherited || volume.readOnly,
-        kubernetes
+        kubernetes,
+        // the data of a service stays where it is, the outputs of its deps are by their state
+        volume.inherited ? dirOf(volume.inherited) : undefined
       )
     }
   }
@@ -158,10 +167,12 @@ export function appendVolume(
   localPath: string | null,
   isFile: boolean,
   readOnly: boolean,
-  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
+  // the folder of the state of `sourceWork` the path is in, see getStateFilesDir
+  stateDir?: string
 ): void {
   const volumeName = getVolumeName(sourceWork, kubernetes)
-  const subPath = getClaimSubPath(sourceWork, containerPath)
+  const subPath = (stateDir ? `${stateDir}/` : '') + getClaimSubPath(sourceWork, containerPath)
 
   const existVolume = persistence.volumes.some((v) => v.name === volumeName)
   if (!existVolume) {
@@ -285,30 +296,25 @@ export function getSandboxAffinity(label: string): V1Affinity {
   }
 }
 
-// The folder of a service run's claim that holds the files of one state of a service: its
-// src and mounts. A run that moves to another commit uploads the files of the new state
-// into a folder of their own, so the pod of the commit before keeps the files it started
-// with until the new one is up, and a Deployment that is put back finds them again.
+// The folder of a service run's claim that holds the files of one state of a work item: the
+// src and mounts it uploads, and the outputs of a task. A run that moves to another commit
+// uploads and builds the files of the new state into a folder of their own, so the pods of
+// the commit before keep the files and outputs they started with until the new ones are up,
+// and a Deployment that is put back finds them again. The volumes of a service hold its data,
+// which stays where it is.
 export const STATE_FILES_PREFIX = '.hammerkit-files-'
 
 export function getStateFilesDir(stateKey: string): string {
   return `${STATE_FILES_PREFIX}${createHash('sha256').update(stateKey).digest('hex').slice(0, 16)}`
 }
 
-/**
- * Puts the uploaded files of `persistence` (its sources and the mounts of `claim`, the work's
- * own, they go to) into the folder of `stateKey`. Volumes stay where they are: their data is the run's.
- */
-export function placeFilesByState(persistence: KubernetesPersistence, claim: string, stateKey: string): string {
-  const dir = getStateFilesDir(stateKey)
-  const uploaded = new Set(persistence.sources.map((source) => source.subPath))
-  for (const source of persistence.sources) {
-    source.subPath = `${dir}/${source.subPath}`
-  }
-  for (const mount of persistence.mounts) {
-    if (mount.mount.name === claim && !mount.workspace && mount.mount.subPath && uploaded.has(mount.mount.subPath)) {
-      mount.mount.subPath = `${dir}/${mount.mount.subPath}`
-    }
-  }
-  return dir
+// The folder of the state of `item`: `stateKey`, or the one it completed at in this run
+export function getItemFilesDir(
+  item: WorkItem<WorkTask | WorkService>,
+  stateKey: string | undefined
+): string | undefined {
+  const key =
+    stateKey ??
+    (item as Partial<WorkItemState<WorkTask | WorkService, { stateKey?: string | null }>>).state?.current.stateKey
+  return key ? getStateFilesDir(key) : undefined
 }

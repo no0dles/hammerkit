@@ -7,7 +7,7 @@ import { Readable } from 'stream'
 import { Parser } from 'tar'
 import { ensurePersistentData, getPodForPersistence, packSource, REMOVE_OTHER_STATES } from './ensure-persistent-data'
 import { getRunLabelValue } from './job-placement'
-import { getClaimMountLabel, getStateFilesDir, placeFilesByState } from './volumes'
+import { getClaimMountLabel, getStateFilesDir, getVolumeName } from './volumes'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // the paths of the entries of an archive
@@ -273,7 +273,7 @@ describe('the files of a service of a service run', () => {
     rmSync(root, { recursive: true, force: true })
   })
 
-  async function upload(files: { dir: string; keep?: string }, uploaded: boolean) {
+  async function upload(dir: string, inUse: string[], uploaded: boolean) {
     const commands: string[][] = []
     const archives: string[][] = []
     const writes: string[] = []
@@ -290,6 +290,27 @@ describe('the files of a service of a service run', () => {
         create: async (spec: any) => (spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec),
       },
       coreApi: {
+        // the pods of the run: one of a Deployment mounts each folder of `inUse`, a Job's does not count
+        listNamespacedPod: async () => ({
+          items: [
+            ...inUse.map((used) => ({
+              metadata: { ownerReferences: [{ kind: 'ReplicaSet' }] },
+              status: { phase: 'Running' },
+              spec: {
+                volumes: [{ name: 'claim', persistentVolumeClaim: { claimName: getVolumeName(api, env) } }],
+                containers: [{ volumeMounts: [{ name: 'claim', subPath: `${used}/package.json` }] }],
+              },
+            })),
+            {
+              metadata: { ownerReferences: [{ kind: 'Job' }] },
+              status: { phase: 'Running' },
+              spec: {
+                volumes: [{ name: 'claim', persistentVolumeClaim: { claimName: getVolumeName(api, env) } }],
+                containers: [{ volumeMounts: [{ name: 'claim', subPath: '.hammerkit-files-job/dist' }] }],
+              },
+            },
+          ],
+        }),
         deleteNamespacedPod: async () => ({}),
         readNamespacedPod: async () => Promise.reject(notFound()),
       },
@@ -346,7 +367,7 @@ describe('the files of a service of a service run', () => {
       workspace: [],
       mounts: [
         {
-          mount: { name: 'hammerkit-api', mountPath: '/app/package.json', subPath: 'package.json' },
+          mount: { name: 'hammerkit-api', mountPath: '/app/package.json', subPath: `${dir}/package.json` },
           cwd: '/app',
           uploadPath: '/dev/hammerkit/api',
         },
@@ -360,25 +381,22 @@ describe('the files of a service of a service run', () => {
         {
           localPath: join(root, 'package.json'),
           containerPath: '/app/package.json',
-          subPath: 'package.json',
+          subPath: `${dir}/package.json`,
           stateKey: '',
           matcher: () => true,
         },
       ],
       initCommands: [],
     }
-    expect(placeFilesByState(persistence, 'hammerkit-api', 'new-state')).toBe(files.dir)
-    // the files go into the folder of their state, the data of the volume stays
-    expect(persistence.mounts.map((m) => m.mount.subPath)).toEqual([`${files.dir}/package.json`, 'data'])
     const environment = { hosted: false, file: { exists: async () => true } } as any
-    await ensurePersistentData(instance, env, environment, api, persistence, { files })
+    await ensurePersistentData(instance, env, environment, api, persistence, { files: { dir } })
     return { commands, archives, writes }
   }
 
   it('go into a folder of their own, and the folders of other commits go apart from the one the pod mounts', async () => {
     const dir = getStateFilesDir('new-state')
     const keep = getStateFilesDir('old-state')
-    const { commands, archives } = await upload({ dir, keep }, false)
+    const { commands, archives } = await upload(dir, [keep], false)
     expect(commands).toEqual([
       ['sh', '-c', REMOVE_OTHER_STATES, 'sh', '/dev/hammerkit/api', dir, keep],
       // what a failed upload left
@@ -392,7 +410,7 @@ describe('the files of a service of a service run', () => {
 
   it('are not uploaded again into the folder the pod mounts, once they are there', async () => {
     const dir = getStateFilesDir('new-state')
-    const { commands, writes } = await upload({ dir, keep: dir }, true)
+    const { commands, writes } = await upload(dir, [dir], true)
     expect(commands).toEqual([
       ['sh', '-c', REMOVE_OTHER_STATES, 'sh', '/dev/hammerkit/api', dir, dir],
       ['test', '-e', `/dev/hammerkit/api/${dir}/.uploaded`],
@@ -402,20 +420,22 @@ describe('the files of a service of a service run', () => {
 
   it('are uploaded again when the upload of the state did not go through', async () => {
     const dir = getStateFilesDir('new-state')
-    const { archives } = await upload({ dir, keep: dir }, false)
+    const { archives } = await upload(dir, [dir], false)
     expect(archives).toEqual([[`${dir}/package.json`]])
   })
 
   it('of other states are removed by the folder they are in only', () => {
     const claim = mkdtempSync(join(tmpdir(), 'hammerkit-state-claim-'))
     try {
-      for (const name of ['.hammerkit-files-a', '.hammerkit-files-b', '.hammerkit-files-c', 'data', 'package.json']) {
+      const states = ['a', 'b', 'c', 'd'].map((state) => `.hammerkit-files-${state}`)
+      for (const name of [...states, 'data', 'package.json']) {
         mkdirSync(join(claim, name))
       }
-      execFileSync('sh', ['-c', REMOVE_OTHER_STATES, 'sh', claim, '.hammerkit-files-a', '.hammerkit-files-c'])
-      expect(readdirSync(claim).sort()).toEqual(['.hammerkit-files-a', '.hammerkit-files-c', 'data', 'package.json'])
-      execFileSync('sh', ['-c', REMOVE_OTHER_STATES, 'sh', claim, '.hammerkit-files-a', ''])
-      expect(readdirSync(claim).sort()).toEqual(['.hammerkit-files-a', 'data', 'package.json'])
+      // the state of the work, and two that pods mount
+      execFileSync('sh', ['-c', REMOVE_OTHER_STATES, 'sh', claim, states[0], states[2], states[3]])
+      expect(readdirSync(claim).sort()).toEqual([states[0], states[2], states[3], 'data', 'package.json'])
+      execFileSync('sh', ['-c', REMOVE_OTHER_STATES, 'sh', claim, states[0]])
+      expect(readdirSync(claim).sort()).toEqual([states[0], 'data', 'package.json'])
     } finally {
       rmSync(claim, { recursive: true, force: true })
     }

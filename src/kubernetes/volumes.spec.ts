@@ -1,6 +1,7 @@
 import {
   appendVolume,
   getClaimMountLabel,
+  getStateFilesDir,
   getKubernetesPersistence,
   getVolumeName,
   getWorkspacePodSpec,
@@ -408,6 +409,86 @@ describe('the pods of a service run', () => {
     expect(getWorkspacePodSpec(env, { workspace: [], volumes: [] })).toEqual({ labels: {} })
     expect(getWorkspacePodSpec({ server: { run: 'run_1' } } as any, { workspace: [], volumes: [claim('a')] })).toEqual({
       labels: {},
+    })
+  })
+})
+
+// a service run that moves to another commit: what each state uploads and builds goes into a
+// folder of its own, so the pods of the commit before keep what they started with
+describe('the files and outputs of a service run', () => {
+  const env = { server: { run: 'run_1', serviceRun: true } } as any
+  const completedAt = <T extends WorkTask | WorkService>(item: WorkItem<T>, stateKey: string) =>
+    Object.assign(item, { state: { current: { type: 'completed', stateKey } } })
+
+  const build = completedAt(
+    makeWorkItem<ContainerWorkTask>('build', {
+      type: 'container-task',
+      name: 'build',
+      mounts: [],
+      src: [{ absolutePath: '/repo/src', inherited: null, isFile: false, source: '', matcher: () => true }],
+      generates: [
+        { path: '/repo/dist', volumeName: '', inherited: null, resetOnChange: false, export: false, isFile: false },
+      ],
+    } as unknown as ContainerWorkTask),
+    'build-2'
+  )
+  const api = makeWorkItem<ContainerWorkService>('api', {
+    type: 'container-service',
+    name: 'api',
+    mounts: [],
+    src: [{ absolutePath: '/repo/.github', inherited: null, isFile: false, source: '', matcher: () => true }],
+    volumes: [
+      {
+        name: 'dist',
+        containerPath: '/repo/dist',
+        inherited: build,
+        resetOnChange: false,
+        export: false,
+        readOnly: false,
+      },
+      {
+        name: 'data',
+        containerPath: '/var/data',
+        inherited: null,
+        resetOnChange: false,
+        export: true,
+        readOnly: false,
+      },
+    ],
+  } as unknown as ContainerWorkService)
+  const subPaths = (persistence: KubernetesPersistence) =>
+    Object.fromEntries(persistence.mounts.map((m) => [m.mount.mountPath, m.mount.subPath]))
+
+  it("put a service's files by its state and its deps' outputs by theirs, and leave its data where it is", async () => {
+    const persistence = await getKubernetesPersistence(api, env, 'api-2')
+    expect(subPaths(persistence)).toEqual({
+      '/repo/.github': `${getStateFilesDir('api-2')}/.github`,
+      '/repo/dist': `${getStateFilesDir('build-2')}/dist`,
+      '/var/data': 'data',
+    })
+    expect(persistence.sources.map((source) => source.subPath)).toEqual([`${getStateFilesDir('api-2')}/.github`])
+  })
+
+  it("put a task's src and outputs by the state it runs at, and restore them there", async () => {
+    const persistence = await getKubernetesPersistence(build, env, 'build-3')
+    expect(subPaths(persistence)).toEqual({
+      '/repo/src': `${getStateFilesDir('build-3')}/src`,
+      '/repo/dist': `${getStateFilesDir('build-3')}/dist`,
+    })
+    // its archive reads the outputs of the state it completed at
+    expect(subPaths(await getKubernetesPersistence(build, env))['/repo/dist']).toBe(
+      `${getStateFilesDir('build-2')}/dist`
+    )
+    expect(getRestoreTarget(build, '/repo/dist', getStateFilesDir('build-3'))).toBe(
+      `/dev/hammerkit/build/${getStateFilesDir('build-3')}/dist`
+    )
+  })
+
+  it('stay where they were outside of a service run', async () => {
+    expect(subPaths(await getKubernetesPersistence(api, { server: { run: 'run_1' } } as any, 'api-2'))).toEqual({
+      '/repo/.github': '.github',
+      '/repo/dist': 'dist',
+      '/var/data': 'data',
     })
   })
 })

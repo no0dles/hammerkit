@@ -18,16 +18,10 @@ import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-s
 import { DEFINITION_LABEL, ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
 import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
-import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
+import { ensurePersistentData, getStateDirsInUse } from '../kubernetes/ensure-persistent-data'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait, stopJob } from '../kubernetes/await-running-state'
-import {
-  getKubernetesPersistence,
-  getStateFilesDir,
-  getVolumeName,
-  getWorkspacePodSpec,
-  placeFilesByState,
-} from '../kubernetes/volumes'
+import { getKubernetesPersistence, getStateFilesDir, getVolumeName, getWorkspacePodSpec } from '../kubernetes/volumes'
 import { getItemLabels, getItemSelector, getResourceName } from '../kubernetes/resources'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
@@ -259,7 +253,7 @@ export function kubernetesTaskRuntime(
     },
     async restore(environment: Environment, path: string, stateKey?: string): Promise<void> {
       if (!kept) {
-        await restoreKubernetesData(task, kubernetes, instance, environment, path)
+        await restoreKubernetesData(task, kubernetes, instance, environment, path, { stateKey })
         return
       }
       const reset = await forgetClaimState(instance, kubernetes, claim)
@@ -274,7 +268,7 @@ export function kubernetesTaskRuntime(
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const envs = getEnvironmentVariables(task.data.envs)
 
-      const persistence = await getKubernetesPersistence(task, kubernetes)
+      const persistence = await getKubernetesPersistence(task, kubernetes, options.stateKey)
       const workspace = getWorkspacePodSpec(kubernetes, persistence, { name: task.name, pool: task.data.pool })
 
       // a shell of a sandbox: its commands go into the sandbox's runner, when it has one now
@@ -300,11 +294,19 @@ export function kubernetesTaskRuntime(
       }
 
       await ensureNamespace(instance, kubernetes.namespace)
+      // a service run writes the outputs of each state into a folder of their own (see
+      // getStateFilesDir), which pods of its services may mount: of the commit before during
+      // a move, or of this state after a move that went back
+      const files = kubernetes.server?.serviceRun ? { dir: getStateFilesDir(options.stateKey) } : undefined
       try {
+        if (files && (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(files.dir)) {
+          task.status.write('info', `${task.name}: services of the run use its outputs of this state, they stay`)
+          return
+        }
         // the task writes to it now: what it holds stops being the outputs of a state, and
         // goes, as a new claim would hold nothing
         const reset = kept && (await forgetClaimState(instance, kubernetes, claim))
-        await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset })
+        await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset, files })
       } catch (e) {
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
         return
@@ -643,15 +645,10 @@ export function kubernetesServiceRuntime(
           return
         }
       }
-      const persistence = await getKubernetesPersistence(service, kubernetes)
+      const persistence = await getKubernetesPersistence(service, kubernetes, options.stateKey)
       // the files of a service run's service go into a folder of their state, so the pod that
       // runs keeps its own until the new one is up
-      const files = kubernetes.server?.serviceRun
-        ? {
-            dir: placeFilesByState(persistence, getVolumeName(service, kubernetes), options.stateKey),
-            keep: getPreviousFilesDir(previous),
-          }
-        : undefined
+      const files = kubernetes.server?.serviceRun ? { dir: getStateFilesDir(options.stateKey) } : undefined
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
       await ensurePersistentData(instance, kubernetes, environment, service, persistence, { files })
@@ -728,12 +725,6 @@ export function kubernetesServiceRuntime(
       return deployment?.metadata?.labels?.['hammerkit.dev/state'] ?? null
     },
   }
-}
-
-// The folder of the files the pod of `previous` mounts, by the state it runs
-function getPreviousFilesDir(previous: V1Deployment | undefined): string | undefined {
-  const state = previous?.metadata?.labels?.['hammerkit.dev/state']
-  return state ? getStateFilesDir(state) : undefined
 }
 
 async function readDeployment(

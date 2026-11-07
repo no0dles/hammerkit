@@ -188,14 +188,16 @@ How the services get to the new commit depends on the backend:
 
 - **On Kubernetes** the run executes again beside itself, in its namespace. A service that
   changed rolls to a new pod, and its requests go to the old one until the new one passes its
-  healthcheck. The files of the new commit (its `src` and `mounts`) go into a folder of their
-  own in the service's claim, so the old pod serves the files it started with until then. A
-  service with volumes of its own (a database) stops before its new pod starts, since two pods
-  would write the same data. Once all services are ready, the run is at the new commit, and
-  what the old commit had that the new one does not (a service whose image changed) goes. A
-  move whose services don't get ready puts every service it rolled back as it was, removes
-  the ones it added, and leaves the run up at the commit it was at; `remote up` says why:
-  `did not move to 9e01b77d...: ...`.
+  healthcheck. What the new commit uploads and builds (a service's `src` and `mounts`, the
+  outputs of the tasks it depends on, such as `dist` or `node_modules`) goes into a folder of
+  its own state in the claim, so the old pod serves the files and builds it started with until
+  then, also when the move fails. A service with volumes of its own (a database) stops before
+  its new pod starts, since two pods would write the same data. Once all services are ready,
+  the run is at the new commit, and what the old commit had that the new one does not (a
+  service whose image changed) goes. A move whose services don't get ready puts every service
+  it rolled back as it was, removes the ones it added, and leaves the run up at the commit it
+  was at; `remote up` says why: `did not move to 9e01b77d...: ...`. The folders of a claim go
+  once no pod of the run mounts them and a later state is built or uploaded.
 - **On a host** the services stop, their volumes kept, and start again at the new commit:
   every service restarts, and the endpoints answer that they are starting meanwhile. When the
   new commit doesn't get up, the services start again at the commit before, with their

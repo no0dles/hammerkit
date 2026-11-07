@@ -1,7 +1,13 @@
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
-import { getClaimPodSpec, KubernetesPersistence, KubernetesPersistenceSource, STATE_FILES_PREFIX } from './volumes'
+import {
+  getClaimPodSpec,
+  getVolumeName,
+  KubernetesPersistence,
+  KubernetesPersistenceSource,
+  STATE_FILES_PREFIX,
+} from './volumes'
 import { V1Pod, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from './apply'
 import { basename, dirname } from 'path'
@@ -210,25 +216,65 @@ export async function execInPod(
 // marks the folder of a state whose upload went through
 const UPLOADED = '.uploaded'
 
-// Removes the folders of the states of a service run's files (see getStateFilesDir) other
-// than `dir` and `keep`, the one the pod that runs now mounts
+// Removes the folders of the states (see getStateFilesDir) in the claim at `$1` but those
+// named after it: the one the work runs at, and the ones pods of the run mount
 export const REMOVE_OTHER_STATES = `cd "$1" || exit 1
+shift
 for d in ${STATE_FILES_PREFIX}*; do
   [ -d "$d" ] || continue
-  [ "$d" = "$2" ] && continue
-  [ -n "$3" ] && [ "$d" = "$3" ] && continue
-  rm -rf "$d"
+  keep=
+  for k in "$@"; do [ "$d" = "$k" ] && keep=1; done
+  [ -n "$keep" ] || rm -rf "$d"
 done`
 
-// Prepares the folder of the files of a service run's state before its upload. The folder
-// the pod that runs now mounts (`keep`) is not touched: when it is the same state, its files
-// are there already. Returns whether the upload is needed.
+/**
+ * The folders of the states (see getStateFilesDir) of the claim `claim` that the services of
+ * the run mount: the pods of its Deployments, which serve or start. A pod of a service mounts
+ * the outputs of a task only after the task completed, so what it mounts is whole.
+ */
+export async function getStateDirsInUse(
+  instance: KubernetesInstance,
+  namespace: string,
+  claim: string
+): Promise<Set<string>> {
+  const pods = await instance.coreApi.listNamespacedPod({ namespace })
+  const dirs = new Set<string>()
+  for (const pod of pods.items) {
+    const phase = pod.status?.phase
+    if (
+      (phase !== 'Running' && phase !== 'Pending') ||
+      !pod.metadata?.ownerReferences?.some((owner) => owner.kind === 'ReplicaSet')
+    ) {
+      continue
+    }
+    const volumes = new Set(
+      (pod.spec?.volumes ?? [])
+        .filter((volume) => volume.persistentVolumeClaim?.claimName === claim)
+        .map((volume) => volume.name)
+    )
+    for (const container of [...(pod.spec?.initContainers ?? []), ...(pod.spec?.containers ?? [])]) {
+      for (const mount of container.volumeMounts ?? []) {
+        const dir = mount.subPath?.split('/')[0]
+        if (volumes.has(mount.name) && dir?.startsWith(STATE_FILES_PREFIX)) {
+          dirs.add(dir)
+        }
+      }
+    }
+  }
+  return dirs
+}
+
+// Prepares the folder of a state in the claim of a work item of a service run before its
+// upload: the folders of other states go, but the ones pods of the run mount. A folder a pod
+// mounts is not touched: when it is the one of this state, its files are there already.
+// Returns whether the upload is needed.
 async function prepareStateFiles(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
   work: WorkItem<ContainerWorkService | ContainerWorkTask>,
   pod: string,
-  files: { dir: string; keep?: string }
+  dir: string,
+  inUse: Set<string>
 ): Promise<boolean> {
   const targetPath = `/dev/hammerkit/${work.id()}`
   const removed = await execInPod(instance, env, pod, [
@@ -237,23 +283,20 @@ async function prepareStateFiles(
     REMOVE_OTHER_STATES,
     'sh',
     targetPath,
-    files.dir,
-    files.keep ?? '',
+    dir,
+    ...[...inUse].sort(),
   ])
   if (removed) {
     throw new Error(`unable to remove the files of other commits in ${targetPath}: ${removed}`)
   }
-  if (
-    files.keep === files.dir &&
-    !(await execInPod(instance, env, pod, ['test', '-e', `${targetPath}/${files.dir}/${UPLOADED}`]))
-  ) {
+  if (inUse.has(dir) && !(await execInPod(instance, env, pod, ['test', '-e', `${targetPath}/${dir}/${UPLOADED}`]))) {
     work.status.write('info', `the files of ${work.name} are there already`)
     return false
   }
-  // what a failed upload left: tar does not remove files the commit does not have
-  const cleared = await execInPod(instance, env, pod, ['rm', '-rf', `${targetPath}/${files.dir}`])
+  // what a failed upload or task left: tar does not remove files the commit does not have
+  const cleared = await execInPod(instance, env, pod, ['rm', '-rf', `${targetPath}/${dir}`])
   if (cleared) {
-    throw new Error(`unable to clear ${targetPath}/${files.dir}: ${cleared}`)
+    throw new Error(`unable to clear ${targetPath}/${dir}: ${cleared}`)
   }
   return true
 }
@@ -291,9 +334,9 @@ export async function ensurePersistentData(
   // the kept claim of the work holds what an earlier run left, which goes first
   options: {
     reset?: boolean
-    // a service of a service run: its files go into the folder of their state (see
-    // placeFilesByState), next to `keep`, the folder its pod mounts now
-    files?: { dir: string; keep?: string }
+    // a work item of a service run: its files go into `dir`, the folder of their state (see
+    // getStateFilesDir), next to the ones pods of the run mount
+    files?: { dir: string }
   } = {}
 ) {
   // what a run of a server uploads comes from its checkout and nowhere else
@@ -316,16 +359,20 @@ export async function ensurePersistentData(
     )
   }
 
-  if (persistence.sources.length === 0 && !options.reset) {
+  if (persistence.sources.length === 0 && !options.reset && !options.files) {
     return
   }
+  // the folders of the states the pods of the run mount, before the upload pod mounts the claim
+  const inUse = options.files
+    ? await getStateDirsInUse(instance, env.namespace, getVolumeName(service, env))
+    : new Set<string>()
 
   service.status.write('debug', 'start upload container')
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
     if (options.reset) {
       await clearClaim(instance, env, service, name)
     }
-    if (options.files && !(await prepareStateFiles(instance, env, service, name, options.files))) {
+    if (options.files && !(await prepareStateFiles(instance, env, service, name, options.files.dir, inUse))) {
       return
     }
     for (const source of persistence.sources) {

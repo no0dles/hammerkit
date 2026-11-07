@@ -170,6 +170,12 @@ const bundle = {
       'services:',
       '  db:',
       '    image: postgres:16',
+      '  cache:',
+      '    image: redis:7',
+      '  deployer:',
+      '    image: alpine:3',
+      '    secrets:',
+      '      - { from: "echo:prod", account: op-payments-prod, env: KUBE_TOKEN }',
       '',
     ].join('\n'),
   },
@@ -1074,5 +1080,77 @@ describe('runs api', () => {
       expect((await api.call('GET', '/v1/runs/run_AAAAAAAAAAAAAAAA/cancel')).status).toBe(405)
       expect((await api.call('POST', '/v1/runs/run_AAAAAAAAAAAAAAAA')).status).toBe(405)
     })
+  })
+})
+
+// `remote up` with the name of a run of the caller's moves that run to another commit, after the
+// same checks as a new run, and replaces it when it runs anything else
+describe('a service run of the same name', () => {
+  const NEXT = 'd'.repeat(40)
+  const repos: RepoAccessOptions = {
+    resolve: async (repo, ref, signal) =>
+      ref === 'next' ? NEXT : (fakeRepos.resolve as NonNullable<RepoAccessOptions['resolve']>)(repo, ref, signal),
+  }
+  const up = (extra: object = {}) => ({
+    definition: request.definition,
+    tasks: [],
+    services: ['db'],
+    name: 'pr-1',
+    ttl: '2h',
+    source: { type: 'ref', repo: REPO, ref: 'main' },
+    ...extra,
+  })
+
+  it('moves to the commit of its ref, after the checks of a new run, and replaces it when it runs other services', async () => {
+    const { executor } = gated()
+    await withApi(
+      'runs-api-move',
+      executor,
+      async (api) => {
+        const first = await (await api.submit(up())).json()
+        await untilState(api, first.id, ['running'])
+
+        // the same services at another commit: the same run, with the move in its log
+        const moved = await api.submit(up({ source: { type: 'ref', repo: REPO, ref: 'next' } }))
+        expect(moved.status).toBe(202)
+        const body = await moved.json()
+        expect(body.id).toBe(first.id)
+        expect(body.moved).toEqual({ logFrom: expect.any(Number) })
+        expect(api.log.join('\n')).toContain(`move run ${first.id} iss=`)
+
+        // a ref that is not where the caller says is refused before anything moves
+        const stale = await api.submit(up({ source: { type: 'ref', repo: REPO, ref: 'next', commit: COMMIT } }))
+        expect(stale.status).toBe(409)
+        // as is a ttl above the server's
+        expect((await api.submit(up({ ttl: '30d' }))).status).toBe(400)
+
+        // a ttl gives it more time, never less
+        expect((await (await api.submit(up({ ttl: '6h' }))).json()).id).toBe(first.id)
+        await api.submit(up({ ttl: '1h' }))
+        expect((await (await api.call('GET', `/v1/runs/${first.id}`)).json()).up.ttl).toBe(6 * 3600_000)
+
+        // another caller's run of the name is theirs: carol gets a run of her own
+        const carols = await (await api.submit(up(), 'carol')).json()
+        expect(carols.id).not.toBe(first.id)
+        expect(carols.moved).toBeUndefined()
+
+        // a run that needs an approval is never a move: approved once, it is asked for again
+        const approved = await (await api.submit(up({ services: ['deployer'], name: 'pr-2' }))).json()
+        expect(approved.state).toBe('awaiting-approval')
+        expect((await api.call('POST', `/v1/approvals/${approved.id}/approve`, { sub: 'bob' })).status).toBe(200)
+        await untilState(api, approved.id, ['running'])
+        const again = await (await api.submit(up({ services: ['deployer'], name: 'pr-2' }))).json()
+        expect(again.id).not.toBe(approved.id)
+        expect(again.state).toBe('awaiting-approval')
+        expect(again.moved).toBeUndefined()
+
+        // other services: a new run, which replaces it once it is up
+        const replaced = await (await api.submit(up({ services: ['db', 'cache'] }))).json()
+        expect(replaced.id).not.toBe(first.id)
+        expect(replaced.moved).toBeUndefined()
+      },
+      '',
+      repos
+    )
   })
 })
