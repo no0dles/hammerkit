@@ -91,12 +91,18 @@ function getContainerFailure(status: V1ContainerStatus): PodFailure | null {
         ? { text: `it keeps crashing: ${describeLastExit(status)}`, final: true }
         : null
   }
+  // a kubelet may leave an instance that ended as it is until its back-off is over, and say
+  // CrashLoopBackOff only when it looks at the pod again, a minute later: the same crash
+  if (status.state?.terminated && status.restartCount >= CRASHES_TO_FAIL) {
+    return { text: `it keeps crashing: ${describeLastExit(status)}`, final: true }
+  }
   return null
 }
 
 // How the last instance of a container ended, as the cluster says it.
 export function describeLastExit(status: V1ContainerStatus): string {
-  const last = status.lastState?.terminated ?? status.state?.terminated
+  // the instance that ended now, else the one before the one that waits or runs
+  const last = status.state?.terminated ?? status.lastState?.terminated
   const restarts = `, restarted ${status.restartCount} time${status.restartCount === 1 ? '' : 's'}`
   if (!last) {
     return `it ended${restarts}`
@@ -131,6 +137,10 @@ export function getPodWaiting(pod: V1Pod, container?: string): string | undefine
         return `can not start its container yet (${waiting.reason})${said}`
       case 'CrashLoopBackOff':
         return `crashed and starts again: ${describeLastExit(status)}`
+    }
+    const ended = status.state?.terminated
+    if (ended) {
+      return `${ended.exitCode === 0 ? 'ended' : 'crashed'} and starts again: ${describeLastExit(status)}`
     }
     if (status.restartCount > 0 && status.state?.running && !status.ready) {
       return `restarted: ${describeLastExit(status)}`

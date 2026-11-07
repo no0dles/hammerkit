@@ -143,6 +143,30 @@ describe('getPodFailure', () => {
     })
   })
 
+  it('fails a crash the kubelet still shows as ended, not yet as CrashLoopBackOff', () => {
+    const ended = (restartCount: number) =>
+      pod({
+        containerStatuses: [
+          {
+            name: 'web',
+            image: 'web:1',
+            ready: false,
+            restartCount,
+            imageID: '',
+            state: { terminated: { exitCode: 4, reason: 'Error' } },
+            lastState: { terminated: { exitCode: 1, reason: 'Error' } },
+          },
+        ],
+      })
+    expect(getPodFailure(ended(1))).toBeNull()
+    expect(getPodWaiting(ended(1))).toBe('crashed and starts again: it exited with code 4 (Error), restarted 1 time')
+    // the instance that ended now, not the one before it
+    expect(getPodFailure(ended(2))).toEqual({
+      text: 'it keeps crashing: it exited with code 4 (Error), restarted 2 times',
+      final: true,
+    })
+  })
+
   it('fails an image pull at once only when the image is not there to pull', () => {
     const pulling = (message: string, reason = 'ImagePullBackOff') =>
       pod({

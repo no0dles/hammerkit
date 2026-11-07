@@ -56,8 +56,10 @@ describe('kubernetes service failures', () => {
             )
             const logs = Array.from(cli.service(name).status.logs()).map((log) => log.message)
             expect(logs).toContain('crash-output-of-the-service')
-            // before, only the healthcheck's time ended the wait, and without one it passed
-            expect(Date.now() - started).toBeLessThan(150_000)
+            // at its third crash (about 35s in, after back-offs of 10s and 20s): not when a
+            // healthcheck's time is up, nor when the kubelet next says CrashLoopBackOff, which
+            // may be once the next back-off (40s) is over
+            expect(Date.now() - started).toBeLessThan(75_000)
           } finally {
             await cli.runDown()
           }
