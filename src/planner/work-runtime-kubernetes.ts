@@ -43,7 +43,13 @@ import { getKubernetesCommandText } from './utils/task-arguments'
 import { restoreKubernetesData } from '../kubernetes/restore-kubernetes-data'
 import { storeKubernetesData } from '../kubernetes/store-kubernetes-data'
 import { removePersistentData } from '../kubernetes/remove-persistent-data'
-import { forgetClaimState, isKeptClaim, recordClaimState, useClaimState } from '../kubernetes/kept-claims'
+import {
+  forgetClaimState,
+  isKeptClaim,
+  recordClaimState,
+  rememberedClaimState,
+  useClaimState,
+} from '../kubernetes/kept-claims'
 import { getKubernetesResources } from '../kubernetes/container-resources'
 import { ensureKubernetesSecret, getKubernetesSecretRefs, removeKubernetesSecret } from '../kubernetes/secrets'
 import {
@@ -258,6 +264,9 @@ export function kubernetesTaskRuntime(
   // on a server that keeps them, the task's claim stays after the run with the state of its
   // outputs, and the next run of the same source mounts them as they are (see kept-claims)
   const kept = isKeptClaim(task, kubernetes)
+  // on a service run, the claim names the last state whose folder is whole (see
+  // rememberedClaimState): a wake or a move at that state mounts it without an upload
+  const remembers = kept || !!kubernetes.server?.serviceRun
   const claim = getVolumeName(task, kubernetes)
   return {
     initialize(): Promise<void> {
@@ -272,6 +281,16 @@ export function kubernetesTaskRuntime(
         (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(getStateFilesDir(stateKey))
       ) {
         task.status.write('info', `${task.name}: services of the run use its outputs of this state, they stay`)
+        await recordClaimState(instance, kubernetes, claim, stateKey)
+        return
+      }
+      if (remembers && !kept) {
+        // the folder of the state is written now: until it is whole, the claim names no state
+        await forgetClaimState(instance, kubernetes, claim)
+        await restoreKubernetesData(task, kubernetes, instance, environment, path, { stateKey })
+        if (stateKey) {
+          await recordClaimState(instance, kubernetes, claim, stateKey)
+        }
         return
       }
       if (!kept) {
@@ -323,11 +342,14 @@ export function kubernetesTaskRuntime(
       try {
         if (files && (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(files.dir)) {
           task.status.write('info', `${task.name}: services of the run use its outputs of this state, they stay`)
+          await recordClaimState(instance, kubernetes, claim, options.stateKey)
           return
         }
         // the task writes to it now: what it holds stops being the outputs of a state, and
-        // goes, as a new claim would hold nothing
-        const reset = kept && (await forgetClaimState(instance, kubernetes, claim))
+        // goes, as a new claim would hold nothing (on a service run, the folders of other
+        // states that no pod mounts go)
+        const forgotten = remembers && (await forgetClaimState(instance, kubernetes, claim))
+        const reset = kept && forgotten
         await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset, files })
       } catch (e) {
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
@@ -508,7 +530,7 @@ export function kubernetesTaskRuntime(
         }
         // the finished job stays for its state, the values it read need not
         await removeTaskSecrets(instance, kubernetes, task)
-        if (kept) {
+        if (remembers) {
           await recordClaimState(instance, kubernetes, claim, options.stateKey)
         }
       } finally {
@@ -567,6 +589,13 @@ export function kubernetesTaskRuntime(
       if (kept) {
         // the server removes the Jobs of a run at its end, the claim says
         return useClaimState(instance, kubernetes, claim)
+      }
+      if (remembers) {
+        // a service run that sleeps loses its Jobs but keeps its claims, the claim says
+        const remembered = await rememberedClaimState(instance, kubernetes, claim)
+        if (remembered) {
+          return remembered
+        }
       }
       const jobs = await instance.batchApi.listNamespacedJob({
         namespace: kubernetes.namespace,
