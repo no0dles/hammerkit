@@ -125,6 +125,21 @@ async function annotate(
   }
 }
 
+// The state key of the outputs whose folder is whole in the claim of a task of a service run
+// (see getStateFilesDir), null when it names none. The run's namespace is its own, and only
+// the run writes to the claim: it forgets the state before it writes, records it after.
+export async function rememberedClaimState(
+  instance: KubernetesInstance,
+  kubernetes: WorkKubernetesEnvironment,
+  name: string
+): Promise<string | null> {
+  const claim = await readClaim(instance, kubernetes.namespace, name)
+  if (!claim || claim.metadata?.deletionTimestamp) {
+    return null
+  }
+  return claim.metadata?.annotations?.[STATE_ANNOTATION] ?? null
+}
+
 // Before a task writes to its kept claim: the outputs in it stop being those of a state.
 // Whether the claim was there, with what an earlier run left in it.
 export function forgetClaimState(

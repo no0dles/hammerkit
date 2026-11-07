@@ -422,6 +422,15 @@ what runs in the namespace instead, which stays. When the server starts, it remo
 namespaces of service runs that none of its runs is in, but those of runs that sleep, from
 which it removes what still ran.
 
+The outputs of the tasks a service depends on (an `install` that makes `node_modules`) are in
+the claim of the task, which the service's pod mounts. A task that is a hit in the server's
+[cache](/docs/remote-compute/backend#cache-and-sources) doesn't run: a short pod named after it
+(`install-…-upload`) takes its outputs from the server into its claim, and then the service
+starts. A miss runs the task's Job. The claim names the state whose outputs it holds whole,
+so a run that wakes, or moves to a commit where the task did not change, mounts them as they
+are: no Job and no upload, also after sleep removed the Jobs. With
+`runs.up.keepVolumes: false` the claims go when the run sleeps, and a wake uploads them again.
+
 What a service prints goes into the log of the run, as on a host: while it starts, and while
 it is up, until the log of the run reaches its limit. A service that can't become ready fails
 the run with the reason the cluster gives, at once when waiting won't change it: an image the

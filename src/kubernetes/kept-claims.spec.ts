@@ -7,6 +7,7 @@ import {
   isKeptClaim,
   KEPT_BY_LABEL,
   recordClaimState,
+  rememberedClaimState,
   STATE_ANNOTATION,
   sweepKeptClaims,
   useClaimState,
@@ -149,6 +150,26 @@ describe('kept claims', () => {
     // a claim that is not there was not left by a run
     expect(await forgetClaimState(instance, env('ref-1'), 'other')).toBe(false)
     expect(await useClaimState(instance, env('ref-1'), 'other')).toBeNull()
+  })
+
+  it('says the state whose folder is whole in the claim of a service run, while it is', async () => {
+    const run = { claim: (): Claim => ({ name: 'claim', labels: {}, annotations: {} }) }
+    const { instance, claims } = cluster([run.claim()])
+    const serviceRun = { ...env(), server: { ...env().server!, serviceRun: true } } as WorkKubernetesEnvironment
+    // a claim of the run is no kept one: it is not taken over, only read
+    expect(await rememberedClaimState(instance, serviceRun, 'claim')).toBeNull()
+    expect(claims[0].labels).toEqual({})
+    await recordClaimState(instance, serviceRun, 'claim', 'state-1')
+    expect(await rememberedClaimState(instance, serviceRun, 'claim')).toBe('state-1')
+    // the folder of a state is written: it names none until it is whole again
+    expect(await forgetClaimState(instance, serviceRun, 'claim')).toBe(true)
+    expect(await rememberedClaimState(instance, serviceRun, 'claim')).toBeNull()
+    // one that is being removed holds nothing to mount
+    claims[0].annotations[STATE_ANNOTATION] = 'state-1'
+    claims[0].deleting = true
+    expect(await rememberedClaimState(instance, serviceRun, 'claim')).toBeNull()
+    // nor one that is not there (a run that did not keep its volumes while it slept)
+    expect(await rememberedClaimState(instance, serviceRun, 'other')).toBeNull()
   })
 
   it('gives the claims a run kept their expiry at its end', async () => {
