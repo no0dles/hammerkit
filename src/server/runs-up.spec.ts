@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { EndpointTarget, QuotaError, RunError, RunExecutor, RunRegistry, ServiceRunSpec } from './runs'
+import { EndpointTarget, QuotaError, Run, RunError, RunExecutor, RunRegistry, ServiceRunSpec } from './runs'
 import { FileRunStore } from './run-store'
 
 const alice = { iss: 'https://idp.corp', sub: 'alice' }
@@ -53,22 +53,26 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
 
 // An executor as `services`, that also says what it kept when a run stopped, and hears what to
 // remove: `hold` keeps a run that stops from ending until the test lets it.
-function keeping(hold = false) {
+function keeping(hold = false, beside = false) {
   const started: {
+    run: Run
     up: (targets: EndpointTarget[]) => void
     signal: AbortSignal
     end: () => void
+    fail: (e: Error) => void
     kept?: string
   }[] = []
   const forgotten: string[] = []
   const restored: string[][] = []
   const executor: RunExecutor = {
-    execute: (_run, context) =>
-      new Promise<void>((resolve) => {
+    execute: (run, context) =>
+      new Promise<void>((resolve, reject) => {
         const one: (typeof started)[number] = {
+          run,
           up: (targets) => context.up?.(targets),
           signal: context.signal,
           end: resolve,
+          fail: reject,
         }
         started.push(one)
         context.signal.addEventListener('abort', () => {
@@ -83,6 +87,7 @@ function keeping(hold = false) {
       forgotten.push(run.id)
     },
     restored: (runs) => restored.push(runs.map((run) => run.id)),
+    ...(beside ? { movesBeside: () => true } : {}),
   }
   return { executor, started, forgotten, restored }
 }
@@ -526,6 +531,157 @@ describe('RunRegistry service runs', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true })
     }
+  })
+
+  describe('a move to another commit', () => {
+    const at = (commit: string) => ({
+      source: { type: 'ref' as const, repo: 'github.com/corp/shop', ref: 'feature', commit: commit.repeat(40) },
+    })
+
+    it('brings the services up beside the ones that answer, which they replace once ready', async () => {
+      const { executor, started } = keeping(false, true)
+      const registry = new RunRegistry({ executor })
+      const run = registry.submit(alice, spec())
+      await tick()
+      started[0].up([target(4100)])
+      const moving = registry.move(alice, run.id, at('d'))
+      expect(moving).toMatchObject({ id: run.id, state: 'up', moving: { commit: 'd'.repeat(40) } })
+      await tick()
+      expect(started).toHaveLength(2)
+      expect(started[1].run).toMatchObject({ id: run.id, source: { commit: 'd'.repeat(40) } })
+      // until the new ones are up, the old ones answer
+      expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4100))
+      expect(started[0].signal.aborted).toBe(false)
+
+      started[1].up([target(4200)])
+      expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4200))
+      const moved = registry.get(alice, run.id)
+      expect(moved).toMatchObject({ state: 'up', source: { commit: 'd'.repeat(40) } })
+      expect(moved?.moving).toBeUndefined()
+      expect(moved?.moves).toEqual([{ commit: 'd'.repeat(40), ref: 'feature', at: expect.any(String) }])
+      // the first execution leaves its services to the move
+      await tick()
+      expect(started[0]).toMatchObject({ kept: 'everything' })
+      expect(started[0].signal.aborted).toBe(true)
+      expect(registry.get(alice, run.id)?.state).toBe('up')
+
+      // the run's end is the move's to see to now
+      registry.cancel(alice, run.id)
+      await vi.waitFor(() => expect(registry.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: alice }))
+      expect(started[1].kept).toBe('nothing')
+    })
+
+    it('stays where it was when the move does not get there', async () => {
+      const { executor, started } = keeping(false, true)
+      const registry = new RunRegistry({ executor })
+      const run = registry.submit(alice, spec())
+      await tick()
+      started[0].up([target(4100)])
+      registry.move(alice, run.id, at('d'))
+      await tick()
+      started[1].fail(new Error('build failed'))
+      await vi.waitFor(() => expect(registry.get(alice, run.id)?.moving).toBeUndefined())
+      const after = registry.get(alice, run.id)
+      expect(after).toMatchObject({ state: 'up', source: { commit: 'c'.repeat(40) } })
+      expect(after?.moves).toEqual([
+        { commit: 'd'.repeat(40), ref: 'feature', at: expect.any(String), error: 'build failed' },
+      ])
+      expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4100))
+      expect(started[0].signal.aborted).toBe(false)
+      expect(started[1].kept).toBeUndefined()
+    })
+
+    it('stops a move that executes for a later one', async () => {
+      const { executor, started } = keeping(false, true)
+      const registry = new RunRegistry({ executor })
+      const run = registry.submit(alice, spec())
+      await tick()
+      started[0].up([target(4100)])
+      registry.move(alice, run.id, at('d'))
+      await tick()
+      registry.move(alice, run.id, at('e'))
+      await vi.waitFor(() => expect(started).toHaveLength(3))
+      expect(started[1].signal.aborted).toBe(true)
+      expect(started[1].kept).toBe('everything')
+      expect(started[2].run.source).toMatchObject({ commit: 'e'.repeat(40) })
+      started[2].up([target(4300)])
+      expect(registry.get(alice, run.id)?.moves?.map((move) => [move.commit[0], move.error])).toEqual([
+        ['d', 'the move was stopped'],
+        ['e', undefined],
+      ])
+    })
+
+    it('moves a run that sleeps, which wakes at the new commit, and one that starts once it is up', async () => {
+      const { executor, started } = keeping(false, true)
+      const registry = new RunRegistry({ executor })
+      const sleepy = registry.submit(alice, spec('sleepy', HOUR, 20))
+      await tick()
+      started[0].up([target(4100)])
+      await vi.waitFor(() => expect(registry.get(alice, sleepy.id)?.state).toBe('asleep'))
+      expect(registry.move(alice, sleepy.id, at('d'))).toMatchObject({
+        state: 'asleep',
+        source: { commit: 'd'.repeat(40) },
+      })
+      expect(started).toHaveLength(1)
+      registry.visit(sleepy.id)
+      await tick()
+      expect(started[1].run.source).toMatchObject({ commit: 'd'.repeat(40) })
+
+      const starting = registry.submit(alice, spec('starting'))
+      await tick()
+      registry.move(alice, starting.id, at('e'))
+      expect(started).toHaveLength(3)
+      started[2].up([target(4300)])
+      await tick()
+      expect(started[3].run.source).toMatchObject({ commit: 'e'.repeat(40) })
+    })
+
+    it('starts the services again at the commit, with their volumes, on a backend that moves no other way', async () => {
+      const { executor, started } = keeping()
+      const registry = new RunRegistry({
+        executor,
+        up: { maxTtl: HOUR, perCaller: 3, total: 10, keepVolumes: false },
+      })
+      const run = registry.submit(alice, spec())
+      await tick()
+      started[0].up([target(4100)])
+      registry.move(alice, run.id, at('d'))
+      await vi.waitFor(() => expect(started).toHaveLength(2))
+      expect(started[0].kept).toBe('volumes')
+      expect(started[1].run.source).toMatchObject({ commit: 'd'.repeat(40) })
+      expect(registry.get(alice, run.id)).toMatchObject({ state: 'running', source: { commit: 'd'.repeat(40) } })
+      started[1].up([target(4200)])
+      expect(registry.get(alice, run.id)).toMatchObject({ state: 'up', id: run.id })
+      expect(registry.endpoint('feature-80-abcdef')?.target).toEqual(target(4200))
+    })
+
+    it('answers a wait once the run is at the commit, and gives it more time when asked', async () => {
+      const now = Date.parse('2026-11-07T10:00:00Z')
+      const { executor, started } = keeping(false, true)
+      const registry = new RunRegistry({
+        executor,
+        now: () => now,
+        up: { maxTtl: 4 * HOUR, perCaller: 3, total: 10 },
+      })
+      const run = registry.submit(alice, spec('feature', HOUR))
+      await tick()
+      started[0].up([target(4100)])
+      expect(registry.move(alice, run.id, { ...at('d'), ttl: 3 * HOUR })?.expiresAt).toBe('2026-11-07T13:00:00.000Z')
+      let answered = false
+      const waiting = registry.wait(alice, run.id, 5000).then((answer) => {
+        answered = true
+        return answer
+      })
+      await tick()
+      expect(answered).toBe(false)
+      started[1].up([target(4200)])
+      expect(await waiting).toMatchObject({ source: { commit: 'd'.repeat(40) } })
+      // not somebody else's, nor one that ended
+      expect(registry.move(bob, run.id, at('e'))).toBeUndefined()
+      registry.cancel(alice, run.id)
+      await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('succeeded'))
+      expect(registry.move(alice, run.id, at('e'))).toBeUndefined()
+    })
   })
 
   it('is not made to end sooner by an extend', async () => {

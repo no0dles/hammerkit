@@ -151,6 +151,30 @@ export interface Run extends RunSpec {
   // a service run whose backend keeps the volumes of its services while it sleeps
   // (`runs.up.keepVolumes`): they are mounted again on the wake, and go when the run ends
   volumesKept?: true
+  // a service run: the commits it moved to since it started (RunRegistry.move), the newest
+  // last; `source` is where it is now
+  moves?: RunMove[]
+  // a service run that is up and moves to this commit: what changed is brought up beside the
+  // services that answer, which the new ones replace once they are ready
+  moving?: { commit: string; ref: string; since: string }
+}
+
+// A move of a service run to another commit of its repository. `error`: it did not get
+// there, and stayed where it was.
+export interface RunMove {
+  commit: string
+  ref: string
+  at: string
+  error?: string
+}
+
+// Where a service run moves to: another commit of the repository it runs from, read from
+// the same published build file, and what its tasks and services do there
+export interface RunMoveChange {
+  source: Extract<RunSource, { type: 'ref' }>
+  plan?: Record<string, TaskPlan>
+  // how long it stays from now, if that is later than its end (ms)
+  ttl?: number
 }
 
 // What an executor reports while it works. `seq` and `time` are added by the registry.
@@ -176,6 +200,8 @@ export type RunEvent =
   | { type: 'state'; state: RunState; error?: string }
   | { type: 'approval'; outcome: 'approved' | 'rejected'; by: Identity; accounts: string[]; reason?: string }
   | { type: 'extended'; by: Identity; expiresAt: string }
+  // a service run moved to another commit, or did not get there (`error`)
+  | { type: 'moved'; commit: string; ref: string; error?: string }
   | { type: 'truncated' }
 
 export type StoredEvent = RunEvent & { seq: number; time: string }
@@ -188,9 +214,11 @@ export interface RunContext {
   // The executor keeps them up until `signal` aborts.
   up?(targets: EndpointTarget[]): void
   // a service run, once `signal` aborted: what of its services the executor keeps. `volumes`:
-  // the run sleeps, the volumes of its services stay for its wake (RunExecutor.forget removes
-  // them if it never wakes). Nothing: the services go with all they hold.
-  keep?(): 'volumes' | undefined
+  // the run sleeps or starts again at another commit, the volumes of its services stay
+  // (RunExecutor.forget removes them if it never wakes). `everything`: the run moved to
+  // another commit, whose execution took the services over, or this one was a move that did
+  // not get there and the services stay the other's. Nothing: the services go with all they hold.
+  keep?(): 'volumes' | 'everything' | undefined
 }
 
 // What actually carries out a run. The registry only keeps its state; a run
@@ -206,6 +234,11 @@ export interface RunExecutor {
   // Once the runs of a previous start are back: the service runs whose volumes are kept,
   // all asleep. What the backend keeps for any other run may go.
   restored?(runs: Run[]): void
+  // Whether a service run that is up moves to another commit beside its services: the run is
+  // executed again at the commit while the first execution keeps them up, and takes over the
+  // services it finds unchanged once the others are ready. Without, the services stop, their
+  // volumes kept, and start again at the commit.
+  movesBeside?(run: Run): boolean
 }
 
 // The server can not take the run now; `status` is what the caller is told
@@ -292,6 +325,14 @@ interface Entry {
   sleeping?: boolean
   // the check keys the executor reported, by task
   keys: Record<string, string | null>
+  // the execution of a service run its services are the ones of: a move takes them over
+  holder?: object
+  // a move of a service run that is up, executing beside its services
+  mover?: { token: object; abort: AbortController; change: RunMoveChange }
+  // a move that waits for the run to be up, or for the move before it to end
+  pendingMove?: RunMoveChange
+  // a move that stops the services, their volumes kept, and starts them again at its commit
+  restartTo?: RunMoveChange
 }
 
 type AccountCheck = (account: string) => boolean
@@ -354,6 +395,8 @@ export class RunRegistry {
   private readonly maxLogBytes: number
   // callers that wait for a run to finish, let go when the server stops
   private readonly waiters = new Set<() => void>()
+  // the moves of service runs that execute beside their services
+  private readonly moving = new Set<Promise<void>>()
 
   constructor(private readonly options: RunRegistryOptions) {
     this.maxConcurrent = options.maxConcurrent ?? 4
@@ -380,6 +423,8 @@ export class RunRegistry {
     const { records, skipped } = await store.load()
     skipped.forEach((name) => this.options.log?.(`skip run record ${name}: it can not be read`))
     for (const { run, events } of records) {
+      // a move that executed went with the server
+      delete run.moving
       const entry: Entry = {
         run,
         events,
@@ -606,6 +651,8 @@ export class RunRegistry {
     } else if (entry.run.state === 'up') {
       entry.run.stoppedBy ??= by ?? 'replaced'
       entry.sleeping = false
+      entry.restartTo = undefined
+      entry.mover?.abort.abort()
       entry.abort.abort()
     } else if (entry.run.state === 'asleep') {
       entry.run.stoppedBy ??= by ?? 'replaced'
@@ -719,11 +766,12 @@ export class RunRegistry {
     if (!entry) {
       return undefined
     }
-    if (!isFinal(entry.run.state) && entry.run.state !== 'up' && ms > 0 && !this.closed && !signal?.aborted) {
+    // a service run is there once it is up, and at the commit it moves to
+    const there = () => isFinal(entry.run.state) || (entry.run.state === 'up' && !entry.run.moving)
+    if (!there() && ms > 0 && !this.closed && !signal?.aborted) {
       await new Promise<void>((resolve) => {
         const listener = (event: StoredEvent) => {
-          // a service run is there once it is up
-          if (event.type === 'state' && (isFinal(event.state) || event.state === 'up')) {
+          if ((event.type === 'state' || event.type === 'moved') && there()) {
             done()
           }
         }
@@ -792,11 +840,13 @@ export class RunRegistry {
         // a service run that may sleep is asleep in its record, the next request after the
         // start wakes it
         entry.sleeping = this.maySleep(entry) && !!this.options.store
+        entry.mover?.abort.abort()
         entry.abort.abort()
       }
     }
     while (
       this.running > 0 ||
+      this.moving.size > 0 ||
       [...this.entries.values()].some((entry) => entry.run.state === 'running' || entry.run.state === 'up')
     ) {
       await new Promise((resolve) => setTimeout(resolve, 10))
@@ -844,6 +894,8 @@ export class RunRegistry {
       accounts: [...run.accounts],
       ...(run.approvals ? { approvals: JSON.parse(JSON.stringify(run.approvals)) } : {}),
       ...(run.results ? { results: JSON.parse(JSON.stringify(run.results)) } : {}),
+      ...(run.moves ? { moves: run.moves.map((move) => ({ ...move })) } : {}),
+      ...(run.moving ? { moving: { ...run.moving } } : {}),
     }
   }
 
@@ -962,16 +1014,25 @@ export class RunRegistry {
         }, limit)
       : undefined
     entry.durationTimer?.unref()
+    const token = {}
+    entry.holder = token
     try {
       await this.options.executor.execute(this.copy(entry.run), {
         emit: (event) => this.record(entry, event),
         signal: entry.abort.signal,
         ...(entry.run.up
-          ? { up: (targets: EndpointTarget[]) => this.markUp(entry, targets), keep: () => this.keepOf(entry) }
+          ? {
+              up: (targets: EndpointTarget[]) => this.markUp(entry, targets),
+              keep: () => (entry.holder === token ? this.keepOf(entry) : 'everything'),
+            }
           : {}),
       })
-      if (entry.sleeping) {
-        this.sleep(entry)
+      if (entry.holder !== token) {
+        // a move took the services over
+        return
+      }
+      if (entry.restartTo || entry.sleeping) {
+        this.stopped(entry)
       } else if (entry.run.upAt) {
         // services stay until they are stopped: ones that stopped on their own failed
         this.endServices(entry, 'the services stopped on their own')
@@ -984,8 +1045,11 @@ export class RunRegistry {
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      if (entry.sleeping) {
-        this.sleep(entry)
+      if (entry.holder !== token) {
+        return
+      }
+      if (entry.restartTo || entry.sleeping) {
+        this.stopped(entry)
       } else if (entry.run.upAt) {
         this.endServices(entry, message)
       } else {
@@ -1040,6 +1104,233 @@ export class RunRegistry {
       }
     }
     this.dispatch()
+    // a move that came while it started or woke
+    this.beginMove(entry)
+  }
+
+  /**
+   * The service run of the caller of this name that a run of theirs would replace: the newest
+   * that is not over and waits for no approval. RunRegistry.move moves it instead, when it
+   * runs the same.
+   */
+  named(owner: Pick<Principal, 'iss' | 'sub'>, name: string): Run | undefined {
+    const entry = [...this.entries.values()]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.run.up?.name === name &&
+          this.owns(owner, candidate) &&
+          !isFinal(candidate.run.state) &&
+          candidate.run.state !== 'awaiting-approval'
+      )
+    return entry ? this.copy(entry.run) : undefined
+  }
+
+  /**
+   * Moves a service run of the caller to another commit of its repository, in place of a new
+   * run that replaces it: it keeps its id, its addresses, its volumes and its place. Queued or
+   * asleep, it starts the new commit when it starts; up, it moves there now (see
+   * RunExecutor.movesBeside), starting or waking, once it is up. A later move takes the place
+   * of one that did not begin yet, and stops one that executes. `ttl` moves its end to that
+   * long from now, if that is later. Undefined when the run is not the caller's to move.
+   */
+  move(owner: Pick<Principal, 'iss' | 'sub'>, id: string, change: RunMoveChange): Run | undefined {
+    const entry = this.entries.get(id)
+    const state = entry?.run.state
+    if (
+      !entry ||
+      !this.owns(owner, entry) ||
+      !entry.run.up ||
+      entry.run.source.type !== 'ref' ||
+      !state ||
+      isFinal(state) ||
+      state === 'awaiting-approval' ||
+      this.closed
+    ) {
+      return undefined
+    }
+    const by = { iss: owner.iss, sub: owner.sub }
+    if (change.ttl !== undefined) {
+      if (entry.run.upAt) {
+        const ms = Math.min(change.ttl, this.options.up?.maxTtl ?? change.ttl)
+        const expiresAt = Math.max(Date.parse(entry.run.expiresAt ?? '') || 0, this.now() + ms)
+        if (new Date(expiresAt).toISOString() !== entry.run.expiresAt) {
+          entry.run.expiresAt = new Date(expiresAt).toISOString()
+          this.record(entry, { type: 'extended', by, expiresAt: entry.run.expiresAt })
+        }
+      } else {
+        entry.run.up.ttl = Math.max(entry.run.up.ttl, change.ttl)
+      }
+    }
+    if (state === 'queued' || state === 'asleep') {
+      this.moveTo(entry, change)
+      if (state === 'asleep') {
+        this.expireLater(entry)
+      }
+      return this.copy(entry.run)
+    }
+    // running or up: once it is up, beside its services
+    entry.pendingMove = change
+    entry.run.moving = { commit: change.source.commit, ref: change.source.ref, since: this.timestamp() }
+    // one that executes goes, the newer commit is what is wanted
+    entry.mover?.abort.abort()
+    if (state === 'up') {
+      // a move counts as a request: the run does not sleep under it
+      this.keepAwake(entry)
+      this.beginMove(entry)
+    }
+    return this.copy(entry.run)
+  }
+
+  // The run is at the commit of `change` now
+  private moveTo(entry: Entry, change: RunMoveChange, error?: string): void {
+    const move: RunMove = {
+      commit: change.source.commit,
+      ref: change.source.ref,
+      at: this.timestamp(),
+      ...(error ? { error } : {}),
+    }
+    if (!error) {
+      entry.run.source = { ...change.source }
+      if (change.plan) {
+        entry.run.plan = change.plan
+      }
+    }
+    entry.run.moves = [...(entry.run.moves ?? []), move]
+    if (!entry.pendingMove && !entry.mover) {
+      delete entry.run.moving
+    }
+    this.record(entry, {
+      type: 'moved',
+      commit: move.commit,
+      ref: move.ref,
+      ...(error ? { error } : {}),
+    })
+  }
+
+  private keepAwake(entry: Entry): void {
+    const sleepTtl = entry.run.up?.sleepTtl
+    if (sleepTtl && entry.run.state === 'up') {
+      entry.run.sleepsAt = new Date(this.now() + sleepTtl).toISOString()
+      this.expireLater(entry)
+    }
+  }
+
+  // The move that waits, once the run is up and no other move executes
+  private beginMove(entry: Entry): void {
+    const change = entry.pendingMove
+    if (!change || entry.run.state !== 'up' || entry.mover || entry.restartTo || entry.abort.signal.aborted) {
+      return
+    }
+    entry.pendingMove = undefined
+    entry.run.moving = { commit: change.source.commit, ref: change.source.ref, since: this.timestamp() }
+    this.record(entry, {
+      type: 'log',
+      task: 'hammerkit',
+      stream: 'stdout',
+      text: `moving ${entry.run.source.type === 'ref' ? `from ${entry.run.source.commit} ` : ''}to ${
+        change.source.commit
+      }`,
+    })
+    if (!this.options.executor.movesBeside?.(this.copy(entry.run))) {
+      // its services stop, their volumes kept, and it starts again at the commit
+      entry.restartTo = change
+      entry.abort.abort()
+      return
+    }
+    const token = {}
+    const abort = new AbortController()
+    entry.mover = { token, abort, change }
+    const run: Run = {
+      ...this.copy(entry.run),
+      source: { ...change.source },
+      ...(change.plan ? { plan: change.plan } : {}),
+    }
+    const execution = this.executeMove(entry, token, abort, run)
+    this.moving.add(execution)
+    void execution.finally(() => this.moving.delete(execution))
+  }
+
+  // A move beside the services of a run that is up: once its services are ready it holds them
+  // (moved), and its end is the run's. One that ends before leaves the run where it was.
+  private async executeMove(entry: Entry, token: object, abort: AbortController, run: Run): Promise<void> {
+    let failure: string | undefined
+    try {
+      await this.options.executor.execute(run, {
+        emit: (event) => this.record(entry, event),
+        signal: abort.signal,
+        up: (targets) => this.moved(entry, token, targets),
+        keep: () => (entry.holder === token ? this.keepOf(entry) : 'everything'),
+      })
+      failure = abort.signal.aborted ? 'the move was stopped' : 'its services stopped before they were up'
+    } catch (e) {
+      failure = e instanceof Error ? e.message : String(e)
+    }
+    if (entry.holder === token) {
+      // the run's services were this execution's
+      if (entry.restartTo || entry.sleeping) {
+        this.stopped(entry)
+      } else {
+        this.endServices(entry, failure === 'the move was stopped' ? 'the services stopped on their own' : failure)
+      }
+      return
+    }
+    if (entry.mover?.token !== token) {
+      return
+    }
+    entry.mover = undefined
+    if (isFinal(entry.run.state)) {
+      return
+    }
+    this.moveTo(entry, { source: run.source as RunMoveChange['source'] }, failure)
+    this.beginMove(entry)
+  }
+
+  // The services of a move are ready: they are the run's from now, at its commit, and the
+  // execution that held the services until now leaves them to it.
+  private moved(entry: Entry, token: object, targets: EndpointTarget[]): void {
+    const mover = entry.mover
+    if (!mover || mover.token !== token || mover.abort.signal.aborted || entry.run.state !== 'up') {
+      return
+    }
+    entry.mover = undefined
+    const previous = entry.abort
+    entry.abort = mover.abort
+    entry.holder = token
+    entry.targets = targets.map((target) => ({ ...target, address: { ...target.address } }))
+    this.moveTo(entry, mover.change)
+    this.keepAwake(entry)
+    previous.abort()
+    this.beginMove(entry)
+  }
+
+  // The services of a run stopped to sleep, or to start again at the commit of a move
+  private stopped(entry: Entry): void {
+    const restart = entry.restartTo
+    if (!restart) {
+      this.sleep(entry)
+      return
+    }
+    entry.restartTo = undefined
+    this.moveTo(entry, restart)
+    if (this.closed) {
+      // the record keeps it asleep, at its new commit
+      if (this.maySleep(entry) && this.options.store) {
+        this.sleep(entry)
+      } else {
+        this.finish(entry, 'failed', 'the server stopped while the services were up, start them again')
+      }
+      return
+    }
+    entry.sleeping = false
+    entry.targets = undefined
+    entry.abort = new AbortController()
+    entry.released = false
+    entry.timedOut = false
+    entry.run.state = 'queued'
+    this.record(entry, { type: 'state', state: 'queued' })
+    this.queue.push(entry)
+    this.dispatch()
   }
 
   // Stops a service run at its expiry, and puts one that is up to sleep at its sleepsAt. A
@@ -1065,6 +1356,11 @@ export class RunRegistry {
           return
         }
         if (entry.run.state === 'up' && Date.parse(entry.run.sleepsAt ?? '') <= this.now()) {
+          if (entry.mover || entry.pendingMove || entry.restartTo) {
+            // it moves: it sleeps once its services are at the new commit
+            this.keepAwake(entry)
+            return
+          }
           entry.sleeping = true
           entry.abort.abort()
           return
@@ -1085,7 +1381,8 @@ export class RunRegistry {
   // the record, so the volumes are removed (RunExecutor.forget) when the run ends asleep, or
   // when a stop came after the sleep began.
   private keepOf(entry: Entry): 'volumes' | undefined {
-    if (entry.sleeping && this.keepsVolumes()) {
+    // a run that starts again at another commit keeps them on any server
+    if (entry.restartTo || (entry.sleeping && this.keepsVolumes())) {
       entry.run.volumesKept = true
       return 'volumes'
     }
@@ -1177,6 +1474,11 @@ export class RunRegistry {
     this.clearTimer(entry)
     clearTimeout(entry.durationTimer)
     entry.targets = undefined
+    entry.pendingMove = undefined
+    entry.restartTo = undefined
+    entry.mover?.abort.abort()
+    entry.mover = undefined
+    delete entry.run.moving
     if (entry.run.volumesKept) {
       // it ends without waking: what was kept for it goes
       delete entry.run.volumesKept
@@ -1308,7 +1610,7 @@ export class RunRegistry {
     }
     // what a restart must not lose: the runs that wait, and how a run ended. A running
     // run is not kept up to date, it fails with the server.
-    if (event.type === 'state' || event.type === 'approval' || event.type === 'extended') {
+    if (event.type === 'state' || event.type === 'approval' || event.type === 'extended' || event.type === 'moved') {
       this.persist(entry)
     }
   }

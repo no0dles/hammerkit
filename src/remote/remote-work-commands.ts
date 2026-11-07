@@ -566,11 +566,20 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           source,
           options: options.env ? { env: options.env } : {},
         })
-        environment.stdout.write(
-          `${printable(submitted.id)} on ${serverName}: ${services.map(printable).join(', ')} from ${printable(
-            source.ref
-          )}${submitted.source.type === 'ref' ? ` at ${printable(submitted.source.commit)}` : ''}\n`
-        )
+        if (submitted.moved) {
+          // a run of this name runs the same: it moves to the commit, with its id, addresses and volumes
+          environment.stdout.write(
+            `${printable(submitted.id)} on ${serverName} (${printable(submitted.state)}) moves to ${printable(
+              source.ref
+            )} at ${printable(submitted.moving?.commit ?? (submitted.source.type === 'ref' ? submitted.source.commit : '-'))}\n`
+          )
+        } else {
+          environment.stdout.write(
+            `${printable(submitted.id)} on ${serverName}: ${services.map(printable).join(', ')} from ${printable(
+              source.ref
+            )}${submitted.source.type === 'ref' ? ` at ${printable(submitted.source.commit)}` : ''}\n`
+          )
+        }
         const followed = await followRun(connection, submitted, {
           signal: environment.abortCtrl.signal,
           untilUp: true,
@@ -586,8 +595,25 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           },
         })
         const run = followed.run
-        if (run.state !== 'up') {
+        if (run.state !== 'up' && !(submitted.moved && run.state === 'asleep')) {
           fail(`${printable(run.id)} ${run.state}${run.error ? `: ${printable(run.error)}` : ''}`, 1)
+        }
+        const lastMove = run.moves?.[run.moves.length - 1]
+        if (submitted.moved && lastMove?.error) {
+          fail(
+            `${printable(run.id)} did not move to ${printable(lastMove.commit)}: ${printable(
+              lastMove.error
+            )}; it stays up at ${printable(run.source.type === 'ref' ? run.source.commit : '-')}`,
+            1
+          )
+        }
+        if (run.state === 'asleep') {
+          environment.stdout.write(
+            `${printable(run.id)} sleeps, at ${printable(
+              run.source.type === 'ref' ? run.source.commit : '-'
+            )} when it wakes, until ${printable(run.expiresAt ?? '-')}\n`
+          )
+          return
         }
         environment.stdout.write(
           `${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}${
