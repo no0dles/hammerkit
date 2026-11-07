@@ -215,6 +215,31 @@ describe('RunRegistry service runs', () => {
     await registry.close()
   })
 
+  it('gives a place back while it sleeps, and wakes only when there is one', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 10 } })
+    const sleepy = registry.submit(alice, spec('sleepy', HOUR, 30))
+    await tick()
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(registry.get(alice, sleepy.id)?.state).toBe('asleep'))
+    // asleep, it holds no place
+    const other = registry.submit(alice, spec('other'))
+    await tick()
+    started[1].up([target(4200)])
+    expect(() => registry.submit(alice, spec('third'))).toThrow(/you have 1 service runs starting or up/)
+    // a wake needs a place: it sleeps on and says why
+    expect(registry.visit(sleepy.id)).toMatch(/its owner has 1 service runs starting or up/)
+    expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
+    expect(started).toHaveLength(2)
+    // once the other stops, the next request wakes it
+    registry.cancel(alice, other.id)
+    await vi.waitFor(() => expect(registry.get(alice, other.id)?.state).toBe('succeeded'))
+    expect(registry.visit(sleepy.id)).toBeUndefined()
+    await vi.waitFor(() => expect(started).toHaveLength(3))
+    expect(registry.get(alice, sleepy.id)?.state).toBe('running')
+    await registry.close()
+  })
+
   it('ends an older run of a name that gets up after a newer one, once it was approved', async () => {
     const { executor, started } = services()
     const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 10 } })

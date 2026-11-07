@@ -838,21 +838,34 @@ export class RunRegistry {
     }
   }
 
-  // Service runs that are not over, of the caller and of everybody, against what may be:
-  // one that is asleep counts, it wakes without asking for a place. The runs of a caller
-  // with one name take one place: the newest replaces the others once it is up, and an older
-  // one that gets up after it goes (markUp), so a new run of a name the caller has does not
-  // need another. Several of one name that are still starting share it too: what they take
-  // while they start is held by runs.limits.running and maxConcurrent.
+  // Service runs that are starting or up, of the caller and of everybody, against what may
+  // be. One that is asleep does not count: it asks for a place when it wakes (visit). The runs
+  // of a caller with one name take one place: the newest replaces the others once it is up,
+  // and an older one that gets up after it goes (markUp), so a new run of a name the caller
+  // has does not need another. Several of one name that are still starting share it too:
+  // what they take while they start is held by runs.limits.running and maxConcurrent.
   private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>, name: string): void {
+    const full = this.upLimitReached(owner, name)
+    if (full === 'caller') {
+      throw new QuotaError(
+        `you have ${this.options.up?.perCaller} service runs starting or up, stop one or wait for its end`
+      )
+    }
+    if (full === 'server') {
+      throw new RunError(`the server has ${this.options.up?.total} service runs starting or up, try again later`)
+    }
+  }
+
+  // Whose limit a service run of the caller with this name would go over, if any
+  private upLimitReached(owner: Pick<Principal, 'iss' | 'sub'>, name: string): 'caller' | 'server' | undefined {
     const limits = this.options.up
     if (!limits) {
-      return
+      return undefined
     }
     const places = new Set<string>()
     const mine = new Set<string>()
     for (const entry of this.entries.values()) {
-      if (!entry.run.up || isFinal(entry.run.state)) {
+      if (!entry.run.up || isFinal(entry.run.state) || entry.run.state === 'asleep') {
         continue
       }
       places.add(JSON.stringify([entry.run.owner.iss, entry.run.owner.sub, entry.run.up.name]))
@@ -861,16 +874,15 @@ export class RunRegistry {
       }
     }
     if (mine.has(name)) {
-      return
+      return undefined
     }
     if (mine.size >= limits.perCaller) {
-      throw new QuotaError(
-        `you have ${limits.perCaller} service runs starting, up or asleep, stop one or wait for its end`
-      )
+      return 'caller'
     }
     if (places.size >= limits.total) {
-      throw new RunError(`the server has ${limits.total} service runs starting, up or asleep, try again later`)
+      return 'server'
     }
+    return undefined
   }
 
   // A host is one run's, or a run's that replaces it (same owner and name) once it is up:
@@ -1100,9 +1112,9 @@ export class RunRegistry {
 
   /**
    * A request to an endpoint of a service run: one that is up stays up for its sleepTtl from
-   * now, one that is asleep is started again (it holds its place of runs.up.limits while it
-   * sleeps), if `mayWake` finds its owner may still run it: else it ends. Answers why it was
-   * not woken, or undefined.
+   * now, one that is asleep is started again, if `mayWake` finds its owner may still run it
+   * (else it ends) and there is a place of runs.up.limits for it (else it sleeps on, and the
+   * next request asks again). Answers why it was not woken, or undefined.
    */
   visit(id: string, mayWake?: (run: Run) => string | undefined): string | undefined {
     const entry = this.entries.get(id)
@@ -1126,6 +1138,13 @@ export class RunRegistry {
     if (refused) {
       this.finish(entry, 'failed', refused)
       return refused
+    }
+    const full = this.upLimitReached(entry.run.owner, entry.run.up.name)
+    if (full === 'caller') {
+      return `its owner has ${this.options.up?.perCaller} service runs starting or up, it wakes once one of them stops or sleeps`
+    }
+    if (full === 'server') {
+      return `the server has ${this.options.up?.total} service runs starting or up, it wakes once one of them stops or sleeps`
     }
     this.clearTimer(entry)
     entry.abort = new AbortController()
