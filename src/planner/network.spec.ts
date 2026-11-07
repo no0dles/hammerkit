@@ -811,7 +811,7 @@ describe('network', () => {
           delete: async (spec: any) => remove(spec.kind, spec.metadata.name),
         },
         appsApi: {
-          readNamespacedDeployment: async () => ({ status: { readyReplicas: 1 } }),
+          readNamespacedDeployment: async () => ({ status: { availableReplicas: 1 } }),
           listNamespacedDeployment: async ({ labelSelector }: any) => ({
             items: [...objects.values()].filter(
               (object) =>

@@ -1,3 +1,16 @@
+# [1.27.0-next.26](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.25...v1.27.0-next.26) (2026-11-07)
+
+
+### Bug Fixes
+
+* **kubernetes:** a service without a healthcheck counts as up once it ran 10s ([31010af](https://github.com/no0dles/hammerkit/commit/31010afc412e0e987d1c0ea7f04ac81c95b2359f))
+* **remote:** review round 1 of the traceable failures ([476d9d8](https://github.com/no0dles/hammerkit/commit/476d9d89857c697989d6dfa466d4f9f7c233ba84))
+
+
+### Features
+
+* **remote:** make failed runs traceable: causes, Kubernetes service logs, cluster state, remote logs ([8b204e9](https://github.com/no0dles/hammerkit/commit/8b204e9fc691d996ca1e325d20a5992abdd41835))
+
 # [1.27.0-next.25](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.24...v1.27.0-next.25) (2026-11-01)
 
 

@@ -116,6 +116,40 @@ describe('following a run', () => {
       }
     )
   })
+
+  it('only stops following a run it was told to detach from, and never cancels it', async () => {
+    const run = { id: 'run_1', state: 'up', tasks: [], results: {} }
+    const asked: string[] = []
+    await withHttp(
+      (req, res) => {
+        asked.push(`${req.method} ${req.url?.split('?')[0]}`)
+        const body = req.url?.startsWith('/v1/runs/run_1/logs')
+          ? { lines: [{ line: 1, task: 'web', stream: 'stdout', text: 'listening' }], truncated: false }
+          : run
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify(body))
+        }, 20)
+      },
+      async (url) => {
+        const abort = new AbortController()
+        const lines: string[] = []
+        const followed = followRun({ url, token: async () => 'tok' }, run as never, {
+          signal: abort.signal,
+          detach: true,
+          onLine: (line) => lines.push(line.text),
+        })
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        abort.abort()
+        const { run: last } = await followed
+        expect(last).toMatchObject({ id: 'run_1', state: 'up' })
+        expect(lines).toContain('listening')
+        // give a cancel sent on the abort the time to arrive
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        expect(asked.filter((call) => call.startsWith('POST'))).toEqual([])
+      }
+    )
+  })
 })
 
 describe('following a service run that moved', () => {

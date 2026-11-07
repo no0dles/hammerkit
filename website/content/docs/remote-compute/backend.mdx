@@ -602,7 +602,9 @@ left. It needs
 no rights on Secrets or pods outside of them: those come from `runRole`, which it binds in each
 caller's namespace (Kubernetes lets it bind that role only, by `bind`). In its own namespace it
 reads the Secrets of the accounts and makes tokens of their ServiceAccounts, by name. The
-processes of runs use the same identity.
+processes of runs use the same identity. `list` on events is how the log of a run that failed
+gets what the cluster said of its pods (a failed image pull, a pod no node takes); a
+`runRole` without it still works, and the log says the events could not be read.
 
 ```yaml title="rbac.yaml"
 apiVersion: rbac.authorization.k8s.io/v1
@@ -625,6 +627,7 @@ rules:
   - apiGroups: ['']
     resources: [pods, pods/exec, pods/log, persistentvolumeclaims, secrets, services]
     verbs: [get, list, create, patch, delete, deletecollection]
+  - { apiGroups: [''], resources: [events], verbs: [list] }   # what the cluster said of a run that failed
   - apiGroups: [batch]
     resources: [jobs, jobs/status]
     verbs: [get, list, create, patch, delete, deletecollection]

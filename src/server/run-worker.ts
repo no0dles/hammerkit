@@ -9,7 +9,7 @@ import { createParseContext } from '../schema/schema-parser'
 import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
 import { statusConsole } from '../planner/work-item-status'
-import { iterateWorkTasks } from '../planner/utils/plan-work-tasks'
+import { iterateWorkServices, iterateWorkTasks } from '../planner/utils/plan-work-tasks'
 import { assertWorkTreePathsWithinRoot } from '../planner/utils/assert-item-paths'
 import { scopeServiceVolumes } from '../planner/utils/hosted-volumes'
 import { SecretCatalog } from '../secrets/secret-catalog'
@@ -26,6 +26,7 @@ import { WorkTree } from '../planner/work-tree'
 import { getResourceName } from '../kubernetes/resources'
 import { removeStaleItems } from '../kubernetes/remove-stale-items'
 import { serviceRollouts } from '../kubernetes/service-rollouts'
+import { readClusterState } from '../kubernetes/cluster-state'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getCheckKeys } from '../optimizer/check-keys'
@@ -271,9 +272,11 @@ export async function runTasks(
         ? cli.up({ ...execOptions, workers: cli.defaultWorkers(), daemon: false, wait: 'ready' })
         : cli.exec({ ...execOptions, workers: cli.defaultWorkers() })
       const seen = new Map<string, Seen>()
+      const failedServices = new Set<string>()
       let ready = false
       const report = () => {
         reportTasks(emit, execution.state.current, seen, (text) => secrets.redact(text))
+        reportServiceFailures(emit, execution.state.current, failedServices, (text) => secrets.redact(text))
         if (input.up && up && !ready) {
           const targets = getEndpointTargets(execution.state.current, input.up, input.kubernetes)
           if (targets) {
@@ -313,7 +316,18 @@ export async function runTasks(
           return
         }
         if (!result.success) {
-          throw new Error(cancelled() ? 'the run was cancelled' : `${name} failed`)
+          if (cancelled()) {
+            throw new Error('the run was cancelled')
+          }
+          if (input.kubernetes) {
+            // what the cluster said, before the server removes what the run made
+            await reportClusterState(input.kubernetes, execution.state.current, !!input.up, emit, (text) =>
+              secrets.redact(text)
+            )
+          }
+          // a service run names what failed and why: its services have no results of their own
+          const failures = input.up ? describeFailures(execution.state.current, (text) => secrets.redact(text)) : []
+          throw new Error(failures.length > 0 ? failures.join('; ').slice(0, MAX_TASK_ERROR) : `${name} failed`)
         }
       } finally {
         watch.close()
@@ -328,6 +342,93 @@ export async function runTasks(
   } finally {
     listener.close()
   }
+}
+
+// What the cluster said of a run that failed, into its log: the server removes its pods
+// once it ended.
+async function reportClusterState(
+  kubernetes: WorkKubernetesEnvironment,
+  workTree: WorkTree,
+  ownNamespace: boolean,
+  emit: (event: RunEventData) => void,
+  redact: (text: string) => string
+): Promise<void> {
+  let lines: string[]
+  try {
+    lines = await readClusterState(createKubernetesInstances(kubernetes), kubernetes, workTree, ownNamespace)
+  } catch (e) {
+    lines = [`it could not be read: ${getErrorMessage(e)}`]
+  }
+  if (lines.length === 0) {
+    return
+  }
+  for (const text of [`what the cluster said in ${kubernetes.namespace}:`, ...lines.map((line) => `  ${line}`)]) {
+    emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text: redact(text).slice(0, MAX_LOG_TEXT) })
+  }
+}
+
+// A service has no result of its own in the run: why it failed goes into the log, under
+// its name, once.
+function reportServiceFailures(
+  emit: (event: RunEventData) => void,
+  workTree: WorkTree,
+  said: Set<string>,
+  redact: (text: string) => string
+): void {
+  for (const service of iterateWorkServices(workTree)) {
+    const state = service.state.current
+    if (state.type === 'error' && !said.has(service.name)) {
+      said.add(service.name)
+      if (lastError(service) === state.errorMessage) {
+        // the runtime said it already
+        continue
+      }
+      emit({
+        type: 'log',
+        task: service.name,
+        stream: 'stderr',
+        text: redact(state.errorMessage).slice(0, MAX_LOG_TEXT),
+      })
+    }
+  }
+}
+
+// The last error the runtime of an item wrote to its status.
+function lastError(item: { status: { read(): Generator<{ level: string; message: string }> } }): string | undefined {
+  let last: string | undefined
+  for (const message of item.status.read()) {
+    if (message.level === 'error') {
+      last = message.message
+    }
+  }
+  return last
+}
+
+/**
+ * What failed in a run, one line each, for its error: the services and tasks that failed,
+ * with their reason. Those that only stopped because another failed are left out.
+ */
+export function describeFailures(workTree: WorkTree, redact: (text: string) => string): string[] {
+  const failures: string[] = []
+  for (const service of iterateWorkServices(workTree)) {
+    const state = service.state.current
+    if (state.type === 'error') {
+      failures.push(`${service.name}: ${redact(state.errorMessage)}`)
+    } else if (state.type === 'end' && state.reason === 'crash') {
+      // on Docker a service that does not get ready ends, and its runtime says why
+      const why = lastError(service)
+      failures.push(`${service.name}: ${why ? redact(why) : 'it stopped on its own'}`)
+    }
+  }
+  for (const task of iterateWorkTasks(workTree)) {
+    const state = task.state.current
+    if (state.type === 'error') {
+      failures.push(`${task.name}: ${redact(state.errorMessage)}`)
+    } else if (state.type === 'crash') {
+      failures.push(`${task.name}: exit code ${state.exitCode}`)
+    }
+  }
+  return failures
 }
 
 interface Seen {

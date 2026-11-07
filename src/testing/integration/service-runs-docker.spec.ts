@@ -296,4 +296,70 @@ describe('service runs (docker)', () => {
     }),
     180_000
   )
+
+  // A service that does not become ready: the run says which and why, and the reason is in
+  // the log under the service's name, where who follows the run reads it.
+  it(
+    'names the service that failed and why in the error and the log of the run',
+    requiresLinuxContainers(async () => {
+      const directory = mkdtempSync(join(tmpdir(), 'hammerkit-service-worker-'))
+      try {
+        writeFileSync(
+          join(directory, '.hammerkit.yaml'),
+          [
+            'services:',
+            '  web:',
+            '    image: alpine:3.19',
+            '    cmd: sh -c "echo starting-web && sleep 300"',
+            '    ports: [0:80]',
+            '    healthcheck: { cmd: "false", timeout: 3s }',
+            '',
+          ].join('\n')
+        )
+        const lines: string[] = []
+        const stdout = new Writable({
+          write(chunk, _encoding, callback) {
+            lines.push(...chunk.toString().split('\n').filter(Boolean))
+            callback()
+          },
+        })
+        const stdin = new PassThrough()
+        stdin.write(
+          `${JSON.stringify({
+            entry: join(directory, '.hammerkit.yaml'),
+            tasks: [],
+            options: { cache: 'none' },
+            accounts: [],
+            catalog: { providers: {}, accounts: {} },
+            up: { services: ['web'], endpoints: [{ service: 'web', port: 80 }] },
+          })}\n`
+        )
+        await workerMain(stdin, stdout, hostEnvs(), directory, new AbortController())
+        stdin.end()
+        const messages = lines.map((line) => JSON.parse(line) as WorkerMessage)
+        const result = messages[messages.length - 1]
+        expect(result).toMatchObject({ kind: 'result', ok: false })
+        const error = result.kind === 'result' ? result.error : ''
+        expect(error).toMatch(/^web: service web did not pass its healthcheck "false" within 3s/)
+        // once: the runtime said it, the worker does not say it again
+        const said = messages.filter(
+          (message) =>
+            message.kind === 'event' &&
+            message.event.type === 'log' &&
+            message.event.task === 'web' &&
+            message.event.text === error?.slice('web: '.length)
+        )
+        expect(said).toEqual([
+          { kind: 'event', event: { type: 'log', task: 'web', stream: 'stderr', text: error?.slice('web: '.length) } },
+        ])
+        expect(messages).toContainEqual({
+          kind: 'event',
+          event: expect.objectContaining({ type: 'log', task: 'web', text: 'starting-web' }),
+        })
+      } finally {
+        rmSync(directory, { recursive: true, force: true })
+      }
+    }),
+    180_000
+  )
 })

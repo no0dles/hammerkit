@@ -80,6 +80,12 @@ It ends `succeeded` when its time ran out or somebody stopped it, and `stoppedBy
 `ttl`, `replaced` or who stopped it. A service that stops on its own, or never gets ready,
 fails the run. `maxDuration` limits how long it may take to get up.
 
+A run that failed names the services that failed and why in its `error`, such as `web: service
+web did not pass its healthcheck "curl -f localhost:8080" within 30s of starting`, and its log
+has the same line under the service's name, after what the service printed. The log stays
+with the run after its services are gone: `GET /v1/runs/<id>/logs`, or
+[`hammerkit remote logs`](/docs/cli/remote#reading-a-run-again).
+
 [`hammerkit remote up`](/docs/cli/remote#service-runs) does this from the command line, and
 the [agent tools](/docs/remote-compute/agents#service-runs) from a coding agent.
 
@@ -372,6 +378,20 @@ without it (an upgrade that didn't add it) says so in its log and in the run's, 
 what runs in the namespace instead, which stays. When the server starts, it removes the
 namespaces of service runs that none of its runs is in, but those of runs that sleep, from
 which it removes what still ran.
+
+What a service prints goes into the log of the run, as on a host: while it starts, and while
+it is up, until the log of the run reaches its limit. A service that can't become ready fails
+the run with the reason the cluster gives, at once when waiting won't change it: an image the
+registry says is not there or not for this cluster, a container that crashed twice in a row
+(with its exit code, or that it ran out of memory), or a network policy that did not take
+hold. A service without a healthcheck counts as ready once its container ran for 10 seconds
+without a restart. A reason that may still pass, such as a registry that limits pulls for
+now or a container that can't be created yet (a Secret that is not there yet), fails it once
+it lasted a minute; until then the log says what it waits for. A pod that waits for a node
+says so too, with what the scheduler said, and the run goes on waiting up to `maxDuration`
+for one. Before the namespace goes, the server writes into the log of a failed run what the
+cluster said: the pods that were not as they should be, and the warning events of the
+namespace.
 
 On a cluster a service run starts from a branch, not from a sandbox, whose claim is in the
 caller's namespace: push the sandbox to a branch and start that.

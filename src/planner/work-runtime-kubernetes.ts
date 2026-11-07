@@ -15,7 +15,12 @@ import { getEnvironmentVariables } from '../environment/replace-env-variables'
 import { V1Deployment, V1EnvVar, V1Job, V1Pod, V1PodSpec, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
-import { DEFINITION_LABEL, ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
+import {
+  DEFINITION_LABEL,
+  ensureKubernetesDeploymentExists,
+  getServiceContainerName,
+} from '../kubernetes/ensure-kubernetes-deployment-exists'
+import { followPodLogs } from '../kubernetes/follow-pod-logs'
 import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
 import { ensurePersistentData, getStateDirsInUse } from '../kubernetes/ensure-persistent-data'
@@ -658,16 +663,45 @@ export function kubernetesServiceRuntime(
         followLog: false,
         run: kubernetes.server ? getRunLabelValue(kubernetes.server.run) : null,
       })
-      await ensureKubernetesDeploymentExists(
+      // its output, as on Docker: while it starts, and while it runs unless it runs on
+      // without hammerkit (`up --daemon`)
+      const logs = followPodLogs(
         instance,
-        kubernetes,
-        service,
-        persistence,
-        getKubernetesSecretRefs(service, kubernetes, service.data.secrets),
-        options.stateKey,
-        network,
-        { previous, signal: options.abort }
+        kubernetes.namespace,
+        getItemSelector(service, kubernetes),
+        getServiceContainerName(service),
+        (line) => service.status.console('stdout', line),
+        { onError: (text) => service.status.write('debug', text) }
       )
+      try {
+        await ensureKubernetesDeploymentExists(
+          instance,
+          kubernetes,
+          service,
+          persistence,
+          getKubernetesSecretRefs(service, kubernetes, service.data.secrets),
+          options.stateKey,
+          network,
+          { previous, signal: options.abort }
+        )
+      } catch (e) {
+        // the last words of a container that crashed, before why it failed
+        await logs.settle().catch(() => undefined)
+        logs.stop()
+        throw e
+      }
+      if (options.daemon || options.abort.aborted || environment.abortCtrl.signal.aborted) {
+        logs.stop()
+      } else {
+        // either ends it, and takes the other listener with it
+        const listening = new AbortController()
+        const stop = () => {
+          logs.stop()
+          listening.abort()
+        }
+        options.abort.addEventListener('abort', stop, { once: true, signal: listening.signal })
+        environment.abortCtrl.signal.addEventListener('abort', stop, { once: true, signal: listening.signal })
+      }
 
       options.state.set({
         type: 'running',
@@ -752,7 +786,7 @@ export function isRolledOut(deployment: V1Deployment, definition: string, stateK
     labels['hammerkit.dev/state'] === stateKey &&
     (status?.observedGeneration ?? 0) >= (deployment.metadata?.generation ?? 0) &&
     (status?.updatedReplicas ?? 0) >= 1 &&
-    (status?.readyReplicas ?? 0) >= 1 &&
+    (status?.availableReplicas ?? 0) >= 1 &&
     (status?.replicas ?? 0) === (status?.updatedReplicas ?? 0)
   )
 }
