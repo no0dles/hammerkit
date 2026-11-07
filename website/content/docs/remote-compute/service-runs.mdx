@@ -428,7 +428,9 @@ the claim of the task, which the service's pod mounts. A task that is a hit in t
 (`install-…-upload`) takes its outputs from the server into its claim, and then the service
 starts. A miss runs the task's Job. The claim names the state whose outputs it holds whole,
 so a run that wakes, or moves to a commit where the task did not change, mounts them as they
-are: no Job and no upload, also after sleep removed the Jobs. With
+are: no Job and no upload, also after sleep removed the Jobs. A claim keeps the outputs of the
+states pods of the run mount and of the latest one; the others go when a state is built or
+restored. With
 `runs.up.keepVolumes: false` the claims go when the run sleeps, and a wake uploads them again.
 
 What a service prints goes into the log of the run, as on a host: while it starts, and while

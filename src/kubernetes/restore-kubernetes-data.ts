@@ -7,7 +7,7 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getItemFilesDir, getKubernetesPersistence } from './volumes'
-import { clearClaim, getPodForPersistence } from './ensure-persistent-data'
+import { clearClaim, clearStateFiles, getPodForPersistence } from './ensure-persistent-data'
 import { getClaimSubPath } from './claim-layout'
 
 // Where the upload pod (which mounts the work's claim at /dev/hammerkit/<id>) unpacks the
@@ -28,14 +28,19 @@ export async function restoreKubernetesData(
   environment: Environment,
   path: string,
   // the kept claim of the work holds what an earlier run left, which goes first; on a
-  // service run, the outputs go into the folder of `stateKey` (see getStateFilesDir)
-  options: { reset?: boolean; stateKey?: string } = {}
+  // service run, the outputs go into the folder of `stateKey` (see getStateFilesDir);
+  // `otherStates`: the folders of the other states go but these (the ones pods of the run
+  // mount), and the folder of `stateKey` is emptied first
+  options: { reset?: boolean; stateKey?: string; otherStates?: Set<string> } = {}
 ) {
   const persistence = await getKubernetesPersistence(work, kubernetes, options.stateKey)
   const stateDir = kubernetes.server?.serviceRun ? getItemFilesDir(work, options.stateKey) : undefined
   await getPodForPersistence(instance, kubernetes, work, persistence, 'write', async (name) => {
     if (options.reset) {
       await clearClaim(instance, kubernetes, work, name)
+    }
+    if (stateDir && options.otherStates) {
+      await clearStateFiles(instance, kubernetes, work, name, stateDir, options.otherStates)
     }
     for (const generatedArchive of getArchivePaths(work.data, path)) {
       if (!(await environment.file.exists(generatedArchive.filename))) {

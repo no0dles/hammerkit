@@ -286,8 +286,13 @@ export function kubernetesTaskRuntime(
       }
       if (remembers && !kept) {
         // the folder of the state is written now: until it is whole, the claim names no state
+        // (a restore without a state key says none, and the next run uploads again)
         await forgetClaimState(instance, kubernetes, claim)
-        await restoreKubernetesData(task, kubernetes, instance, environment, path, { stateKey })
+        await restoreKubernetesData(task, kubernetes, instance, environment, path, {
+          stateKey,
+          // the folders of other states no pod of the run mounts go, as before a Job
+          ...(stateKey ? { otherStates: await getStateDirsInUse(instance, kubernetes.namespace, claim) } : {}),
+        })
         if (stateKey) {
           await recordClaimState(instance, kubernetes, claim, stateKey)
         }
@@ -591,9 +596,11 @@ export function kubernetesTaskRuntime(
         return useClaimState(instance, kubernetes, claim)
       }
       if (remembers) {
-        // a service run that sleeps loses its Jobs but keeps its claims, the claim says
+        // a service run that sleeps loses its Jobs but keeps its claims, the claim says. One
+        // that names no state is being written (or was, and that failed): the folder of the
+        // state of an earlier Job may be gone. Only a task without a claim goes by its Jobs.
         const remembered = await rememberedClaimState(instance, kubernetes, claim)
-        if (remembered) {
+        if (remembered !== undefined) {
           return remembered
         }
       }

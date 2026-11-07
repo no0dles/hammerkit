@@ -18,6 +18,7 @@ import { EventEmitter } from 'events'
 import { Readable } from 'stream'
 import { Parser } from 'tar'
 import {
+  clearStateFiles,
   ensurePersistentData,
   getPodForPersistence,
   packSource,
@@ -436,6 +437,31 @@ describe('the files of a service of a service run', () => {
     ])
     // not where the pod of the commit before reads its files
     expect(archives).toEqual([[`${dir}/package.json`]])
+  })
+
+  it('a restore of a task makes room the same way: other folders go but the mounted ones, its own is emptied', async () => {
+    const commands: string[][] = []
+    const instance = {
+      exec: {
+        exec: async (...args: any[]) => {
+          commands.push(args[3])
+          const res = new EventEmitter()
+          setImmediate(() => {
+            args[8]({ status: 'Success' })
+            res.emit('close')
+          })
+          return res
+        },
+      },
+    } as any
+    const dir = getStateFilesDir('new-state')
+    const mounted = [getStateFilesDir('b-state'), getStateFilesDir('a-state')]
+    const build = { id: () => 'build', name: 'build', status: { write: () => undefined } } as any
+    await clearStateFiles(instance, { namespace: 'hk-run' } as any, build, 'build-upload', dir, new Set(mounted))
+    expect(commands).toEqual([
+      ['sh', '-c', REMOVE_OTHER_STATES, 'sh', '/dev/hammerkit/build', dir, ...mounted.sort()],
+      ['rm', '-rf', `/dev/hammerkit/build/${dir}`],
+    ])
   })
 
   it('are not uploaded again into the folder the pod mounts, once they are there', async () => {
