@@ -1,0 +1,152 @@
+---
+title: "Status"
+description: "See how a server stands for you: what runs, what waits in the queue and why, your limits and the runs that count against them, and the service runs that are up or asleep."
+---
+A server runs a few runs at a time and queues the rest. When a run of yours does not start,
+`hammerkit remote status` says why: every place is taken, you are at your own limit of
+running runs, another run works on its sandbox, or it waits for an approval. Each of your
+limits lists the runs that count against it, so you know which one to stop.
+
+```txt
+$ hammerkit remote status
+build: signed in as alice
+places: 4 of 4 taken (runs.maxConcurrent)
+  run_a8Zt0pQw3mVx7yLc  test, lint  since 2026-11-07T10:01:12.000Z
+  run_c2Lk9sDe4rTy6uIo  build  since 2026-11-07T10:05:40.000Z
+  2 runs of others
+queue: 2
+  1. run_f1Gh5jKl8zXc3vBn  deploy  waits: your limit of running runs, 2 of 2 (runs.limits.running)
+  2. a run of somebody else  waits: no free place, 4 of 4 taken (runs.maxConcurrent)
+waiting for an approval: 1 of at most 100
+  run_k9Qw2eRt5yUi8oPa  e2e  needs op-payments-prod until 2026-11-07T11:42:00.000Z
+service runs: 3 of 20 on the server
+  run_Vd1rX9pQ2mT7wN4a  up  feature-login: up web  until 2026-11-09T10:12:00.000Z, sleeps at 2026-11-07T10:42:00.000Z
+    web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com
+  run_Ws8tY3uI6oP1aS4d  asleep  feature-cart: up web  until 2026-11-08T09:00:00.000Z
+your limits:
+  running   2 of 2    run_a8Zt0pQw3mVx7yLc, run_c2Lk9sDe4rTy6uIo  full
+  queued    1 of 20   run_f1Gh5jKl8zXc3vBn
+  approval  1 of 10   run_k9Qw2eRt5yUi8oPa
+  services  2 of 3    run_Vd1rX9pQ2mT7wN4a, run_Ws8tY3uI6oP1aS4d
+```
+
+`--json` prints the overview as the server answers it, for a script or an agent.
+
+## The queue
+
+The queue is in the order the server starts runs. When a place frees up, the first run in
+it whose owner has a place of their own left starts, so one caller with many runs does not
+keep the others waiting (see [Limits and restarts](/docs/remote-compute/runs#limits-and-restarts)).
+Each run in the queue says what holds it, the first that applies:
+
+| Waits for | What it means | What helps |
+| --- | --- | --- |
+| your limit of running runs | You have `runs.limits.running` runs executing. A free place would not start it. | Wait for one of yours, or stop it with `remote stop`. |
+| its sandbox | Another run works on the same [sandbox](/docs/remote-compute/sandboxes), which runs one at a time. | Wait for that run. |
+| a run that holds what it needs | On Kubernetes, runs of one caller that share kept claims run one at a time, see [Namespaces](/docs/remote-compute/backend#namespaces). | Wait for that run. |
+| no free place | Every place of `runs.maxConcurrent` is taken. | Wait; the operator may raise `runs.maxConcurrent`. |
+
+A run that waits for an [approval](/docs/remote-compute/entitlements#approvals) is not in the
+queue yet: it is listed under `waiting for an approval` with the accounts it still needs and
+when it is rejected without an answer.
+
+`places` counts the places taken. A service run takes one while it starts and gives it back
+once it is up. A line `N taken by no running run` means the server counts a place that no
+run holds, which is a fault worth reporting with the output of `remote status --json`.
+
+## Your limits
+
+| Line | Counts | Its limit |
+| --- | --- | --- |
+| `running` | Your runs that execute, service runs while they start | `runs.limits.running` |
+| `queued` | Your runs in the queue, and service runs that are waking | `runs.limits.queued` |
+| `approval` | Your runs that wait for an approval | `runs.limits.waiting` |
+| `services` | Your service runs that are starting, up or asleep: one that sleeps keeps its place | `runs.up.limits.up` |
+
+A submit over `queued` or `approval` is answered `429` and says which; over `services` too.
+A run that ended counts against nothing.
+
+## Service runs and past runs
+
+`hammerkit remote services` lists the service runs that are starting, up or asleep: yours,
+and those of a repository whose endpoints you may open, with their addresses and when they end
+or sleep. `--ended` adds the ones that ended, as long as the server keeps them.
+
+`hammerkit remote runs` lists your runs, newest first, as many as the server keeps
+(`runs.keep`, 200 by default). A queued run says where it stands and why it waits.
+
+| Option | What it does |
+| --- | --- |
+| `--state <states>` | Only runs in these states, comma separated: `awaiting-approval`, `queued`, `running`, `up`, `asleep`, `succeeded`, `failed`, `cancelled`, `rejected`. |
+| `--services`, `--tasks` | Only service runs, or only runs of tasks. |
+| `--all` | Also the runs of others you may see, each with its owner, see [Who sees what](#who-sees-what). |
+| `--limit <count>` | Show more than 20. |
+
+Read the log of one with [`remote logs`](/docs/cli/remote#reading-a-run-again).
+
+## Who sees what
+
+Everyone sees their own runs in full. Of the runs of others, a caller sees:
+
+- the runs that wait for an approval of an account they `use`: they decide about them;
+- the service runs of a repository whose endpoints they may open (an `endpoints` level);
+- every run, with `observe: true` on one of their entitlements.
+
+A run of somebody else names its owner, and leaves out the arguments and the plan of its
+tasks; who approves reads those with `remote show`. Every other run counts in the totals
+and stands in the queue as `a run of somebody else`, with no id, owner or task; a run that
+holds one of yours is named only when you may see it.
+
+`observe` is for the people who run the server and need to see why the queue is stuck:
+
+```yaml title="server.yaml"
+entitlements:
+  - group: { iss: https://login.example.com, name: platform }
+    observe: true
+```
+
+It only shows. It stops, extends and approves nothing, and runs nothing.
+
+## API
+
+`GET /v1/overview` answers what `remote status` prints. A caller with no entitlement is
+answered `403`.
+
+```json
+{
+  "you": { "iss": "https://login.example.com", "sub": "alice", "observe": false },
+  "places": { "max": 4, "used": 4, "runs": [{ "id": "run_a8Zt0pQw3mVx7yLc", "state": "running", "tasks": ["test", "lint"] }], "others": 2 },
+  "queue": [
+    {
+      "position": 1,
+      "mine": true,
+      "run": { "id": "run_f1Gh5jKl8zXc3vBn", "state": "queued", "tasks": ["deploy"] },
+      "waitsFor": { "type": "own-limit", "running": 2, "limit": 2 }
+    },
+    { "position": 2, "mine": false, "waitsFor": { "type": "place", "used": 4, "max": 4 } }
+  ],
+  "approvals": { "waiting": 1, "max": 100, "runs": [] },
+  "services": { "open": 3, "max": 20, "runs": [] },
+  "limits": {
+    "waiting": { "used": 0, "limit": 10, "runs": [] },
+    "queued": { "used": 1, "limit": 20, "runs": ["run_f1Gh5jKl8zXc3vBn"] },
+    "running": { "used": 2, "limit": 2, "runs": ["run_a8Zt0pQw3mVx7yLc", "run_c2Lk9sDe4rTy6uIo"] },
+    "services": { "used": 0, "limit": 3, "runs": [] }
+  }
+}
+```
+
+Runs are shown as `GET /v1/runs` lists them (shortened here). `waitsFor.type` is
+`own-limit`, `sandbox` or `held` (with the `run` that holds it, when you may see it),
+`place`, or `starting` for a run that starts with the next look at the queue.
+
+`GET /v1/runs` takes the same filters as `remote runs`:
+
+| Parameter | What it does |
+| --- | --- |
+| `scope` | `mine` (the default), `visible` (also the runs of others you may see) or `all` (every run, needs `observe`, else `403`). |
+| `state` | One or more states, comma separated. |
+| `kind` | `tasks` or `services`. |
+
+A queued run, in the list and in `GET /v1/runs/<id>`, carries where it stands:
+`"queue": { "position": 1, "waitsFor": { "type": "place", "used": 4, "max": 4 } }`.
