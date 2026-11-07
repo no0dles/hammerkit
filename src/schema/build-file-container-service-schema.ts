@@ -41,7 +41,12 @@ export const buildFileContainerServiceSchema = object({
   resources: resourcesSchema.optional(),
   // on Kubernetes, how often its container may crash and be restarted before the
   // service fails (2 by default): it fails when it crashes once more
-  restarts: number().int().min(0).describe('crashes restarted before it fails on Kubernetes, 2 by default').optional(),
+  restarts: number()
+    .int()
+    .min(0)
+    .max(10)
+    .describe('crashes restarted before it fails on Kubernetes, 0 to 10, 2 by default')
+    .optional(),
   // on Kubernetes, the size of the claim that holds its sources, mounts and volumes
   volumeSize: sizeSchema.describe('size of its claim on Kubernetes, e.g. 10Gi').optional(),
   // what the service reaches besides its needs; tasks needing it always reach it

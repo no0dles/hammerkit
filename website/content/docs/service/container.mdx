@@ -144,8 +144,10 @@ ran for 10 seconds without a restart, so one that exits right after it started f
 On Kubernetes the cluster restarts a service's container that exits, with a back-off of 10s,
 20s, 40s and so on between starts. While hammerkit waits for the service to become ready, it
 fails the service with how the container exited once it crashed again after `restarts`
-restarts: by default 2, so at the third crash, about 35 seconds in. Raise it for a service that
-may crash a few times while what it needs starts, or set `0` to fail at the first crash:
+restarts: by default 2, so at the third crash, about 35 seconds in. Raise it (up to 10) for a
+service that may crash a few times while what it needs starts, or set `0` to fail at the first
+crash. A healthcheck's `timeout` counts from each start of the container, so the back-off
+between two starts doesn't use it up:
 
 ```yaml
 services:

@@ -654,7 +654,8 @@
                   "restarts": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "crashes restarted before it fails on Kubernetes, 2 by default"
+                    "maximum": 10,
+                    "description": "crashes restarted before it fails on Kubernetes, 0 to 10, 2 by default"
                   },
                   "volumeSize": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize",

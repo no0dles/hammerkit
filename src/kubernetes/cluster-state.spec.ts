@@ -182,6 +182,10 @@ describe('getPodFailure', () => {
       })
     expect(getPodFailure(ended(1))).toBeNull()
     expect(getPodWaiting(ended(1))).toBe('crashed and starts again: it exited with code 4 (Error), restarted 1 time')
+    // as often as its service allows
+    expect(getPodFailure(ended(0), 'web', 0)?.final).toBe(true)
+    expect(getPodFailure(ended(4), 'web', 5)).toBeNull()
+    expect(getPodFailure(ended(5), 'web', 5)?.final).toBe(true)
     // the instance that ended now, not the one before it
     expect(getPodFailure(ended(2))).toEqual({
       text: 'it keeps crashing: it exited with code 4 (Error), restarted 2 times',

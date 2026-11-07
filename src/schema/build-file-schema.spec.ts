@@ -23,6 +23,9 @@ describe('buildFileSchema', () => {
       expect((await parse({ services: { api: { image: 'node:alpine', restarts: 5 } } })).success).toBe(true)
       expect((await parse({ services: { api: { image: 'node:alpine', restarts: -1 } } })).success).toBe(false)
       expect((await parse({ services: { api: { image: 'node:alpine', restarts: 1.5 } } })).success).toBe(false)
+      // a crash loop of 10 restarts is about 35 minutes of back-off already
+      expect((await parse({ services: { api: { image: 'node:alpine', restarts: 10 } } })).success).toBe(true)
+      expect((await parse({ services: { api: { image: 'node:alpine', restarts: 11 } } })).success).toBe(false)
     })
 
     it('rejects a service that is neither a container nor a kubernetes service', async () => {
