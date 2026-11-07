@@ -450,9 +450,9 @@ export class EndpointGateway {
         res,
         503,
         'Starting',
-        `<p>The services of this endpoint are ${run.wakes ? 'waking up' : 'starting'} (${escape(
-          run.state
-        )}), this page reloads until they are up.</p>`
+        `<p>The services of this endpoint are ${
+          run.wakes ? `waking up${run.volumesKept ? ' with the volumes they kept' : ''}` : 'starting'
+        } (${escape(run.state)}), this page reloads until they are up.</p>`
       )
     }
     if (run.state === 'asleep') {
@@ -525,6 +525,7 @@ export class EndpointGateway {
               run.source.clean === false ? ' with changes' : ''
             }`
           : 'an upload'
+    const moving = run.moving ? `, moving to ${run.moving.commit.slice(0, 12)}` : ''
     const options = ['1h', '8h', '24h', '72h']
       .map((ttl) => `<option value="${ttl}"${ttl === '8h' ? ' selected' : ''}>${ttl}</option>`)
       .join('')
@@ -534,8 +535,10 @@ export class EndpointGateway {
       run.up?.name ?? 'Endpoint',
       `<dl>
 <dt>Service</dt><dd>${escape(endpoint.service)}, port ${endpoint.port}</dd>
-<dt>Run</dt><dd><code>${escape(run.id)}</code> of <code>${escape(run.owner.sub)}</code>, ${escape(run.state)}</dd>
-<dt>Source</dt><dd>${escape(source)}</dd>
+<dt>Run</dt><dd><code>${escape(run.id)}</code> of <code>${escape(run.owner.sub)}</code>, ${escape(run.state)}${
+        run.state === 'asleep' ? (run.volumesKept ? ' with its volumes kept' : ', its services start from nothing') : ''
+      }</dd>
+<dt>Source</dt><dd>${escape(source + moving)}</dd>
 <dt>Ends</dt><dd>${escape(run.expiresAt ?? 'when it is up and its time ran out')}</dd>
 ${
   run.up?.sleepTtl

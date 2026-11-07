@@ -97,9 +97,12 @@ at addresses of its own, and two people with a branch of the same name don't tak
 other's. A run whose address would be one of another run that is not over, of somebody else
 or of another name, is refused with `409`.
 
-A second service run of yours with the same name replaces the first: once the new one is up,
-the old one stops, and the addresses stay. Push a fix, start the branch again, and the
-reviewer reloads the same page. Until the new one is up, the old one answers.
+A second service run of yours with the same name takes the place of the first, and the
+addresses stay. Push a fix, start the branch again, and the reviewer reloads the same page.
+When it starts the same services of the same build file, the first run
+[moves to the new commit](#moving-to-another-commit): it keeps its id, its time and the data
+of its services. Otherwise it is replaced: once the new run is up, the old one stops. Either
+way, until the new commit is up, the old one answers.
 
 Each caller has at most `runs.up.limits.up` service runs starting or up at a time (`3` by
 default); one more is answered `429`. The server takes `runs.up.total` of them (`20`). A run
@@ -131,7 +134,7 @@ asleep or not. An endpoint whose run ended says so, and who to ask, with status 
 With a `sleepTtl`, a run whose endpoints get no request for that long stops its services and
 is `asleep`: nothing of it runs, its addresses and its id stay. The next request of somebody
 who may open an endpoint wakes it: the run starts the services again, from the commit it
-started first (where its branch is now or not), and the page says they are waking up and
+is at (the one it started at, or its last move, wherever its branch is now), and the page says they are waking up and
 reloads until they are up (`503` with `Retry-After` for other clients). Every request and
 WebSocket keeps it up for its `sleepTtl` from then. The `ttl` goes on counting while it
 sleeps; at its end the run ends, as one that never slept.
@@ -142,14 +145,98 @@ owner who may no longer run from the repository, use its accounts or publish its
 ends the run instead, with the reason as its error. An account they may only request ends it
 too, nobody is there to approve it; start the run again.
 
-A woken run starts from nothing: what its services kept in their containers is gone, as on a
-new run. A run from a sandbox doesn't sleep, its files change under it; push the sandbox and
-start the branch.
+A run keeps the volumes of its services while it sleeps: the database of a preview wakes
+with the rows it had. What a service wrote anywhere else in its container is gone, as on a
+new run. The volumes go only when the run really ends: at its `ttl`, when it is stopped or
+replaced, or when it fails. While it sleeps, the status page of its endpoints says so
+(`asleep with its volumes kept`). A server with `runs.up.keepVolumes: false` keeps nothing:
+a woken run starts from nothing.
+
+A run from a sandbox doesn't sleep, its files change under it; push the sandbox and start the
+branch.
 
 The services live with the server: when it stops, they stop. A run that may sleep is asleep
-then, and the next request after the server is back wakes it, unless its `ttl` ended while
-the server was down: then it ends as the server starts, and gives its place back. The others
-fail with `the server stopped while the services were up, start them again`.
+then, with its volumes, and the next request after the server is back wakes it, unless its
+`ttl` ended while the server was down: then it ends as the server starts, gives its place back,
+and its volumes go. The others fail with
+`the server stopped while the services were up, start them again`. A server that
+starts again finds the volumes of its sleeping runs; those of a run that ended or that it has
+no record of any more go. On a host, the docker volumes of a service run carry a key of the
+server (by its runs' directory), so a second server on the same docker leaves them alone.
+Earlier prereleases named them otherwise: a server of this version doesn't sweep those, remove
+them with `docker volume rm` once their runs ended.
+
+## Moving to another commit
+
+`remote up` with the name of a run of yours that is up or asleep, and the same build file
+version, services, endpoints and `sleepTtl`, moves that run to the commit its ref points at
+now (or `--commit`), instead of starting a new one. The server checks the move as it checks a
+new run: you may still run from the repository, with the run's accounts. A run that would need
+an approval is started anew and replaces the old one.
+
+```txt
+$ git push && hammerkit remote up api web --endpoint web:4200 --name pr-42
+run_Vd1rX9pQ2mT7wN4a on build (up) moves to feature/login at 9e01b77d...
+[hammerkit] moving from 4be1a07c... to 9e01b77d...
+[hammerkit] checked out github.com/corp/shop at 9e01b77d...
+run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m without a request
+  web:4200  https://pr-42-4200-3fa2c1e09b7d.run.example.com/
+```
+
+What moves with it:
+
+- **Its id, addresses and time.** The run stays `up`; `--ttl` gives it more time, never less.
+  It takes no other place of `runs.up.limits`.
+- **The data of its services.** Volumes stay, as across a sleep, with one exception: a service
+  whose image or volumes change is another service to hammerkit, and starts with new, empty
+  volumes (a database from `postgres:16.3` to `16.4` has no rows). The volumes of the old one
+  stay until the run ends and count against its quota.
+- **What did not change.** Tasks run again only where their files changed, as any run of the
+  commit would. A service whose files, variables, definition or dependencies' outputs did not
+  change goes on running as it is, with the secrets it read: a rotated secret reaches it with a
+  change of the service, or a new run (`remote stop`, then `remote up`).
+- **A dev server, on Kubernetes.** A service with
+  [`continuous: true`](/docs/service/container#continuous) watches its own files: when only
+  its `src` or `mounts` change, the move writes the changed files into its running pod
+  instead of starting a new one, and it reloads. It serves the files as they arrive, not the
+  commit before until the new one is healthy. A move that does not get up, also because the
+  dev server restarts or stops being ready within 15 seconds of getting them, puts its files back.
+
+The run's record lists every commit it moved to (`moves`, with `moving` while a move is under
+way), and its `source` and the status page of its endpoints show the commit it is at now. A run that is asleep only changes its commit: the next
+wake starts the services of the new one. A second `remote up` while a move is under way
+takes its place.
+
+How the services get to the new commit depends on the backend:
+
+- **On Kubernetes** the run executes again beside itself, in its namespace. A service that
+  changed rolls to a new pod, and its requests go to the old one until the new one passes its
+  healthcheck. What the new commit uploads and builds (a service's `src` and `mounts`, the
+  outputs of the tasks it depends on, such as `dist` or `node_modules`) goes into a folder of
+  its own state in the claim, so the old pod serves the files and builds it started with until
+  then, also when the move fails. A service with volumes of its own (a database) stops before
+  its new pod starts, since two pods would write the same data. Once all services are ready,
+  the run is at the new commit, and what the old commit had that the new one does not (a
+  service whose image changed) goes. A move whose services don't get ready puts every service
+  it rolled back as it was, removes the ones it added, and leaves the run up at the commit it
+  was at; `remote up` says why: `did not move to 9e01b77d...: ...`. The folders of a claim go
+  once no pod of the run mounts them and a later state is built or uploaded.
+- **On a host** the services stop, their volumes kept, and start again at the new commit:
+  every service restarts, and the endpoints answer that they are starting meanwhile. When the
+  new commit doesn't get up, the services start again at the commit before, with their
+  volumes, and `remote up` says why.
+
+A move takes a place of `runs.maxConcurrent` while it runs, and waits for one, and it ends after
+`runs.maxDuration` as a run would.
+
+During a move the pods of the old commit still mount their claims, and a cloud disk attaches
+to one node at a time. So every pod of a service run that mounts claims (a service's, a Job of
+a changed task, an upload) has to go to a node where a pod runs that mounts the same claims,
+while one does; the first one goes anywhere. A full node keeps the pod waiting, and a rollout
+that makes no progress for 10 minutes fails the move. Unlike the first start, where the tasks
+run before the services, a move runs the Jobs of its changed tasks and the uploads of its
+changed services in the run's namespace while all services are up: its quota needs room for
+them and for one more pod of a rolled service.
 
 ## Who opens an endpoint
 
@@ -265,6 +352,7 @@ runs:
     maxTtl: 72h # default, the furthest a run or an extend sets the end
     limits: { up: 3, asleep: 10 } # defaults, per caller starting or up, and asleep; 429 over it
     total: 20 # default, on the whole server, 503 over it
+    keepVolumes: true # default, a run keeps the volumes of its services while it sleeps
     quota: { requests.cpu: '4', requests.memory: 8Gi } # Kubernetes only, backend.quota when left out
 ```
 
@@ -276,6 +364,7 @@ runs:
 | `endpoints.session` | How long a sign-in at one endpoint holds, at most until its run ends; also how long a group or claim taken away at the issuer still counts. |
 | `endpoints.dashboard` | The host of the [dashboard](/docs/remote-compute/status#dashboard) below the domain, `hammerkit` by default (`https://hammerkit.run.example.com`); `false` for none. It needs `login`. |
 | `runs.up` | The time and the limits of service runs, see [Time](#time) and [Addresses](#addresses). |
+| `runs.up.keepVolumes` | Whether a run keeps the volumes of its services while it sleeps, see [Sleeping](#sleeping). `false` removes them when it sleeps. |
 
 The sign-in gets the claims an entitlement matches on from the ID token, so `group` and
 `claims` entitlements work for people signed in at an endpoint as for the API, as long as
@@ -304,12 +393,18 @@ docker host, where only the server reaches them, so the docker daemon has to be 
 server's machine. No other port of a service run is published, whatever its build file says:
 `hammerkit up` would publish them on every interface, where two runs collide.
 
+The volumes of a service run are its own (`hammerkit-up-<hash of the run>-<volume>`), not
+the ones a `hammerkit up` on the same docker uses. They stay while the run sleeps and go at its
+end; the server removes those of runs it no longer has when it starts.
+
 ### On Kubernetes
 
 A service run gets a namespace of its own, with the policies, quota (`runs.up.quota`) and
-rights of a caller's namespace, and goes with it at the end, or when it sleeps (a woken run
-gets a new one): the services stay up for hours while the caller's other runs go on in
-theirs. The server reaches an endpoint at the Service of its service, so it has to run in the
+rights of a caller's namespace, and goes with it at the end: the services stay up for hours
+while the caller's other runs go on in theirs. While the run sleeps, its namespace stays with
+the claims of its services, so their volumes count against its quota; its Deployments, Jobs,
+pods, Services and Secrets go. With `runs.up.keepVolumes: false` the namespace goes when it
+sleeps, and a woken run gets a new one. The server reaches an endpoint at the Service of its service, so it has to run in the
 cluster (not with a `kubeconfig`), and one more NetworkPolicy of the namespace lets the
 server's namespace in, to the ports of the endpoints only: a database of the run stays for
 its pods. That policy is what keeps the other pods of the cluster from reaching a service
@@ -324,7 +419,8 @@ namespaces of its service runs (see
 [What the server may do](/docs/remote-compute/backend#what-the-server-may-do)). A server
 without it (an upgrade that didn't add it) says so in its log and in the run's, and removes
 what runs in the namespace instead, which stays. When the server starts, it removes the
-namespaces of service runs that none of its runs is in.
+namespaces of service runs that none of its runs is in, but those of runs that sleep, from
+which it removes what still ran.
 
 What a service prints goes into the log of the run, as on a host: while it starts, and while
 it is up, until the log of the run reaches its limit. A service that can't become ready fails
@@ -351,3 +447,8 @@ caller's namespace: push the sandbox to a branch and start that.
 - A service run from a sandbox on Kubernetes.
 - Services that keep running over a restart of the server: a run that may sleep wakes after
   it, the others fail.
+- A run that follows its branch on its own: a move happens on `remote up`, a wake starts the
+  commit the run is at.
+- Updating the files of a running service in place on a host: every service starts again
+  at the new commit, also one with `continuous: true`.
+- Keeping the volumes of a run that is replaced (another build file or other services).

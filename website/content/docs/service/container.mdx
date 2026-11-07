@@ -180,6 +180,38 @@ services:
 `workdir` applies to the Docker and Kubernetes runtimes alike and is part of the
 service's identity; services that don't declare it keep their id.
 
+## A service that watches its files [#continuous]
+
+A dev server that rebuilds on its own when its files change (`ng serve`, `vite`,
+`nodemon`) is a service with `continuous: true`:
+
+```yaml
+services:
+  web:
+    image: node:24-alpine
+    continuous: true
+    deps: [install]
+    src:
+      - src
+      - angular.json
+    cmd: npx ng serve --host 0.0.0.0
+    ports:
+      - 4200
+```
+
+On your machine its `src` and `mounts` are mounted from your files, so it sees every save,
+and `hammerkit up --watch` leaves it running instead of restarting it.
+
+In a [service run](/docs/remote-compute/service-runs#moving-to-another-commit) on
+Kubernetes, a move to a commit that changes only its `src` or `mounts` writes the changed
+files into the pod that runs, and removes the ones that are gone: the pod stays, and the dev
+server reloads. If it then restarts (even once, whatever its `restarts` allows) or stops
+being ready within 15 seconds, the move fails and the files of the commit before are put back. A path of its `src` or `mounts` that the new
+commit doesn't have is emptied rather than removed, since the pod mounts it. Its `deps` work as for any service. When the output of one changes (a new
+`node_modules`), or its image, command or variables do, it gets a new pod. The files reach
+the pod through its claim; a watcher that relies on file events needs the claim on a disk of
+the node (the default of most clusters), and polling on a network file system.
+
 ## Volumes
 Services start and stop depending on what tasks need.
 To persist data across restarts, use volumes.

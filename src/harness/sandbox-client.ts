@@ -453,7 +453,11 @@ export const FINAL_RUN_STATES = ['succeeded', 'failed', 'cancelled', 'rejected']
 
 // Submits a run, as `POST /v1/runs` takes it, and answers it as the server queued it or
 // holds it for an approval.
-export async function submitRun(connection: ServerConnection, request: unknown): Promise<Run> {
+// What the server answers a submitted run. `moved`: a service run of the caller's of the same
+// name moves to the commit instead (see RunRegistry.move); its log goes on from `logFrom`.
+export type SubmittedRun = Run & { moved?: { logFrom: number } }
+
+export async function submitRun(connection: ServerConnection, request: unknown): Promise<SubmittedRun> {
   return json(await call(connection, 'POST', '/v1/runs', { body: request }))
 }
 
@@ -483,23 +487,46 @@ export interface FollowedRun {
 
 /**
  * Follows a run to its end: its log as it grows, and its state. A signal cancels the run
- * on the server and fails the follow.
+ * on the server and fails the follow. A service run that moved to another commit is followed
+ * from where its log was until it is there; a signal leaves it be, it was up before.
  */
+/** The commit a service run that moved was submitted to move to */
+export function getMoveTarget(submitted: SubmittedRun): string | undefined {
+  if (!submitted.moved) {
+    return undefined
+  }
+  return submitted.moving?.commit ?? (submitted.source.type === 'ref' ? submitted.source.commit : undefined)
+}
+
+// A service run is up; one that moved is where the move took it: up or asleep at the commit,
+// or back where it was, once it does not move there anymore
+function isThere(run: Run, submitted: SubmittedRun): boolean {
+  if (!submitted.moved) {
+    return run.state === 'up' && !run.moving
+  }
+  if (run.moving?.commit === getMoveTarget(submitted)) {
+    return false
+  }
+  return run.state === 'up' || run.state === 'asleep'
+}
+
 export async function followRun(
   connection: ServerConnection,
-  submitted: Run,
+  submitted: SubmittedRun,
   options: FollowRunOptions = {}
 ): Promise<FollowedRun> {
   const path = `/v1/runs/${encodeURIComponent(submitted.id)}`
   let cancelling: Promise<unknown> | undefined
   const cancel = () => {
-    cancelling ??= call(connection, 'POST', `${path}/cancel`).catch(() => undefined)
+    if (!submitted.moved) {
+      cancelling ??= call(connection, 'POST', `${path}/cancel`).catch(() => undefined)
+    }
   }
   if (!options.detach) {
     options.signal?.addEventListener('abort', cancel, { once: true })
   }
   const lines: LogLine[] = []
-  let from = 1
+  let from = submitted.moved?.logFrom ?? 1
   let truncated = false
   const add = (line: LogLine) => {
     lines.push(line)
@@ -533,14 +560,16 @@ export async function followRun(
         let timer: NodeJS.Timeout | undefined
         await Promise.race([cancelling, new Promise((resolve) => (timer = setTimeout(resolve, CANCEL_WAIT_MS)))])
         clearTimeout(timer)
-        throw new SandboxClientError('the run was cancelled')
+        throw new SandboxClientError(
+          submitted.moved ? 'stopped following the run, it moves on without' : 'the run was cancelled'
+        )
       }
       if (run.state === 'awaiting-approval' && !waitingSaid) {
         waitingSaid = true
         options.onWaiting?.(run)
       }
       await readLog()
-      if (FINAL_RUN_STATES.includes(run.state) || (options.untilUp && run.state === 'up')) {
+      if (FINAL_RUN_STATES.includes(run.state) || (options.untilUp && isThere(run, submitted))) {
         break
       }
       run = await json(await call(connection, 'GET', path, { query: { wait: POLL_WAIT } }))

@@ -6,14 +6,19 @@ import { ContainerWorkService } from '../planner/work-service'
 import { ContainerWorkTask } from '../planner/work-task'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
-import { getKubernetesPersistence } from './volumes'
+import { getItemFilesDir, getKubernetesPersistence } from './volumes'
 import { clearClaim, getPodForPersistence } from './ensure-persistent-data'
 import { getClaimSubPath } from './claim-layout'
 
 // Where the upload pod (which mounts the work's claim at /dev/hammerkit/<id>) unpacks the
 // archive of an output: the output's place in the claim, which its mount reads
-export function getRestoreTarget(work: WorkItem<ContainerWorkService | ContainerWorkTask>, path: string): string {
-  return `/dev/hammerkit/${work.id()}/${getClaimSubPath(work, path)}`
+export function getRestoreTarget(
+  work: WorkItem<ContainerWorkService | ContainerWorkTask>,
+  path: string,
+  // the folder of the state on a service run, see getStateFilesDir
+  stateDir?: string
+): string {
+  return `/dev/hammerkit/${work.id()}/${stateDir ? `${stateDir}/` : ''}${getClaimSubPath(work, path)}`
 }
 
 export async function restoreKubernetesData(
@@ -22,10 +27,12 @@ export async function restoreKubernetesData(
   instance: KubernetesInstance,
   environment: Environment,
   path: string,
-  // the kept claim of the work holds what an earlier run left, which goes first
-  options: { reset?: boolean } = {}
+  // the kept claim of the work holds what an earlier run left, which goes first; on a
+  // service run, the outputs go into the folder of `stateKey` (see getStateFilesDir)
+  options: { reset?: boolean; stateKey?: string } = {}
 ) {
-  const persistence = await getKubernetesPersistence(work, kubernetes)
+  const persistence = await getKubernetesPersistence(work, kubernetes, options.stateKey)
+  const stateDir = kubernetes.server?.serviceRun ? getItemFilesDir(work, options.stateKey) : undefined
   await getPodForPersistence(instance, kubernetes, work, persistence, 'write', async (name) => {
     if (options.reset) {
       await clearClaim(instance, kubernetes, work, name)
@@ -35,7 +42,7 @@ export async function restoreKubernetesData(
         continue
       }
 
-      const targetPath = getRestoreTarget(work, generatedArchive.path)
+      const targetPath = getRestoreTarget(work, generatedArchive.path, stateDir)
       // a claim made for this run (a server removes the claims of a run when it
       // ends) does not have the directory of the output yet
       let failure: string | null = null

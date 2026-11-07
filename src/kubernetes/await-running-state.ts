@@ -198,6 +198,138 @@ export async function awaitDeployRunningState(
   }
 }
 
+/**
+ * Waits until every pod of a Deployment is of its spec `generation` and available, as a
+ * rollout of a changed service does. Fails when Kubernetes gave up on it (its progress
+ * deadline), when a new pod (`podSelector`) won't get there without a change (as
+ * awaitDeployRunningState tells), or once one ran for the readiness timeout without getting
+ * ready.
+ */
+export async function awaitDeployRollout(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness & { generation: number; signal?: AbortSignal },
+  pollInterval = 1000,
+  now: () => number = Date.now
+): Promise<void> {
+  const subject = readiness.subject ?? name
+  const timeoutMessage = readiness.timeoutMessage || `${subject} did not get ready`
+  let runningSince: number | null = null
+  let said: string | undefined
+  const failingSince = new Map<string, number>()
+  for (;;) {
+    if (readiness.signal?.aborted) {
+      throw new AbortError()
+    }
+    const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
+    const status = deployment.status
+    if (
+      (status?.observedGeneration ?? 0) >= readiness.generation &&
+      (status?.updatedReplicas ?? 0) >= 1 &&
+      (status?.availableReplicas ?? 0) >= 1 &&
+      (status?.replicas ?? 0) === (status?.updatedReplicas ?? 0)
+    ) {
+      return
+    }
+    const stalled = status?.conditions?.find(
+      (condition) => condition.type === 'Progressing' && condition.reason === 'ProgressDeadlineExceeded'
+    )
+    if (stalled && (status?.observedGeneration ?? 0) >= readiness.generation) {
+      throw new Error(`${timeoutMessage}: ${stalled.message ?? 'its rollout made no progress'}`)
+    }
+    const listed = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: readiness.podSelector,
+    })
+    const pods = listed.items.filter((pod) => !pod.metadata?.deletionTimestamp)
+    for (const [index, pod] of pods.entries()) {
+      const key = pod.metadata?.name ?? `${index}`
+      const failure = getPodFailure(pod, readiness.container)
+      if (!failure) {
+        failingSince.delete(key)
+        continue
+      }
+      const since = failingSince.get(key) ?? now()
+      failingSince.set(key, since)
+      if (failure.final || now() - since >= PASSING_FAILURE_MS) {
+        throw new Error(`${subject} can not become ready, ${failure.text}`)
+      }
+    }
+    const waiting = pods.map((pod) => getPodWaiting(pod, readiness.container)).find((text): text is string => !!text)
+    if (waiting && waiting !== said) {
+      readiness.onWaiting?.(waiting)
+    }
+    said = waiting
+    if (readiness.timeout !== null) {
+      if (runningSince === null) {
+        if (pods.some((pod) => pod.status?.phase === 'Running')) {
+          runningSince = now()
+        }
+      } else if (now() - runningSince >= readiness.timeout) {
+        throw new Error(timeoutMessage)
+      }
+    }
+    await sleep(pollInterval, readiness.signal ?? new AbortController().signal)
+  }
+}
+
+// how long the pod a service that watches its files keeps has to go on running once it got
+// the changed files
+export const KEPT_POD_MS = 15_000
+
+/**
+ * Watches the pods of a Deployment that stays (a service that watches its files got the
+ * changed ones, see syncLiveFiles) for `windowMs`: fails when one of them restarts, fails as
+ * awaitDeployRunningState tells, or the Deployment has no available pod any more, so a move
+ * whose files break the service does not count as up.
+ */
+export async function watchKeptPods(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness & { signal?: AbortSignal },
+  windowMs = KEPT_POD_MS,
+  pollInterval = 1000,
+  now: () => number = Date.now
+): Promise<void> {
+  const subject = readiness.subject ?? name
+  const restarts = new Map<string, number>()
+  const started = now()
+  for (;;) {
+    if (readiness.signal?.aborted) {
+      throw new AbortError()
+    }
+    const listed = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: readiness.podSelector,
+    })
+    for (const pod of listed.items.filter((pod) => !pod.metadata?.deletionTimestamp)) {
+      const key = pod.metadata?.name ?? ''
+      const failure = getPodFailure(pod, readiness.container, readiness.restarts)
+      if (failure) {
+        throw new Error(`${subject} stopped working with the changed files, ${failure.text}`)
+      }
+      const count = (pod.status?.containerStatuses ?? [])
+        .filter((status) => !readiness.container || status.name === readiness.container)
+        .reduce((sum, status) => sum + (status.restartCount ?? 0), 0)
+      const before = restarts.get(key)
+      if (before !== undefined && count > before) {
+        throw new Error(`${subject} stopped working with the changed files, its container restarted`)
+      }
+      restarts.set(key, count)
+    }
+    const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
+    if ((deployment.status?.availableReplicas ?? 0) < 1) {
+      throw new Error(`${subject} stopped working with the changed files, it has no ready pod`)
+    }
+    if (now() - started >= windowMs) {
+      return
+    }
+    await sleep(pollInterval, readiness.signal ?? new AbortController().signal)
+  }
+}
+
 // Delete a job and wait until it is gone: its name is reused for the task's next
 // command (and the next run with the same state), and creating it while the old
 // one is still being deleted would pick up the old job.

@@ -24,6 +24,8 @@ import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { EndpointTarget, RunEventData, TaskStatus } from './runs'
 import { WorkTree } from '../planner/work-tree'
 import { getResourceName } from '../kubernetes/resources'
+import { removeStaleItems } from '../kubernetes/remove-stale-items'
+import { serviceRollouts } from '../kubernetes/service-rollouts'
 import { readClusterState } from '../kubernetes/cluster-state'
 import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
@@ -71,7 +73,7 @@ export const workerInputSchema = z
     // volumes (see scopeServiceVolumes)
     volumeScope: z
       .string()
-      .regex(/^[a-z]+-[0-9a-f]{24}$/)
+      .regex(/^(?:[a-z]+|up-[0-9a-f]{8})-[0-9a-f]{24}$/)
       .optional(),
     // a service run: the services it keeps up instead of tasks, and the ports the server
     // reaches as endpoints
@@ -290,6 +292,18 @@ export async function runTasks(
         // on a cluster the services stay in their Deployments once they are ready, until
         // the namespace of the run goes
         if (input.up && input.kubernetes && ready && result.success && !abortCtrl.signal.aborted) {
+          if (input.kubernetes.server?.serviceRun) {
+            // a run that moved here from another commit: what it made for items it has no more
+            const ids = [...Object.values(workTree.tasks), ...Object.values(workTree.services)].map((item) => item.id())
+            await removeStaleItems(createKubernetesInstances(input.kubernetes), input.kubernetes, ids).catch((e) =>
+              emit({
+                type: 'log',
+                task: 'hammerkit',
+                stream: 'stderr',
+                text: `what the run made at its previous commit could not be removed: ${getErrorMessage(e)}`,
+              })
+            )
+          }
           await new Promise<void>((resolve) =>
             abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
           )
@@ -317,6 +331,12 @@ export async function runTasks(
         }
       } finally {
         watch.close()
+        if (input.up && input.kubernetes?.server?.serviceRun && !ready && serviceRollouts.size > 0) {
+          // a move (or a start) whose services did not all get up: the run stays where it was
+          await serviceRollouts.undo(createKubernetesInstances(input.kubernetes), (text) =>
+            emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text })
+          )
+        }
       }
     }
   } finally {

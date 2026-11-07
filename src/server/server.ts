@@ -11,7 +11,17 @@ import { Principal, quote, TokenError, TokenVerifier, TokenVerifierOptions } fro
 import { canUse, decideRun, endpointLevel, getGrant, mayRun, sandboxPushBranches } from './policy'
 import { matchesAnyRepo } from './repo'
 import { FileRunStore } from './run-store'
-import { isFinal, RUN_ID_PATTERN, RunError, RunExecutor, Run, RunRegistry, RunSource, StoredEvent } from './runs'
+import {
+  isFinal,
+  RUN_ID_PATTERN,
+  RunError,
+  RunExecutor,
+  Run,
+  RunRegistry,
+  RunSource,
+  ServiceRunSpec,
+  StoredEvent,
+} from './runs'
 import { RefError } from './git-checkout'
 import { RepoAccess, RepoAccessOptions } from './repo-access'
 import { HostExecutor } from './executor'
@@ -23,7 +33,7 @@ import { PlanContext, PlannedRun, planRun, refuseArguments } from './run-plan'
 import { parseWorkNetwork } from '../planner/work-network'
 import { runEnvironment } from './run-environment'
 import { handleAccounts } from './accounts-api'
-import { runRequestSchema } from './run-request'
+import { RunRequest, runRequestSchema } from './run-request'
 import { HttpError, readJson, send } from './http'
 import { DefinitionStore } from './definitions'
 import { handleDefinitions } from './definitions-api'
@@ -381,6 +391,35 @@ export function refuseWake(config: ServerConfig, repos: Pick<RepoAccess, 'readab
   return undefined
 }
 
+// Whether a service run that is not over runs what a new one would, but for its commit: then
+// the new one moves it there (RunRegistry.move)
+export function runsTheSame(
+  run: Run,
+  next: {
+    definition: string
+    accounts: string[]
+    request: Pick<RunRequest, 'options'>
+    source: Extract<RunSource, { type: 'ref' }>
+    up: Pick<ServiceRunSpec, 'services' | 'endpoints' | 'sleepTtl'>
+  }
+): boolean {
+  const sorted = (values: string[]) => JSON.stringify([...values].sort())
+  const options = (value: object | undefined) => JSON.stringify(value ?? {}, Object.keys(value ?? {}).sort())
+  const endpoints = (spec: Pick<ServiceRunSpec, 'endpoints'>) =>
+    JSON.stringify(spec.endpoints.map((endpoint) => [endpoint.service, endpoint.port, endpoint.host]))
+  return (
+    !!run.up &&
+    run.source.type === 'ref' &&
+    run.source.repo === next.source.repo &&
+    run.definition === next.definition &&
+    sorted(run.accounts) === sorted(next.accounts) &&
+    sorted(run.up.services) === sorted(next.up.services) &&
+    endpoints(run.up) === endpoints(next.up) &&
+    (run.up.sleepTtl ?? null) === (next.up.sleepTtl ?? null) &&
+    options(run.options) === options(next.request.options)
+  )
+}
+
 // A run whole, for its owner and who may read it; who is not its owner is told whose it is.
 function toRunResponse(
   run: Run,
@@ -630,6 +669,28 @@ async function submitRun(
   const owner = {
     ...principal,
     claims: Object.fromEntries(Object.entries(principal.claims).filter(([name]) => claimNames.has(name))),
+  }
+  // A service run of the caller of this name that runs the same build file, services and
+  // endpoints moves to the commit, in place of a new run that would replace it: it keeps its
+  // id, its addresses and its volumes. A run that needs an approval is new as before.
+  if (up && source?.type === 'ref' && approvals.length === 0) {
+    const named = registry.named(principal, up.name)
+    if (named && runsTheSame(named, { definition: version.hash, accounts: planned.accounts, request, source, up })) {
+      const from = (registry.logs(principal, named.id)?.index.size ?? 0) + 1
+      const moved = registry.move(principal, named.id, {
+        source,
+        plan: planned.plan,
+        owner,
+        ...(request.ttl ? { ttl } : {}),
+      })
+      if (moved) {
+        log(
+          `move run ${moved.id} iss=${principal.iss} sub=${principal.sub} name=${up.name} to ${source.commit} (${moved.state})`
+        )
+        send(res, 202, { ...toRunResponse(moved), moved: { logFrom: from } })
+        return
+      }
+    }
   }
   const submit = (runSource: RunSource) =>
     registry.submit(
@@ -1037,6 +1098,7 @@ export async function startServer(
       perCaller: config.runs.up.limits.up,
       asleep: config.runs.up.limits.asleep,
       total: config.runs.up.total,
+      keepVolumes: config.runs.up.keepVolumes,
     },
     store: new FileRunStore(join(storage, 'records')),
     // what a check run passed, for `remote verify` to find
@@ -1051,11 +1113,9 @@ export async function startServer(
     },
     log,
   })
+  // the executor hears which service runs sleep with their volumes kept, and removes what it
+  // kept for any other (RunExecutor.restored)
   await registry.restore()
-  if (executor instanceof KubernetesExecutor) {
-    // the services of the runs of a server that stopped are gone with it
-    executor.sweepServiceRuns()
-  }
   const proposals = new ProposalRegistry({
     maxWaiting: config.approvals.maxWaiting,
     timeout: parseDuration(config.approvals.timeout),

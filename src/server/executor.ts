@@ -19,6 +19,8 @@ import { NetworkSchema } from '../schema/network-schema'
 import { WorkerInput, WorkerMessage } from './run-worker'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { toNetworkSchema } from '../planner/work-network'
+import Dockerode from 'dockerode'
+import { createDockerClient } from '../executer/execute-docker'
 
 // `.git` as a file system may read it: any case, and a name Windows reads without its
 // trailing dots and spaces, or by its short name
@@ -112,10 +114,51 @@ export function cacheNamespace(run: Run): string {
 
 // The docker volumes of a run's services are its caller's, within the cache's source trust:
 // two callers of one repository share a cache, a task is keyed by what it reads, but not the
-// data their services keep.
-export function volumeScope(run: Run): string {
+// data their services keep. A service run's are its own: they stay while it sleeps and go
+// when it ends (removeServiceRunVolumes). They carry the server's key (see serviceRunScopes),
+// so a server sweeps its own only, next to another one on the same docker.
+export function volumeScope(run: Run, server = ''): string {
+  if (run.up) {
+    return `${serviceRunScopes(server)}${createHash('sha256').update(run.id).digest('hex').slice(0, 24)}`
+  }
   const key = `${cacheNamespace(run)}\0${run.owner.iss}\0${run.owner.sub}`
   return `${run.source.type}-${createHash('sha256').update(key).digest('hex').slice(0, 24)}`
+}
+
+// the start of the volume scopes of the service runs of a server, by the directory its runs
+// work in
+export function serviceRunScopes(server: string): string {
+  return `up-${createHash('sha256').update(server).digest('hex').slice(0, 8)}-`
+}
+
+// the volume of a service of a service run, with the scope of its run (see scopeServiceVolumes)
+const SERVICE_RUN_VOLUME = /^hammerkit-(up-[0-9a-f]{8}-[0-9a-f]{24})-/
+
+/**
+ * Removes the docker volumes of the services of service runs whose scope `remove` names: of
+ * one run that ended, or at a start, of every run but those that sleep with their volumes.
+ * One a container still uses stays, and is said.
+ */
+export async function removeServiceRunVolumes(
+  docker: Dockerode,
+  remove: (scope: string) => boolean,
+  log: (line: string) => void
+): Promise<string[]> {
+  const listed = await docker.listVolumes({ filters: { name: ['hammerkit-up-'] } })
+  const removed: string[] = []
+  for (const volume of listed.Volumes ?? []) {
+    const scope = SERVICE_RUN_VOLUME.exec(volume.Name)?.[1]
+    if (!scope || !remove(scope)) {
+      continue
+    }
+    try {
+      await docker.getVolume(volume.Name).remove()
+      removed.push(volume.Name)
+    } catch (e) {
+      log(`the volume ${volume.Name} could not be removed: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  return removed
 }
 
 /**
@@ -133,7 +176,61 @@ export function volumeScope(run: Run): string {
  * its definition and sources and not by where they are.
  */
 export class HostExecutor implements RunExecutor {
+  // the directories of the executions that run now
+  private readonly directories = new Set<string>()
+
   constructor(private readonly options: HostExecutorOptions) {}
+
+  // the docker daemon the runs' services are on, as their processes reach it
+  private docker(): Dockerode {
+    return createDockerClient(this.options.planning.environment.processEnvs.DOCKER_HOST)
+  }
+
+  // the volumes of a service run's services, which its end removes
+  private async removeVolumes(run: Run, context?: RunContext): Promise<void> {
+    const scope = volumeScope(run, this.options.directory)
+    const say = (text: string) => {
+      this.options.log?.(`run=${run.id} ${text}`)
+      context?.emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text })
+    }
+    try {
+      await removeServiceRunVolumes(this.docker(), (candidate) => candidate === scope, say)
+    } catch (e) {
+      say(`the volumes of the services could not be removed: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /** A service run that slept with its volumes ended without waking: they go. */
+  async forget(run: Run): Promise<void> {
+    if (run.up && !this.options.placement) {
+      await this.removeVolumes(run)
+    }
+  }
+
+  /**
+   * At the start of the server: the volumes of service runs go, but of those that sleep with
+   * them. A server without docker has none.
+   */
+  restored(runs: Run[]): void {
+    if (this.options.placement) {
+      return
+    }
+    const own = serviceRunScopes(this.options.directory)
+    const kept = new Set(runs.filter((run) => run.up).map((run) => volumeScope(run, this.options.directory)))
+    const log = (line: string) => this.options.log?.(line)
+    removeServiceRunVolumes(this.docker(), (scope) => scope.startsWith(own) && !kept.has(scope), log)
+      .then((removed) => {
+        if (removed.length > 0) {
+          log(`removed ${removed.length} volumes of service runs from before the server started`)
+        }
+      })
+      .catch((e) => {
+        const code = (e as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT' && code !== 'ECONNREFUSED') {
+          log(`the volumes of earlier service runs could not be removed: ${e instanceof Error ? e.message : e}`)
+        }
+      })
+  }
 
   async execute(run: Run, context: RunContext): Promise<void> {
     const { definitions, planning, repos } = this.options
@@ -184,7 +281,8 @@ export class HostExecutor implements RunExecutor {
     }
     context.signal.addEventListener('abort', abort, { once: true })
 
-    const root = join(this.options.directory, run.id)
+    // a service run that moves executes beside itself, each in a directory of its own
+    const root = this.directoryOf(run)
     let attachment: SandboxAttachment | undefined
     try {
       // where the process of the run starts: the checkout of a ref, or for a sandbox the
@@ -297,7 +395,7 @@ export class HostExecutor implements RunExecutor {
             tasks: run.tasks,
             options: run.options,
             accounts: run.accounts,
-            volumeScope: volumeScope(run),
+            volumeScope: volumeScope(run, this.options.directory),
             ...(isCheckRun(run) ? { check: true } : {}),
             catalog: planning.environment.hosted?.catalog as SecretCatalog,
             ...(run.up
@@ -319,15 +417,29 @@ export class HostExecutor implements RunExecutor {
       } finally {
         if (placement && placed) {
           await placement.release(run, context)
+        } else if (run.up && !context.keep?.()) {
+          // the services are gone with the process, their volumes stay only while the run sleeps
+          await this.removeVolumes(run, context)
         }
       }
     } finally {
       context.signal.removeEventListener('abort', abort)
       attachment?.release?.()
       await this.removeRunDirectory(run, root, context)
+      this.directories.delete(root)
       if (source.type === 'sandbox') {
         // what the run wrote counts against the owner's limits, from their next run or create
         sandboxes?.registry.measure(source.id).catch(() => undefined)
+      }
+    }
+  }
+
+  private directoryOf(run: Run): string {
+    for (let execution = 1; ; execution++) {
+      const root = join(this.options.directory, execution === 1 ? run.id : `${run.id}-${execution}`)
+      if (!this.directories.has(root)) {
+        this.directories.add(root)
+        return root
       }
     }
   }

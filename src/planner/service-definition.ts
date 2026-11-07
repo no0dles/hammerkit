@@ -4,6 +4,7 @@ import { WorkItem } from './work-item'
 import { ContainerWorkService, isContainerWorkService } from './work-service'
 import { getEffectiveNetwork, isLimitedNetwork } from './work-network'
 import { getDeclaredWorkTaskId } from './work-cache-id'
+import { portablePath } from './utils/portable-path'
 
 // Everything a running container of the service was created from, plus the
 // definitions of the services it needs: a dependent links to the container it
@@ -13,19 +14,25 @@ import { getDeclaredWorkTaskId } from './work-cache-id'
 export function getServiceDefinitionHash(item: WorkItem<ContainerWorkService>): string {
   const service = item.data
   const network = getEffectiveNetwork(service)
+  const portable = (path: string) => portablePath(service.projectRoot, path)
   const definition = {
     image: service.image,
     cmd: service.cmd?.cmd ?? null,
     shell: service.shell,
-    workdir: service.workdir,
+    // where the checkout is does not count: a service run that moves to another commit runs
+    // from another directory beside the first, and keeps what did not change
+    workdir: service.workdir ? portable(service.workdir) : null,
     envs: {
       variables: service.envs.variables,
       replacements: service.envs.replacements.map((r) => [r.key, r.name, r.value]),
     },
     ports: service.ports.map((p) => `${p.hostPort ?? ''}:${p.containerPort}`),
-    mounts: service.mounts.map((m) => `${m.localPath}:${m.containerPath}:${m.readOnly ? 'ro' : 'rw'}`),
-    volumes: service.volumes.map((v) => `${v.name}:${v.containerPath}:${v.readOnly ? 'ro' : 'rw'}`),
-    src: service.src.map((s) => s.absolutePath),
+    mounts: service.mounts.map((m) => `${portable(m.localPath)}:${m.containerPath}:${m.readOnly ? 'ro' : 'rw'}`),
+    // the volume of a dep's output is named by where it is, which its path says already
+    volumes: service.volumes.map(
+      (v) => `${v.inherited ? '' : v.name}:${portable(v.containerPath)}:${v.readOnly ? 'ro' : 'rw'}`
+    ),
+    src: service.src.map((s) => portable(s.absolutePath)),
     healthcheck: service.healthcheck?.cmd.cmd ?? null,
     // where secrets go, never their values: a rotated value needs a `down`
     secrets: service.secrets.map((s) =>

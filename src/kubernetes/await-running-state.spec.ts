@@ -1,11 +1,13 @@
 import { ApiException } from '@kubernetes/client-node'
 import {
+  awaitDeployRollout,
   awaitDeployRunningState,
   awaitJobCompletion,
   awaitRunningState,
   deleteJob,
   deleteJobAndWait,
   stopJob,
+  watchKeptPods,
 } from './await-running-state'
 import { AbortError } from '../executer/abort'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -461,5 +463,144 @@ describe('stopJob', () => {
     } as unknown as KubernetesInstance
 
     await expect(stopJob(instance, env, 'job', 0, 0)).rejects.toThrow('the pods of job were still there after 0s')
+  })
+})
+
+describe('awaitDeployRollout', () => {
+  const readiness = {
+    podSelector: 'hammerkit.dev/id=api',
+    timeout: null,
+    timeoutMessage: 'api did not get ready',
+    generation: 2,
+  }
+
+  it('waits until every pod is of the new spec and ready, the old pod ready meanwhile', async () => {
+    const readNamespacedDeployment = vi
+      .fn()
+      // the old pod serves, the new spec is not seen yet
+      .mockResolvedValueOnce({
+        status: { observedGeneration: 1, replicas: 1, updatedReplicas: 1, availableReplicas: 1 },
+      })
+      // the new pod starts beside the old one
+      .mockResolvedValueOnce({
+        status: { observedGeneration: 2, replicas: 2, updatedReplicas: 1, availableReplicas: 1 },
+      })
+      .mockResolvedValueOnce({
+        status: { observedGeneration: 2, replicas: 1, updatedReplicas: 1, availableReplicas: 1 },
+      })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }) },
+    } as unknown as KubernetesInstance
+
+    await awaitDeployRollout(instance, env, 'api', readiness, 0)
+
+    expect(readNamespacedDeployment).toHaveBeenCalledTimes(3)
+  })
+
+  it('fails once Kubernetes gave up on the rollout', async () => {
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({
+      status: {
+        observedGeneration: 2,
+        replicas: 2,
+        updatedReplicas: 1,
+        availableReplicas: 1,
+        conditions: [{ type: 'Progressing', reason: 'ProgressDeadlineExceeded', message: 'it timed out' }],
+      },
+    })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }) },
+    } as unknown as KubernetesInstance
+
+    await expect(awaitDeployRollout(instance, env, 'api', readiness, 0)).rejects.toThrow(
+      'api did not get ready: it timed out'
+    )
+  })
+
+  it('fails at once when the new pod keeps crashing, which a move then puts back', async () => {
+    const readNamespacedDeployment = vi
+      .fn()
+      .mockResolvedValue({ status: { observedGeneration: 2, replicas: 2, updatedReplicas: 1, availableReplicas: 1 } })
+    const crashing = {
+      metadata: { name: 'api-2' },
+      status: {
+        phase: 'Running',
+        containerStatuses: [
+          {
+            name: 'api',
+            image: 'api:2',
+            restartCount: 2,
+            state: { waiting: { reason: 'CrashLoopBackOff' } },
+            lastState: { terminated: { exitCode: 1, reason: 'Error' } },
+          },
+        ],
+      },
+    }
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [crashing] }) },
+    } as unknown as KubernetesInstance
+    await expect(
+      awaitDeployRollout(instance, env, 'api', { ...readiness, container: 'api', subject: 'service api' }, 0)
+    ).rejects.toThrow(
+      'service api can not become ready, it keeps crashing: it exited with code 1 (Error), restarted 2 times'
+    )
+  })
+
+  it('stops when it is aborted', async () => {
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { observedGeneration: 1 } })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod: vi.fn().mockResolvedValue({ items: [] }) },
+    } as unknown as KubernetesInstance
+    const abort = new AbortController()
+    const waiting = awaitDeployRollout(instance, env, 'api', { ...readiness, signal: abort.signal }, 5)
+    abort.abort()
+    await expect(waiting).rejects.toBeInstanceOf(AbortError)
+  })
+})
+
+describe('watchKeptPods', () => {
+  const readiness = { podSelector: 'hammerkit.dev/id=dev', timeout: null, timeoutMessage: '', subject: 'service dev' }
+  const pod = (restartCount: number) => ({
+    metadata: { name: 'dev-1' },
+    status: {
+      phase: 'Running',
+      containerStatuses: [{ name: 'dev', restartCount, ready: true, state: { running: {} } }],
+    },
+  })
+  const cluster = (counts: number[], available = 1) => {
+    const listNamespacedPod = vi.fn()
+    for (const count of counts) {
+      listNamespacedPod.mockResolvedValueOnce({ items: [pod(count)] })
+    }
+    return {
+      coreApi: { listNamespacedPod },
+      appsApi: { readNamespacedDeployment: vi.fn().mockResolvedValue({ status: { availableReplicas: available } }) },
+    } as unknown as KubernetesInstance
+  }
+  // a clock that moves a second with every look
+  const clock = () => {
+    let at = 0
+    return () => (at += 1000)
+  }
+
+  it('lets a pod that goes on running with the changed files stay', async () => {
+    const instance = cluster([2, 2, 2, 2])
+    await watchKeptPods(instance, env, 'dev', readiness, 3000, 0, clock())
+    expect(instance.coreApi.listNamespacedPod).toHaveBeenCalledTimes(3)
+  })
+
+  it('fails when its container restarts after it got them', async () => {
+    await expect(watchKeptPods(cluster([2, 3]), env, 'dev', readiness, 10_000, 0, clock())).rejects.toThrow(
+      'service dev stopped working with the changed files, its container restarted'
+    )
+  })
+
+  it('fails when the Deployment has no ready pod any more', async () => {
+    await expect(watchKeptPods(cluster([0], 0), env, 'dev', readiness, 10_000, 0, clock())).rejects.toThrow(
+      'service dev stopped working with the changed files, it has no ready pod'
+    )
   })
 })

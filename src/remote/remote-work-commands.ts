@@ -8,7 +8,16 @@ import { Annotations, Bundle, hashBundle, HASH_PATTERN } from './bundle'
 import { applyAnnotations, collectAnnotations, readCheckout } from './annotations'
 import { callServer, getDiscovery, printable, printableWhole, ServerError } from './server-client'
 import { showBundle } from './bundle-text'
-import { FINAL_RUN_STATES, followRun, getRun, readRunLog, ServerConnection, submitRun } from '../harness/sandbox-client'
+import {
+  FINAL_RUN_STATES,
+  followRun,
+  getMoveTarget,
+  getRun,
+  readRunLog,
+  ServerConnection,
+  submitRun,
+  SubmittedRun,
+} from '../harness/sandbox-client'
 import type { LogLine } from '../server/run-logs'
 import { formatDuration } from '../utils/units'
 import type { Run } from '../server/runs'
@@ -470,7 +479,7 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     request: { definition: string; [key: string]: unknown },
     local: Bundle | undefined,
     publish: boolean
-  ): Promise<Run> => {
+  ): Promise<SubmittedRun> => {
     const { serverName, server, connection } = target
     try {
       return await submitRun(connection, request)
@@ -725,7 +734,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     .addOption(
       new Option(
         '--name <name>',
-        'a later run of yours with the same name replaces this one and keeps its addresses; the branch when left out'
+        'a later remote up of yours with the same name moves this run to its commit, or replaces it when it ' +
+          'starts other services or another build file; the addresses stay; the branch when left out'
       )
     )
     .addOption(
@@ -771,11 +781,22 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           local,
           !!options.publish
         )
-        environment.stdout.write(
-          `${printable(submitted.id)} on ${serverName}: ${services.map(printable).join(', ')} from ${printable(
-            source.ref
-          )}${submitted.source.type === 'ref' ? ` at ${printable(submitted.source.commit)}` : ''}\n`
-        )
+        if (submitted.moved) {
+          // a run of this name runs the same: it moves to the commit, with its id, addresses and volumes
+          environment.stdout.write(
+            `${printable(submitted.id)} on ${serverName} (${printable(submitted.state)}) moves to ${printable(
+              source.ref
+            )} at ${printable(
+              submitted.moving?.commit ?? (submitted.source.type === 'ref' ? submitted.source.commit : '-')
+            )}\n`
+          )
+        } else {
+          environment.stdout.write(
+            `${printable(submitted.id)} on ${serverName}: ${services.map(printable).join(', ')} from ${printable(
+              source.ref
+            )}${submitted.source.type === 'ref' ? ` at ${printable(submitted.source.commit)}` : ''}\n`
+          )
+        }
         const followed = await followRun(connection, submitted, {
           signal: environment.abortCtrl.signal,
           untilUp: true,
@@ -791,13 +812,32 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           },
         })
         const run = followed.run
-        if (run.state !== 'up') {
+        if (run.state !== 'up' && !(submitted.moved && run.state === 'asleep')) {
           const [said, ...why] = describeRunEnd(run)
           for (const line of why) {
             environment.stdout.write(`${line}\n`)
           }
           environment.stdout.write(`read its log again with: hammerkit remote logs ${printable(run.id)}\n`)
           fail(said, 1)
+        }
+        // the outcome of this move, not of one that came after it
+        const target = getMoveTarget(submitted)
+        const lastMove = [...(run.moves ?? [])].reverse().find((move) => move.commit === target)
+        if (submitted.moved && lastMove?.error) {
+          fail(
+            `${printable(run.id)} did not move to ${printable(lastMove.commit)}: ${printable(
+              lastMove.error
+            )}; it stays at ${printable(run.source.type === 'ref' ? run.source.commit : '-')}`,
+            1
+          )
+        }
+        if (run.state === 'asleep') {
+          environment.stdout.write(
+            `${printable(run.id)} sleeps, at ${printable(
+              run.source.type === 'ref' ? run.source.commit : '-'
+            )} when it wakes, until ${printable(run.expiresAt ?? '-')}\n`
+          )
+          return
         }
         environment.stdout.write(
           `${printable(run.id)} is up until ${printable(run.expiresAt ?? '-')}${

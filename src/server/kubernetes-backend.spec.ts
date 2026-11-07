@@ -749,7 +749,7 @@ describe('kubernetes backend', () => {
     it('removes the namespaces of service runs no run is in when the server starts', async () => {
       const executor = new KubernetesExecutor(config(), {}, {} as any)
       const active = getServiceRunNamespace('hammerkit-', 'run_active')
-      ;(executor as any).serviceRuns.add(active)
+      ;(executor as any).serviceRuns.set(active, 1)
       const left = getServiceRunNamespace('hammerkit-', 'run_left')
       const deleted: string[] = []
       const selectors: string[] = []
@@ -775,6 +775,115 @@ describe('kubernetes backend', () => {
       ;(executor as any).sweepLeftClaims()
       await vi.waitFor(() => expect(selectors).toHaveLength(2))
       expect(selectors[1]).toBe('hammerkit.dev/managed=true,!hammerkit.dev/service-run')
+    })
+
+    // a cluster that says what is removed in which namespace
+    function recording() {
+      const calls: string[] = []
+      const collection = (kind: string) => async (request: any) => {
+        calls.push(`delete ${kind} ${request.namespace} ${request.labelSelector}`)
+      }
+      const instance = {
+        batchApi: { deleteCollectionNamespacedJob: collection('Job') },
+        appsApi: { deleteCollectionNamespacedDeployment: collection('Deployment') },
+        coreApi: {
+          deleteNamespace: async ({ name }: any) => calls.push(`delete Namespace ${name}`),
+          readNamespace: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+          deleteCollectionNamespacedPod: collection('Pod'),
+          deleteCollectionNamespacedService: collection('Service'),
+          deleteCollectionNamespacedSecret: collection('Secret'),
+          deleteCollectionNamespacedPersistentVolumeClaim: collection('PersistentVolumeClaim'),
+          listNamespacedPod: async () => ({ items: [] }),
+          listNamespacedPersistentVolumeClaim: async () => ({ items: [] }),
+          listNamespace: async () => ({ items: [] as any[] }),
+        },
+        objectApi: { list: async () => ({ items: [] }) },
+      }
+      return { calls, instance }
+    }
+
+    it('keeps the namespace of a run that sleeps, with its claims, and wakes it there', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const { calls, instance } = recording()
+      ;(executor as any).instance = instance
+      ;(executor as any).serviceRunsSwept = true
+      const run = { id: 'run_4', owner, source: ref, up } as unknown as Run
+      const namespace = getServiceRunNamespace('hammerkit-', 'run_4')
+      await (executor as any).placement().release(run, { ...context, keep: () => 'volumes' })
+      expect(calls).toEqual([
+        `delete Job ${namespace} hammerkit.dev/run`,
+        `delete Deployment ${namespace} hammerkit.dev/run`,
+        `delete Pod ${namespace} hammerkit.dev/run`,
+        `delete Service ${namespace} hammerkit.dev/run`,
+        `delete Secret ${namespace} hammerkit.dev/run`,
+      ])
+      // the wakes of the run are in the namespace it slept in, which no sweep removes
+      expect((executor as any).namespaceOf({ ...run, wakes: 3 })).toBe(namespace)
+      instance.coreApi.listNamespace = async () => ({ items: [{ metadata: { name: namespace } }] })
+      ;(executor as any).serviceRunsSwept = false
+      executor.sweepServiceRuns()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(calls).not.toContain(`delete Namespace ${namespace}`)
+      // it ended without waking: the namespace goes, and the claims with it
+      await executor.forget(run)
+      expect(calls).toContain(`delete Namespace ${namespace}`)
+    })
+
+    it('moves a service run beside itself, and leaves the services to the execution that holds them', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const { calls, instance } = recording()
+      ;(executor as any).instance = instance
+      ;(executor as any).serviceRunsSwept = true
+      const run = { id: 'run_6', owner, source: ref, up } as unknown as Run
+      expect(executor.movesBeside(run)).toBe(true)
+      expect(executor.movesBeside({ ...run, up: undefined } as Run)).toBe(false)
+      const namespace = getServiceRunNamespace('hammerkit-', 'run_6')
+      ;(executor as any).serviceRuns.set(namespace, 2)
+      // the execution the run moved away from, or a move that did not get there
+      await (executor as any).placement().release(run, { ...context, keep: () => 'everything' })
+      expect(calls).toEqual([])
+      expect((executor as any).serviceRuns.get(namespace)).toBe(1)
+      // the run's namespace is still in use: no sweep takes it
+      instance.coreApi.listNamespace = async () => ({ items: [{ metadata: { name: namespace } }] })
+      executor.sweepServiceRuns()
+      ;(executor as any).serviceRunsSwept = false
+      executor.sweepServiceRuns()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(calls).toEqual([])
+      await (executor as any).placement().release(run, { ...context, keep: () => undefined })
+      expect(calls).toEqual([`delete Namespace ${namespace}`])
+      expect((executor as any).serviceRuns.has(namespace)).toBe(false)
+    })
+
+    it('removes the namespace of a run that sleeps on a server that keeps no volumes, and wakes it in another', async () => {
+      const executor = new KubernetesExecutor(
+        { ...config(), runs: { ...config().runs, up: { ...config().runs.up, keepVolumes: false } } },
+        {},
+        {} as any
+      )
+      const { calls, instance } = recording()
+      ;(executor as any).instance = instance
+      const run = { id: 'run_5', owner, source: ref, up } as unknown as Run
+      await (executor as any).placement().release(run, { ...context, keep: () => undefined })
+      expect(calls).toEqual([`delete Namespace ${getServiceRunNamespace('hammerkit-', 'run_5')}`])
+      expect((executor as any).namespaceOf({ ...run, wakes: 1 })).toBe(getServiceRunNamespace('hammerkit-', 'run_5', 1))
+    })
+
+    it('keeps the namespaces of the runs that sleep with their volumes when the server starts', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const { calls, instance } = recording()
+      const sleeping = getServiceRunNamespace('hammerkit-', 'run_sleeping')
+      const gone = getServiceRunNamespace('hammerkit-', 'run_gone')
+      instance.coreApi.listNamespace = async () => ({
+        items: [{ metadata: { name: sleeping } }, { metadata: { name: gone } }],
+      })
+      ;(executor as any).instance = instance
+      executor.restored([{ id: 'run_sleeping', owner, source: ref, up, volumesKept: true } as unknown as Run])
+      await vi.waitFor(() => expect(calls).toContain(`delete Namespace ${gone}`))
+      // what a server that went away left running in it goes, its claims stay
+      await vi.waitFor(() => expect(calls).toContain(`delete Secret ${sleeping} hammerkit.dev/run`))
+      expect(calls).not.toContain(`delete Namespace ${sleeping}`)
+      expect(calls.filter((call) => call.startsWith('delete PersistentVolumeClaim'))).toEqual([])
     })
 
     it('removes what runs in the namespace when the server may not delete it, and looks again later', async () => {

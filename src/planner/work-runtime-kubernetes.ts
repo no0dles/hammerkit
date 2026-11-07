@@ -12,7 +12,7 @@ import { kubernetesService } from '../executer/kubernetes-service'
 import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { V1EnvVar, V1Job, V1Pod, V1PodSpec, V1VolumeMount } from '@kubernetes/client-node'
+import { V1Deployment, V1EnvVar, V1Job, V1Pod, V1PodSpec, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import {
@@ -23,10 +23,17 @@ import {
 import { followPodLogs } from '../kubernetes/follow-pod-logs'
 import { getServiceDefinitionHash } from './service-definition'
 import { ensureNamespace } from '../kubernetes/ensure-namespace'
-import { ensurePersistentData } from '../kubernetes/ensure-persistent-data'
+import { ensurePersistentData, getStateDirsInUse, restoreLiveFiles } from '../kubernetes/ensure-persistent-data'
 import { NETWORK_GATE_CONTAINER } from '../kubernetes/network-gate'
 import { awaitJobCompletion, deleteJob, deleteJobAndWait, stopJob } from '../kubernetes/await-running-state'
-import { getKubernetesPersistence, getVolumeName, getWorkspacePodSpec } from '../kubernetes/volumes'
+import {
+  getKubernetesPersistence,
+  getStateFilesDir,
+  getVolumeName,
+  getWorkspacePodSpec,
+  isLiveService,
+} from '../kubernetes/volumes'
+import { serviceRollouts } from '../kubernetes/service-rollouts'
 import { getItemLabels, getItemSelector, getResourceName } from '../kubernetes/resources'
 import { ensureHttpRoute, HTTP_ROUTE_API_VERSION, HTTP_ROUTE_KIND } from '../kubernetes/ensure-http-route'
 import findProcess from 'find-process'
@@ -257,23 +264,33 @@ export function kubernetesTaskRuntime(
       return Promise.resolve()
     },
     async restore(environment: Environment, path: string, stateKey?: string): Promise<void> {
+      // a cache hit of a service run at the state that services of the run mount (a move whose
+      // dep did not change): its outputs are there, and stay as they are while pods read them
+      if (
+        kubernetes.server?.serviceRun &&
+        stateKey &&
+        (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(getStateFilesDir(stateKey))
+      ) {
+        task.status.write('info', `${task.name}: services of the run use its outputs of this state, they stay`)
+        return
+      }
       if (!kept) {
-        await restoreKubernetesData(task, kubernetes, instance, environment, path)
+        await restoreKubernetesData(task, kubernetes, instance, environment, path, { stateKey })
         return
       }
       const reset = await forgetClaimState(instance, kubernetes, claim)
-      await restoreKubernetesData(task, kubernetes, instance, environment, path, { reset })
+      await restoreKubernetesData(task, kubernetes, instance, environment, path, { reset, stateKey })
       if (stateKey) {
         await recordClaimState(instance, kubernetes, claim, stateKey)
       }
     },
-    async archive(environment: Environment, path: string): Promise<void> {
-      await storeKubernetesData(task, kubernetes, instance, environment, path)
+    async archive(environment: Environment, path: string, stateKey?: string): Promise<void> {
+      await storeKubernetesData(task, kubernetes, instance, environment, path, stateKey)
     },
     async execute(environment: Environment, options: ExecuteOptions<TaskState>): Promise<void> {
       const envs = getEnvironmentVariables(task.data.envs)
 
-      const persistence = await getKubernetesPersistence(task, kubernetes)
+      const persistence = await getKubernetesPersistence(task, kubernetes, options.stateKey)
       const workspace = getWorkspacePodSpec(kubernetes, persistence, { name: task.name, pool: task.data.pool })
 
       // a shell of a sandbox: its commands go into the sandbox's runner, when it has one now
@@ -299,11 +316,19 @@ export function kubernetesTaskRuntime(
       }
 
       await ensureNamespace(instance, kubernetes.namespace)
+      // a service run writes the outputs of each state into a folder of their own (see
+      // getStateFilesDir), which pods of its services may mount: of the commit before during
+      // a move, or of this state after a move that went back
+      const files = kubernetes.server?.serviceRun ? { dir: getStateFilesDir(options.stateKey) } : undefined
       try {
+        if (files && (await getStateDirsInUse(instance, kubernetes.namespace, claim)).has(files.dir)) {
+          task.status.write('info', `${task.name}: services of the run use its outputs of this state, they stay`)
+          return
+        }
         // the task writes to it now: what it holds stops being the outputs of a state, and
         // goes, as a new claim would hold nothing
         const reset = kept && (await forgetClaimState(instance, kubernetes, claim))
-        await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset })
+        await ensurePersistentData(instance, kubernetes, environment, task, persistence, { reset, files })
       } catch (e) {
         options.state.set({ stateKey: options.stateKey, type: 'error', errorMessage: getErrorMessage(e) })
         return
@@ -582,6 +607,10 @@ export function kubernetesServiceRuntime(
     // stops it and a run reuses it, as with a container on Docker. One whose
     // definition changed goes, with its limits, and is created anew.
     async initialize(state: State<ServiceState>): Promise<void> {
+      if (kubernetes.server?.serviceRun) {
+        // a service run starts every service: one that did not change stays as it is (execute)
+        return
+      }
       const deployments = await instance.appsApi.listNamespacedDeployment({
         namespace: kubernetes.namespace,
         labelSelector: getItemSelector(service, kubernetes),
@@ -626,10 +655,41 @@ export function kubernetesServiceRuntime(
       await removeAllKubernetesItemNetworks(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
-      const persistence = await getKubernetesPersistence(service, kubernetes)
+      const name = getResourceName(service, kubernetes)
+      // a service run that moves to another commit: a service of the same definition and
+      // state is left running, another one is rolled from the Deployment it has now
+      let previous: V1Deployment | undefined
+      if (kubernetes.server?.serviceRun) {
+        previous = await readDeployment(instance, kubernetes.namespace, name)
+        if (previous && isRolledOut(previous, getServiceDefinitionHash(service), options.stateKey)) {
+          service.status.write('info', `${service.name} did not change, it stays up`)
+          options.state.set({ type: 'running', dns: { containerId: name }, stateKey: options.stateKey, remote: null })
+          return
+        }
+      }
+      const persistence = await getKubernetesPersistence(service, kubernetes, options.stateKey)
+      // the files of a service run's service go into a folder of their state, so the pod that
+      // runs keeps its own until the new one is up. One that watches its files (`continuous`)
+      // gets them synced into the folder its pod mounts: the pod that runs sees the changes.
+      const live = isLiveService(service, kubernetes)
+      // the files of the state it runs at now, to put back when the move does not get up
+      const before = live ? previous?.metadata?.labels?.['hammerkit.dev/state'] : undefined
+      const files = kubernetes.server?.serviceRun
+        ? {
+            dir: getStateFilesDir(options.stateKey),
+            live,
+            keep: before ? [getStateFilesDir(before)] : [],
+          }
+        : undefined
+      if (live && previous && before) {
+        const from = getStateFilesDir(before)
+        serviceRollouts.add(kubernetes.namespace, name, previous, () =>
+          restoreLiveFiles(instance, kubernetes, service, persistence, from)
+        )
+      }
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
-      await ensurePersistentData(instance, kubernetes, environment, service, persistence)
+      await ensurePersistentData(instance, kubernetes, environment, service, persistence, { files })
       await ensureKubernetesSecret(instance, kubernetes, service, service.data.secrets, environment)
       // on a server, the run's: its runs share the namespace, and the service goes with the run
       const network = await ensureKubernetesItemNetwork(instance, kubernetes, service, {
@@ -654,7 +714,8 @@ export function kubernetesServiceRuntime(
           persistence,
           getKubernetesSecretRefs(service, kubernetes, service.data.secrets),
           options.stateKey,
-          network
+          network,
+          { previous, signal: options.abort }
         )
       } catch (e) {
         // the last words of a container that crashed, before why it failed
@@ -675,7 +736,6 @@ export function kubernetesServiceRuntime(
         environment.abortCtrl.signal.addEventListener('abort', stop, { once: true, signal: listening.signal })
       }
 
-      const name = getResourceName(service, kubernetes)
       options.state.set({
         type: 'running',
         dns: { containerId: name },
@@ -732,6 +792,36 @@ export function kubernetesServiceRuntime(
       return deployment?.metadata?.labels?.['hammerkit.dev/state'] ?? null
     },
   }
+}
+
+async function readDeployment(
+  instance: KubernetesInstance,
+  namespace: string,
+  name: string
+): Promise<V1Deployment | undefined> {
+  try {
+    return await instance.appsApi.readNamespacedDeployment({ name, namespace })
+  } catch (e) {
+    if (statusCodeOf(e) === 404) {
+      return undefined
+    }
+    throw e
+  }
+}
+
+// A Deployment of this definition and state whose pods are all of it and ready
+export function isRolledOut(deployment: V1Deployment, definition: string, stateKey: string): boolean {
+  const labels = deployment.metadata?.labels ?? {}
+  const status = deployment.status
+  return (
+    !deployment.metadata?.deletionTimestamp &&
+    labels[DEFINITION_LABEL] === definition &&
+    labels['hammerkit.dev/state'] === stateKey &&
+    (status?.observedGeneration ?? 0) >= (deployment.metadata?.generation ?? 0) &&
+    (status?.updatedReplicas ?? 0) >= 1 &&
+    (status?.availableReplicas ?? 0) >= 1 &&
+    (status?.replicas ?? 0) === (status?.updatedReplicas ?? 0)
+  )
 }
 
 export function kubernetesForwardRuntime(service: WorkItem<KubernetesWorkService>): WorkRuntime<ServiceState> {

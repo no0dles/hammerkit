@@ -1,10 +1,11 @@
 import { ContainerWorkService, WorkService } from '../planner/work-service'
 import { dirname, isAbsolute, relative, sep } from 'path'
 import { existsSync } from 'fs'
+import { createHash } from 'crypto'
 import { V1Affinity, V1Volume, V1VolumeMount } from '@kubernetes/client-node'
 import { WorkKubernetesEnvironment, WorkKubernetesWorkspace } from '../planner/work-environment'
 import { ContainerWorkTask, WorkTask } from '../planner/work-task'
-import { WorkItem } from '../planner/work-item'
+import { WorkItem, WorkItemState } from '../planner/work-item'
 import { getClaimName, isKeptClaim } from './kept-claims'
 import { getClaimSubPath } from './claim-layout'
 
@@ -85,8 +86,17 @@ function appendWorkspaceMount(
 
 export async function getKubernetesPersistence(
   work: WorkItem<ContainerWorkTask | ContainerWorkService>,
-  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
+  // the state the work runs at, on a service run (see getStateFilesDir); what it inherits is
+  // at the state its own work item completed at
+  stateKey?: string
 ): Promise<KubernetesPersistence> {
+  const dirOf = (item: WorkItem<WorkTask | WorkService>) =>
+    kubernetes.server?.serviceRun ? getItemFilesDir(item, item === work ? stateKey : undefined) : undefined
+  const own = dirOf(work)
+  // a service that watches its files mounts them from the folder they are synced into, and
+  // takes them into the folder of their state (see syncLiveFiles)
+  const mounted = own && isLiveService(work, kubernetes) ? LIVE_FILES_DIR : own
   const persistence: KubernetesPersistence = {
     volumes: [],
     sizes: {},
@@ -105,7 +115,7 @@ export async function getKubernetesPersistence(
     ) {
       continue
     }
-    appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true, kubernetes)
+    appendVolume(work, persistence, mount.containerPath, mount.localPath, mount.isFile, true, kubernetes, mounted, own)
   }
 
   for (const src of work.data.src) {
@@ -118,7 +128,7 @@ export async function getKubernetesPersistence(
     ) {
       continue
     }
-    appendVolume(work, persistence, src.absolutePath, src.absolutePath, src.isFile, true, kubernetes) // TODO matcher
+    appendVolume(work, persistence, src.absolutePath, src.absolutePath, src.isFile, true, kubernetes, mounted, own) // TODO matcher
   }
 
   if (work.data.type === 'container-task') {
@@ -130,7 +140,8 @@ export async function getKubernetesPersistence(
         null,
         false,
         !!generate.inherited,
-        kubernetes
+        kubernetes,
+        dirOf(generate.inherited ?? work)
       )
     }
   } else {
@@ -142,7 +153,9 @@ export async function getKubernetesPersistence(
         null,
         false,
         !!volume.inherited || volume.readOnly,
-        kubernetes
+        kubernetes,
+        // the data of a service stays where it is, the outputs of its deps are by their state
+        volume.inherited ? dirOf(volume.inherited) : undefined
       )
     }
   }
@@ -157,10 +170,16 @@ export function appendVolume(
   localPath: string | null,
   isFile: boolean,
   readOnly: boolean,
-  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
+  // the folder of the state of `sourceWork` the path is in, see getStateFilesDir
+  stateDir?: string,
+  // the folder its upload goes to, when it is not the one the path is mounted from (a
+  // service that watches its files, see syncLiveFiles)
+  uploadDir: string | undefined = stateDir
 ): void {
   const volumeName = getVolumeName(sourceWork, kubernetes)
-  const subPath = getClaimSubPath(sourceWork, containerPath)
+  const claimPath = getClaimSubPath(sourceWork, containerPath)
+  const subPath = (stateDir ? `${stateDir}/` : '') + claimPath
 
   const existVolume = persistence.volumes.some((v) => v.name === volumeName)
   if (!existVolume) {
@@ -192,7 +211,7 @@ export function appendVolume(
       localPath: localPath,
       matcher: () => true, // TODO
       containerPath,
-      subPath,
+      subPath: (uploadDir ? `${uploadDir}/` : '') + claimPath,
       stateKey: '', // TODO
     })
   }
@@ -207,10 +226,13 @@ export function appendVolume(
  */
 export function getWorkspacePodSpec(
   kubernetes: Pick<WorkKubernetesEnvironment, 'server'>,
-  persistence: Pick<KubernetesPersistence, 'workspace'>,
+  persistence: Pick<KubernetesPersistence, 'workspace'> & Partial<Pick<KubernetesPersistence, 'volumes'>>,
   task?: { name: string; pool?: string }
 ): { labels: { [label: string]: string }; affinity?: V1Affinity } {
   const workspace = kubernetes.server?.workspace
+  if (kubernetes.server?.serviceRun && !workspace) {
+    return getClaimPodSpec(persistence.volumes ?? [])
+  }
   if (!workspace || persistence.workspace.length === 0) {
     return { labels: {} }
   }
@@ -226,6 +248,48 @@ export function getWorkspacePodSpec(
   }
 }
 
+/**
+ * A pod of a service run that mounts claims: labelled by each of them, and made to go where a
+ * pod runs that mounts all of them. A run that moves to another commit starts a new pod of a
+ * service, a Job of a changed task or an upload while the pods of the commit before still
+ * mount the same claims, which a cloud disk attaches to one node at a time: a pod on another
+ * node would wait for the disk until its deadline. Required, as one term: while no pod mounts
+ * all of them (the first one, or after the run slept), the scheduler lets the pod go anywhere,
+ * because it matches the term itself, so a Deployment that keeps the term is never held back
+ * by it. Mounting all of them is what holds the disks on one node.
+ */
+export function getClaimPodSpec(volumes: Pick<V1Volume, 'persistentVolumeClaim'>[]): {
+  labels: { [label: string]: string }
+  affinity?: V1Affinity
+} {
+  const keys = [
+    ...new Set(
+      volumes.flatMap((volume) =>
+        volume.persistentVolumeClaim ? [getClaimMountLabel(volume.persistentVolumeClaim.claimName)] : []
+      )
+    ),
+  ].sort()
+  if (keys.length === 0) {
+    return { labels: {} }
+  }
+  const labels = Object.fromEntries(keys.map((key) => [key, 'mounted']))
+  return {
+    labels,
+    affinity: {
+      podAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: [
+          { labelSelector: { matchLabels: labels }, topologyKey: 'kubernetes.io/hostname' },
+        ],
+      },
+    },
+  }
+}
+
+// a claim name is longer than a label name may be: its hash
+export function getClaimMountLabel(claimName: string): string {
+  return `claim.hammerkit.dev/${createHash('sha256').update(claimName).digest('hex').slice(0, 16)}`
+}
+
 // the label of the pods that mount the claim of a sandbox
 export const SANDBOX_LABEL = 'hammerkit.dev/sandbox'
 
@@ -237,4 +301,45 @@ export function getSandboxAffinity(label: string): V1Affinity {
       ],
     },
   }
+}
+
+// The folder of a service run's claim that holds the files of one state of a work item: the
+// src and mounts it uploads, and the outputs of a task. A run that moves to another commit
+// uploads and builds the files of the new state into a folder of their own, so the pods of
+// the commit before keep the files and outputs they started with until the new ones are up,
+// and a Deployment that is put back finds them again. The volumes of a service hold its data,
+// which stays where it is.
+export const STATE_FILES_PREFIX = '.hammerkit-files-'
+
+export function getStateFilesDir(stateKey: string): string {
+  return `${STATE_FILES_PREFIX}${createHash('sha256').update(stateKey).digest('hex').slice(0, 16)}`
+}
+
+// The folder of the claim of a service of a service run that watches its own files
+// (`continuous`), which its pod mounts its `src` and `mounts` from. The files of each state
+// are uploaded into the folder of that state, and synced into this one from there: the pod
+// stays, and the service sees the files of the new commit (syncLiveFiles).
+export const LIVE_FILES_DIR = `${STATE_FILES_PREFIX}live`
+
+export function isLiveService(
+  work: WorkItem<WorkTask | WorkService>,
+  kubernetes: Pick<WorkKubernetesEnvironment, 'server'>
+): work is WorkItem<ContainerWorkService> {
+  return (
+    !!kubernetes.server?.serviceRun &&
+    !kubernetes.server.workspace &&
+    work.data.type === 'container-service' &&
+    work.data.continuous === true
+  )
+}
+
+// The folder of the state of `item`: `stateKey`, or the one it completed at in this run
+export function getItemFilesDir(
+  item: WorkItem<WorkTask | WorkService>,
+  stateKey: string | undefined
+): string | undefined {
+  const key =
+    stateKey ??
+    (item as Partial<WorkItemState<WorkTask | WorkService, { stateKey?: string | null }>>).state?.current.stateKey
+  return key ? getStateFilesDir(key) : undefined
 }

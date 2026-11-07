@@ -152,6 +152,59 @@ describe('following a run', () => {
   })
 })
 
+describe('following a service run that moved', () => {
+  const c = 'c'.repeat(40)
+  const d = 'd'.repeat(40)
+  const base = { id: 'run_1', tasks: [], results: {}, moved: { logFrom: 5 } }
+
+  // a server whose run is each of `runs` in turn, the last one from then on
+  async function follow(submitted: object, runs: object[]) {
+    let polls = 0
+    const froms: string[] = []
+    let result: unknown
+    await withHttp(
+      (req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        if (req.url?.startsWith('/v1/runs/run_1/logs')) {
+          froms.push(new URL(req.url, 'http://x').searchParams.get('from') ?? '')
+          res.end(JSON.stringify({ lines: [], truncated: false }))
+        } else {
+          res.end(JSON.stringify(runs[Math.min(polls++, runs.length - 1)]))
+        }
+      },
+      async (url) => {
+        result = await followRun({ url, token: async () => 'tok' }, submitted as never, { untilUp: true })
+      }
+    )
+    return { result: result as { run: { state: string } }, polls, froms }
+  }
+
+  it('ends at once for a run that sleeps, which only changed its commit', async () => {
+    const asleep = { ...base, state: 'asleep', source: { type: 'ref', commit: d }, moves: [{ commit: d }] }
+    const { result, polls, froms } = await follow(asleep, [asleep])
+    expect(result.run.state).toBe('asleep')
+    expect(polls).toBe(0)
+    expect(froms).toEqual(['5'])
+  })
+
+  it('follows a run that is up until it is at the commit, or did not get there', async () => {
+    const moving = { ...base, state: 'up', source: { type: 'ref', commit: c }, moving: { commit: d } }
+    const there = { ...moving, moving: undefined, source: { type: 'ref', commit: d }, moves: [{ commit: d }] }
+    expect((await follow(moving, [moving, moving, there])).polls).toBe(3)
+    const back = { ...moving, moving: undefined, moves: [{ commit: d, error: 'build failed' }] }
+    expect((await follow(moving, [moving, back])).result.run).toMatchObject({ moves: [{ error: 'build failed' }] })
+    // a move that starts the services again goes through the states of a start
+    const restarting = { ...moving, state: 'running' }
+    expect((await follow(moving, [restarting, { ...there, state: 'running' }, there])).polls).toBe(3)
+  })
+
+  it('stops following once a later move takes its place', async () => {
+    const moving = { ...base, state: 'up', source: { type: 'ref', commit: c }, moving: { commit: d } }
+    const later = { ...moving, moving: { commit: 'e'.repeat(40) } }
+    expect((await follow(moving, [later])).polls).toBe(1)
+  })
+})
+
 describe('tokens', () => {
   const secret = 'SECRET-refresh-token'
 
