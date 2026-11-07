@@ -143,6 +143,28 @@ describe('getPodFailure', () => {
     })
   })
 
+  it('fails a crash once the container was restarted as often as its service allows', () => {
+    const crashed = (restartCount: number) =>
+      pod({
+        containerStatuses: [
+          {
+            name: 'web',
+            image: 'web:1',
+            ready: false,
+            restartCount,
+            imageID: '',
+            state: { waiting: { reason: 'CrashLoopBackOff' } },
+            lastState: { terminated: { exitCode: 1, reason: 'Error' } },
+          },
+        ],
+      })
+    expect(getPodFailure(crashed(0), 'web', 0)?.final).toBe(true)
+    expect(getPodFailure(crashed(4), 'web', 5)).toBeNull()
+    expect(getPodFailure(crashed(5), 'web', 5)?.text).toBe(
+      'it keeps crashing: it exited with code 1 (Error), restarted 5 times'
+    )
+  })
+
   it('fails a crash the kubelet still shows as ended, not yet as CrashLoopBackOff', () => {
     const ended = (restartCount: number) =>
       pod({

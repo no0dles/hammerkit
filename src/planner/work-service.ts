@@ -59,6 +59,8 @@ export interface ContainerWorkService extends BaseWorkService {
   resources: WorkResources | null
   // on Kubernetes, the size of its claim; the environment's when null
   volumeSize: string | null
+  // on Kubernetes, the crashes restarted before it fails; CRASHES_TO_FAIL when null
+  restarts: number | null
   // what the container reaches besides its needs, as the build file declares it
   network: WorkNetwork
   // the run's `--network` ceiling, null for none; see getEffectiveNetwork

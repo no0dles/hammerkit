@@ -651,6 +651,11 @@
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/resources",
                     "description": "cpu and memory requests and limits"
                   },
+                  "restarts": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "crashes restarted before it fails on Kubernetes, 2 by default"
+                  },
                   "volumeSize": {
                     "$ref": "#/definitions/hammerkit/properties/tasks/additionalProperties/anyOf/0/properties/volumeSize",
                     "description": "size of its claim on Kubernetes, e.g. 10Gi"

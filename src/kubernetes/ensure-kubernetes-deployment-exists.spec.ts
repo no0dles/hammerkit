@@ -111,4 +111,32 @@ describe('ensureKubernetesDeploymentExists', () => {
     expect(created[1].spec.minReadySeconds).toBe(0)
     expect(created[1].spec.template.spec.containers[0].readinessProbe).toBeDefined()
   })
+  it('lets the wait fail a crash once the service was restarted as often as it allows', async () => {
+    const instance = {
+      objectApi: {
+        read: vi.fn(async () => {
+          throw { code: 404 }
+        }),
+        create: vi.fn(async (spec: any) => ({ ...spec, status: {} })),
+      },
+    } as any
+    const env = { type: 'kubernetes', namespace: 'caller', httpRoutes: [] } as unknown as WorkKubernetesEnvironment
+    const patient = { ...service, data: { ...service.data, restarts: 5 } } as unknown as WorkItem<ContainerWorkService>
+    vi.mocked(awaitDeployRunningState).mockClear()
+    await ensureKubernetesDeploymentExists(
+      instance,
+      env,
+      patient,
+      { mounts: [], volumes: [], workspace: [] } as any,
+      { env: [], mounts: [], volumes: [] } as any,
+      'state',
+      { env: [], hostAliases: [], initContainers: [] }
+    )
+    expect(awaitDeployRunningState).toHaveBeenCalledWith(
+      instance,
+      env,
+      expect.any(String),
+      expect.objectContaining({ restarts: 5 })
+    )
+  })
 })

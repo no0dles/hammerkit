@@ -152,6 +152,7 @@ export async function ensureKubernetesDeploymentExists(
     container: getServiceContainerName(service),
     subject: `service ${service.name}`,
     onWaiting: (text) => service.status.write('warn', `${service.name} ${text}`),
+    ...(service.data.restarts !== null ? { restarts: service.data.restarts } : {}),
   })
 }
 

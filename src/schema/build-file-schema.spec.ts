@@ -18,6 +18,13 @@ describe('buildFileSchema', () => {
       expect(result.success).toBe(true)
     })
 
+    it('accepts how often a service may be restarted, as a whole number from 0', async () => {
+      expect((await parse({ services: { api: { image: 'node:alpine', restarts: 0 } } })).success).toBe(true)
+      expect((await parse({ services: { api: { image: 'node:alpine', restarts: 5 } } })).success).toBe(true)
+      expect((await parse({ services: { api: { image: 'node:alpine', restarts: -1 } } })).success).toBe(false)
+      expect((await parse({ services: { api: { image: 'node:alpine', restarts: 1.5 } } })).success).toBe(false)
+    })
+
     it('rejects a service that is neither a container nor a kubernetes service', async () => {
       const result = await parse({ services: { broken: { ports: [80] } } })
       expect(result.success).toBe(false)

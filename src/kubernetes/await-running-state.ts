@@ -107,6 +107,8 @@ export interface DeployReadiness {
   subject?: string
   // told what a pod waits for, when that changes: a node, its image
   onWaiting?: (text: string) => void
+  // how often its container may crash and be restarted before it fails (CRASHES_TO_FAIL)
+  restarts?: number
 }
 
 // how long a reason that may still pass (an image pull a registry refused for now, a
@@ -117,7 +119,8 @@ export const PASSING_FAILURE_MS = 60_000
 // stayed ready for a while. The deadline only starts once a pod runs, so an
 // image pull doesn't count against it (as on docker, where it starts after
 // the container started). A pod that won't get there without a change (an image
-// that isn't there, a container that crashed three times) fails it at once, with
+// that isn't there, a container that crashed once more than its
+// service's `restarts`, 2 by default) fails it at once, with
 // the reason the cluster gives; one that may still pass fails once it lasted a minute.
 // Only the pods of this Deployment count: not the ones of one deleted before it was
 // created again, which may still be there, terminating or not yet.
@@ -151,7 +154,7 @@ export async function awaitDeployRunningState(
     )
     for (const [index, pod] of pods.entries()) {
       const key = pod.metadata?.name ?? `${index}`
-      const failure = getPodFailure(pod, readiness.container)
+      const failure = getPodFailure(pod, readiness.container, readiness.restarts)
       if (!failure) {
         failingSince.delete(key)
         continue
