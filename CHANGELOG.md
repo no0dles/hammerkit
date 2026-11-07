@@ -1,3 +1,10 @@
+# [2.0.0-next.3](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.2...v2.0.0-next.3) (2026-11-07)
+
+
+### Bug Fixes
+
+* reuse the outputs a service run's claim holds on wake and move ([e3c436f](https://github.com/no0dles/hammerkit/commit/e3c436fc7f364f0f7b8c92e612c4f2122610c3bb))
+
 # [2.0.0-next.2](https://github.com/no0dles/hammerkit/compare/v2.0.0-next.1...v2.0.0-next.2) (2026-11-07)
 
 
