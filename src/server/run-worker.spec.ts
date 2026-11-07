@@ -5,7 +5,8 @@ import { PassThrough, Writable } from 'stream'
 import { createTestCase } from '../testing/test-case'
 import { memoryStream } from '../testing/test-streams'
 import { runProgram } from '../run-program'
-import { getRunNetwork, readInput, WorkerMessage, taskCauses, workerMain } from './run-worker'
+import { describeFailures, getRunNetwork, readInput, WorkerMessage, taskCauses, workerMain } from './run-worker'
+import { WorkTree } from '../planner/work-tree'
 import { limitNetwork, parseWorkNetwork } from '../planner/work-network'
 import { NetworkSchema } from '../schema/network-schema'
 import { hostEnvs } from '../testing/host-env'
@@ -298,6 +299,44 @@ describe('taskCauses', () => {
   it('leaves the causes out when there are none', () => {
     expect(taskCauses(undefined, (text) => text)).toEqual({})
     expect(taskCauses([], (text) => text)).toEqual({})
+  })
+})
+
+describe('describeFailures', () => {
+  const item = (name: string, current: object, errors: string[] = []) => ({
+    name,
+    state: { current },
+    status: {
+      *read() {
+        yield { level: 'info', message: 'starting' }
+        for (const message of errors) {
+          yield { level: 'error', message }
+        }
+      },
+    },
+  })
+
+  it('names the services and tasks that failed, why, masked, and leaves out the ones stopped for them', () => {
+    const workTree = {
+      services: {
+        web: item('web', { type: 'error', errorMessage: 'service web can not become ready, token secret-1' }),
+        db: item('db', { type: 'canceled' }),
+        cache: item('cache', { type: 'end', reason: 'crash' }),
+        nginx: item('nginx', { type: 'end', reason: 'crash' }, ['first', 'service nginx did not pass its healthcheck']),
+      },
+      tasks: {
+        migrate: item('migrate', { type: 'crash', exitCode: 3 }),
+        seed: item('seed', { type: 'error', errorMessage: 'the secret db could not be read' }),
+        lint: item('lint', { type: 'completed' }),
+      },
+    } as unknown as WorkTree
+    expect(describeFailures(workTree, (text) => text.replace(/secret-\d+/g, '***'))).toEqual([
+      'web: service web can not become ready, token ***',
+      'cache: it stopped on its own',
+      'nginx: service nginx did not pass its healthcheck',
+      'migrate: exit code 3',
+      'seed: the secret db could not be read',
+    ])
   })
 })
 

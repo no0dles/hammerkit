@@ -77,6 +77,8 @@ const RUN_RULES: V1PolicyRule[] = [
     resources: ['pods', 'pods/exec', 'pods/log', 'persistentvolumeclaims', 'secrets', 'services'],
     verbs: MANAGE,
   },
+  // what the cluster said of a run that failed
+  { apiGroups: [''], resources: ['events'], verbs: ['list'] },
   { apiGroups: ['batch'], resources: ['jobs', 'jobs/status'], verbs: MANAGE },
   { apiGroups: ['apps'], resources: ['deployments'], verbs: MANAGE },
   {

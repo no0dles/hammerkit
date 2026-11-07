@@ -80,6 +80,12 @@ It ends `succeeded` when its time ran out or somebody stopped it, and `stoppedBy
 `ttl`, `replaced` or who stopped it. A service that stops on its own, or never gets ready,
 fails the run. `maxDuration` limits how long it may take to get up.
 
+A run that failed names the services that failed and why in its `error`, such as `web: service
+web did not pass its healthcheck "curl -f localhost:8080" within 30s of starting`, and its log
+has the same line under the service's name, after what the service printed. The log stays
+with the run after its services are gone: `GET /v1/runs/<id>/logs`, or
+[`hammerkit remote logs`](/docs/cli/remote#reading-a-run-again).
+
 [`hammerkit remote up`](/docs/cli/remote#service-runs) does this from the command line, and
 the [agent tools](/docs/remote-compute/agents#service-runs) from a coding agent.
 
@@ -283,6 +289,16 @@ namespaces of its service runs (see
 without it (an upgrade that didn't add it) says so in its log and in the run's, and removes
 what runs in the namespace instead, which stays. When the server starts, it removes the
 namespaces of service runs that none of its runs is in.
+
+What a service prints goes into the log of the run, as on a host: while it starts, and while
+it is up, until the log of the run reaches its limit. A service that can't become ready fails
+the run at once, with the reason the cluster gives: an image that can't be pulled, a
+container that keeps crashing (with its exit code, or that it ran out of memory), one that
+can't be created (a missing Secret), or a network policy that did not take hold. A pod that
+waits for a node says so in the log, with what the scheduler said, and the run goes on
+waiting up to `maxDuration` for one. Before the namespace goes, the server writes into the log
+of a failed run what the cluster said: the pods that were not as they should be, and the
+warning events of the namespace.
 
 On a cluster a service run starts from a branch, not from a sandbox, whose claim is in the
 caller's namespace: push the sandbox to a branch and start that.

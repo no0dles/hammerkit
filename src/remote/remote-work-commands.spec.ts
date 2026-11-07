@@ -13,7 +13,7 @@ import { startServer } from '../server/server'
 import { COMMIT, REPO, fakeRepos } from '../testing/repos'
 import { RunExecutor } from '../server/runs'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
-import { describeApproval, describePlan } from './remote-work-commands'
+import { describeApproval, describeListedRun, describePlan, describeRunEnd } from './remote-work-commands'
 
 const HK = 'hammerkit'
 
@@ -358,6 +358,9 @@ describe('remote run', () => {
       expect(failed.message).toMatch(/^run_\S+ failed: build failed$/)
       // the output came before, control characters written out but tabs kept
       expect(h.output()).toContain(`build main@${COMMIT} 3,more\n\tfailing?[2J\n`)
+      // then why each task failed, which the error of the run does not say, and where the log stays
+      expect(h.output()).toContain('\n  build: exit code 3\n')
+      expect(h.output()).toMatch(/read its log again with: hammerkit remote logs run_\S+\n/)
       const [submitted] = (await h.call('bob', 'GET', '/v1/runs')).body.runs
       expect(submitted.options.args).toEqual(['3', 'more'])
     })
@@ -483,6 +486,103 @@ describe('remote run', () => {
         'is not the hash of a published version'
       )
     })
+  })
+})
+
+describe('remote logs and runs', () => {
+  const from = ['--repo', REPO, '--ref', 'main']
+
+  it('lists the runs of the caller and prints the log of one that ended, of all or one task', async () => {
+    await withHarness('remote-logs', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await h.run('remote', 'publish')
+      await h.run('remote', 'run', 'build', ...from)
+      await h.run('remote', 'run', 'build', ...from, '--', '3').catch(() => undefined)
+      const [failed, succeeded] = (await h.call('bob', 'GET', '/v1/runs')).body.runs
+
+      const runs = await h.run('remote', 'runs')
+      const lines = runs.trim().split('\n')
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toMatch(new RegExp(`^${failed.id}  \\S+  failed  build: build failed$`))
+      expect(lines[1]).toMatch(new RegExp(`^${succeeded.id}  \\S+  succeeded  build$`))
+      expect(await h.run('remote', 'runs', '--limit', '1')).toContain('… and 1 older, see them with --limit 2')
+
+      const log = await h.run('remote', 'logs', failed.id)
+      expect(log).toContain(`[build] build main@${COMMIT} 3\n`)
+      expect(log).toContain('[build] \tfailing?[2J\n')
+      expect(log).toContain(`${failed.id} failed: build failed\n  build: exit code 3\n`)
+
+      // one task, its last line, without whose it is
+      expect(await h.run('remote', 'logs', failed.id, '--task', 'build', '--tail', '1')).toBe(
+        `\tfailing?[2J\n${failed.id} failed: build failed\n  build: exit code 3\n`
+      )
+      expect(await h.run('remote', 'logs', succeeded.id, '--follow')).toBe(
+        `[build] build main@${COMMIT} \n${succeeded.id} succeeded\n`
+      )
+    })
+  })
+
+  it('says when there is no such run, and checks the id and options first', async () => {
+    await withHarness('remote-logs-missing', async (h) => {
+      await h.run('remote', 'login', 'build')
+      await h.run('remote', 'use', 'build')
+      await expect(h.run('remote', 'logs', 'run_aaaaaaaaaaaaaaaa')).rejects.toThrow(
+        'build keeps no run run_aaaaaaaaaaaaaaaa you may see, list them with: hammerkit remote runs'
+      )
+      await expect(h.run('remote', 'logs', 'nope')).rejects.toThrow('nope is not a run id (run_...)')
+      await expect(h.run('remote', 'logs', 'run_aaaaaaaaaaaaaaaa', '--follow', '--tail', '5')).rejects.toThrow(
+        '--follow prints the whole log, leave --tail out'
+      )
+      expect(await h.run('remote', 'runs')).toBe('build: you have no runs it still keeps\n')
+    })
+  })
+})
+
+describe('describeRunEnd', () => {
+  it('names each failed task the error of the run does not, with its error or exit code', () => {
+    expect(
+      describeRunEnd({
+        id: 'run_x',
+        state: 'failed',
+        error: 'web: service web can not become ready, its image could not be pulled',
+        results: {
+          migrate: { status: 'failed', exitCode: 2, lastLog: [] },
+          seed: { status: 'failed', error: 'the secret db could not be read', lastLog: [] },
+          lint: { status: 'succeeded', lastLog: [] },
+        },
+      })
+    ).toEqual([
+      'run_x failed: web: service web can not become ready, its image could not be pulled',
+      '  migrate: exit code 2',
+      '  seed: the secret db could not be read',
+    ])
+  })
+
+  it('does not say twice what the error of the run says', () => {
+    expect(
+      describeRunEnd({
+        id: 'run_x',
+        state: 'failed',
+        error: 'web: it stopped; seed: the secret db could not be read',
+        results: { seed: { status: 'failed', error: 'the secret db could not be read', lastLog: [] } },
+      })
+    ).toEqual(['run_x failed: web: it stopped; seed: the secret db could not be read'])
+  })
+})
+
+describe('describeListedRun', () => {
+  it('says the services of a service run and until when it is up', () => {
+    expect(
+      describeListedRun({
+        id: 'run_x',
+        state: 'up',
+        createdAt: '2026-11-07T07:00:00.000Z',
+        tasks: [],
+        expiresAt: '2026-11-07T09:00:00.000Z',
+        up: { services: ['web', 'api'], ttl: 1, name: 'main', endpoints: [] },
+      })
+    ).toBe('run_x  2026-11-07T07:00:00.000Z  up until 2026-11-07T09:00:00.000Z  up web, api')
   })
 })
 

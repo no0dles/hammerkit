@@ -49,6 +49,8 @@ server, so they work with or without a build file in the working directory.
 | `remote publish [server]` | Publish the build file of the working directory (or the one `--file` names) and the files it includes, and print its hash, see [Publishing](#publishing-a-build-file). `--dry-run` only checks it against the server's policy. |
 | `remote run <tasks...>` | Run tasks of a published build file on a server from a git ref, print their output and exit as they did, see [Running tasks](#running-tasks). |
 | `remote up <services...>` | Start services of a published build file on a server from a git ref and keep them up, with `--endpoint service:port` at addresses of their own, see [Service runs](#service-runs). |
+| `remote runs [server]` | List your runs on a server, newest first: their state, what they ran, and why one failed. `--limit <count>` shows more than 20, see [Reading a run again](#reading-a-run-again). |
+| `remote logs <run> [server]` | Print the log of a run, also of one that ended: what its tasks and services printed, and what the server and the cluster said. `--task <name>` keeps one task or service, `--tail <lines>` the last lines, `--follow` keeps printing until the run ends, see [Reading a run again](#reading-a-run-again). |
 | `remote extend <run> <ttl> [server]` | Keep a service run up for this long from now. |
 | `remote stop <run> [server]` | Stop a run; a service run takes its services and endpoints down. |
 | `remote verify <tasks...>` | Check that the server already passed tasks for the files checked out here, without running them, see [Verifying checks](#verifying-checks). |
@@ -249,7 +251,7 @@ What it runs, when you leave the options out, is what is checked out where you a
 | `--commit <sha>` | The commit the ref has to be at. A ref that moved since is refused, so the run executes the code you meant: `main is at 9e1f... now, not at 4be1a07c...`. | The commit checked out here when `--ref` is left out too, else no pin. |
 | `--server <name>` | The server. | The default of `remote use`. |
 | `--env`, `--cache`, `--timeout`, `--max-timeout` | As for [`run`](/docs/remote-compute/runs#submitting-a-run). | The server's and the build file's defaults. |
-| `--detach` | Submit the run and exit, without following it: it prints the run and `follow it with: hammerkit remote show <id>`. For a [check](#verifying-checks) that CI verifies later. | Follow the run to its end. |
+| `--detach` | Submit the run and exit, without following it: it prints the run and `follow it with: hammerkit remote logs <id> --follow`. For a [check](#verifying-checks) that CI verifies later. | Follow the run to its end. |
 
 What follows `--` goes to the one task named, as the
 [arguments](/docs/remote-compute/runs#arguments) of a run. The server refuses them for a
@@ -291,9 +293,61 @@ run_Vd1rX9pQ2mT7wN4a is up until 2026-10-28T10:12:00.000Z, asleep after 30m with
 | `--name <name>` | Lower case letters, digits and `-`. A later run of yours with this name replaces this one and keeps its addresses. | The branch. |
 | `--build`, `--repo`, `--ref`, `--commit`, `--server`, `--env` | As for [`remote run`](#running-tasks). | As there. |
 
-It exits with `1` when the run failed before it was up. Ctrl-C while it starts cancels it.
+It prints what the services print while they start, on Kubernetes too, and the server's
+`[hammerkit]` lines, such as what a service waits for (`web waits for a node: 0/3 nodes are
+available: 3 Insufficient cpu`). When the run fails before it is up, it says which service
+failed and why, and exits with `1`:
+
+```
+[web] service web can not become ready, it keeps crashing: it exited with code 1 (Error), restarted 2 times
+[hammerkit] what the cluster said in hk-run-3f2a...:
+[hammerkit]   pod web-6c9f...-x2k8q: Running, restarted: it exited with code 1 (Error), restarted 2 times
+[hammerkit]   event BackOff pod/web-6c9f...-x2k8q: Back-off restarting failed container web (4 times)
+read its log again with: hammerkit remote logs run_Vd1rX9pQ2mT7wN4a
+run_Vd1rX9pQ2mT7wN4a failed: web: service web can not become ready, it keeps crashing: it exited with code 1 (Error), restarted 2 times
+```
+
+Ctrl-C while it starts cancels it.
 `remote extend <run> 8h` keeps it for that long from now (never shorter than it was),
 `remote stop <run>` takes it down, asleep or not.
+
+## Reading a run again
+
+A run that failed says why when it ends: the error of the run, then each task that failed
+with its own error or exit code, then where its log stays:
+
+```
+  migrate: exit code 2
+read its log again with: hammerkit remote logs run_Qx3k9ZpL2mW7vN4a
+run_Qx3k9ZpL2mW7vN4a failed: migrate failed
+```
+
+The server keeps the log of your last runs (`runs.keep`, 200 by default) after they ended,
+also over a restart, so the pods of a run can be gone and its log is still there.
+`remote runs` lists them, newest first:
+
+```
+$ hammerkit remote runs
+run_Vd1rX9pQ2mT7wN4a  2026-11-07T07:12:03.000Z  failed  up web: web: service web can not become ready, its image ghcr.io/corp/web:4be1a07 could not be pulled (ImagePullBackOff)
+run_Qx3k9ZpL2mW7vN4a  2026-11-07T06:58:41.000Z  succeeded  test
+```
+
+`remote logs <run>` prints the log of one, each line with its task or service in front, then
+how it ended:
+
+| Option | What it does |
+| --- | --- |
+| `--task <name>` | Only the lines of this task or service (`hammerkit` for the server's own), without the name in front. |
+| `--tail <lines>` | Only the last lines, at most 1000. |
+| `-f`, `--follow` | Keep printing what comes until the run ends, as `remote run` does. Ctrl-C stops following and leaves the run alone. For a service run that is up, that is the output of its services. |
+
+A log longer than the server keeps of a run (`runs.maxLogBytes`) ends with the last lines of
+each task, which the server always keeps. On Kubernetes the log of a run that failed also
+holds what the cluster said before the server removed its pods: each pod that was not as it
+should be, and the warning events of the run's objects, such as `FailedScheduling`, a failed
+image pull or a container that was killed for its memory. The output of a failed probe is the
+service's own and is left out. The server needs `list` on events for that, see
+[What the server may do](/docs/remote-compute/backend#what-the-server-may-do).
 
 ## Verifying checks
 

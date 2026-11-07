@@ -4,6 +4,7 @@ import { statusCodeOf } from './apply'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { KubernetesInstance } from './kubernetes-instance'
 import { sleep as delay } from '../utils/sleep'
+import { getPodFailure, getPodWaiting } from './cluster-state'
 
 // The waits below poll instead of using the client's Watch: Watch aborts every
 // request after 30s, which a pod or deployment still pulling its image outlasts.
@@ -100,11 +101,19 @@ export interface DeployReadiness {
   timeout: number | null
   // message when the deadline passes
   timeoutMessage: string
+  // the container whose state counts, all of the pod's when left out
+  container?: string
+  // what fails, such as `service web`, in front of why it can not become ready
+  subject?: string
+  // told what a pod waits for, when that changes: a node, its image
+  onWaiting?: (text: string) => void
 }
 
 // Waits for a ready replica. The deadline only starts once a pod runs, so an
 // image pull doesn't count against it (as on docker, where it starts after
-// the container started).
+// the container started). A pod that won't get there without a change (an image
+// that can't be pulled, a container that keeps crashing) fails it at once, with
+// the reason the cluster gives.
 export async function awaitDeployRunningState(
   instance: KubernetesInstance,
   env: WorkKubernetesEnvironment,
@@ -114,17 +123,31 @@ export async function awaitDeployRunningState(
   now: () => number = Date.now
 ): Promise<void> {
   let runningSince: number | null = null
+  let said: string | undefined
   for (;;) {
     const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
     if ((deployment.status?.readyReplicas ?? 0) > 0) {
       return
     }
+    const pods = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: readiness.podSelector,
+    })
+    for (const pod of pods.items) {
+      const failure = getPodFailure(pod, readiness.container)
+      if (failure) {
+        throw new Error(`${readiness.subject ?? name} can not become ready, ${failure}`)
+      }
+    }
+    const waiting = pods.items
+      .map((pod) => getPodWaiting(pod, readiness.container))
+      .find((text): text is string => !!text)
+    if (waiting && waiting !== said) {
+      readiness.onWaiting?.(waiting)
+    }
+    said = waiting
     if (readiness.timeout !== null) {
       if (runningSince === null) {
-        const pods = await instance.coreApi.listNamespacedPod({
-          namespace: env.namespace,
-          labelSelector: readiness.podSelector,
-        })
         if (pods.items.some((pod) => pod.status?.phase === 'Running')) {
           runningSince = now()
         }

@@ -99,7 +99,7 @@ export async function ensureKubernetesDeploymentExists(
             : {}),
           containers: [
             {
-              name: service.name.replace(/:/, '-'),
+              name: getServiceContainerName(service),
               image: service.data.image,
               workingDir: getServiceWorkingDir(service.data),
               env: [
@@ -146,7 +146,15 @@ export async function ensureKubernetesDeploymentExists(
     timeoutMessage: service.data.healthcheck
       ? getHealthcheckTimeoutMessage(service.name, service.data.healthcheck)
       : '',
+    container: getServiceContainerName(service),
+    subject: `service ${service.name}`,
+    onWaiting: (text) => service.status.write('warn', `${service.name} ${text}`),
   })
+}
+
+// The container of a service's pod that runs its command, beside the `debug` one.
+export function getServiceContainerName(service: WorkItem<ContainerWorkService>): string {
+  return service.name.replace(/:/, '-')
 }
 
 // Kubernetes `command` replaces the image entrypoint and `args` its command.

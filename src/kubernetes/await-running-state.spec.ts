@@ -51,13 +51,120 @@ describe('awaitRunningState', () => {
 describe('awaitDeployRunningState', () => {
   const noDeadline = { podSelector: 'hammerkit.dev/id=api', timeout: null, timeoutMessage: '' }
 
+  function polling(...pods: object[][]) {
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { readyReplicas: 0 } })
+    const listNamespacedPod = vi.fn()
+    for (const items of pods) {
+      listNamespacedPod.mockResolvedValueOnce({ items })
+    }
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod },
+    } as unknown as KubernetesInstance
+    return { instance, listNamespacedPod }
+  }
+
+  const pod = (container: object, extra: object = {}) => ({
+    metadata: { name: 'api-1' },
+    status: {
+      phase: 'Pending',
+      containerStatuses: [{ name: 'api', image: 'api:1', restartCount: 0, ...container }],
+      ...extra,
+    },
+  })
+
+  it('fails at once with the reason when the image can not be pulled, without a deadline', async () => {
+    const { instance } = polling(
+      [pod({ state: { waiting: { reason: 'ContainerCreating' } } })],
+      [pod({ state: { waiting: { reason: 'ImagePullBackOff', message: 'Back-off pulling image "api:1"' } } })]
+    )
+    await expect(
+      awaitDeployRunningState(instance, env, 'api', { ...noDeadline, container: 'api', subject: 'service api' }, 0)
+    ).rejects.toThrow(
+      'service api can not become ready, its image api:1 could not be pulled (ImagePullBackOff): Back-off pulling image "api:1"'
+    )
+  })
+
+  it('fails when the container keeps crashing, with how it ended last', async () => {
+    const { instance } = polling([
+      pod({
+        restartCount: 2,
+        state: { waiting: { reason: 'CrashLoopBackOff', message: 'back-off 20s' } },
+        lastState: { terminated: { exitCode: 1, reason: 'Error' } },
+      }),
+    ])
+    await expect(
+      awaitDeployRunningState(instance, env, 'api', { ...noDeadline, container: 'api', subject: 'service api' }, 0)
+    ).rejects.toThrow(
+      'service api can not become ready, it keeps crashing: it exited with code 1 (Error), restarted 2 times'
+    )
+  })
+
+  it('only looks at the container it is told, not at the debug one beside it', async () => {
+    const readNamespacedDeployment = vi
+      .fn()
+      .mockResolvedValueOnce({ status: { readyReplicas: 0 } })
+      .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
+    const listNamespacedPod = vi.fn().mockResolvedValue({
+      items: [
+        {
+          status: {
+            containerStatuses: [
+              { name: 'debug', image: 'x', restartCount: 0, state: { waiting: { reason: 'CrashLoopBackOff' } } },
+            ],
+          },
+        },
+      ],
+    })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod },
+    } as unknown as KubernetesInstance
+    await awaitDeployRunningState(instance, env, 'api', { ...noDeadline, container: 'api' }, 0)
+    expect(readNamespacedDeployment).toHaveBeenCalledTimes(2)
+  })
+
+  it('says what a pod waits for once each time it changes', async () => {
+    const unscheduled = {
+      metadata: { name: 'api-1' },
+      status: {
+        phase: 'Pending',
+        conditions: [
+          { type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: '0/3 nodes are available' },
+        ],
+      },
+    }
+    const readNamespacedDeployment = vi
+      .fn()
+      .mockResolvedValueOnce({ status: {} })
+      .mockResolvedValueOnce({ status: {} })
+      .mockResolvedValueOnce({ status: {} })
+      .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
+    const listNamespacedPod = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [unscheduled] })
+      .mockResolvedValueOnce({ items: [unscheduled] })
+      .mockResolvedValueOnce({ items: [] })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod },
+    } as unknown as KubernetesInstance
+    const said: string[] = []
+    await awaitDeployRunningState(instance, env, 'api', { ...noDeadline, onWaiting: (text) => said.push(text) }, 0)
+    expect(said).toEqual(['waits for a node: 0/3 nodes are available'])
+  })
+
   it('polls the deployment until a replica is ready', async () => {
     const readNamespacedDeployment = vi
       .fn()
       .mockResolvedValueOnce({ status: {} })
       .mockResolvedValueOnce({ status: { readyReplicas: 0 } })
       .mockResolvedValueOnce({ status: { readyReplicas: 1 } })
-    const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
+    const listNamespacedPod = vi.fn().mockResolvedValue({ items: [] })
+    const instance = {
+      appsApi: { readNamespacedDeployment },
+      coreApi: { listNamespacedPod },
+    } as unknown as KubernetesInstance
 
     await awaitDeployRunningState(instance, env, 'api', noDeadline, 0)
 
@@ -92,8 +199,9 @@ describe('awaitDeployRunningState', () => {
     ).rejects.toThrow('api not ready')
 
     expect(listNamespacedPod).toHaveBeenCalledWith({ namespace: 'demo', labelSelector: 'hammerkit.dev/id=abc' })
-    // two pending polls, then running at t=10s, failing once 20s passed
-    expect(listNamespacedPod).toHaveBeenCalledTimes(3)
+    // two pending polls, then running at t=10s, failing once 20s passed; the pods are
+    // looked at on each poll, for a reason they will not become ready
+    expect(listNamespacedPod).toHaveBeenCalledTimes(5)
     expect(readNamespacedDeployment).toHaveBeenCalledTimes(5)
   })
 
