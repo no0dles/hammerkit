@@ -256,6 +256,62 @@ export async function awaitDeployRollout(
   }
 }
 
+// how long the pod a service that watches its files keeps has to go on running once it got
+// the changed files
+export const KEPT_POD_MS = 15_000
+
+/**
+ * Watches the pods of a Deployment that stays (a service that watches its files got the
+ * changed ones, see syncLiveFiles) for `windowMs`: fails when one of them restarts, fails as
+ * awaitDeployRunningState tells, or the Deployment has no available pod any more, so a move
+ * whose files break the service does not count as up.
+ */
+export async function watchKeptPods(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness & { signal?: AbortSignal },
+  windowMs = KEPT_POD_MS,
+  pollInterval = 1000,
+  now: () => number = Date.now
+): Promise<void> {
+  const subject = readiness.subject ?? name
+  const restarts = new Map<string, number>()
+  const started = now()
+  for (;;) {
+    if (readiness.signal?.aborted) {
+      throw new AbortError()
+    }
+    const listed = await instance.coreApi.listNamespacedPod({
+      namespace: env.namespace,
+      labelSelector: readiness.podSelector,
+    })
+    for (const pod of listed.items.filter((pod) => !pod.metadata?.deletionTimestamp)) {
+      const key = pod.metadata?.name ?? ''
+      const failure = getPodFailure(pod, readiness.container)
+      if (failure) {
+        throw new Error(`${subject} stopped working with the changed files, ${failure.text}`)
+      }
+      const count = (pod.status?.containerStatuses ?? [])
+        .filter((status) => !readiness.container || status.name === readiness.container)
+        .reduce((sum, status) => sum + (status.restartCount ?? 0), 0)
+      const before = restarts.get(key)
+      if (before !== undefined && count > before) {
+        throw new Error(`${subject} stopped working with the changed files, its container restarted`)
+      }
+      restarts.set(key, count)
+    }
+    const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
+    if ((deployment.status?.availableReplicas ?? 0) < 1) {
+      throw new Error(`${subject} stopped working with the changed files, it has no ready pod`)
+    }
+    if (now() - started >= windowMs) {
+      return
+    }
+    await sleep(pollInterval, readiness.signal ?? new AbortController().signal)
+  }
+}
+
 // Delete a job and wait until it is gone: its name is reused for the task's next
 // command (and the next run with the same state), and creating it while the old
 // one is still being deleted would pick up the old job.

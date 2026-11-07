@@ -24,7 +24,7 @@ import { apply, KubernetesObjectHeader, replaceDeployment } from './apply'
 import { KubernetesInstance } from './kubernetes-instance'
 import { getVersion } from '../version'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { awaitDeployRollout, awaitDeployRunningState, DeployReadiness } from './await-running-state'
+import { awaitDeployRollout, awaitDeployRunningState, DeployReadiness, watchKeptPods } from './await-running-state'
 import { getItemLabels, getItemSelector, getResourceName } from './resources'
 import { getHealthcheckTimeoutMessage } from '../planner/work-healthcheck'
 import { getKubernetesResources } from './container-resources'
@@ -209,7 +209,7 @@ async function rollOut(
     ...template.metadata,
     labels: { ...template.metadata?.labels, [DEFINITION_LABEL]: definition },
   }
-  const pod = getPodTemplateHash(template)
+  const pod = getPodTemplateHash(template, service.data.projectRoot)
   deployment.metadata.annotations = { ...deployment.metadata.annotations, [POD_ANNOTATION]: pod }
   const previous = rollout.previous
   if (
@@ -223,6 +223,8 @@ async function rollOut(
     serviceRollouts.add(env.namespace, deployment.metadata.name, previous)
     await relabelDeployment(instance, env.namespace, deployment.metadata.name, stateKey)
     service.status.write('info', `${service.name} watches its files, it got the changed ones and stays up`)
+    // it goes on running with them: else the move does not get up, and gets them back
+    await watchKeptPods(instance, env, deployment.metadata.name, { ...readiness, signal: rollout.signal })
     return
   }
   // put back, or removed, by the worker when the execution ends before its services are up
@@ -242,11 +244,15 @@ async function rollOut(
 // the pod a Deployment of a service run makes, but for the state it runs at
 export const POD_ANNOTATION = 'hammerkit.dev/pod'
 
-export function getPodTemplateHash(template: V1PodTemplateSpec): string {
+// A move executes from a checkout of its own (`root`), which the pod's paths name: where the
+// checkout is does not count, as for getServiceDefinitionHash
+export function getPodTemplateHash(template: V1PodTemplateSpec, root?: string): string {
   const labels = { ...template.metadata?.labels }
   delete labels['hammerkit.dev/state']
+  const json = JSON.stringify({ ...template, metadata: { ...template.metadata, labels } })
+  const escaped = root ? JSON.stringify(root).slice(1, -1) : ''
   return createHash('sha256')
-    .update(JSON.stringify({ ...template, metadata: { ...template.metadata, labels } }))
+    .update(escaped ? json.split(escaped).join('<checkout>') : json)
     .digest('hex')
     .slice(0, 32)
 }

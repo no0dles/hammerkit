@@ -7,6 +7,7 @@ import {
   deleteJob,
   deleteJobAndWait,
   stopJob,
+  watchKeptPods,
 } from './await-running-state'
 import { AbortError } from '../executer/abort'
 import { KubernetesInstance } from './kubernetes-instance'
@@ -500,5 +501,49 @@ describe('awaitDeployRollout', () => {
     const waiting = awaitDeployRollout(instance, env, 'api', { ...readiness, signal: abort.signal }, 5)
     abort.abort()
     await expect(waiting).rejects.toBeInstanceOf(AbortError)
+  })
+})
+
+describe('watchKeptPods', () => {
+  const readiness = { podSelector: 'hammerkit.dev/id=dev', timeout: null, timeoutMessage: '', subject: 'service dev' }
+  const pod = (restartCount: number) => ({
+    metadata: { name: 'dev-1' },
+    status: {
+      phase: 'Running',
+      containerStatuses: [{ name: 'dev', restartCount, ready: true, state: { running: {} } }],
+    },
+  })
+  const cluster = (counts: number[], available = 1) => {
+    const listNamespacedPod = vi.fn()
+    for (const count of counts) {
+      listNamespacedPod.mockResolvedValueOnce({ items: [pod(count)] })
+    }
+    return {
+      coreApi: { listNamespacedPod },
+      appsApi: { readNamespacedDeployment: vi.fn().mockResolvedValue({ status: { availableReplicas: available } }) },
+    } as unknown as KubernetesInstance
+  }
+  // a clock that moves a second with every look
+  const clock = () => {
+    let at = 0
+    return () => (at += 1000)
+  }
+
+  it('lets a pod that goes on running with the changed files stay', async () => {
+    const instance = cluster([2, 2, 2, 2])
+    await watchKeptPods(instance, env, 'dev', readiness, 3000, 0, clock())
+    expect(instance.coreApi.listNamespacedPod).toHaveBeenCalledTimes(3)
+  })
+
+  it('fails when its container restarts after it got them', async () => {
+    await expect(watchKeptPods(cluster([2, 3]), env, 'dev', readiness, 10_000, 0, clock())).rejects.toThrow(
+      'service dev stopped working with the changed files, its container restarted'
+    )
+  })
+
+  it('fails when the Deployment has no ready pod any more', async () => {
+    await expect(watchKeptPods(cluster([0], 0), env, 'dev', readiness, 10_000, 0, clock())).rejects.toThrow(
+      'service dev stopped working with the changed files, it has no ready pod'
+    )
   })
 })

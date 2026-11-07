@@ -3,7 +3,7 @@ import {
   MIN_READY_SECONDS,
   POD_ANNOTATION,
 } from './ensure-kubernetes-deployment-exists'
-import { awaitDeployRollout, awaitDeployRunningState } from './await-running-state'
+import { awaitDeployRollout, awaitDeployRunningState, watchKeptPods } from './await-running-state'
 import { AbortError } from '../executer/abort'
 import { getClaimMountLabel } from './volumes'
 import { serviceRollouts } from './service-rollouts'
@@ -15,6 +15,7 @@ import { ContainerWorkService } from '../planner/work-service'
 vi.mock('./await-running-state', () => ({
   awaitDeployRunningState: vi.fn(async () => undefined),
   awaitDeployRollout: vi.fn(async () => undefined),
+  watchKeptPods: vi.fn(async () => undefined),
 }))
 vi.mock('../planner/service-definition', () => ({ getServiceDefinitionHash: () => 'definition' }))
 vi.mock('./job-placement', async (original) => ({
@@ -187,9 +188,16 @@ describe('ensureKubernetesDeploymentExists', () => {
     })
 
     it('keeps the pod of a service whose pod would only run at another state, as one that watches its files', async () => {
-      const item = { ...service, data: { ...service.data, volumes: [], continuous: true } } as any
+      // each move executes from a checkout of its own
+      const checkout = (root: string) =>
+        ({
+          ...service,
+          data: { ...service.data, volumes: [], continuous: true, projectRoot: root, cwd: `${root}/web` },
+        }) as any
+      const item = checkout('/runs/run_1-2/source')
       const first = cluster()
-      await ensure(first.instance, item)
+      await ensure(first.instance, checkout('/runs/run_1/source'))
+      expect(first.replaced[0].spec.template.spec.containers[0].workingDir).toBe('/runs/run_1/source/web')
       const pod = first.replaced[0].metadata.annotations[POD_ANNOTATION]
       expect(pod).toEqual(expect.any(String))
       vi.mocked(awaitDeployRollout).mockClear()
@@ -213,9 +221,21 @@ describe('ensureKubernetesDeploymentExists', () => {
         body: [{ op: 'add', path: '/metadata/labels/hammerkit.dev~1state', value: 'new' }],
       })
       expect(awaitDeployRollout).not.toHaveBeenCalled()
+      // and it goes on running with the changed files
+      expect(watchKeptPods).toHaveBeenCalledWith(
+        instance,
+        env,
+        name,
+        expect.objectContaining({ podSelector: `hammerkit.dev/id=abc123,hammerkit.dev/run=${run}` })
+      )
       // put back to its state when the move does not get up
       await serviceRollouts.undo(instance, () => undefined)
       expect(replaced[0].metadata.labels['hammerkit.dev/state']).toBe('old')
+
+      // a dev server that stops working with them fails the move, which puts them back
+      vi.mocked(watchKeptPods).mockRejectedValueOnce(new Error('service db stopped working with the changed files'))
+      await expect(ensure(cluster().instance, item, undefined, running)).rejects.toThrow('stopped working')
+      await serviceRollouts.undo(instance, () => undefined)
 
       // a pod that is not ready, or another pod, rolls as before
       for (const other of [
