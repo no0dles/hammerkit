@@ -402,9 +402,10 @@ describe('tutorial snippets match their tested example', () => {
   })
 })
 
-// The landing page (website/components/home) shows a build file and the commands
-// run against it. The snippets are plain template literals, read as text here
-// because website/ is outside this package.
+// The landing page (website/components/home) shows a build file and the CI files
+// that run commands against it; its illustrations show no commands. The snippets
+// are plain template literals, read as text here because website/ is outside this
+// package.
 describe('landing page snippets', () => {
   const homeDir = join(websiteDir, 'components', 'home')
   const snippets = readFileSync(join(homeDir, 'snippets.ts'), 'utf8')
@@ -415,7 +416,7 @@ describe('landing page snippets', () => {
     }
     return match[1]
   }
-  const commands = [snippet('githubCi'), snippet('gitlabCi'), readFileSync(join(homeDir, 'terminal.tsx'), 'utf8')]
+  const commands = [snippet('githubCi'), snippet('gitlabCi')]
   const ranTasks = commands.flatMap((code) => [...code.matchAll(/hammerkit run ([\w:-]+)/g)].map((match) => match[1]))
   const remotes = commands.flatMap((code) => [...code.matchAll(/--remote ([\w-]+)/g)].map((match) => match[1]))
 

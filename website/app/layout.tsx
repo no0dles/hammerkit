@@ -8,7 +8,7 @@ import { siteUrl } from '@/lib/shared';
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: { default: 'hammerkit — containerized builds with incremental caching', template: '%s | hammerkit' },
-  description: 'One build definition that runs the same way on your laptop, in CI and in a coding agent’s sandbox.',
+  description: 'One build definition that runs the same way on your dev machine, in CI and in a coding agent’s sandbox.',
 };
 
 const inter = Inter({
