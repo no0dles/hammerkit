@@ -317,9 +317,8 @@ export function filterRuns(runs: Run[], viewer: Viewer, filter: RunFilter): Run[
 }
 
 // The machines and what the runs take, with whose the namespaces are where the caller may
-// know: their own, and every one with `observe` or `runs.activity: everyone`.
+// know: their own, and every one with `observe`.
 export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
-  // whose a namespace is: for operators, and for its owner
   const everyone = viewer.grant.observe
   return {
     ...capacity,
