@@ -46,6 +46,7 @@ describe('getGrant', () => {
       sandboxes: [],
       endpoints: [],
       checks: false,
+      observe: false,
       matched: [],
     })
     expect(getGrant([], alice).accounts).toEqual({})
@@ -150,6 +151,7 @@ describe('decideRun', () => {
   }
   const grantOf = (accounts: Grant['accounts'], builds: Grant['builds'] = 'run', sandboxes = true): Grant => ({
     checks: false,
+    observe: false,
     accounts,
     repos: ['github.com/corp/*'],
     builds,
@@ -280,6 +282,7 @@ describe('decideRun', () => {
 describe('decideSandbox', () => {
   const grant = (over: Partial<Grant> = {}): Grant => ({
     checks: false,
+    observe: false,
     accounts: {},
     repos: ['github.com/corp/*'],
     builds: 'run',
@@ -373,6 +376,7 @@ describe('decideSandbox', () => {
 describe('sandboxBranchType', () => {
   const grant = (sandboxes: Grant['sandboxes']): Grant => ({
     checks: false,
+    observe: false,
     accounts: {},
     repos: [],
     builds: null,
@@ -400,6 +404,7 @@ describe('sandboxBranchType', () => {
 describe('sandboxPushBranches', () => {
   const grant = (sandboxes: Grant['sandboxes']): Grant => ({
     checks: false,
+    observe: false,
     accounts: {},
     repos: [],
     builds: null,

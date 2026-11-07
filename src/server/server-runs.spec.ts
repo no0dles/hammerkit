@@ -42,6 +42,8 @@ entitlements:
     accounts: { op-payments-dev: use }
     repos: [github.com/corp/*]
     builds: run
+  - subject: { iss: ISSUER, sub: erin }
+    observe: true
 `
 
 // the responses of this api are json
@@ -592,6 +594,74 @@ describe('runs api', () => {
       expect((await (await api.call('GET', '/v1/runs', { sub: 'bob' })).json()).runs).toEqual([])
       expect((await api.call('GET', `/v1/runs/${run.id}`)).status).toBe(200)
     })
+  })
+
+  it('shows the queue and the limits of the caller, and every run to who observes', async () => {
+    await withApi(
+      'runs-api-overview',
+      gated().executor,
+      async (api) => {
+        const first = await (await api.submit(request)).json()
+        await untilState(api, first.id, ['running'])
+        const second = await (await api.submit(request)).json()
+        const bobs = await (await api.submit(request, 'bob')).json()
+        const waiting = await (await api.submit({ ...request, tasks: ['deploy'] })).json()
+
+        expect((await api.call('GET', '/v1/overview', { sub: null })).status).toBe(401)
+        expect((await api.call('GET', '/v1/overview', { sub: 'mallory' })).status).toBe(403)
+        expect((await api.call('POST', '/v1/overview')).status).toBe(405)
+
+        const mine = await (await api.call('GET', '/v1/overview')).json()
+        expect(mine.places).toMatchObject({ max: 1, used: 1, others: 0 })
+        expect(mine.places.runs.map((run: { id: string }) => run.id)).toEqual([first.id])
+        expect(mine.queue).toEqual([
+          {
+            position: 1,
+            mine: true,
+            run: expect.objectContaining({ id: second.id }),
+            waitsFor: { type: 'place', used: 1, max: 1 },
+          },
+          { position: 2, mine: false, waitsFor: { type: 'place', used: 1, max: 1 } },
+        ])
+        expect(mine.limits).toMatchObject({
+          running: { used: 1, limit: 2, runs: [first.id] },
+          queued: { used: 1, limit: 20, runs: [second.id] },
+          waiting: { used: 1, limit: 10, runs: [waiting.id] },
+        })
+        expect(mine.approvals.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id])
+        expect(JSON.stringify(mine)).not.toContain(bobs.id)
+
+        // bob uses prod: he sees the run he may approve, with who asked
+        const approver = await (await api.call('GET', '/v1/overview', { sub: 'bob' })).json()
+        expect(approver.approvals.runs).toEqual([
+          expect.objectContaining({ id: waiting.id, owner: expect.objectContaining({ sub: 'alice' }) }),
+        ])
+
+        const observer = await (await api.call('GET', '/v1/overview', { sub: 'erin' })).json()
+        expect(observer.you).toMatchObject({ sub: 'erin', observe: true })
+        expect(observer.queue.map((entry: { run: { id: string } }) => entry.run.id)).toEqual([second.id, bobs.id])
+
+        // a queued run says where it stands, in the list and on its own
+        const own = await (await api.call('GET', `/v1/runs/${second.id}`)).json()
+        expect(own.queue).toEqual({ position: 1, waitsFor: { type: 'place', used: 1, max: 1 } })
+        const listed = await (await api.call('GET', '/v1/runs?state=queued')).json()
+        expect(listed.runs).toEqual([expect.objectContaining({ id: second.id, queue: own.queue })])
+
+        expect((await api.call('GET', '/v1/runs?scope=all')).status).toBe(403)
+        expect((await api.call('GET', '/v1/runs?state=sleeping')).status).toBe(400)
+        const all = await (await api.call('GET', '/v1/runs?scope=all', { sub: 'erin' })).json()
+        expect(all.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id, bobs.id, second.id, first.id])
+        expect(all.runs[1].owner).toMatchObject({ sub: 'bob' })
+        expect(all.runs[1].options).toBeUndefined()
+        const visible = await (await api.call('GET', '/v1/runs?scope=visible&kind=tasks', { sub: 'bob' })).json()
+        expect(visible.runs.map((run: { id: string }) => run.id)).toEqual([waiting.id, bobs.id])
+        // erin observes, she can not stop what she sees
+        expect((await api.call('POST', `/v1/runs/${bobs.id}/cancel`, { sub: 'erin' })).status).toBe(404)
+      },
+      '',
+      fakeRepos,
+      'maxConcurrent: 1'
+    )
   })
 
   it('cancels a running run', async () => {

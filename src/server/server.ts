@@ -43,6 +43,18 @@ import { getHammerkitDirectory } from '../optimizer/get-cache-directory'
 import { join } from 'path'
 import { CheckStore, getCheckRecords } from './checks'
 import { handleChecks } from './checks-api'
+import {
+  FilterRefused,
+  filterRuns,
+  getOverview,
+  ListedRun,
+  maySee,
+  parseRunFilter,
+  QueuePlace,
+  toListedRun,
+  Viewer,
+  visibleReason,
+} from './overview'
 
 export { DISCOVERY_PATH, SERVER_PROTOCOL } from './discovery'
 export type { DiscoveredIssuer, DiscoveryDocument } from './discovery'
@@ -184,12 +196,17 @@ async function handleRuns(
   if (!id) {
     if (method === 'GET') {
       // the results of each task are read one run at a time
+      const viewer = { principal, grant: getGrant(config.entitlements, principal) }
+      let filter
+      try {
+        filter = parseRunFilter(url.searchParams, viewer.grant)
+      } catch (e) {
+        send(res, e instanceof FilterRefused ? 403 : 400, { error: e instanceof Error ? e.message : String(e) })
+        return true
+      }
+      const runs = filter.scope === 'mine' ? registry.list(principal) : registry.all()
       send(res, 200, {
-        runs: registry.list(principal).map((run) => {
-          const { results, ...listed } = toRunResponse(run)
-          void results
-          return listed
-        }),
+        runs: filterRuns(runs, viewer, filter).map((run) => listRun(registry, viewer, run)),
       })
     } else if (method === 'POST') {
       await submitRun(
@@ -259,7 +276,10 @@ async function handleRuns(
     res.on('close', () => gone.abort())
     const run = await registry.wait(principal, id, wait, accountsOf(config, principal), gone.signal)
     if (!gone.signal.aborted) {
-      run ? send(res, 200, toRunResponse(run)) : send(res, 404, { error: 'not found' })
+      const viewer = { principal, grant: getGrant(config.entitlements, principal) }
+      run
+        ? send(res, 200, toRunResponse(run, queuePlace(registry, viewer, run)))
+        : send(res, 404, { error: 'not found' })
     }
   }
   return true
@@ -340,10 +360,28 @@ export function refuseWake(config: ServerConfig, repos: Pick<RepoAccess, 'readab
   return undefined
 }
 
-function toRunResponse(run: Run): Omit<Run, 'owner'> {
+function toRunResponse(run: Run, queue?: QueuePlace): Omit<Run, 'owner'> & { queue?: QueuePlace } {
   const { owner, ...visible } = run
   void owner
-  return { ...visible, results: run.results ?? {} }
+  return { ...visible, results: run.results ?? {}, ...(queue ? { queue } : {}) }
+}
+
+// Where a queued run stands, and why it waits: the run that holds it is named when the
+// caller may see it.
+function queuePlace(registry: RunRegistry, viewer: Viewer, run: Run): QueuePlace | undefined {
+  const queue = run.state === 'queued' ? registry.queued(run.id) : undefined
+  if (!queue) {
+    return undefined
+  }
+  const visible = (id: string) => {
+    const holder = registry.peek(id)
+    return !!holder && maySee(viewer, holder)
+  }
+  return { position: queue.position, waitsFor: visibleReason(queue.waitsFor, visible) }
+}
+
+function listRun(registry: RunRegistry, viewer: Viewer, run: Run): ListedRun {
+  return toListedRun(viewer, run, queuePlace(registry, viewer, run))
 }
 
 async function submitRun(
@@ -619,7 +657,7 @@ async function submitRun(
           : ''
       }${approvals.length > 0 ? ` approval=[${approvals.join(',')}]` : ''}`
     )
-    send(res, 202, toRunResponse(run))
+    send(res, 202, toRunResponse(run, queuePlace(registry, { principal, grant }, run)))
   } catch (e) {
     if (e instanceof RunError) {
       send(res, e.status, { error: e.message })
@@ -728,6 +766,19 @@ async function handle(
       url
     )
   ) {
+    return
+  }
+  if (path === '/v1/overview') {
+    if (req.method !== 'GET') {
+      send(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
+      return
+    }
+    const grant = getGrant(config.entitlements, principal)
+    if (grant.matched.length === 0) {
+      send(res, 403, { error: 'you are not entitled to anything on this server' })
+      return
+    }
+    send(res, 200, getOverview(registry.snapshot(), registry.usage(principal), { principal, grant }))
     return
   }
   if (await handleApprovals(config, registry, log, principal, req, res, url)) {

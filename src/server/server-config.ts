@@ -428,6 +428,9 @@ export const entitlementSchema = z
     sandboxes: z.array(sandboxGrantSchema).optional(),
     // the repositories whose service runs' endpoints the caller may open, or publish
     endpoints: z.array(endpointGrantSchema).optional(),
+    // sees every run of the server, and who started it, in `remote status`, `remote runs
+    // --all` and the dashboard: for operators, it stops, extends and approves nothing
+    observe: z.literal(true).optional(),
   })
   .strict()
   .superRefine((entitlement, ctx) => {
@@ -437,11 +440,12 @@ export const entitlementSchema = z
       entitlement.builds === undefined &&
       entitlement.checks === undefined &&
       !entitlement.sandboxes?.length &&
-      !entitlement.endpoints?.length
+      !entitlement.endpoints?.length &&
+      !entitlement.observe
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'name accounts to use or request, a builds level, checks, sandboxes or endpoints',
+        message: 'name accounts to use or request, a builds level, checks, sandboxes, endpoints or observe',
       })
     }
     if (entitlement.checks && entitlement.repos.length === 0) {
