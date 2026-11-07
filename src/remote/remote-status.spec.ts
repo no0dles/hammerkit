@@ -101,7 +101,7 @@ describe('remote status', () => {
       'waiting for an approval: 1 of at most 100',
     ])
     expect(lines).toContain('  run_ask  build of bob  needs prod until 2026-11-07T10:00:00.000Z')
-    expect(lines).toContain('service runs: 3 of 10 on the server')
+    expect(lines).toContain('service runs: 3 of 10 places taken on the server')
     expect(lines).toContain(
       '  run_web  up  pr-42: up web  until 2026-11-07T17:00:00.000Z, sleeps at 2026-11-07T09:30:00.000Z'
     )

@@ -237,7 +237,10 @@ export interface RunUsage {
   waiting: string[]
   queued: string[]
   running: string[]
+  // one run per name that is starting or up (runs.up.limits.up), and per name asleep
+  // (runs.up.limits.asleep)
   services: string[]
+  asleep: string[]
 }
 
 // How the registry stands, for an overview: copies, of every caller.
@@ -249,8 +252,9 @@ export interface RegistrySnapshot {
   queue: { run: Run; waitsFor: WaitReason }[]
   // the runs waiting for an approval, oldest first, and how many may
   awaiting: { runs: Run[]; max: number }
-  // service runs that are starting, up or asleep, oldest first, and how many may be
-  services: { runs: Run[]; max?: number; perCaller?: number }
+  // service runs that are starting, up or asleep, oldest first; the places they take of how
+  // many may be, and how many one caller may have asleep
+  services: { runs: Run[]; taken: number; max?: number; perCaller?: number; asleepPerCaller?: number }
   limits?: RunLimits
 }
 
@@ -272,8 +276,9 @@ export interface RunRegistryOptions {
   // log output kept per run (bytes of text), the rest is cut off with a `truncated` event
   maxLogBytes?: number
   // service runs: how long they stay at most (ms) from a start or an extend, and how many
-  // one caller and the whole server have starting or up
-  up?: { maxTtl: number; perCaller: number; total: number }
+  // one caller and the whole server have starting or up, and one caller asleep (unlimited when
+  // left out)
+  up?: { maxTtl: number; perCaller: number; total: number; asleep?: number }
   // keeps the runs over a restart
   store?: RunStore
   // told of every run that ended, with the check keys its executor reported per task
@@ -324,10 +329,22 @@ type AccountCheck = (account: string) => boolean
 export const RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]{16}$/
 export const SANDBOX_ID_PATTERN = /^sbx_[A-Za-z0-9_-]{16}$/
 
-// A service run that is starting, up or asleep counts against runs.up.limits: one that
-// sleeps wakes without asking for a place.
-function countsAsService(run: Run): boolean {
+// A service run that is starting, up or asleep is listed as open.
+function isOpenService(run: Run): boolean {
   return !!run.up && !isFinal(run.state)
+}
+
+// The places of runs.up.limits that service runs take: one per caller and name of the runs
+// that are starting or up, an asleep one takes none (as checkUpLimits counts). Per place the
+// newest run, which is the one that stays.
+function servicePlaces(runs: Run[], asleep = false): Run[] {
+  const places = new Map<string, Run>()
+  for (const run of runs) {
+    if (run.up && !isFinal(run.state) && (run.state === 'asleep') === asleep) {
+      places.set(JSON.stringify([run.owner.iss, run.owner.sub, run.up.name]), run)
+    }
+  }
+  return [...places.values()]
 }
 
 function onSandbox(run: Run, sandbox: string): boolean {
@@ -436,6 +453,10 @@ export class RunRegistry {
         } else {
           this.expireLater(entry)
         }
+      } else if (run.state === 'asleep') {
+        // its time ran out while the server was down: it ends now, and gives its place back
+        run.stoppedBy ??= 'ttl'
+        this.finish(entry, 'succeeded')
       } else if (run.state === 'queued' || run.state === 'running') {
         this.finish(entry, 'failed', `the server stopped while the run was ${run.state}, submit it again`)
       } else if (run.state === 'up') {
@@ -462,7 +483,7 @@ export class RunRegistry {
     }
     this.checkLimits(owner, waiting)
     if (spec.up) {
-      this.checkUpLimits(owner)
+      this.checkUpLimits(owner, spec.up.name)
       this.checkHosts(owner, spec.up)
     }
     const run: Run = {
@@ -544,7 +565,11 @@ export class RunRegistry {
       waiting: ids((entry) => entry.run.state === 'awaiting-approval'),
       queued: ids((entry) => entry.run.state === 'queued'),
       running: ids((entry) => entry.run.state === 'running'),
-      services: ids((entry) => countsAsService(entry.run)),
+      services: servicePlaces(mine.map((entry) => entry.run)).map((run) => run.id),
+      asleep: servicePlaces(
+        mine.map((entry) => entry.run),
+        true
+      ).map((run) => run.id),
     }
   }
 
@@ -568,8 +593,10 @@ export class RunRegistry {
         max: this.maxWaiting,
       },
       services: {
-        runs: all.filter((entry) => countsAsService(entry.run)).map((entry) => this.copy(entry.run)),
+        runs: all.filter((entry) => isOpenService(entry.run)).map((entry) => this.copy(entry.run)),
+        taken: servicePlaces(all.map((entry) => entry.run)).length,
         ...(up ? { max: up.total, perCaller: up.perCaller } : {}),
+        ...(up?.asleep !== undefined ? { asleepPerCaller: up.asleep } : {}),
       },
       ...(this.options.limits ? { limits: { ...this.options.limits } } : {}),
     }
@@ -950,22 +977,64 @@ export class RunRegistry {
     }
   }
 
-  // Service runs that are not over, of the caller and of everybody, against what may be:
-  // one that is asleep counts, it wakes without asking for a place.
-  private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>): void {
-    const limits = this.options.up
-    if (!limits) {
-      return
+  // Service runs that are starting or up, of the caller and of everybody, against what may
+  // be. One that is asleep does not count: it asks for a place when it wakes (visit). The runs
+  // of a caller with one name take one place: the newest replaces the others once it is up,
+  // and an older one that gets up after it goes (markUp), so a new run of a name the caller
+  // has does not need another. Several of one name that are still starting share it too:
+  // what they take while they start is held by runs.limits.running and maxConcurrent.
+  private checkUpLimits(owner: Pick<Principal, 'iss' | 'sub'>, name: string): void {
+    // what a caller keeps asleep is held by a limit of its own: a run that sleeps may keep the
+    // volumes of its services. A run of a name the caller has a run of (asleep, up or
+    // starting) replaces it, it is not one more.
+    const asleep = this.options.up?.asleep
+    if (asleep !== undefined) {
+      const open = [...this.entries.values()].filter(
+        (entry) => entry.run.up && !isFinal(entry.run.state) && this.owns(owner, entry)
+      )
+      const sleeping = new Set(open.filter((entry) => entry.run.state === 'asleep').map((entry) => entry.run.up?.name))
+      if (!open.some((entry) => entry.run.up?.name === name) && sleeping.size >= asleep) {
+        throw new QuotaError(`you have ${asleep} service runs asleep, stop one or wait for its end`)
+      }
     }
-    const open = [...this.entries.values()].filter((entry) => countsAsService(entry.run))
-    if (this.usage(owner).services.length >= limits.perCaller) {
+    const full = this.upLimitReached(owner, name)
+    if (full === 'caller') {
       throw new QuotaError(
-        `you have ${limits.perCaller} service runs starting, up or asleep, stop one or wait for its end`
+        `you have ${this.options.up?.perCaller} service runs starting or up, stop one or wait for its end`
       )
     }
-    if (open.length >= limits.total) {
-      throw new RunError(`the server has ${limits.total} service runs starting, up or asleep, try again later`)
+    if (full === 'server') {
+      throw new RunError(`the server has ${this.options.up?.total} service runs starting or up, try again later`)
     }
+  }
+
+  // Whose limit a service run of the caller with this name would go over, if any
+  private upLimitReached(owner: Pick<Principal, 'iss' | 'sub'>, name: string): 'caller' | 'server' | undefined {
+    const limits = this.options.up
+    if (!limits) {
+      return undefined
+    }
+    const places = new Set<string>()
+    const mine = new Set<string>()
+    for (const entry of this.entries.values()) {
+      if (!entry.run.up || isFinal(entry.run.state) || entry.run.state === 'asleep') {
+        continue
+      }
+      places.add(JSON.stringify([entry.run.owner.iss, entry.run.owner.sub, entry.run.up.name]))
+      if (this.owns(owner, entry)) {
+        mine.add(entry.run.up.name)
+      }
+    }
+    if (mine.has(name)) {
+      return undefined
+    }
+    if (mine.size >= limits.perCaller) {
+      return 'caller'
+    }
+    if (places.size >= limits.total) {
+      return 'server'
+    }
+    return undefined
   }
 
   // A host is one run's, or a run's that replaces it (same owner and name) once it is up:
@@ -1146,6 +1215,21 @@ export class RunRegistry {
         this.stop(other, `replaced by ${entry.run.id}`)
       }
     }
+    // A newer run of the name that is up or asleep already (this one waited for an approval
+    // while it got up) is what the owner started last: this one goes, so the runs of a name,
+    // which take one place of runs.up.limits, never hold more than one set of services.
+    const newer = entries
+      .slice(entries.indexOf(entry) + 1)
+      .find(
+        (other) =>
+          other.run.up?.name === spec.name &&
+          this.owns(entry.run.owner, other) &&
+          (other.run.state === 'up' || other.run.state === 'asleep')
+      )
+    if (newer) {
+      entry.run.stoppedBy = 'replaced'
+      this.stop(entry, `replaced by ${newer.run.id}`)
+    }
     this.dispatch()
   }
 
@@ -1206,9 +1290,9 @@ export class RunRegistry {
 
   /**
    * A request to an endpoint of a service run: one that is up stays up for its sleepTtl from
-   * now, one that is asleep is started again (it holds its place of runs.up.limits while it
-   * sleeps), if `mayWake` finds its owner may still run it: else it ends. Answers why it was
-   * not woken, or undefined.
+   * now, one that is asleep is started again, if `mayWake` finds its owner may still run it
+   * (else it ends) and there is a place of runs.up.limits for it (else it sleeps on, and the
+   * next request asks again). Answers why it was not woken, or undefined.
    */
   visit(id: string, mayWake?: (run: Run) => string | undefined): string | undefined {
     const entry = this.entries.get(id)
@@ -1232,6 +1316,13 @@ export class RunRegistry {
     if (refused) {
       this.finish(entry, 'failed', refused)
       return refused
+    }
+    const full = this.upLimitReached(entry.run.owner, entry.run.up.name)
+    if (full === 'caller') {
+      return 'its owner has as many service runs starting or up as they may, it wakes once one of them stops or sleeps'
+    }
+    if (full === 'server') {
+      return 'the server has as many service runs starting or up as it may, it wakes once one of them stops or sleeps'
     }
     this.clearTimer(entry)
     entry.abort = new AbortController()

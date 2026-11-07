@@ -78,8 +78,11 @@ export interface Overview {
   // the queue in the order runs start, a run the caller may not see as a place with a reason
   queue: { position: number; mine: boolean; run?: ListedRun; waitsFor: VisibleWaitReason }[]
   approvals: { waiting: number; max: number; runs: ListedRun[] }
+  // open: the places of runs.up.limits.up that service runs take (one per caller and name,
+  // none for one that is asleep)
   services: { open: number; max?: number; runs: ListedRun[] }
-  limits: { waiting: Meter; queued: Meter; running: Meter; services: Meter }
+  // asleep: left out by servers of before runs.up.limits.asleep
+  limits: { waiting: Meter; queued: Meter; running: Meter; services: Meter; asleep?: Meter }
 }
 
 export function owns(viewer: Viewer, run: Run): boolean {
@@ -216,7 +219,7 @@ export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer:
       runs: snapshot.awaiting.runs.filter((run) => maySee(viewer, run)).map((run) => toListedRun(viewer, run)),
     },
     services: {
-      open: snapshot.services.runs.length,
+      open: snapshot.services.taken,
       ...(snapshot.services.max !== undefined ? { max: snapshot.services.max } : {}),
       runs: snapshot.services.runs.filter((run) => maySee(viewer, run)).map((run) => toListedRun(viewer, run)),
     },
@@ -225,6 +228,7 @@ export function getOverview(snapshot: RegistrySnapshot, usage: RunUsage, viewer:
       queued: meter(usage.queued, limits?.queued),
       running: meter(usage.running, limits?.running),
       services: meter(usage.services, snapshot.services.perCaller),
+      asleep: meter(usage.asleep, snapshot.services.asleepPerCaller),
     },
   }
 }

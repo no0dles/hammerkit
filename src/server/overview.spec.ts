@@ -113,6 +113,7 @@ describe('RunRegistry wait reasons', () => {
       queued: [queued.id, services.id],
       running: [running.id],
       services: [services.id],
+      asleep: [],
     })
     pending[0].resolve()
     await tick()
@@ -120,8 +121,13 @@ describe('RunRegistry wait reasons', () => {
     const snapshot = registry.snapshot()
     expect(snapshot.places).toEqual({ max: 1, used: 1 })
     expect(snapshot.awaiting.runs.map((run) => run.id)).toEqual([waiting.id])
-    expect(snapshot.services).toMatchObject({ max: 10, perCaller: 3 })
+    expect(snapshot.services).toMatchObject({ max: 10, perCaller: 3, taken: 1 })
     expect(snapshot.services.runs.map((run) => run.id)).toEqual([services.id])
+    // a new run of the name replaces the old one once it is up: both take one place, the newest's
+    const again = registry.submit(alice, service('pr-1'))
+    expect(registry.usage(alice).services).toEqual([again.id])
+    expect(registry.snapshot().services).toMatchObject({ taken: 1 })
+    expect(registry.snapshot().services.runs.map((run) => run.id)).toEqual([services.id, again.id])
   })
 })
 
@@ -172,6 +178,7 @@ describe('overview', () => {
       queued: { used: 1, limit: 4, runs: [mineQueued.id] },
       running: { used: 1, limit: 1, runs: [mine.id] },
       services: { used: 0, limit: 2, runs: [] },
+      asleep: { used: 0, runs: [] },
     })
     // nothing of anybody else's runs is in it
     const text = JSON.stringify(overview)

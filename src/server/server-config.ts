@@ -606,6 +606,9 @@ export const serverConfigSchema = z
               .object({
                 // service runs one caller has starting or up at a time; one more is 429
                 up: z.number().int().min(1).default(3),
+                // service runs one caller has asleep, which take no place of `up`; a new run
+                // when there are this many is 429
+                asleep: z.number().int().min(1).default(10),
               })
               .strict()
               .default({}),

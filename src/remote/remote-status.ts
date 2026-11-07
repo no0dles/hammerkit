@@ -92,7 +92,7 @@ export function describeOverview(server: string, overview: Overview, now = Date.
   lines.push(
     `service runs: ${overview.services.open}${
       overview.services.max !== undefined ? ` of ${overview.services.max}` : ''
-    } on the server`
+    } places taken on the server`
   )
   for (const run of overview.services.runs) {
     lines.push(...describeServiceRun(run))
@@ -102,7 +102,8 @@ export function describeOverview(server: string, overview: Overview, now = Date.
     describeMeter('running', overview.limits.running),
     describeMeter('queued', overview.limits.queued),
     describeMeter('approval', overview.limits.waiting),
-    describeMeter('services', overview.limits.services)
+    describeMeter('services', overview.limits.services),
+    ...(overview.limits.asleep ? [describeMeter('asleep', overview.limits.asleep)] : [])
   )
   return lines
 }

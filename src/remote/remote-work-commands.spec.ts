@@ -537,7 +537,7 @@ describe('remote logs and runs', () => {
       expect(status).toContain('places: 0 of 4 taken (runs.maxConcurrent)\nqueue: empty\n')
       expect(status).toContain('waiting for an approval: 1 of at most 100\n')
       expect(status).toContain(`  ${waiting.id}  deploy of alice  needs op-payments-prod until `)
-      expect(status).toContain('service runs: 0 of 20 on the server\n')
+      expect(status).toContain('service runs: 0 of 20 places taken on the server\n')
       expect(status).toMatch(/your limits:\n {2}running {3}0 of 2 {4}-\n {2}queued {4}0 of 20 {3}-\n/)
 
       const json = JSON.parse(await h.run('remote', 'status', '--json'))

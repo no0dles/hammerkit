@@ -428,6 +428,9 @@ export class EndpointGateway {
       )
     }
     if (run.state === 'asleep') {
+      // it may wake on a later request, once there is a place for it
+      res.setHeader('refresh', '30')
+      res.setHeader('retry-after', '30')
       return page(
         res,
         503,

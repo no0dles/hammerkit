@@ -434,6 +434,7 @@ ${capacity ? this.capacitySummary(capacity) : ''}
       this.meter('Queued', overview.limits.queued, 'runs.limits.queued'),
       this.meter('Waiting for approval', overview.limits.waiting, 'runs.limits.waiting'),
       this.meter('Service runs', overview.limits.services, 'runs.up.limits.up'),
+      overview.limits.asleep ? this.meter('Asleep', overview.limits.asleep, 'runs.up.limits.asleep') : '',
     ].join('')}</div></section>
 <section><h2>Waiting for an approval <small>${overview.approvals.waiting} of at most ${
       overview.approvals.max
@@ -442,7 +443,7 @@ ${capacity ? this.capacitySummary(capacity) : ''}
     }</section>
 <section><h2>Service runs <small>${overview.services.open}${
       overview.services.max !== undefined ? ` of ${overview.services.max}` : ''
-    } on the server</small></h2>${
+    } places taken on the server</small></h2>${
       overview.services.runs.length > 0
         ? this.serviceTable(overview.services.runs)
         : '<p class="quiet">None you may see is starting, up or asleep.</p>'

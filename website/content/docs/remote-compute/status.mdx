@@ -21,7 +21,7 @@ queue: 2
   2. run_Pq8wE2rT5yU1iO4p  lint of bob  waiting 40s  waits: no free place, 4 of 4 taken (runs.maxConcurrent)
 waiting for an approval: 1 of at most 100
   run_k9Qw2eRt5yUi8oPa  e2e  needs op-payments-prod until 2026-11-07T11:42:00.000Z
-service runs: 3 of 20 on the server
+service runs: 2 of 20 places taken on the server
   run_Vd1rX9pQ2mT7wN4a  up  feature-login: up web  until 2026-11-09T10:12:00.000Z, sleeps at 2026-11-07T10:42:00.000Z
     web:8080  https://feature-login-8080-3fa2c1e09b7d.run.example.com
   run_Ws8tY3uI6oP1aS4d  asleep  feature-cart: up web  until 2026-11-08T09:00:00.000Z
@@ -29,7 +29,8 @@ your limits:
   running   2 of 2    run_a8Zt0pQw3mVx7yLc, run_c2Lk9sDe4rTy6uIo  full
   queued    1 of 20   run_f1Gh5jKl8zXc3vBn
   approval  1 of 10   run_k9Qw2eRt5yUi8oPa
-  services  2 of 3    run_Vd1rX9pQ2mT7wN4a, run_Ws8tY3uI6oP1aS4d
+  services  1 of 3    run_Vd1rX9pQ2mT7wN4a
+  asleep    1 of 10   run_Ws8tY3uI6oP1aS4d
 capacity: 3 nodes with 12 CPU, 45 GiB, 4.1 CPU, 19 GiB in use
   runs: 14 pods, requested 5.25 CPU, 11 GiB, in use 2.8 CPU, 7.4 GiB
 ```
@@ -65,9 +66,10 @@ run holds, which is a fault worth reporting with the output of `remote status --
 | `running` | Your runs that execute, service runs while they start | `runs.limits.running` |
 | `queued` | Your runs in the queue, and service runs that are waking | `runs.limits.queued` |
 | `approval` | Your runs that wait for an approval | `runs.limits.waiting` |
-| `services` | Your service runs that are starting, up or asleep: one that sleeps keeps its place | `runs.up.limits.up` |
+| `services` | Your service runs that are starting or up, one place per name: a newer run of a name replaces the older one; one that sleeps takes none and asks for one when it wakes | `runs.up.limits.up` |
+| `asleep` | Your service runs that sleep, one per name | `runs.up.limits.asleep` |
 
-A submit over `queued` or `approval` is answered `429` and says which; over `services` too.
+A submit over `queued` or `approval` is answered `429` and says which; over `services` or `asleep` too.
 A run that ended counts against nothing.
 
 ## Service runs and past runs
