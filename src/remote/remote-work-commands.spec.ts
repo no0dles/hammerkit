@@ -537,6 +537,12 @@ describe('remote run', () => {
           /the build file here is not published on build \(sha256:[0-9a-f]{64}\), nothing was published/
         )
       }
+      // Ctrl-C at the question: the prompt answers nothing and the command is stopped
+      h.answer()
+      h.abort()
+      await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
+        'stopped, nothing was published'
+      )
       expect((await h.call('bob', 'GET', '/v1/definitions')).body.definitions).toEqual([])
       expect(h.executed).toEqual([])
     })
@@ -574,7 +580,7 @@ describe('remote run', () => {
       expect(asked).toEqual([])
       // --publish asks the server all the same, which refuses
       await expect(h.run('remote', 'run', 'build', '--server', 'build', '--publish', ...from)).rejects.toThrow(
-        /publish/
+        /not published on build \(sha256:[0-9a-f]{64}\), .* answered 403: you may not publish build files, it needs builds: propose or publish/
       )
 
       h.as('agent')
@@ -587,6 +593,13 @@ describe('remote run', () => {
       expect(proposing).toEqual(['propose it to build now? [y/N] '])
       expect(h.output()).toContain('publishing it would propose it')
       expect(h.output()).toMatch(/proposed to build: sha256:[0-9a-f]{64}/)
+      // again before it is approved: still only proposed, never taken for published
+      h.answer('y')
+      await expect(h.run('remote', 'run', 'build', '--server', 'build', ...from)).rejects.toThrow(
+        /sha256:[0-9a-f]{64} is only proposed on build, nothing was started/
+      )
+      expect(h.output()).toMatch(/already proposed to build: sha256:[0-9a-f]{64}/)
+      expect(h.output()).not.toContain('already published')
       expect(h.executed).toEqual([])
     })
   })
@@ -616,7 +629,7 @@ describe('remote up', () => {
       )
       expect(asked).toEqual(['publish it to build now and go on? [y/N] '])
       expect(out).toMatch(/published to build: sha256:[0-9a-f]{64} \(1 file\)/)
-      expect(out).toMatch(/run_\w+ is up until/)
+      expect(out).toMatch(/run_[\w-]+ is up until/)
       expect(h.executed).toEqual(['up web'])
     })
   })

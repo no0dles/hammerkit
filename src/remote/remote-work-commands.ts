@@ -366,8 +366,16 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
     })
     const version = answer.body
     const files = Object.keys(bundle.files).length
-    const proposed = answer.status === 202
-    const verb = proposed ? 'proposed' : answer.status === 201 ? 'published' : 'already published'
+    // a proposal that already waits answers 200 like a published version, with its state
+    const proposed = answer.status === 202 || version.state !== undefined
+    const verb =
+      answer.status === 202
+        ? 'proposed'
+        : proposed
+          ? 'already proposed'
+          : answer.status === 201
+            ? 'published'
+            : 'already published'
     environment.stdout.write(
       `${verb} to ${serverName}: ${printable(version.hash)} (${files} ${files === 1 ? 'file' : 'files'})\n`
     )
@@ -452,6 +460,8 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
           `${notPublished}, publish it first with: hammerkit remote publish ${serverName}, or pass --publish`
         )
       }
+      // a server before 1.27 can't say what publishing would do: it is asked all the same,
+      // and refuses then what the caller may not do
       const planned = await planBundle(server, token, local)
       if (planned && planned.outcome === null) {
         throw new Error(
@@ -482,7 +492,9 @@ export function registerWorkCommands(remote: Command, context: WorkCommandContex
       }
     }
     const annotations = await collectAnnotations(buildFile, Object.keys(local.files))
-    const { version, proposed } = await publishBundle(serverName, server, token, local, annotations)
+    const { version, proposed } = await publishBundle(serverName, server, token, local, annotations).catch((e) => {
+      throw e instanceof ServerError && e.status === 403 ? new Error(`${notPublished}, ${e.message}`) : e
+    })
     if (version.hash !== definition) {
       throw new Error(
         `${serverName} published ${printable(version.hash)}, not ${definition} as computed here, nothing was started`

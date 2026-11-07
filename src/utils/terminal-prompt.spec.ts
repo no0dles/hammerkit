@@ -41,20 +41,16 @@ describe('terminalPrompt', () => {
 describe('getTerminalPrompt', () => {
   it('asks nothing in CI or without a terminal', () => {
     const signal = new AbortController().signal
-    // vitest runs without a terminal on stdin
-    expect(getTerminalPrompt({}, signal)).toBeUndefined()
-    const tty = [process.stdin.isTTY, process.stdout.isTTY]
-    try {
-      process.stdin.isTTY = true
-      process.stdout.isTTY = true
-      expect(getTerminalPrompt({}, signal)).toBeDefined()
-      expect(getTerminalPrompt({ CI: 'false' }, signal)).toBeDefined()
-      expect(getTerminalPrompt({ CI: 'true' }, signal)).toBeUndefined()
-      expect(getTerminalPrompt({ CI: '1' }, signal)).toBeUndefined()
-    } finally {
-      process.stdin.isTTY = tty[0] as true
-      process.stdout.isTTY = tty[1] as true
-    }
+    const stdio = (stdin: boolean, stdout: boolean) => ({
+      stdin: Object.assign(new PassThrough(), { isTTY: stdin }),
+      stdout: Object.assign(new PassThrough(), { isTTY: stdout }),
+    })
+    expect(getTerminalPrompt({}, signal, stdio(false, true))).toBeUndefined()
+    expect(getTerminalPrompt({}, signal, stdio(true, false))).toBeUndefined()
+    expect(getTerminalPrompt({}, signal, stdio(true, true))).toBeDefined()
+    expect(getTerminalPrompt({ CI: 'false' }, signal, stdio(true, true))).toBeDefined()
+    expect(getTerminalPrompt({ CI: 'true' }, signal, stdio(true, true))).toBeUndefined()
+    expect(getTerminalPrompt({ CI: '1' }, signal, stdio(true, true))).toBeUndefined()
   })
 })
 

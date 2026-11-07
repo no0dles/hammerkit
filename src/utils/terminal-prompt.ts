@@ -43,12 +43,16 @@ export function terminalPrompt(
  */
 export function getTerminalPrompt(
   processEnvs: { [key: string]: string | undefined },
-  signal: AbortSignal
+  signal: AbortSignal,
+  stdio: {
+    stdin: NodeJS.ReadableStream & { isTTY?: boolean }
+    stdout: NodeJS.WritableStream & { isTTY?: boolean }
+  } = process
 ): Prompt | undefined {
-  if (!process.stdin.isTTY || !process.stdout.isTTY || isSet(processEnvs.CI)) {
+  if (!stdio.stdin.isTTY || !stdio.stdout.isTTY || isSet(processEnvs.CI)) {
     return undefined
   }
-  return terminalPrompt(process.stdin, process.stdout, signal)
+  return terminalPrompt(stdio.stdin, stdio.stdout, signal)
 }
 
 function isSet(value: string | undefined): boolean {
