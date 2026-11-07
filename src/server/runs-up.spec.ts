@@ -188,6 +188,149 @@ describe('RunRegistry service runs', () => {
     expect(() => registry.submit(bob, { ...spec(), up: undefined, tasks: ['build'] })).not.toThrow()
   })
 
+  it('takes no other place for a run that replaces one of the same name', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 2, total: 3 } })
+    const first = registry.submit(alice, spec('a'))
+    registry.submit(alice, spec('b'))
+    await tick()
+    started.forEach((service, index) => service.up([target(4100 + index)]))
+    // a new commit of a: it replaces the first once up, the caller has the same two
+    const second = registry.submit(alice, spec('a'))
+    expect(() => registry.submit(alice, spec('c'))).toThrow(QuotaError)
+    await tick()
+    started[2].up([target(4300)])
+    await vi.waitFor(() =>
+      expect(registry.get(alice, first.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'replaced' })
+    )
+    expect(registry.get(alice, second.id)?.state).toBe('up')
+    // the server counts one place per caller and name too
+    const bobs = spec('a')
+    bobs.up.endpoints = [{ ...bobs.up.endpoints[0], host: 'a-80-123456' }]
+    registry.submit(bob, bobs)
+    expect(() => registry.submit(bob, bobs)).not.toThrow()
+    const other = spec('b')
+    other.up.endpoints = [{ ...other.up.endpoints[0], host: 'b-80-123456' }]
+    expect(() => registry.submit(bob, other)).toThrow(/the server has 3 service runs/)
+    await registry.close()
+  })
+
+  it('gives a place back while it sleeps, and wakes only when there is one', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 10 } })
+    const sleepy = registry.submit(alice, spec('sleepy', HOUR, 30))
+    await tick()
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(registry.get(alice, sleepy.id)?.state).toBe('asleep'))
+    // asleep, it holds no place
+    const other = registry.submit(alice, spec('other'))
+    await tick()
+    started[1].up([target(4200)])
+    expect(() => registry.submit(alice, spec('third'))).toThrow(/you have 1 service runs starting or up/)
+    // a wake needs a place: it sleeps on and says why
+    expect(registry.visit(sleepy.id)).toMatch(/its owner has as many service runs starting or up as they may/)
+    expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
+    expect(started).toHaveLength(2)
+    // once the other stops, the next request wakes it
+    registry.cancel(alice, other.id)
+    await vi.waitFor(() => expect(registry.get(alice, other.id)?.state).toBe('succeeded'))
+    expect(registry.visit(sleepy.id)).toBeUndefined()
+    await vi.waitFor(() => expect(started).toHaveLength(3))
+    expect(registry.get(alice, sleepy.id)?.state).toBe('running')
+    await registry.close()
+  })
+
+  it('wakes a run while a run of its name starts, and not over the limit of the server', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 1 } })
+    const sleepy = registry.submit(alice, spec('sleepy', HOUR, 30))
+    await tick()
+    started[0].up([target(4100)])
+    await vi.waitFor(() => expect(registry.get(alice, sleepy.id)?.state).toBe('asleep'))
+    // bob takes the one place of the server
+    const bobs = spec('bobs')
+    bobs.up.endpoints = [{ ...bobs.up.endpoints[0], host: 'bobs-80-123456' }]
+    const other = registry.submit(bob, bobs)
+    expect(registry.visit(sleepy.id)).toMatch(/the server has as many service runs starting or up as it may/)
+    expect(registry.get(alice, sleepy.id)?.state).toBe('asleep')
+    registry.cancel(bob, other.id)
+    await vi.waitFor(() => expect(registry.get(bob, other.id)?.state).toBe('cancelled'))
+    // a new commit of sleepy takes the place, the old one may still wake beside it
+    registry.submit(alice, spec('sleepy', HOUR, 30))
+    expect(registry.visit(sleepy.id)).toBeUndefined()
+    expect(registry.get(alice, sleepy.id)?.state).not.toBe('asleep')
+    await registry.close()
+  })
+
+  it('refuses a new run while the caller has as many runs asleep as they may', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 2, total: 10, asleep: 2 } })
+    // one that stays up, and two that sleep
+    registry.submit(alice, spec('x'))
+    await vi.waitFor(() => expect(started).toHaveLength(1))
+    started[0].up([target(4000)])
+    for (const name of ['a', 'b']) {
+      const count = started.length
+      const run = registry.submit(alice, spec(name, HOUR, 30))
+      await vi.waitFor(() => expect(started).toHaveLength(count + 1))
+      started[count].up([target(4100)])
+      await vi.waitFor(() => expect(registry.get(alice, run.id)?.state).toBe('asleep'))
+    }
+    expect(() => registry.submit(alice, spec('c'))).toThrow(/you have 2 service runs asleep/)
+    // a new commit of one that sleeps, or of one that is up, replaces it: it is not one more
+    expect(() => registry.submit(alice, spec('a'))).not.toThrow()
+    expect(() => registry.submit(alice, spec('x'))).not.toThrow()
+    await registry.close()
+  })
+
+  it('ends an older run of a name that gets up after a newer one, once it was approved', async () => {
+    const { executor, started } = services()
+    const registry = new RunRegistry({ executor, up: { maxTtl: HOUR, perCaller: 1, total: 10 } })
+    const older = registry.submit(alice, spec('a'), ['prod'])
+    const newer = registry.submit(alice, spec('a'))
+    await tick()
+    started[0].up([target(4100)])
+    expect(registry.get(alice, newer.id)?.state).toBe('up')
+    expect(registry.decide(bob, older.id, 'approved', () => true)).toMatchObject({ status: 'ok' })
+    await tick()
+    started[1].up([target(4200)])
+    await vi.waitFor(() =>
+      expect(registry.get(alice, older.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'replaced' })
+    )
+    expect(started[1].signal.aborted).toBe(true)
+    expect(registry.get(alice, newer.id)?.state).toBe('up')
+    expect(registry.endpoint('a-80-abcdef')?.run.id).toBe(newer.id)
+    await registry.close()
+  })
+
+  it('ends a run that was asleep when its ttl ran out while the server was down, and frees its place', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
+    try {
+      let now = Date.parse('2026-11-07T10:00:00Z')
+      const { executor, started } = services()
+      const registry = new RunRegistry({ executor, now: () => now, store: new FileRunStore(directory) })
+      const run = registry.submit(alice, spec('sleepy', HOUR, 60_000))
+      await tick()
+      started[0].up([target(4100)])
+      await registry.close()
+      expect(registry.get(alice, run.id)?.state).toBe('asleep')
+      // the server is down past the run's end
+      now += 2 * HOUR
+      const restarted = new RunRegistry({
+        executor: services().executor,
+        now: () => now,
+        store: new FileRunStore(directory),
+        up: { maxTtl: HOUR, perCaller: 1, total: 10 },
+      })
+      await restarted.restore()
+      expect(restarted.get(alice, run.id)).toMatchObject({ state: 'succeeded', stoppedBy: 'ttl' })
+      expect(() => restarted.submit(alice, spec('other'))).not.toThrow()
+      await restarted.close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('fails a service run that was up when the server stopped', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'hammerkit-runs-up-'))
     try {

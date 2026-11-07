@@ -101,9 +101,18 @@ A second service run of yours with the same name replaces the first: once the ne
 the old one stops, and the addresses stay. Push a fix, start the branch again, and the
 reviewer reloads the same page. Until the new one is up, the old one answers.
 
-Each caller has at most `runs.up.limits.up` service runs starting, up or asleep at a time
-(`3` by default); one more is answered `429`. The server takes `runs.up.total` of them
-(`20`). A run that sleeps keeps its place, so it wakes without waiting for one.
+Each caller has at most `runs.up.limits.up` service runs starting or up at a time (`3` by
+default); one more is answered `429`. The server takes `runs.up.total` of them (`20`). A run
+that sleeps gives its place back, so you can start another while yours sleep. It asks for a
+place again when a request wakes it: with none free it sleeps on, its page says why and
+reloads every 30 seconds (`503` with `Retry-After` for other clients), and it wakes on the
+first request after one of your runs stops or sleeps. What sleeps has a limit of its own,
+`runs.up.limits.asleep` (`10`): with that many of yours asleep, a new run is answered `429`
+until you stop one (`hammerkit remote stop`) or one ends. Your runs of
+one name take one place: a new one that replaces a run of that name is not refused for
+`runs.up.limits.up` or `runs.up.total`, even while both are there (`runs.limits.queued` and
+`runs.limits.waiting` still count it). Only the newest of a name stays: one that waited for an
+approval and gets up after a newer one stops again at once.
 
 ## Time
 
@@ -138,8 +147,9 @@ new run. A run from a sandbox doesn't sleep, its files change under it; push the
 start the branch.
 
 The services live with the server: when it stops, they stop. A run that may sleep is asleep
-then, and the next request after the server is back wakes it. The others fail with
-`the server stopped while the services were up, start them again`.
+then, and the next request after the server is back wakes it, unless its `ttl` ended while
+the server was down: then it ends as the server starts, and gives its place back. The others
+fail with `the server stopped while the services were up, start them again`.
 
 ## Who opens an endpoint
 
@@ -253,7 +263,7 @@ runs:
     ttl: 8h # default, when a run names none
     sleepTtl: 30m # unset by default: services never sleep unless the run says
     maxTtl: 72h # default, the furthest a run or an extend sets the end
-    limits: { up: 3 } # default, per caller, 429 over it
+    limits: { up: 3, asleep: 10 } # defaults, per caller starting or up, and asleep; 429 over it
     total: 20 # default, on the whole server, 503 over it
     quota: { requests.cpu: '4', requests.memory: 8Gi } # Kubernetes only, backend.quota when left out
 ```
@@ -318,9 +328,10 @@ namespaces of service runs that none of its runs is in.
 What a service prints goes into the log of the run, as on a host: while it starts, and while
 it is up, until the log of the run reaches its limit. A service that can't become ready fails
 the run with the reason the cluster gives, at once when waiting won't change it: an image the
-registry says is not there or not for this cluster, a container that crashed twice in a row
-(with its exit code, or that it ran out of memory), or a network policy that did not take
-hold. A service without a healthcheck counts as ready once its container ran for 10 seconds
+registry says is not there or not for this cluster, a container that crashed again after the
+cluster restarted it as often as the service's
+[`restarts`](/docs/service/container#restarts) allow (twice by default; with its exit code, or
+that it ran out of memory), or a network policy that did not take hold. A service without a healthcheck counts as ready once its container ran for 10 seconds
 without a restart. A reason that may still pass, such as a registry that limits pulls for
 now or a container that can't be created yet (a Secret that is not there yet), fails it once
 it lasted a minute; until then the log says what it waits for. A pod that waits for a node

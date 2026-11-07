@@ -1,3 +1,42 @@
+# [1.27.0-next.29](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.28...v1.27.0-next.29) (2026-11-07)
+
+
+### Bug Fixes
+
+* **kubernetes:** a startup probe gives a service its healthcheck timeout to start ([cc7ec04](https://github.com/no0dles/hammerkit/commit/cc7ec04f3946e9433908ba53229996e7fec1de65)), closes [#137](https://github.com/no0dles/hammerkit/issues/137)
+* **kubernetes:** an ended container starts again only in a pod that restarts it ([432119e](https://github.com/no0dles/hammerkit/commit/432119ec04e87cc415ab3eec563bbd275d6b0331)), closes [#137](https://github.com/no0dles/hammerkit/issues/137)
+* **kubernetes:** fail a crash-looping service also while its crash shows as ended ([9c45677](https://github.com/no0dles/hammerkit/commit/9c4567727cd91d1468bce472ca3b441eb53096e1))
+* **kubernetes:** the healthcheck deadline bounds each start of a service's container ([f075fad](https://github.com/no0dles/hammerkit/commit/f075fadc622a8e5e19a6bf1d8816da62fc245157)), closes [#137](https://github.com/no0dles/hammerkit/issues/137)
+* **kubernetes:** the startup probe outlasts the wait's healthcheck timeout ([6fbdb4e](https://github.com/no0dles/hammerkit/commit/6fbdb4e49eb5ca2a7ac568d46fd9071b61b4c2d1)), closes [#137](https://github.com/no0dles/hammerkit/issues/137)
+
+
+### Features
+
+* **kubernetes:** a service sets how often it may be restarted before it fails ([a62df3a](https://github.com/no0dles/hammerkit/commit/a62df3a1eeb672672ede80a7a5ac5807ca0eb48b))
+
+# [1.27.0-next.28](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.27...v1.27.0-next.28) (2026-11-07)
+
+
+### Bug Fixes
+
+* **remote:** say "already proposed" for a waiting proposal and fix review findings ([9b522f9](https://github.com/no0dles/hammerkit/commit/9b522f940757037ddd6061012eaa8c06d39390ae))
+
+
+### Features
+
+* **remote:** offer to publish a missing build file on remote up and run ([6a8625e](https://github.com/no0dles/hammerkit/commit/6a8625eb6bfc422b0c2e9df3a7d61bef931a547d))
+
+# [1.27.0-next.27](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.26...v1.27.0-next.27) (2026-11-07)
+
+
+### Bug Fixes
+
+* **server:** a new commit of a run that is up is not one more asleep ([deb37a0](https://github.com/no0dles/hammerkit/commit/deb37a0fe4f96ec1dc4d57cc510bd9aeb7d780ff))
+* **server:** cap the service runs one caller keeps asleep ([a2dd46f](https://github.com/no0dles/hammerkit/commit/a2dd46f0f75b91116d67baeb14b4eecd36b9c3f1))
+* **server:** old service runs no longer block the up limits ([831d83c](https://github.com/no0dles/hammerkit/commit/831d83c7fe8fdf5f11ad2c76c2016d99d3840898))
+* **server:** only the newest service run of a name stays up ([43ba74c](https://github.com/no0dles/hammerkit/commit/43ba74c9d30c068c655a014e6b18842f976e2531))
+* **server:** service runs that sleep give their place back ([9e377b5](https://github.com/no0dles/hammerkit/commit/9e377b5667780f40ce6ef30db03f65c3e299def0))
+
 # [1.27.0-next.26](https://github.com/no0dles/hammerkit/compare/v1.27.0-next.25...v1.27.0-next.26) (2026-11-07)
 
 

@@ -5,6 +5,7 @@ import { StatusConsole } from '../planner/work-item-status'
 import { Writable } from 'stream'
 import { SecretRegistry } from '../utils/redact'
 import type { SecretCatalog } from '../secrets/secret-catalog'
+import type { Prompt } from '../utils/terminal-prompt'
 
 // How a hammerkit server runs the engine for somebody else's build file. Its
 // secret providers and accounts are the operator's, never the build file's, and
@@ -40,4 +41,7 @@ export interface Environment {
   secrets: SecretRegistry
   // set on a server, see HostedPolicy
   hosted?: HostedPolicy
+  // asks the person at the terminal; unset when nobody can answer, such as in CI or
+  // with stdin or stdout not a terminal
+  prompt?: Prompt
 }
