@@ -1,5 +1,5 @@
 import { V1ContainerStatus } from '@kubernetes/client-node'
-import { describeFailedJob, getTaskJobContainers } from './work-runtime-kubernetes'
+import { describeFailedJob, getTaskJobContainers, isRolledOut } from './work-runtime-kubernetes'
 import { KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment, WorkKubernetesServer } from './work-environment'
 import { WorkItem } from './work-item'
@@ -143,5 +143,24 @@ describe('getTaskJobContainers', () => {
     expect(() => pod(['SYS_ADMIN'], { ...kubernetes, server: { ...server, capabilities: undefined } })).toThrow(
       'which this server grants in no sandboxed runtime'
     )
+  })
+})
+
+describe('isRolledOut', () => {
+  const deployment = (labels: { [key: string]: string }, status: object, generation = 2) =>
+    ({ metadata: { labels, generation }, status }) as any
+  const done = { observedGeneration: 2, replicas: 1, updatedReplicas: 1, readyReplicas: 1 }
+  const current = { 'hammerkit.dev/definition': 'def', 'hammerkit.dev/state': 'state' }
+
+  it('leaves a service of a service run as it is when it is of the same definition and state, and up', () => {
+    expect(isRolledOut(deployment(current, done), 'def', 'state')).toBe(true)
+  })
+
+  it('rolls one that changed, or one that is not all up at its spec', () => {
+    expect(isRolledOut(deployment(current, done), 'def', 'other')).toBe(false)
+    expect(isRolledOut(deployment(current, done), 'other', 'state')).toBe(false)
+    expect(isRolledOut(deployment(current, { ...done, readyReplicas: 0 }), 'def', 'state')).toBe(false)
+    expect(isRolledOut(deployment(current, { ...done, replicas: 2 }), 'def', 'state')).toBe(false)
+    expect(isRolledOut(deployment(current, { ...done, observedGeneration: 1 }), 'def', 'state')).toBe(false)
   })
 })

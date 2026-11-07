@@ -1,11 +1,15 @@
 import { ensureKubernetesDeploymentExists } from './ensure-kubernetes-deployment-exists'
-import { awaitDeployRunningState } from './await-running-state'
+import { awaitDeployRollout, awaitDeployRunningState } from './await-running-state'
+import { AbortError } from '../executer/abort'
 import { getRunLabelValue } from './job-placement'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { WorkItem } from '../planner/work-item'
 import { ContainerWorkService } from '../planner/work-service'
 
-vi.mock('./await-running-state', () => ({ awaitDeployRunningState: vi.fn(async () => undefined) }))
+vi.mock('./await-running-state', () => ({
+  awaitDeployRunningState: vi.fn(async () => undefined),
+  awaitDeployRollout: vi.fn(async () => undefined),
+}))
 vi.mock('../planner/service-definition', () => ({ getServiceDefinitionHash: () => 'definition' }))
 vi.mock('./job-placement', async (original) => ({
   ...(await original<typeof import('./job-placement')>()),
@@ -16,6 +20,7 @@ vi.mock('./network-policy', () => ({ getNetworkLabels: () => ({}) }))
 const service = {
   name: 'db',
   id: () => 'abc123',
+  status: { write: vi.fn() },
   data: {
     type: 'container-service',
     image: 'busybox:1.36',
@@ -72,5 +77,113 @@ describe('ensureKubernetesDeploymentExists', () => {
       `db-abc123-${run.substring(0, 8)}`,
       expect.objectContaining({ podSelector: `hammerkit.dev/id=abc123,hammerkit.dev/run=${run}` })
     )
+  })
+
+  describe('of a service run', () => {
+    const env = {
+      type: 'kubernetes',
+      namespace: 'hk-run',
+      httpRoutes: [],
+      networkPolicyEnforced: true,
+      server: { run: 'run_1', serviceRun: true },
+    } as unknown as WorkKubernetesEnvironment
+    const run = getRunLabelValue('run_1')
+    const name = `db-abc123-${run.substring(0, 8)}`
+    const previous = {
+      metadata: { name, labels: { 'hammerkit.dev/state': 'old' }, annotations: { a: 'b' } },
+      spec: { replicas: 1, template: { metadata: { labels: { 'hammerkit.dev/state': 'old' } } } },
+    }
+
+    function cluster() {
+      const replaced: any[] = []
+      const instance = {
+        objectApi: {
+          read: vi.fn(async () => ({ metadata: { resourceVersion: '7' } })),
+          replace: vi.fn(async (spec: any) => {
+            replaced.push(spec)
+            return { ...spec, metadata: { ...spec.metadata, generation: 3 } }
+          }),
+          patch: vi.fn(),
+        },
+      } as any
+      return { instance, replaced }
+    }
+
+    function ensure(instance: any, item: WorkItem<ContainerWorkService>, signal?: AbortSignal) {
+      return ensureKubernetesDeploymentExists(
+        instance,
+        env,
+        item,
+        { mounts: [], volumes: [], workspace: [] } as any,
+        { env: [], mounts: [], volumes: [] } as any,
+        'new',
+        { env: [], hostAliases: [], initContainers: [] },
+        { previous: previous as any, signal }
+      )
+    }
+
+    it('replaces the Deployment and waits for its new pods, the old ones serve until then', async () => {
+      const { instance, replaced } = cluster()
+      await ensure(instance, { ...service, data: { ...service.data, volumes: [] } } as any)
+
+      expect(instance.objectApi.patch).not.toHaveBeenCalled()
+      expect(replaced).toHaveLength(1)
+      expect(replaced[0].metadata.resourceVersion).toBe('7')
+      expect(replaced[0].spec.strategy).toEqual({
+        type: 'RollingUpdate',
+        rollingUpdate: { maxSurge: 1, maxUnavailable: 0 },
+      })
+      expect(replaced[0].spec.template.metadata.labels).toMatchObject({
+        'hammerkit.dev/state': 'new',
+        'hammerkit.dev/definition': 'definition',
+      })
+      expect(
+        replaced[0].spec.template.spec.affinity.podAffinity.preferredDuringSchedulingIgnoredDuringExecution
+      ).toEqual([
+        {
+          weight: 100,
+          podAffinityTerm: {
+            labelSelector: { matchLabels: { 'hammerkit.dev/id': 'abc123', 'hammerkit.dev/run': run } },
+            topologyKey: 'kubernetes.io/hostname',
+          },
+        },
+      ])
+      expect(awaitDeployRollout).toHaveBeenCalledWith(
+        instance,
+        env,
+        name,
+        expect.objectContaining({
+          generation: 3,
+          podSelector: `hammerkit.dev/id=abc123,hammerkit.dev/run=${run},hammerkit.dev/state=new,hammerkit.dev/definition=definition`,
+        })
+      )
+    })
+
+    it('stops a service with volumes of its own before its new pod starts', async () => {
+      const { instance, replaced } = cluster()
+      await ensure(instance, {
+        ...service,
+        data: { ...service.data, volumes: [{ name: 'data', containerPath: '/data', inherited: null }] },
+      } as any)
+      expect(replaced[0].spec.strategy).toEqual({ type: 'Recreate' })
+    })
+
+    it('puts the Deployment back as it was when its new pods do not get ready', async () => {
+      const { instance, replaced } = cluster()
+      vi.mocked(awaitDeployRollout).mockRejectedValueOnce(new Error('db did not get ready'))
+      await expect(ensure(instance, { ...service, data: { ...service.data, volumes: [] } } as any)).rejects.toThrow(
+        'db did not get ready'
+      )
+      expect(replaced).toHaveLength(2)
+      expect(replaced[1].metadata).toMatchObject({ name, labels: previous.metadata.labels, annotations: { a: 'b' } })
+      expect(replaced[1].spec).toBe(previous.spec)
+    })
+
+    it('leaves it to the next move when the rollout is stopped', async () => {
+      const { instance, replaced } = cluster()
+      vi.mocked(awaitDeployRollout).mockRejectedValueOnce(new AbortError())
+      await expect(ensure(instance, { ...service, data: { ...service.data, volumes: [] } } as any)).rejects.toThrow()
+      expect(replaced).toHaveLength(1)
+    })
   })
 })

@@ -363,6 +363,7 @@ export function runsTheSame(
   }
 ): boolean {
   const sorted = (values: string[]) => JSON.stringify([...values].sort())
+  const options = (value: object | undefined) => JSON.stringify(value ?? {}, Object.keys(value ?? {}).sort())
   const endpoints = (spec: Pick<ServiceRunSpec, 'endpoints'>) =>
     JSON.stringify(spec.endpoints.map((endpoint) => [endpoint.service, endpoint.port, endpoint.host]))
   return (
@@ -374,7 +375,7 @@ export function runsTheSame(
     sorted(run.up.services) === sorted(next.up.services) &&
     endpoints(run.up) === endpoints(next.up) &&
     (run.up.sleepTtl ?? null) === (next.up.sleepTtl ?? null) &&
-    JSON.stringify(run.options) === JSON.stringify(next.request.options)
+    options(run.options) === options(next.request.options)
   )
 }
 

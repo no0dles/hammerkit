@@ -1,7 +1,7 @@
 import { runRequestSchema } from './run-request'
 import { serverConfigSchema } from './server-config'
 import { getEndpointHosts, getServiceRunName, mayOpenEndpoints, refuseEndpoints } from './service-runs'
-import { refuseWake } from './server'
+import { refuseWake, runsTheSame } from './server'
 import { getEndpointTargets, publishEndpoints } from './run-worker'
 import { getServiceRunNamespace, getServerIngressPolicy, isCallerNamespace } from './kubernetes-backend'
 import type { TaskPlan } from './plan'
@@ -263,5 +263,39 @@ describe('refuseWake', () => {
     expect(
       refuseWake(config([{ ...dev, ...publish, accounts: { 'shop-dev': 'request' } }]), repos, run(['shop-dev']))
     ).toBe('its owner alice may only request shop-dev now, start it again')
+  })
+})
+
+describe('runsTheSame', () => {
+  const endpoints = [{ service: 'web', port: 80, host: 'pr-12-80-abc', url: 'https://pr-12-80-abc.run.corp/' }]
+  const run = {
+    id: 'run_1',
+    definition,
+    accounts: ['b', 'a'],
+    options: { env: 'preview' },
+    source: { ...source, commit: 'c1' },
+    up: { services: ['web', 'db'], endpoints, ttl: 1000, sleepTtl: 60_000, name: 'pr-12' },
+  } as any
+  const next = {
+    definition,
+    accounts: ['a', 'b'],
+    request: { options: { env: 'preview' } },
+    source: { ...source, ref: 'feature', commit: 'c2' } as any,
+    up: { services: ['db', 'web'], endpoints, sleepTtl: 60_000 },
+  }
+
+  it('moves a run of the same build file, services, endpoints and options to another commit', () => {
+    expect(runsTheSame(run, next)).toBe(true)
+  })
+
+  it('replaces one that runs anything else', () => {
+    expect(runsTheSame(run, { ...next, definition: 'sha256:' + 'b'.repeat(64) })).toBe(false)
+    expect(runsTheSame(run, { ...next, accounts: ['a'] })).toBe(false)
+    expect(runsTheSame(run, { ...next, request: { options: { env: 'other' } } })).toBe(false)
+    expect(runsTheSame(run, { ...next, source: { ...next.source, repo: 'github.com/corp/other' } })).toBe(false)
+    expect(runsTheSame(run, { ...next, up: { ...next.up, services: ['web'] } })).toBe(false)
+    expect(runsTheSame(run, { ...next, up: { ...next.up, endpoints: [] } })).toBe(false)
+    expect(runsTheSame(run, { ...next, up: { ...next.up, sleepTtl: undefined } })).toBe(false)
+    expect(runsTheSame({ ...run, source: { type: 'sandbox', id: 'sbx' } }, next)).toBe(false)
   })
 })

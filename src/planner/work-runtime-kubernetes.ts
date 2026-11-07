@@ -12,7 +12,7 @@ import { kubernetesService } from '../executer/kubernetes-service'
 import { WorkKubernetesEnvironment } from './work-environment'
 import { createKubernetesInstances, KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import { getEnvironmentVariables } from '../environment/replace-env-variables'
-import { V1EnvVar, V1Job, V1Pod, V1PodSpec, V1VolumeMount } from '@kubernetes/client-node'
+import { V1Deployment, V1EnvVar, V1Job, V1Pod, V1PodSpec, V1VolumeMount } from '@kubernetes/client-node'
 import { apply, KubernetesObjectHeader, statusCodeOf } from '../kubernetes/apply'
 import { ensureKubernetesServiceExists } from '../kubernetes/ensure-kubernetes-service-exists'
 import { DEFINITION_LABEL, ensureKubernetesDeploymentExists } from '../kubernetes/ensure-kubernetes-deployment-exists'
@@ -577,6 +577,10 @@ export function kubernetesServiceRuntime(
     // stops it and a run reuses it, as with a container on Docker. One whose
     // definition changed goes, with its limits, and is created anew.
     async initialize(state: State<ServiceState>): Promise<void> {
+      if (kubernetes.server?.serviceRun) {
+        // a service run starts every service: one that did not change stays as it is (execute)
+        return
+      }
       const deployments = await instance.appsApi.listNamespacedDeployment({
         namespace: kubernetes.namespace,
         labelSelector: getItemSelector(service, kubernetes),
@@ -621,6 +625,18 @@ export function kubernetesServiceRuntime(
       await removeAllKubernetesItemNetworks(instance, kubernetes, service)
     },
     async execute(environment: Environment, options: ExecuteOptions<ServiceState>): Promise<void> {
+      const name = getResourceName(service, kubernetes)
+      // a service run that moves to another commit: a service of the same definition and
+      // state is left running, another one is rolled from the Deployment it has now
+      let previous: V1Deployment | undefined
+      if (kubernetes.server?.serviceRun) {
+        previous = await readDeployment(instance, kubernetes.namespace, name)
+        if (previous && isRolledOut(previous, getServiceDefinitionHash(service), options.stateKey)) {
+          service.status.write('info', `${service.name} did not change, it stays up`)
+          options.state.set({ type: 'running', dns: { containerId: name }, stateKey: options.stateKey, remote: null })
+          return
+        }
+      }
       const persistence = await getKubernetesPersistence(service, kubernetes)
       await ensureNamespace(instance, kubernetes.namespace)
       await ensureKubernetesServiceExists(instance, kubernetes, service)
@@ -638,10 +654,10 @@ export function kubernetesServiceRuntime(
         persistence,
         getKubernetesSecretRefs(service, kubernetes, service.data.secrets),
         options.stateKey,
-        network
+        network,
+        { previous, signal: options.abort }
       )
 
-      const name = getResourceName(service, kubernetes)
       options.state.set({
         type: 'running',
         dns: { containerId: name },
@@ -698,6 +714,36 @@ export function kubernetesServiceRuntime(
       return deployment?.metadata?.labels?.['hammerkit.dev/state'] ?? null
     },
   }
+}
+
+async function readDeployment(
+  instance: KubernetesInstance,
+  namespace: string,
+  name: string
+): Promise<V1Deployment | undefined> {
+  try {
+    return await instance.appsApi.readNamespacedDeployment({ name, namespace })
+  } catch (e) {
+    if (statusCodeOf(e) === 404) {
+      return undefined
+    }
+    throw e
+  }
+}
+
+// A Deployment of this definition and state whose pods are all of it and ready
+export function isRolledOut(deployment: V1Deployment, definition: string, stateKey: string): boolean {
+  const labels = deployment.metadata?.labels ?? {}
+  const status = deployment.status
+  return (
+    !deployment.metadata?.deletionTimestamp &&
+    labels[DEFINITION_LABEL] === definition &&
+    labels['hammerkit.dev/state'] === stateKey &&
+    (status?.observedGeneration ?? 0) >= (deployment.metadata?.generation ?? 0) &&
+    (status?.updatedReplicas ?? 0) >= 1 &&
+    (status?.readyReplicas ?? 0) >= 1 &&
+    (status?.replicas ?? 0) === (status?.updatedReplicas ?? 0)
+  )
 }
 
 export function kubernetesForwardRuntime(service: WorkItem<KubernetesWorkService>): WorkRuntime<ServiceState> {

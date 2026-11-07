@@ -303,8 +303,9 @@ export class KubernetesExecutor implements RunExecutor {
   // the namespaces where no run of this process left anything: what a run makes goes at its
   // end, unless its release failed
   private readonly tidy = new Set<string>()
-  // the namespaces of the service runs that execute, and whether those of earlier ones went
-  private readonly serviceRuns = new Set<string>()
+  // the namespaces of the service runs that execute, with how many executions each (a run
+  // that moves executes beside itself), and whether those of earlier ones went
+  private readonly serviceRuns = new Map<string, number>()
   private serviceRunsSwept = false
   // whether a service run keeps its namespace, with the claims of its services, while it
   // sleeps (`runs.up.keepVolumes`), and the namespaces of the runs that sleep so
@@ -365,6 +366,12 @@ export class KubernetesExecutor implements RunExecutor {
         this.active.delete(namespace)
       }
     }
+  }
+
+  // A service run moves to another commit in its namespace: unchanged services stay, the
+  // others roll to their new pods (see kubernetesServiceRuntime)
+  movesBeside(run: Run): boolean {
+    return !!run.up
   }
 
   private namespaceOf(run: Run): string {
@@ -482,7 +489,7 @@ export class KubernetesExecutor implements RunExecutor {
           if (context.signal.aborted) {
             throw new Error('the run was cancelled')
           }
-          this.serviceRuns.add(namespace)
+          this.serviceRuns.set(namespace, (this.serviceRuns.get(namespace) ?? 0) + 1)
           this.asleep.delete(namespace)
           this.sweepServiceRuns()
           const up = run.up
@@ -545,6 +552,11 @@ export class KubernetesExecutor implements RunExecutor {
         if (run.up) {
           const say = (text: string) => context.emit({ type: 'log', task: 'hammerkit', stream: 'stderr', text })
           try {
+            if (context.keep?.() === 'everything') {
+              // the services are another execution's of the run now: the one it moved to, or
+              // the one a move that did not get there leaves them to
+              return
+            }
             if (context.keep?.() === 'volumes' && this.keepServiceRuns) {
               // it sleeps: what runs goes, the namespace stays with its claims and policies
               this.asleep.add(namespace)
@@ -560,7 +572,12 @@ export class KubernetesExecutor implements RunExecutor {
             }
             await this.enqueue(namespace, () => this.removeServiceRun(namespace, say))
           } finally {
-            this.serviceRuns.delete(namespace)
+            const executions = (this.serviceRuns.get(namespace) ?? 1) - 1
+            if (executions > 0) {
+              this.serviceRuns.set(namespace, executions)
+            } else {
+              this.serviceRuns.delete(namespace)
+            }
           }
           return
         }
@@ -626,6 +643,7 @@ export class KubernetesExecutor implements RunExecutor {
         ...(work?.claim ? { workspace: getWorkspace(work.root, work.claim, namespace, backend.sandboxes.runner) } : {}),
         // the claims of a service run go with its namespace
         ...(this.keep > 0 && !run.up ? { volumeScope: getVolumeScope(run) } : {}),
+        ...(run.up ? { serviceRun: true as const } : {}),
         ...(backend.capabilities
           ? {
               capabilities: {

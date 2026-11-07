@@ -4,7 +4,8 @@ import { join } from 'path'
 import { EventEmitter } from 'events'
 import { Readable } from 'stream'
 import { Parser } from 'tar'
-import { ensurePersistentData, packSource } from './ensure-persistent-data'
+import { ensurePersistentData, getPodForPersistence, packSource } from './ensure-persistent-data'
+import { getRunLabelValue } from './job-placement'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 
 // the paths of the entries of an archive
@@ -198,5 +199,59 @@ describe('setting up the claim of a task', () => {
         'debug delete pod install-install-upload',
       ])
     )
+  })
+
+  // a service of a service run takes the upload of a move while it serves
+  it('keeps the upload pod of a service of a service run out of its Service, beside its pod', async () => {
+    const created: any[] = []
+    const api = {
+      id: () => 'api',
+      name: 'api',
+      data: { type: 'container-service' },
+      status: { write: () => undefined },
+    } as any
+    const instance = {
+      objectApi: {
+        read: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+        create: async (spec: any) => {
+          created.push(spec)
+          return spec.kind === 'Pod' ? { ...spec, status: { phase: 'Running' } } : spec
+        },
+      },
+      coreApi: {
+        deleteNamespacedPod: async () => ({}),
+        readNamespacedPod: async () => Promise.reject(Object.assign(new Error('not found'), { code: 404 })),
+      },
+    } as any
+    const env = {
+      type: 'kubernetes',
+      namespace: 'hk-run',
+      httpRoutes: [],
+      networkPolicyEnforced: false,
+      server: {
+        run: 'run_1',
+        serviceRun: true,
+        pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' } }],
+      },
+    } as unknown as WorkKubernetesEnvironment
+    const persistence = {
+      volumes: [{ name: 'hammerkit-api', persistentVolumeClaim: { claimName: 'hammerkit-api' } }],
+      sizes: { 'hammerkit-api': null },
+      kept: [],
+      workspace: [],
+      mounts: [
+        { mount: { name: 'hammerkit-api', mountPath: '/app/src', subPath: 'src' }, uploadPath: '/dev/hammerkit/api' },
+      ],
+      sources: [],
+      initCommands: [],
+    } as any
+    await getPodForPersistence(instance, env, api, persistence, 'write', async () => undefined)
+    const pod = created.find((spec) => spec.kind === 'Pod')
+    const run = getRunLabelValue('run_1')
+    expect(pod.metadata.labels).toEqual({ 'hammerkit.dev/run': run })
+    expect(pod.spec.affinity.podAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm).toEqual({
+      labelSelector: { matchLabels: { 'hammerkit.dev/id': 'api', 'hammerkit.dev/run': run } },
+      topologyKey: 'kubernetes.io/hostname',
+    })
   })
 })

@@ -169,6 +169,9 @@ export async function removeServiceRunVolumes(
  * its definition and sources and not by where they are.
  */
 export class HostExecutor implements RunExecutor {
+  // the directories of the executions that run now
+  private readonly directories = new Set<string>()
+
   constructor(private readonly options: HostExecutorOptions) {}
 
   // the docker daemon the runs' services are on, as their processes reach it
@@ -270,7 +273,8 @@ export class HostExecutor implements RunExecutor {
     }
     context.signal.addEventListener('abort', abort, { once: true })
 
-    const root = join(this.options.directory, run.id)
+    // a service run that moves executes beside itself, each in a directory of its own
+    const root = this.directoryOf(run)
     let attachment: SandboxAttachment | undefined
     try {
       // where the process of the run starts: the checkout of a ref, or for a sandbox the
@@ -405,7 +409,7 @@ export class HostExecutor implements RunExecutor {
       } finally {
         if (placement && placed) {
           await placement.release(run, context)
-        } else if (run.up && context.keep?.() !== 'volumes') {
+        } else if (run.up && !context.keep?.()) {
           // the services are gone with the process, their volumes stay only while the run sleeps
           await this.removeVolumes(run, context)
         }
@@ -414,9 +418,20 @@ export class HostExecutor implements RunExecutor {
       context.signal.removeEventListener('abort', abort)
       attachment?.release?.()
       await this.removeRunDirectory(run, root, context)
+      this.directories.delete(root)
       if (source.type === 'sandbox') {
         // what the run wrote counts against the owner's limits, from their next run or create
         sandboxes?.registry.measure(source.id).catch(() => undefined)
+      }
+    }
+  }
+
+  private directoryOf(run: Run): string {
+    for (let execution = 1; ; execution++) {
+      const root = join(this.options.directory, execution === 1 ? run.id : `${run.id}-${execution}`)
+      if (!this.directories.has(root)) {
+        this.directories.add(root)
+        return root
       }
     }
   }

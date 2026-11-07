@@ -432,6 +432,7 @@ export class EndpointGateway {
               run.source.clean === false ? ' with changes' : ''
             }`
           : 'an upload'
+    const moving = run.moving ? `, moving to ${run.moving.commit.slice(0, 12)}` : ''
     const options = ['1h', '8h', '24h', '72h']
       .map((ttl) => `<option value="${ttl}"${ttl === '8h' ? ' selected' : ''}>${ttl}</option>`)
       .join('')
@@ -444,7 +445,7 @@ export class EndpointGateway {
 <dt>Run</dt><dd><code>${escape(run.id)}</code> of <code>${escape(run.owner.sub)}</code>, ${escape(run.state)}${
         run.state === 'asleep' ? (run.volumesKept ? ' with its volumes kept' : ', its services start from nothing') : ''
       }</dd>
-<dt>Source</dt><dd>${escape(source)}</dd>
+<dt>Source</dt><dd>${escape(source + moving)}</dd>
 <dt>Ends</dt><dd>${escape(run.expiresAt ?? 'when it is up and its time ran out')}</dd>
 ${
   run.up?.sleepTtl

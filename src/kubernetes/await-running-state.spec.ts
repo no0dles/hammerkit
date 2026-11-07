@@ -1,5 +1,6 @@
 import { ApiException } from '@kubernetes/client-node'
 import {
+  awaitDeployRollout,
   awaitDeployRunningState,
   awaitJobCompletion,
   awaitRunningState,
@@ -244,5 +245,55 @@ describe('stopJob', () => {
     } as unknown as KubernetesInstance
 
     await expect(stopJob(instance, env, 'job', 0, 0)).rejects.toThrow('the pods of job were still there after 0s')
+  })
+})
+
+describe('awaitDeployRollout', () => {
+  const readiness = {
+    podSelector: 'hammerkit.dev/id=api',
+    timeout: null,
+    timeoutMessage: 'api did not get ready',
+    generation: 2,
+  }
+
+  it('waits until every pod is of the new spec and ready, the old pod ready meanwhile', async () => {
+    const readNamespacedDeployment = vi
+      .fn()
+      // the old pod serves, the new spec is not seen yet
+      .mockResolvedValueOnce({ status: { observedGeneration: 1, replicas: 1, updatedReplicas: 1, readyReplicas: 1 } })
+      // the new pod starts beside the old one
+      .mockResolvedValueOnce({ status: { observedGeneration: 2, replicas: 2, updatedReplicas: 1, readyReplicas: 1 } })
+      .mockResolvedValueOnce({ status: { observedGeneration: 2, replicas: 1, updatedReplicas: 1, readyReplicas: 1 } })
+    const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
+
+    await awaitDeployRollout(instance, env, 'api', readiness, 0)
+
+    expect(readNamespacedDeployment).toHaveBeenCalledTimes(3)
+  })
+
+  it('fails once Kubernetes gave up on the rollout', async () => {
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({
+      status: {
+        observedGeneration: 2,
+        replicas: 2,
+        updatedReplicas: 1,
+        readyReplicas: 1,
+        conditions: [{ type: 'Progressing', reason: 'ProgressDeadlineExceeded', message: 'it timed out' }],
+      },
+    })
+    const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
+
+    await expect(awaitDeployRollout(instance, env, 'api', readiness, 0)).rejects.toThrow(
+      'api did not get ready: it timed out'
+    )
+  })
+
+  it('stops when it is aborted', async () => {
+    const readNamespacedDeployment = vi.fn().mockResolvedValue({ status: { observedGeneration: 1 } })
+    const instance = { appsApi: { readNamespacedDeployment } } as unknown as KubernetesInstance
+    const abort = new AbortController()
+    const waiting = awaitDeployRollout(instance, env, 'api', { ...readiness, signal: abort.signal }, 5)
+    abort.abort()
+    await expect(waiting).rejects.toBeInstanceOf(AbortError)
   })
 })

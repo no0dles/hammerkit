@@ -749,7 +749,7 @@ describe('kubernetes backend', () => {
     it('removes the namespaces of service runs no run is in when the server starts', async () => {
       const executor = new KubernetesExecutor(config(), {}, {} as any)
       const active = getServiceRunNamespace('hammerkit-', 'run_active')
-      ;(executor as any).serviceRuns.add(active)
+      ;(executor as any).serviceRuns.set(active, 1)
       const left = getServiceRunNamespace('hammerkit-', 'run_left')
       const deleted: string[] = []
       const selectors: string[] = []
@@ -827,6 +827,32 @@ describe('kubernetes backend', () => {
       // it ended without waking: the namespace goes, and the claims with it
       await executor.forget(run)
       expect(calls).toContain(`delete Namespace ${namespace}`)
+    })
+
+    it('moves a service run beside itself, and leaves the services to the execution that holds them', async () => {
+      const executor = new KubernetesExecutor(config(), {}, {} as any)
+      const { calls, instance } = recording()
+      ;(executor as any).instance = instance
+      ;(executor as any).serviceRunsSwept = true
+      const run = { id: 'run_6', owner, source: ref, up } as unknown as Run
+      expect(executor.movesBeside(run)).toBe(true)
+      expect(executor.movesBeside({ ...run, up: undefined } as Run)).toBe(false)
+      const namespace = getServiceRunNamespace('hammerkit-', 'run_6')
+      ;(executor as any).serviceRuns.set(namespace, 2)
+      // the execution the run moved away from, or a move that did not get there
+      await (executor as any).placement().release(run, { ...context, keep: () => 'everything' })
+      expect(calls).toEqual([])
+      expect((executor as any).serviceRuns.get(namespace)).toBe(1)
+      // the run's namespace is still in use: no sweep takes it
+      instance.coreApi.listNamespace = async () => ({ items: [{ metadata: { name: namespace } }] })
+      executor.sweepServiceRuns()
+      ;(executor as any).serviceRunsSwept = false
+      executor.sweepServiceRuns()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(calls).toEqual([])
+      await (executor as any).placement().release(run, { ...context, keep: () => undefined })
+      expect(calls).toEqual([`delete Namespace ${namespace}`])
+      expect((executor as any).serviceRuns.has(namespace)).toBe(false)
     })
 
     it('removes the namespace of a run that sleeps on a server that keeps no volumes, and wakes it in another', async () => {

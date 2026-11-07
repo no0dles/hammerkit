@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { CliExecOptions, getCli } from '../cli'
 import { Environment } from '../executer/environment'
 import { getFileContext } from '../file/get-file-context'
-import { consoleContext } from '../log'
+import { consoleContext, getErrorMessage } from '../log'
 import { createParseContext } from '../schema/schema-parser'
 import { parseReferences } from '../schema/reference-parser'
 import { getWorkContext } from '../schema/work-scope-parser'
@@ -24,6 +24,8 @@ import { MAX_CAUSES, MAX_TASK_ERROR } from './runs'
 import type { EndpointTarget, RunEventData, TaskStatus } from './runs'
 import { WorkTree } from '../planner/work-tree'
 import { getResourceName } from '../kubernetes/resources'
+import { removeStaleItems } from '../kubernetes/remove-stale-items'
+import { createKubernetesInstances } from '../kubernetes/kubernetes-instance'
 import { WorkKubernetesEnvironment } from '../planner/work-environment'
 import { getCheckKeys } from '../optimizer/check-keys'
 
@@ -286,6 +288,18 @@ export async function runTasks(
         // on a cluster the services stay in their Deployments once they are ready, until
         // the namespace of the run goes
         if (input.up && input.kubernetes && ready && result.success && !abortCtrl.signal.aborted) {
+          if (input.kubernetes.server?.serviceRun) {
+            // a run that moved here from another commit: what it made for items it has no more
+            const ids = [...Object.values(workTree.tasks), ...Object.values(workTree.services)].map((item) => item.id())
+            await removeStaleItems(createKubernetesInstances(input.kubernetes), input.kubernetes, ids).catch((e) =>
+              emit({
+                type: 'log',
+                task: 'hammerkit',
+                stream: 'stderr',
+                text: `what the run made at its previous commit could not be removed: ${getErrorMessage(e)}`,
+              })
+            )
+          }
           await new Promise<void>((resolve) =>
             abortCtrl.signal.addEventListener('abort', () => resolve(), { once: true })
           )

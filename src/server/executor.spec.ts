@@ -391,6 +391,16 @@ describe('HostExecutor', () => {
     expect(lines).toEqual([`the volume hammerkit-${scope}-busy could not be removed: volume is in use`])
   })
 
+  it('gives each execution of a run a directory of its own, as a service run that moves has two', () => {
+    const run = { id: 'run_1' } as Run
+    const first = (executor as any).directoryOf(run)
+    const second = (executor as any).directoryOf(run)
+    expect(first).toBe(join(options.directory, 'run_1'))
+    expect(second).toBe(join(options.directory, 'run_1-2'))
+    ;(executor as any).directories.delete(first)
+    expect((executor as any).directoryOf(run)).toBe(first)
+  })
+
   it('hands the docker runtime of capabilities to the process of the run', async () => {
     const hash = await publish({ '.hammerkit.yaml': 'tasks:\n  build:\n    cmds: [echo]\n' })
     const telling = new HostExecutor({

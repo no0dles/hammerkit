@@ -16,7 +16,7 @@ import { ContainerWorkTask } from '../planner/work-task'
 import { ensureKubernetesPersistentVolumeClaimExists } from './ensure-kubernetes-persistent-volume-claim-exists'
 import { Environment } from '../executer/environment'
 import { Readable } from 'stream'
-import { getContainerSecurity, getPodPlacement } from './job-placement'
+import { getContainerSecurity, getPodPlacement, getRunLabels } from './job-placement'
 import { assertItemPathsWithinRoot } from '../planner/utils/assert-item-paths'
 
 // A previous run that crashed between creating an upload/download pod and its
@@ -92,18 +92,38 @@ export async function getPodForPersistence(
   }
 
   const name = getResourceName(service, env, type === 'write' ? '-upload' : '-download')
+  // a service of a service run is up while its claim takes an upload (a move to another
+  // commit): the pod goes where the service's runs, and is not one its Service sends to
+  const serving = !!env.server?.serviceRun && service.data.type === 'container-service'
   const podSpec: V1Pod & KubernetesObjectHeader = {
     kind: 'Pod',
     apiVersion: 'v1',
     metadata: {
       namespace: env.namespace,
       name,
-      labels: getItemLabels(service, env),
+      labels: serving ? getRunLabels(env) : getItemLabels(service, env),
       annotations: {
         'hammerkit.dev/version': getVersion(),
       },
     },
     spec: {
+      ...(serving
+        ? {
+            affinity: {
+              podAffinity: {
+                preferredDuringSchedulingIgnoredDuringExecution: [
+                  {
+                    weight: 100,
+                    podAffinityTerm: {
+                      labelSelector: { matchLabels: getItemLabels(service, env) },
+                      topologyKey: 'kubernetes.io/hostname',
+                    },
+                  },
+                ],
+              },
+            },
+          }
+        : {}),
       // on a server the claims are bound where the pod of the task can go: the nodes
       // of its pool
       ...(env.server

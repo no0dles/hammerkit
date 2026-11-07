@@ -136,6 +136,57 @@ export async function awaitDeployRunningState(
   }
 }
 
+/**
+ * Waits until every pod of a Deployment is of its spec `generation` and ready, as a rollout
+ * of a changed service does. Fails when Kubernetes gave up on it (its progress deadline),
+ * or once a new pod (`podSelector`) ran for the readiness timeout without getting ready.
+ */
+export async function awaitDeployRollout(
+  instance: KubernetesInstance,
+  env: WorkKubernetesEnvironment,
+  name: string,
+  readiness: DeployReadiness & { generation: number; signal?: AbortSignal },
+  pollInterval = 1000,
+  now: () => number = Date.now
+): Promise<void> {
+  let runningSince: number | null = null
+  for (;;) {
+    if (readiness.signal?.aborted) {
+      throw new AbortError()
+    }
+    const deployment = await instance.appsApi.readNamespacedDeployment({ name, namespace: env.namespace })
+    const status = deployment.status
+    if (
+      (status?.observedGeneration ?? 0) >= readiness.generation &&
+      (status?.updatedReplicas ?? 0) >= 1 &&
+      (status?.readyReplicas ?? 0) >= 1 &&
+      (status?.replicas ?? 0) === (status?.updatedReplicas ?? 0)
+    ) {
+      return
+    }
+    const stalled = status?.conditions?.find(
+      (condition) => condition.type === 'Progressing' && condition.reason === 'ProgressDeadlineExceeded'
+    )
+    if (stalled && (status?.observedGeneration ?? 0) >= readiness.generation) {
+      throw new Error(`${readiness.timeoutMessage}: ${stalled.message ?? 'its rollout made no progress'}`)
+    }
+    if (readiness.timeout !== null) {
+      if (runningSince === null) {
+        const pods = await instance.coreApi.listNamespacedPod({
+          namespace: env.namespace,
+          labelSelector: readiness.podSelector,
+        })
+        if (pods.items.some((pod) => pod.status?.phase === 'Running')) {
+          runningSince = now()
+        }
+      } else if (now() - runningSince >= readiness.timeout) {
+        throw new Error(readiness.timeoutMessage)
+      }
+    }
+    await sleep(pollInterval, readiness.signal ?? new AbortController().signal)
+  }
+}
+
 // Delete a job and wait until it is gone: its name is reused for the task's next
 // command (and the next run with the same state), and creating it while the old
 // one is still being deleted would pick up the old job.
