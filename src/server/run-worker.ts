@@ -72,7 +72,7 @@ export const workerInputSchema = z
     // volumes (see scopeServiceVolumes)
     volumeScope: z
       .string()
-      .regex(/^[a-z]+-[0-9a-f]{24}$/)
+      .regex(/^(?:[a-z]+|up-[0-9a-f]{8})-[0-9a-f]{24}$/)
       .optional(),
     // a service run: the services it keeps up instead of tasks, and the ports the server
     // reaches as endpoints

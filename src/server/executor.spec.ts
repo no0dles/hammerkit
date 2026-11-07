@@ -5,6 +5,7 @@ import { join } from 'path'
 import { environmentMock } from '../executer/environment-mock'
 import { DefinitionStore } from './definitions'
 import { HostExecutor, HostExecutorOptions, removeServiceRunVolumes, serviceRunScopes, volumeScope } from './executor'
+import { workerInputSchema } from './run-worker'
 import { HOST_ENV_ALLOW } from '../testing/host-env'
 import { getSecretCatalog } from './server-config'
 import { PlanContext } from './run-plan'
@@ -352,6 +353,9 @@ describe('HostExecutor', () => {
       ({ ...run('sha256:x'), id, up: { services: ['db'], ttl: 1, name: 'n', endpoints: [] } }) as Run
     const scope = volumeScope(service('run_aaaaaaaaaaaaaaaa'), '/srv/a')
     expect(scope).toMatch(/^up-[0-9a-f]{8}-[0-9a-f]{24}$/)
+    // the process of the run takes it, as a scope of a run of tasks
+    expect(workerInputSchema.shape.volumeScope.safeParse(scope).success).toBe(true)
+    expect(workerInputSchema.shape.volumeScope.safeParse(volumeScope(run('sha256:x'))).success).toBe(true)
     expect(scope.startsWith(serviceRunScopes('/srv/a'))).toBe(true)
     expect(volumeScope(service('run_bbbbbbbbbbbbbbbb'), '/srv/a')).not.toBe(scope)
     // of another server on the same docker
