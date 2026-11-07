@@ -189,6 +189,9 @@ describe('EndpointGateway', () => {
         { subject: { iss: ISS, sub: 'reviewer' }, endpoints: [{ repo: 'github.com/corp/*', level: 'open' }] },
         { subject: { iss: ISS, sub: 'other' }, endpoints: [{ repo: 'github.com/other/*', level: 'open' }] },
         { subject: { iss: ISS, sub: 'operator' }, observe: true },
+        { subject: { iss: ISS, sub: 'colleague' }, repos: ['github.com/corp/*'], builds: 'run' },
+        { subject: { iss: ISS, sub: 'stranger' }, repos: ['github.com/other/*'], builds: 'run' },
+        { subject: { iss: ISS, sub: 'ci' }, repos: ['github.com/corp/*'], checks: 'read' },
       ],
     })
     const executor: RunExecutor = {
@@ -326,17 +329,25 @@ describe('EndpointGateway', () => {
       expect(opener.body).toContain('are for the owner of the run and who decides about it')
       expect(opener.body).toContain('>Extend</button>')
       expect(opener.body).not.toContain('>Stop</button>')
-      // with runs.activity: everyone, somebody else sees that it is up, not where
-      const other = await get('hammerkit', `/runs/${runId}`, as('other'))
-      expect(other.status).toBe(200)
-      expect(other.body).toContain('<dt>Owner</dt><dd><code>alice</code>')
-      expect(other.body).not.toContain(`${host}.${DOMAIN}`)
-      expect(other.body).not.toContain('>Extend</button>')
-      expect((await get('hammerkit', `/runs/${runId}/log`, as('other'))).status).toBe(404)
+      // with runs.activity: everyone, who may run builds of the repository sees that it is up,
+      // not where
+      const colleague = await get('hammerkit', `/runs/${runId}`, as('colleague'))
+      expect(colleague.status).toBe(200)
+      expect(colleague.body).toContain('<dt>Owner</dt><dd><code>alice</code>')
+      expect(colleague.body).not.toContain(`${host}.${DOMAIN}`)
+      expect(colleague.body).not.toContain('>Extend</button>')
+      expect((await get('hammerkit', `/runs/${runId}/log`, as('colleague'))).status).toBe(404)
+      expect((await get('hammerkit', '/runs?who=all', as('colleague'))).body).toContain(runId)
+      // nobody of another repository, nor who may only open endpoints or read checks
+      for (const sub of ['stranger', 'other', 'ci']) {
+        expect((await get('hammerkit', `/runs/${runId}`, as(sub))).status).toBe(404)
+        expect((await get('hammerkit', '/runs?who=all', as(sub))).body).not.toContain(runId)
+        expect((await get('hammerkit', '/tasks', as(sub))).body).not.toContain('github.com/corp/shop')
+      }
       // with involved, only who decides about it or may open it
       config.runs = { ...config.runs, activity: 'involved' }
-      expect((await get('hammerkit', `/runs/${runId}`, as('other'))).status).toBe(404)
-      expect((await get('hammerkit', '/services', as('other'))).body).not.toContain(runId)
+      expect((await get('hammerkit', `/runs/${runId}`, as('colleague'))).status).toBe(404)
+      expect((await get('hammerkit', '/services', as('colleague'))).body).not.toContain(runId)
       const operator = await get('hammerkit', `/runs/${runId}`, as('operator'))
       expect(operator.status).toBe(200)
       expect(operator.body).not.toContain('>Extend</button>')

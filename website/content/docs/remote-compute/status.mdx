@@ -1,6 +1,6 @@
 ---
 title: "Status"
-description: "See how a server stands: what runs, what waits in the queue and why, your limits, the activity of everybody, what past tasks took, what waits for an approval, and the CPU and memory the runs take."
+description: "See how a server stands: what runs, what waits in the queue and why, your limits, the activity in your repositories, what past tasks took, what waits for an approval, and the CPU and memory the runs take."
 ---
 A server runs a few runs at a time and queues the rest. Everything on this page is in the
 [dashboard](#dashboard) of a server with endpoints, too. When a run of yours does not start,
@@ -143,17 +143,20 @@ On a **host**, the machine of its docker daemon: its CPUs and memory, the memory
 load when the daemon runs on the server's own machine, and what the containers of runs use.
 
 The server reads it at most every 15 seconds. Everyone with an entitlement sees the totals;
-whose a namespace is follows [Who sees what](#who-sees-what).
+whose a namespace is, its owner and `observe` see.
 
 ## Who sees what
 
 Everyone sees their own runs in full. What a caller sees of the runs of others depends on
 `runs.activity` in the server's config:
 
-- `everyone` (the default): every caller with an entitlement sees every run of the server:
-  whose it is, what it runs (its tasks or services), its source, its state, where it waits,
-  how long it waited and ran, and how long each task took. Not its arguments, what its tasks
-  run, why it failed, its log, or the addresses of its endpoints.
+- `everyone` (the default): a caller with a `builds` level sees the runs of others in the
+  repositories they have access to, those of their `repos` and of their `sandboxes`: whose a
+  run is, what it runs (its tasks or services), its source, its state, where it waits, how long
+  it waited and ran, and how long each task took. Not its arguments, what its tasks run, why it
+  failed, its log, or the addresses of its endpoints. Who may only open endpoints or read
+  checks (a preview reviewer, a CI job) sees none of it, and a run of uploaded files, which has
+  no repository, is for its owner and who is involved.
 - `involved`: a caller sees only the runs of others they are involved in, below.
 
 Whatever `runs.activity` says, a caller also sees:

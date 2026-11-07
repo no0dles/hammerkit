@@ -11,6 +11,11 @@ export function formatCpu(cores: number | undefined): string {
   return cores < 10 ? String(Math.round(cores * 100) / 100) : String(Math.round(cores * 10) / 10)
 }
 
+// a count and what it counts: 1 pod, 2 pods
+export function plural(count: number, one: string, more = `${one}s`): string {
+  return `${count} ${count === 1 ? one : more}`
+}
+
 // bytes as a person reads them: 512 MiB, 3.4 GiB
 export function formatMemory(bytes: number | undefined): string {
   if (bytes === undefined) {

@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from 'http'
 import { timingSafeEqual } from 'crypto'
 import { HASH_PATTERN } from '../remote/bundle'
 import type { Capacity, CapacityGroup, CapacityReader, Resources } from './capacity'
-import { formatCpu, formatMemory } from './capacity-format'
+import { formatCpu, formatMemory, plural } from './capacity-format'
 import { bar, cut, h, HEADERS, Nav, printableLine, sendPage, span } from './dashboard-html'
 import { DefinitionError, DefinitionStore } from './definitions'
 import { Principal, quote } from './oauth'
@@ -15,6 +15,7 @@ import {
   Meter,
   mayRead,
   maySee,
+  seesActivity,
   Overview,
   owns,
   queuePlace,
@@ -516,7 +517,7 @@ ${capacity ? this.capacitySummary(capacity) : ''}
 
   // whether the viewer sees more than their own runs
   private get seesOthers(): boolean {
-    return this.viewer.grant.observe || !!this.viewer.activity
+    return this.viewer.grant.observe || seesActivity(this.viewer)
   }
 
   runs(params: URLSearchParams): string {
@@ -1093,7 +1094,7 @@ ${capacity ? this.capacitySummary(capacity) : ''}
   private capacityMeters(capacity: Capacity): string {
     const { machines, runs } = capacity
     const meter = (name: string, kind: 'cpu' | 'memory') => {
-      const format = kind === 'cpu' ? (n: number) => `${formatCpu(n)} cores` : formatMemory
+      const format = kind === 'cpu' ? (n: number) => `${formatCpu(n)} ${n === 1 ? 'core' : 'cores'}` : formatMemory
       const max = machines?.allocatable[kind]
       const used = runs.used?.[kind]
       const requested = runs.requested[kind]
@@ -1164,7 +1165,7 @@ ${capacity ? this.capacitySummary(capacity) : ''}
     )}. Requested is what the pods of runs asked the scheduler for; in use is what they use now.</p><div class="meters">${this.capacityMeters(
       capacity
     )}<div class="meter"><strong>Runs</strong><small>${
-      capacity.runs.pods !== undefined ? `${capacity.runs.pods} pods · ` : ''
+      capacity.runs.pods !== undefined ? `${plural(capacity.runs.pods, 'pod')} · ` : ''
     }${capacity.runs.containers !== undefined ? `${capacity.runs.containers} containers · ` : ''}requested ${resources(
       capacity.runs.requested
     )}${capacity.runs.used ? ` · in use ${resources(capacity.runs.used)}` : ''}</small></div></div>${groups}${problems}`

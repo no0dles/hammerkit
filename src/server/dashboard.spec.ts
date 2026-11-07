@@ -356,20 +356,19 @@ describe('dashboard pages', () => {
     expect(page.body).toContain('12 cores on 3 nodes')
     expect(page.body).toContain('runs requested 2.25')
     expect(page.body).toContain('<code>hk-0123456789abcdef</code>')
-    expect(page.body).toContain('<td>bob</td>')
+    // whose a namespace is, is for operators and its owner
+    expect(page.body).not.toContain('<td>bob</td>')
     expect(page.body).toContain('8 CPU · 16 GiB')
     // what the cluster answered is for operators, others learn that something is missing
     expect(page.body).toContain('some of it could not be read')
     expect(page.body).not.toContain('may not list nodes')
-    expect(
-      (await open({ config: makeConfig('everyone'), registry, capacity: reader }, olga, '/capacity')).body
-    ).toContain('the server may not list nodes')
+    const observed = (await open({ config: makeConfig('everyone'), registry, capacity: reader }, olga, '/capacity'))
+      .body
+    expect(observed).toContain('the server may not list nodes')
+    expect(observed).toContain('<td>bob</td>')
     expect((await open({ config: makeConfig('everyone'), registry, capacity: reader }, alice, '/')).body).toContain(
       'Capacity <small>'
     )
-    // with involved, alice does not learn whose the namespace is
-    const involved = await open({ config: makeConfig('involved'), registry, capacity: reader }, alice, '/capacity')
-    expect(involved.body).not.toContain('<td>bob</td>')
     expect(run.id).toMatch(/^run_/)
   })
 })

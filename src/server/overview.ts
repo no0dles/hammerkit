@@ -14,6 +14,7 @@ import type {
 import type { ServerConfig } from './server-config'
 import type { Capacity } from './capacity'
 import { mayOpenEndpoints } from './service-runs'
+import { matchesAnyRepo, matchesRepo } from './repo'
 import type { VisibleWaitReason } from './wait-reason'
 export { describeWait } from './wait-reason'
 export type { VisibleWaitReason }
@@ -97,8 +98,8 @@ export function decides(viewer: Viewer, run: Run): boolean {
 /**
  * Whether the caller may see a run, with the entitlements of the moment: their own; any
  * with `observe`; one that asked for an approval of an account they use (they decide about
- * it); a service run whose endpoints they may open; and any, with `runs.activity: everyone`,
- * for a caller with an entitlement.
+ * it); a service run whose endpoints they may open; and with `runs.activity: everyone`, one
+ * of a repository they have access to (seesActivityOf).
  */
 export function maySee(viewer: Viewer, run: Run): boolean {
   return (
@@ -106,7 +107,28 @@ export function maySee(viewer: Viewer, run: Run): boolean {
     viewer.grant.observe ||
     decides(viewer, run) ||
     (!!run.up && mayOpenEndpoints(viewer.grant, run)) ||
-    (!!viewer.activity && viewer.grant.matched.length > 0)
+    seesActivityOf(viewer, run)
+  )
+}
+
+/**
+ * With `runs.activity: everyone`, a caller with a `builds` level sees the runs of others in
+ * the repositories they have access to: the `repos` and the `sandboxes` repositories of their
+ * entitlements. Who may only open endpoints or read checks sees none, and a run of uploaded
+ * files has no repository: it is for its owner, who decides about it and `observe`.
+ */
+export function seesActivity(viewer: Viewer): boolean {
+  return !!viewer.activity && viewer.grant.builds !== null
+}
+
+export function seesActivityOf(viewer: Viewer, run: Run): boolean {
+  if (!seesActivity(viewer) || run.source.type === 'upload') {
+    return false
+  }
+  const repo = run.source.repo
+  return (
+    matchesAnyRepo(viewer.grant.repos, repo) ||
+    viewer.grant.sandboxes.some((sandbox) => matchesRepo(sandbox.repo, repo))
   )
 }
 
@@ -297,7 +319,8 @@ export function filterRuns(runs: Run[], viewer: Viewer, filter: RunFilter): Run[
 // The machines and what the runs take, with whose the namespaces are where the caller may
 // know: their own, and every one with `observe` or `runs.activity: everyone`.
 export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
-  const everyone = viewer.grant.observe || !!viewer.activity
+  // whose a namespace is: for operators, and for its owner
+  const everyone = viewer.grant.observe
   return {
     ...capacity,
     // what the cluster answered is for operators; others learn that something is missing

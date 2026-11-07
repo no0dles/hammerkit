@@ -177,7 +177,8 @@ export class KubernetesCapacity implements CapacityReader {
           kind,
           ...this.options.ownerOf(namespace, runs),
           pods: 0,
-          requested: {},
+          // a namespace whose pods could be listed and that has none asks for nothing
+          requested: { cpu: 0, memory: 0 },
         }
         try {
           const pods = await this.instance.coreApi.listNamespacedPod({ namespace })
@@ -214,7 +215,7 @@ export class KubernetesCapacity implements CapacityReader {
         if (this.instance.metrics) {
           try {
             const metrics = await this.instance.metrics.getPodMetrics(namespace)
-            const used: Resources = {}
+            const used: Resources = { cpu: 0, memory: 0 }
             for (const pod of metrics.items) {
               for (const container of pod.containers) {
                 add(used, parseQuantity(container.usage.cpu), parseQuantity(container.usage.memory))

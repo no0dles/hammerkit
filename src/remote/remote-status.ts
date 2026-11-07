@@ -1,6 +1,6 @@
 import colors from 'colors'
 import type { Capacity, Resources } from '../server/capacity'
-import { formatCpu, formatMemory } from '../server/capacity-format'
+import { formatCpu, formatMemory, plural } from '../server/capacity-format'
 import type { ListedRun, Meter, Overview } from '../server/overview'
 import { ranMs, roughly, TaskStats, waitedMs } from '../server/timings'
 import { describeWait } from '../server/wait-reason'
@@ -123,7 +123,7 @@ export function describeCapacity(capacity: Capacity, short = false): string[] {
     }${machines?.used ? `, ${resources(machines.used)} in use` : ''}${
       machines?.load ? `, load ${machines.load.map((load) => load.toFixed(2)).join(' ')}` : ''
     }`,
-    `  runs: ${runs.pods !== undefined ? `${runs.pods} pods, ` : ''}${
+    `  runs: ${runs.pods !== undefined ? `${plural(runs.pods, 'pod')}, ` : ''}${
       runs.containers !== undefined ? `${runs.containers} containers, ` : ''
     }${capacity.backend === 'kubernetes' ? `requested ${resources(runs.requested)}` : ''}${
       runs.used ? `${capacity.backend === 'kubernetes' ? ', ' : ''}in use ${resources(runs.used)}` : ''
@@ -136,9 +136,9 @@ export function describeCapacity(capacity: Capacity, short = false): string[] {
     lines.push(
       `  ${printable(group.name)}  ${group.kind === 'service-run' ? 'service run' : 'caller'}${
         group.owner ? ` of ${printable(group.owner.sub)}` : ''
-      }${group.run ? ` ${printable(group.run)}` : ''}  ${group.pods} pods  requested ${resources(group.requested)}${
-        group.quota ? ` of ${resources(group.quota)}` : ''
-      }${group.used ? `  in use ${resources(group.used)}` : ''}`
+      }${group.run ? ` ${printable(group.run)}` : ''}  ${plural(group.pods ?? 0, 'pod')}  requested ${resources(
+        group.requested
+      )}${group.quota ? ` of ${resources(group.quota)}` : ''}${group.used ? `  in use ${resources(group.used)}` : ''}`
     )
   }
   for (const problem of capacity.problems) {
