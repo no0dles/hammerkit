@@ -98,24 +98,30 @@ function addAll(into: Resources, from: Resources | undefined): void {
   }
 }
 
-// Reads at most once in `ms`, and never twice at the same time: the dashboard reloads.
-export function cachedCapacity(reader: CapacityReader, ms = 15_000, now = Date.now): CapacityReader {
+// Reads at most once in `ms`, and never twice at the same time: the dashboard reloads. A read
+// that takes longer than `wait` is not waited for: a slow cluster API does not hold up a page,
+// the next one shows what it read.
+export function cachedCapacity(reader: CapacityReader, ms = 15_000, now = Date.now, wait = 3000): CapacityReader {
   let last: { at: number; value: Promise<Capacity> } | undefined
+  const failed = (problem: string): Capacity => ({
+    backend: 'host',
+    at: new Date(now()).toISOString(),
+    runs: { requested: {} },
+    groups: [],
+    problems: [problem],
+  })
   return {
     read(runs) {
       if (!last || now() - last.at >= ms) {
-        const value = reader.read(runs).catch(
-          (e): Capacity => ({
-            backend: 'host',
-            at: new Date(now()).toISOString(),
-            runs: { requested: {} },
-            groups: [],
-            problems: [getErrorMessage(e)],
-          })
-        )
+        const value = reader.read(runs).catch((e): Capacity => failed(getErrorMessage(e)))
         last = { at: now(), value }
       }
-      return last.value
+      let timer: NodeJS.Timeout | undefined
+      const late = new Promise<Capacity>((resolve) => {
+        timer = setTimeout(() => resolve(failed('the capacity could not be read in time')), wait)
+        timer.unref?.()
+      })
+      return Promise.race([last.value, late]).finally(() => clearTimeout(timer))
     },
   }
 }

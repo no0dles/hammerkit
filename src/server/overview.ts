@@ -296,6 +296,9 @@ export function visibleCapacity(capacity: Capacity, viewer: Viewer): Capacity {
   const everyone = viewer.grant.observe || !!viewer.activity
   return {
     ...capacity,
+    // what the cluster answered is for operators; others learn that something is missing
+    problems:
+      viewer.grant.observe || capacity.problems.length === 0 ? capacity.problems : ['some of it could not be read'],
     groups: capacity.groups.map((group) => {
       const mine = group.owner?.iss === viewer.principal.iss && group.owner?.sub === viewer.principal.sub
       if (everyone || mine || !group.owner) {

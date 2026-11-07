@@ -51,6 +51,8 @@ interface Session {
   groups: string[]
   claims: Record<string, string>
   exp: number
+  // when the person signed in, for what needs a recent sign-in (deciding on the dashboard)
+  at?: number
 }
 
 interface PendingLogin {
@@ -154,6 +156,12 @@ export class EndpointGateway {
       res.end()
       return
     }
+    if (label === this.dashboardLabel() && url.pathname === `${OWN_PATH}signin`) {
+      // sign in again, with the groups and claims of now, and go back to a page of the dashboard
+      const back = url.searchParams.get('path') ?? '/'
+      const path = /^\/[A-Za-z0-9_\-/?=&.,]*$/.test(back) && !back.startsWith('//') ? back : '/'
+      return this.signIn(label, req, res, new URL(path, 'http://endpoint'))
+    }
     if (label === this.dashboardLabel()) {
       const principal = await this.caller(label, req)
       if (!principal) {
@@ -170,6 +178,8 @@ export class EndpointGateway {
           ...(this.options.now ? { now: this.options.now } : {}),
           ...this.options.dashboard,
           session: session ? `session:${session.exp}` : 'token',
+          // a cookie of before the sign-in time was kept counts as an old sign-in
+          ...(session ? { signedInAt: session.at ?? 0 } : {}),
         },
         principal,
         req,
@@ -686,6 +696,7 @@ ${
         groups: issued.principal.groups,
         claims: this.matchedClaims(issued.principal),
         exp,
+        at: this.now(),
       }),
       'cache-control': 'no-store',
     })

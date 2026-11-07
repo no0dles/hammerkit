@@ -1,5 +1,5 @@
 import { formatCpu, formatMemory } from './capacity-format'
-import { cachedCapacity, HostCapacity, KubernetesCapacity, parseQuantity } from './capacity'
+import { Capacity, cachedCapacity, HostCapacity, KubernetesCapacity, parseQuantity } from './capacity'
 import type { KubernetesInstance } from '../kubernetes/kubernetes-instance'
 import type { Run } from './runs'
 
@@ -125,5 +125,14 @@ describe('capacity', () => {
     now = 1000
     await cached.read([])
     expect(reads).toBe(2)
+  })
+
+  it('does not wait long for a slow read, and shows it once it came', async () => {
+    let answer: (capacity: Capacity) => void = () => undefined
+    const slow = new Promise<Capacity>((resolve) => (answer = resolve))
+    const cached = cachedCapacity({ read: () => slow }, 60_000, Date.now, 20)
+    expect((await cached.read([])).problems).toEqual(['the capacity could not be read in time'])
+    answer({ backend: 'host', at: '', runs: { requested: {} }, groups: [], problems: [] })
+    expect((await cached.read([])).problems).toEqual([])
   })
 })

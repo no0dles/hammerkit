@@ -5,7 +5,7 @@ import type { Capacity, CapacityGroup, CapacityReader, Resources } from './capac
 import { formatCpu, formatMemory } from './capacity-format'
 import { bar, cut, h, HEADERS, Nav, printableLine, sendPage, span } from './dashboard-html'
 import { DefinitionError, DefinitionStore } from './definitions'
-import type { Principal } from './oauth'
+import { Principal, quote } from './oauth'
 import {
   decides,
   describeWait,
@@ -55,9 +55,14 @@ export interface DashboardContext {
   capacity?: CapacityReader
   // what the token of the forms is bound to: the sign-in (its session), or an API token
   session?: string
+  // when the person signed in to the dashboard; left out for a caller with an API token
+  signedInAt?: number
 }
 
 const REFRESH_SECONDS = 10
+// Approving and publishing take a sign-in of the last minutes: the groups of a session are
+// those of its sign-in, and somebody taken out of a group must not decide for hours.
+export const DECIDE_WITHIN_MS = 15 * 60_000
 const LOG_LINES = 200
 const EXTEND_CHOICES = ['1h', '8h', '24h', '72h']
 const ACTIVE: RunState[] = ['awaiting-approval', 'queued', 'running', 'up', 'asleep']
@@ -115,7 +120,8 @@ export async function handleDashboard(
     return page.send(res, 200, 'Tasks', page.tasks(url.searchParams), { nav: 'tasks' })
   }
   if (path === '/approvals') {
-    return page.send(res, 200, 'Approvals', page.approvals(), { refresh: true, nav: 'approvals' })
+    // no reload: it would wipe the reason of a reject being typed
+    return page.send(res, 200, 'Approvals', page.approvals(), { nav: 'approvals' })
   }
   if (path === '/capacity') {
     const capacity = await page.readCapacity()
@@ -153,7 +159,7 @@ export async function handleDashboard(
       return page.send(res, 200, `Log of ${run.id}`, page.log(run, url.searchParams), { nav: 'runs' })
     }
     return page.send(res, 200, run.id, page.run(run, url.searchParams), {
-      refresh: !isFinal(run.state),
+      refresh: !isFinal(run.state) && !page.mayDecideRun(run),
       nav: 'runs',
     })
   }
@@ -220,11 +226,25 @@ async function post(
     }
     return done(back)
   }
+  if ((runDecision || versionDecision) && !page.signedInLately()) {
+    return page.send(
+      res,
+      403,
+      'Sign in again',
+      `<p>Approving and rejecting take a sign-in of the last ${
+        DECIDE_WITHIN_MS / 60_000
+      } minutes.</p><p>${page.signInAgain(ownBack(form.get('back'), '/approvals'))}</p>`
+    )
+  }
   if (runDecision) {
     const [, id, verb] = runDecision
     const outcome = verb === 'approve' ? 'approved' : 'rejected'
     const result = context.registry.decide(principal, id, outcome, (account) => canUse(grant, account), reason)
-    context.log(`dashboard ${verb} run=${id} iss=${principal.iss} sub=${principal.sub} result=${result.status}`)
+    context.log(
+      `dashboard ${verb} run=${id} iss=${principal.iss} sub=${principal.sub} result=${result.status}${loggedReason(
+        reason
+      )}`
+    )
     switch (result.status) {
       case 'ok':
         return done(ownBack(form.get('back'), '/approvals'))
@@ -250,7 +270,11 @@ async function post(
   const outcome = verb === 'approve' ? 'approved' : 'rejected'
   try {
     const result = await decideProposal(context.definitions, context.proposals, grant, principal, hash, outcome, reason)
-    context.log(`dashboard ${verb} proposal=${hash} iss=${principal.iss} sub=${principal.sub} result=${result.status}`)
+    context.log(
+      `dashboard ${verb} proposal=${hash} iss=${principal.iss} sub=${principal.sub} result=${
+        result.status
+      }${loggedReason(reason)}`
+    )
     switch (result.status) {
       case 'ok':
         return done('/approvals')
@@ -274,6 +298,11 @@ async function post(
   }
 }
 
+// The reason of a decision for the log, on one line, as the API writes it.
+function loggedReason(reason: string | undefined): string {
+  return reason ? ` reason=${quote(reason)}` : ''
+}
+
 // A path of the dashboard a form goes back to, never another host.
 function ownBack(value: string | null, fallback: string): string {
   return value && /^\/[A-Za-z0-9_\-/?=&.,]*$/.test(value) && !value.startsWith('//') ? value : fallback
@@ -293,6 +322,16 @@ class Page {
   private get csrf(): string {
     const { iss, sub } = this.viewer.principal
     return this.context.sign(`dashboard\0csrf\0${iss}\0${sub}\0${this.context.session ?? 'token'}`)
+  }
+
+  // An API token is new; a sign-in in the browser has to be of the last minutes to decide.
+  signedInLately(): boolean {
+    const at = this.context.signedInAt
+    return at === undefined || this.now - at <= DECIDE_WITHIN_MS
+  }
+
+  signInAgain(back: string): string {
+    return `<a href="/.hammerkit/signin?path=${h(encodeURIComponent(back))}">Sign in again</a> to decide.`
   }
 
   validCsrf(value: string | null): boolean {
@@ -873,7 +912,7 @@ ${capacity ? this.capacitySummary(capacity) : ''}
     return runs + versions
   }
 
-  private mayDecideRun(run: Run): boolean {
+  mayDecideRun(run: Run): boolean {
     return (
       run.state === 'awaiting-approval' &&
       !owns(this.viewer, run) &&
@@ -1029,6 +1068,11 @@ ${capacity ? this.capacitySummary(capacity) : ''}
   }
 
   private decideForm(action: string, yes: string, back: string): string {
+    if (!this.signedInLately()) {
+      return `<p class="quiet">Your sign-in is older than ${DECIDE_WITHIN_MS / 60_000} minutes. ${this.signInAgain(
+        back
+      )}</p>`
+    }
     const hidden = `<input type="hidden" name="csrf" value="${h(
       this.csrf
     )}"><input type="hidden" name="back" value="${h(back)}">`

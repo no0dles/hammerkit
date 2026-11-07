@@ -13,11 +13,13 @@ function isHidden(code: number): boolean {
   return control || bidi
 }
 
-// A text as it is to be read: control characters and bidi marks become `?`. Line breaks stay
+// A text as it is to be read: control characters and bidi marks become `?`. Line breaks (also
+// CRLF) stay
 // in an error; a line of a log has none.
 export function printable(text: string): string {
   let out = ''
-  for (const char of text) {
+  // a file written on Windows: its line ends are line ends
+  for (const char of text.replace(/\r\n/g, '\n')) {
     out += isHidden(char.codePointAt(0) ?? 0) ? '?' : char
   }
   return out

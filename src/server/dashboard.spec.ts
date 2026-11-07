@@ -13,6 +13,7 @@ const person = (sub: string) => ({ iss: ISS, sub, groups: [], claims: {} })
 const alice = person('alice')
 const bob = person('bob')
 const carol = person('carol')
+const olga = person('olga')
 
 const makeConfig = (activity: 'everyone' | 'involved') =>
   serverConfigSchema.parse({
@@ -34,6 +35,7 @@ const makeConfig = (activity: 'everyone' | 'involved') =>
         builds: 'publish',
         accounts: { 'op-prod': 'use' },
       },
+      { subject: { iss: ISS, sub: 'olga' }, observe: true },
     ],
   })
 
@@ -74,7 +76,7 @@ interface Opened {
 }
 
 async function open(
-  context: Omit<DashboardContext, 'sign' | 'log'> & { config: ServerConfig },
+  context: Omit<DashboardContext, 'sign' | 'log'> & { config: ServerConfig; log?: (line: string) => void },
   principal: typeof alice,
   path: string,
   form?: Record<string, string>
@@ -104,6 +106,8 @@ async function open(
   return { status, headers, body }
 }
 
+// the token of the forms of an API caller, as the dashboard signs it
+const csrfFor = (sub: string) => `signed:${Buffer.from(`dashboard\0csrf\0${ISS}\0${sub}\0token`).toString('base64url')}`
 const csrfOf = (page: Opened) => /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] as string
 
 describe('dashboard pages', () => {
@@ -248,9 +252,12 @@ describe('dashboard pages', () => {
       accounts: ['op-prod'],
       plan: { deploy: plan('./deploy.sh <prod>') },
     } as unknown as DefinitionVersion
-    proposals.propose(version, { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': 'tasks: <x>' } }, bob, [
-      'op-prod',
-    ])
+    proposals.propose(
+      version,
+      { entry: '.hammerkit.yaml', files: { '.hammerkit.yaml': 'tasks: <x>\r\nenvs: {}\r\n' } },
+      bob,
+      ['op-prod']
+    )
     const waiting = registry.submit(
       alice,
       { ...spec(['deploy'], ['op-prod']), plan: { deploy: plan('./deploy.sh') } },
@@ -263,13 +270,37 @@ describe('dashboard pages', () => {
     expect(mine.body).toContain(`<a href="/runs/${waiting.id}">`)
     expect(mine.body).toContain(`/approvals/versions/${version.hash}`)
     const file = await open(context, carol, `/approvals/versions/${version.hash}`)
-    expect(file.body).toContain('tasks: &#60;x&#62;')
+    // a file written on Windows reads as it was written
+    expect(file.body).toContain('tasks: &#60;x&#62;\nenvs: {}\n')
     expect(file.body).toContain('$ ./deploy.sh &#60;prod&#62;')
     // alice asked, she does not decide; bob proposed, he sees his version but not its buttons
     const asked = await open(context, alice, '/approvals')
     expect(asked.body).toContain('Your runs that wait')
     expect(asked.body).not.toContain('/approve"')
     expect((await open(context, bob, `/approvals/versions/${version.hash}`)).body).not.toContain('/approve"')
+
+    // an observer sees the waiting run whole, and decides nothing
+    expect((await open(context, olga, '/approvals')).body).not.toContain('/approve"')
+    const observed = await open(context, olga, `/runs/${waiting.id}`)
+    expect(observed.body).toContain('$ ./deploy.sh')
+    expect(observed.body).not.toContain('/approve"')
+    expect((await open(context, olga, `/approvals/runs/${waiting.id}/approve`, { csrf: csrfFor('olga') })).status).toBe(
+      404
+    )
+    // the run page of who decides does not reload, nor do the approvals: a reason being typed stays
+    expect((await open(context, carol, `/runs/${waiting.id}`)).headers.refresh).toBeUndefined()
+    expect(mine.headers.refresh).toBeUndefined()
+    expect((await open(context, alice, `/runs/${waiting.id}`)).headers.refresh).toBe('10')
+
+    // a sign-in of hours ago may look, but signs in again to decide
+    const old = { ...context, signedInAt: Date.now() - 16 * 60_000 }
+    const stale = await open(old, carol, '/approvals')
+    expect(stale.body).not.toContain('/approve"')
+    expect(stale.body).toContain('href="/.hammerkit/signin?path=%2Fapprovals"')
+    const refused = await open(old, carol, `/approvals/runs/${waiting.id}/approve`, { csrf: csrfOf(mine) })
+    expect(refused.status).toBe(403)
+    expect(refused.body).toContain('Sign in again')
+    expect(registry.peek(waiting.id)?.state).toBe('awaiting-approval')
 
     const csrf = csrfOf(mine)
     expect((await open(context, carol, `/approvals/runs/${waiting.id}/approve`)).status).toBe(405)
@@ -285,11 +316,15 @@ describe('dashboard pages', () => {
     expect(approved.status).toBe(303)
     await until(() => registry.peek(waiting.id)?.state === 'succeeded')
 
-    const rejected = await open(context, carol, `/approvals/versions/${version.hash}/reject`, {
-      csrf,
-      reason: 'not now',
-    })
+    const logs: string[] = []
+    const rejected = await open(
+      { ...context, signedInAt: Date.now() - 60_000, log: (line) => logs.push(line) },
+      carol,
+      `/approvals/versions/${version.hash}/reject`,
+      { csrf, reason: 'not now' }
+    )
     expect(rejected.status).toBe(303)
+    expect(logs).toEqual([expect.stringContaining('result=ok reason="not now"')])
     expect(proposals.get(version.hash)).toMatchObject({ state: 'rejected', reason: 'not now' })
     expect(published).toEqual([])
   })
@@ -323,7 +358,12 @@ describe('dashboard pages', () => {
     expect(page.body).toContain('<code>hk-0123456789abcdef</code>')
     expect(page.body).toContain('<td>bob</td>')
     expect(page.body).toContain('8 CPU · 16 GiB')
-    expect(page.body).toContain('the server may not list nodes')
+    // what the cluster answered is for operators, others learn that something is missing
+    expect(page.body).toContain('some of it could not be read')
+    expect(page.body).not.toContain('may not list nodes')
+    expect(
+      (await open({ config: makeConfig('everyone'), registry, capacity: reader }, olga, '/capacity')).body
+    ).toContain('the server may not list nodes')
     expect((await open({ config: makeConfig('everyone'), registry, capacity: reader }, alice, '/')).body).toContain(
       'Capacity <small>'
     )

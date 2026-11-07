@@ -443,6 +443,50 @@ describe('EndpointGateway', () => {
       ).toBe(403)
     })
 
+    it('lets a sign-in decide for its first minutes, then signs the person in again', async () => {
+      issuer.sent.sub = 'alice'
+      const { callback } = await signIn('/', undefined, 'hammerkit')
+      const { cookie } = await takeCookie(callback.headers.location as string)
+      const csrf = /name="csrf" value="([^"]+)"/.exec((await get('hammerkit', `/runs/${runId}`, { cookie })).body)?.[1]
+      const own = {
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+        'sec-fetch-site': 'same-origin',
+        origin: `http://hammerkit.${DOMAIN}:${port}`,
+      }
+      const decide = () =>
+        get(
+          'hammerkit',
+          '/approvals/runs/run_0000000000000000/approve',
+          own,
+          'POST',
+          `csrf=${encodeURIComponent(csrf ?? '')}`
+        )
+      // a new sign-in may decide (there is no such run to decide about)
+      expect((await decide()).status).toBe(404)
+      ahead = 16 * 60_000
+      const late = await decide()
+      expect(late.status).toBe(403)
+      expect(late.body).toContain('href="/.hammerkit/signin?path=%2Fapprovals"')
+      // stop and extend do not need it
+      expect(
+        (await get('hammerkit', `/runs/${runId}/extend`, own, 'POST', `csrf=${encodeURIComponent(csrf ?? '')}&ttl=8h`))
+          .status
+      ).toBe(303)
+      // signing in again goes through the login host, back to a page of the dashboard only
+      for (const [path, back] of [
+        ['%2Fapprovals', '/approvals'],
+        ['%2F%2Fevil.example', '/'],
+        ['https%3A%2F%2Fevil.example', '/'],
+      ]) {
+        const again = await get('hammerkit', `/.hammerkit/signin?path=${path}`, { cookie, accept: 'text/html' })
+        expect(again.status).toBe(302)
+        const start = new URL(again.headers.location as string)
+        expect(start.host).toBe(`login.${DOMAIN}:${port}`)
+        expect(start.searchParams.get('path')).toBe(back)
+      }
+    })
+
     it('is not there when switched off', async () => {
       config.endpoints = { ...config.endpoints!, dashboard: false }
       expect((await get('hammerkit', '/', as('alice'))).status).toBe(404)

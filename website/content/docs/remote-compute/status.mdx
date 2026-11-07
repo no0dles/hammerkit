@@ -125,7 +125,9 @@ pods requested of the scheduler, the quota the server set on it (`backend.quota`
 `runs.up.quota`) and what the pods use now. Requests and the quota need nothing more. What pods
 use comes from the metrics API (metrics-server, which GKE, EKS and AKS run), and the nodes from
 listing them; give the server these rules for both, or the output says what it could not read
-and shows the rest:
+and shows the rest. What the cluster answered is shown to an `observe` entitlement; others are
+told that some of it could not be read. A read that takes longer than 3 seconds is not waited
+for: the next look shows it.
 
 ```yaml title="rbac.yaml"
 # in hammerkit-runs, bound by the server in its namespaces: what the pods use
@@ -195,8 +197,8 @@ browser goes there too, and `hammerkit remote dashboard` prints it.
 | Approvals | The runs that wait for an account you use, with what they run, and **Approve** or **Reject** (with a reason); the versions of build files that wait for somebody who may publish, with their plan and every file, and **Publish** or **Reject**. The rules are those of [`remote approve`](/docs/cli/remote#approving-runs) and [proposals](/docs/cli/remote#proposing-a-version): nobody decides about their own. |
 | Capacity | What `remote capacity` prints, with the namespaces and what could not be read. |
 
-The overview, the service runs, the approvals, the capacity and a run that is not over reload
-every 10 seconds.
+The overview, the service runs, the capacity and a run that is not over reload every 10
+seconds. The approvals, and a run you decide about, do not: a reason being typed stays.
 
 Nothing more needs setting up: the dashboard signs people in the way an endpoint does,
 through `login.<domain>`, with the redirect URI already registered, and sets a cookie for its
@@ -204,7 +206,11 @@ own host only. Who signs in needs an entitlement on the server, and sees what
 [Who sees what](#who-sees-what) says, checked with the entitlements of the moment on every page.
 The groups and claims of a person are the ones of their sign-in, for as long as the session
 holds (`endpoints.session`, 8 hours by default): somebody taken out of a group at the issuer
-keeps what the group gave them until they sign in again.
+keeps what the group gave them to look at and to stop or extend until they sign in again.
+**Approve**, **Publish** and **Reject** take a sign-in of the last 15 minutes: an older one
+shows *Sign in again*, which goes through `login.<domain>` and back with the groups of now (at
+an issuer that still knows the person, without a password). A decision is logged with its
+reason, as one through the API.
 **Stop** is for the owner and who decides about a run, **Extend** for the owner of a service run
 and who may open its endpoints. An `observe` entitlement sees every run and changes none.
 
