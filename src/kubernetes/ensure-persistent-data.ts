@@ -218,14 +218,18 @@ const UPLOADED = '.uploaded'
 
 // Removes the folders of the states (see getStateFilesDir) in the claim at `$1` but those
 // named after it: the one the work runs at, and the ones pods of the run mount
+// (it says how it went itself: a loop ends with the status of its last test in some shells)
 export const REMOVE_OTHER_STATES = `cd "$1" || exit 1
 shift
 for d in ${STATE_FILES_PREFIX}*; do
-  [ -d "$d" ] || continue
+  if [ ! -d "$d" ]; then continue; fi
   keep=
-  for k in "$@"; do [ "$d" = "$k" ] && keep=1; done
-  [ -n "$keep" ] || rm -rf "$d"
-done`
+  for k in "$@"; do
+    if [ "$d" = "$k" ]; then keep=1; fi
+  done
+  if [ -z "$keep" ]; then rm -rf "$d" || exit 1; fi
+done
+exit 0`
 
 /**
  * The folders of the states (see getStateFilesDir) of the claim `claim` that the services of
@@ -359,20 +363,24 @@ export async function ensurePersistentData(
     )
   }
 
-  if (persistence.sources.length === 0 && !options.reset && !options.files) {
+  // the folder of the state is in the work's own claim: one that has none (a service that
+  // only mounts what its deps made) has nothing to prepare
+  const claim = getVolumeName(service, env)
+  const files = persistence.volumes.some((volume) => volume.persistentVolumeClaim?.claimName === claim)
+    ? options.files
+    : undefined
+  if (persistence.sources.length === 0 && !options.reset && !files) {
     return
   }
   // the folders of the states the pods of the run mount, before the upload pod mounts the claim
-  const inUse = options.files
-    ? await getStateDirsInUse(instance, env.namespace, getVolumeName(service, env))
-    : new Set<string>()
+  const inUse = files ? await getStateDirsInUse(instance, env.namespace, claim) : new Set<string>()
 
   service.status.write('debug', 'start upload container')
   await getPodForPersistence(instance, env, service, persistence, 'write', async (name) => {
     if (options.reset) {
       await clearClaim(instance, env, service, name)
     }
-    if (options.files && !(await prepareStateFiles(instance, env, service, name, options.files.dir, inUse))) {
+    if (files && !(await prepareStateFiles(instance, env, service, name, files.dir, inUse))) {
       return
     }
     for (const source of persistence.sources) {
@@ -419,8 +427,8 @@ export async function ensurePersistentData(
         }
       })
     }
-    if (options.files) {
-      const dir = `/dev/hammerkit/${service.id()}/${options.files.dir}`
+    if (files) {
+      const dir = `/dev/hammerkit/${service.id()}/${files.dir}`
       const marked = await execInPod(instance, env, name, [
         'sh',
         '-c',

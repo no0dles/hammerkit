@@ -273,7 +273,7 @@ describe('the files of a service of a service run', () => {
     rmSync(root, { recursive: true, force: true })
   })
 
-  async function upload(dir: string, inUse: string[], uploaded: boolean) {
+  async function upload(dir: string, inUse: string[], uploaded: boolean, own = true) {
     const commands: string[][] = []
     const archives: string[][] = []
     const writes: string[] = []
@@ -360,8 +360,10 @@ describe('the files of a service of a service run', () => {
         pools: [{ name: 'default', platform: { os: 'linux', arch: 'amd64' } }],
       },
     } as unknown as WorkKubernetesEnvironment
+    // the claim of the service, or only the one of a dep whose outputs it mounts
+    const claim = own ? getVolumeName(api, env) : 'hammerkit-build'
     const persistence = {
-      volumes: [{ name: 'hammerkit-api', persistentVolumeClaim: { claimName: 'hammerkit-api' } }],
+      volumes: [{ name: 'hammerkit-api', persistentVolumeClaim: { claimName: claim } }],
       sizes: { 'hammerkit-api': null },
       kept: [],
       workspace: [],
@@ -416,6 +418,13 @@ describe('the files of a service of a service run', () => {
       ['test', '-e', `/dev/hammerkit/api/${dir}/.uploaded`],
     ])
     expect(writes).toContain('info the files of api are there already')
+  })
+
+  it('need no upload pod for a service that only mounts what its deps made', async () => {
+    const dir = getStateFilesDir('new-state')
+    const { commands } = await upload(dir, [], false, false)
+    // its sources are uploaded as before, without a folder of its own to prepare
+    expect(commands.map((command) => command[0])).toEqual(['tar'])
   })
 
   it('are uploaded again when the upload of the state did not go through', async () => {
